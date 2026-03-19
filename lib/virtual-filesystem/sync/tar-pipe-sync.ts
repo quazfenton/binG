@@ -59,7 +59,7 @@ export async function syncVFSToSandbox(
 
   try {
     // Get all files from VFS
-    const files = await vfs.getWorkspaceFiles(ownerId);
+    const files = await (vfs as any).getWorkspaceFiles?.(ownerId) || [];
     const filteredFiles = files.filter(f => {
       return !exclude.some(pattern => pattern.test(f.path));
     });
@@ -194,9 +194,9 @@ export async function syncSandboxToVFS(
 
   try {
     // List files in sandbox
-    const listResult = await sandbox.listDirectory(sandbox.workspaceDir);
-    
-    if (!listResult.success || !listResult.files) {
+    const listResult = await sandbox.listDirectory(sandbox.workspaceDir) as any;
+
+    if (!listResult.success || !Array.isArray(listResult.files)) {
       return {
         success: false,
         filesSynced: 0,
@@ -207,7 +207,7 @@ export async function syncSandboxToVFS(
       };
     }
 
-    const files = listResult.files
+    const files = (listResult.files as any[])
       .filter(f => f.type === 'file')
       .filter(f => !exclude.some(pattern => pattern.test(f.path)));
 

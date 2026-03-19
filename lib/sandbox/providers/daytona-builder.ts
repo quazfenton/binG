@@ -17,7 +17,7 @@
  * @see docs/sdk/daytona-llms-full.txt
  */
 
-import type { DockerImage as DockerImageType } from '@daytonaio/sdk';
+// import type { DockerImage as DockerImageType } from '@daytonaio/sdk';
 
 /**
  * Base image options

@@ -966,7 +966,7 @@ export class SandboxConnectionManager {
 
         this.writeLine(`\x1b[31m${msg.data}\x1b[0m`)
         
-        if (!this.state.status === 'connected') {
+        if (this.state.status !== 'connected') {
           this.updateTerminalState({
             sandboxInfo: {
               sessionId: this.state.sessionId,

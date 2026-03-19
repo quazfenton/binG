@@ -303,8 +303,8 @@ export class OracleVMSandboxHandle implements SandboxHandle {
           write: (data: string) => {
             stream.write(data);
           },
-          resize: (cols: number, rows: number) => {
-            stream.setWindow(rows, cols);
+          resize: async (cols: number, rows: number) => {
+            (stream as any).setWindow(rows, cols);
           },
           onOutput: (callback: (data: string) => void) => {
             stream.on('data', (data: Buffer) => {
@@ -314,7 +314,7 @@ export class OracleVMSandboxHandle implements SandboxHandle {
           destroy: () => {
             stream.end();
           },
-        };
+        } as any;
 
         resolve(ptyHandle);
       });

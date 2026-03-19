@@ -2,7 +2,7 @@
  * Tests for Plugin Isolation System
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { PluginIsolationManager, PluginError } from '../plugin-isolation';
 
 describe('PluginIsolationManager', () => {

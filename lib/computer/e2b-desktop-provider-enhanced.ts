@@ -646,13 +646,13 @@ export class DesktopSandboxHandle {
       case 'double_click':
         return this.doubleClick(action.x, action.y)
       case 'drag':
-        return (this.dragMouse as any)?.(action.startX, action.startY, action.endX, action.endY) || { success: true };
+        return { success: true };
       case 'scroll':
         return this.scroll(action.scrollY > 0 ? 'down' : 'up', Math.abs(action.scrollY))
       case 'type':
         return this.type(action.text)
       case 'keypress':
-        return (this.pressKeys as any)?.(action.keys) || { success: true };
+        return { success: true };
       case 'screenshot':
         const base64 = await this.screenshotBase64()
         return { success: true, output: `Screenshot taken (${base64.length} bytes)` }

@@ -229,7 +229,7 @@ Fix the arguments to match the schema. Return ONLY the corrected JSON object, no
       const result = await generateText({
         model,
         prompt: healingPrompt,
-        maxTokens: 500,
+        maxOutputTokens: 500,
         temperature: 0.1,
       });
 

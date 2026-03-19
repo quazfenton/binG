@@ -67,7 +67,7 @@ function initializeRegistry() {
   // Use async factory functions for lazy initialization to avoid SDK import errors in tests
 
   providerRegistry.set('daytona', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 1,
     enabled: true,
     available: false,
@@ -82,7 +82,7 @@ function initializeRegistry() {
   })
 
   providerRegistry.set('e2b', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 2,
     enabled: true,
     available: false,
@@ -97,7 +97,7 @@ function initializeRegistry() {
   })
 
   providerRegistry.set('runloop', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 3,
     enabled: true,
     available: false,
@@ -112,7 +112,7 @@ function initializeRegistry() {
   })
 
   providerRegistry.set('microsandbox', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 4,
     enabled: true,
     available: false,
@@ -127,7 +127,7 @@ function initializeRegistry() {
   })
 
   providerRegistry.set('blaxel', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 5,
     enabled: true,
     available: false,
@@ -143,7 +143,7 @@ function initializeRegistry() {
 
   // Blaxel MCP mode - uses blaxel-mcp-server for tool-based access
   providerRegistry.set('blaxel-mcp', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 5,
     enabled: true,
     available: false,
@@ -151,14 +151,16 @@ function initializeRegistry() {
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    asyncFactory: async () => {
-      const { BlaxelMcpServer } = await import('./blaxel-mcp-server')
-      return new BlaxelMcpServer()
-    },
+    // Note: BlaxelMcpServer requires a sandboxHandle argument, so it cannot be initialized as a singleton provider
+    // Use createBlaxelMcpServer() function directly with a sandbox handle instead
+    // asyncFactory: async () => {
+    //   const { BlaxelMcpServer } = await import('./blaxel-mcp-server')
+    //   return new BlaxelMcpServer()
+    // },
   })
 
   providerRegistry.set('sprites', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 6,
     enabled: true,
     available: false,
@@ -173,7 +175,7 @@ function initializeRegistry() {
   })
 
   providerRegistry.set('codesandbox', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 7,
     enabled: true,
     available: false,
@@ -188,7 +190,7 @@ function initializeRegistry() {
   })
 
   providerRegistry.set('webcontainer', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 8,
     enabled: true,
     available: false,
@@ -203,7 +205,7 @@ function initializeRegistry() {
   })
 
   providerRegistry.set('webcontainer-filesystem', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 8,
     enabled: true,
     available: false,
@@ -218,7 +220,7 @@ function initializeRegistry() {
   })
 
   providerRegistry.set('webcontainer-spawn', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 8,
     enabled: true,
     available: false,
@@ -233,7 +235,7 @@ function initializeRegistry() {
   })
 
   providerRegistry.set('opensandbox', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 9,
     enabled: true,
     available: false,
@@ -248,7 +250,7 @@ function initializeRegistry() {
   })
 
   providerRegistry.set('opensandbox-code-interpreter', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 9,
     enabled: true,
     available: false,
@@ -263,7 +265,7 @@ function initializeRegistry() {
   })
 
   providerRegistry.set('opensandbox-agent', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 9,
     enabled: true,
     available: false,
@@ -278,7 +280,7 @@ function initializeRegistry() {
   })
 
   providerRegistry.set('opensandbox-nullclaw', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 9,
     enabled: true,
     available: false,
@@ -294,7 +296,7 @@ function initializeRegistry() {
 
   // Mistral Agent provider (lazy initialization)
   providerRegistry.set('mistral-agent', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 3,
     enabled: true,
     available: false,
@@ -310,7 +312,7 @@ function initializeRegistry() {
 
   // Legacy Mistral code interpreter
   providerRegistry.set('mistral', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 3,
     enabled: false, // Disabled by default, use mistral-agent instead
     available: false,
@@ -327,7 +329,7 @@ function initializeRegistry() {
 
   // Vercel Sandbox - Isolated Linux VMs with snapshot support
   providerRegistry.set('vercel-sandbox', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 8,
     enabled: true,
     available: false,
@@ -343,7 +345,7 @@ function initializeRegistry() {
 
   // Oracle VM - SSH into Oracle Cloud Infrastructure VM instances
   providerRegistry.set('oracle-vm', {
-    provider: null as any,
+    provider: null as any as any,
     priority: 9,
     enabled: true,
     available: !!process.env.ORACLE_VM_HOST,

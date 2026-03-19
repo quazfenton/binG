@@ -131,16 +131,16 @@ export class VercelSandboxProvider implements SandboxProvider {
       const latency = Date.now() - startTime
       
       // Check if token is configured (or running on Vercel with OIDC)
-      const hasAuth = this.token || this.isRunningOnVercel()
-      
-      return { 
-        healthy: hasAuth, 
+      const hasAuth = Boolean(this.token || this.isRunningOnVercel())
+
+      return {
+        healthy: Boolean(hasAuth),
         latency,
-        details: { 
+        details: {
           hasToken: !!this.token,
           runningOnVercel: this.isRunningOnVercel(),
           teamId: this.teamId || 'personal'
-        } 
+        }
       }
     } catch (error: any) {
       const latency = Date.now() - startTime

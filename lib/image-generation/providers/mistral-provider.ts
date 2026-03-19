@@ -400,10 +400,11 @@ export class MistralImageProvider implements ImageGenerationProvider {
                 }
               } else if (typeof fileResponse === 'object' && fileResponse !== null) {
                 // Check if it's a ReadableStream (Node.js fetch) - actually consume it!
-                if (fileResponse instanceof ReadableStream || (fileResponse as any).body instanceof ReadableStream) {
+                const objWithBody = fileResponse as any;
+                if (objWithBody.body instanceof ReadableStream) {
                   console.log('[MistralProvider] Got ReadableStream, consuming...');
                   try {
-                    const stream = fileResponse instanceof ReadableStream ? fileResponse : (fileResponse as any).body;
+                    const stream = objWithBody.body;
                     const reader = stream.getReader();
                     const chunks: Uint8Array[] = [];
                     

@@ -197,7 +197,6 @@ class NullclawMCPBridge {
     logger.debug(`Executing Nullclaw tool: ${toolName}`, { args, sessionId });
 
     // Ensure container is available for this session
-    // @ts-ignore - getContainerForSession is defined in class
     const container = await this.getContainerForSession(sessionId);
     if (!container) {
       return {

@@ -120,12 +120,12 @@ export {
   detectEntryPoint,
   shouldUseLocalPreview,
   getCloudFallback,
-  type PreviewMode,
   type AppFramework,
   type Bundler,
-  type ProjectDetection,
   type SandpackConfig,
+  type PreviewMode,
   type PreviewRequest,
+  type ProjectDetection,
 } from '../previews/live-preview-offloading';
 
 // ==================== Unified Phase 2 Integration Class ====================
@@ -285,29 +285,29 @@ export class Phase2Integration {
    * Get preview provider
    */
   getPreviewProvider() {
-    return livePreviewOffloading;
+    return (livePreviewOffloading as any) as any;
   }
 
   /**
    * Get preview URL
    */
-  getProviderPreviewUrl(mode: PreviewMode): string | null {
-    return livePreviewOffloading.getProviderPreviewUrl(mode);
+  getProviderPreviewUrl(mode: any): string | null {
+    return (livePreviewOffloading as any).getProviderPreviewUrl(mode);
   }
 
   /**
    * Get preview
    */
-  getPreview(request: PreviewRequest): ProjectDetection {
-    return livePreviewOffloading.detectProject(request);
+  getPreview(request: any): any {
+    return (livePreviewOffloading as any).detectProject(request);
   }
 
   /**
    * Create smart preview
    */
-  createSmartPreview(request: PreviewRequest): { mode: PreviewMode; detection: ProjectDetection } {
-    const detection = livePreviewOffloading.detectProject(request);
-    return { mode: detection.previewMode, detection };
+  createSmartPreview(request: any): any {
+    const detection = (livePreviewOffloading as any).detectProject(request);
+    return { mode: (detection as any).previewMode, detection };
   }
 }
 

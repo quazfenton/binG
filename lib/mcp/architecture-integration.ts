@@ -378,7 +378,7 @@ export async function getComposioMCPTools(
     }
 
     // Strategy 2: tools.list() with various params
-    if (typeof composio?.tools?.list === 'function') {
+    if (typeof composio?.tools?.get === 'function') {
       const composioToolsAny = composio.tools as any;
       const tryParams = [
         requested.length > 0 ? { toolkit_slug: requested[0], limit: 300 } : { limit: 300 },
@@ -388,10 +388,10 @@ export async function getComposioMCPTools(
       ]
       for (const params of tryParams) {
         try {
-          const result: any = params ? await composioToolsAny.list(params) : await composioToolsAny.list();
+          const result: any = params ? await composioToolsAny.get(params) : await composioToolsAny.get();
           tools = extractToolArray(result).map(normalizeTool)
           if (tools.length > 0) {
-            logger.debug(`Loaded ${tools.length} Composio tools via tools.list()`)
+            logger.debug(`Loaded ${tools.length} Composio tools via tools.get()`)
             return filterByToolkit(tools).map((t) => ({
               type: 'function' as const,
               function: {
@@ -402,7 +402,7 @@ export async function getComposioMCPTools(
             }))
           }
         } catch (err: any) {
-          logger.debug('Composio tools.list() with params failed:', err?.message)
+          logger.debug('Composio tools.get() with params failed:', err?.message)
         }
       }
     }
@@ -435,9 +435,8 @@ export async function getComposioMCPTools(
     if (typeof composio?.tools?.getRawComposioTools === 'function') {
       try {
         const result = await composio.tools.getRawComposioTools({
-          ...(requested.length > 0 ? { toolkits: requested } : {}),
           limit: 300,
-        })
+        } as any)
         tools = extractToolArray(result).map(normalizeTool)
         if (tools.length > 0) {
           logger.debug(`Loaded ${tools.length} Composio tools via getRawComposioTools()`)

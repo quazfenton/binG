@@ -89,7 +89,7 @@ export class ObjectStorageService {
       } else {
         // For streams, we'd need to handle differently in Node.js
         // This is a simplified version
-        throw new Error('Stream content not yet supported in this implementation')
+        throw new Error('Stream content not yet supported in this implementation' as any)
       }
 
       formData.append('file', content, request.key)
@@ -113,7 +113,7 @@ export class ObjectStorageService {
         throw new Error(`Failed to upload: ${response.statusText}`)
       }
 
-      const data = await response.json()
+      const data = await (response as any).json()
       return { success: true, etag: data.etag }
     } catch (error: any) {
       return { success: false, error: error.message }
@@ -142,7 +142,7 @@ export class ObjectStorageService {
             'X-Storage-Key': key,
             ...(metadata ? { 'X-Storage-Metadata': JSON.stringify(metadata) } : {}),
           },
-          body: content,
+          body: content as any,
         }
       )
 
@@ -150,7 +150,7 @@ export class ObjectStorageService {
         throw new Error(`Failed to upload: ${response.statusText}`)
       }
 
-      const data = await response.json()
+      const data = await (response as any).json()
       return { success: true, etag: data.etag }
     } catch (error: any) {
       return { success: false, error: error.message }
@@ -271,7 +271,7 @@ export class ObjectStorageService {
         throw new Error(`Failed to list objects: ${response.statusText}`)
       }
 
-      const data = await response.json()
+      const data = await (response as any).json()
       return {
         success: true,
         data: {
