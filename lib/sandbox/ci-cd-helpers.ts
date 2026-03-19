@@ -192,8 +192,8 @@ export async function runDeploy(config: DeployConfig): Promise<DeployResult> {
       cwd: config.cwd,
       env: {
         ...process.env,
-        NODE_ENV: 'production',
-      },
+        NODE_ENV: config.environment as 'production' | 'development' | 'test' || 'production',
+      } as NodeJS.ProcessEnv,
       timeout: 5 * 60 * 1000,
       maxBuffer: 10 * 1024 * 1024,
     });

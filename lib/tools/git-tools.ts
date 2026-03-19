@@ -482,12 +482,13 @@ export function createGitTools(handle: SandboxHandle) {
     git_shadow_rollback: tool({
       description: 'Rollback workspace to a shadow commit',
       parameters: z.object({
+        sessionId: z.string().describe('Session ID for tracking'),
         commitId: z.string().describe('Shadow commit ID to rollback to'),
       }),
-      execute: async ({ commitId }) => {
+      execute: async ({ sessionId, commitId }) => {
         try {
-          // Rollback requires sessionId - using placeholder
-          const result = await shadowCommitManager.rollback('default-session', commitId);
+          // Rollback requires sessionId and commitId
+          const result = await shadowCommitManager.rollback(sessionId, commitId);
 
           return {
             success: result.success,
@@ -522,20 +523,39 @@ export const standaloneGitTools = {
       })).describe('Files to commit'),
       author: z.string().optional().describe('Author name'),
     }),
-    execute: async ({ sessionId, message, files, author }) => {
-      try {
-        const shadowCommitManager = new ShadowCommitManager();
-        // Shadow commit requires vfs and transactions - returning placeholder
-        const result: CommitResult = {
-          success: false,
-          committedFiles: 0,
-          error: 'Standalone shadow commit not supported - requires vfs and transactions',
-        };
+      execute: async ({ sessionId, message, files, author }) => {
+        try {
+          const shadowCommitManager = new ShadowCommitManager();
+          const vfs = new (await import('@/lib/virtual-filesystem/virtual-filesystem-service')).VirtualFilesystemService();
+          
+          // Track files in vfs
+          const transactions = files.map(f => ({
+            path: f.path,
+            type: 'CREATE' as const,
+            timestamp: Date.now(),
+            newContent: f.content,
+            originalContent: f.originalContent,
+          }));
+          
+          // Create shadow commit with tracked files
+          const vfsState: Record<string, string> = {};
+          for (const tx of transactions) {
+            if (tx.newContent !== undefined) {
+              vfsState[tx.path] = tx.newContent;
+            }
+          }
+          
+          const result = await shadowCommitManager.commit(vfsState, transactions, {
+            sessionId,
+            message,
+            author: author || 'standalone',
+            source: 'standalone-git-tools',
+          });
 
-        return {
-          success: result.success,
-          commitId: result.commitId,
-          committedFiles: result.committedFiles,
+          return {
+            success: result.success,
+            commitId: result.commitId,
+            committedFiles: result.committedFiles,
           error: result.error,
         };
       } catch (error: any) {

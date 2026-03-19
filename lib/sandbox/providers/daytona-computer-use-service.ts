@@ -416,7 +416,7 @@ export class ComputerUseService {
         success: true,
         output: `Region screenshot captured (${buffer.length} bytes)`,
         // Return image as base64 for compatibility with SandboxHandle interface
-        binary: buffer.toString('base64'),
+        binary: base64Image,
       }
     } catch (error: any) {
       return {

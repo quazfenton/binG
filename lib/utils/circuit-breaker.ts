@@ -353,7 +353,7 @@ export function createCircuitBreakerWithMetrics(
         provider,
         operation: 'call',
       } as any,
-      duration
+      duration / 1000 // Convert milliseconds to seconds
     );
   });
 
@@ -368,7 +368,7 @@ export function createCircuitBreakerWithMetrics(
         provider,
         operation: 'call',
       } as any,
-      duration
+      duration / 1000 // Convert milliseconds to seconds
     );
   });
 

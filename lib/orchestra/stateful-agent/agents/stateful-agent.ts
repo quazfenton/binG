@@ -741,7 +741,7 @@ Use 'createFile' for new files.`;
             let callArgs: any;
             try {
               callArgs = (call as any).args || (call as any).input || {};
-              const execResult = await this.toolExecutor.execute(call.toolName, call.toolCallId ? callArgs : {});
+              const execResult = await this.toolExecutor.execute(call.toolName, callArgs);
 
               // Record for loop detection
               const loopResult = this.loopDetector.recordToolCall(call.toolName, callArgs, execResult);
@@ -758,25 +758,26 @@ Use 'createFile' for new files.`;
               }
 
               // Update local state based on result
-              if (execResult.success && execResult.content && call.toolCallId && callArgs && 'path' in callArgs) {
-                this.vfs[(callArgs as any).path] = execResult.content;
+              const contentForState = typeof execResult.content === 'string'
+                ? execResult.content
+                : (typeof (callArgs as any).content === 'string' ? (callArgs as any).content : undefined);
+              if (execResult.success && callArgs && 'path' in callArgs && contentForState !== undefined) {
+                this.vfs[(callArgs as any).path] = contentForState;
 
                 // Auto-write to Tool Memory Graph
-                if (callArgs && 'path' in callArgs) {
-                  await this.addMemoryNode('file', execResult.content, (callArgs as any).path);
-                }
+                await this.addMemoryNode('file', contentForState, (callArgs as any).path);
+              }
 
-                // Update execution graph if tracking
-                if (this.executionGraphId) {
-                  const graph = executionGraphEngine.getGraph(this.executionGraphId);
-                  if (graph) {
-                    const readyNodes = executionGraphEngine.getReadyNodes(graph);
-                    if (readyNodes.length > 0) {
-                      executionGraphEngine.markComplete(graph, readyNodes[0].id, {
-                        file: callArgs && 'path' in callArgs ? (callArgs as any).path : 'unknown',
-                        success: true,
-                      });
-                    }
+              // Update execution graph if tracking
+              if (this.executionGraphId) {
+                const graph = executionGraphEngine.getGraph(this.executionGraphId);
+                if (graph) {
+                  const readyNodes = executionGraphEngine.getReadyNodes(graph);
+                  if (readyNodes.length > 0) {
+                    executionGraphEngine.markComplete(graph, readyNodes[0].id, {
+                      file: callArgs && 'path' in callArgs ? (callArgs as any).path : 'unknown',
+                      success: true,
+                    });
                   }
                 }
               }

@@ -388,7 +388,7 @@ export async function getComposioMCPTools(
       ]
       for (const params of tryParams) {
         try {
-          const result: any = params ? await composioToolsAny.get(params) : await composioToolsAny.get();
+          const result: any = params ? await composioToolsAny.list(params) : await composioToolsAny.list();
           tools = extractToolArray(result).map(normalizeTool)
           if (tools.length > 0) {
             logger.debug(`Loaded ${tools.length} Composio tools via tools.get()`)
