@@ -482,7 +482,7 @@ export function createGitTools(handle: SandboxHandle) {
     git_shadow_rollback: tool({
       description: 'Rollback workspace to a shadow commit',
       parameters: z.object({
-        sessionId: z.string().regex(/^[A-Za-z0-9_-]+$/).describe('Session ID for tracking'),
+        sessionId: z.string().regex(/^[A-Za-z0-9:_-]+$/).describe('Session ID for tracking'),
         commitId: z.string().regex(/^[A-Za-z0-9-]+$/).describe('Shadow commit ID to rollback to'),
       }),
       execute: async ({ sessionId, commitId }) => {

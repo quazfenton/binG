@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { blockSensitiveFiles } from './lib/security/file-access-blocker';
 import { generateAndStoreNonces, generateCspHeader } from './lib/security/nonce-generator';
+import { auth0 } from './lib/auth0';
 
 /**
  * Next.js Middleware
@@ -9,14 +10,32 @@ import { generateAndStoreNonces, generateCspHeader } from './lib/security/nonce-
  * 1. Blocks access to sensitive files (.db, .env, etc.)
  * 2. Generates cryptographic nonces for CSP
  * 3. Adds security headers with nonce-based CSP
- * 4. Can add authentication checks, rate limiting, etc.
+ * 4. Handles Auth0 authentication routing (sidelayer for future integrations)
+ * 5. Can add authentication checks, rate limiting, etc.
  */
 
-export function middleware(request: NextRequest) {
+export async function middleware(request: NextRequest) {
   // Block access to sensitive files
   const blockedResponse = blockSensitiveFiles(request);
   if (blockedResponse) {
     return blockedResponse;
+  }
+
+  // Auth0 middleware - handles /auth/* routes (login, logout, callback, profile)
+  // Runs alongside existing auth system - NOT a replacement
+  const auth0Response = await auth0.middleware(request);
+  
+  // If this is an Auth0 auth route (/auth/*), return Auth0's response
+  // Auth0 handles login, logout, callback, profile, etc.
+  if (request.nextUrl.pathname.startsWith('/auth/')) {
+    // Merge Auth0 cookies with our security headers
+    const mergedResponse = NextResponse.next();
+    auth0Response.headers.forEach((value, key) => {
+      if (key.toLowerCase() === 'set-cookie') {
+        mergedResponse.headers.append(key, value);
+      }
+    });
+    return mergedResponse;
   }
 
   // Generate unique nonces for this request
