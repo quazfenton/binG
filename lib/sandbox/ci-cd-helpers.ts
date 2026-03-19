@@ -117,7 +117,7 @@ export async function runBuild(config: BuildConfig): Promise<BuildResult> {
       success: false,
       output: error.stdout || '',
       duration: Date.now() - startTime,
-      error: error.message || stderr || 'Build failed',
+      error: error.message || 'Build failed',
     };
   }
 }

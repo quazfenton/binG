@@ -139,9 +139,13 @@ export class EnhancedPluginManager {
     const compatibility = await this.checkDependencies(plugin);
     const resolution = await this.dependencyManager.resolveDependencies(pluginId);
     
-    // Log dependency resolution info
-    if (resolution.warnings.length > 0) {
-      console.warn(`Plugin ${pluginId} dependency warnings:`, resolution.warnings);
+    // Handle string or PluginDependency types
+    const deps = plugin.dependencies || [];
+    for (const dep of deps) {
+      const depId = typeof dep === 'string' ? dep : (dep as any).pluginId;
+      if (!this.plugins.has(depId)) {
+        console.warn(`Plugin ${plugin.id} depends on ${depId} which is not registered`);
+      }
     }
 
     // Create sandbox

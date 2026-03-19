@@ -1965,9 +1965,16 @@ export default function InteractionPanel({
                             <button
                               type="button"
                               onClick={async () => {
-                                const filesOnly = virtualFileNodes.filter(n => n.type === 'file');
-                                for (const file of filesOnly) {
-                                  await virtualFilesystem.attachFile(file.path);
+                                const filesOnly = virtualFileNodes.filter(
+                                  (n) => n.type === "file" && !selectedFilePaths.includes(n.path)
+                                );
+                                try {
+                                  for (const file of filesOnly) {
+                                    await virtualFilesystem.attachFile(file.path);
+                                  }
+                                } catch (error) {
+                                  const message = error instanceof Error ? error.message : "Failed to attach files";
+                                  toast.error(message);
                                 }
                               }}
                               className="text-[9px] text-blue-400 hover:text-blue-300 transition-colors"

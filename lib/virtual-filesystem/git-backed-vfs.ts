@@ -199,23 +199,11 @@ export class GitBackedVFS {
    * Track transaction entry (public method for proxy access)
    */
   trackTransaction(ownerId: string, entry: TransactionEntry, transactionId?: string): void {
-    // Use transactionId if provided (for batch operations), otherwise use ownerId
     const key = transactionId || ownerId;
     if (!this.transactionLog.has(key)) {
       this.transactionLog.set(key, []);
     }
     this.transactionLog.get(key)!.push(entry);
-    
-    // Also track in changeBuffer for auto-commit events
-    const change: GitVFSChange = {
-      path: entry.path,
-      type: entry.type === 'DELETE' ? 'delete' : (entry.originalContent ? 'update' : 'create'),
-      version: 0, // Will be set by VFS
-      previousContent: entry.originalContent,
-      newContent: entry.newContent,
-      timestamp: new Date().toISOString(),
-    };
-    this.changeBuffer.push(change);
   }
 
   /**
@@ -289,12 +277,8 @@ export class GitBackedVFS {
       // Get shadow commit history
       const history = await this.shadowCommitManager.getCommitHistory(this.options.sessionId, 100);
 
-      // Find commit at target version using workspaceVersion (NOT filesChanged)
-      const targetCommit = history.find(c => {
-        // Match by explicit workspace version (reliable version tracking)
-        return c.workspaceVersion === targetVersion ||
-               c.message?.includes(`v${targetVersion}`);
-      });
+      // Find commit at target version using workspaceVersion only
+      const targetCommit = history.find(c => c.workspaceVersion === targetVersion);
 
       if (!targetCommit) {
         return {
@@ -307,12 +291,19 @@ export class GitBackedVFS {
 
       // Rollback to commit (ShadowCommitManager.rollback takes sessionId and commitId)
       const result = await this.shadowCommitManager.rollback(this.options.sessionId, targetCommit.commitId);
-
+      if (!result.success) {
+        logger.error(`[GitVFS] Rollback to version ${targetVersion} failed: ${result.error}`);
+        return {
+          success: false,
+          filesRestored: result.restoredFiles ?? 0,
+          version: targetVersion,
+          error: result.error,
+        };
+      }
       logger.info(`[GitVFS] Rolled back to version ${targetVersion}`);
-
       return {
-        success: result.success,
-        filesRestored: result.restoredFiles || 0,
+        success: true,
+        filesRestored: result.restoredFiles ?? 0,
         version: targetVersion,
       };
     } catch (error: any) {

@@ -73,8 +73,10 @@ vi.mock('@/lib/orchestra/stateful-agent/tools/tool-executor', () => ({
 
 describe('StatefulAgent', () => {
   let agent: StatefulAgent;
+  const originalEnv = { ...process.env };
 
   beforeEach(() => {
+    process.env = { ...originalEnv };
     agent = new StatefulAgent({
       sessionId: 'test-session',
       maxSelfHealAttempts: 2,
@@ -86,6 +88,7 @@ describe('StatefulAgent', () => {
 
   afterEach(() => {
     vi.clearAllMocks();
+    process.env = { ...originalEnv };
   });
 
   describe('Constructor', () => {

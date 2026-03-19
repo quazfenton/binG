@@ -90,9 +90,10 @@ describe('Stateful Agent Schemas', () => {
         path: '/test/file.ts',
         action: 'read',
         original_hash: 'abc123',
-        diff_preview: 'file content here'
+        diff_preview: 'file content here',
+        reason: 'Testing read operation',
       };
-      
+
       expect(planFile.new_hash).toBeUndefined();
     });
   });
@@ -108,7 +109,8 @@ describe('Stateful Agent Schemas', () => {
             path: '/test/file.ts',
             action: 'edit',
             original_hash: 'abc123',
-            diff_preview: 'changes'
+            diff_preview: 'changes',
+            reason: 'Fixing bug',
           }
         ],
         execution_order: ['/test/file.ts'],
@@ -126,14 +128,14 @@ describe('Stateful Agent Schemas', () => {
         created_at: new Date().toISOString(),
         task: 'Add feature',
         files: [
-          { path: '/test/a.ts', action: 'create', original_hash: '', diff_preview: '' },
-          { path: '/test/b.ts', action: 'create', original_hash: '', diff_preview: '' },
-          { path: '/test/c.ts', action: 'create', original_hash: '', diff_preview: '' }
+          { path: '/test/a.ts', action: 'create', original_hash: '', diff_preview: '', reason: 'Creating file A' },
+          { path: '/test/b.ts', action: 'create', original_hash: '', diff_preview: '', reason: 'Creating file B' },
+          { path: '/test/c.ts', action: 'create', original_hash: '', diff_preview: '', reason: 'Creating file C' }
         ],
         execution_order: ['/test/a.ts', '/test/b.ts', '/test/c.ts'],
-        rollback_plan: 'Delete files'
+        rollback_plan: 'Delete files',
       };
-      
+
       expect(plan.execution_order).toEqual(['/test/a.ts', '/test/b.ts', '/test/c.ts']);
     });
   });
@@ -320,9 +322,12 @@ describe('Stateful Agent Schemas', () => {
           }
         ],
         current_plan: null,
-        errors: []
+        errors: [],
+        retry_count: 0,
+        status: 'idle',
+        created_at: new Date().toISOString(),
       };
-      
+
       expect(checkpoint.session_id).toBe('session-123');
       expect(checkpoint.vfs_snapshot).toHaveProperty('/test/file.ts');
       expect(checkpoint.transaction_log).toHaveLength(1);
@@ -335,18 +340,21 @@ describe('Stateful Agent Schemas', () => {
         task: 'Test',
         files: [],
         execution_order: [],
-        rollback_plan: ''
+        rollback_plan: '',
       };
-      
+
       const checkpoint: AgentCheckpoint = {
         session_id: 'session-123',
         checkpoint_id: 'checkpoint-456',
         vfs_snapshot: {},
         transaction_log: [],
         current_plan: plan,
-        errors: []
+        errors: [],
+        retry_count: 0,
+        status: 'idle',
+        created_at: new Date().toISOString(),
       };
-      
+
       expect(checkpoint.current_plan).not.toBeNull();
       expect(checkpoint.current_plan?.task).toBe('Test');
     });

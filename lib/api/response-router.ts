@@ -76,8 +76,10 @@ const logger = createLogger('API:ResponseRouter')
 // Type Definitions
 // ============================================================================
 
+export type LLMMessageRole = 'user' | 'assistant' | 'system';
+
 export interface LLMMessage {
-  role: 'user' | 'assistant' | 'system' | 'tool'
+  role: LLMMessageRole
   content: string | Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }>
   toolCalls?: Array<{
     id: string
@@ -506,7 +508,13 @@ export class ResponseRouter {
         enabled: process.env.N8N_ENABLED === 'true',
         service: n8nAgentService,
         healthCheck: () => n8nAgentService.healthCheck(),
-        canHandle: (req: RouterRequest) => true,
+        canHandle: (req: RouterRequest) => {
+          const detectedType = detectRequestType(req.messages)
+          if (detectedType === 'tool' || detectedType === 'sandbox') {
+            return false
+          }
+          return true
+        },
         processRequest: async (req: RouterRequest) => {
           const response = await n8nAgentService.processRequest({
             messages: req.messages,
@@ -522,7 +530,13 @@ export class ResponseRouter {
         enabled: process.env.CUSTOM_FALLBACK_ENABLED === 'true',
         service: customFallbackService,
         healthCheck: () => customFallbackService.healthCheck(),
-        canHandle: () => true,
+        canHandle: (req: RouterRequest) => {
+          const detectedType = detectRequestType(req.messages)
+          if (detectedType === 'tool' || detectedType === 'sandbox') {
+            return false
+          }
+          return true
+        },
         processRequest: async (req: RouterRequest) => {
           const response = await customFallbackService.processRequest({
             messages: req.messages,
@@ -961,10 +975,11 @@ export class ResponseRouter {
         return this.parseStructuredCommands(match[1])
       }
 
-      // Fallback: Parse raw markdown code blocks with filenames (Bug #1 fix)
-      const rawDiffs = this.parseRawCodeBlocks(content)
-      if (rawDiffs && rawDiffs.length > 0) {
-        return { write_diffs: rawDiffs }
+      // Fallback: Parse raw markdown code blocks with filenames
+      // Emit as request_files since these are full file contents, not patches
+      const rawFiles = this.parseRawCodeBlocks(content)
+      if (rawFiles && rawFiles.length > 0) {
+        return { request_files: rawFiles }
       }
 
       return undefined
@@ -1003,14 +1018,15 @@ export class ResponseRouter {
         }
         
         const diffsContent = block.substring(startIdx + 1, endIdx)
-        const items = diffsContent.split(/\},\s*\{/)
-          .map((s, idx) => {
-            if (idx === 0) return s + '}'
-            if (idx === items.length - 1) return '{' + s
-            return '{' + s + '}'
-          })
+        const rawItems = diffsContent.split(/\},\s*\{/)
           .map(s => s.trim())
           .filter(Boolean)
+        const items = rawItems.map((s, idx) => {
+          if (rawItems.length === 1) return s
+          if (idx === 0) return `${s}}`
+          if (idx === rawItems.length - 1) return `{${s}`
+          return `{${s}}`
+        })
 
         write_diffs = items.map(raw => {
           const pathMatch = raw.match(/path:\s*"([^"]+)"/)

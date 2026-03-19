@@ -29,7 +29,7 @@ WORKDIR /app
 COPY package.json pnpm-lock.yaml ./
 
 # Install dependencies
-RUN pnpm install --frozen-lockfile
+RUN pnpm install --frozen-lockfile --prod
 
 # Copy OpenSandbox integration code
 COPY lib/sandbox/providers/opensandbox-provider.ts ./lib/sandbox/providers/
@@ -38,8 +38,8 @@ COPY lib/sandbox/spawn ./lib/sandbox/spawn
 COPY lib/utils ./lib/utils
 COPY lib/types ./lib/types
 
-# Copy OpenSandbox service entry point
-COPY services/opensandbox ./services/opensandbox
+# Note: services/opensandbox is not yet implemented
+# See alternative deployment options below
 
 # Set environment variables
 ENV NODE_ENV=production
@@ -55,8 +55,14 @@ EXPOSE 3004
 HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
     CMD wget -q --spider http://localhost:${PORT}/health || exit 1
 
-# Start the OpenSandbox service
-CMD ["node", "services/opensandbox/index.js"]
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
+
+# Switch to non-root user
+USER nodejs
+
+# Start the OpenSandbox service (requires services/opensandbox to be implemented)
+# CMD ["node", "services/opensandbox/index.js"]
 
 # ===========================================
 # ALTERNATIVE: Use official OpenSandbox server

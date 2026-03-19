@@ -782,18 +782,18 @@ async function runEnhancedJavaScriptChecks(
 
     // Check for syntax errors
     const diagnostics: Array<{ messageText: string; start?: number }> = [];
-    
+
     // Visit all nodes to find errors
-    const visit = (node: ts.Node) => {
-      if (node.kind === ts.SyntaxKind.Unknown) {
+    const visit = (node: any) => {
+      if (node.kind === (globalThis as any).ts?.SyntaxKind.Unknown) {
         diagnostics.push({
           messageText: `Unknown syntax at line ${sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1}`,
           start: node.getStart(),
         });
       }
-      ts.forEachChild(node, visit);
+      (globalThis as any).ts?.forEachChild(node, visit);
     };
-    
+
     visit(sourceFile);
 
     for (const diag of diagnostics) {

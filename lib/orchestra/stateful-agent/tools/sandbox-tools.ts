@@ -45,7 +45,7 @@ TIP: Use list_files first to discover file paths if you're unsure.`,
   parameters: z.object({
     path: z.string().describe('File path relative to workspace root'),
   }),
-  execute: async ({ path }, { messages, toolCallId }) => {
+  execute: async ({ path }: { path: string }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
     // When called through AI SDK, the actual execution happens via ToolExecutor
     // This is a fallback that provides guidance
     return {
@@ -73,7 +73,7 @@ EXAMPLE:
     path: z.string().optional().describe('Directory path (default: root)'),
     pattern: z.string().optional().describe('Glob pattern to filter files (e.g., "*.ts", "*.tsx")'),
   }),
-  execute: async ({ path, pattern }) => {
+  execute: async ({ path, pattern }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
     return {
       type: 'list_files_request',
       path: path || '.',
@@ -96,7 +96,7 @@ IMPORTANT: Only use for NEW files. For existing files, use apply_diff.`,
     path: z.string().describe('File path where the new file will be created'),
     content: z.string().describe('Complete file content'),
   }),
-  execute: async ({ path, content }) => {
+  execute: async ({ path, content }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
     return {
       type: 'create_file_request',
       path,
@@ -135,7 +135,7 @@ TIPS:
     replace: z.string().describe('New code to insert'),
     thought: z.string().describe('Explain WHY this change is needed and WHAT it does'),
   }),
-  execute: async ({ path, search, replace, thought }) => {
+  execute: async ({ path, search, replace, thought }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
     return {
       type: 'apply_diff_request',
       path,
@@ -170,7 +170,7 @@ EXAMPLE:
     command: z.string().describe('Shell command to execute'),
     cwd: z.string().optional().describe('Working directory (default: sandbox root)'),
   }),
-  execute: async ({ command, cwd }) => {
+  execute: async ({ command, cwd }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
     return {
       type: 'exec_shell_request',
       command,
@@ -192,7 +192,7 @@ SUPPORTED: TypeScript, JavaScript, JSON, YAML, HTML, CSS`,
   parameters: z.object({
     paths: z.array(z.string()).describe('Array of file paths to check'),
   }),
-  execute: async ({ paths }) => {
+  execute: async ({ paths }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
     return {
       type: 'syntax_check_request',
       paths,
@@ -217,7 +217,7 @@ This tool creates an approval request that must be resolved before proceeding.`,
     reason: z.string().describe('Why this action is needed'),
     diff: z.string().optional().describe('Preview of changes (for edit operations)'),
   }),
-  execute: async ({ action, target, reason, diff }) => {
+  execute: async ({ action, target, reason, diff }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
     return {
       requires_approval: true,
       approval_request: {
@@ -247,7 +247,7 @@ Call this before making any changes.`,
     files_to_analyze: z.array(z.string()).describe('List of file paths to analyze'),
     proposed_task: z.string().describe('Description of the task you plan to do'),
   }),
-  execute: async ({ files_to_analyze, proposed_task }) => {
+  execute: async ({ files_to_analyze, proposed_task }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
     return {
       type: 'discovery_request',
       files_to_analyze,
@@ -277,7 +277,7 @@ Call this after discovery and before any edits.`,
     execution_order: z.array(z.string()).describe('Ordered list of file paths to process'),
     rollback_plan: z.string().describe('How to revert if something goes wrong'),
   }),
-  execute: async ({ task, files, execution_order, rollback_plan }) => {
+  execute: async ({ task, files, execution_order, rollback_plan }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
     return {
       success: true,
       plan: {
@@ -298,7 +298,7 @@ export const commitTool = tool({
     session_id: z.string().describe('Session identifier'),
     message: z.string().describe('Commit message describing the changes'),
   }),
-  execute: async ({ session_id, message }) => {
+  execute: async ({ session_id, message }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
     return {
       type: 'commit_request',
       session_id,
@@ -314,7 +314,7 @@ export const rollbackTool = tool({
     session_id: z.string().describe('Session identifier'),
     commit_id: z.string().describe('Commit ID to rollback to'),
   }),
-  execute: async ({ session_id, commit_id }) => {
+  execute: async ({ session_id, commit_id }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
     return {
       type: 'rollback_request',
       session_id,
@@ -330,7 +330,7 @@ export const historyTool = tool({
     session_id: z.string().describe('Session identifier'),
     limit: z.number().optional().describe('Maximum number of commits to return (default: 10)'),
   }),
-  execute: async ({ session_id, limit }) => {
+  execute: async ({ session_id, limit }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
     return {
       type: 'history_request',
       session_id,
@@ -354,3 +354,5 @@ export const allTools = {
   rollback: rollbackTool,
   history: historyTool,
 };
+
+

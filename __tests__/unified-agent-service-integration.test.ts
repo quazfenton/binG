@@ -8,7 +8,7 @@
  * - Mode detection
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import {
   processUnifiedAgentRequest,
   checkProviderHealth,
@@ -54,8 +54,15 @@ vi.mock('@/lib/sandbox/providers/llm-factory', () => ({
 }));
 
 describe('Unified Agent Service', () => {
+  const originalEnv = { ...process.env };
+
   beforeEach(() => {
     vi.clearAllMocks();
+    process.env = { ...originalEnv };
+  });
+
+  afterEach(() => {
+    process.env = { ...originalEnv };
   });
 
   describe('checkProviderHealth()', () => {
@@ -297,15 +304,17 @@ describe('Unified Agent Service', () => {
     });
 
     it('should include error details in result', async () => {
+      process.env.LLM_PROVIDER = 'invalid';
+      delete process.env.INVALID_API_KEY;
+
       const config: UnifiedAgentConfig = {
-        userMessage: 'Task',
+        userMessage: 'Task that will fail',
       };
 
       const result = await processUnifiedAgentRequest(config);
-      
-      if (!result.success) {
-        expect(result.error).toBeDefined();
-      }
+
+      expect(result.success).toBe(false);
+      expect(result.error).toBeDefined();
     });
   });
 

@@ -188,6 +188,7 @@ async function executeToolOnSandbox(
 
       case 'read_file': {
         const filePath = args.path as string;
+        const repoPath = filePath || '.';
         // Check rate limit for file operations
         rateLimitResult = await rateLimiter.check(rateLimitKey, 'fileOps')
         if (!rateLimitResult.allowed) {
@@ -392,19 +393,19 @@ async function executeToolOnSandbox(
           }
         }
 
-        const { remote = 'origin', branch, force } = args
-        const repoPath = path || '.'
+        const { remote = 'origin', branch, force, repoPath } = args
+        const pathToUse = repoPath || '.'
 
         // Validate inputs
-        if (!/^[a-zA-Z0-9._\-/]+$/.test(repoPath)) {
+        if (!/^[a-zA-Z0-9._\-/]+$/.test(pathToUse)) {
           return { success: false, output: 'Invalid repository path', exitCode: 1 }
         }
-        
+
         if (!/^[a-zA-Z0-9._\-/]+$/.test(remote)) {
           return { success: false, output: 'Invalid remote name', exitCode: 1 }
         }
 
-        let cmd = `cd ${repoPath} && git push ${remote}`
+        let cmd = `cd ${pathToUse} && git push ${remote}`
         if (force) {
           cmd += ' --force'
         }

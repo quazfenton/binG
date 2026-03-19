@@ -17,9 +17,8 @@ import type { SandboxProviderType } from '../../sandbox/providers'
 // Log deprecation warning on first import
 console.warn('[DEPRECATED] user-terminal-sessions.ts is deprecated. Use terminal-session-manager.ts instead.')
 
-// Re-export types for backward compatibility
-export type { TerminalSessionState as UserTerminalSession }
-export type { CreateSessionOptions, DisconnectSessionOptions, RestoreResult }
+// Re-export types for backward compatibility (only those not already exported from terminal-session-manager)
+// Note: UserTerminalSession, CreateSessionOptions, DisconnectSessionOptions, RestoreResult are already exported from terminal-session-manager
 
 // ============================================================================
 // DEPRECATED - Use terminalSessionManager from terminal-session-manager.ts
