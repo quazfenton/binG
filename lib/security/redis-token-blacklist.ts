@@ -182,11 +182,7 @@ export function createRedisBlacklistFromEnv(): RedisTokenBlacklist | null {
   }
 
   try {
-    const redis = new Redis(redisUrl, {
-      maxRetriesPerRequest: 3,
-      retryDelay: 100,
-      connectTimeout: 5000,
-    });
+    const redis = new Redis(redisUrl);
 
     const defaultTTLSeconds = parseInt(process.env.TOKEN_BLACKLIST_TTL || '86400', 10);
 

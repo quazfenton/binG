@@ -383,7 +383,9 @@ export class EnhancedSandboxEventEmitter extends UniversalEventEmitter {
    * Get subscriber count for a sandbox
    */
   getSubscriberCount(sandboxId: string): number {
-    return this.listenerCount(sandboxId)
+    // Note: We don't track actual subscriber count, return 1 if sandbox has events
+    const store = eventStores.get(sandboxId);
+    return store && store.events.length > 0 ? 1 : 0;
   }
 
   /**

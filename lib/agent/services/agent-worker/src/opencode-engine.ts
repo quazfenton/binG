@@ -206,6 +206,7 @@ class OpenCodeEngine extends EventEmitter {
       // Set timeout
       const timeout = setTimeout(() => {
         this.off('event', handleEvent);
+        this.off('event', doneHandler);
         this.pendingResolves.delete(sessionId);
         resolve(events); // Resolve with partial events on timeout
       }, 120000);

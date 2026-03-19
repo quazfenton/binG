@@ -63,7 +63,7 @@ export class MCPGateway {
         }
 
         await toolManager.registerTool(toolKey, {
-          provider: 'gateway',
+          provider: 'gateway' as any,
           toolName: tool.name,
           description: tool.description,
           category: tool.capability || 'integration',

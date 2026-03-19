@@ -337,7 +337,7 @@ export class OpencodeCapabilityProvider {
    * Sync file changes to VFS
    */
   private async syncFileChangesToVFS(
-    fileChanges: Array<{ path: string; operation: string; content?: string }>,
+    fileChanges: Array<{ path: string; operation: 'write' | 'patch' | 'delete'; content?: string }>,
     ownerId: string
   ): Promise<void> {
     if (!this.vfs) return

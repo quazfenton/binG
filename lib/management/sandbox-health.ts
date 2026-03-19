@@ -54,7 +54,7 @@ export async function checkSandboxHealth(
 
   try {
     // Try to execute a simple health check command
-    const result: any = await sandboxBridge.executeCommand(sandboxId, 'echo health', undefined, 5000);
+    const result: any = await sandboxBridge.executeCommand(sandboxId, 'echo health');
     
     const latency = Date.now() - startTime;
     

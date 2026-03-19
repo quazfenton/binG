@@ -239,7 +239,7 @@ export class S3StorageBackend extends StorageBackend {
 
       this.emit('download_complete', { remoteKey, localPath });
       sandboxMetrics.storageDownloadsTotal.inc({ backend: 's3', status: 'success' }, 1);
-      sandboxMetrics.storageDownloadSize.observe({ backend: 's3' }, stats.size);
+      sandboxMetrics.storageDownloadSize.observe(stats.size, { backend: 's3' });
       sandboxMetrics.storageOperationDuration.observe(duration
       , { backend: 's3', operation: 'download' });
       return true;
@@ -411,7 +411,7 @@ export class LocalStorageBackend extends StorageBackend {
 
       this.emit('download_complete', { remoteKey, localPath });
       sandboxMetrics.storageDownloadsTotal.inc({ backend: 'local', status: 'success' }, 1);
-      sandboxMetrics.storageDownloadSize.observe({ backend: 'local' }, stats.size);
+      sandboxMetrics.storageDownloadSize.observe(stats.size, { backend: 'local' });
       sandboxMetrics.storageOperationDuration.observe(duration
       , { backend: 'local', operation: 'download' });
       return true;
@@ -511,6 +511,7 @@ export function getLocalBackend(baseDir: string = '/tmp/snapshots'): LocalStorag
   }
   return localBackend;
 }
+
 
 
 

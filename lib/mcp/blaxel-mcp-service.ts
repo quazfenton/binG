@@ -260,12 +260,12 @@ export class BlaxelMcpService {
     serverId: string, 
     config: Partial<BlaxelDeploymentConfig>
   ): Promise<BlaxelMcpServer> {
-    const server = await this.request<BlaxelMcpServer>(`/functions/mcp/${serverId}`, {
+    const server: any = await this.request(`/functions/mcp/${serverId}`, {
       method: 'PATCH',
       body: JSON.stringify(config),
     });
 
-    return BlaxelMcpServerSchema.parse(server);
+    return BlaxelMcpServerSchema.parse(server) as any;
   }
 
   /**

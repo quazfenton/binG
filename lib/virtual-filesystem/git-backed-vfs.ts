@@ -277,8 +277,11 @@ export class GitBackedVFS {
       // Get shadow commit history
       const history = await this.shadowCommitManager.getCommitHistory(this.options.sessionId, 100);
 
-      // Find commit at target version using workspaceVersion only
-      const targetCommit = history.find(c => c.workspaceVersion === targetVersion);
+      // Find commit at target version - match by workspaceVersion or fall back to commit message
+      const targetCommit = history.find(c => 
+        c.workspaceVersion === targetVersion ||
+        (c.workspaceVersion === null && c.message?.includes(`v${targetVersion}`))
+      );
 
       if (!targetCommit) {
         return {

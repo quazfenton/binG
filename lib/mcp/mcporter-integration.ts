@@ -44,7 +44,7 @@ class MCPorterIntegration {
               },
               // @ts-ignore - env is optional for http transport
               env: transport.env,
-            },
+            } as any,
           ]
         }
 
@@ -65,7 +65,8 @@ class MCPorterIntegration {
                   url: new URL(normalizedUrl),
                   headers: {},
                 },
-              },
+                env: {},
+              } as any,
             ]
           } catch (error) {
             logger.warn(`Skipping invalid mcporter URL for server ${config.id}`)

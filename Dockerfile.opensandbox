@@ -61,8 +61,9 @@ RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 # Switch to non-root user
 USER nodejs
 
-# Start the OpenSandbox service (requires services/opensandbox to be implemented)
-# CMD ["node", "services/opensandbox/index.js"]
+# Placeholder command - services/opensandbox not yet implemented
+# When implemented, replace with: CMD ["node", "services/opensandbox/dist/index.js"]
+CMD ["tail", "-f", "/dev/null"]
 
 # ===========================================
 # ALTERNATIVE: Use official OpenSandbox server

@@ -57,7 +57,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     const result = await llm.runAgentLoop({
       userMessage,
       conversationHistory,
-      tools: [...ENHANCED_SANDBOX_TOOLS],
+      tools: [...ENHANCED_SANDBOX_TOOLS] as any,
       systemPrompt,
       maxSteps: 15,
       onToolExecution(toolName: string, args: Record<string, any>, toolResult: ToolResult) {
@@ -69,15 +69,11 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
         sandboxEvents.emit(sandboxId, 'agent:stream', { text: chunk })
         onStreamChunk?.(chunk)
       },
-      onReasoningChunk(chunk: string, type?: 'thought' | 'reasoning' | 'plan' | 'reflection') {
-        sandboxEvents.emit(sandboxId, 'agent:reasoning_chunk', { text: chunk, type })
-        onReasoningChunk?.(chunk, type)
-      },
       async executeTool(name: string, args: Record<string, any>): Promise<ToolResult> {
         sandboxEvents.emit(sandboxId, 'agent:tool_start', { toolName: name, args })
         return executeToolOnSandbox(sandboxHandle, name as ToolName, args, userId)
       },
-    })
+    } as any)
 
     sandboxEvents.emit(sandboxId, 'agent:complete', {
       response: result.response,

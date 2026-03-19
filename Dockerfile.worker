@@ -47,7 +47,10 @@ COPY lib/agent/services/agent-worker/src ./services/agent-worker/src
 
 # Build the worker service
 WORKDIR /app/services/agent-worker
-RUN pnpm install --frozen-lockfile --prod && pnpm build
+RUN pnpm install --frozen-lockfile && pnpm build
+
+# Remove dev dependencies and cache
+RUN pnpm prune --prod
 
 # Set environment variables
 WORKDIR /app

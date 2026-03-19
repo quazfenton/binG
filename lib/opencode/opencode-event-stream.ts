@@ -268,7 +268,7 @@ export class OpencodeEventStream {
    * Handle incoming event
    */
   private handleEvent(event: OpencodeEvent): void {
-    logger.debug('Received event:', event.type, event.properties)
+    logger.debug(`Received event: ${event.type}`, event.properties);
 
     switch (event.type) {
       case 'part':

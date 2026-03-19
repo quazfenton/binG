@@ -90,18 +90,18 @@ export const nangoGitHubTools = {
       page: z.number().optional().describe('Page number (default: 1)'),
       per_page: z.number().refine((val) => val <= 100, 'Items per page must be at most 100').optional().describe('Items per page (default: 30, max: 100)'),
     }),
-    execute: async ({ connectionId, page = 1, per_page = 30 }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+    execute: async ({ connectionId, page = 1, per_page = 30 }, ctx: any) => {
       const result = await executeNangoProxy('github', {
         method: 'GET',
         endpoint: '/user/repos',
         connectionId,
         params: { page: page.toString(), per_page: per_page.toString() },
       });
-      return result.success 
+      return result.success
         ? { success: true as const, repos: result.data }
         : { success: false as const, error: result.error };
     },
-  }),
+  } as any),
 
   github_create_issue: tool({
     description: `Create a new GitHub issue.
@@ -120,18 +120,18 @@ export const nangoGitHubTools = {
       body: z.string().optional().describe('Issue body/description'),
       labels: z.array(z.string()).optional().describe('Issue labels'),
     }),
-    execute: async ({ connectionId, owner, repo, title, body, labels }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+    execute: async ({ connectionId, owner, repo, title, body, labels }, ctx: any) => {
       const result = await executeNangoProxy('github', {
         method: 'POST',
         endpoint: `/repos/${owner}/${repo}/issues`,
         connectionId,
         body: { title, body, labels },
       });
-      return result.success 
+      return result.success
         ? { success: true as const, issue: result.data }
         : { success: false as const, error: result.error };
     },
-  }),
+  } as any),
 
   github_create_pull_request: tool({
     description: `Create a new GitHub pull request.
@@ -151,18 +151,18 @@ export const nangoGitHubTools = {
       base: z.string().describe('The name of the branch you want the changes pulled into'),
       body: z.string().optional().describe('PR description'),
     }),
-    execute: async ({ connectionId, owner, repo, title, head, base, body }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+    execute: async ({ connectionId, owner, repo, title, head, base, body }, ctx: any) => {
       const result = await executeNangoProxy('github', {
         method: 'POST',
         endpoint: `/repos/${owner}/${repo}/pulls`,
         connectionId,
         body: { title, head, base, body },
       });
-      return result.success 
+      return result.success
         ? { success: true as const, pull_request: result.data }
         : { success: false as const, error: result.error };
     },
-  }),
+  } as any),
 
   github_get_file: tool({
     description: `Get a file from a GitHub repository.
@@ -180,30 +180,30 @@ export const nangoGitHubTools = {
       path: z.string().describe('Path to the file'),
       ref: z.string().optional().describe('Branch name or commit SHA (default: default branch)'),
     }),
-    execute: async ({ connectionId, owner, repo, path, ref }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+    execute: async ({ connectionId, owner, repo, path, ref }, ctx: any) => {
       const endpoint = `/repos/${owner}/${repo}/contents/${path}${ref ? `?ref=${ref}` : ''}`;
       const result = await executeNangoProxy<any>('github', {
         method: 'GET',
         endpoint,
         connectionId,
       });
-      
+
       if (!result.success || !result.data) {
         return { success: false as const, error: result.error };
       }
-      
+
       // Decode base64 content
       try {
         const content = Buffer.from(result.data.content, 'base64').toString('utf-8');
         return { success: true as const, content, sha: result.data.sha };
       } catch (error) {
-        return { 
-          success: false as const, 
-          error: `Failed to decode content: ${error instanceof Error ? error.message : String(error)}` 
+        return {
+          success: false as const,
+          error: `Failed to decode content: ${error instanceof Error ? error.message : String(error)}`
         };
       }
     },
-  }),
+  } as any),
 };
 
 export const nangoSlackTools = {
@@ -222,18 +222,18 @@ export const nangoSlackTools = {
       text: z.string().describe('Message text'),
       thread_ts: z.string().optional().describe('Thread timestamp to reply in a thread'),
     }),
-    execute: async ({ connectionId, channel, text, thread_ts }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+    execute: async ({ connectionId, channel, text, thread_ts }, ctx: any) => {
       const result = await executeNangoProxy('slack', {
         method: 'POST',
         endpoint: '/chat.postMessage',
         connectionId,
         body: { channel, text, thread_ts },
       });
-      return result.success 
+      return result.success
         ? { success: true as const, message: result.data }
         : { success: false as const, error: result.error };
     },
-  }),
+  } as any),
 
   slack_list_channels: tool({
     description: `List Slack channels.
@@ -246,18 +246,18 @@ export const nangoSlackTools = {
       connectionId: z.string().describe('Nango connection ID for Slack'),
       limit: z.number().refine((val) => val <= 100, 'Limit must be at most 100').optional().describe('Maximum number of channels (default: 100)'),
     }),
-    execute: async ({ connectionId, limit = 100 }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+    execute: async ({ connectionId, limit = 100 }, ctx: any) => {
       const result = await executeNangoProxy('slack', {
         method: 'GET',
         endpoint: '/conversations.list',
         connectionId,
         params: { limit: limit.toString() },
       });
-      return result.success 
+      return result.success
         ? { success: true as const, channels: result.data?.channels || [] }
         : { success: false as const, error: result.error };
     },
-  }),
+  } as any),
 };
 
 export const nangoNotionTools = {
@@ -276,18 +276,18 @@ export const nangoNotionTools = {
         property: z.literal('object'),
       }).optional().describe('Filter by object type'),
     }),
-    execute: async ({ connectionId, query, filter }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+    execute: async ({ connectionId, query, filter }, ctx: any) => {
       const result = await executeNangoProxy('notion', {
         method: 'POST',
         endpoint: '/v1/search',
         connectionId,
         body: { query, filter },
       });
-      return result.success 
+      return result.success
         ? { success: true as const, results: result.data?.results || [] }
         : { success: false as const, error: result.error };
     },
-  }),
+  } as any),
 
   notion_create_page: tool({
     description: `Create a new Notion page.
@@ -304,7 +304,7 @@ export const nangoNotionTools = {
       title: z.string().describe('Page title'),
       content: z.string().optional().describe('Page content (markdown)'),
     }),
-    execute: async ({ connectionId, parent_page_id, title, content }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+    execute: async ({ connectionId, parent_page_id, title, content }, ctx: any) => {
       const result = await executeNangoProxy('notion', {
         method: 'POST',
         endpoint: '/v1/pages',
@@ -329,11 +329,11 @@ export const nangoNotionTools = {
             : undefined,
         },
       });
-      return result.success 
+      return result.success
         ? { success: true as const, page: result.data }
         : { success: false as const, error: result.error };
     },
-  }),
+  } as any),
 };
 
 export const nangoTools = {

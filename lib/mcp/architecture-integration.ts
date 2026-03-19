@@ -354,10 +354,12 @@ export async function getComposioMCPTools(
     // Strategy 1: Direct tools.get() (newest SDK)
     if (typeof composio?.tools?.get === 'function') {
       try {
-        const result = await composio.tools.get(userId, {
+        const composioAny = composio as any;
+        const result = await composioAny.tools.get(userId, {
           ...(requested.length > 0 ? { toolkits: requested } : {}),
           limit: 300,
-        })
+          authConfigIds: [],
+        } as any);
         tools = extractToolArray(result).map(normalizeTool)
         if (tools.length > 0) {
           logger.debug(`Loaded ${tools.length} Composio tools via tools.get()`)
@@ -377,6 +379,7 @@ export async function getComposioMCPTools(
 
     // Strategy 2: tools.list() with various params
     if (typeof composio?.tools?.list === 'function') {
+      const composioToolsAny = composio.tools as any;
       const tryParams = [
         requested.length > 0 ? { toolkit_slug: requested[0], limit: 300 } : { limit: 300 },
         requested.length > 0 ? { apps: requested.join(','), limit: 300 } : { limit: 300 },
@@ -385,7 +388,7 @@ export async function getComposioMCPTools(
       ]
       for (const params of tryParams) {
         try {
-          const result = params ? await composio.tools.list(params) : await composio.tools.list()
+          const result: any = params ? await composioToolsAny.list(params) : await composioToolsAny.list();
           tools = extractToolArray(result).map(normalizeTool)
           if (tools.length > 0) {
             logger.debug(`Loaded ${tools.length} Composio tools via tools.list()`)
@@ -530,7 +533,7 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
     function: {
       name: `git_${name}`,
       description: toolDef.description || `Git operation: ${name}`,
-      parameters: toolDef.parameters as any,
+      parameters: (toolDef as any).parameters || (toolDef as any).inputSchema || {} as any,
     },
   }))
 
