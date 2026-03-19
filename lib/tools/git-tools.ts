@@ -482,8 +482,8 @@ export function createGitTools(handle: SandboxHandle) {
     git_shadow_rollback: tool({
       description: 'Rollback workspace to a shadow commit',
       parameters: z.object({
-        sessionId: z.string().describe('Session ID for tracking'),
-        commitId: z.string().describe('Shadow commit ID to rollback to'),
+        sessionId: z.string().regex(/^[A-Za-z0-9_-]+$/).describe('Session ID for tracking'),
+        commitId: z.string().regex(/^[A-Za-z0-9-]+$/).describe('Shadow commit ID to rollback to'),
       }),
       execute: async ({ sessionId, commitId }) => {
         try {
@@ -526,7 +526,6 @@ export const standaloneGitTools = {
       execute: async ({ sessionId, message, files, author }) => {
         try {
           const shadowCommitManager = new ShadowCommitManager();
-          const vfs = new (await import('@/lib/virtual-filesystem/virtual-filesystem-service')).VirtualFilesystemService();
           
           // Track files in vfs
           const transactions = files.map(f => ({

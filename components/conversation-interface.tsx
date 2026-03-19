@@ -20,7 +20,7 @@ import { toast } from "sonner";
 import type { LLMProvider } from "@/lib/chat/llm-providers";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
-import { setCurrentMode, detectNewProjectFolder } from "@/lib/mode-manager";
+import { setCurrentMode, detectNewProjectFolder } from "@/lib/chat/mode-manager";
 import {
   createInputContext,
   processSafeContent,
@@ -110,47 +110,8 @@ function writePersistedConversationUiState(state: Omit<PersistedConversationUiSt
 
 const buildFilesystemHeaders = (): HeadersInit => buildApiHeaders();
 
-function applyUnifiedDiffToContent(currentContent: string, path: string, diffBody: string): string | null {
-  const diffText = diffBody.endsWith("\n") ? diffBody : `${diffBody}\n`;
-  const hasHeaders = diffText.includes("--- ") && diffText.includes("+++ ");
-  const unifiedDiff = hasHeaders
-    ? diffText
-    : `--- ${path}\n+++ ${path}\n${diffText}`;
-  try {
-    const parsed = parsePatch(unifiedDiff);
-    if (!parsed.length) return null;
-    const patched = applyPatch(currentContent, parsed[0]);
-    return patched === false ? null : patched;
-  } catch (error) {
-    console.error('Failed to apply unified diff:', error);
-    return null;
-  }
-}
-
-function applySimpleLineDiff(currentContent: string, diffBody: string): string | null {
-  // For new files (empty content), still try to apply the diff as it may contain the full file content
-  // Only skip if there's existing content that would be overwritten
-  if (currentContent && currentContent.trim().length > 0) {
-    // Still try to apply - the diff might be for modifying existing content
-  }
-  const lines = diffBody
-    .split("\n")
-    .filter((l) => /^(\+\s|\-\s|\s\s)/.test(l.trimStart()))
-    .map((l) => l.replace(/^\s+/, ""));
-  if (!lines.length) return null;
-  const resultLines: string[] = [];
-  for (const line of lines) {
-    if (line.startsWith("+ ")) {
-      resultLines.push(line.slice(2));
-    } else if (line.startsWith("- ")) {
-      continue;
-    } else if (line.startsWith("  ")) {
-      resultLines.push(line.slice(2));
-    }
-  }
-  const result = resultLines.join("\n");
-  return result && result !== currentContent ? result : null;
-}
+// Use shared file diff utilities
+import { applyDiffToContent } from '@/lib/chat/file-diff-utils';
 
 export default function ConversationInterface() {
   const { user } = useAuth();
@@ -274,6 +235,7 @@ export default function ConversationInterface() {
   const filesystemSessionIdRef = useRef(filesystemSessionId);
   const persistedUiStateUpdatedAtRef = useRef(0);
   const continueProcessedRef = useRef<string | null>(null);
+  const chatHistorySavedRef = useRef<string | null>(null);
 
   useEffect(() => {
     providerRef.current = currentProvider;
@@ -543,6 +505,13 @@ export default function ConversationInterface() {
       // Only save if the last message is from assistant (completed response)
       const lastMessage = messages[messages.length - 1];
       if (lastMessage && lastMessage.role === "assistant") {
+        // Track last message ID to prevent duplicate saves
+        const lastMessageId = lastMessage.id;
+        if (chatHistorySavedRef.current === lastMessageId) {
+          return; // Skip if we already saved this message
+        }
+        chatHistorySavedRef.current = lastMessageId;
+
         const savedChatId = saveCurrentChat(
           messages,
           currentConversationId || undefined,
@@ -552,9 +521,6 @@ export default function ConversationInterface() {
           setCurrentConversationId(savedChatId);
           persistFilesystemScope(savedChatId, filesystemSessionId);
         }
-
-        // Update chat history state to reflect the saved chat
-        setChatHistory(getAllChats());
 
         // Auto-speak AI responses if voice is enabled
         if (isVoiceEnabled && voiceService.getSettings().autoSpeak) {
@@ -593,11 +559,9 @@ export default function ConversationInterface() {
     messages,
     isLoading,
     saveCurrentChat,
-    // Note: removed currentConversationId from deps to prevent duplicate triggers
-    // when it's set in the same effect cycle
+    currentConversationId,
     filesystemSessionId,
     isVoiceEnabled,
-    getAllChats,
     handleSubmit,
     setInput
   ]);
@@ -1152,9 +1116,7 @@ export default function ConversationInterface() {
         currentContent = "";
       }
 
-      const nextContent =
-        applyUnifiedDiffToContent(currentContent, resolvedPath, entry.diff) ??
-        applySimpleLineDiff(currentContent, entry.diff);
+      const nextContent = applyDiffToContent(currentContent, entry.path, entry.diff);
 
       if (nextContent == null) {
         failed[entry.path] = failed[entry.path] || [];

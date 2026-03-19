@@ -6,7 +6,7 @@
  * from user prompts.
  */
 
-import { processResponse, type ProcessedResponse } from './mode-manager';
+import { processResponse, type ProcessedResponse } from './chat/mode-manager';
 
 export interface InputContext {
   isUserInput: boolean;

@@ -462,7 +462,7 @@ export class MastraWorkflowIntegration extends EventEmitter {
         },
       });
 
-      if ((result as any)?.status && (result as any).status !== 'success') {
+      if ((result as any)?.status && (result as any).status !== 'success' && (result as any).status !== 'suspended') {
         throw new Error((result as any).error || `HITL workflow ended with status ${(result as any).status}`);
       }
 

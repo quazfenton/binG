@@ -96,7 +96,8 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
 
     // Check for the Origin Private File System API via navigator.storage
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
-    return 'storage' in navigator && 'getDirectory' in (navigator as any).storage;
+    const nav = navigator as any;
+    return 'storage' in nav && nav.storage != null && 'getDirectory' in nav.storage;
   }
 
   /**

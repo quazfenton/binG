@@ -160,10 +160,11 @@ export class OPFSStorageBackend implements VFSStorageBackend {
    * Check if OPFS is supported
    */
   static isSupported(): boolean {
-    return typeof window !== 'undefined' &&
-           'storage' in navigator &&
-           typeof navigator.storage === 'object' && navigator.storage !== null &&
-           'getDirectory' in navigator.storage;
+    if (typeof window === 'undefined') {
+      return false;
+    }
+    const nav = navigator as any;
+    return 'storage' in nav && nav.storage != null && 'getDirectory' in nav.storage;
   }
 
   // ========== Private Methods ==========

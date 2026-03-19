@@ -80,3 +80,10 @@ export type {
   InFlightRequest,
   DeduplicationConfig,
 } from './request-deduplicator';
+
+// Image loader with SSRF protection
+export {
+  validateImageUrl,
+  isHostnameSafe,
+  getHostname,
+} from './image-loader';

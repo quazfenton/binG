@@ -143,6 +143,7 @@ export function useChatHistory() {
 
     // Limit to 50 chats and save
     localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedChats.slice(0, 50)))
+    invalidateCache()
     return finalChatId
   }, [getAllChats, invalidateCache])
 
@@ -158,11 +159,10 @@ export function useChatHistory() {
 
   const deleteChat = useCallback(
     (chatId: string) => {
-      // Invalidate cache before deleting
-      invalidateCache()
       const chats = getAllChats()
       const updatedChats = chats.filter((chat: ChatHistory) => chat.id !== chatId)
       localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedChats))
+      invalidateCache()
     },
     [getAllChats, invalidateCache],
   )

@@ -18,6 +18,7 @@
  * @see app/api/preview/sandbox/route.ts
  */
 
+import path from 'path'
 import type { ToolResult, PreviewInfo } from '../types'
 
 // ---------------------------------------------------------------------------
@@ -157,12 +158,21 @@ async function execCommand(serverId: string, command: string, cwd = '/workspace'
 }
 
 async function writeFileTo(serverId: string, filePath: string, content: string): Promise<void> {
-  const dir = filePath.substring(0, filePath.lastIndexOf('/'))
+  // SECURITY: Normalize and validate path to prevent traversal attacks
+  const normalizedPath = path.posix.normalize(filePath)
+  const workspaceRoot = '/workspace'
+  
+  // Ensure path stays within workspace
+  if (!normalizedPath.startsWith(workspaceRoot + '/') && normalizedPath !== workspaceRoot) {
+    throw new Error(`Invalid path: Path traversal detected. Path must be within ${workspaceRoot}`)
+  }
+  
+  const dir = normalizedPath.substring(0, normalizedPath.lastIndexOf('/'))
   if (dir) {
     await execCommand(serverId, `mkdir -p ${JSON.stringify(dir)}`)
   }
   const encoded = Buffer.from(content, 'utf-8').toString('base64')
-  await execCommand(serverId, `printf %s ${JSON.stringify(encoded)} | base64 -d > ${JSON.stringify(filePath)}`)
+  await execCommand(serverId, `printf %s ${JSON.stringify(encoded)} | base64 -d > ${JSON.stringify(normalizedPath)}`)
 }
 
 async function getEndpointUrl(serverId: string, port: number): Promise<string> {
@@ -226,10 +236,19 @@ export class OpenSandboxPreviewService {
 
       const sandboxId = `osb-preview-${serverId}`
 
-      // Write all project files
+      // Write all project files with path traversal protection
       let filesWritten = 0
       for (const [filePath, content] of Object.entries(req.files)) {
-        const targetPath = filePath.startsWith('/') ? `/workspace${filePath}` : `/workspace/${filePath}`
+        // SECURITY: Sanitize file path to prevent traversal
+        const sanitizedPath = filePath.replace(/^\/+/, '') // Remove leading slashes
+        const targetPath = path.posix.join('/workspace', sanitizedPath)
+        
+        // Double-check the resolved path stays within workspace
+        if (!targetPath.startsWith('/workspace/')) {
+          logs.push(`Skipped malicious path: ${filePath}`)
+          continue
+        }
+        
         await writeFileTo(serverId, targetPath, content)
         filesWritten++
       }
@@ -318,7 +337,15 @@ export class OpenSandboxPreviewService {
     const logs: string[] = []
     try {
       for (const [filePath, content] of Object.entries(files)) {
-        const targetPath = filePath.startsWith('/') ? `/workspace${filePath}` : `/workspace/${filePath}`
+        // SECURITY: Sanitize file path to prevent traversal
+        const sanitizedPath = filePath.replace(/^\/+/, '')
+        const targetPath = path.posix.join('/workspace', sanitizedPath)
+        
+        if (!targetPath.startsWith('/workspace/')) {
+          logs.push(`Skipped malicious path: ${filePath}`)
+          continue
+        }
+        
         await writeFileTo(session.serverId, targetPath, content)
       }
       logs.push(`Updated ${Object.keys(files).length} files`)

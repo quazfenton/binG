@@ -24,6 +24,7 @@ import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@/lib/agent/workforce-manager';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
+import { sanitizeFileEditTags, extractFileEdits, extractFencedDiffEdits as extractFencedDiffEditsShared } from '@/lib/chat/file-edit-parser';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -1155,7 +1156,8 @@ function sanitizeAssistantDisplayContent(content: string): string {
   // Remove explicit command envelopes
   next = next.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
   next = next.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
-  next = next.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
+  // Remove file_edit tags using shared parser
+  next = sanitizeFileEditTags(next);
 
   // Remove <fs-actions>...</fs-actions> XML tag blocks (LLM sometimes uses XML instead of code blocks)
   next = next.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
@@ -1822,34 +1824,13 @@ function buildAgenticContext(messages: LLMMessage[]): string {
   return parts.join('\n\n');
 }
 
+// Use shared extractors from file-edit-parser.ts
 function extractTaggedFileEdits(content: string): Array<{ path: string; content: string }> {
-  const edits: Array<{ path: string; content: string }> = [];
-  const regex = /<file_edit\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_edit>/gi;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(content)) !== null) {
-    const filePath = match[1]?.trim();
-    const fileContent = match[2] ?? '';
-    if (!filePath) continue;
-    edits.push({ path: filePath, content: fileContent });
-  }
-
-  return edits;
+  return extractFileEdits(content).map(edit => ({ path: edit.path, content: edit.content }));
 }
 
 function extractFencedDiffEdits(content: string): Array<{ path: string; diff: string }> {
-  const edits: Array<{ path: string; diff: string }> = [];
-  const regex = /```diff\s+([^\n]+)\n([\s\S]*?)```/gi;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(content)) !== null) {
-    const targetPath = match[1]?.trim();
-    const diff = match[2] ?? '';
-    if (!targetPath) continue;
-    edits.push({ path: targetPath, diff });
-  }
-
-  return edits;
+  return extractFencedDiffEditsShared(content);
 }
 
 function extractFsActionWrites(content: string): Array<{ path: string; content: string }> {

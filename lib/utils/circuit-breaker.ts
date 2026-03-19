@@ -349,11 +349,11 @@ export function createCircuitBreakerWithMetrics(
       result: 'success',
     } as any);
     sandboxMetrics.circuitBreakerDuration.observe(
+      duration / 1000, // Convert milliseconds to seconds
       {
         provider,
         operation: 'call',
-      } as any,
-      duration / 1000 // Convert milliseconds to seconds
+      } as any
     );
   });
 
@@ -364,11 +364,11 @@ export function createCircuitBreakerWithMetrics(
       result: 'failure',
     } as any);
     sandboxMetrics.circuitBreakerDuration.observe(
+      duration / 1000, // Convert milliseconds to seconds
       {
         provider,
         operation: 'call',
-      } as any,
-      duration / 1000 // Convert milliseconds to seconds
+      } as any
     );
   });
 
