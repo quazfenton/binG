@@ -979,7 +979,7 @@ export class ResponseRouter {
       // Emit as request_files since these are full file contents, not patches
       const rawFiles = this.parseRawCodeBlocks(content)
       if (rawFiles && rawFiles.length > 0) {
-        return { request_files: rawFiles }
+        return { request_files: rawFiles.map(f => f.path) }
       }
 
       return undefined

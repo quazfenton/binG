@@ -353,7 +353,9 @@ export function ExperimentalWorkspacePanel() {
   // Get agent activity from hook (will be wired later)
   // For now, using local state that can be updated by parent component via props
   const { agentActivity: externalAgentActivity, setAgentActivity: setExternalAgentActivity } =
-    (window as any).__agentActivity || { agentActivity: undefined, setAgentActivity: undefined };
+    typeof window !== 'undefined' 
+      ? (window as any).__agentActivity || { agentActivity: undefined, setAgentActivity: undefined }
+      : { agentActivity: undefined, setAgentActivity: undefined };
 
   const vfs = useVirtualFilesystem();
   const {
@@ -906,11 +908,18 @@ export function ExperimentalWorkspacePanel() {
     toast.info('File copied - click paste in a folder');
   }, []);
 
-  const handlePasteToFolder = useCallback(async (targetFolderPath: string) => {
-    if (!clipboard) return;
+  const handlePasteToFolder = useCallback(async (targetFolderPath: string, currentClipboard?: typeof clipboard) => {
+    const activeClipboard = currentClipboard || clipboard;
+    if (!activeClipboard) return;
 
-    const sourceName = clipboard.sourcePath.split('/').pop() || '';
+    const sourceName = activeClipboard.sourcePath.split('/').pop() || '';
     const targetPath = targetFolderPath === '/' ? `/${sourceName}` : `${targetFolderPath}/${sourceName}`;
+
+    // Bail out when the target path equals the source path
+    if (targetPath === activeClipboard.sourcePath) {
+      toast.info('Cannot paste file into itself');
+      return;
+    }
 
     // Check if target exists
     const exists = vfsSnapshot?.files.some(f => f.path === targetPath);
@@ -919,7 +928,7 @@ export function ExperimentalWorkspacePanel() {
         title: 'File Exists',
         message: `A file named "${sourceName}" already exists in this folder. Overwrite?`,
         onConfirm: async () => {
-          await performPaste(targetPath);
+          await performPaste(targetPath, activeClipboard);
           setShowConfirmDialog(false);
           setConfirmDialogData(null);
         },
@@ -928,18 +937,19 @@ export function ExperimentalWorkspacePanel() {
       return;
     }
 
-    await performPaste(targetPath);
+    await performPaste(targetPath, activeClipboard);
   }, [clipboard, vfsSnapshot?.files]);
 
-  const performPaste = async (targetPath: string) => {
-    if (!clipboard) return;
+  const performPaste = async (targetPath: string, currentClipboard?: typeof clipboard) => {
+    const activeClipboard = currentClipboard || clipboard;
+    if (!activeClipboard) return;
 
     try {
       // Read source file
       const readResponse = await fetch('/api/filesystem/read', {
         method: 'POST',
         headers: buildApiHeaders(),
-        body: JSON.stringify({ path: resolveScopedPath(clipboard.sourcePath, vfs?.currentPath || '/') }),
+        body: JSON.stringify({ path: resolveScopedPath(activeClipboard.sourcePath, vfs?.currentPath || '/') }),
       });
 
       if (!readResponse.ok) {
@@ -953,16 +963,16 @@ export function ExperimentalWorkspacePanel() {
       await writeFile(targetPath, content);
 
       // If cut, delete source
-      if (clipboard.operation === 'cut') {
+      if (activeClipboard.operation === 'cut') {
         await fetch('/api/filesystem/delete', {
           method: 'POST',
           headers: buildApiHeaders(),
-          body: JSON.stringify({ path: resolveScopedPath(clipboard.sourcePath, vfs?.currentPath || '/') }),
+          body: JSON.stringify({ path: resolveScopedPath(activeClipboard.sourcePath, vfs?.currentPath || '/') }),
         });
       }
 
       await listDirectory(vfs?.currentPath || '/');
-      toast.success(`File ${clipboard.operation === 'cut' ? 'moved' : 'copied'} successfully`);
+      toast.success(`File ${activeClipboard.operation === 'cut' ? 'moved' : 'copied'} successfully`);
       setClipboard(null);
     } catch (err: any) {
       toast.error(`Operation failed: ${err.message}`);
@@ -1008,15 +1018,15 @@ export function ExperimentalWorkspacePanel() {
     await performRename(newPath);
   }, [renamingFile, renameValue, vfsSnapshot?.files]);
 
-  const performRename = async (newPath: string) => {
-    if (!renamingFile) return;
+  const performRename = async (newPath: string, oldPath: string) => {
+    if (!oldPath) return;
 
     try {
       // Read source
       const readResponse = await fetch('/api/filesystem/read', {
         method: 'POST',
         headers: buildApiHeaders(),
-        body: JSON.stringify({ path: resolveScopedPath(renamingFile, vfs?.currentPath || '/') }),
+        body: JSON.stringify({ path: resolveScopedPath(oldPath, vfs?.currentPath || '/') }),
       });
 
       if (!readResponse.ok) throw new Error('Failed to read file');
@@ -1095,15 +1105,20 @@ export function ExperimentalWorkspacePanel() {
     setDraggedFile(null);
   }, [draggedFile, vfsSnapshot?.files]);
 
-  const performMove = async (targetPath: string) => {
-    if (!draggedFile) return;
+  const performMove = async (targetPath: string, sourcePath: string) => {
+    if (!sourcePath) return;
+
+    // Bail out when the target path equals the source path
+    if (targetPath === sourcePath) {
+      return;
+    }
 
     try {
       // Read source
       const readResponse = await fetch('/api/filesystem/read', {
         method: 'POST',
         headers: buildApiHeaders(),
-        body: JSON.stringify({ path: resolveScopedPath(draggedFile, vfs?.currentPath || '/') }),
+        body: JSON.stringify({ path: resolveScopedPath(sourcePath, vfs?.currentPath || '/') }),
       });
 
       if (!readResponse.ok) throw new Error('Failed to read file');
@@ -1114,11 +1129,12 @@ export function ExperimentalWorkspacePanel() {
       await writeFile(targetPath, content);
 
       // Delete source
-      await fetch('/api/filesystem/delete', {
+      const deleteResponse = await fetch('/api/filesystem/delete', {
         method: 'POST',
         headers: buildApiHeaders(),
-        body: JSON.stringify({ path: resolveScopedPath(draggedFile, vfs?.currentPath || '/') }),
+        body: JSON.stringify({ path: resolveScopedPath(sourcePath, vfs?.currentPath || '/') }),
       });
+      if (!deleteResponse.ok) throw new Error('Failed to delete source file');
 
       await listDirectory(vfs?.currentPath || '/');
       toast.success('File moved successfully');

@@ -1,0 +1,523 @@
+app/api/chat/route.ts(581,67): error TS2345: Argument of type '{ messages: LLMMessage[]; provider: string; model: string; temperature: number; maxTokens: number; stream: boolean; apiKeys: Record<string, string>; requestId: string; userId: string; enableTools: boolean; enableSandbox: boolean; enableComposio: boolean; }' is not assignable to parameter of type 'RouterRequest'.
+  Types of property 'messages' are incompatible.
+    Type 'import("C:/Users/ceclabs/Downloads/binG/lib/chat/llm-providers").LLMMessage[]' is not assignable to type 'import("C:/Users/ceclabs/Downloads/binG/lib/api/response-router").LLMMessage[]'.
+      Type 'import("C:/Users/ceclabs/Downloads/binG/lib/chat/llm-providers").LLMMessage' is not assignable to type 'import("C:/Users/ceclabs/Downloads/binG/lib/api/response-router").LLMMessage'.
+        Types of property 'role' are incompatible.
+          Type '"user" | "assistant" | "system" | "tool"' is not assignable to type 'LLMMessageRole'.
+            Type '"tool"' is not assignable to type 'LLMMessageRole'.
+app/api/desktop/[id]/[action]/route.ts(13,10): error TS2459: Module '"../route"' declares 'activeDesktops' locally, but it is not exported.
+components/experimental-workspace-panel.tsx(1192,19): error TS2554: Expected 3 arguments, but got 1.
+components/experimental-workspace-panel.tsx(1548,46): error TS2554: Expected 3 arguments, but got 1.
+lib/agent/nullclaw-integration.ts(101,5): error TS2353: Object literal may only specify known properties, and 'baseUrl' does not exist in type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(123,33): error TS2339: Property 'baseUrl' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(145,31): error TS2339: Property 'mode' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(161,13): error TS2339: Property 'apiKey' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(222,28): error TS2339: Property 'mode' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(253,41): error TS2339: Property 'basePort' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(300,11): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(300,65): error TS2339: Property 'baseUrl' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(303,42): error TS2339: Property 'baseUrl' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(304,46): error TS2339: Property 'baseUrl' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(304,99): error TS2339: Property 'baseUrl' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(306,46): error TS2339: Property 'baseUrl' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(311,11): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(314,43): error TS2339: Property 'mode' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(315,77): error TS2339: Property 'poolSize' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(317,11): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(326,11): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(354,28): error TS2339: Property 'mode' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(355,47): error TS2304: Cannot find name 'uuidv4'.
+lib/agent/nullclaw-integration.ts(359,7): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(401,7): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(403,22): error TS2304: Cannot find name 'spawn'.
+lib/agent/nullclaw-integration.ts(410,16): error TS2339: Property 'image' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(416,9): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(421,9): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(440,15): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(449,13): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(463,11): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(486,13): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(495,11): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(498,9): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(582,11): error TS2304: Cannot find name 'uuidv4'.
+lib/agent/nullclaw-integration.ts(591,7): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(607,7): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(611,7): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(674,54): error TS2339: Property 'baseUrl' does not exist on type 'NullclawConfig'.
+lib/agent/nullclaw-integration.ts(714,26): error TS2304: Cannot find name 'spawn'.
+lib/agent/nullclaw-integration.ts(718,9): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(721,9): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(730,5): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(738,11): error TS2304: Cannot find name 'logger'.
+lib/agent/nullclaw-integration.ts(745,5): error TS2304: Cannot find name 'logger'.
+lib/agent/v2-executor.ts(245,64): error TS2367: This comparison appears to be unintentional because the types '"opencode" | "cli"' and '"nullclaw"' have no overlap.
+lib/chat/fast-agent-interceptor.ts(41,50): error TS2345: Argument of type 'string | { type: "text" | "image_url"; text?: string; image_url?: { url: string; }; }[]' is not assignable to parameter of type 'string'.
+  Type '{ type: "text" | "image_url"; text?: string; image_url?: { url: string; }; }[]' is not assignable to type 'string'.
+lib/chat/fast-agent-interceptor.ts(86,9): error TS2353: Object literal may only specify known properties, and 'taskComplexity' does not exist in type 'InterceptorRequest'.
+lib/chat/llm-provider-router.ts(387,43): error TS2341: Property 'metrics' is private and only accessible within class 'LLMProviderLatencyTracker'.
+lib/chat/priority-request-router.ts(1253,22): error TS2339: Property 'tool_calls' does not exist on type 'LLMMessage'.
+lib/chat/priority-request-router.ts(1254,36): error TS2339: Property 'tool_calls' does not exist on type 'LLMMessage'.
+lib/computer/e2b-desktop-provider-enhanced.ts(620,5): error TS2739: Type '{ id: string; uptime: number; actionCount: number; lastActionAt: undefined; resolution: [number, number]; streamUrl: string; mcpConfigured: boolean; activeSessions: number; }' is missing the following properties from type 'DesktopStats': actionsExecuted, screenshotsTaken, commandsRun
+lib/computer/e2b-desktop-provider-enhanced.ts(646,21): error TS2339: Property 'dragMouse' does not exist on type 'DesktopSandboxHandle'.
+lib/computer/e2b-desktop-provider-enhanced.ts(652,21): error TS2339: Property 'pressKeys' does not exist on type 'DesktopSandboxHandle'.
+lib/computer/e2b-desktop-provider-enhanced.ts(796,37): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(this: typeof Sandbox, opts?: SandboxOpts): Promise<Sandbox>', gave the following error.
+    Object literal may only specify known properties, and 'template' does not exist in type 'SandboxOpts'.
+  Overload 2 of 2, '(this: typeof Sandbox, template: string, opts?: SandboxOpts): Promise<Sandbox>', gave the following error.
+    Argument of type '{ template: string; timeoutMs: number; resolution: [number, number]; dpi: number; }' is not assignable to parameter of type 'string'.
+lib/computer/e2b-desktop-provider-enhanced.ts(807,35): error TS2339: Property 'screen' does not exist on type 'Sandbox'.
+lib/computer/e2b-desktop-provider-enhanced.ts(814,75): error TS2339: Property 'id' does not exist on type 'Sandbox'.
+lib/computer/e2b-desktop-provider-enhanced.ts(890,11): error TS2322: Type 'Buffer<ArrayBufferLike>' is not assignable to type 'string'.
+lib/crewai/index.ts(77,30): error TS2339: Property 'success' does not exist on type 'AsyncGenerator<StreamChunk, any, any> | CrewAIRunResult'.
+  Property 'success' does not exist on type 'AsyncGenerator<StreamChunk, any, any>'.
+lib/crewai/index.ts(77,56): error TS2339: Property 'response' does not exist on type 'AsyncGenerator<StreamChunk, any, any> | CrewAIRunResult'.
+  Property 'response' does not exist on type 'AsyncGenerator<StreamChunk, any, any>'.
+lib/crewai/mcp/server.ts(88,26): error TS2339: Property 'json' does not exist on type 'CrewOutput'.
+lib/crewai/observability/index.ts(233,10): error TS2339: Property 'tokenUsage' does not exist on type 'Span'.
+lib/crewai/observability/index.ts(236,10): error TS2339: Property 'cost' does not exist on type 'Span'.
+lib/crewai/observability/index.ts(240,58): error TS2339: Property 'cost' does not exist on type 'Span'.
+lib/crewai/observability/index.ts(397,45): error TS2339: Property 'type' does not exist on type 'Span'.
+lib/crewai/observability/index.ts(405,28): error TS2339: Property 'tokenUsage' does not exist on type 'Span'.
+lib/crewai/observability/index.ts(406,22): error TS2339: Property 'cost' does not exist on type 'Span'.
+lib/crewai/runtime/self-healing.ts(240,43): error TS2559: Type 'string' has no properties in common with type 'KickoffOptions'.
+lib/crewai/runtime/self-healing.ts(262,25): error TS2339: Property 'onRetry' does not exist on type 'RetryBudget'.
+lib/crewai/runtime/self-healing.ts(263,23): error TS2339: Property 'onRetry' does not exist on type 'RetryBudget'.
+lib/crewai/tools/crewai-tools.ts(275,49): error TS2769: No overload matches this call.
+  Overload 1 of 3, '(path: PathLike | FileHandle, options?: { encoding?: null; flag?: OpenMode; } & Abortable): Promise<NonSharedBuffer>', gave the following error.
+    Type 'string' is not assignable to type 'null'.
+  Overload 2 of 3, '(path: PathLike | FileHandle, options: BufferEncoding | ({ encoding: BufferEncoding; flag?: OpenMode; } & Abortable)): Promise<...>', gave the following error.
+    Type 'string' is not assignable to type 'BufferEncoding'.
+  Overload 3 of 3, '(path: PathLike | FileHandle, options?: BufferEncoding | (ObjectEncodingOptions & Abortable & { flag?: OpenMode; })): Promise<...>', gave the following error.
+    Type 'string' is not assignable to type 'BufferEncoding'.
+lib/database/connection.ts(58,5): error TS2353: Object literal may only specify known properties, and 'register' does not exist in type 'Partial<Database>'.
+lib/image-generation/providers/mistral-provider.ts(403,21): error TS2358: The left-hand side of an 'instanceof' expression must be of type 'any', an object type or a type parameter.
+lib/image-generation/providers/mistral-provider.ts(406,36): error TS2358: The left-hand side of an 'instanceof' expression must be of type 'any', an object type or a type parameter.
+lib/management/health-checker.ts(194,9): error TS2345: Argument of type '{ provider: SandboxProviderType; }' is not assignable to parameter of type 'number'.
+lib/management/health-checker.ts(302,27): error TS2341: Property 'config' is private and only accessible within class 'ProviderHealthChecker'.
+lib/management/sandbox-health.ts(57,92): error TS2554: Expected 2-3 arguments, but got 4.
+lib/mcp/architecture-integration.ts(357,57): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(userId: string, filters: ToolListParams, options?: ToolOptions): Promise<OpenAiToolCollection>', gave the following error.
+    Argument of type '{ limit: number; toolkits?: string[]; }' is not assignable to parameter of type 'ToolListParams'.
+      Type '{ limit: number; toolkits?: string[]; }' is not assignable to type 'AuthConfigIdsOnlyParams'.
+        Property 'authConfigIds' is missing in type '{ limit: number; toolkits?: string[]; }' but required in type '{ authConfigIds: string[]; tools?: never; toolkits?: never; }'.
+  Overload 2 of 2, '(userId: string, slug: string, options?: ToolOptions): Promise<OpenAiToolCollection>', gave the following error.
+    Argument of type '{ limit: number; toolkits?: string[]; }' is not assignable to parameter of type 'string'.
+lib/mcp/architecture-integration.ts(379,33): error TS2339: Property 'list' does not exist on type 'Tools<unknown, unknown, OpenAIProvider>'.
+lib/mcp/architecture-integration.ts(388,56): error TS2339: Property 'list' does not exist on type 'Tools<unknown, unknown, OpenAIProvider>'.
+lib/mcp/architecture-integration.ts(388,92): error TS2339: Property 'list' does not exist on type 'Tools<unknown, unknown, OpenAIProvider>'.
+lib/mcp/architecture-integration.ts(434,65): error TS2345: Argument of type '{ limit: number; toolkits?: string[]; }' is not assignable to parameter of type 'ToolListParams'.
+  Type '{ limit: number; toolkits?: string[]; }' is not assignable to type 'AuthConfigIdsOnlyParams'.
+    Property 'authConfigIds' is missing in type '{ limit: number; toolkits?: string[]; }' but required in type '{ authConfigIds: string[]; tools?: never; toolkits?: never; }'.
+lib/mcp/architecture-integration.ts(533,27): error TS2339: Property 'parameters' does not exist on type 'Tool<unknown, unknown>'.
+  Property 'parameters' does not exist on type '{ description?: string; title?: string; providerOptions?: SharedV3ProviderOptions; inputSchema: FlexibleSchema<unknown>; inputExamples?: { input: unknown; }[]; ... 4 more ...; onInputAvailable?: (options: { ...; } & ToolExecutionOptions) => void | PromiseLike<...>; } & { ...; } & { ...; } & { ...; }'.
+lib/mcp/blaxel-mcp-service.ts(268,5): error TS2322: Type '{ id: string; tools: { description?: string; name?: string; inputSchema?: Record<string, any>; }[]; createdAt: string; updatedAt: string; status?: "error" | "deployed" | "deleted" | "deploying"; ... 4 more ...; transport?: "websocket" | "http-stream"; }' is not assignable to type 'BlaxelMcpServer'.
+  Property 'name' is optional in type '{ id: string; tools: { description?: string; name?: string; inputSchema?: Record<string, any>; }[]; createdAt: string; updatedAt: string; status?: "error" | "deployed" | "deleted" | "deploying"; ... 4 more ...; transport?: "websocket" | "http-stream"; }' but required in type 'BlaxelMcpServer'.
+lib/mcp/gateway.ts(66,11): error TS2322: Type '"gateway"' is not assignable to type 'IntegrationProvider'.
+lib/mcp/mcporter-integration.ts(31,16): error TS2345: Argument of type '(this: undefined, config: MCPServerConfig) => { name: string; description: string; command: { kind: "stdio"; command: string; args: string[]; cwd: string; }; env: Record<string, string>; }[] | { ...; }[]' is not assignable to parameter of type '(this: undefined, value: MCPServerConfig, index: number, array: MCPServerConfig[]) => { name: string; description: string; command: { kind: "stdio"; command: string; args: string[]; cwd: string; }; env: Record<...>; } | readonly { ...; }[]'.
+  Type '{ name: string; description: string; command: { kind: "stdio"; command: string; args: string[]; cwd: string; }; env: Record<string, string>; }[] | { name: string; description: string; command: { ...; }; }[]' is not assignable to type '{ name: string; description: string; command: { kind: "stdio"; command: string; args: string[]; cwd: string; }; env: Record<string, string>; } | readonly { name: string; description: string; command: { ...; }; env: Record<...>; }[]'.
+    Type '{ name: string; description: string; command: { kind: "http"; url: URL; headers: {}; }; }[]' is not assignable to type '{ name: string; description: string; command: { kind: "stdio"; command: string; args: string[]; cwd: string; }; env: Record<string, string>; } | readonly { name: string; description: string; command: { ...; }; env: Record<...>; }[]'.
+      Type '{ name: string; description: string; command: { kind: "http"; url: URL; headers: {}; }; }[]' is not assignable to type 'readonly { name: string; description: string; command: { kind: "stdio"; command: string; args: string[]; cwd: string; }; env: Record<string, string>; }[]'.
+        Property 'env' is missing in type '{ name: string; description: string; command: { kind: "http"; url: URL; headers: {}; }; }' but required in type '{ name: string; description: string; command: { kind: "stdio"; command: string; args: string[]; cwd: string; }; env: Record<string, string>; }'.
+lib/opencode/opencode-capability-provider.ts(333,5): error TS2322: Type '{ path: string; operation: string; content?: string; }[]' is not assignable to type '{ path: string; operation: "write" | "patch" | "delete"; content?: string; }[]'.
+  Type '{ path: string; operation: string; content?: string; }' is not assignable to type '{ path: string; operation: "write" | "patch" | "delete"; content?: string; }'.
+    Types of property 'operation' are incompatible.
+      Type 'string' is not assignable to type '"write" | "patch" | "delete"'.
+lib/opencode/opencode-event-stream.ts(271,49): error TS2554: Expected 1-2 arguments, but got 3.
+lib/orchestra/agent-loop.ts(60,7): error TS2322: Type '({ name: string; description: string; parameters: { type: string; properties: { command: { type: string; description: string; }; path?: undefined; content?: undefined; x?: undefined; y?: undefined; button?: undefined; ... 37 more ...; public?: undefined; }; required: string[]; }; validate: (args: { ...; }) => { ...;...' is not assignable to type 'LLMToolDefinition[]'.
+  Type '{ name: string; description: string; parameters: { type: string; properties: { command: { type: string; description: string; }; path?: undefined; content?: undefined; x?: undefined; y?: undefined; button?: undefined; ... 37 more ...; public?: undefined; }; required: string[]; }; validate: (args: { ...; }) => { ...; ...' is not assignable to type 'LLMToolDefinition'.
+    Type '{ name: string; description: string; parameters: { type: string; properties: { region: { type: string; properties: { x: { type: string; }; y: { type: string; }; width: { type: string; }; height: { type: string; }; }; description: string; }; ... 42 more ...; public?: undefined; }; required?: undefined; }; validate?: ...' is not assignable to type 'LLMToolDefinition'.
+      Types of property 'parameters' are incompatible.
+        Type '{ type: string; properties: { region: { type: string; properties: { x: { type: string; }; y: { type: string; }; width: { type: string; }; height: { type: string; }; }; description: string; }; quality: { type: string; description: string; default: number; }; ... 41 more ...; public?: undefined; }; required?: undefine...' is not assignable to type '{ type: string; properties: Record<string, any>; required: readonly string[]; }'.
+          Property 'required' is optional in type '{ type: string; properties: { region: { type: string; properties: { x: { type: string; }; y: { type: string; }; width: { type: string; }; height: { type: string; }; }; description: string; }; quality: { type: string; description: string; default: number; }; ... 41 more ...; public?: undefined; }; required?: undefine...' but required in type '{ type: string; properties: Record<string, any>; required: readonly string[]; }'.
+lib/orchestra/langgraph/index.ts(26,10): error TS2305: Module '"../stateful-agent/commit/shadow-commit"' has no exported member 'createCheckpointer'.
+lib/orchestra/langgraph/nodes/index.ts(168,47): error TS2339: Property 'errors' does not exist on type 'never'.
+lib/orchestra/mastra/mastra-instance.ts(49,3): error TS2353: Object literal may only specify known properties, and 'telemetry' does not exist in type 'Config<Record<string, Agent<any, ToolsInput, undefined, unknown>>, { codeAgent: Workflow<DefaultEngineType, Step<string, unknown, unknown, unknown, unknown, unknown, any, unknown>[], ... 5 more ..., unknown>; hitlCodeReview: Workflow<...>; parallelProcessing: Workflow<...>; }, ... 7 more ..., Record<...>>'.
+lib/orchestra/mastra/mcp/server.ts(161,60): error TS2345: Argument of type 'any[]' is not assignable to parameter of type 'string'.
+lib/orchestra/mastra/mcp/server.ts(216,60): error TS2345: Argument of type 'any[]' is not assignable to parameter of type 'string'.
+lib/orchestra/mastra/memory/index.ts(135,7): error TS2353: Object literal may only specify known properties, and 'message' does not exist in type '{ threadId: string; resourceId: string; config?: MemoryConfig; content: string | (TextPart | ImagePart | FilePart)[] | (TextPart | FilePart | ReasoningPart | RedactedReasoningPart | ToolCallPart)[]; ... 4 more ...; toolCallIds?: string[]; }'.
+lib/orchestra/stateful-agent/commit/shadow-commit.ts(536,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ session_id, message, author }: { session_id: string; message: string; author?: string; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ success: boolean; message: string; note: string; sessionId: string; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/commit/shadow-commit.ts(553,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ session_id, commit_id }: { session_id: string; commit_id: string; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<RollbackResult>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/commit/shadow-commit.ts(566,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ session_id, limit }: { session_id: string; limit?: number; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ success: boolean; history: CommitHistoryEntry[]; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-sync-tools.ts(97,5): error TS2322: Type 'SyncToolResult & { status: string; lastSyncDate?: number; }' is not assignable to type 'SyncToolResult & { status?: string; lastSyncDate?: string; nextSyncDate?: string; }'.
+  Type 'SyncToolResult & { status: string; lastSyncDate?: number; }' is not assignable to type '{ status?: string; lastSyncDate?: string; nextSyncDate?: string; }'.
+    Types of property 'lastSyncDate' are incompatible.
+      Type 'number' is not assignable to type 'string'.
+lib/orchestra/stateful-agent/tools/nango-tools.ts(93,5): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ connectionId, page, per_page }: { connectionId: any; page?: number; per_page?: number; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ success: true; repos: any; error?: undefined; } | { success: false; error: string; repos?: undefined; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-tools.ts(123,5): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ connectionId, owner, repo, title, body, labels }: { connectionId: any; owner: any; repo: any; title: any; body: any; labels: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ success: true; issue: any; error?: undefined; } | { success: false; error: string; issue?: undefined; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-tools.ts(154,5): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ connectionId, owner, repo, title, head, base, body }: { connectionId: any; owner: any; repo: any; title: any; head: any; base: any; body: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ success: true; pull_request: any; error?: undefined; } | { ...; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-tools.ts(183,5): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ connectionId, owner, repo, path, ref }: { connectionId: any; owner: any; repo: any; path: any; ref: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ success: false; error: string; content?: undefined; sha?: undefined; } | { success: true; content: string; sha: any; error?: un...' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-tools.ts(225,5): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ connectionId, channel, text, thread_ts }: { connectionId: any; channel: any; text: any; thread_ts: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ success: true; message: any; error?: undefined; } | { success: false; error: string; message?: undefined; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-tools.ts(249,5): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ connectionId, limit }: { connectionId: any; limit?: number; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ success: true; channels: any; error?: undefined; } | { success: false; error: string; channels?: undefined; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-tools.ts(279,5): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ connectionId, query, filter }: { connectionId: any; query: any; filter: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ success: true; results: any; error?: undefined; } | { success: false; error: string; results?: undefined; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-tools.ts(307,5): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ connectionId, parent_page_id, title, content }: { connectionId: any; parent_page_id: any; title: any; content: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ success: true; page: any; error?: undefined; } | { success: false; error: string; page?: undefined; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-webhook-tools.ts(47,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ providerConfigKey, connectionId, webhookTypes, webhookUrl }: { providerConfigKey: any; connectionId: any; webhookTypes: any; webhookUrl: any; }) => Promise<{ success: boolean; message?: string; error?: string; subscription?: any; subscriptionId?: string; details?: any; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-webhook-tools.ts(121,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ providerConfigKey, connectionId, subscriptionId }: { providerConfigKey: any; connectionId: any; subscriptionId: any; }) => Promise<{ success: boolean; message?: string; error?: string; details?: any; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-webhook-tools.ts(182,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ providerConfigKey, connectionId }: { providerConfigKey: any; connectionId: any; }) => Promise<{ success: boolean; subscriptions?: any[]; count?: number; error?: string; details?: any; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-webhook-tools.ts(254,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ webhookPayload, webhookSignature, expectedProvider }: { webhookPayload: any; webhookSignature: any; expectedProvider: any; }) => Promise<{ success: boolean; processed?: boolean; webhookType?: string; provider?: string; data?: any; verified?: boolean; error?: string; details?: any; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/nango-webhook-tools.ts(329,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ providerConfigKey, webhookUrl, webhookTypes }: { providerConfigKey: any; webhookUrl: any; webhookTypes: any; }) => Promise<{ success: boolean; message?: string; config?: any; note?: string; error?: string; details?: any; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/sandbox-tools.ts(48,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ path }: { path: string; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ type: string; path: string; message: string; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/sandbox-tools.ts(76,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ path, pattern }: { path: any; pattern: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ type: string; path: any; pattern: any; message: string; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/sandbox-tools.ts(99,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ path, content }: { path: any; content: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ type: string; path: any; content: any; message: string; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/sandbox-tools.ts(138,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ path, search, replace, thought }: { path: any; search: any; replace: any; thought: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ type: string; path: any; search: any; replace: any; thought: any; message: string; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/sandbox-tools.ts(173,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ command, cwd }: { command: any; cwd: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ type: string; command: any; cwd: any; message: string; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/sandbox-tools.ts(195,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ paths }: { paths: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ type: string; paths: any; message: string; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/sandbox-tools.ts(220,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ action, target, reason, diff }: { action: any; target: any; reason: any; diff: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ requires_approval: boolean; approval_request: { id: string; action: any; target: any; reason: any; diff: any; requested_at: string; status: string; ...' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/sandbox-tools.ts(250,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ files_to_analyze, proposed_task }: { files_to_analyze: any; proposed_task: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ type: string; files_to_analyze: any; proposed_task: any; message: string; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/sandbox-tools.ts(280,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ task, files, execution_order, rollback_plan }: { task: any; files: any; execution_order: any; rollback_plan: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ success: boolean; plan: { version: string; created_at: string; task: any; files: any; execution_order: any; rollback_p...' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/sandbox-tools.ts(301,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ session_id, message }: { session_id: any; message: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ type: string; session_id: any; message: any; note: string; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/sandbox-tools.ts(317,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ session_id, commit_id }: { session_id: any; commit_id: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ type: string; session_id: any; commit_id: any; note: string; }>' is not assignable to type 'undefined'.
+lib/orchestra/stateful-agent/tools/sandbox-tools.ts(333,3): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ session_id, limit }: { session_id: any; limit: any; }, { messages, toolCallId }: { messages: any; toolCallId: string; }) => Promise<{ type: string; session_id: any; limit: any; note: string; }>' is not assignable to type 'undefined'.
+lib/platforms/nango-service.ts(274,11): error TS2353: Object literal may only specify known properties, and 'toolName' does not exist in type 'NangoExecutionResult'.
+lib/platforms/nango-service.ts(300,13): error TS2353: Object literal may only specify known properties, and 'toolName' does not exist in type 'NangoExecutionResult'.
+lib/platforms/nango/nango-tools.ts(29,55): error TS2554: Expected 0 arguments, but got 1.
+lib/platforms/nango/nango-tools.ts(30,18): error TS2339: Property 'allowed' does not exist on type '{ success: boolean; remaining: number; }'.
+lib/platforms/nango/nango-tools.ts(33,77): error TS2339: Property 'retryAfter' does not exist on type '{ success: boolean; remaining: number; }'.
+lib/platforms/nango/nango-tools.ts(43,51): error TS2339: Property 'proxy' does not exist on type '{ getConnection: () => Promise<any>; executeProxy: () => Promise<{ success: boolean; data: any; }>; }'.
+lib/platforms/nango/nango-tools.ts(49,26): error TS2339: Property 'recordRequest' does not exist on type '{ checkLimit: () => Promise<{ success: boolean; remaining: number; }>; }'.
+lib/plugins/__tests__/plugin-isolation.test.ts(15,3): error TS2304: Cannot find name 'afterEach'.
+lib/plugins/enhanced-plugin-manager.ts(119,31): error TS2345: Argument of type 'string | PluginDependency' is not assignable to parameter of type 'string'.
+  Type 'PluginDependency' is not assignable to type 'string'.
+lib/plugins/enhanced-plugin-manager.ts(549,7): error TS2322: Type 'string[] | PluginDependency[]' is not assignable to type 'PluginDependency[]'.
+  Type 'string[]' is not assignable to type 'PluginDependency[]'.
+    Type 'string' is not assignable to type 'PluginDependency'.
+lib/previews/vercel-preview-service.ts(160,21): error TS2339: Property 'stop' does not exist on type 'SandboxHandle'.
+lib/previews/vercel-preview-service.ts(207,21): error TS2339: Property 'extendTimeout' does not exist on type 'SandboxHandle'.
+lib/redis/agent-service.ts(347,41): error TS2339: Property 'event' does not exist on type 'string[]'.
+lib/sandbox/auto-suspend-service.ts(318,57): error TS2353: Object literal may only specify known properties, and 'ownerId' does not exist in type 'SandboxCreateConfig'.
+lib/sandbox/core-sandbox-service.ts(93,7): error TS2353: Object literal may only specify known properties, and 'env' does not exist in type 'SandboxCreateConfig'.
+lib/sandbox/e2b-deep-integration.ts(289,44): error TS2339: Property 'streamJson' does not exist on type '{ run(config: { prompt: string; workingDir?: string; streamJson?: boolean; model?: string; }): Promise<{ output?: string; cost?: number; tokens?: number; }>; }'.
+lib/sandbox/e2b-deep-integration.ts(620,32): error TS2304: Cannot find name 'startTime'.
+lib/sandbox/index.ts(243,3): error TS2305: Module '"./phase2-integration"' has no exported member 'getPreviewProvider'.
+lib/sandbox/index.ts(244,3): error TS2305: Module '"./phase2-integration"' has no exported member 'getProviderPreviewUrl'.
+lib/sandbox/index.ts(245,3): error TS2305: Module '"./phase2-integration"' has no exported member 'getPreview'.
+lib/sandbox/index.ts(246,3): error TS2305: Module '"./phase2-integration"' has no exported member 'createSmartPreview'.
+lib/sandbox/lsp-integration.ts(120,33): error TS2551: Property 'getLSPService' does not exist on type 'SandboxHandle'. Did you mean 'getAmpService'?
+lib/sandbox/lsp-integration.ts(161,33): error TS2551: Property 'getLSPService' does not exist on type 'SandboxHandle'. Did you mean 'getAmpService'?
+lib/sandbox/lsp-integration.ts(194,33): error TS2551: Property 'getLSPService' does not exist on type 'SandboxHandle'. Did you mean 'getAmpService'?
+lib/sandbox/lsp-integration.ts(225,33): error TS2551: Property 'getLSPService' does not exist on type 'SandboxHandle'. Did you mean 'getAmpService'?
+lib/sandbox/lsp-integration.ts(260,33): error TS2551: Property 'getLSPService' does not exist on type 'SandboxHandle'. Did you mean 'getAmpService'?
+lib/sandbox/lsp-integration.ts(290,33): error TS2551: Property 'getLSPService' does not exist on type 'SandboxHandle'. Did you mean 'getAmpService'?
+lib/sandbox/phase2-integration.ts(294,31): error TS2304: Cannot find name 'PreviewMode'.
+lib/sandbox/phase2-integration.ts(295,34): error TS2339: Property 'getProviderPreviewUrl' does not exist on type 'LivePreviewOffloading'.
+lib/sandbox/phase2-integration.ts(301,23): error TS2304: Cannot find name 'PreviewRequest'.
+lib/sandbox/phase2-integration.ts(301,40): error TS2304: Cannot find name 'ProjectDetection'.
+lib/sandbox/phase2-integration.ts(308,31): error TS2304: Cannot find name 'PreviewRequest'.
+lib/sandbox/phase2-integration.ts(308,56): error TS2304: Cannot find name 'PreviewMode'.
+lib/sandbox/phase2-integration.ts(308,80): error TS2304: Cannot find name 'ProjectDetection'.
+lib/sandbox/providers/blaxel-mcp-server.ts(588,9): error TS2353: Object literal may only specify known properties, and 'port' does not exist in type 'WebStandardStreamableHTTPServerTransportOptions'.
+lib/sandbox/providers/daytona-builder.ts(20,15): error TS2305: Module '"@daytonaio/sdk"' has no exported member 'DockerImage'.
+lib/sandbox/providers/daytona-computer-use-service.ts(419,9): error TS2322: Type 'Buffer<ArrayBuffer>' is not assignable to type 'string'.
+lib/sandbox/providers/daytona-object-storage-service.ts(145,11): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(input: string | URL | Request, init?: RequestInit): Promise<Response>', gave the following error.
+    Type 'ReadStream' is not assignable to type 'BodyInit'.
+      Type 'ReadStream' is missing the following properties from type 'URLSearchParams': size, append, delete, get, and 8 more.
+  Overload 2 of 2, '(input: URL | RequestInfo, init?: RequestInit): Promise<Response>', gave the following error.
+    Type 'ReadStream' is not assignable to type 'BodyInit'.
+      Type 'ReadStream' is missing the following properties from type 'URLSearchParams': size, append, delete, get, and 8 more.
+lib/sandbox/providers/daytona-provider.ts(281,34): error TS2339: Property 'output' does not exist on type '{ recordingId: string; }'.
+lib/sandbox/providers/daytona-provider.ts(291,28): error TS2339: Property 'output' does not exist on type '{ video: string; }'.
+lib/sandbox/providers/daytona-provider.ts(301,28): error TS2339: Property 'binary' does not exist on type '{ image: string; }'.
+lib/sandbox/providers/daytona-provider.ts(301,56): error TS2339: Property 'binary' does not exist on type '{ image: string; }'.
+lib/sandbox/providers/daytona-provider.ts(301,93): error TS2339: Property 'output' does not exist on type '{ image: string; }'.
+lib/sandbox/providers/e2b-structured-output.ts(234,101): error TS2554: Expected 1-3 arguments, but got 4.
+lib/sandbox/providers/e2b-structured-output.ts(378,45): error TS2353: Object literal may only specify known properties, and 'minimum' does not exist in type 'JsonSchema'.
+lib/sandbox/providers/index.ts(154,5): error TS2322: Type '() => Promise<BlaxelMcpServer>' is not assignable to type '() => Promise<SandboxProvider>'.
+  Type 'Promise<BlaxelMcpServer>' is not assignable to type 'Promise<SandboxProvider>'.
+    Type 'BlaxelMcpServer' is missing the following properties from type 'SandboxProvider': name, createSandbox, getSandbox, destroySandbox
+lib/sandbox/providers/index.ts(156,14): error TS2554: Expected 1 arguments, but got 0.
+lib/sandbox/providers/mistral/mistral-agent-provider.ts(136,46): error TS2345: Argument of type '{ files: Record<string, string>; }' is not assignable to parameter of type 'WorkspaceState'.
+  Type '{ files: Record<string, string>; }' is missing the following properties from type 'WorkspaceState': id, lastModified
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(82,7): error TS2322: Type '(AgentHandoffEntry | FunctionCallEntry | ToolExecutionEntry | MessageOutputEntry)[]' is not assignable to type 'ConversationEntry[]'.
+  Type 'AgentHandoffEntry | FunctionCallEntry | ToolExecutionEntry | MessageOutputEntry' is not assignable to type 'ConversationEntry'.
+    Property 'content' is missing in type 'AgentHandoffEntry' but required in type 'ConversationEntry'.
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(100,7): error TS2322: Type 'ConversationEntry[]' is not assignable to type 'ConversationInputs'.
+  Type 'ConversationEntry[]' is not assignable to type 'InputEntries[]'.
+    Type 'ConversationEntry' is not assignable to type 'InputEntries'.
+      Type 'ConversationEntry' is not assignable to type 'ToolExecutionEntry | MessageOutputEntry | MessageInputEntry'.
+        Type 'ConversationEntry' is not assignable to type 'MessageOutputEntry'.
+          Types of property 'type' are incompatible.
+            Type 'EntryType' is not assignable to type '"message.output"'.
+              Type '"message.input"' is not assignable to type '"message.output"'.
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(135,7): error TS2322: Type '(AgentHandoffEntry | FunctionCallEntry | ToolExecutionEntry | MessageOutputEntry)[]' is not assignable to type 'ConversationEntry[]'.
+  Type 'AgentHandoffEntry | FunctionCallEntry | ToolExecutionEntry | MessageOutputEntry' is not assignable to type 'ConversationEntry'.
+    Property 'content' is missing in type 'AgentHandoffEntry' but required in type 'ConversationEntry'.
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(185,9): error TS2322: Type 'ConversationEntry[]' is not assignable to type 'ConversationInputs'.
+  Type 'ConversationEntry[]' is not assignable to type 'InputEntries[]'.
+    Type 'ConversationEntry' is not assignable to type 'InputEntries'.
+      Type 'ConversationEntry' is not assignable to type 'ToolExecutionEntry | MessageOutputEntry | MessageInputEntry'.
+        Type 'ConversationEntry' is not assignable to type 'MessageOutputEntry'.
+          Types of property 'type' are incompatible.
+            Type 'EntryType' is not assignable to type '"message.output"'.
+              Type '"message.input"' is not assignable to type '"message.output"'.
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(192,7): error TS2322: Type '(AgentHandoffEntry | FunctionCallEntry | ToolExecutionEntry | MessageOutputEntry)[]' is not assignable to type 'ConversationEntry[]'.
+  Type 'AgentHandoffEntry | FunctionCallEntry | ToolExecutionEntry | MessageOutputEntry' is not assignable to type 'ConversationEntry'.
+    Property 'content' is missing in type 'AgentHandoffEntry' but required in type 'ConversationEntry'.
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(193,14): error TS2352: Conversion of type 'ConversationUsageInfo' to type 'TokenUsage' may be a mistake because neither type sufficiently overlaps with the other. If this was intentional, convert the expression to 'unknown' first.
+  Type 'ConversationUsageInfo' is missing the following properties from type 'TokenUsage': prompt_tokens, completion_tokens, total_tokens
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(208,5): error TS2322: Type '(AgentHandoffEntry | FunctionCallEntry | ToolExecutionEntry | MessageOutputEntry | MessageInputEntry | FunctionResultEntry)[]' is not assignable to type 'ConversationEntry[]'.
+  Type 'AgentHandoffEntry | FunctionCallEntry | ToolExecutionEntry | MessageOutputEntry | MessageInputEntry | FunctionResultEntry' is not assignable to type 'ConversationEntry'.
+    Property 'content' is missing in type 'AgentHandoffEntry' but required in type 'ConversationEntry'.
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(221,5): error TS2322: Type 'MessageEntries[]' is not assignable to type 'ConversationEntry[]'.
+  Type 'MessageEntries' is not assignable to type 'ConversationEntry'.
+    Type 'MessageOutputEntry' is not assignable to type 'ConversationEntry'.
+      Types of property 'content' are incompatible.
+        Type 'string | MessageOutputContentChunks[]' is not assignable to type 'string | ContentChunk[]'.
+          Type 'MessageOutputContentChunks[]' is not assignable to type 'string | ContentChunk[]'.
+            Type 'MessageOutputContentChunks[]' is not assignable to type 'ContentChunk[]'.
+              Type 'MessageOutputContentChunks' is not assignable to type 'ContentChunk'.
+                Type 'ImageURLChunk' is not assignable to type 'ContentChunk'.
+                  Property 'image_url' is missing in type 'ImageURLChunk' but required in type 'ImageChunk'.
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(266,67): error TS2551: Property 'created_at' does not exist on type 'AgentsApiV1ConversationsGetResponseV1ConversationsGet'. Did you mean 'createdAt'?
+  Property 'created_at' does not exist on type 'ModelConversation'.
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(267,67): error TS2551: Property 'updated_at' does not exist on type 'AgentsApiV1ConversationsGetResponseV1ConversationsGet'. Did you mean 'updatedAt'?
+  Property 'updated_at' does not exist on type 'ModelConversation'.
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(364,52): error TS2339: Property 'name' does not exist on type 'ConversationEntry'.
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(366,23): error TS2339: Property 'info' does not exist on type 'ConversationEntry'.
+lib/sandbox/providers/mistral/mistral-conversation-manager.ts(367,25): error TS2339: Property 'info' does not exist on type 'ConversationEntry'.
+lib/sandbox/providers/oracle-vm-provider.ts(306,11): error TS2322: Type '(cols: number, rows: number) => void' is not assignable to type '(cols: number, rows: number) => Promise<void>'.
+  Type 'void' is not assignable to type 'Promise<void>'.
+lib/sandbox/providers/sprites-checkpoint-manager.ts(72,43): error TS2551: Property 'created_at' does not exist on type 'CheckpointInfo'. Did you mean 'createdAt'?
+lib/sandbox/providers/vercel-sandbox-provider.ts(137,9): error TS2322: Type 'string | boolean' is not assignable to type 'boolean'.
+  Type 'string' is not assignable to type 'boolean'.
+lib/sandbox/sandbox-connection-manager.ts(969,13): error TS2367: This comparison appears to be unintentional because the types 'boolean' and 'string' have no overlap.
+lib/sandbox/sandbox-events-enhanced.ts(386,17): error TS2339: Property 'listenerCount' does not exist on type 'EnhancedSandboxEventEmitter'.
+lib/sandbox/sandbox-events.ts(26,32): error TS2304: Cannot find name 'EnhancedSandboxEventType'.
+lib/sandbox/sandbox-events.ts(27,28): error TS2304: Cannot find name 'EnhancedSandboxEvent'.
+lib/sandbox/sandbox-events.ts(31,3): error TS2416: Property 'emit' in type 'LegacySandboxEventEmitter' is not assignable to the same property in base type 'UniversalEventEmitter'.
+  Type '(sandboxId: string, type: EnhancedSandboxEventType, data: any) => void' is not assignable to type '(event: string, ...args: any[]) => boolean'.
+    Type 'void' is not assignable to type 'boolean'.
+lib/sandbox/sandbox-events.ts(33,5): error TS2304: Cannot find name 'emitEvent'.
+lib/sandbox/sandbox-events.ts(37,12): error TS2304: Cannot find name 'subscribeToEvents'.
+lib/sandbox/sandbox-events.ts(41,12): error TS2304: Cannot find name 'enhancedSandboxEvents'.
+lib/sandbox/sandbox-manager.ts(129,22): error TS2339: Property 'commandExecutions' does not exist on type 'SandboxMetrics'.
+lib/sandbox/sandbox-manager.ts(137,22): error TS2339: Property 'commandExecutions' does not exist on type 'SandboxMetrics'.
+lib/sandbox/sandbox-manager.ts(176,24): error TS2339: Property 'commandExecutions' does not exist on type 'SandboxMetrics'.
+lib/sandbox/sandbox-manager.ts(177,24): error TS2339: Property 'commandExecutionDuration' does not exist on type 'SandboxMetrics'.
+lib/sandbox/sandbox-manager.ts(179,26): error TS2339: Property 'commandExecutions' does not exist on type 'SandboxMetrics'.
+lib/sandbox/sandbox-manager.ts(188,24): error TS2339: Property 'commandExecutions' does not exist on type 'SandboxMetrics'.
+lib/sandbox/sandbox-manager.ts(195,24): error TS2339: Property 'commandExecutions' does not exist on type 'SandboxMetrics'.
+lib/sandbox/spawn/e2b-codex-service.ts(246,27): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(path: string, data: string | Blob | ArrayBuffer | ReadableStream<any>, opts?: FilesystemRequestOpts): Promise<WriteInfo>', gave the following error.
+    Argument of type 'Buffer<ArrayBufferLike>' is not assignable to parameter of type 'string | Blob | ArrayBuffer | ReadableStream<any>'.
+      Type 'Buffer<ArrayBufferLike>' is missing the following properties from type 'ArrayBuffer': maxByteLength, resizable, resize, detached, and 2 more.
+  Overload 2 of 2, '(files: WriteEntry[], opts?: FilesystemRequestOpts): Promise<WriteInfo[]>', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type 'WriteEntry[]'.
+lib/sandbox/spawn/e2b-codex-service.ts(369,29): error TS2769: No overload matches this call.
+  Overload 1 of 2, '(path: string, data: string | Blob | ArrayBuffer | ReadableStream<any>, opts?: FilesystemRequestOpts): Promise<WriteInfo>', gave the following error.
+    Argument of type 'Buffer<ArrayBufferLike>' is not assignable to parameter of type 'string | Blob | ArrayBuffer | ReadableStream<any>'.
+      Type 'Buffer<ArrayBufferLike>' is missing the following properties from type 'ArrayBuffer': maxByteLength, resizable, resize, detached, and 2 more.
+  Overload 2 of 2, '(files: WriteEntry[], opts?: FilesystemRequestOpts): Promise<WriteInfo[]>', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type 'WriteEntry[]'.
+lib/security/index.ts(36,3): error TS2305: Module '"./jwt-auth"' has no exported member 'TokenBlacklist'.
+lib/security/redis-token-blacklist.ts(185,23): error TS2769: No overload matches this call.
+  Overload 1 of 8, '(path: string, options: RedisOptions): Redis', gave the following error.
+    Object literal may only specify known properties, and 'retryDelayOnFail' does not exist in type 'RedisOptions'.
+  Overload 2 of 8, '(port: number, options: RedisOptions): Redis', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type 'number'.
+  Overload 3 of 8, '(port: number, host: string): Redis', gave the following error.
+    Argument of type 'string' is not assignable to parameter of type 'number'.
+lib/security/sri-generator.ts(271,11): error TS2353: Object literal may only specify known properties, and 'error' does not exist in type 'SRIHash'.
+lib/session/session-lock.ts(8,32): error TS2307: Cannot find module '../redis/client' or its corresponding type declarations.
+lib/storage/cloud-storage.ts(679,10): error TS2678: Type '"nextcloud"' is not comparable to type '"gcp"'.
+lib/storage/cloud-storage.ts(681,10): error TS2678: Type '"s3"' is not comparable to type '"gcp"'.
+lib/storage/cloud-storage.ts(683,10): error TS2678: Type '"minio"' is not comparable to type '"gcp"'.
+lib/storage/object-storage-integration.ts(87,37): error TS2339: Property 'getObjectStorageService' does not exist on type 'SandboxHandle'.
+lib/storage/object-storage-integration.ts(100,18): error TS2339: Property 'uploadToStorage' does not exist on type 'SandboxHandle'.
+lib/storage/object-storage-integration.ts(101,37): error TS2339: Property 'uploadToStorage' does not exist on type 'SandboxHandle'.
+lib/storage/object-storage-integration.ts(139,37): error TS2339: Property 'getObjectStorageService' does not exist on type 'SandboxHandle'.
+lib/storage/object-storage-integration.ts(151,18): error TS2339: Property 'downloadFromStorage' does not exist on type 'SandboxHandle'.
+lib/storage/object-storage-integration.ts(152,37): error TS2339: Property 'downloadFromStorage' does not exist on type 'SandboxHandle'.
+lib/storage/object-storage-integration.ts(187,37): error TS2339: Property 'getObjectStorageService' does not exist on type 'SandboxHandle'.
+lib/storage/object-storage-integration.ts(217,37): error TS2339: Property 'getObjectStorageService' does not exist on type 'SandboxHandle'.
+lib/storage/object-storage-integration.ts(246,37): error TS2339: Property 'getObjectStorageService' does not exist on type 'SandboxHandle'.
+lib/storage/storage-backend.ts(93,46): error TS2345: Argument of type '{ backend: string; }' is not assignable to parameter of type 'number'.
+lib/storage/storage-backend.ts(121,9): error TS2345: Argument of type '{ backend: string; operation: string; }' is not assignable to parameter of type 'number'.
+lib/storage/storage-backend.ts(131,9): error TS2345: Argument of type '{ backend: string; operation: string; }' is not assignable to parameter of type 'number'.
+lib/storage/storage-backend.ts(246,50): error TS2345: Argument of type '{ backend: string; }' is not assignable to parameter of type 'number'.
+lib/storage/storage-backend.ts(248,9): error TS2345: Argument of type '{ backend: string; operation: string; }' is not assignable to parameter of type 'number'.
+lib/storage/storage-backend.ts(257,9): error TS2345: Argument of type '{ backend: string; operation: string; }' is not assignable to parameter of type 'number'.
+lib/storage/storage-backend.ts(382,48): error TS2345: Argument of type '{ backend: string; }' is not assignable to parameter of type 'number'.
+lib/storage/storage-backend.ts(384,9): error TS2345: Argument of type '{ backend: string; operation: string; }' is not assignable to parameter of type 'number'.
+lib/storage/storage-backend.ts(394,9): error TS2345: Argument of type '{ backend: string; operation: string; }' is not assignable to parameter of type 'number'.
+lib/storage/storage-backend.ts(426,50): error TS2345: Argument of type '{ backend: string; }' is not assignable to parameter of type 'number'.
+lib/storage/storage-backend.ts(428,9): error TS2345: Argument of type '{ backend: string; operation: string; }' is not assignable to parameter of type 'number'.
+lib/storage/storage-backend.ts(437,9): error TS2345: Argument of type '{ backend: string; operation: string; }' is not assignable to parameter of type 'number'.
+lib/tambo/index.ts(63,3): error TS2305: Module '"./tambo-error-handler"' has no exported member 'withRetry'.
+lib/tambo/index.ts(64,3): error TS2305: Module '"./tambo-error-handler"' has no exported member 'createTamboError'.
+lib/tambo/index.ts(65,3): error TS2305: Module '"./tambo-error-handler"' has no exported member 'categorizeError'.
+lib/tambo/index.ts(67,8): error TS2305: Module '"./tambo-error-handler"' has no exported member 'TamboErrorCategory'.
+lib/tambo/index.ts(68,8): error TS2305: Module '"./tambo-error-handler"' has no exported member 'RetryConfig'.
+lib/tambo/tambo-provider.tsx(157,7): error TS2322: Type '{ name: string; tool: (args: any) => Promise<any>; argsSchema: ZodType<any, ZodTypeDef, any>; description: string; annotations?: { title?: string; readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean; tamboStreamableHint?: boolean; }; }[]' is not assignable to type 'TamboTool<ZodTuple<any, any>, ZodTypeAny>[]'.
+  Property 'toolSchema' is missing in type '{ name: string; tool: (args: any) => Promise<any>; argsSchema: ZodType<any, ZodTypeDef, any>; description: string; annotations?: { title?: string; readOnlyHint?: boolean; destructiveHint?: boolean; idempotentHint?: boolean; openWorldHint?: boolean; tamboStreamableHint?: boolean; }; }' but required in type 'TamboTool<ZodTuple<any, any>, ZodTypeAny>'.
+lib/tambo/tambo-service.ts(107,9): error TS2561: Object literal may only specify known properties, but 'baseUrl' does not exist in type 'ClientOptions'. Did you mean to write 'baseURL'?
+lib/tambo/tambo-service.ts(139,6): error TS2355: A function whose declared type is neither 'undefined', 'void', nor 'any' must return a value.
+lib/tambo/tambo-tool-registry.ts(490,21): error TS2341: Property 'initialized' is private and only accessible within class 'TamboToolRegistry'.
+lib/tambo/tambo-tool-registry.ts(498,26): error TS2341: Property 'initialized' is private and only accessible within class 'TamboToolRegistry'.
+lib/terminal/session/terminal-session-manager.ts(1129,15): error TS2484: Export declaration conflicts with exported declaration of 'TerminalSessionState'.
+lib/tools/bootstrap-gateway.ts(61,44): error TS2367: This comparison appears to be unintentional because the types 'IntegrationProvider' and '"gateway"' have no overlap.
+lib/tools/bootstrap.ts(27,36): error TS2724: '"./router"' has no exported member named 'CapabilityRouter'. Did you mean 'getCapabilityRouter'?
+lib/tools/bootstrap/bootstrap-mcp.ts(45,11): error TS2322: Type '"http"' is not assignable to type 'MCPTransportType'.
+lib/tools/bootstrap/bootstrap-mcp.ts(64,44): error TS2345: Argument of type 'string' is not assignable to parameter of type 'MCPCallToolRequest'.
+lib/tools/bootstrap/bootstrap-mcp.ts(91,11): error TS2353: Object literal may only specify known properties, and 'port' does not exist in type 'MCPTransportConfig'.
+lib/tools/bootstrap/bootstrap-mcp.ts(115,44): error TS2345: Argument of type 'string' is not assignable to parameter of type 'MCPCallToolRequest'.
+lib/tools/bootstrap/bootstrap-nullclaw.ts(100,42): error TS2339: Property 'searchWeb' does not exist on type 'NullclawIntegration'.
+lib/tools/bootstrap/bootstrap-sandbox.ts(76,35): error TS2339: Property 'runAmpAgent' does not exist on type 'typeof E2BIntegration'.
+lib/tools/bootstrap/bootstrap-sandbox.ts(95,35): error TS2339: Property 'runCodexAgent' does not exist on type 'typeof E2BIntegration'.
+lib/tools/bootstrap/bootstrap-sandbox.ts(123,47): error TS2339: Property 'execute' does not exist on type 'typeof DaytonaComputerUseWorkflow'.
+lib/tools/bootstrap/bootstrap-sandbox.ts(170,39): error TS2339: Property 'runBatchJob' does not exist on type 'typeof CodeSandboxBatchCI'.
+lib/tools/composio-adapter.ts(9,10): error TS2724: '"@/lib/platforms/composio-service"' has no exported member named 'composioService'. Did you mean 'ComposioService'?
+lib/tools/composio-adapter.ts(68,26): error TS2304: Cannot find name 'executeToolCall'.
+lib/tools/composio-adapter.ts(121,10): error TS2304: Cannot find name 'composioSessionManager'.
+lib/tools/composio-adapter.ts(132,10): error TS2304: Cannot find name 'composioSessionManager'.
+lib/tools/composio-adapter.ts(143,10): error TS2304: Cannot find name 'composioSessionManager'.
+lib/tools/composio-adapter.ts(150,10): error TS2304: Cannot find name 'composioSessionManager'.
+lib/tools/discovery.ts(207,17): error TS2339: Property 'registry' does not exist on type 'ToolDiscoveryService'.
+lib/tools/error-handler.ts(18,3): error TS1205: Re-exporting a type when 'isolatedModules' is enabled requires using 'export type'.
+lib/tools/error-handler.ts(19,3): error TS1205: Re-exporting a type when 'isolatedModules' is enabled requires using 'export type'.
+lib/tools/error-handler.ts(49,25): error TS2339: Property 'createValidationError' does not exist on type 'UnifiedErrorHandler'.
+lib/tools/error-handler.ts(53,25): error TS2339: Property 'createAuthError' does not exist on type 'UnifiedErrorHandler'.
+lib/tools/git-tools.ts(37,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ repoPath }: { repoPath?: string; }) => Promise<{ success: boolean; status: { branch: string; isClean: boolean; ahead: number; behind: number; files: { path: string; status: "copied" | "modified" | "deleted" | "added" | "untracked" | "renamed"; staged: boolean; }[]; }; error?: undefined; } | { ...; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(76,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ repoPath }: { repoPath?: string; }) => Promise<{ success: boolean; message: string; error?: undefined; } | { success: boolean; error: string; message?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(101,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ url, path }: { url: any; path?: string; }) => Promise<{ success: boolean; message: string; error?: undefined; } | { success: boolean; error: string; message?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(125,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ files }: { files: any; }) => Promise<{ success: boolean; message: string; error?: undefined; } | { success: boolean; error: string; message?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(152,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ message, files }: { message: any; files: any; }) => Promise<{ success: boolean; message: string; shadowCommitId: any; error?: undefined; } | { success: boolean; error: string; message?: undefined; shadowCommitId?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(164,58): error TS2339: Property 'createCommit' does not exist on type 'ShadowCommitManager'.
+lib/tools/git-tools.ts(194,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ action, branchName }: { action: any; branchName: any; }) => Promise<{ success: boolean; branches: string[]; message?: undefined; error?: undefined; } | { success: boolean; message: string; branches?: undefined; error?: undefined; } | { ...; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(241,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ target }: { target: any; }) => Promise<{ success: boolean; message: string; error?: undefined; } | { success: boolean; error: string; message?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(266,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ remote, branch }: { remote?: string; branch: any; }) => Promise<{ success: boolean; message: string; error?: undefined; } | { success: boolean; error: string; message?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(291,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ limit, branch }: { limit?: number; branch: any; }) => Promise<{ success: boolean; commits: { hash: string; author: string; email: string; date: string; message: string; }[]; error?: undefined; } | { success: boolean; error: string; commits?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(324,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ target, files }: { target?: string; files: any; }) => Promise<{ success: boolean; diff: string; error?: undefined; } | { success: boolean; error: string; diff?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(352,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ workspaceId, ownerId, message }: { workspaceId: any; ownerId: any; message: any; }) => Promise<{ success: boolean; commitId: string; filesCommitted: number; error: string; } | { success: boolean; error: string; commitId?: undefined; filesCommitted?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(387,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ workspaceId, ownerId, target }: { workspaceId: any; ownerId: any; target: any; }) => Promise<{ success: boolean; filesRestored: number; error: string; } | { success: boolean; error: string; filesRestored?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(421,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ workspaceId, ownerId }: { workspaceId: any; ownerId: any; }) => Promise<{ success: boolean; status: { branch: string; isClean: boolean; isSynced: boolean; vfsVersion: number; pendingChanges: number; files: GitStatusFile[]; }; error?: undefined; } | { ...; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(456,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ sessionId, limit }: { sessionId: any; limit?: number; }) => Promise<{ success: boolean; commits: any; error?: undefined; } | { success: boolean; error: string; commits?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(458,53): error TS2339: Property 'getHistory' does not exist on type 'ShadowCommitManager'.
+lib/tools/git-tools.ts(488,7): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ commitId }: { commitId: any; }) => Promise<{ success: boolean; filesRestored: number; error: string; } | { success: boolean; error: string; filesRestored?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(490,52): error TS2554: Expected 2 arguments, but got 1.
+lib/tools/git-tools.ts(525,5): error TS2769: No overload matches this call.
+  The last overload gave the following error.
+    Type '({ sessionId, message, files, author }: { sessionId: any; message: any; files: any; author: any; }) => Promise<{ success: any; commitId: any; committedFiles: any; error: any; } | { success: boolean; error: string; commitId?: undefined; committedFiles?: undefined; }>' is not assignable to type 'undefined'.
+lib/tools/git-tools.ts(528,50): error TS2339: Property 'createCommit' does not exist on type 'ShadowCommitManager'.
+lib/tools/index.ts(182,7): error TS2353: Object literal may only specify known properties, and 'smithery' does not exist in type 'IntegrationConfig'.
+lib/tools/tool-authorization-manager.ts(454,35): error TS2339: Property 'type' does not exist on type 'Error'.
+lib/tools/tool-authorization-manager.ts(562,36): error TS2339: Property 'execute' does not exist on type 'ToolRouterSession<unknown, unknown, OpenAIProvider>'.
+lib/tools/tool-integration-system.ts(697,15): error TS2740: Type 'Record<string, any>' is missing the following properties from type 'ZodType<any, ZodTypeDef, any>': _type, _output, _input, _def, and 34 more.
+lib/tools/tool-integration-system.ts(728,17): error TS2740: Type 'Record<string, any>' is missing the following properties from type 'ZodType<any, ZodTypeDef, any>': _type, _output, _input, _def, and 34 more.
+lib/tools/tool-integration-system.ts(795,17): error TS2740: Type 'Record<string, any>' is missing the following properties from type 'ZodType<any, ZodTypeDef, any>': _type, _output, _input, _def, and 34 more.
+lib/tools/tool-integration/parsers/grammar-parser.ts(23,11): error TS2322: Type '"grammar-write"' is not assignable to type '"xml" | "grammar" | "native"'.
+lib/tools/tool-integration/parsers/grammar-parser.ts(40,11): error TS2322: Type '"grammar-read"' is not assignable to type '"xml" | "grammar" | "native"'.
+lib/tools/tool-integration/parsers/self-healing.ts(232,9): error TS2353: Object literal may only specify known properties, and 'maxTokens' does not exist in type 'CallSettings & (Prompt & { model: LanguageModel; tools?: ToolSet; toolChoice?: ToolChoice<NoInfer<ToolSet>>; ... 19 more ...; _internal?: { ...; }; })'.
+lib/tools/tool-integration/providers/smithery.ts(18,82): error TS2307: Cannot find module '../../types' or its corresponding type declarations.
+lib/user/user-api-keys.ts(90,9): error TS2322: Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'BufferSource'.
+  Type 'Uint8Array<ArrayBufferLike>' is not assignable to type 'ArrayBufferView<ArrayBuffer>'.
+    Types of property 'buffer' are incompatible.
+      Type 'ArrayBufferLike' is not assignable to type 'ArrayBuffer'.
+        Type 'SharedArrayBuffer' is missing the following properties from type 'ArrayBuffer': resizable, resize, detached, transfer, transferToFixedLength
+lib/utils/feature-flags.ts(16,29): error TS2307: Cannot find module './database' or its corresponding type declarations.
+lib/virtual-filesystem/opfs/index.ts(191,51): error TS2322: Type 'unknown' is not assignable to type 'object'.
+lib/virtual-filesystem/opfs/index.ts(204,23): error TS2304: Cannot find name 'getOPFSSupportInfo'.
+lib/virtual-filesystem/opfs/opfs-git.ts(416,34): error TS2367: This comparison appears to be unintentional because the types 'WorkdirStatus' and '3' have no overlap.
+lib/virtual-filesystem/opfs/opfs-git.ts(418,20): error TS2367: This comparison appears to be unintentional because the types 'HeadStatus' and '2' have no overlap.
+lib/virtual-filesystem/opfs/opfs-git.ts(418,34): error TS2367: This comparison appears to be unintentional because the types 'WorkdirStatus' and '3' have no overlap.
+lib/virtual-filesystem/opfs/opfs-git.ts(658,31): error TS2339: Property 'oid' does not exist on type 'void'.
+lib/virtual-filesystem/opfs/opfs-git.ts(689,7): error TS2322: Type '{ oid: string; commit: CommitObject; payload: string; }[]' is not assignable to type 'GitLogEntry[]'.
+  Type '{ oid: string; commit: CommitObject; payload: string; }' is not assignable to type 'GitLogEntry'.
+    Types of property 'commit' are incompatible.
+      Property 'oid' is missing in type 'CommitObject' but required in type 'GitCommit'.
+lib/virtual-filesystem/opfs/opfs-git.ts(793,29): error TS2559: Type 'string' has no properties in common with type '{ ref?: string; }'.
+lib/virtual-filesystem/opfs/opfs-git.ts(794,24): error TS2339: Property 'HEAD' does not exist on type 'typeof import("C:/Users/ceclabs/Downloads/binG/node_modules/isomorphic-git/index")'.
+lib/virtual-filesystem/opfs/opfs-git.ts(834,36): error TS2339: Property 'diff' does not exist on type 'typeof import("C:/Users/ceclabs/Downloads/binG/node_modules/isomorphic-git/index")'.
+lib/virtual-filesystem/opfs/opfs-storage-backend.ts(165,30): error TS2322: Type 'unknown' is not assignable to type 'object'.
+lib/virtual-filesystem/opfs/utils.ts(72,64): error TS2322: Type 'unknown' is not assignable to type 'object'.
+lib/virtual-filesystem/sync/snapshot-manager.ts(171,46): error TS2345: Argument of type '{ userId: string; }' is not assignable to parameter of type 'number'.
+lib/virtual-filesystem/sync/snapshot-manager.ts(172,53): error TS2345: Argument of type '{ userId: string; }' is not assignable to parameter of type 'number'.
+lib/virtual-filesystem/sync/snapshot-manager.ts(257,56): error TS2345: Argument of type '{ userId: string; }' is not assignable to parameter of type 'number'.
+lib/virtual-filesystem/sync/tar-pipe-sync.ts(62,29): error TS2339: Property 'getWorkspaceFiles' does not exist on type 'VirtualFilesystemService'.
+lib/virtual-filesystem/sync/tar-pipe-sync.ts(199,44): error TS2339: Property 'files' does not exist on type 'ToolResult'.
+lib/virtual-filesystem/sync/tar-pipe-sync.ts(210,30): error TS2339: Property 'files' does not exist on type 'ToolResult'.
