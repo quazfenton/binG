@@ -140,7 +140,6 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     io: 1000, // operations
     api: 100, // calls
   };
-  private loopTokens: Map<string, number> = new Map(); // jobId -> current loop token
 
   constructor() {
     super();
@@ -355,10 +354,9 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
    * Execute job loop with comprehensive tracking
    */
   private async executeJobLoop(job: EnhancedJob): Promise<void> {
-    // Check if a newer loop token exists (prevents duplicate loops on resume)
-    const currentToken = (this.loopTokens.get(job.jobId) || 0) + 1;
-    this.loopTokens.set(job.jobId, currentToken);
-    job.loopToken = currentToken;
+    // Increment loop token to prevent duplicate loops on resume
+    job.loopToken = (job.loopToken || 0) + 1;
+    const currentToken = job.loopToken;
 
     logger.debug('Starting job execution loop', {
       jobId: job.jobId,
@@ -798,9 +796,7 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     if (!job || job.status !== 'paused') return false;
 
     // Increment loop token to cancel any stale loops
-    const newToken = (this.loopTokens.get(jobId) || 0) + 1;
-    this.loopTokens.set(jobId, newToken);
-    job.loopToken = newToken;
+    job.loopToken = (job.loopToken || 0) + 1;
 
     job.status = 'running';
     // Use internal intervalMs for next execution calculation
@@ -811,7 +807,7 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
 
     this.emit('job:resumed', jobId);
 
-    logger.info('Background job resumed', { jobId, loopToken: newToken });
+    logger.info('Background job resumed', { jobId, loopToken: job.loopToken });
 
     return true;
   }

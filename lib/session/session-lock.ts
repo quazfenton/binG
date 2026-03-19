@@ -13,9 +13,14 @@ const LOCK_TTL_SECONDS = 30;
 const LOCK_PREFIX = 'session:lock:';
 
 /**
+ * Release function type
+ */
+export type SessionLockRelease = () => Promise<void>;
+
+/**
  * Acquire session lock to prevent concurrent access
  */
-export async function acquireSessionLock(sessionId: string): Promise<() => void> {
+export async function acquireSessionLock(sessionId: string): Promise<SessionLockRelease> {
   const redis = getRedisClient();
   const lockKey = `${LOCK_PREFIX}${sessionId}`;
   const lockValue = `${Date.now()}-${Math.random()}`;
@@ -26,10 +31,14 @@ export async function acquireSessionLock(sessionId: string): Promise<() => void>
     log.debug('Session lock acquired', { sessionId });
     
     const release = async () => {
-      const currentValue = await redis.get(lockKey);
-      if (currentValue === lockValue) {
-        await redis.del(lockKey);
-        log.debug('Session lock released', { sessionId });
+      try {
+        const currentValue = await redis.get(lockKey);
+        if (currentValue === lockValue) {
+          await redis.del(lockKey);
+          log.debug('Session lock released', { sessionId });
+        }
+      } catch (err) {
+        log.error('Failed to release session lock', { sessionId, error: err });
       }
     };
     
@@ -43,10 +52,14 @@ export async function acquireSessionLock(sessionId: string): Promise<() => void>
     if (reAcquired) {
       log.debug('Session lock acquired after wait', { sessionId });
       return async () => {
-        const currentValue = await redis.get(lockKey);
-        if (currentValue === lockValue) {
-          await redis.del(lockKey);
-          log.debug('Session lock released', { sessionId });
+        try {
+          const currentValue = await redis.get(lockKey);
+          if (currentValue === lockValue) {
+            await redis.del(lockKey);
+            log.debug('Session lock released', { sessionId });
+          }
+        } catch (err) {
+          log.error('Failed to release session lock', { sessionId, error: err });
         }
       };
     }

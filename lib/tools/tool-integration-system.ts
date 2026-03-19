@@ -694,7 +694,7 @@ export class ToolIntegrationManager {
               description: tool.description,
               category: 'integration',
               requiresAuth: false,
-              inputSchema: tool.inputSchema,
+              inputSchema: tool.inputSchema as unknown as z.ZodSchema,
             });
           }
         }
@@ -725,7 +725,7 @@ export class ToolIntegrationManager {
                 description: tool.description,
                 category: tool.toolkit || 'integration',
                 requiresAuth: tool.requiresAuth,
-                inputSchema: tool.inputSchema,
+                inputSchema: tool.inputSchema as unknown as z.ZodSchema,
               });
             }
           }
@@ -792,7 +792,7 @@ export class ToolIntegrationManager {
                 description: tool.description,
                 category: tool.toolkit || 'integration',
                 requiresAuth: tool.requiresAuth,
-                inputSchema: tool.inputSchema,
+                inputSchema: tool.inputSchema as unknown as z.ZodSchema,
               });
             }
           }
@@ -949,3 +949,4 @@ export function formatToolOutput(toolKey: string, output: any): string {
 }
 
 export default ToolIntegrationManager;
+

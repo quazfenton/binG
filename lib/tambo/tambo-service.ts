@@ -104,7 +104,7 @@ export class TamboService {
       const { TamboAI } = await import('@tambo-ai/typescript-sdk');
       this.client = new TamboAI({
         apiKey: this.config.apiKey,
-        baseUrl: this.config.baseUrl,
+        baseURL: this.config.baseUrl,
       });
       this.initialized = true;
     } catch (error: any) {
@@ -184,6 +184,9 @@ export class TamboService {
       }
       // ... (fallback logic)
     } catch (error) { /* ... */ }
+    
+    // Return empty response if no response was generated
+    return { response: '' };
   }
 
   /**

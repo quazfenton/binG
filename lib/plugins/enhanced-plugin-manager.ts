@@ -135,16 +135,23 @@ export class EnhancedPluginManager {
       throw new Error(`Plugin ${pluginId} not found`);
     }
 
+    // Normalize dependencies to PluginDependency[] format BEFORE resolution
+    const normalizedDeps: PluginDependency[] = (plugin.dependencies || []).map(dep => {
+      if (typeof dep === 'string') {
+        return { pluginId: dep, version: '*', optional: false };
+      }
+      return dep;
+    });
+    plugin.dependencies = normalizedDeps;
+
     // Check dependencies and resolve fallbacks
     const compatibility = await this.checkDependencies(plugin);
     const resolution = await this.dependencyManager.resolveDependencies(pluginId);
     
-    // Handle string or PluginDependency types
-    const deps = plugin.dependencies || [];
-    for (const dep of deps) {
-      const depId = typeof dep === 'string' ? dep : (dep as any).pluginId;
-      if (!this.plugins.has(depId)) {
-        console.warn(`Plugin ${plugin.id} depends on ${depId} which is not registered`);
+    // Validate resolved dependencies
+    for (const dep of normalizedDeps) {
+      if (!this.plugins.has(dep.pluginId)) {
+        console.warn(`Plugin ${plugin.id} depends on ${dep.pluginId} which is not registered`);
       }
     }
 

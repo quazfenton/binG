@@ -587,13 +587,13 @@ describe('Safe Diff Operations Integration', () => {
 
       const result = await diffOps.safelyApplyDiffs(fileId, originalContent, diffs, fileState);
 
-      if (result.backupId) {
-        await diffOps.rollbackToBackup(fileId, result.backupId);
+      expect(result.backupId).toBeDefined();
 
-        const tracking = (diffOps as any).changeTracking.get(fileId);
-        expect(tracking).toBeDefined();
-        expect(tracking.length).toBeGreaterThan(1); // Original change + rollback
-      }
+      await diffOps.rollbackToBackup(fileId, result.backupId!);
+
+      const tracking = (diffOps as any).changeTracking.get(fileId);
+      expect(tracking).toBeDefined();
+      expect(tracking.length).toBeGreaterThan(1); // Original change + rollback
     });
   });
 
@@ -730,11 +730,10 @@ export function Component() {
 
       const result = await diffOps.safelyApplyDiffs('resolution-test', currentContent, diffs, fileState);
 
-      if (result.conflicts.length > 0) {
-        const conflict = result.conflicts[0];
-        expect(conflict.resolutionOptions).toBeDefined();
-        expect(conflict.resolutionOptions.length).toBeGreaterThan(0);
-      }
+      expect(result.conflicts.length).toBeGreaterThan(0);
+      const conflict = result.conflicts[0];
+      expect(conflict.resolutionOptions).toBeDefined();
+      expect(conflict.resolutionOptions.length).toBeGreaterThan(0);
     });
 
     it('should detect semantic conflicts', async () => {
