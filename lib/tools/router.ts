@@ -1232,7 +1232,7 @@ class OAuthIntegrationProvider implements CapabilityProvider {
 /**
  * Capability Router - selects and executes capabilities via providers
  */
-class CapabilityRouter {
+export class CapabilityRouter {
   private providers = new Map<string, CapabilityProvider>();
   private initialized = false;
 

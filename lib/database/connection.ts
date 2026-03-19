@@ -49,6 +49,8 @@ function getMockDatabase(): Database.Database {
         raw: () => []
       } as any;
     },
+    get: () => null,
+    all: () => [],
     exec: () => mockDb as Database.Database,
     pragma: () => {},
     transaction: (fn: any) => fn,

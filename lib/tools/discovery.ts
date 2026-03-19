@@ -74,6 +74,7 @@ export class ToolDiscoveryService {
   private static instance: ToolDiscoveryService;
   private usageStats = new Map<string, ToolUsageStats>();
   private toolManager = getToolManager();
+  public registry = getToolManager();
 
   static getInstance(): ToolDiscoveryService {
     if (!ToolDiscoveryService.instance) {

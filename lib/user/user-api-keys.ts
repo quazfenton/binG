@@ -90,7 +90,7 @@ async function encrypt(value: string): Promise<string> {
         iv: iv,
       },
       key,
-      data.buffer
+      data.buffer.slice(data.byteOffset, data.byteOffset + data.byteLength)
     )
     
     // Combine IV + ciphertext and encode as base64

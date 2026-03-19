@@ -198,8 +198,8 @@ export class ProviderHealthChecker extends EventEmitter {
 
     if (latency) {
       sandboxMetrics.providerHealthCheckDuration.observe(
-        { provider: provider as any },
-        latency / 1000
+        latency / 1000,
+        { provider: provider as any }
       )
     }
 

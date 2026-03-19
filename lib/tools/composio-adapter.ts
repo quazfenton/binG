@@ -6,7 +6,22 @@
  * SECURITY: All tool calls now require userId for proper isolation.
  */
 
-import { composioService } from '@/lib/platforms/composio-service';
+import { getComposioService } from '@/lib/platforms/composio-service';
+
+const composioService = getComposioService();
+
+// Stub implementations for missing session manager
+// TODO: Implement proper session management
+export const composioSessionManager = {
+  getUserTools: async (_userId: string, _options?: any) => [],
+  searchTools: async (_userId: string, _query: string, _options?: any) => [],
+  connectAccount: async (_userId: string, _toolkit: string, _authMode?: any) => ({ success: false, error: 'Not implemented' }),
+  getConnectedAccounts: async (_userId: string) => [],
+};
+
+export async function executeToolCall(_userId: string, _tool: string, _args?: any): Promise<any> {
+  throw new Error('Tool execution not implemented - use composioService directly');
+}
 
 export interface ToolCall {
   tool: string;

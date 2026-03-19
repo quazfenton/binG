@@ -45,14 +45,14 @@ TIP: Use list_files first to discover file paths if you're unsure.`,
   parameters: z.object({
     path: z.string().describe('File path relative to workspace root'),
   }),
-  execute: async ({ path }: { path: string }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+  execute: async ({ path }: { path: string }, ctx: any) => {
     // When called through AI SDK, the actual execution happens via ToolExecutor
     // This is a fallback that provides guidance
     return {
       type: 'file_read_request',
       path,
       message: `To read ${path}, ensure you have sandbox context. The ToolExecutor will handle actual file reading.`,
-    };
+    } as any;
   },
 });
 
@@ -73,13 +73,13 @@ EXAMPLE:
     path: z.string().optional().describe('Directory path (default: root)'),
     pattern: z.string().optional().describe('Glob pattern to filter files (e.g., "*.ts", "*.tsx")'),
   }),
-  execute: async ({ path, pattern }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+  execute: async ({ path, pattern }, ctx: any) => {
     return {
       type: 'list_files_request',
       path: path || '.',
       pattern,
       message: 'File listing will be provided by ToolExecutor with sandbox context',
-    };
+    } as any;
   },
 });
 
@@ -96,13 +96,13 @@ IMPORTANT: Only use for NEW files. For existing files, use apply_diff.`,
     path: z.string().describe('File path where the new file will be created'),
     content: z.string().describe('Complete file content'),
   }),
-  execute: async ({ path, content }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+  execute: async ({ path, content }, ctx: any) => {
     return {
       type: 'create_file_request',
       path,
       content,
       message: `File creation request for ${path}. ToolExecutor will handle actual creation.`,
-    };
+    } as any;
   },
 });
 
@@ -135,7 +135,7 @@ TIPS:
     replace: z.string().describe('New code to insert'),
     thought: z.string().describe('Explain WHY this change is needed and WHAT it does'),
   }),
-  execute: async ({ path, search, replace, thought }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+  execute: async ({ path, search, replace, thought }, ctx: any) => {
     return {
       type: 'apply_diff_request',
       path,
@@ -143,7 +143,7 @@ TIPS:
       replace,
       thought,
       message: `Diff application request for ${path}. ToolExecutor will validate and apply the change.`,
-    };
+    } as any;
   },
 });
 
@@ -170,13 +170,13 @@ EXAMPLE:
     command: z.string().describe('Shell command to execute'),
     cwd: z.string().optional().describe('Working directory (default: sandbox root)'),
   }),
-  execute: async ({ command, cwd }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+  execute: async ({ command, cwd }, ctx: any) => {
     return {
       type: 'exec_shell_request',
       command,
       cwd,
       message: `Shell execution request: ${command}. ToolExecutor will execute with security checks.`,
-    };
+    } as any;
   },
 });
 
@@ -192,12 +192,12 @@ SUPPORTED: TypeScript, JavaScript, JSON, YAML, HTML, CSS`,
   parameters: z.object({
     paths: z.array(z.string()).describe('Array of file paths to check'),
   }),
-  execute: async ({ paths }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+  execute: async ({ paths }, ctx: any) => {
     return {
       type: 'syntax_check_request',
       paths,
       message: `Syntax check requested for ${paths.length} files. ToolExecutor will validate.`,
-    };
+    } as any;
   },
 });
 
@@ -217,7 +217,7 @@ This tool creates an approval request that must be resolved before proceeding.`,
     reason: z.string().describe('Why this action is needed'),
     diff: z.string().optional().describe('Preview of changes (for edit operations)'),
   }),
-  execute: async ({ action, target, reason, diff }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+  execute: async ({ action, target, reason, diff }, ctx: any) => {
     return {
       requires_approval: true,
       approval_request: {
@@ -230,7 +230,7 @@ This tool creates an approval request that must be resolved before proceeding.`,
         status: 'pending',
       },
       message: `Waiting for approval to ${action} ${target}`,
-    };
+    } as any;
   },
 });
 
@@ -247,13 +247,13 @@ Call this before making any changes.`,
     files_to_analyze: z.array(z.string()).describe('List of file paths to analyze'),
     proposed_task: z.string().describe('Description of the task you plan to do'),
   }),
-  execute: async ({ files_to_analyze, proposed_task }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+  execute: async ({ files_to_analyze, proposed_task }, ctx: any) => {
     return {
       type: 'discovery_request',
       files_to_analyze,
       proposed_task,
       message: `Discovery phase: Will analyze ${files_to_analyze.length} files for task: ${proposed_task}`,
-    };
+    } as any;
   },
 });
 
@@ -277,7 +277,7 @@ Call this after discovery and before any edits.`,
     execution_order: z.array(z.string()).describe('Ordered list of file paths to process'),
     rollback_plan: z.string().describe('How to revert if something goes wrong'),
   }),
-  execute: async ({ task, files, execution_order, rollback_plan }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+  execute: async ({ task, files, execution_order, rollback_plan }, ctx: any) => {
     return {
       success: true,
       plan: {
@@ -288,7 +288,7 @@ Call this after discovery and before any edits.`,
         execution_order,
         rollback_plan,
       },
-    };
+    } as any;
   },
 });
 
@@ -298,13 +298,13 @@ export const commitTool = tool({
     session_id: z.string().describe('Session identifier'),
     message: z.string().describe('Commit message describing the changes'),
   }),
-  execute: async ({ session_id, message }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+  execute: async ({ session_id, message }, ctx: any) => {
     return {
       type: 'commit_request',
       session_id,
       message,
       note: 'Commit will be processed by ShadowCommitManager',
-    };
+    } as any;
   },
 });
 
@@ -314,13 +314,13 @@ export const rollbackTool = tool({
     session_id: z.string().describe('Session identifier'),
     commit_id: z.string().describe('Commit ID to rollback to'),
   }),
-  execute: async ({ session_id, commit_id }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+  execute: async ({ session_id, commit_id }, ctx: any) => {
     return {
       type: 'rollback_request',
       session_id,
       commit_id,
       note: 'Rollback will be processed by ShadowCommitManager',
-    };
+    } as any;
   },
 });
 
@@ -330,13 +330,13 @@ export const historyTool = tool({
     session_id: z.string().describe('Session identifier'),
     limit: z.number().optional().describe('Maximum number of commits to return (default: 10)'),
   }),
-  execute: async ({ session_id, limit }, { messages, toolCallId }: { messages: any; toolCallId: string }) => {
+  execute: async ({ session_id, limit }, ctx: any) => {
     return {
       type: 'history_request',
       session_id,
       limit,
       note: 'History will be retrieved from ShadowCommitManager',
-    };
+    } as any;
   },
 });
 

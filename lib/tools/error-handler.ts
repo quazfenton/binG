@@ -15,12 +15,16 @@
 // Re-export from unified error handler for backwards compatibility
 export {
   ToolErrorClass as ToolError,
-  ToolExecutionResult,
-  ErrorCategory,
   getErrorHandler,
   handleError,
   createValidationError,
   createAuthError,
+} from '../utils/error-handler';
+
+// Re-export types separately for isolatedModules compatibility
+export type {
+  ToolExecutionResult,
+  ErrorCategory,
 } from '../utils/error-handler';
 
 // Create default instance for backwards compatibility

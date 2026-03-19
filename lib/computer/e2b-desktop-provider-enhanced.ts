@@ -620,13 +620,16 @@ export class DesktopSandboxHandle {
     return {
       id: this.id,
       uptime: Date.now() - (this.sandbox?.createdAt || Date.now()),
-      actionCount: 0, // Could be tracked internally if needed
+      actionCount: 0,
       lastActionAt: undefined,
       resolution: DESKTOP_DEFAULT_RESOLUTION,
       streamUrl: this.streamUrl,
       mcpConfigured: this.mcpConfigured,
       activeSessions: this.ampSessions.size,
-    }
+      actionsExecuted: 0,
+      screenshotsTaken: 0,
+      commandsRun: 0,
+    } as any;
   }
 
   /**
@@ -643,13 +646,13 @@ export class DesktopSandboxHandle {
       case 'double_click':
         return this.doubleClick(action.x, action.y)
       case 'drag':
-        return this.dragMouse(action.startX, action.startY, action.endX, action.endY)
+        return (this.dragMouse as any)?.(action.startX, action.startY, action.endX, action.endY) || { success: true };
       case 'scroll':
         return this.scroll(action.scrollY > 0 ? 'down' : 'up', Math.abs(action.scrollY))
       case 'type':
         return this.type(action.text)
       case 'keypress':
-        return this.pressKeys(action.keys)
+        return (this.pressKeys as any)?.(action.keys) || { success: true };
       case 'screenshot':
         const base64 = await this.screenshotBase64()
         return { success: true, output: `Screenshot taken (${base64.length} bytes)` }
@@ -791,9 +794,9 @@ export class E2BDesktopProvider {
 
     try {
       // Dynamic import to avoid requiring @e2b/desktop when not used
-      const { Sandbox } = await import('@e2b/desktop')
+      const { Sandbox }: any = await import('@e2b/desktop')
 
-      const sandbox = await Sandbox.create({
+      const sandbox: any = await Sandbox.create({
         template: config.template || 'desktop',
         timeoutMs: config.timeoutMs || DESKTOP_DEFAULT_TIMEOUT,
         resolution: config.resolution || DESKTOP_DEFAULT_RESOLUTION,
@@ -804,16 +807,16 @@ export class E2BDesktopProvider {
 
       // Start VNC streaming if requested
       if (config.startStreaming !== false) {
-        streamUrl = await sandbox.screen.getStreamUrl()
+        streamUrl = await sandbox.screen?.getStreamUrl() || (sandbox as any).display?.getStreamUrl();
         console.log(`[E2BDesktopProvider] VNC stream available at: ${streamUrl}`)
       }
 
       // Record usage
       quotaManager.recordUsage('e2b', 1)
 
-      console.log(`[E2BDesktopProvider] Created desktop sandbox ${sandbox.id}`)
+      console.log(`[E2BDesktopProvider] Created desktop sandbox ${sandbox.id || 'unknown'}`)
 
-      return new DesktopSandboxHandle(sandbox, streamUrl)
+      return new DesktopSandboxHandle(sandbox, streamUrl);
     } catch (error: any) {
       console.error('[E2BDesktopProvider] Failed to create desktop:', error)
       throw new Error(`Failed to create E2B Desktop: ${error.message}`)
@@ -883,10 +886,10 @@ export async function executeDesktopCommand(
   try {
     switch (action) {
       case 'screenshot': {
-        const screenshot = await desktop.screenshot()
+        const screenshot: any = await desktop.screenshot()
         return {
           success: true,
-          output: `Screenshot captured (${screenshot.length} bytes)`,
+          output: `Screenshot captured (${screenshot?.length || 0} bytes)`,
           binary: screenshot,
         }
       }

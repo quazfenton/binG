@@ -33,15 +33,16 @@ export {
   authenticateRequest,
   generateApiKey,
   isValidApiKeyFormat,
-  TokenBlacklist,
+  InMemoryTokenBlacklist as TokenBlacklist,
   globalBlacklist,
-  
+
   // Types
   type TokenPayload,
   type JWTConfig,
   type VerificationResult,
   type AuthOptions,
   type AuthResult,
+  type TokenBlacklistProvider,
 } from './jwt-auth';
 
 export {
