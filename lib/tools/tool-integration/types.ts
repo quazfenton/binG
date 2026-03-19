@@ -52,6 +52,9 @@ export interface IntegrationConfig {
   tambo?: {
     enabled?: boolean;
   };
+  smithery?: {
+    apiKey: string;
+  };
 }
 
 export interface ProviderExecutionRequest {

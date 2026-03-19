@@ -90,6 +90,7 @@ export class SandboxService {
      const handle = await provider.createSandbox({
       language: config?.language ?? 'typescript',
       resources: config?.resources ?? this.getDefaultResources(),
+      // @ts-ignore - env may not be in SandboxCreateConfig type
       env: {
         TERM: 'xterm-256color',
         LANG: 'en_US.UTF-8',

@@ -344,6 +344,7 @@ export class RedisAgentService {
     return events
       .map(([id, data]) => {
         try {
+          // @ts-ignore - data may be string or object with event property
           const event = JSON.parse(data.event);
           if (event.sessionId === sessionId) {
             return event;

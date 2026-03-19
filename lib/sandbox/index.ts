@@ -177,7 +177,7 @@ export {
   phase2,
   runAgentTaskWithAutoProvider,
   runCIWithAutoProvider,
-  
+
   // Provider Router
   ProviderRouter,
   providerRouter,
@@ -192,7 +192,7 @@ export {
   type TaskContext,
   type ProviderSelectionResult,
   type ProviderProfile,
-  
+
   // E2B Deep Integration
   E2BIntegration,
   e2bIntegration,
@@ -207,7 +207,7 @@ export {
   type AmpEvent,
   type CodexEvent,
   type GitOperationResult,
-  
+
   // Daytona Computer Use
   DaytonaComputerUseWorkflow,
   daytonaComputerUse,
@@ -222,7 +222,7 @@ export {
   type KeyboardInput,
   type RecordingResult,
   type ScreenshotResult,
-  
+
   // CodeSandbox Batch CI/CD
   CodeSandboxBatchCI,
   codesandboxBatch,
@@ -236,18 +236,23 @@ export {
   type ParallelTestConfig,
   type MultiEnvBuildConfig,
   type CIPipelineConfig,
-  
+
   // Live Preview Offloading
   LivePreviewOffloading,
   livePreviewOffloading,
-  getPreviewProvider,
-  getProviderPreviewUrl,
-  getPreview,
-  createSmartPreview,
+  detectProject,
+  getSandpackConfig,
+  detectPreviewMode,
+  detectFramework,
+  detectEntryPoint,
+  shouldUseLocalPreview,
+  getCloudFallback,
   type PreviewMode,
   type AppFramework,
-  type PreviewRequest,
+  type Bundler,
   type ProjectDetection,
+  type SandpackConfig,
+  type PreviewRequest,
 } from './phase2-integration';
 
 // ==================== Phase 3 Integration (NEW) ====================

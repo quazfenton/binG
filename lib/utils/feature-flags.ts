@@ -31,15 +31,15 @@ const DEFAULT_FLAGS = {
 async function getUserPreferences(userId: string): Promise<Record<string, boolean> | null> {
   try {
     const db = getDatabase();
-    const row = db.get(
+    const row = (db as any).get?.(
       'SELECT preferences FROM user_preferences WHERE user_id = ?',
       [userId]
     );
-    
+
     if (row?.preferences) {
       return JSON.parse(row.preferences);
     }
-    
+
     return null;
   } catch (error) {
     console.error('[FeatureFlags] Failed to get user preferences:', error);

@@ -330,7 +330,7 @@ export class OpencodeCapabilityProvider {
       }
     }
 
-    return fileChanges
+    return fileChanges as Array<{ path: string; operation: 'write' | 'patch' | 'delete'; content?: string }>
   }
 
   /**

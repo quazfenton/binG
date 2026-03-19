@@ -243,7 +243,7 @@ export function createCodexService(
 
     // Upload image if data provided
     if ('imageData' in config && config.imageData) {
-      await sandbox.files.write(config.imagePath!, config.imageData as Buffer)
+      await (sandbox.files as any).write(config.imagePath!, config.imageData as Buffer)
     }
 
     const args = buildArgs(config)
@@ -366,7 +366,7 @@ export function createCodexService(
       
       // Write image to sandbox
       try {
-        await sandbox.files.write(config.imagePath, config.imageData);
+        await (sandbox.files as any).write(config.imagePath, config.imageData);
         console.log(`[Codex] Image written to ${config.imagePath} (${imageFormat}, ${(config.imageData.length / 1024).toFixed(2)}KB)`);
       } catch (writeError: any) {
         throw new Error(`Failed to write image to sandbox: ${writeError.message}`);

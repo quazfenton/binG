@@ -78,12 +78,12 @@ async function executeNangoProxy<T = any>(
 export const nangoGitHubTools = {
   github_list_repos: tool({
     description: `List GitHub repositories for the authenticated user.
-    
+
     USE CASES:
     - Find repositories to work with
     - Check repository existence
     - Get repository metadata
-    
+
     RETURNS: Array of repository objects with name, owner, description, etc.`,
     parameters: z.object({
       connectionId: z.string().describe('Nango connection ID for GitHub'),
@@ -105,12 +105,12 @@ export const nangoGitHubTools = {
 
   github_create_issue: tool({
     description: `Create a new GitHub issue.
-    
+
     USE CASES:
     - Report bugs
     - Request features
     - Track tasks
-    
+
     REQUIRES: Repository owner, repo name, and issue title`,
     parameters: z.object({
       connectionId: z.string().describe('Nango connection ID for GitHub'),
@@ -135,12 +135,12 @@ export const nangoGitHubTools = {
 
   github_create_pull_request: tool({
     description: `Create a new GitHub pull request.
-    
+
     USE CASES:
     - Propose code changes
     - Merge branches
     - Contribute to open source
-    
+
     REQUIRES: Owner, repo, title, head branch, base branch`,
     parameters: z.object({
       connectionId: z.string().describe('Nango connection ID for GitHub'),
@@ -166,12 +166,12 @@ export const nangoGitHubTools = {
 
   github_get_file: tool({
     description: `Get a file from a GitHub repository.
-    
+
     USE CASES:
     - Read file contents
     - Check file existence
     - Get file metadata including SHA
-    
+
     RETURNS: File content (decoded from base64) and SHA`,
     parameters: z.object({
       connectionId: z.string().describe('Nango connection ID for GitHub'),
@@ -209,12 +209,12 @@ export const nangoGitHubTools = {
 export const nangoSlackTools = {
   slack_send_message: tool({
     description: `Send a message to a Slack channel.
-    
+
     USE CASES:
     - Send notifications
     - Post updates to team
     - Reply to threads
-    
+
     REQUIRES: Channel ID (can get from slack_list_channels)`,
     parameters: z.object({
       connectionId: z.string().describe('Nango connection ID for Slack'),
@@ -237,7 +237,7 @@ export const nangoSlackTools = {
 
   slack_list_channels: tool({
     description: `List Slack channels.
-    
+
     USE CASES:
     - Find channel IDs for sending messages
     - Discover available channels
@@ -263,7 +263,7 @@ export const nangoSlackTools = {
 export const nangoNotionTools = {
   notion_search: tool({
     description: `Search Notion pages and databases.
-    
+
     USE CASES:
     - Find pages by title or content
     - Discover databases
@@ -291,12 +291,12 @@ export const nangoNotionTools = {
 
   notion_create_page: tool({
     description: `Create a new Notion page.
-    
+
     USE CASES:
     - Create documentation pages
     - Add notes
     - Create database entries
-    
+
     REQUIRES: Parent page ID (use notion_search to find)`,
     parameters: z.object({
       connectionId: z.string().describe('Nango connection ID for Notion'),
@@ -343,5 +343,6 @@ export const nangoTools = {
 };
 
 export type NangoToolName = keyof typeof nangoTools;
+
 
 
