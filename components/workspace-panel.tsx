@@ -152,6 +152,11 @@ export function ExperimentalWorkspacePanel() {
   const [githubUrl, setGithubUrl] = useState('');
   const [isImporting, setIsImporting] = useState(false);
   const [importError, setImportError] = useState<string | null>(null);
+  const [isGithubAuthenticated, setIsGithubAuthenticated] = useState(false);
+  const [githubRepos, setGithubRepos] = useState<Array<{ id: number; name: string; fullName: string; description: string; private: boolean; url: string; defaultBranch: string; stars: number; language: string }>>([]);
+  const [isLoadingRepos, setIsLoadingRepos] = useState(false);
+  const [selectedRepo, setSelectedRepo] = useState<{ owner: string; repo: string; branch: string } | null>(null);
+  const [showUrlInput, setShowUrlInput] = useState(false);
   
   // Resizable panel width
   const [panelWidth, setPanelWidth] = useState(400);
@@ -1367,6 +1372,99 @@ export function ExperimentalWorkspacePanel() {
       </div>
     );
   }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile, handleRenameFile, renamingFile, renameValue, confirmRename, cancelRename, clipboard, handlePasteToFolder, dragOverFolder, handleDragOver, handleDragLeave, handleDrop, handleDragStart, handleCutFile, handleCopyFile]);
+
+  // Check GitHub auth status and fetch repos when modal opens
+  useEffect(() => {
+    if (!showGithubImport) return;
+
+    const checkAuth = async () => {
+      try {
+        const response = await fetch('/api/auth0/github-status');
+        if (response.ok) {
+          const data = await response.json();
+          setIsGithubAuthenticated(data.authenticated);
+          if (data.authenticated && data.repos) {
+            setGithubRepos(data.repos);
+          }
+        }
+      } catch {
+        setIsGithubAuthenticated(false);
+      }
+    };
+
+    checkAuth();
+  }, [showGithubImport]);
+
+  const handleSignInWithGithub = () => {
+    window.location.href = '/api/auth/login?connection=github';
+  };
+
+  const handleFetchRepos = async () => {
+    setIsLoadingRepos(true);
+    try {
+      const response = await fetch('/api/implementations/github');
+      const data = await response.json();
+      if (data.repos) {
+        setGithubRepos(data.repos);
+      }
+    } catch (err) {
+      console.error('Failed to fetch repos:', err);
+    } finally {
+      setIsLoadingRepos(false);
+    }
+  };
+
+  const handleImportFromRepo = async (repo: { owner: string; repo: string; branch: string }) => {
+    const { owner, repo: repoName, branch } = repo;
+    setIsImporting(true);
+    setImportError(null);
+
+    try {
+      const response = await fetch('/api/implementations/github', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ owner, repo: repoName, branch }),
+      });
+
+      const data = await response.json();
+
+      if (!response.ok) {
+        setImportError(data.error || 'Failed to import from GitHub');
+        setIsImporting(false);
+        return;
+      }
+
+      // Write imported files to VFS
+      const files = data.files;
+      let importedCount = 0;
+
+      for (const [path, content] of Object.entries(files)) {
+        try {
+          await vfs.writeFile(path, content as string);
+          importedCount++;
+        } catch (err) {
+          console.error(`Failed to write ${path}:`, err);
+        }
+      }
+
+      // Refresh the filesystem state
+      const snapshot = await vfs.getSnapshot();
+      setVfsSnapshot(snapshot);
+      setFilesystem({
+        sessionId: filesystem?.sessionId || "default",
+        version: snapshot?.version || 1,
+        files: snapshot?.files || [],
+      });
+
+      toast.success(`Imported ${importedCount} files from ${data.repo.fullName}`);
+      setShowGithubImport(false);
+      setGithubUrl('');
+    } catch (err) {
+      setImportError(err instanceof Error ? err.message : 'Failed to import from GitHub');
+    } finally {
+      setIsImporting(false);
+    }
+  };
 
   return (
     <>
@@ -2865,7 +2963,7 @@ export function ExperimentalWorkspacePanel() {
       {/* GitHub Import Modal */}
       {showGithubImport && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
-          <div className="bg-gray-900 border border-white/20 rounded-lg shadow-2xl w-full max-w-md p-6">
+          <div className="bg-gray-900 border border-white/20 rounded-lg shadow-2xl w-full max-w-lg p-6 max-h-[80vh] flex flex-col">
             <div className="flex items-center justify-between mb-4">
               <div className="flex items-center gap-3">
                 <svg className="h-6 w-6 text-white" viewBox="0 0 24 24" fill="currentColor">
@@ -2880,116 +2978,284 @@ export function ExperimentalWorkspacePanel() {
                   setShowGithubImport(false);
                   setGithubUrl('');
                   setImportError(null);
+                  setSelectedRepo(null);
                 }}
                 className="h-8 w-8 text-white/70 hover:text-white"
               >
                 <X className="h-4 w-4" />
               </Button>
             </div>
-            
-            <p className="text-sm text-white/60 mb-4">
-              Enter a GitHub repository URL to import files into your workspace.
-            </p>
-            
-            <Input
-              value={githubUrl}
-              onChange={(e) => {
-                setGithubUrl(e.target.value);
-                setImportError(null);
-              }}
-              placeholder="https://github.com/owner/repo"
-              className="mb-4 bg-black/40 border-white/20 text-white"
-              disabled={isImporting}
-            />
-            
-            {importError && (
-              <div className="mb-4 p-3 bg-red-500/20 border border-red-500/30 rounded text-red-400 text-sm">
-                {importError}
-              </div>
-            )}
-            
-            <div className="flex gap-3 justify-end">
-              <Button
-                variant="outline"
-                onClick={() => {
-                  setShowGithubImport(false);
-                  setGithubUrl('');
-                  setImportError(null);
-                }}
-                disabled={isImporting}
-                className="border-white/20 text-white/70"
-              >
-                Cancel
-              </Button>
-              <Button
-                onClick={async () => {
-                  if (!githubUrl.trim()) {
-                    setImportError('Please enter a GitHub URL');
-                    return;
-                  }
-                  
-                  setIsImporting(true);
-                  setImportError(null);
-                  
-                  try {
-                    const response = await fetch('/api/github/import', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({ url: githubUrl }),
-                    });
-                    
-                    const data = await response.json();
-                    
-                    if (!response.ok) {
-                      setImportError(data.error || 'Failed to import from GitHub');
-                      setIsImporting(false);
-                      return;
-                    }
-                    
-                    // Write imported files to VFS
-                    const files = data.files;
-                    let importedCount = 0;
-                    
-                    for (const [path, content] of Object.entries(files)) {
-                      try {
-                        await vfs.writeFile(path, content as string);
-                        importedCount++;
-                      } catch (err) {
-                        console.error(`Failed to write ${path}:`, err);
-                      }
-                    }
-                    
-                    // Refresh the filesystem state
-                    const snapshot = await vfs.getSnapshot();
-                    setVfsSnapshot(snapshot);
-                    setFilesystem({
-                      sessionId: filesystem?.sessionId || "default",
-                      version: snapshot?.version || 1,
-                      files: snapshot?.files || [],
-                    });
-                    
-                    toast.success(`Imported ${importedCount} files from ${data.repo.fullName}`);
-                    setShowGithubImport(false);
-                    setGithubUrl('');
-                  } catch (err) {
-                    setImportError(err instanceof Error ? err.message : 'Failed to import from GitHub');
-                  } finally {
-                    setIsImporting(false);
-                  }
-                }}
-                disabled={isImporting || !githubUrl.trim()}
-                className="bg-green-600 hover:bg-green-700 text-white"
-              >
-                {isImporting ? (
-                  <>
-                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
-                    Importing...
-                  </>
+
+            {!isGithubAuthenticated ? (
+              <>
+                <p className="text-sm text-white/60 mb-4">
+                  Sign in with GitHub to browse and import your repositories.
+                </p>
+                <Button
+                  onClick={handleSignInWithGithub}
+                  className="bg-[#24292f] hover:bg-[#363b42] text-white"
+                >
+                  <svg className="h-4 w-4 mr-2" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                  </svg>
+                  Sign in with GitHub
+                </Button>
+                <div className="mt-6 pt-4 border-t border-white/10">
+                  <p className="text-xs text-white/40 mb-2">Or import from a public repository:</p>
+                  <Input
+                    value={githubUrl}
+                    onChange={(e) => {
+                      setGithubUrl(e.target.value);
+                      setImportError(null);
+                    }}
+                    placeholder="https://github.com/owner/repo"
+                    className="mb-3 bg-black/40 border-white/20 text-white"
+                    disabled={isImporting}
+                  />
+                  <div className="flex gap-3 justify-end">
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowGithubImport(false)}
+                      disabled={isImporting}
+                      className="border-white/20 text-white/70"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={async () => {
+                        if (!githubUrl.trim()) {
+                          setImportError('Please enter a GitHub URL');
+                          return;
+                        }
+                        setIsImporting(true);
+                        setImportError(null);
+                        try {
+                          const response = await fetch('/api/implementations/github', {
+                            method: 'POST',
+                            headers: { 'Content-Type': 'application/json' },
+                            body: JSON.stringify({ url: githubUrl }),
+                          });
+                          const data = await response.json();
+                          if (!response.ok) {
+                            setImportError(data.error || 'Failed to import from GitHub');
+                            setIsImporting(false);
+                            return;
+                          }
+                          const files = data.files;
+                          let importedCount = 0;
+                          for (const [path, content] of Object.entries(files)) {
+                            try {
+                              await vfs.writeFile(path, content as string);
+                              importedCount++;
+                            } catch (err) {
+                              console.error(`Failed to write ${path}:`, err);
+                            }
+                          }
+                          const snapshot = await vfs.getSnapshot();
+                          setVfsSnapshot(snapshot);
+                          setFilesystem({
+                            sessionId: filesystem?.sessionId || "default",
+                            version: snapshot?.version || 1,
+                            files: snapshot?.files || [],
+                          });
+                          toast.success(`Imported ${importedCount} files from ${data.repo.fullName}`);
+                          setShowGithubImport(false);
+                          setGithubUrl('');
+                        } catch (err) {
+                          setImportError(err instanceof Error ? err.message : 'Failed to import from GitHub');
+                        } finally {
+                          setIsImporting(false);
+                        }
+                      }}
+                      disabled={isImporting || !githubUrl.trim()}
+                      className="bg-green-600 hover:bg-green-700 text-white"
+                    >
+                      {isImporting ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Importing...
+                        </>
+                      ) : (
+                        'Import Public Repo'
+                      )}
+                    </Button>
+                  </div>
+                </div>
+              </>
+            ) : (
+              <>
+                <div className="flex items-center justify-between mb-3">
+                  <p className="text-sm text-white/60">
+                    {githubRepos.length} repositories found
+                  </p>
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={handleFetchRepos}
+                    disabled={isLoadingRepos}
+                    className="text-white/70 hover:text-white"
+                  >
+                    <RefreshCw className={`h-3 w-3 mr-1 ${isLoadingRepos ? 'animate-spin' : ''}`} />
+                    Refresh
+                  </Button>
+                </div>
+                
+                {isLoadingRepos ? (
+                  <div className="flex items-center justify-center py-8">
+                    <Loader2 className="h-6 w-6 animate-spin text-white/60" />
+                  </div>
                 ) : (
-                  'Import'
+                  <ScrollArea className="flex-1 max-h-64 mb-4">
+                    <div className="space-y-2 pr-4">
+                      {githubRepos.map((repo) => (
+                        <div
+                          key={repo.id}
+                          onClick={() => setSelectedRepo({ owner: repo.fullName.split('/')[0], repo: repo.name, branch: repo.defaultBranch })}
+                          className={`p-3 rounded cursor-pointer transition-colors ${
+                            selectedRepo?.repo === repo.name
+                              ? 'bg-green-600/30 border border-green-500/50'
+                              : 'bg-white/5 hover:bg-white/10 border border-transparent'
+                          }`}
+                        >
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Folder className="h-4 w-4 text-blue-400" />
+                              <span className="text-sm font-medium text-white">{repo.name}</span>
+                              {repo.private && (
+                                <Badge variant="outline" className="text-[10px] px-1 py-0 border-white/20 text-white/50">
+                                  Private
+                                </Badge>
+                              )}
+                            </div>
+                            {repo.stars > 0 && (
+                              <span className="text-xs text-yellow-400 flex items-center gap-1">
+                                ★ {repo.stars}
+                              </span>
+                            )}
+                          </div>
+                          {repo.description && (
+                            <p className="text-xs text-white/50 mt-1 truncate">{repo.description}</p>
+                          )}
+                          {repo.language && (
+                            <p className="text-xs text-white/30 mt-1">{repo.language}</p>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  </ScrollArea>
                 )}
-              </Button>
-            </div>
+
+                {importError && (
+                  <div className="mb-4 p-3 bg-red-500/20 border border-red-500/30 rounded text-red-400 text-sm">
+                    {importError}
+                  </div>
+                )}
+
+                <div className="flex gap-3 justify-between">
+                  <Button
+                    variant="outline"
+                    onClick={() => setShowUrlInput(!showUrlInput)}
+                    disabled={isImporting}
+                    className="border-white/20 text-white/70"
+                  >
+                    {showUrlInput ? 'Hide URL Input' : 'Import via URL'}
+                  </Button>
+                  <div className="flex gap-3">
+                    <Button
+                      variant="outline"
+                      onClick={() => setShowGithubImport(false)}
+                      disabled={isImporting}
+                      className="border-white/20 text-white/70"
+                    >
+                      Cancel
+                    </Button>
+                    <Button
+                      onClick={() => selectedRepo && handleImportFromRepo(selectedRepo)}
+                      disabled={isImporting || !selectedRepo}
+                      className="bg-green-600 hover:bg-green-700 text-white"
+                    >
+                      {isImporting ? (
+                        <>
+                          <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                          Importing...
+                        </>
+                      ) : (
+                        'Import Selected'
+                      )}
+                    </Button>
+                  </div>
+                </div>
+
+                {showUrlInput && (
+                  <div className="mt-4 pt-4 border-t border-white/10">
+                    <p className="text-xs text-white/40 mb-2">Or enter a GitHub URL:</p>
+                    <div className="flex gap-2">
+                      <Input
+                        value={githubUrl}
+                        onChange={(e) => {
+                          setGithubUrl(e.target.value);
+                          setImportError(null);
+                        }}
+                        placeholder="https://github.com/owner/repo"
+                        className="flex-1 bg-black/40 border-white/20 text-white"
+                        disabled={isImporting}
+                      />
+                      <Button
+                        onClick={async () => {
+                          if (!githubUrl.trim()) {
+                            setImportError('Please enter a GitHub URL');
+                            return;
+                          }
+                          setIsImporting(true);
+                          setImportError(null);
+                          try {
+                            const response = await fetch('/api/implementations/github', {
+                              method: 'POST',
+                              headers: { 'Content-Type': 'application/json' },
+                              body: JSON.stringify({ url: githubUrl }),
+                            });
+                            const data = await response.json();
+                            if (!response.ok) {
+                              setImportError(data.error || 'Failed to import from GitHub');
+                              setIsImporting(false);
+                              return;
+                            }
+                            const files = data.files;
+                            let importedCount = 0;
+                            for (const [path, content] of Object.entries(files)) {
+                              try {
+                                await vfs.writeFile(path, content as string);
+                                importedCount++;
+                              } catch (err) {
+                                console.error(`Failed to write ${path}:`, err);
+                              }
+                            }
+                            const snapshot = await vfs.getSnapshot();
+                            setVfsSnapshot(snapshot);
+                            setFilesystem({
+                              sessionId: filesystem?.sessionId || "default",
+                              version: snapshot?.version || 1,
+                              files: snapshot?.files || [],
+                            });
+                            toast.success(`Imported ${importedCount} files from ${data.repo.fullName}`);
+                            setShowGithubImport(false);
+                            setGithubUrl('');
+                          } catch (err) {
+                            setImportError(err instanceof Error ? err.message : 'Failed to import from GitHub');
+                          } finally {
+                            setIsImporting(false);
+                          }
+                        }}
+                        disabled={isImporting || !githubUrl.trim()}
+                        className="bg-green-600 hover:bg-green-700 text-white"
+                      >
+                        Import
+                      </Button>
+                    </div>
+                  </div>
+                )}
+              </>
+            )}
           </div>
         </div>
       )}
