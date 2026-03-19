@@ -4,7 +4,7 @@
  * Migrated from ephemeral/auth.py
  */
 
-import { jwtVerify, importSPKI, createSecretKey, JWTPayload } from 'jose';
+import { jwtVerify, importSPKI } from 'jose';
 
 /**
  * Import a symmetric secret key for JWT verification

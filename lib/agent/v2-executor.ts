@@ -242,7 +242,7 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
         } else {
           // FIX (Bug 8): ensure session exists before runOpenCodeDirect
           // Use consistent session mode based on preferredAgent
-          const sessionMode = options.preferredAgent === 'nullclaw' ? 'nullclaw' : 'opencode';
+          const sessionMode: 'opencode' | 'nullclaw' | 'cli' = options.preferredAgent === 'nullclaw' ? 'nullclaw' : (options.preferredAgent as 'opencode' | 'cli') || 'opencode';
           await agentSessionManager.getOrCreateSession(
             options.userId,
             options.conversationId,

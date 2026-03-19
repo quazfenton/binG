@@ -5,5 +5,4 @@
  */
 
 // Resource monitor
-export { resourceMonitor, createResourceMonitor } from './resource-monitor';
-export type { ResourceMonitor, ResourceUsage, ResourceThresholds } from './resource-monitor';
+export { resourceMonitor, createResourceMonitor, SandboxResourceMonitor } from './resource-monitor';

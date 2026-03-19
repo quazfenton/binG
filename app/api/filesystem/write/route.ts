@@ -7,6 +7,7 @@ import { extractSessionIdFromPath } from '@/lib/virtual-filesystem/scope-utils';
 import { fileContentSchema, languageSchema } from '@/lib/validation/schemas';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+import type { AuthResult } from '@/lib/auth/auth-service';
 
 export const runtime = 'nodejs';
 
@@ -47,8 +48,8 @@ export async function POST(req: NextRequest) {
   try {
     // Resolve owner: authenticated users via JWT/session, anonymous via x-anonymous-session-id header
     authResult = await resolveRequestAuth(req, { allowAnonymous: true });
-    
-    if (!authResult.success || !authResult.userId) {
+
+    if (!authResult.success || !authResult.user) {
       // Fallback: resolve via resolveFilesystemOwner (checks header + cookie)
       filesystemOwnerResolution = await resolveFilesystemOwnerWithFallback(req, {
         route: 'write',
@@ -63,7 +64,7 @@ export async function POST(req: NextRequest) {
       }
       ownerId = filesystemOwnerResolution.ownerId;
     } else {
-      ownerId = authResult.userId;
+      ownerId = String(authResult.user?.id || authResult.user || '');
     }
 
     // Parse JSON body with error handling
@@ -77,7 +78,7 @@ export async function POST(req: NextRequest) {
       );
       return withAnonSessionCookie(errorResponse, filesystemOwnerResolution || {
         ownerId,
-        source: authResult.source || 'jwt',
+        source: (authResult.source as any) || 'jwt',
         isAuthenticated: true,
       });
     }
@@ -98,7 +99,7 @@ export async function POST(req: NextRequest) {
       );
       return withAnonSessionCookie(errorResponse, filesystemOwnerResolution || {
         ownerId,
-        source: authResult.source || 'jwt',
+        source: (authResult.source as any) || 'jwt',
         isAuthenticated: true,
       });
     }
@@ -176,7 +177,7 @@ export async function POST(req: NextRequest) {
     
     return withAnonSessionCookie(response, filesystemOwnerResolution || {
       ownerId: ownerId || 'unknown',
-      source: authResult?.source || 'jwt',
+      source: 'jwt',
       isAuthenticated: true,
     });
   } catch (error: unknown) {
@@ -184,7 +185,7 @@ export async function POST(req: NextRequest) {
     const errorResponse = NextResponse.json({ success: false, error: message }, { status: 400 });
     return withAnonSessionCookie(errorResponse, filesystemOwnerResolution || {
       ownerId: ownerId || 'unknown',
-      source: authResult?.source || 'jwt',
+      source: 'jwt',
       isAuthenticated: true,
     });
   }

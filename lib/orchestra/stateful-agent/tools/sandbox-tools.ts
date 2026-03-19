@@ -22,6 +22,7 @@ export interface ToolResult {
   error?: string;
   exitCode?: number;
   blocked?: boolean;
+  hint?: string;
 }
 
 /**

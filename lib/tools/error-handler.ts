@@ -46,11 +46,11 @@ export class ToolErrorHandler {
   }
 
   createValidationError(message: string, parameters?: any) {
-    return createValidationError(message, parameters);
+    return this.handler.createValidationError(message, parameters);
   }
 
   createAuthError(message: string, authUrl?: string) {
-    return createAuthError(message, authUrl);
+    return this.handler.createAuthError(message, authUrl);
   }
 }
 

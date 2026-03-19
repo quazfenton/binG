@@ -61,6 +61,14 @@ export interface MCPConfig {
 export interface DesktopHandle {
   sessionId?: string
   sandboxId?: string
+  // Desktop control methods
+  screenshot(): Promise<Buffer>
+  moveMouse(x: number, y: number): Promise<ToolResult>
+  leftClick(x?: number, y?: number, button?: 'left' | 'right' | 'middle'): Promise<ToolResult>
+  rightClick(x?: number, y?: number): Promise<ToolResult>
+  middleClick?(x?: number, y?: number): Promise<ToolResult>
+  write(text: string): Promise<ToolResult>
+  press(key: string | string[]): Promise<ToolResult>
 }
 
 // ==================== Desktop Action Types ====================

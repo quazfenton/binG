@@ -33,72 +33,15 @@
 // Re-export types from separate file to avoid pulling in server modules for client components
 export type { VFSFileEntry, SyncMode, VFSyncConfig, VFSyncResult, VFSyncStatus } from './vfs-sync-back.types';
 
+// Import types for local use
+import type { VFSFileEntry, SyncMode, VFSyncConfig, VFSyncResult, VFSyncStatus } from './vfs-sync-back.types';
+
 // Dynamic import to prevent bundling in client components
 import type { SandboxProviderType } from '../../sandbox/providers';
 import { getTerminalSession } from '../../terminal/session/terminal-session-store';
 import { createLogger } from '../../utils/logger';
 
 const logger = createLogger('VFS:SyncBack');
-
-/**
- * Sync mode options
- */
-export type SyncMode = 'full' | 'incremental' | 'changed-only';
-
-/**
- * Sync configuration
- */
-export interface VFSyncConfig {
-  /** VFS scope path (e.g., 'project') */
-  vfsScopePath: string;
-  
-  /** Sync mode */
-  syncMode?: SyncMode;
-  
-  /** File patterns to include (glob) */
-  includePatterns?: string[];
-  
-  /** File patterns to exclude (glob) */
-  excludePatterns?: string[];
-  
-  /** Max file size to sync (bytes) */
-  maxFileSize?: number;
-  
-  /** Timeout per file (ms) */
-  fileTimeout?: number;
-}
-
-/**
- * Sync result
- */
-export interface VFSyncResult {
-  success: boolean;
-  filesSynced: number;
-  bytesSynced: number;
-  duration: number;
-  errors?: Array<{ path: string; error: string }>;
-  metadata?: {
-    totalFiles: number;
-    skippedFiles: number;
-    failedFiles: number;
-  };
-}
-
-/**
- * Sync status
- */
-export interface VFSyncStatus {
-  sessionId: string;
-  lastSyncAt?: number;
-  lastSyncDuration?: number;
-  lastSyncFiles?: number;
-  isSyncing: boolean;
-  progress?: {
-    currentFile: number;
-    totalFiles: number;
-    currentPath?: string;
-  };
-}
 
 /**
  * Default configuration

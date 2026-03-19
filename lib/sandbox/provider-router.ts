@@ -262,7 +262,7 @@ export interface ProviderSelectionResult {
 /**
  * Provider capability profile
  */
-interface ProviderProfile {
+export interface ProviderProfile {
   type: SandboxProviderType;
   services: ProviderService[];
   bestFor: TaskType[];

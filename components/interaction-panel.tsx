@@ -1,6 +1,6 @@
 "use client";
 //fix
-import type React from "react";
+import React from "react";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 
 // Tabs that need taller height when opened
@@ -323,6 +323,53 @@ interface InteractionPanelProps {
   onPollDiffsNow?: () => void;
 }
 
+// Memoized provider selector component
+const ProviderSelector = React.memo(function ProviderSelector({
+  selectValue,
+  availableProviders,
+  onValueChange,
+}: {
+  selectValue: string;
+  availableProviders: any[];
+  onValueChange: (provider: string, model: string) => void;
+}) {
+  if (!selectValue || availableProviders.length === 0) return null;
+  
+  return (
+    <div className="flex items-center gap-2 mb-2 text-xs text-white/60">
+      <Select value={selectValue} onValueChange={(value) => {
+        if (!value || value === "none") return;
+        const [provider, ...modelParts] = value.split(":");
+        const model = modelParts.join(":");
+        onValueChange(provider, model);
+      }}>
+        <SelectTrigger className="w-full sm:w-[280px] border-white/20" style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)' }}>
+          <SelectValue placeholder="Select a model" />
+        </SelectTrigger>
+        <SelectContent>
+          {availableProviders
+            .filter((p: any) => p.isAvailable !== false)
+            .map((provider) => (
+              <SelectGroup key={provider.id}>
+                <SelectLabel>{provider.name}</SelectLabel>
+                {provider.models.map((model: string) => (
+                  <SelectItem key={model} value={`${provider.id}:${model}`}>
+                    {model}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ))}
+          {availableProviders.filter((p: any) => p.isAvailable !== false).length === 0 && (
+            <SelectItem value="none" disabled>
+              No providers configured - add API keys to .env
+            </SelectItem>
+          )}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+});
+
 export default function InteractionPanel({
   onSubmit,
   onNewChat,
@@ -379,6 +426,22 @@ export default function InteractionPanel({
   const [isExpanding, setIsExpanding] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prevPanelHeightRef = useRef<number | null>(null);
+
+  // Memoize select value to prevent infinite loop
+  const selectValue = useMemo(() => {
+    if (availableProviders.length === 0) return "";
+    const currentValue = `${currentProvider}:${currentModel}`;
+    const validValues = availableProviders
+      .filter((p: any) => p.isAvailable !== false)
+      .flatMap((p: any) => p.models.map((m: string) => `${p.id}:${m}`));
+    return validValues.includes(currentValue) ? currentValue : (validValues[0] || "");
+  }, [currentProvider, currentModel, availableProviders]);
+
+  // Memoized handler for ProviderSelector
+  const handleProviderSelect = useCallback((provider: string, model: string) => {
+    onProviderChange(provider, model);
+  }, [onProviderChange]);
+
   const getPanelMaxHeight = useCallback(() => {
     if (typeof window === "undefined") {
       return 600;
@@ -1708,44 +1771,11 @@ export default function InteractionPanel({
               </div>
 
               {/* Provider/Model Selection - Restored */}
-              <div className="flex items-center gap-2 mb-2 text-xs text-white/60">
-                <Select
-                  value={`${currentProvider}:${currentModel}`}
-                  onValueChange={(value) => {
-                    const [provider, ...modelParts] = value.split(":");
-                    const model = modelParts.join(":");
-                    onProviderChange(provider, model);
-                  }}
-                >
-                  <SelectTrigger 
-                    className="w-full sm:w-[280px] border-white/20"
-                    style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)' }}
-                  >
-                    <SelectValue placeholder="Select a model" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {/* Only show available providers (with API keys configured) */}
-                    {availableProviders
-                      .filter(p => (p as any).isAvailable !== false)
-                      .map((provider) => (
-                        <SelectGroup key={provider.id}>
-                          <SelectLabel>{provider.name}</SelectLabel>
-                          {provider.models.map((model) => (
-                            <SelectItem key={model} value={`${provider.id}:${model}`}>
-                              {model}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      ))}
-                    {/* Show message if no providers configured */}
-                    {availableProviders.filter(p => (p as any).isAvailable !== false).length === 0 && (
-                      <SelectItem value="none" disabled>
-                        No providers configured - add API keys to .env
-                      </SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
+              <ProviderSelector
+                selectValue={selectValue}
+                availableProviders={availableProviders}
+                onValueChange={handleProviderSelect}
+              />
 
               {/* Tab Content Sections */}
               <TabsContent value="chat" className={`m-0 flex-1 flex flex-col min-h-0 overflow-visible ${activeTab === 'chat' ? DEFAULT_TAB_HEIGHT : ''} ${activeTab && activeTab !== 'chat' && TALL_TABS.includes(activeTab) ? 'min-h-[200px]' : ''} ${EXPAND_TRANSITION}`}>

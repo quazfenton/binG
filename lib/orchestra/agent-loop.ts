@@ -187,6 +187,7 @@ async function executeToolOnSandbox(
       }
 
       case 'read_file': {
+        const filePath = args.path as string;
         // Check rate limit for file operations
         rateLimitResult = await rateLimiter.check(rateLimitKey, 'fileOps')
         if (!rateLimitResult.allowed) {
