@@ -209,9 +209,14 @@ const mcpTools: MCPTool[] = [
 
       // @ts-ignore - ownerId is passed in config
       const sandbox = await (await getProvider()).createSandbox({ ownerId });
-      const command = language === 'python' ? 'pip install' : 'npm install';
-
-      const result = await sandbox.executeCommand(`${command} ${packages.join(' ')}`);
+      
+      // SECURITY: Use proper shell escaping to prevent injection
+      const baseCommand = language === 'python' ? 'pip' : 'npm';
+      // Quote each package name to prevent shell injection
+      const quotedPackages = packages.map(pkg => `'${pkg.replace(/'/g, "'\\''")}'`);
+      const fullCommand = `${baseCommand} install ${quotedPackages.join(' ')}`;
+      
+      const result = await sandbox.executeCommand(fullCommand);
       return {
         success: result.exitCode === 0,
         output: result.output || '',

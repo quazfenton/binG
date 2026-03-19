@@ -34,7 +34,7 @@ export interface ParsedDiff {
 export interface EnhancedDiffViewerProps {
   /** Path to the file being compared */
   path: string;
-  /** Server version content */
+  /** Server version content (can be diff format or full content) */
   serverContent: string;
   /** Local (OPFS) version content (optional) */
   localContent?: string;
@@ -52,6 +52,8 @@ export interface EnhancedDiffViewerProps {
   onAcceptLocal?: () => void;
   /** On accept server changes */
   onAcceptServer?: () => void;
+  /** Treat serverContent as full file content (not diff) */
+  isFullContent?: boolean;
 }
 
 /**
@@ -163,6 +165,19 @@ function DiffHunk({ hunk, showLineNumbers = true }: { hunk: DiffSection[]; showL
 }
 
 /**
+ * Check if content looks like a unified diff (has diff markers)
+ */
+function isDiffFormat(content: string): boolean {
+  const lines = content.split('\n');
+  return lines.some(line => 
+    line.startsWith('---') || 
+    line.startsWith('+++') || 
+    line.startsWith('@@') ||
+    /^[\+\-]/.test(line)
+  );
+}
+
+/**
  * Enhanced Diff Viewer Component
  */
 export function EnhancedDiffViewer({
@@ -176,6 +191,7 @@ export function EnhancedDiffViewer({
   showUnsynced = true,
   onAcceptLocal,
   onAcceptServer,
+  isFullContent: forceFullContent = false,
 }: EnhancedDiffViewerProps) {
   const [activeTab, setActiveTab] = useState<'server-local' | 'server-git' | 'local-git'>('server-local');
   
@@ -184,6 +200,9 @@ export function EnhancedDiffViewer({
     isEnabled: isOPFSEnabled,
     syncStatus 
   } = useOPFS('current-user', { autoEnable: true });
+
+  // Auto-detect if content is diff format
+  const contentIsDiff = useMemo(() => !forceFullContent && isDiffFormat(serverContent), [serverContent, forceFullContent]);
 
   // Parse diffs
   const serverLocalDiff = useMemo(() => {
@@ -342,13 +361,25 @@ export function EnhancedDiffViewer({
               <DiffHunk key={idx} hunk={hunk} />
             ))}
           </div>
-        ) : (
+        ) : contentIsDiff ? (
           <div className="p-8 text-center text-gray-500 dark:text-gray-400">
             {compareWithLocal && !localContent
               ? 'No local version available'
               : compareWithGit && !gitContent
               ? 'No git version available'
               : 'No changes detected'}
+          </div>
+        ) : (
+          /* Show full content when not in diff format */
+          <div className="p-4 font-mono text-sm">
+            <pre className="whitespace-pre-wrap break-all text-gray-700 dark:text-gray-300">
+              {serverContent.slice(0, maxLines * 100)}
+            </pre>
+            {serverContent.length > maxLines * 100 && (
+              <div className="text-xs text-gray-400 text-center py-2">
+                ... {serverContent.length - maxLines * 100} more characters
+              </div>
+            )}
           </div>
         )}
       </div>

@@ -1,5 +1,8 @@
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 
+// NOTE: Tambo local tools are for server-side tool execution without persistent sessions.
+// Using 'anon:public' for unauthenticated requests is acceptable for development/public use.
+// For persistent user sessions, callers should provide authContextUserId.
 const DEFAULT_OWNER = 'anon:public';
 
 /**

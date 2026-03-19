@@ -5,10 +5,12 @@
  * Usage: /api/image-proxy?url=https://example.com/image.jpg
  *
  * SECURITY: Includes SSRF protection, timeout, and size limits
+ * Uses centralized validateImageUrl() for consistent security checks
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import ipaddr from 'ipaddr.js';
+import { validateImageUrl, isHostnameSafe } from '@/lib/utils/image-loader';
 
 // Configuration
 const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB max image size
@@ -64,27 +66,6 @@ function isPrivateIP(ip: string): boolean {
   }
 }
 
-/**
- * Check if hostname is allowed (blocks internal/hostnames)
- */
-function isAllowedHostname(hostname: string): boolean {
-  // Block localhost and common internal hostnames
-  const blockedHostnames = [
-    'localhost',
-    'internal',
-    'intranet',
-    'metadata',
-    'metadata.google.internal',
-    '169.254.169.254', // AWS metadata
-    'metadata.azure.com', // Azure metadata
-  ];
-
-  const lowerHostname = hostname.toLowerCase();
-  return !blockedHostnames.some(blocked => 
-    lowerHostname === blocked || lowerHostname.endsWith(`.${blocked}`)
-  );
-}
-
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const imageUrl = searchParams.get('url');
@@ -96,24 +77,18 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Validate URL - only allow HTTPS
+  // SECURITY: Use centralized URL validation for SSRF protection
+  const validation = validateImageUrl(imageUrl);
+  if (!validation.valid) {
+    return NextResponse.json(
+      { error: validation.error || 'URL validation failed' },
+      { status: 400 }
+    );
+  }
+
   let url: URL;
   try {
     url = new URL(imageUrl);
-    if (url.protocol !== 'https:') {
-      return NextResponse.json(
-        { error: 'Only HTTPS URLs are allowed' },
-        { status: 400 }
-      );
-    }
-
-    // SSRF Protection: Check hostname
-    if (!isAllowedHostname(url.hostname)) {
-      return NextResponse.json(
-        { error: 'Hostname not allowed' },
-        { status: 403 }
-      );
-    }
   } catch {
     return NextResponse.json(
       { error: 'Invalid URL format' },
@@ -122,7 +97,7 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    // SSRF Protection: Resolve and check IP address
+    // Additional SSRF Protection: Resolve and check IP address
     // Note: This is a basic check; production should use DNS resolution with IP validation
     const dns = await import('dns').catch(() => null);
     if (dns && dns.promises) {

@@ -176,7 +176,9 @@ function getClientIdentifier(req: NextRequest): string {
   // SECURITY: Never trust client-controlled headers for identity (IDOR vulnerability)
   const anonId = req.cookies.get('anon-session-id')?.value;
   if (anonId) {
-    return `anon:${anonId}`;
+    // Strip 'anon_' prefix if present (from generateSecureId format) for consistent format
+    const sessionId = anonId.startsWith('anon_') ? anonId.slice(5) : anonId;
+    return `anon:${sessionId}`;
   }
 
   // Last resort: use user agent + host as identifier

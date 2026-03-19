@@ -618,7 +618,13 @@ export class VirtualFilesystemService {
 
   private sanitizeOwnerId(ownerId: string): string {
     const trimmed = (ownerId || '').trim();
-    if (!trimmed) return 'anon:public';
+    if (!trimmed) {
+      // WARNING: Empty ownerId should never happen if callers use resolveFilesystemOwner()
+      // Using generateSecureId would cause inconsistent workspace per-request
+      // Caller MUST provide a valid ownerId via resolveFilesystemOwner()
+      console.warn('[VFS] Empty ownerId - callers should use resolveFilesystemOwner()');
+      return 'anon:public';
+    }
     if (trimmed.length > 256) return trimmed.slice(0, 256);
     return trimmed;
   }

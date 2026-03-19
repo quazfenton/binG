@@ -233,7 +233,7 @@ export async function POST(request: NextRequest) {
       typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
         ? filesystemContext.scopePath.trim()
         : defaultScopePath;
-    const filesystemOwnerId = authResult.success && authResult.userId ? authResult.userId : 'anon:public';
+    const filesystemOwnerId = authResult.success && authResult.userId ? authResult.userId : `anon:${generateSecureId('anon').slice(5)}`;
     const denialContext = await filesystemEditSessionService.getRecentDenials(
       `${filesystemOwnerId}:${resolvedConversationId}`,
       4,
@@ -1222,6 +1222,8 @@ interface FilesystemEditSummary {
   version: number;
   previousVersion: number | null;
   existedBefore: boolean;
+  content?: string;
+  diff?: string;
 }
 
 interface FilesystemEditResult {
@@ -2426,6 +2428,7 @@ async function applyFilesystemEditsFromResponse(input: {
           version: file.version,
           previousVersion,
           existedBefore,
+          content: edit.content,
         });
         filesystemEditSessionService.recordOperation(transaction.id, {
           path: file.path,
@@ -2483,6 +2486,8 @@ async function applyFilesystemEditsFromResponse(input: {
           version: file.version,
           previousVersion,
           existedBefore,
+          diff: diffOperation.diff,
+          content: patchedContent,
         });
         filesystemEditSessionService.recordOperation(transaction.id, {
           path: file.path,

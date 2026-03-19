@@ -761,25 +761,29 @@ Use 'createFile' for new files.`;
               const contentForState = typeof execResult.content === 'string'
                 ? execResult.content
                 : (typeof (callArgs as any).content === 'string' ? (callArgs as any).content : undefined);
+              
+              // Update execution graph for ANY successful tool call (not just file operations)
+              // This prevents graphs from stalling on non-file tool calls like execShell
+              if (execResult.success && this.executionGraphId) {
+                const graph = executionGraphEngine.getGraph(this.executionGraphId);
+                if (graph) {
+                  const readyNodes = executionGraphEngine.getReadyNodes(graph);
+                  if (readyNodes.length > 0) {
+                    executionGraphEngine.markComplete(graph, readyNodes[0].id, {
+                      tool: call.toolName,
+                      success: true,
+                      hasFilePath: callArgs && 'path' in callArgs,
+                    });
+                  }
+                }
+              }
+              
+              // Update VFS and memory graph only for file operations
               if (execResult.success && callArgs && 'path' in callArgs && contentForState !== undefined) {
                 this.vfs[(callArgs as any).path] = contentForState;
 
                 // Auto-write to Tool Memory Graph
                 await this.addMemoryNode('file', contentForState, (callArgs as any).path);
-
-                // Update execution graph if tracking (only on success)
-                if (this.executionGraphId) {
-                  const graph = executionGraphEngine.getGraph(this.executionGraphId);
-                  if (graph) {
-                    const readyNodes = executionGraphEngine.getReadyNodes(graph);
-                    if (readyNodes.length > 0) {
-                      executionGraphEngine.markComplete(graph, readyNodes[0].id, {
-                        file: (callArgs as any).path,
-                        success: true,
-                      });
-                    }
-                  }
-                }
               }
             } catch (err: any) {
               this.errors.push({

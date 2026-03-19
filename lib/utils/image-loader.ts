@@ -185,27 +185,30 @@ export function validateImageUrl(url: string): { valid: boolean; error?: string 
 
 /**
  * Custom Next.js Image Loader
- * 
+ *
+ * SECURITY: Returns placeholder for blocked URLs - NEVER returns unsafe URLs
+ *
  * @param src - Image source URL
  * @param width - Desired image width
  * @param quality - Image quality (1-100)
- * @returns Optimized image URL or original if validation fails
+ * @returns Optimized image URL or placeholder if validation fails
  */
 const imageLoader: ImageLoader = ({ src, width, quality = 75 }) => {
   // For relative paths, use Next.js default optimization
   if (src.startsWith('/') || src.startsWith('./')) {
-    return `${src}?w=${width}&q=${quality}`;
+    // FIX: Handle URLs that already have query strings
+    return `${src}${src.includes('?') ? '&' : '?'}w=${width}&q=${quality}`;
   }
-  
+
   // Validate external URLs
   const validation = validateImageUrl(src);
   if (!validation.valid) {
     console.error(`[ImageLoader] Blocked unsafe image URL: ${src} - ${validation.error}`);
-    // Return a placeholder or the original URL with a warning
-    // In production, you might want to return a safe placeholder image
-    return src;
+    // SECURITY: Return placeholder instead of unsafe URL
+    // This enforces the SSRF/domain block check
+    return `data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZWlnaHQ9IjMwMCIgeG1sbnM9Imh0dHA6Ly93d3cudzMub3JnLzIwMDAvc3ZnIj48cmVjdCB3aWR0aD0iNDAwIiBoZWlnaHQ9IjMwMCIgZmlsbD0iI2U1ZTdlYiIvPjx0ZXh0IHg9IjUwJSIgeT0iNTAlIiB0ZXh0LWFuY2hvcj0ibWlkZGxlIiBkeT0iLjNlbSIgZmlsbD0iI2U1MzIzMiIgZm9udC1zaXplPSIxNiIgZm9udC13ZWlnaHQ9ImJvbGQiPkJsb2NrZWQ8L3RleHQ+PHRleHQgeD0iNTAlIiB5PSI1NSUiIHRleHQtYW5jaG9yPSJtaWRkbGUiIGR5PSIuM2VtIiBmaWxsPSIjOWNhM2FmIiBmb250LXNpemU9IjEyIj5VbnNhZmUgVVJMPC90ZXh0Pjwvc3ZnPg==`;
   }
-  
+
   // For Next.js image optimization, return the source as-is
   // Next.js will handle the optimization based on remotePatterns
   return src;

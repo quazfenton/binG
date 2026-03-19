@@ -151,7 +151,9 @@ export async function resolveRequestAuth(
     if (anonCookie) {
       const anonId = normalizeAnonymousId(anonCookie);
       if (anonId) {
-        const result: ResolvedRequestAuth = { success: true, userId: `anon:${anonId}`, source: 'anonymous' };
+        // Strip 'anon_' prefix if present (from generateSecureId format) for consistent ownerId
+        const sessionId = anonId.startsWith('anon_') ? anonId.slice(5) : anonId;
+        const result: ResolvedRequestAuth = { success: true, userId: `anon:${sessionId}`, source: 'anonymous' };
         authCache.set(cacheKey, result);
         return result;
       }

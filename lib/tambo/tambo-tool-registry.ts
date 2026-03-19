@@ -154,6 +154,10 @@ export function initializeDefaultTools(): void {
     return; // Already initialized
   }
 
+  // NOTE: Tambo tools are used by AI agents which don't have persistent sessions.
+  // Agents share a workspace when no ownerId is provided. This is acceptable for
+  // ephemeral agent contexts. For persistent user sessions, callers should provide
+  // an ownerId via resolveFilesystemOwner().
   const DEFAULT_OWNER = 'anon:public';
 
   // Filesystem tools (using API routes for server-side execution)
@@ -163,7 +167,7 @@ export function initializeDefaultTools(): void {
       description: 'Read a file from the virtual filesystem',
       inputSchema: z.object({
         path: z.string().describe('File path to read'),
-        ownerId: z.string().optional().describe('Owner ID (defaults to anon:public)'),
+        ownerId: z.string().optional().describe('Owner ID for persistent sessions (defaults to shared anon:public for agent contexts)'),
       }),
       outputSchema: z.object({
         path: z.string(),
@@ -198,7 +202,7 @@ export function initializeDefaultTools(): void {
       inputSchema: z.object({
         path: z.string().describe('File path to write'),
         content: z.string().describe('Content to write'),
-        ownerId: z.string().optional().describe('Owner ID (defaults to anon:public)'),
+        ownerId: z.string().optional().describe('Owner ID for persistent sessions (defaults to shared anon:public for agent contexts)'),
       }),
       outputSchema: z.object({
         path: z.string(),
@@ -234,7 +238,7 @@ export function initializeDefaultTools(): void {
       description: 'List contents of a directory',
       inputSchema: z.object({
         path: z.string().optional().describe('Directory path (defaults to root)'),
-        ownerId: z.string().optional().describe('Owner ID (defaults to anon:public)'),
+        ownerId: z.string().optional().describe('Owner ID for persistent sessions (defaults to shared anon:public for agent contexts)'),
       }),
       outputSchema: z.object({
         path: z.string(),
@@ -269,7 +273,7 @@ export function initializeDefaultTools(): void {
       description: 'Delete a file or directory',
       inputSchema: z.object({
         path: z.string().describe('Path to delete'),
-        ownerId: z.string().optional().describe('Owner ID (defaults to anon:public)'),
+        ownerId: z.string().optional().describe('Owner ID for persistent sessions (defaults to shared anon:public for agent contexts)'),
       }),
       outputSchema: z.object({
         deletedCount: z.number(),
@@ -298,7 +302,7 @@ export function initializeDefaultTools(): void {
       inputSchema: z.object({
         query: z.string().describe('Search query'),
         path: z.string().optional().describe('Limit search to this path'),
-        ownerId: z.string().optional().describe('Owner ID (defaults to anon:public)'),
+        ownerId: z.string().optional().describe('Owner ID for persistent sessions (defaults to shared anon:public for agent contexts)'),
       }),
       outputSchema: z.object({
         results: z.array(z.object({

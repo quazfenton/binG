@@ -1730,6 +1730,17 @@ export default function InteractionPanel({
                   >
                     <History className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
+                  {onPollDiffsNow && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={onPollDiffsNow}
+                      title={`Refresh file changes (${pollCount || 0} polls)`}
+                      className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                    >
+                      <RefreshCw className="h-3 w-3 sm:h-4 sm:w-4" />
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -1756,17 +1767,6 @@ export default function InteractionPanel({
                       }`}
                     />
                   </Button>
-                  {onPollDiffsNow && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={onPollDiffsNow}
-                      title={`Refresh file changes (${pollCount || 0} polls)`}
-                      className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
-                    >
-                      <RefreshCw className="h-3 w-3 sm:h-4 sm:w-4" />
-                    </Button>
-                  )}
                 </div>
               </div>
 

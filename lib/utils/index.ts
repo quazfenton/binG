@@ -87,3 +87,16 @@ export {
   isHostnameSafe,
   getHostname,
 } from './image-loader';
+
+// Crypto-secure random utilities
+export {
+  secureRandom,
+  secureRandomInt,
+  secureRandomString,
+  secureRandomId,
+  secureRandomUUID,
+  secureRandomSeed,
+  secureJitter,
+  secureShuffle,
+  securePick,
+} from './crypto-random';

@@ -54,11 +54,13 @@ export async function resolveFilesystemOwner(req: NextRequest): Promise<Filesyst
   // SECURITY: Only trust the HttpOnly cookie for anonymous identity.
   // Never trust client-controlled headers - they can be forged to impersonate other users.
   // PRIORITY 1: Use existing anonymous session ID from HttpOnly cookie
-  const anonymousSessionId = req.cookies.get('anon-session-id')?.value;
+  const rawSessionId = req.cookies.get('anon-session-id')?.value;
 
-  if (anonymousSessionId) {
+  if (rawSessionId) {
+    // Strip 'anon_' prefix if present (from generateSecureId format)
+    const sessionId = rawSessionId.startsWith('anon_') ? rawSessionId.slice(5) : rawSessionId;
     return {
-      ownerId: `anon:${anonymousSessionId}`,
+      ownerId: `anon:${sessionId}`,
       source: 'anonymous',
       isAuthenticated: false,
     };
@@ -67,12 +69,13 @@ export async function resolveFilesystemOwner(req: NextRequest): Promise<Filesyst
   // PRIORITY 2: Generate new anonymous session ID for first-time visitors
   // IMPORTANT: Caller MUST set the cookie when anonSessionId is returned
   // to prevent session fragmentation across requests
-  const newAnonId = generateSecureId('anon');
+  // The session ID stored in cookie is the full generateSecureId output (includes 'anon_' prefix)
+  const newAnonId = generateSecureId('anon'); // Produces 'anon_timestamp_random'
 
   return {
-    ownerId: `anon:${newAnonId}`,
+    ownerId: `anon:${newAnonId.slice(5)}`, // Strip 'anon_' prefix for consistent ownerId format
     source: 'anonymous',
     isAuthenticated: false,
-    anonSessionId: newAnonId, // Signal to set cookie
+    anonSessionId: newAnonId, // Store full ID (with anon_ prefix) in cookie
   };
 }
