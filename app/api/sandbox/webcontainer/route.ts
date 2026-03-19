@@ -12,6 +12,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { createLogger } from '@/lib/utils/logger';
+import { withAnonSessionCookie } from '@/lib/virtual-filesystem';
+import { resolveFilesystemOwnerWithFallback } from '../../filesystem/utils';
 import { generateSecureId } from '@/lib/utils';
 
 const logger = createLogger('WebContainerAPI');
@@ -20,9 +22,13 @@ export const runtime = 'nodejs';
 
 export async function POST(req: NextRequest) {
   try {
-    const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
-    const anonymousSessionId = req.headers.get('x-anonymous-session-id') || generateSecureId('anon');
-    const userId = authResult.userId || `anonymous:${anonymousSessionId}`;
+    // SECURITY: Use resolveFilesystemOwnerWithFallback to properly handle anonymous identity
+    // Only trust the HttpOnly cookie, not client-controlled headers
+    const ownerResolution = await resolveFilesystemOwnerWithFallback(req, {
+      route: 'webcontainer',
+      requestId: Math.random().toString(36).slice(2, 8),
+    });
+    const userId = ownerResolution.ownerId;
 
     const body = await req.json();
     const { files, startCommand, waitForPort } = body;
@@ -53,7 +59,7 @@ export async function POST(req: NextRequest) {
 
     // Return configuration for client-side WebContainer bootstrapping
     // The client will use WebContainerProvider directly in the browser
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       sandboxId,
       sessionId,
@@ -70,15 +76,21 @@ export async function POST(req: NextRequest) {
       files,
       message: 'WebContainer runs in browser. Use WebContainerProvider client-side to boot.',
     });
+    return withAnonSessionCookie(response, ownerResolution);
   } catch (error: any) {
     logger.error('Failed to generate WebContainer config:', error);
     
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       { 
         error: 'Failed to create WebContainer environment',
         details: error.message,
       },
       { status: 500 }
     );
+    return withAnonSessionCookie(errorResponse, {
+      ownerId: 'unknown',
+      source: 'anonymous',
+      isAuthenticated: false,
+    });
   }
 }

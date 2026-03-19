@@ -288,7 +288,7 @@ export class CodeValidator {
       );
     }
 
-    return { errors, warnings, suggestions };
+    return { safe: errors.length === 0, errors, warnings, suggestions };
   }
 
   /**
@@ -330,7 +330,7 @@ export class CodeValidator {
       errors.push('eval() with user input detected - critical security risk');
     }
 
-    return { errors, warnings, suggestions };
+    return { safe: errors.length === 0, errors, warnings, suggestions };
   }
 
   /**
@@ -362,7 +362,7 @@ export class CodeValidator {
       suggestions.push('Use quoted variable expansions to prevent word splitting');
     }
 
-    return { errors, warnings, suggestions };
+    return { safe: errors.length === 0, errors, warnings, suggestions };
   }
 
   /**

@@ -6,6 +6,8 @@
  * - List connections
  * - Revoke connections
  * - Execute tools with authorization
+ * 
+ * SECURITY: All handlers use context.userId exclusively to prevent IDOR attacks
  */
 
 import type { ToolRegistry } from '../registry';
@@ -30,8 +32,12 @@ export async function registerOAuthTools(registry: ToolRegistry, config: Bootstr
     capability: 'integration.connect',
     provider: 'oauth',
     handler: async (args: any, context: any) => {
+      // SECURITY: Use context.userId exclusively, ignore args.userId to prevent IDOR
+      if (!context.userId) {
+        return { success: false, error: 'Authentication required' };
+      }
       const { oauthIntegration } = await import('../../oauth');
-      return await oauthIntegration.connect(args.provider, args.userId || context.userId);
+      return await oauthIntegration.connect(args.provider, context.userId);
     },
     metadata: {
       latency: 'low',
@@ -49,8 +55,12 @@ export async function registerOAuthTools(registry: ToolRegistry, config: Bootstr
     capability: 'integration.list_connections',
     provider: 'oauth',
     handler: async (args: any, context: any) => {
+      // SECURITY: Use context.userId exclusively, ignore args.userId to prevent IDOR
+      if (!context.userId) {
+        return { success: false, error: 'Authentication required' };
+      }
       const { oauthIntegration } = await import('../../oauth');
-      return await oauthIntegration.listConnections(args.userId || context.userId, args.provider);
+      return await oauthIntegration.listConnections(context.userId, args.provider);
     },
     metadata: {
       latency: 'low',
@@ -68,8 +78,12 @@ export async function registerOAuthTools(registry: ToolRegistry, config: Bootstr
     capability: 'integration.revoke',
     provider: 'oauth',
     handler: async (args: any, context: any) => {
+      // SECURITY: Use context.userId exclusively, ignore args.userId to prevent IDOR
+      if (!context.userId) {
+        return { success: false, error: 'Authentication required' };
+      }
       const { oauthIntegration } = await import('../../oauth');
-      return await oauthIntegration.revoke(args.provider, args.userId || context.userId, args.connectionId);
+      return await oauthIntegration.revoke(args.provider, context.userId, args.connectionId);
     },
     metadata: {
       latency: 'low',
@@ -87,12 +101,16 @@ export async function registerOAuthTools(registry: ToolRegistry, config: Bootstr
     capability: 'integration.execute',
     provider: 'oauth',
     handler: async (args: any, context: any) => {
+      // SECURITY: Use context.userId exclusively, ignore args.userId to prevent IDOR
+      if (!context.userId) {
+        return { success: false, error: 'Authentication required' };
+      }
       const { oauthIntegration } = await import('../../oauth');
       return await oauthIntegration.execute(
         args.provider,
         args.action,
         args.params,
-        args.userId || context.userId,
+        context.userId,
         args.conversationId || context.conversationId
       );
     },
@@ -106,14 +124,18 @@ export async function registerOAuthTools(registry: ToolRegistry, config: Bootstr
   });
   count++;
 
-  // Register OAuth search tools
+  // Register OAuth search tools tool
   await registry.registerTool({
     name: 'oauth:searchTools',
     capability: 'integration.search_tools',
     provider: 'oauth',
     handler: async (args: any, context: any) => {
+      // SECURITY: Use context.userId exclusively, ignore args.userId to prevent IDOR
+      if (!context.userId) {
+        return { success: false, error: 'Authentication required' };
+      }
       const { oauthIntegration } = await import('../../oauth');
-      const tools = await oauthIntegration.getAvailableTools(args.userId || context.userId);
+      const tools = await oauthIntegration.getAvailableTools(context.userId);
       return { success: true, tools };
     },
     metadata: {

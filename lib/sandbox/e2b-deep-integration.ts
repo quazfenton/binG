@@ -286,11 +286,12 @@ export class E2BIntegration {
       }
       
       // Stream events
+      // @ts-ignore - streamJson may not exist on all AMP service implementations
       for await (const event of ampService.streamJson({
         prompt: config.prompt,
         workingDir: config.workingDir || '/home/user',
         model: config.model,
-      })) {
+      } as any)) {
         yield event as AmpEvent;
         
         // Call user's event handler
@@ -593,6 +594,7 @@ export class E2BIntegration {
    * Enable desktop environment
    */
   async enableDesktop(config?: DesktopConfig): Promise<E2BResult<{ url: string }>> {
+    const startTime = Date.now();
     try {
       if (!process.env.E2B_API_KEY) {
         return {

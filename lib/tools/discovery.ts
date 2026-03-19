@@ -74,6 +74,7 @@ export class ToolDiscoveryService {
   private static instance: ToolDiscoveryService;
   private usageStats = new Map<string, ToolUsageStats>();
   private toolManager = getToolManager();
+  public registry = getToolManager();
 
   static getInstance(): ToolDiscoveryService {
     if (!ToolDiscoveryService.instance) {
@@ -107,7 +108,7 @@ export class ToolDiscoveryService {
     let results: DiscoveredTool[] = [];
 
     // Use consolidated ToolIntegrationManager for tool search
-    const tools = this.toolManager.searchTools(query || '');
+    const tools = await this.toolManager.searchTools(query || '');
     logger.debug(`Found ${tools.length} tools from tool manager`, { query });
 
     // Convert to DiscoveredTool format

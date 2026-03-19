@@ -88,16 +88,15 @@ export class SandboxService {
     log.debug(`Provider ${providerType} instance obtained, creating sandbox...`)
     
      const handle = await provider.createSandbox({
-      language: config?.language ?? 'typescript',
-      autoStopInterval: config?.autoStopInterval ?? 60,
-      resources: config?.resources ?? this.getDefaultResources(),
-      envVars: {
-        TERM: 'xterm-256color',
-        LANG: 'en_US.UTF-8',
-        ...config?.envVars,
-      },
-      labels: { userId },
-    })
+       language: config?.language ?? 'typescript',
+       resources: config?.resources ?? this.getDefaultResources(),
+       envVars: {
+         TERM: 'xterm-256color',
+         LANG: 'en_US.UTF-8',
+         ...config?.env,
+       },
+       labels: { userId },
+     })
 
     log.debug(`Sandbox created successfully with ID: ${handle.id}`)
 
@@ -338,7 +337,7 @@ export class SandboxService {
     const provider = await this.resolveProviderForSandbox(sandboxId)
     await provider.destroySandbox(sandboxId)
     this.sandboxProviderById.delete(sandboxId)
-    updateSession(sessionId, { status: 'destroyed' })
+    updateSession(sessionId, { status: 'closed' })
     deleteSession(sessionId)
   }
 }

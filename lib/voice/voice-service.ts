@@ -6,8 +6,12 @@ import {
   LocalParticipant,
   AudioTrack,
   LocalAudioTrack,
-  AudioSource,
 } from "livekit-client";
+
+// LocalTrackOptions type from livekit-client
+interface LocalTrackOptions {
+  name?: string;
+}
 
 export interface VoiceSettings {
   enabled: boolean;
@@ -35,7 +39,7 @@ class VoiceService {
   private room: Room | null = null;
   private isConnected = false;
   private eventHandlers: VoiceEventHandler[] = [];
-  private recognition: SpeechRecognition | null = null;
+  private recognition: any | null = null;
   private synthesis: SpeechSynthesis | null = null;
   private voices: SpeechSynthesisVoice[] = [];
   private isListening = false;
@@ -569,55 +573,10 @@ export const voiceService = new VoiceService();
 export type { VoiceService };
 
 // Add global type declarations for Web Speech API
+// Note: These are ambient declarations that augment the global scope
 declare global {
   interface Window {
-    SpeechRecognition: typeof SpeechRecognition;
-    webkitSpeechRecognition: typeof SpeechRecognition;
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
   }
-
-  interface SpeechRecognition extends EventTarget {
-    continuous: boolean;
-    interimResults: boolean;
-    lang: string;
-    onresult: (event: SpeechRecognitionEvent) => void;
-    onerror: (event: SpeechRecognitionErrorEvent) => void;
-    onend: () => void;
-    start(): void;
-    stop(): void;
-  }
-
-  interface SpeechRecognitionEvent {
-    resultIndex: number;
-    results: SpeechRecognitionResultList;
-  }
-
-  interface SpeechRecognitionErrorEvent {
-    error: string;
-  }
-
-  interface SpeechRecognitionResultList {
-    length: number;
-    [index: number]: SpeechRecognitionResult;
-  }
-
-  interface SpeechRecognitionResult {
-    length: number;
-    isFinal: boolean;
-    [index: number]: SpeechRecognitionAlternative;
-  }
-
-  interface SpeechRecognitionAlternative {
-    transcript: string;
-    confidence: number;
-  }
-
-  var SpeechRecognition: {
-    prototype: SpeechRecognition;
-    new (): SpeechRecognition;
-  };
-
-  var webkitSpeechRecognition: {
-    prototype: SpeechRecognition;
-    new (): SpeechRecognition;
-  };
 }

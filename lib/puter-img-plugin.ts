@@ -5,8 +5,6 @@
 import { PUTER_PROXY_BASE } from '../src/config'
 
 export async function generateImage(prompt: string, testMode = true): Promise<HTMLImageElement | string> {
-  // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-  // @ts-ignore
   const puter = typeof window !== 'undefined' ? (window as any).puter : undefined
   if (puter?.ai?.txt2img) {
     const img = await puter.ai.txt2img(prompt, testMode)

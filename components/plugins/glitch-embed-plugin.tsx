@@ -1,6 +1,6 @@
 /**
  * Glitch Embed Plugin
- * 
+ *
  * Embed Glitch projects for live code editing and preview
  * @see https://glitch.com/
  */
@@ -21,6 +21,8 @@ import {
   SelectTrigger,
   SelectValue,
 } from "../ui/select";
+import useIframeLoader from '@/hooks/use-iframe-loader';
+import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
 
 export interface GlitchEmbedPluginProps {
   onOpenWindow?: (projectId: string, title: string) => void;
@@ -43,6 +45,38 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
   const [currentProject, setCurrentProject] = useState<GlitchProject | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
+
+  // Use iframe loader hook with fallback
+  const {
+    isLoading: hookIsLoading,
+    isLoaded,
+    isFailed,
+    failureReason,
+    errorMessage,
+    retryCount,
+    canRetry,
+    isUsingFallback,
+    fallbackUrl,
+    handleLoad,
+    handleRetry,
+    handleReset,
+    handleFallback,
+  } = useIframeLoader({
+    url: currentProject?.embedUrl || '',
+    timeout: 30000,
+    maxRetries: 3,
+    retryDelay: 5000,
+    enableAutoRetry: true,
+    enableFallback: true,
+    onLoaded: () => {
+      setIsLoading(false);
+      setError(null);
+    },
+    onFailed: (reason, error) => {
+      setIsLoading(false);
+      setError(error || 'Failed to load Glitch project');
+    },
+  });
 
   // Extract project name from Glitch URL
   const extractProjectName = (url: string): string | null => {
@@ -228,14 +262,30 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
             {/* Embed iframe */}
             <div className="border rounded-lg overflow-hidden" style={{ height: getEmbedHeight() }}>
               {embedMode !== "preview" && (
-                <iframe
-                  src={currentProject.embedUrl}
-                  className="w-full h-full"
-                  style={{ height: embedMode === "both" ? "50%" : "100%" }}
-                  title={`Glitch Project: ${currentProject.name}`}
-                  allow="camera; microphone; midi; geolocation; display-capture; encrypted-media; fullscreen"
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-                />
+                isFailed ? (
+                  <div className="w-full h-full" style={{ height: embedMode === "both" ? "50%" : "100%" }}>
+                    <IframeUnavailableScreen
+                      url={currentProject.embedUrl}
+                      reason={failureReason || 'failed'}
+                      errorMessage={errorMessage || undefined}
+                      onRetry={handleRetry}
+                      onTryFallback={handleFallback}
+                      onOpenExternal={() => window.open(currentProject.embedUrl, '_blank', 'noopener,noreferrer')}
+                      onClose={() => setCurrentProject(null)}
+                      autoRetryCount={retryCount}
+                      maxRetries={3}
+                    />
+                  </div>
+                ) : (
+                  <iframe
+                    src={isUsingFallback && fallbackUrl ? fallbackUrl : currentProject.embedUrl}
+                    className="w-full h-full"
+                    style={{ height: embedMode === "both" ? "50%" : "100%" }}
+                    title={`Glitch Project: ${currentProject.name}`}
+                    allow="camera; microphone; midi; geolocation; display-capture; encrypted-media; fullscreen"
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                  />
+                )
               )}
               {embedMode === "both" && (
                 <>

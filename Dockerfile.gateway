@@ -1,0 +1,67 @@
+# syntax=docker/dockerfile:1
+# Dockerfile for Agent Gateway Service
+# Handles session orchestration, SSE streaming, and job queue management
+# Based on existing Dockerfile.agent pattern
+
+FROM node:20-alpine AS runner
+
+# Install system dependencies
+RUN apk add --no-cache \
+    docker \
+    git \
+    python3 \
+    py3-pip \
+    build-base \
+    linux-headers \
+    curl
+
+# Enable corepack for pnpm
+RUN corepack enable
+
+# Set working directory
+WORKDIR /app
+
+# Copy package files
+COPY package.json pnpm-lock.yaml ./
+
+# Install dependencies
+RUN pnpm install --frozen-lockfile --prod
+
+# Copy shared libraries needed for gateway
+COPY lib/agent ./lib/agent
+COPY lib/redis ./lib/redis
+COPY lib/session ./lib/session
+COPY lib/utils ./lib/utils
+COPY lib/types ./lib/types
+COPY lib/management ./lib/management
+
+# Copy gateway service entry point
+COPY lib/agent/services/agent-gateway/package.json ./services/agent-gateway/
+COPY lib/agent/services/agent-gateway/tsconfig.json ./services/agent-gateway/
+COPY lib/agent/services/agent-gateway/src ./services/agent-gateway/src
+
+# Build the gateway service
+WORKDIR /app/services/agent-gateway
+RUN pnpm install --frozen-lockfile --lockfile-dir /app && pnpm build && pnpm prune --prod
+
+# Set environment variables
+WORKDIR /app
+ENV NODE_ENV=production
+ENV SERVICE_NAME=gateway
+ENV PORT=3002
+
+# Expose gateway port
+EXPOSE 3002
+
+# Create non-root user
+RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
+
+# Switch to non-root user
+USER nodejs
+
+# Health check endpoint
+HEALTHCHECK --interval=30s --timeout=10s --start-period=30s --retries=3 \
+    CMD wget -q --spider http://localhost:${PORT}/health || exit 1
+
+# Start the gateway service
+CMD ["node", "services/agent-gateway/dist/index.js"]

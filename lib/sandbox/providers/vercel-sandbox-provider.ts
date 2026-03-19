@@ -131,16 +131,16 @@ export class VercelSandboxProvider implements SandboxProvider {
       const latency = Date.now() - startTime
       
       // Check if token is configured (or running on Vercel with OIDC)
-      const hasAuth = this.token || this.isRunningOnVercel()
-      
-      return { 
-        healthy: hasAuth, 
+      const hasAuth = Boolean(this.token || this.isRunningOnVercel())
+
+      return {
+        healthy: Boolean(hasAuth),
         latency,
-        details: { 
+        details: {
           hasToken: !!this.token,
           runningOnVercel: this.isRunningOnVercel(),
           teamId: this.teamId || 'personal'
-        } 
+        }
       }
     } catch (error: any) {
       const latency = Date.now() - startTime
@@ -204,14 +204,6 @@ export class VercelSandboxProvider implements SandboxProvider {
       createOptions.timeout = config.autoStopInterval * 60 * 1000 // Convert minutes to ms
     }
 
-    // Add snapshot if provided (for faster startups)
-    if (config.snapshotId) {
-      createOptions.source = {
-        type: 'snapshot',
-        snapshotId: config.snapshotId,
-      }
-    }
-
     // Configure network policy for security
     if (process.env.VERCEL_SANDBOX_FIREWALL === 'true') {
       createOptions.networkPolicy = {
@@ -250,7 +242,7 @@ export class VercelSandboxProvider implements SandboxProvider {
   async destroySandbox(sandboxId: string): Promise<void> {
     try {
       const sandbox = await this.getSandbox(sandboxId)
-      await sandbox.stop()
+      await (sandbox as any).stop()
       console.log(`[VercelSandbox] Destroyed sandbox ${sandboxId}`)
     } catch (error: any) {
       if (error.message?.includes('not found') || error.message?.includes('404')) {
@@ -278,8 +270,12 @@ export class VercelSandboxProvider implements SandboxProvider {
 
   async createSnapshot(sandboxId: string, label?: string): Promise<string> {
     const sandbox = await this.getSandbox(sandboxId)
-    const snapshot = await sandbox.snapshot()
-    return snapshot.snapshotId
+    // Use VercelSandboxHandle's createSnapshot method
+    const snapshot = await sandbox.createSnapshot(label)
+    if (!snapshot) {
+      throw new Error('Snapshot creation not supported')
+    }
+    return snapshot.id
   }
 
   async restoreSnapshot(snapshotId: string): Promise<SandboxHandle> {
@@ -288,7 +284,7 @@ export class VercelSandboxProvider implements SandboxProvider {
       source: {
         type: 'snapshot',
         snapshotId: snapshotId,
-      },
+      } as any,
     })
     return new VercelSandboxHandle(sandbox, this)
   }

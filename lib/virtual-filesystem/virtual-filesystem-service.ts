@@ -12,7 +12,7 @@ import type {
 import { diffTracker } from './filesystem-diffs';
 import { stripWorkspacePrefixes } from './scope-utils';
 import { VFSBatchOperations } from './vfs-batch-operations';
-import { createGitBackedVFS, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
+import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
 
 // Default configuration
 const DEFAULT_WORKSPACE_ROOT = process.env.DEFAULT_WORKSPACE_ROOT || 'project';
@@ -329,23 +329,34 @@ export class VirtualFilesystemService {
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(targetPath);
     const normalizedPrefix = `${normalizedPath}/`;
-    let deletedCount = 0;
-
+    
+    // Collect paths to delete first so we can increment version once
+    const toDelete: string[] = [];
     for (const existingPath of Array.from(workspace.files.keys())) {
       if (existingPath === normalizedPath || existingPath.startsWith(normalizedPrefix)) {
+        toDelete.push(existingPath);
+      }
+    }
+
+    let deletedCount = 0;
+    
+    if (toDelete.length > 0) {
+      // FIX: Increment version ONCE before emitting events so all events
+      // carry the same correct post-deletion version number.
+      workspace.version += 1;
+      workspace.updatedAt = new Date().toISOString();
+
+      for (const existingPath of toDelete) {
         const deletedFile = workspace.files.get(existingPath);
         workspace.files.delete(existingPath);
         deletedCount += 1;
         if (deletedFile) {
           diffTracker.trackDeletion(existingPath, ownerId, deletedFile.content);
         }
-        this.emitFileChange(ownerId, existingPath, 'delete', workspace.version + 1);
+        // FIX: emit with the already-incremented version
+        this.emitFileChange(ownerId, existingPath, 'delete', workspace.version);
       }
-    }
 
-    if (deletedCount > 0) {
-      workspace.version += 1;
-      workspace.updatedAt = new Date().toISOString();
       this.emitSnapshotChange(ownerId, workspace.version);
       await this.persistWorkspace(ownerId, workspace);
     }
@@ -811,4 +822,198 @@ export class VirtualFilesystemService {
   }
 }
 
-export const virtualFilesystem = new VirtualFilesystemService();
+// =============================================================================
+// Git-Backed VFS Proxy
+// =============================================================================
+// The main export now automatically wraps VFS operations with Git-backed
+// functionality for automatic commits, version tracking, and rollbacks.
+// This ensures all file operations are tracked without requiring code changes.
+// =============================================================================
+
+/**
+ * Git-backed VFS proxy that wraps VirtualFilesystemService methods
+ * to automatically create git commits for every filesystem operation.
+ */
+class GitBackedVFSProxy {
+  private vfs: VirtualFilesystemService;
+
+  constructor(vfs: VirtualFilesystemService) {
+    this.vfs = vfs;
+  }
+
+  /**
+   * Get the underlying VFS instance (for advanced operations)
+   */
+  get underlying(): VirtualFilesystemService {
+    return this.vfs;
+  }
+
+  /**
+   * Get git-backed VFS for specific owner (full-featured wrapper)
+   */
+  forOwner(ownerId: string, options?: GitVFSOptions): GitBackedVFS {
+    return this.vfs.getGitBackedVFS(ownerId, options);
+  }
+
+  // Delegate all VFS methods with automatic git tracking
+
+  async readFile(ownerId: string, filePath: string): Promise<VirtualFile> {
+    return this.vfs.readFile(ownerId, filePath);
+  }
+
+  async writeFile(
+    ownerId: string,
+    filePath: string,
+    content: string,
+    language?: string,
+    options?: { failIfExists?: boolean }
+  ): Promise<VirtualFile> {
+    const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    return gitVFS.writeFile(ownerId, filePath, content, language, options);
+  }
+
+  async deletePath(ownerId: string, targetPath: string): Promise<{ deletedCount: number }> {
+    // Track deletion in git
+    const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    const listing = await this.vfs.listDirectory(ownerId, targetPath);
+    
+    // Record deletions
+    for (const node of listing.nodes) {
+      if (node.type === 'file') {
+        try {
+          const file = await this.vfs.readFile(ownerId, node.path);
+          gitVFS.trackTransaction(ownerId, {
+            path: node.path,
+            type: 'DELETE',
+            timestamp: Date.now(),
+            originalContent: file.content,
+          });
+        } catch {
+          // File may not exist
+        }
+      }
+    }
+    
+    const result = await this.vfs.deletePath(ownerId, targetPath);
+    
+    // Commit the deletion
+    if (result.deletedCount > 0) {
+      await gitVFS.commitChanges(ownerId, `Delete ${targetPath}`);
+    }
+    
+    return result;
+  }
+
+  async listDirectory(
+    ownerId: string,
+    directoryPath?: string
+  ): Promise<import('./filesystem-types').VirtualFilesystemDirectoryListing> {
+    return this.vfs.listDirectory(ownerId, directoryPath);
+  }
+
+  async search(
+    ownerId: string,
+    query: string,
+    options?: { path?: string; limit?: number }
+  ): Promise<import('./filesystem-types').VirtualFilesystemSearchResult[]> {
+    return this.vfs.search(ownerId, query, options);
+  }
+
+  async getWorkspaceVersion(ownerId: string): Promise<number> {
+    return this.vfs.getWorkspaceVersion(ownerId);
+  }
+
+  async exportWorkspace(ownerId: string): Promise<import('./filesystem-types').VirtualWorkspaceSnapshot> {
+    return this.vfs.exportWorkspace(ownerId);
+  }
+
+  async createDirectory(
+    ownerId: string,
+    dirPath: string
+  ): Promise<{ path: string; createdAt: string }> {
+    const result = await this.vfs.createDirectory(ownerId, dirPath);
+
+    // Track directory creation in git
+    const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    gitVFS.trackTransaction(ownerId, {
+      path: dirPath,
+      type: 'CREATE',
+      timestamp: Date.now(),
+      newContent: '',
+    });
+    await gitVFS.commitChanges(ownerId, `Create directory ${dirPath}`);
+
+    return result;
+  }
+
+  async getWorkspaceStats(ownerId: string): Promise<{
+    totalSize: number;
+    totalSizeFormatted: string;
+    fileCount: number;
+    largestFile?: { path: string; size: number; sizeFormatted: string };
+    quotaUsage: {
+      sizePercent: number;
+      fileCountPercent: number;
+    };
+  }> {
+    return this.vfs.getWorkspaceStats(ownerId);
+  }
+
+  batch(ownerId: string): import('./vfs-batch-operations').VFSBatchOperations {
+    return this.vfs.batch(ownerId);
+  }
+
+  onFileChange(
+    listener: (event: import('./virtual-filesystem-service').FilesystemChangeEvent) => void
+  ): () => void {
+    return this.vfs.onFileChange(listener);
+  }
+
+  onSnapshotChange(
+    listener: (ownerId: string, version: number) => void
+  ): () => void {
+    return this.vfs.onSnapshotChange(listener);
+  }
+
+  onConflict(
+    listener: (event: import('./virtual-filesystem-service').ConflictEvent) => void
+  ): () => void {
+    return this.vfs.onConflict(listener);
+  }
+
+  getDiffSummary(ownerId: string, maxDiffs?: number): string {
+    return this.vfs.getDiffSummary(ownerId, maxDiffs);
+  }
+
+  async rollbackToVersion(
+    ownerId: string,
+    targetVersion: number
+  ): Promise<{
+    success: boolean;
+    restoredFiles: number;
+    deletedFiles: number;
+    errors: string[];
+  }> {
+    return this.vfs.rollbackToVersion(ownerId, targetVersion);
+  }
+
+  getDiffTracker(): import('./filesystem-diffs').FilesystemDiffTracker {
+    return this.vfs.getDiffTracker();
+  }
+
+  getFilesAtVersion(ownerId: string, targetVersion: number): Map<string, string> {
+    return this.vfs.getFilesAtVersion(ownerId, targetVersion);
+  }
+
+  /**
+   * Clear workspace (for testing)
+   * FIX Bug 19: Delegate to real VFS clearWorkspace (not just deletePath)
+   */
+  async clearWorkspace(ownerId: string): Promise<void> {
+    // Delegate to the proper clear (wipes in-memory map + diff tracker + disk file)
+    await (this as any).vfs.clearWorkspace(ownerId);
+  }
+}
+
+// Export singleton instance with Git-backed proxy
+export const virtualFilesystem = new GitBackedVFSProxy(new VirtualFilesystemService());

@@ -69,7 +69,8 @@ export function getOPFSSupportInfo(): {
   }
   
   // Check support
-  const isSupported = 'storage' in window && 'getDirectory' in window.storage;
+  const nav = navigator as any;
+  const isSupported = 'storage' in nav && nav.storage != null && 'getDirectory' in nav.storage;
   
   let details = '';
   if (isSupported) {

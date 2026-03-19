@@ -4,6 +4,8 @@
  * - getPuterAdapter(modelId, options): returns { responses(payload), stream(payload) } adapter
  */
 
+import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
+
 type PuterModelRaw = {
   id?: string
   model?: string
@@ -83,34 +85,67 @@ export function getPuterAdapter(
 
     const reader = resp.body.getReader()
     const dec = new TextDecoder()
-    let buffer = ''
-    while (true) {
-      const { done, value } = await reader.read()
-      if (done) break
-      buffer += dec.decode(value, { stream: true })
-      let idx: number
-      while ((idx = buffer.indexOf('\n')) !== -1) {
-        const chunk = buffer.slice(0, idx).trim()
-        buffer = buffer.slice(idx + 1)
-        if (!chunk) continue
+    
+    // Use robust NDJSON parser to handle partial chunks
+    const parser = createNDJSONParser({
+      maxBufferSize: 10 * 1024 * 1024, // 10MB
+      maxLineLength: 1024 * 1024, // 1MB
+      verbose: false,
+    })
+
+    try {
+      while (true) {
+        const { done, value } = await reader.read()
+        if (done) break
+
+        const chunk = dec.decode(value, { stream: true })
+
+        // Parse NDJSON with robust error handling
+        const parsedObjects = parser.parse(chunk)
+
+        for (const json of parsedObjects) {
+          let part: any = {}
+          if (typeof json === 'string') {
+            part.text = json
+          } else if (json.text) {
+            part.text = json.text
+          } else if (json.delta?.content) {
+            part.text = json.delta.content
+          } else {
+            part = json
+          }
+          yield part
+        }
+
+        // Handle non-JSON chunks (plain text, errors, etc.)
+        // If parser found nothing but chunk has content, emit as text
+        if (parsedObjects.length === 0 && chunk.trim()) {
+          // Check if it's not an SSE data line (those are handled by parser)
+          const trimmed = chunk.trim()
+          if (!trimmed.startsWith('data:') && !trimmed.startsWith('event:')) {
+            yield { text: trimmed }
+          }
+        }
+      }
+
+      // Finalize to process any remaining buffered data
+      const final = parser.finalize()
+      for (const json of final) {
         let part: any = {}
-        try {
-          const json = JSON.parse(chunk)
-          if (typeof json === 'string') part.text = json
-          else if (json.text) part.text = json.text
-          else if (json.delta?.content) part.text = json.delta.content
-          else part = json
-        } catch {
-          part.text = chunk
+        if (typeof json === 'string') {
+          part.text = json
+        } else if (json.text) {
+          part.text = json.text
+        } else if (json.delta?.content) {
+          part.text = json.delta.content
+        } else {
+          part = json
         }
         yield part
       }
-      if (buffer.length > 8192) {
-        yield { text: buffer }
-        buffer = ''
-      }
+    } finally {
+      reader.releaseLock()
     }
-    if (buffer.length) yield { text: buffer }
   }
 
   return {

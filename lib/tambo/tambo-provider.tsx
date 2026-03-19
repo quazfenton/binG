@@ -154,10 +154,10 @@ export function EnhancedTamboProvider({
     <OriginalTamboProvider
       apiKey={effectiveApiKey}
       userToken={userToken}
-      tools={tools}
+      tools={tools as any}
       components={components}
       contextHelpers={allContextHelpers}
-      mcpServers={mcpServers}
+      {...(mcpServers ? { mcpServers } : {})}
     >
       {children}
     </OriginalTamboProvider>

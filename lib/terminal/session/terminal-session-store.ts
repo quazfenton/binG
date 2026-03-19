@@ -18,7 +18,7 @@ import { terminalSessionManager } from './terminal-session-manager'
 console.warn('[DEPRECATED] terminal-session-store.ts is deprecated. Use terminal-session-manager.ts instead.')
 
 // Re-export types
-export type { TerminalSessionState }
+export type { TerminalSessionState } from './terminal-session-manager'
 
 // ============================================================================
 // DEPRECATED - Use terminalSessionManager from terminal-session-manager.ts

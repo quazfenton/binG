@@ -11,6 +11,8 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
 import { ImageIcon, Download, Sparkles, X, Shuffle, ImagePlus, TerminalSquare, Globe2 } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
 import { toast } from 'sonner';
+import useIframeLoader from '@/hooks/use-iframe-loader';
+import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
 
 const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, initialData }) => {
   const [prompt, setPrompt] = useState(initialData?.prompt || '');
@@ -46,6 +48,32 @@ const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, ini
     if (match) return `https://${match[1]}-${match[2]}.hf.space`;
     return spaceUrl.trim();
   })();
+
+  // Use iframe loader hook with fallback for Spaces
+  const {
+    isLoading,
+    isLoaded,
+    isFailed,
+    failureReason,
+    errorMessage,
+    retryCount,
+    canRetry,
+    isUsingFallback,
+    fallbackUrl,
+    handleLoad,
+    handleRetry,
+    handleReset,
+    handleFallback,
+  } = useIframeLoader({
+    url: spaceEmbedUrl,
+    timeout: 30000,
+    maxRetries: 3,
+    retryDelay: 5000,
+    enableAutoRetry: true,
+    enableFallback: true,
+    onLoaded: () => {},
+    onFailed: () => {},
+  });
 
   const runInference = async () => {
     setApiLoading(true);
@@ -295,8 +323,22 @@ const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, ini
                 onChange={(e) => setSpaceUrl(e.target.value)}
               />
               <div className="rounded border border-white/10 overflow-hidden h-[420px]">
-                {spaceEmbedUrl ? (
-                  <iframe className="w-full h-full" src={spaceEmbedUrl} allow="clipboard-read; clipboard-write; microphone; camera; autoplay; encrypted-media" />
+                {isFailed ? (
+                  <div className="w-full h-full">
+                    <IframeUnavailableScreen
+                      url={spaceEmbedUrl}
+                      reason={failureReason || 'failed'}
+                      errorMessage={errorMessage || undefined}
+                      onRetry={handleRetry}
+                      onTryFallback={handleFallback}
+                      onOpenExternal={() => window.open(spaceUrl, '_blank', 'noopener,noreferrer')}
+                      onClose={onClose}
+                      autoRetryCount={retryCount}
+                      maxRetries={3}
+                    />
+                  </div>
+                ) : spaceEmbedUrl ? (
+                  <iframe className="w-full h-full" src={isUsingFallback && fallbackUrl ? fallbackUrl : spaceEmbedUrl} allow="clipboard-read; clipboard-write; microphone; camera; autoplay; encrypted-media" />
                 ) : (
                   <div className="w-full h-full flex items-center justify-center text-white/50">
                     Enter a Space URL above to load it

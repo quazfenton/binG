@@ -5,7 +5,8 @@
  * using the jose library for cryptographic operations.
  */
 
-import { SignJWT, jwtVerify, JWTPayload } from 'jose';
+import { SignJWT, jwtVerify, JWTPayload, errors } from 'jose';
+const { JWTExpired, JWTInvalid, JOSEError } = errors;
 import { createSecureHash } from './crypto-utils';
 
 /**
@@ -169,11 +170,33 @@ export async function verifyToken(
     });
     
     // Check token blacklist for revoked tokens
+    // Note: In distributed environments, use RedisTokenBlacklist for consistent checks
     const jti = payload.jti;
-    if (jti && globalBlacklist.isRevoked(jti)) {
+    if (jti) {
+      const revoked = globalBlacklist.isRevoked(jti);
+      
+      // Handle both sync and async blacklist implementations
+      if (revoked instanceof Promise) {
+        const isRevoked = await revoked;
+        if (isRevoked) {
+          return {
+            valid: false,
+            error: 'Token has been revoked',
+          };
+        }
+      } else if (revoked) {
+        return {
+          valid: false,
+          error: 'Token has been revoked',
+        };
+      }
+    }
+    
+    // Validate required userId claim
+    if (typeof payload.userId !== 'string' || payload.userId.trim() === '') {
       return {
         valid: false,
-        error: 'Token has been revoked',
+        error: 'Token contains invalid userId claim',
       };
     }
     
@@ -182,23 +205,30 @@ export async function verifyToken(
       payload: payload as TokenPayload,
     };
   } catch (error) {
-    if (error instanceof Error) {
-      if (error.message.includes('expired')) {
-        return {
-          valid: false,
-          error: 'Token has expired',
-          expired: true,
-        };
-      }
-      
-      if (error.message.includes('invalid')) {
+    if (error instanceof JWTExpired) {
+      return {
+        valid: false,
+        error: 'Token has expired',
+        expired: true,
+      };
+    }
+
+    if (error instanceof JWTInvalid || error instanceof JOSEError) {
+      const err = error as InstanceType<typeof JOSEError>;
+      if (err.code === 'ERR_JWS_SIGNATURE_VERIFICATION_FAILED') {
         return {
           valid: false,
           error: 'Invalid token signature',
         };
       }
+      if (err.code === 'ERR_JWT_CLAIM_VALIDATION_FAILED') {
+        return {
+          valid: false,
+          error: 'Token claim validation failed',
+        };
+      }
     }
-    
+
     return {
       valid: false,
       error: error instanceof Error ? error.message : 'Unknown verification error',
@@ -275,7 +305,7 @@ export async function revokeToken(
   config: Partial<JWTConfig> = {}
 ): Promise<void> {
   const fullConfig = { ...DEFAULT_CONFIG, ...config };
-  
+
   try {
     const { payload } = await jwtVerify(token, getSigningKey(fullConfig.secretKey), {
       issuer: fullConfig.issuer,
@@ -286,7 +316,13 @@ export async function revokeToken(
     const exp = payload.exp;
 
     if (jti && exp) {
-      globalBlacklist.revoke(jti, exp * 1000); // exp is in seconds, convert to ms
+      // Revoke in blacklist (supports both sync and async implementations)
+      const result = globalBlacklist.revoke(jti, exp * 1000); // exp is in seconds, convert to ms
+      
+      // Handle async blacklist implementations (e.g., Redis)
+      if (result instanceof Promise) {
+        await result;
+      }
     }
   } catch (error) {
     // Token is already expired or invalid — no need to blacklist
@@ -403,36 +439,82 @@ export function isValidApiKeyFormat(apiKey: string): boolean {
 }
 
 /**
- * Create token blacklist for revoked tokens
+ * Token Blacklist Interface
  * 
- * In production, use Redis for distributed blacklist
+ * Abstract interface for token revocation storage.
+ * 
+ * IMPORTANT: For production/distributed environments, use Redis-backed implementation
+ * to ensure consistent revocation checks across all server instances.
+ * 
+ * @example
+ * ```typescript
+ * // Single instance (development)
+ * const blacklist = new InMemoryTokenBlacklist();
+ * 
+ * // Distributed (production)
+ * const blacklist = new RedisTokenBlacklist(redisClient);
+ * ```
  */
-export class TokenBlacklist {
-  private revoked = new Map<string, number>(); // token JTI -> expiry timestamp
+export interface TokenBlacklistProvider {
+  /**
+   * Revoke a token by JTI
+   * @param tokenJti - Token JTI identifier
+   * @param expiryTimestamp - When the revocation expires (ms)
+   */
+  revoke(tokenJti: string, expiryTimestamp: number): Promise<void> | void;
   
+  /**
+   * Check if token is revoked
+   * @param tokenJti - Token JTI identifier
+   * @returns true if revoked, false otherwise
+   */
+  isRevoked(tokenJti: string): Promise<boolean> | boolean;
+  
+  /**
+   * Clean up expired entries
+   */
+  cleanup(): Promise<void> | void;
+}
+
+/**
+ * In-Memory Token Blacklist (Development Only)
+ * 
+ * ⚠️ WARNING: This implementation is NOT suitable for production/distributed environments.
+ * - Data is lost on process restart
+ * - No synchronization across multiple server instances
+ * - Race conditions possible with concurrent revocation checks
+ * 
+ * For production, use RedisTokenBlacklist or similar distributed store.
+ */
+export class InMemoryTokenBlacklist implements TokenBlacklistProvider {
+  private revoked = new Map<string, number>(); // token JTI -> expiry timestamp
+
   /**
    * Revoke a token
    */
   revoke(tokenJti: string, expiryTimestamp: number): void {
     this.revoked.set(tokenJti, expiryTimestamp);
   }
-  
+
   /**
    * Check if token is revoked
+   * 
+   * ⚠️ Note: In distributed environments, this check may be stale
+   * if another instance revoked the token concurrently.
    */
   isRevoked(tokenJti: string): boolean {
     const expiry = this.revoked.get(tokenJti);
     if (!expiry) return false;
-    
+
     // Clean up expired entries
     if (Date.now() > expiry) {
       this.revoked.delete(tokenJti);
       return false;
     }
-    
+
     return true;
   }
-  
+
   /**
    * Clean up all expired entries
    */
@@ -447,10 +529,30 @@ export class TokenBlacklist {
 }
 
 // Export singleton instances
-export const globalBlacklist = new TokenBlacklist();
+// SECURITY: Use Redis blacklist in production for distributed token revocation
+// Falls back to in-memory for development/single-instance deployments
+export const globalBlacklist: TokenBlacklistProvider = (() => {
+  // Check if Redis is available (production environment)
+  const redisUrl = process.env.REDIS_URL;
+  if (redisUrl && process.env.NODE_ENV === 'production') {
+    try {
+      const { RedisTokenBlacklist } = require('./redis-token-blacklist');
+      const redis = new (require('ioredis'))(redisUrl);
+      const blacklist = new RedisTokenBlacklist(redis);
+      console.log('[Security] Using Redis token blacklist for distributed revocation');
+      return blacklist;
+    } catch (error) {
+      console.warn('[Security] Failed to initialize Redis blacklist, falling back to in-memory:', error);
+    }
+  }
+  
+  // Fallback to in-memory (development or Redis unavailable)
+  console.log('[Security] Using in-memory token blacklist');
+  return new InMemoryTokenBlacklist();
+})();
 
-// Periodic cleanup (every hour)
-if (typeof global !== 'undefined') {
+// Periodic cleanup (every hour) - only for in-memory blacklist
+if (typeof global !== 'undefined' && globalBlacklist instanceof InMemoryTokenBlacklist) {
   setInterval(() => {
     globalBlacklist.cleanup();
   }, 60 * 60 * 1000);

@@ -17,8 +17,7 @@ import fetch from 'node-fetch';
 import * as fs from 'fs/promises';
 import { getOpenCodeEngine, OpenCodeEngine, type OpenCodeEvent } from './opencode-engine';
 import { checkpointManager, type AgentCheckpoint } from './checkpoint-manager';
-import { taskRouter } from '../../../../task-router';
-import { executeV2Task } from '../../../../v2-executor';
+import { taskRouter } from '../../../task-router';
 import { providerRouter, latencyTracker } from '../../../../sandbox/provider-router';
 import { determineExecutionPolicy } from '../../../../sandbox/types';
 
@@ -180,7 +179,7 @@ async function runOpenCode(job: AgentJob): Promise<void> {
     logger.info('Execution policy determined', { policy: executionPolicy, jobId });
 
     // Step 2: Select optimal provider using provider-router
-    const providerSelection = await providerRouter.selectOptimalProvider({
+    const providerSelection = await providerRouter.selectWithServices({
       type: 'agent',
       duration: executionPolicy === 'local-safe' ? 'short' : 'medium',
       requiresPersistence: executionPolicy === 'persistent-sandbox',
@@ -247,9 +246,11 @@ async function runOpenCode(job: AgentJob): Promise<void> {
       },
     });
 
-    // Record latency for provider router
+    // Record latency for provider router only when opencode agent was used
     const latency = Date.now() - startTime;
-    latencyTracker.record(providerSelection.provider, latency, result.success !== false);
+    if (result?.agent === 'opencode') {
+      latencyTracker.record(providerSelection.provider, latency);
+    }
 
     // Emit completion
     await publishEvent({
@@ -276,10 +277,8 @@ async function runOpenCode(job: AgentJob): Promise<void> {
     const latency = Date.now() - startTime;
     logger.error('Job failed', { jobId, error: error.message });
 
-    // Record failed latency
-    try {
-      latencyTracker.record('daytona' as any, latency, false);
-    } catch {}
+    // Skip failed latency tracking since provider is unknown and hardcoding would corrupt metrics
+    logger.debug('Skipping failed latency tracking', { jobId, latency });
 
     await publishEvent({
       type: 'error',

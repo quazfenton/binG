@@ -87,10 +87,6 @@ export default defineConfig({
       },
     },
     pool: 'threads',
-    poolThreads: {
-      minThreads: 1,
-      maxThreads: 4,
-    },
     testTimeout: 30000,
     hookTimeout: 10000,
   },

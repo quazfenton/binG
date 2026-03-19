@@ -8,15 +8,17 @@
 export {
   Logger,
   SecureLogger,
-  LogLevel,
-  LogEntry,
-  LoggerConfig,
   createLogger,
   createSecureLogger,
   configureLogger,
   flushLogs,
   loggers,
   sanitizeForLogging,
+} from './logger';
+export type {
+  LogLevel,
+  LogEntry,
+  LoggerConfig,
 } from './logger';
 
 // Error Handler (unified)
@@ -25,6 +27,13 @@ export {
   BaseError,
   ToolErrorClass as ToolError,
   APIError,
+  getErrorHandler,
+  handleError,
+  createValidationError,
+  createAuthError,
+  createNotFoundError,
+} from './error-handler';
+export type {
   ErrorCategory,
   ErrorSeverity,
   StandardError,
@@ -32,40 +41,49 @@ export {
   ProcessedError,
   UserNotification,
   ErrorHandlerConfig,
-  getErrorHandler,
-  handleError,
-  createValidationError,
-  createAuthError,
-  createNotFoundError,
 } from './error-handler';
 
 // Other utilities
 export {
-  retry,
-  RetryConfig,
-  RetryError,
+  sleep,
+} from './retry';
+export type {
+  RetryOptions,
 } from './retry';
 
 export {
   RateLimiter,
-  RateLimitConfig,
+  terminalCommandRateLimiter,
+  sandboxCreationRateLimiter,
+  websocketConnectionRateLimiter,
+} from './rate-limiter';
+export type {
   RateLimitResult,
-  rateLimiter,
 } from './rate-limiter';
 
 export {
   CircuitBreaker,
-  CircuitBreakerConfig,
-  CircuitBreakerState,
-  circuitBreaker,
+  CircuitBreakerError,
+  providerCircuitBreakers,
+} from './circuit-breaker';
+export type {
+  CircuitBreakerOptions,
+  CircuitState,
 } from './circuit-breaker';
 
 export {
   RequestDeduplicator,
-  RequestDedupConfig,
-  requestDeduplicator,
+  codeRequestDeduplicator,
+} from './request-deduplicator';
+export type {
+  RequestFingerprint,
+  InFlightRequest,
+  DeduplicationConfig,
 } from './request-deduplicator';
 
+// Image loader with SSRF protection
 export {
-  createLogger as createSecureLogger,  // Backwards compatibility
-} from './logger';
+  validateImageUrl,
+  isHostnameSafe,
+  getHostname,
+} from './image-loader';

@@ -231,7 +231,7 @@ export class E2BStructuredOutputManager {
     try {
       const fullCommand = `${command} --output-format stream-json`;
       
-      const result = await this.sandbox.executeCommand(fullCommand, options?.cwd, options?.timeout, {
+      const result = await (this.sandbox as any).executeCommand(fullCommand, options?.cwd, options?.timeout, {
         onStdout: (data: string) => {
           // Parse streaming JSONL
           const lines = data.split('\n').filter(line => line.trim());
@@ -375,7 +375,7 @@ export class E2BStructuredOutputManager {
                 required: ['file', 'category', 'comment'],
               },
             },
-            overallScore: { type: 'number', minimum: 0, maximum: 100 },
+            overallScore: { type: 'number', minimum: 0, maximum: 100 } as any,
           },
           required: ['feedback', 'overallScore'],
         };

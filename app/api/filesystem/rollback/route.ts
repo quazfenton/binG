@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem';
+import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { sessionIdSchema, commitIdSchema } from '@/lib/validation/schemas';
 
@@ -39,7 +40,11 @@ export async function POST(req: NextRequest) {
     
     const { sessionId, commitId } = parseResult.data;
 
-    const authResolution = await resolveFilesystemOwner(req);
+    // Resolve auth upfront for cookie wrapping
+    const authResolution = await resolveFilesystemOwnerWithFallback(req, {
+      route: 'rollback',
+      requestId: Math.random().toString(36).slice(2, 8),
+    });
     const ownerId = authResolution.ownerId;
     const scopedSessionId = `${ownerId}:${sessionId}`;
 
@@ -47,10 +52,11 @@ export async function POST(req: NextRequest) {
     const commit = await commitManager.getCommit(scopedSessionId, commitId);
 
     if (!commit) {
-      return NextResponse.json(
+      const errorResponse = NextResponse.json(
         { success: false, error: 'Commit not found' },
         { status: 404 },
       );
+      return withAnonSessionCookie(errorResponse, authResolution);
     }
 
     // Restore files from the commit into the live VFS
@@ -98,7 +104,7 @@ export async function POST(req: NextRequest) {
       author: ownerId,
     });
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: {
         restoredFiles: restoredCount,
@@ -106,12 +112,18 @@ export async function POST(req: NextRequest) {
         rollbackCommitId: commitId,
       },
     });
+    return withAnonSessionCookie(response, authResolution);
   } catch (error: unknown) {
     console.error('[VFS Rollback] Error:', error);
     const message = error instanceof Error ? error.message : 'Failed to rollback';
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       { success: false, error: message },
       { status: 400 },
     );
+    return withAnonSessionCookie(errorResponse, {
+      ownerId: 'unknown',
+      source: 'anonymous',
+      isAuthenticated: false,
+    });
   }
 }

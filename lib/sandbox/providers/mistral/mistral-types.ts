@@ -305,7 +305,7 @@ export interface StreamChunk {
   /** Chunk type */
   type: string
   /** Chunk content */
-  content: string
+  content?: string
   /** Timestamp */
   timestamp: Date
   /** Additional metadata */
@@ -476,7 +476,7 @@ export interface CodeExecutionResult {
 /**
  * Stream chunk for code execution streaming
  */
-export interface StreamChunk {
+export interface CodeExecutionStreamChunk {
   /** Chunk type */
   type: 'stdout' | 'stderr' | 'error' | 'done'
   /** Chunk content */

@@ -1,6 +1,6 @@
 "use client";
 //fix
-import type React from "react";
+import React from "react";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 
 // Tabs that need taller height when opened
@@ -106,6 +106,8 @@ import ObservableEmbedPlugin from "./plugins/observable-embed-plugin";
 import HuggingFaceSpacesPlugin from "./plugins/huggingface-spaces-plugin";
 import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin";
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
+import PStreamEmbedPlugin from "./plugins/pstream-embed-plugin";
+import E2BDesktopPlugin from "./plugins/e2b-desktop-plugin";
 import IntegrationPanel from "./integrations/IntegrationPanel";
 import { useVirtualFilesystem, type AttachedVirtualFile } from "../hooks/use-virtual-filesystem";
 import { usePanel } from "../contexts/panel-context";
@@ -200,6 +202,16 @@ const popOutPlugins: Plugin[] = [
     minSize: { width: 600, height: 400 },
   },
   {
+    id: "pstream-embed",
+    name: "Movies",
+    description: "Watch movies and TV shows from pstream.net",
+    icon: Film,
+    component: PStreamEmbedPlugin,
+    category: "media",
+    defaultSize: { width: 1000, height: 700 },
+    minSize: { width: 800, height: 600 },
+  },
+  {
     id: "github-explorer",
     name: "GitHub Explorer",
     description: "Browse trending repositories and analyze code",
@@ -269,6 +281,16 @@ const popOutPlugins: Plugin[] = [
     defaultSize: { width: 1000, height: 800 },
     minSize: { width: 800, height: 600 },
   },
+  {
+    id: "e2b-desktop",
+    name: "E2B Desktop",
+    description: "Computer use desktop environment with VNC streaming",
+    icon: Monitor,
+    component: E2BDesktopPlugin,
+    category: "media",
+    defaultSize: { width: 1200, height: 800 },
+    minSize: { width: 900, height: 600 },
+  },
 ];
 
 interface InteractionPanelProps {
@@ -300,6 +322,53 @@ interface InteractionPanelProps {
   onStopPollingDiffs?: () => void;
   onPollDiffsNow?: () => void;
 }
+
+// Memoized provider selector component
+const ProviderSelector = React.memo(function ProviderSelector({
+  selectValue,
+  availableProviders,
+  onValueChange,
+}: {
+  selectValue: string;
+  availableProviders: any[];
+  onValueChange: (provider: string, model: string) => void;
+}) {
+  if (!selectValue || availableProviders.length === 0) return null;
+  
+  return (
+    <div className="flex items-center gap-2 mb-2 text-xs text-white/60">
+      <Select value={selectValue} onValueChange={(value) => {
+        if (!value || value === "none") return;
+        const [provider, ...modelParts] = value.split(":");
+        const model = modelParts.join(":");
+        onValueChange(provider, model);
+      }}>
+        <SelectTrigger className="w-full sm:w-[280px] border-white/20" style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)' }}>
+          <SelectValue placeholder="Select a model" />
+        </SelectTrigger>
+        <SelectContent>
+          {availableProviders
+            .filter((p: any) => p.isAvailable !== false)
+            .map((provider) => (
+              <SelectGroup key={provider.id}>
+                <SelectLabel>{provider.name}</SelectLabel>
+                {provider.models.map((model: string) => (
+                  <SelectItem key={model} value={`${provider.id}:${model}`}>
+                    {model}
+                  </SelectItem>
+                ))}
+              </SelectGroup>
+            ))}
+          {availableProviders.filter((p: any) => p.isAvailable !== false).length === 0 && (
+            <SelectItem value="none" disabled>
+              No providers configured - add API keys to .env
+            </SelectItem>
+          )}
+        </SelectContent>
+      </Select>
+    </div>
+  );
+});
 
 export default function InteractionPanel({
   onSubmit,
@@ -357,6 +426,22 @@ export default function InteractionPanel({
   const [isExpanding, setIsExpanding] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prevPanelHeightRef = useRef<number | null>(null);
+
+  // Memoize select value to prevent infinite loop
+  const selectValue = useMemo(() => {
+    if (availableProviders.length === 0) return "";
+    const currentValue = `${currentProvider}:${currentModel}`;
+    const validValues = availableProviders
+      .filter((p: any) => p.isAvailable !== false)
+      .flatMap((p: any) => p.models.map((m: string) => `${p.id}:${m}`));
+    return validValues.includes(currentValue) ? currentValue : "";
+  }, [currentProvider, currentModel, availableProviders]);
+
+  // Memoized handler for ProviderSelector
+  const handleProviderSelect = useCallback((provider: string, model: string) => {
+    onProviderChange(provider, model);
+  }, [onProviderChange]);
+
   const getPanelMaxHeight = useCallback(() => {
     if (typeof window === "undefined") {
       return 600;
@@ -1384,15 +1469,17 @@ export default function InteractionPanel({
           ref={dragHandleRef}
           className={`w-full absolute top-0 left-0 right-0 h-[40px] transition-all duration-200 pointer-events-none ${
             isDragging
-              ? 'bg-white/40'
-              : 'bg-gradient-to-b from-white/10 to-transparent sm:from-transparent sm:bg-transparent'
+              ? 'bg-white/5 shadow-[0_0_12px_rgba(255,255,255,0.1)]'
+              : 'bg-gradient-to-b from-white/10 to-transparent hover:from-white/15'
           }`}
           style={{ zIndex: 40 }}
           onDoubleClick={toggleMinimized}
         >
-          {/* Touch target for drag - only enabled when actively dragging or on mobile */}
+          {/* Touch target for drag - enabled on all screen sizes */}
           <div
-            className="absolute inset-0 pointer-events-auto sm:pointer-events-none"
+            className={`absolute inset-0 pointer-events-auto cursor-ns-resize ${
+              isDragging ? 'bg-gradient-to-b from-blue-400/8 to-transparent' : ''
+            }`}
             onMouseDown={(e) => {
               // Only allow dragging from the very top area, not the button area
               if (e.clientX < 64) return; // Skip left 64px where button is
@@ -1431,7 +1518,7 @@ export default function InteractionPanel({
 
               // CRITICAL: Remove any previously attached touch listeners first to prevent memory leaks
               if (touchMoveHandler.current) {
-                document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false });
+                document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false } as EventListenerOptions);
               }
               if (touchEndHandler.current) {
                 document.removeEventListener("touchend", touchEndHandler.current);
@@ -1450,7 +1537,7 @@ export default function InteractionPanel({
               touchEndHandler.current = () => {
                 setIsDragging(false);
                 if (touchMoveHandler.current) {
-                  document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false });
+                  document.removeEventListener("touchmove", touchMoveHandler.current, { passive: false } as EventListenerOptions);
                 }
                 if (touchEndHandler.current) {
                   document.removeEventListener("touchend", touchEndHandler.current);
@@ -1463,8 +1550,10 @@ export default function InteractionPanel({
               document.addEventListener("touchend", touchEndHandler.current);
             }}
           >
-            {/* Visual indicator for mobile drag area */}
-            <div className="w-full h-[4px] bg-white/30 rounded-full mx-auto mt-1 sm:hidden" />
+            {/* Visual indicator for drag area */}
+            <div className={`w-12 h-[4px] rounded-full mx-auto mt-2 transition-all duration-200 ${
+              isDragging ? 'bg-blue-400/40 shadow-[0_0_6px_rgba(96,165,250,0.2)] w-16' : 'bg-white/30'
+            }`} />
           </div>
         </div>
 
@@ -1475,7 +1564,7 @@ export default function InteractionPanel({
             size="sm"
             onClick={togglePanel}
             className={`absolute top-2 left-2 w-8 h-8 p-0 z-[70] transition-all duration-300 sm:w-6 sm:h-6 ${
-              isOpen
+              isPanelOpen
                 ? "text-yellow-400 hover:bg-yellow-500/20 hover:text-yellow-300"
                 : "text-gray-400 hover:text-white hover:bg-white/10"
             }`}
@@ -1682,44 +1771,11 @@ export default function InteractionPanel({
               </div>
 
               {/* Provider/Model Selection - Restored */}
-              <div className="flex items-center gap-2 mb-2 text-xs text-white/60">
-                <Select
-                  value={`${currentProvider}:${currentModel}`}
-                  onValueChange={(value) => {
-                    const [provider, ...modelParts] = value.split(":");
-                    const model = modelParts.join(":");
-                    onProviderChange(provider, model);
-                  }}
-                >
-                  <SelectTrigger 
-                    className="w-full sm:w-[280px] border-white/20"
-                    style={{ backgroundColor: 'rgba(255, 255, 255, 0.08)' }}
-                  >
-                    <SelectValue placeholder="Select a model" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {/* Only show available providers (with API keys configured) */}
-                    {availableProviders
-                      .filter(p => (p as any).isAvailable !== false)
-                      .map((provider) => (
-                        <SelectGroup key={provider.id}>
-                          <SelectLabel>{provider.name}</SelectLabel>
-                          {provider.models.map((model) => (
-                            <SelectItem key={model} value={`${provider.id}:${model}`}>
-                              {model}
-                            </SelectItem>
-                          ))}
-                        </SelectGroup>
-                      ))}
-                    {/* Show message if no providers configured */}
-                    {availableProviders.filter(p => (p as any).isAvailable !== false).length === 0 && (
-                      <SelectItem value="none" disabled>
-                        No providers configured - add API keys to .env
-                      </SelectItem>
-                    )}
-                  </SelectContent>
-                </Select>
-              </div>
+              <ProviderSelector
+                selectValue={selectValue}
+                availableProviders={availableProviders}
+                onValueChange={handleProviderSelect}
+              />
 
               {/* Tab Content Sections */}
               <TabsContent value="chat" className={`m-0 flex-1 flex flex-col min-h-0 overflow-visible ${activeTab === 'chat' ? DEFAULT_TAB_HEIGHT : ''} ${activeTab && activeTab !== 'chat' && TALL_TABS.includes(activeTab) ? 'min-h-[200px]' : ''} ${EXPAND_TRANSITION}`}>
@@ -1831,13 +1887,24 @@ export default function InteractionPanel({
                           <h4 className="text-sm font-medium text-white/80">
                             Attach Files ({selectedFilePaths.length})
                           </h4>
-                          <button
-                            type="button"
-                            onClick={() => setShowFileSelector(false)}
-                            className="text-white/50 hover:text-white/80"
-                          >
-                            <X className="w-4 h-4" />
-                          </button>
+                          <div className="flex items-center gap-2">
+                            {selectedFilePaths.length > 0 && (
+                              <button
+                                type="button"
+                                onClick={() => virtualFilesystem.clearAttachedFiles()}
+                                className="text-[10px] text-red-400 hover:text-red-300 transition-colors mr-2"
+                              >
+                                Clear All
+                              </button>
+                            )}
+                            <button
+                              type="button"
+                              onClick={() => setShowFileSelector(false)}
+                              className="text-white/50 hover:text-white/80"
+                            >
+                              <X className="w-4 h-4" />
+                            </button>
+                          </div>
                         </div>
 
                         {/* Quick Upload Section */}
@@ -1891,6 +1958,29 @@ export default function InteractionPanel({
                                 <RefreshCw className="w-3 h-3 text-white/70" />
                               </button>
                             </div>
+                          </div>
+                          
+                          <div className="flex justify-between items-center mb-1 px-1">
+                            <span className="text-[9px] text-white/40 uppercase font-medium">Workspace Files</span>
+                            <button
+                              type="button"
+                              onClick={async () => {
+                                const filesOnly = virtualFileNodes.filter(
+                                  (n) => n.type === "file" && !selectedFilePaths.includes(n.path)
+                                );
+                                try {
+                                  for (const file of filesOnly) {
+                                    await virtualFilesystem.attachFile(file.path);
+                                  }
+                                } catch (error) {
+                                  const message = error instanceof Error ? error.message : "Failed to attach files";
+                                  toast.error(message);
+                                }
+                              }}
+                              className="text-[9px] text-blue-400 hover:text-blue-300 transition-colors"
+                            >
+                              Select All
+                            </button>
                           </div>
                         </div>
 

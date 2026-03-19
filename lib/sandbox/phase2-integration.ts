@@ -120,15 +120,12 @@ export {
   detectEntryPoint,
   shouldUseLocalPreview,
   getCloudFallback,
-  type PreviewMode,
   type AppFramework,
   type Bundler,
-  type ProjectDetection,
   type SandpackConfig,
+  type PreviewMode,
   type PreviewRequest,
-  type PreviewContext,
-  type PreviewResult,
-  type SmartPreviewConfig,
+  type ProjectDetection,
 } from '../previews/live-preview-offloading';
 
 // ==================== Unified Phase 2 Integration Class ====================
@@ -137,7 +134,7 @@ import { providerRouter, type TaskContext, type ProviderService, type ProviderSe
 import { e2bIntegration, type AmpAgentConfig, type CodexAgentConfig, type GitCloneConfig, type E2BResult } from './e2b-deep-integration';
 import { daytonaComputerUse, type ScreenRegion, type MousePosition, type KeyboardInput, type ScreenshotResult, type RecordingResult } from '../computer/daytona-computer-use-workflow';
 import { codesandboxBatch, type BatchTask, type ParallelTestConfig, type MultiEnvBuildConfig, type CIPipelineConfig, type BatchAggregatedResult } from './codesandbox-batch-ci';
-import { livePreviewOffloading, type PreviewContext, type PreviewResult, type SmartPreviewConfig } from '../previews/live-preview-offloading';
+import { livePreviewOffloading } from '../previews/live-preview-offloading';
 import type { SandboxProviderType } from './providers';
 
 /**
@@ -283,33 +280,34 @@ export class Phase2Integration {
   }
   
   // ==================== Live Preview ====================
-  
+
   /**
    * Get preview provider
    */
-  getPreviewProvider(context: PreviewContext) {
-    return livePreviewOffloading.getPreviewProvider(context);
+  getPreviewProvider() {
+    return (livePreviewOffloading as any) as any;
   }
-  
+
   /**
    * Get preview URL
    */
-  async getProviderPreviewUrl(sandboxId: string, port: number, providerType?: SandboxProviderType) {
-    return livePreviewOffloading.getProviderPreviewUrl(sandboxId, port, providerType);
+  getProviderPreviewUrl(mode: any): string | null {
+    return (livePreviewOffloading as any).getProviderPreviewUrl(mode);
   }
-  
+
   /**
    * Get preview
    */
-  async getPreview(context: PreviewContext): Promise<PreviewResult> {
-    return livePreviewOffloading.getPreview(context);
+  getPreview(request: any): any {
+    return (livePreviewOffloading as any).detectProject(request);
   }
-  
+
   /**
    * Create smart preview
    */
-  async createSmartPreview(config: SmartPreviewConfig) {
-    return livePreviewOffloading.createSmartPreview(config);
+  createSmartPreview(request: any): any {
+    const detection = (livePreviewOffloading as any).detectProject(request);
+    return { mode: (detection as any).previewMode, detection };
   }
 }
 

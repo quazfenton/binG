@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useRef, useEffect } from 'react';
 import { streamingErrorHandler } from '@/lib/streaming/streaming-error-handler';
+import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import type { Message } from '@/types';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { buildApiHeaders } from '@/lib/utils';
@@ -135,6 +136,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       const response = await fetch(options.api, {
         method: 'POST',
         headers: buildRequestHeaders(),
+        credentials: 'include',
         body: JSON.stringify(requestBody),
         signal: abortController.signal,
       });
@@ -318,7 +320,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   ) => {
     const reader = body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
     let accumulatedContent = '';
     let currentEventType = '';
 
@@ -342,6 +343,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     }, 30000); // 30 second timeout
 
     try {
+      const parser = createNDJSONParser();
+      
       while (true) {
         const { done, value } = await reader.read();
 
@@ -353,10 +356,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           break;
         }
 
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-
+        // Decode chunk and parse complete NDJSON lines
+        const chunk = decoder.decode(value, { stream: true });
+        
+        // Handle SSE format (event: / data: / \n\n)
+        const lines = chunk.split('\n');
+        
         for (const line of lines) {
           if (line.trim() === '') {
             // Empty line indicates end of event
@@ -364,55 +369,38 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             continue;
           }
 
-          try {
-            // Handle event type declarations
-            if (line.startsWith('event: ')) {
-              currentEventType = line.slice(7).trim();
+          // Handle event type declarations
+          if (line.startsWith('event: ')) {
+            currentEventType = line.slice(7).trim();
+            continue;
+          }
+
+          // Handle data lines
+          if (line.startsWith('data: ')) {
+            const dataString = line.slice(6).trim();
+            if (!dataString) continue;
+
+            // Use robust NDJSON parser to handle partial chunks
+            // Add newline to ensure complete parsing of SSE payloads
+            let parsedObjects: any[];
+            try {
+              parsedObjects = parser.parse(dataString + '\n');
+            } catch (parseError) {
+              // Handle parsing errors gracefully - use streaming error handler
+              const streamingError = streamingErrorHandler.processError(
+                parseError instanceof Error ? parseError : new Error(String(parseError))
+              );
+
+              // Only show error to user if it should be shown
+              if (streamingErrorHandler.shouldShowToUser(streamingError)) {
+                console.error('SSE parsing error:', parseError);
+              } else {
+                console.warn('SSE parsing error (handled silently):', parseError);
+              }
               continue;
             }
 
-            // Handle data lines
-            if (line.startsWith('data: ')) {
-              const dataString = line.slice(6).trim();
-              if (!dataString) continue;
-
-              let eventData;
-              try {
-                eventData = JSON.parse(dataString);
-              } catch (jsonError) {
-                // If JSON parsing fails, check if it's a simple text response
-                if (dataString && typeof dataString === 'string' && dataString.trim()) {
-                  // Handle different possible formats
-                  if (dataString.startsWith('{') && dataString.endsWith('}')) {
-                    // Looks like malformed JSON, try to extract content
-                    const contentMatch = dataString.match(/"content":\s*"([^"]*)"/) || 
-                                       dataString.match(/'content':\s*'([^']*)'/) ||
-                                       dataString.match(/content:\s*"([^"]*)"/) ||
-                                       dataString.match(/content:\s*'([^']*)'/) ||
-                                       dataString.match(/"([^"]+)"/);
-                    
-                    if (contentMatch && contentMatch[1]) {
-                      accumulatedContent += contentMatch[1];
-                      setMessages(prev => prev.map(msg => 
-                        msg.id === assistantMessage.id 
-                          ? { ...msg, content: accumulatedContent }
-                          : msg
-                      ));
-                    }
-                  } else {
-                    // Treat as plain text content for backward compatibility
-                    accumulatedContent += dataString;
-                    setMessages(prev => prev.map(msg => 
-                      msg.id === assistantMessage.id 
-                        ? { ...msg, content: accumulatedContent }
-                        : msg
-                    ));
-                  }
-                }
-                continue;
-              }
-
-              // Determine event type from current context or data
+            for (const eventData of parsedObjects) {              // Determine event type from current context or data
               const eventType = currentEventType || eventData.type || 'token';
 
               switch (eventType) {
@@ -818,31 +806,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }
                   break;
               }
-            }
+            } // End for loop
 
             // Handle other SSE fields (id, retry) - ignore them
             if (line.startsWith('id: ') || line.startsWith('retry: ')) {
               continue;
             }
-
-          } catch (parseError) {
-            // Handle parsing errors gracefully - use streaming error handler
-            const streamingError = streamingErrorHandler.processError(
-              parseError instanceof Error ? parseError : new Error(String(parseError))
-            );
-            
-            // Only show error to user if it should be shown
-            if (streamingErrorHandler.shouldShowToUser(streamingError)) {
-              console.error('SSE parsing error:', parseError);
-            } else {
-              console.warn('SSE parsing error (handled silently):', parseError);
-            }
-            
-            // Continue processing other lines even if one fails
-            continue;
-          }
-        }
-      }
+          } // End if (line.startsWith('data: '))
+        } // End for (const line of lines)
+      } // End while (true)
 
       // If we reach here without a 'done' event, consider it complete
       clearTimeout(timeoutId);
@@ -897,6 +869,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       v1Response = await fetch(options.api, {
         method: 'POST',
         headers: buildRequestHeaders(),
+        credentials: 'include',
         body: JSON.stringify(v1RequestBody),
         signal: abortController.signal,
       });
@@ -967,7 +940,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   ) => {
     const reader = body.getReader();
     const decoder = new TextDecoder();
-    let buffer = '';
     let accumulatedContent = '';
     
     // Set up a timeout
@@ -988,18 +960,22 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       }
     }, 30000);
     
+    const parser = createNDJSONParser();
+
     try {
       while (true) {
         const { done, value } = await reader.read();
         if (done || abortController.signal.aborted) break;
+
+        // Decode chunk and parse complete NDJSON lines
+        const chunk = decoder.decode(value, { stream: true });
         
-        buffer += decoder.decode(value, { stream: true });
-        const lines = buffer.split('\n');
-        buffer = lines.pop() || '';
-        
+        // Handle SSE format (data: {...})
+        const lines = chunk.split('\n');
+
         for (const line of lines) {
           if (!line.trim() || !line.startsWith('data: ')) continue;
-          
+
           const dataString = line.slice(6).trim();
           if (dataString === '[DONE]') {
             clearTimeout(timeoutId);
@@ -1012,32 +988,39 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             }
             return;
           }
-          
+
+          // Use robust NDJSON parser to handle partial chunks
+          // Add newline to ensure complete parsing of SSE payloads
+          let parsedObjects: any[];
           try {
-            const parsed = JSON.parse(dataString);
+            parsedObjects = parser.parse(dataString + '\n');
+          } catch (parseError) {
+            console.warn('V1 stream parsing error:', parseError);
+            continue;
+          }
+          
+          for (const parsed of parsedObjects) {
             // Handle OpenAI-compatible streaming format (v1)
             if (parsed.choices?.[0]?.delta?.content) {
               accumulatedContent += parsed.choices[0].delta.content;
-              setMessages(prev => prev.map(msg => 
-                msg.id === assistantMessage.id 
+              setMessages(prev => prev.map(msg =>
+                msg.id === assistantMessage.id
                   ? { ...msg, content: accumulatedContent }
                   : msg
               ));
             } else if (parsed.content) {
               // Non-streaming content
               accumulatedContent += parsed.content;
-              setMessages(prev => prev.map(msg => 
-                msg.id === assistantMessage.id 
+              setMessages(prev => prev.map(msg =>
+                msg.id === assistantMessage.id
                   ? { ...msg, content: accumulatedContent }
                   : msg
               ));
             }
-          } catch {
-            // Skip non-JSON lines
+            }
           }
         }
-      }
-    } finally {
+      } finally {
       reader.releaseLock();
     }
     

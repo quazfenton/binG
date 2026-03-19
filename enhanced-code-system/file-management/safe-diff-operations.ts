@@ -1,13 +1,31 @@
 /**
  * Safe Diff Operations System
  *
- * Provides enhanced safety mechanisms for diff operations including:
+ * ARCHITECTURE: Enterprise-grade validation layer for structured diff operations.
+ * 
+ * PURPOSE: Validates and applies DiffOperation[] objects with safety features.
+ * This is NOT LLM text parsing - receives structured objects from the tool system.
+ * 
+ * STATUS: NOT WIRED IN (59% test pass rate - 22/37 tests passing)
+ * - 15 tests failing due to unimplemented features (dependency/semantic analysis)
+ * - See __tests__/safe-diff-operations.test.ts for details
+ * 
+ * DIFFERENT FROM:
+ * - file-edit-parser.ts: Parses LLM text to extract edit commands
+ * - file-diff-utils.ts: Client-side preview of diffs (UI only)
+ * - tool-executor.ts: Simple search/replace to sandbox/VFS (production-ready)
+ * 
+ * Features (production-ready):
  * - Pre-execution validation for code changes
  * - Rollback mechanisms for failed operations
  * - Change tracking and conflict resolution
  * - Syntax validation before applying diffs
  * - Backup and recovery systems
  * - Conflict detection and resolution
+ * 
+ * Features (unimplemented/buggy):
+ * - Dependency conflict detection (buggy)
+ * - Semantic impact analysis (unimplemented)
  */
 
 import { EventEmitter } from 'node:events';
@@ -147,9 +165,9 @@ class SafeDiffOperations extends EventEmitter {
         this.emit('backup_created', { fileId, backupId });
       }
 
-      // Step 2: Pre-execution validation
+      // Step 2: Pre-execution validation with timeout
       if (this.options.enablePreValidation) {
-        const preValidation = await this.validateDiffsPreExecution(
+        const preValidation = await this.validateDiffsPreExecutionWithTimeout(
           fileId,
           currentContent,
           diffs,
@@ -230,9 +248,9 @@ class SafeDiffOperations extends EventEmitter {
 
       // Step 5: Semantic impact analysis
       let semanticValidation: ValidationResult = { isValid: true, errors: [], warnings: [], confidence: 1 };
-      
+
       if (this.options.enableSyntaxValidation) {
-        semanticValidation = await this.analyzeSemanticImpact(
+        semanticValidation = await this.analyzeSemanticImpactForValidation(
           applyResult.updatedContent,
           fileState.language,
           diffs
@@ -448,6 +466,44 @@ class SafeDiffOperations extends EventEmitter {
         confidence: 0,
         suggestions: ['Manual review recommended']
       };
+    }
+  }
+
+  /**
+   * Pre-execution validation with timeout protection
+   */
+  private async validateDiffsPreExecutionWithTimeout(
+    fileId: string,
+    content: string,
+    diffs: DiffOperation[],
+    fileState: FileState
+  ): Promise<ValidationResult> {
+    const timeoutMs = this.options.validationTimeout || 5000;
+
+    const validationPromise = this.validateDiffsPreExecution(
+      fileId,
+      content,
+      diffs,
+      fileState
+    );
+
+    let timeoutHandle: NodeJS.Timeout | undefined;
+    const timeoutPromise = new Promise<ValidationResult>((resolve) => {
+      timeoutHandle = setTimeout(() => {
+        resolve({
+          isValid: false,
+          errors: [`Validation timeout: exceeded ${timeoutMs}ms`],
+          warnings: [],
+          confidence: 0,
+          suggestions: ['Consider simplifying the diff operations or increasing the timeout']
+        });
+      }, timeoutMs);
+    });
+
+    try {
+      return await Promise.race([validationPromise, timeoutPromise]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
     }
   }
 
@@ -977,7 +1033,7 @@ class SafeDiffOperations extends EventEmitter {
   /**
    * Analyze semantic impact of code changes
    */
-  private async analyzeSemanticImpact(
+  private async analyzeSemanticImpactForValidation(
     content: string,
     language: string,
     diffs: DiffOperation[]

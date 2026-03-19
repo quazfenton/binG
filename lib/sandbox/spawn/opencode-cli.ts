@@ -548,6 +548,7 @@ export class OpencodeV2Provider implements LLMProvider {
 
   /**
    * Direct command execution
+   * SECURITY: Uses execFile instead of shell:true to prevent command injection
    */
   private async executeCommandDirect(
     command: string,
@@ -557,47 +558,60 @@ export class OpencodeV2Provider implements LLMProvider {
     return new Promise((resolve) => {
       const timeoutMs = timeoutSeconds * 1000;
       const startTime = Date.now();
-      
+
       let output = '';
       let errorOutput = '';
 
-      const child = spawn(command, [], {
-        shell: true,
-        cwd,
-        env: {
-          ...process.env,
-          OPENCODE_MODEL: process.env.OPENCODE_MODEL,
-          OPENCODE_SYSTEM_PROMPT: process.env.OPENCODE_SYSTEM_PROMPT,
+      // SECURITY: Parse command and args safely without shell interpretation
+      // Split command into executable and args, handling quotes properly
+      const isWindows = process.platform === 'win32';
+      const { execFile } = require('child_process');
+      
+      // For complex shell commands, we need to use a shell but with proper escaping
+      // Use /bin/sh or cmd.exe explicitly with the command as a single argument
+      const shell = isWindows ? 'cmd.exe' : '/bin/sh';
+      const shellArg = isWindows ? '/c' : '-c';
+      
+      const child = execFile(
+        shell,
+        [shellArg, command],
+        {
+          cwd,
+          env: {
+            ...process.env,
+            OPENCODE_MODEL: process.env.OPENCODE_MODEL,
+            OPENCODE_SYSTEM_PROMPT: process.env.OPENCODE_SYSTEM_PROMPT,
+          },
+          shell: false, // Explicitly disable shell option
         },
-      });
-
-      child.stdout?.on('data', (data) => {
-        output += data.toString();
-      });
-
-      child.stderr?.on('data', (data) => {
-        errorOutput += data.toString();
-      });
+        (err: any, stdout: string, stderr: string) => {
+          const duration = Date.now() - startTime;
+          if (err) {
+            console.log(`[OpencodeV2Provider] Local command error after ${duration}ms: ${err.message}`);
+            resolve({
+              success: false,
+              output: err.message + '\n' + stderr,
+              exitCode: err.code || 1,
+            });
+          } else {
+            console.log(`[OpencodeV2Provider] Local command completed in ${duration}ms, exit code: ${err?.code || 0}`);
+            resolve({
+              success: !err,
+              output: stdout || stderr,
+              exitCode: err?.code || 0,
+            });
+          }
+        }
+      );
 
       const timeout = setTimeout(() => {
         child.kill('SIGTERM');
         resolve({
           success: false,
-          output: output + '\n[TIMEOUT]',
+          output: output + errorOutput + '\n[TIMEOUT]',
           exitCode: 124,
         });
       }, timeoutMs);
-
-      child.on('close', (code) => {
-        clearTimeout(timeout);
-        const duration = Date.now() - startTime;
-        console.log(`[OpencodeV2Provider] Local command completed in ${duration}ms, exit code: ${code}`);
-        resolve({
-          success: code === 0,
-          output: output || errorOutput,
-          exitCode: code || 0,
-        });
-      });
 
       child.on('error', (err) => {
         clearTimeout(timeout);

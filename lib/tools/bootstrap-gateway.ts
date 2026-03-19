@@ -57,8 +57,8 @@ export async function unregisterGatewayTools(): Promise<void> {
 
   try {
     const toolManager = getToolManager();
-    const tools = toolManager.getAllTools();
-    const gatewayTools = tools.filter(t => t.provider === 'gateway');
+    const tools = await toolManager.getAllTools();
+    const gatewayTools = tools.filter(t => (t as any).provider === 'gateway');
 
     for (const tool of gatewayTools) {
       // Note: ToolIntegrationManager doesn't have unregisterTool yet

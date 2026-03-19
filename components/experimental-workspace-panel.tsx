@@ -2,7 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from "react";
 import { motion, AnimatePresence } from "framer-motion";
-import { usePanel } from "@/contexts/panel-context";
+import { usePanel, type PanelTab } from "@/contexts/panel-context";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
 import { ScrollArea } from "@/components/ui/scroll-area";
@@ -26,8 +26,9 @@ import {
   Plus,
   Trash2,
   ExternalLink,
-  GitHistory,
+  LucideHistory,
   RotateCcw,
+  RefreshCw,
   Code,
   FileCode,
   Folder,
@@ -60,9 +61,9 @@ import {
   FileText as FileDoc,
   Clock,
   Youtube,
+  Paperclip,
   Maximize2,
   Minimize2,
-  SwipeRight,
   Users,
   Heart,
   MessageCircle as MessageComment,
@@ -83,7 +84,11 @@ import {
 import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";
 import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
+import { getOrCreateAnonymousSessionId } from "@/lib/utils";
 import type { Message } from "@/types";
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
+import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
+import { buildApiHeaders } from "@/lib/utils";
 
 interface FileNode {
   name: string;
@@ -110,6 +115,44 @@ export function ExperimentalWorkspacePanel() {
   const [chatMessages, setChatMessages] = useState<Message[]>([]);
   const [chatInput, setChatInput] = useState("");
   const [isChatLoading, setIsChatLoading] = useState(false);
+  const [attachedFiles, setAttachedFiles] = useState<Array<{ path: string; content: string }>>([]);
+  const [showFilePicker, setShowFilePicker] = useState(false);
+  
+  // Resizable panel width
+  const [panelWidth, setPanelWidth] = useState(400);
+  const [isResizing, setIsResizing] = useState(false);
+  const resizeStartX = useRef(0);
+  const resizeStartWidth = useRef(400);
+  
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsResizing(true);
+    resizeStartX.current = e.clientX;
+    resizeStartWidth.current = panelWidth;
+  }, [panelWidth]);
+  
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (!isResizing) return;
+      const delta = e.clientX - resizeStartX.current;
+      const newWidth = Math.max(300, Math.min(800, resizeStartWidth.current + delta));
+      setPanelWidth(newWidth);
+    };
+    
+    const handleMouseUp = () => {
+      setIsResizing(false);
+    };
+    
+    if (isResizing) {
+      document.addEventListener('mousemove', handleMouseMove);
+      document.addEventListener('mouseup', handleMouseUp);
+    }
+    
+    return () => {
+      document.removeEventListener('mousemove', handleMouseMove);
+      document.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizing]);
 
   // Load chat history from localStorage on mount
   useEffect(() => {
@@ -309,15 +352,18 @@ export function ExperimentalWorkspacePanel() {
   
   // Get agent activity from hook (will be wired later)
   // For now, using local state that can be updated by parent component via props
-  const { agentActivity: externalAgentActivity, setAgentActivity: setExternalAgentActivity } = 
-    (window as any).__agentActivity || { agentActivity: undefined, setAgentActivity: undefined };
+  const { agentActivity: externalAgentActivity, setAgentActivity: setExternalAgentActivity } =
+    typeof window !== 'undefined' 
+      ? (window as any).__agentActivity || { agentActivity: undefined, setAgentActivity: undefined }
+      : { agentActivity: undefined, setAgentActivity: undefined };
 
-  const { filesystem } = useVirtualFilesystem();
-  const { 
-    writeFile, 
+  const vfs = useVirtualFilesystem();
+  const {
+    currentPath,
+    nodes,
+    writeFile,
     listDirectory,
-    ownerId 
-  } = useVirtualFilesystem(filesystem?.scopePath || 'project');
+  } = vfs;
   const chatEndRef = useRef<HTMLDivElement>(null);
   const audioRef = useRef<HTMLAudioElement | null>(null);
 
@@ -327,9 +373,68 @@ export function ExperimentalWorkspacePanel() {
   const [newItemName, setNewItemName] = useState("");
   const [creatingParentPath, setCreatingParentPath] = useState("/");
 
+  // File operations state (cut/copy/paste, rename, drag-drop)
+  const [clipboard, setClipboard] = useState<{ sourcePath: string; operation: 'cut' | 'copy' } | null>(null);
+  const [renamingFile, setRenamingFile] = useState<string | null>(null);
+  const [renameValue, setRenameValue] = useState("");
+  const [draggedFile, setDraggedFile] = useState<string | null>(null);
+  const [dragOverFolder, setDragOverFolder] = useState<string | null>(null);
+  const [showConfirmDialog, setShowConfirmDialog] = useState(false);
+  const [confirmDialogData, setConfirmDialogData] = useState<{
+    title: string;
+    message: string;
+    onConfirm: () => void;
+  } | null>(null);
+
+  // VFS snapshot state
+  const [vfsSnapshot, setVfsSnapshot] = useState<{ files: Array<{ path: string; content: string; language: string }> } | null>(null);
+
+  // Filesystem state (alias for vfsSnapshot with additional metadata)
+  const [filesystem, setFilesystem] = useState<{ 
+    sessionId: string; 
+    version: number; 
+    files: Array<{ path: string; content: string; language: string }> 
+  } | null>(null);
+
+  // Fetch VFS snapshot on mount
+  useEffect(() => {
+    const fetchSnapshot = async () => {
+      try {
+        const snapshot = await vfs.getSnapshot();
+        setVfsSnapshot(snapshot);
+        
+        // Auto-expand all folders on initial load
+        if (snapshot?.files) {
+          const folders = new Set<string>();
+          snapshot.files.forEach((file: { path: string }) => {
+            const parts = file.path.split("/").filter(Boolean);
+            // Add each folder path to expanded set
+            for (let i = 1; i < parts.length; i++) {
+              const folderPath = "/" + parts.slice(0, i).join("/");
+              folders.add(folderPath);
+            }
+          });
+          setExpandedFolders(folders);
+        }
+        
+        // Initialize filesystem state with snapshot data
+        // Use stable session ID from user session (not Date.now() which changes on refresh)
+        const stableSessionId = `session-${getOrCreateAnonymousSessionId()}`;
+        setFilesystem({
+          sessionId: stableSessionId,
+          version: snapshot?.version || 1,
+          files: snapshot?.files || [],
+        });
+      } catch (error) {
+        console.error('Failed to fetch VFS snapshot:', error);
+      }
+    };
+    fetchSnapshot();
+  }, [vfs.getSnapshot]);
+
   // Build file tree from filesystem
   const fileTree = React.useMemo(() => {
-    const files = filesystem?.files || [];
+    const files = vfsSnapshot?.files || [];
     const root: FileNode = {
       name: "workspace",
       path: "/",
@@ -364,7 +469,7 @@ export function ExperimentalWorkspacePanel() {
     });
 
     return root;
-  }, [filesystem?.files]);
+  }, [vfsSnapshot?.files]);
 
   // Scroll chat to bottom
   useEffect(() => {
@@ -405,103 +510,155 @@ export function ExperimentalWorkspacePanel() {
     });
   }, []);
 
-  const handleSendChat = useCallback(async () => {
-    if (!chatInput.trim() || isChatLoading) return;
+  const handleSendChat = useCallback(async (customPrompt?: string) => {
+    const promptToSend = customPrompt || chatInput.trim();
+    if (!promptToSend && !isChatLoading) return;
+    if (isChatLoading) return;
 
     const userMessage: Message = {
       id: `exp-chat-${Date.now()}`,
       role: "user",
-      content: chatInput.trim(),
-      timestamp: Date.now(),
+      content: promptToSend,
+      timestamp: new Date().toISOString(),
     };
 
     setChatMessages((prev) => [...prev, userMessage]);
-    setChatInput("");
+    if (!customPrompt) setChatInput("");
     setIsChatLoading(true);
 
     // Try to call the actual chat API
     try {
+      // Get the current chat messages as the messages array
+      const messagesPayload = [
+        ...chatMessages.map(m => ({ role: m.role, content: m.content })),
+        { 
+          role: 'user' as const, 
+          content: attachedFiles.length > 0 
+            ? `${promptToSend}\n\n--- Attached Files for Context ---\n${attachedFiles.map(f => `File: ${f.path}\n\`\`\`\n${f.content.slice(0, 4000)}\n\`\`\``).join('\n\n')}`
+            : promptToSend 
+        }
+      ];
+
+      // Get filesystem scope from the VFS
+      const vfsScope = filesystem?.sessionId || 'project/sessions/default';
+      
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+        },
         body: JSON.stringify({
-          message: chatInput.trim(),
-          conversationId: 'experimental-panel',
+          messages: messagesPayload,
+          provider: 'openrouter',
+          model: 'nvidia/nemotron-3-nano-30b-a3b:free',
+          conversationId: `exp-workspace-${vfsScope}`,
+          agentMode: 'auto', // Allow agentic behaviors
+          filesystemContext: {
+            scopePath: vfsScope,
+            attachedFiles: attachedFiles.map(f => ({
+              path: f.path,
+              content: f.content,
+            })),
+            applyFileEdits: true,
+          },
         }),
       });
 
       if (response.ok) {
         const data = await response.json();
+        const content = data?.data?.response || data?.data?.content || data?.content || data?.response || "Response received";
+        
+        const fsData = data?.data?.filesystem || data?.filesystem;
+        if (fsData && fsData.applied && fsData.applied.length > 0) {
+          console.log('[ExperimentalWorkspace] Filesystem operations applied:', fsData.applied);
+          toast.success(`Applied ${fsData.applied.length} file changes`);
+          
+          const snapshot = await vfs.getSnapshot();
+          setVfsSnapshot(snapshot);
+          setFilesystem({
+            sessionId: vfsScope,
+            version: snapshot?.version || 1,
+            files: snapshot?.files || [],
+          });
+        }
+        
+        if (fsData && fsData.errors && fsData.errors.length > 0) {
+          console.warn('[ExperimentalWorkspace] Filesystem errors:', fsData.errors);
+          toast.error(`Errors applying some changes: ${fsData.errors[0]}`);
+        }
+        
         const assistantMessage: Message = {
           id: `exp-chat-${Date.now()}`,
           role: "assistant",
-          content: data.response || data.content || "Response received",
-          timestamp: Date.now(),
+          content: typeof content === 'string' ? content : JSON.stringify(content),
+          timestamp: new Date().toISOString(),
         };
         setChatMessages((prev) => [...prev, assistantMessage]);
       } else {
         throw new Error('API request failed');
       }
     } catch (error) {
-      // Fallback to simulated response if API fails
-      setTimeout(() => {
-        const assistantMessage: Message = {
-          id: `exp-chat-${Date.now()}`,
-          role: "assistant",
-          content: "Thanks for your message! This is experimental chat with localStorage persistence.",
-          timestamp: Date.now(),
-        };
-        setChatMessages((prev) => [...prev, assistantMessage]);
-      }, 1000);
+      console.error('[ExperimentalWorkspace] Chat error:', error);
+      toast.error('Chat failed. Check console for details.');
     } finally {
       setIsChatLoading(false);
     }
-  }, [chatInput, isChatLoading]);
+  }, [chatInput, isChatLoading, chatMessages, filesystem, vfs, attachedFiles]);
 
   // YouTube helper functions
-  const getYouTubeVideoId = useCallback((urlOrId: string): string => {
-    // If it's already a video ID (11 characters), return it
-    if (/^[a-zA-Z0-9_-]{11}$/.test(urlOrId)) {
-      return urlOrId;
+  const getYouTubeEmbedUrl = useCallback((urlOrId: string): string => {
+    const playlistMatch = urlOrId.match(/[&?]list=([a-zA-Z0-9_-]+)/) || urlOrId.match(/playlist\?list=([a-zA-Z0-9_-]+)/);
+    if (playlistMatch) {
+      return `https://www.youtube.com/embed?listType=playlist&list=${playlistMatch[1]}&autoplay=1`;
     }
-    
-    // Try to extract from various YouTube URL formats
-    const patterns = [
-      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
-      /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/,
-      /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
-    ];
-    
-    for (const pattern of patterns) {
-      const match = urlOrId.match(pattern);
-      if (match) {
-        return match[1];
+
+    let videoId = urlOrId;
+    if (urlOrId.includes('youtube.com') || urlOrId.includes('youtu.be')) {
+      const patterns = [
+        /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
+        /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/,
+        /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
+      ];
+      for (const pattern of patterns) {
+        const match = urlOrId.match(pattern);
+        if (match) {
+          videoId = match[1];
+          break;
+        }
       }
     }
     
-    // Default fallback video (lofi hip hop radio)
-    return 'jfKfPfyJRdk';
+    if (!/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+      videoId = 'jfKfPfyJRdk';
+    }
+    
+    return `https://www.youtube.com/embed/${videoId}?autoplay=1&loop=1&playlist=${videoId}`;
   }, []);
 
   const extractYouTubeId = useCallback((urlOrId: string): string | null => {
-    // If it's already a video ID
+    if (!urlOrId) return null;
+    
+    // If it's already just an ID (11 characters, alphanumeric with - and _)
     if (/^[a-zA-Z0-9_-]{11}$/.test(urlOrId)) {
       return urlOrId;
     }
     
-    // Try to extract from URL
-    const patterns = [
-      /(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/)([a-zA-Z0-9_-]{11})/,
-      /youtube\.com\/v\/([a-zA-Z0-9_-]{11})/,
-      /youtube\.com\/shorts\/([a-zA-Z0-9_-]{11})/,
-      /youtube\.com\/playlist\?list=([a-zA-Z0-9_-]+)/,
-    ];
+    // Standard YouTube URL: https://www.youtube.com/watch?v=VIDEO_ID
+    const watchMatch = urlOrId.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+    if (watchMatch) {
+      return watchMatch[1];
+    }
     
-    for (const pattern of patterns) {
-      const match = urlOrId.match(pattern);
-      if (match) {
-        return match[1];
-      }
+    // Shortened URL: https://youtu.be/VIDEO_ID
+    const shortMatch = urlOrId.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
+    if (shortMatch) {
+      return shortMatch[1];
+    }
+    
+    // Embed URL: https://www.youtube.com/embed/VIDEO_ID
+    const embedMatch = urlOrId.match(/\/embed\/([a-zA-Z0-9_-]{11})/);
+    if (embedMatch) {
+      return embedMatch[1];
     }
     
     return null;
@@ -740,16 +897,278 @@ export function ExperimentalWorkspacePanel() {
     setNewItemName("");
   }, []);
 
+  // File operation handlers
+  const handleCutFile = useCallback((path: string) => {
+    setClipboard({ sourcePath: path, operation: 'cut' });
+    toast.info('File cut - click paste in a folder');
+  }, []);
+
+  const handleCopyFile = useCallback((path: string) => {
+    setClipboard({ sourcePath: path, operation: 'copy' });
+    toast.info('File copied - click paste in a folder');
+  }, []);
+
+  const handlePasteToFolder = useCallback(async (targetFolderPath: string, currentClipboard?: typeof clipboard) => {
+    const activeClipboard = currentClipboard || clipboard;
+    if (!activeClipboard) return;
+
+    const sourceName = activeClipboard.sourcePath.split('/').pop() || '';
+    const targetPath = targetFolderPath === '/' ? `/${sourceName}` : `${targetFolderPath}/${sourceName}`;
+
+    // Bail out when the target path equals the source path
+    if (targetPath === activeClipboard.sourcePath) {
+      toast.info('Cannot paste file into itself');
+      return;
+    }
+
+    // Check if target exists
+    const exists = vfsSnapshot?.files.some(f => f.path === targetPath);
+    if (exists) {
+      setConfirmDialogData({
+        title: 'File Exists',
+        message: `A file named "${sourceName}" already exists in this folder. Overwrite?`,
+        onConfirm: async () => {
+          await performPaste(targetPath, activeClipboard);
+          setShowConfirmDialog(false);
+          setConfirmDialogData(null);
+        },
+      });
+      setShowConfirmDialog(true);
+      return;
+    }
+
+    await performPaste(targetPath, activeClipboard);
+  }, [clipboard, vfsSnapshot?.files]);
+
+  const performPaste = async (targetPath: string, currentClipboard?: typeof clipboard) => {
+    const activeClipboard = currentClipboard || clipboard;
+    if (!activeClipboard) return;
+
+    try {
+      // Read source file
+      const readResponse = await fetch('/api/filesystem/read', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({ path: resolveScopedPath(activeClipboard.sourcePath, vfs?.currentPath || '/') }),
+      });
+
+      if (!readResponse.ok) {
+        throw new Error('Failed to read source file');
+      }
+
+      const payload = await readResponse.json().catch(() => null);
+      const content = payload?.data?.content || '';
+
+      // Write to target
+      await writeFile(targetPath, content);
+
+      // If cut, delete source
+      if (activeClipboard.operation === 'cut') {
+        const deleteResponse = await fetch('/api/filesystem/delete', {
+          method: 'POST',
+          headers: buildApiHeaders(),
+          body: JSON.stringify({ path: resolveScopedPath(activeClipboard.sourcePath, vfs?.currentPath || '/') }),
+        });
+        if (!deleteResponse.ok) {
+          throw new Error('Failed to delete source file');
+        }
+      }
+
+      await listDirectory(vfs?.currentPath || '/');
+      toast.success(`File ${activeClipboard.operation === 'cut' ? 'moved' : 'copied'} successfully`);
+      setClipboard(null);
+    } catch (err: any) {
+      toast.error(`Operation failed: ${err.message}`);
+    }
+  };
+
+  const handleRenameFile = useCallback((path: string, currentName: string) => {
+    setRenamingFile(path);
+    setRenameValue(currentName);
+  }, []);
+
+  const confirmRename = useCallback(async () => {
+    if (!renamingFile || !renameValue.trim()) {
+      setRenamingFile(null);
+      return;
+    }
+
+    const oldName = renamingFile.split('/').pop() || '';
+    if (renameValue.trim() === oldName) {
+      setRenamingFile(null);
+      return;
+    }
+
+    const parentPath = renamingFile.substring(0, renamingFile.lastIndexOf('/')) || '/';
+    const newPath = parentPath === '/' ? `/${renameValue.trim()}` : `${parentPath}/${renameValue.trim()}`;
+
+    // Check if new name exists
+    const exists = vfsSnapshot?.files.some(f => f.path === newPath && f.path !== renamingFile);
+    if (exists) {
+      setConfirmDialogData({
+        title: 'File Exists',
+        message: `A file named "${renameValue.trim()}" already exists. Overwrite?`,
+        onConfirm: async () => {
+          await performRename(newPath, renamingFile);
+          setShowConfirmDialog(false);
+          setConfirmDialogData(null);
+        },
+      });
+      setShowConfirmDialog(true);
+      return;
+    }
+
+    await performRename(newPath, renamingFile);
+  }, [renamingFile, renameValue, vfsSnapshot?.files]);
+
+  const performRename = async (newPath: string, oldPath: string) => {
+    if (!oldPath) return;
+
+    try {
+      // Read source
+      const readResponse = await fetch('/api/filesystem/read', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({ path: resolveScopedPath(oldPath, vfs?.currentPath || '/') }),
+      });
+
+      if (!readResponse.ok) throw new Error('Failed to read file');
+      const payload = await readResponse.json().catch(() => null);
+      const content = payload?.data?.content || '';
+
+      // Write to new path
+      await writeFile(newPath, content);
+
+      // Delete old
+      await fetch('/api/filesystem/delete', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({ path: resolveScopedPath(renamingFile, vfs?.currentPath || '/') }),
+      });
+
+      await listDirectory(vfs?.currentPath || '/');
+      toast.success('File renamed successfully');
+      setRenamingFile(null);
+      setRenameValue("");
+    } catch (err: any) {
+      toast.error(`Rename failed: ${err.message}`);
+      setRenamingFile(null);
+    }
+  };
+
+  const cancelRename = useCallback(() => {
+    setRenamingFile(null);
+    setRenameValue("");
+  }, []);
+
+  // Drag and drop handlers
+  const handleDragStart = useCallback((path: string) => {
+    setDraggedFile(path);
+  }, []);
+
+  const handleDragOver = useCallback((e: React.DragEvent, folderPath: string) => {
+    e.preventDefault();
+    setDragOverFolder(folderPath);
+  }, []);
+
+  const handleDragLeave = useCallback(() => {
+    setDragOverFolder(null);
+  }, []);
+
+  const handleDrop = useCallback(async (e: React.DragEvent, targetFolderPath: string) => {
+    e.preventDefault();
+    setDragOverFolder(null);
+
+    if (!draggedFile || draggedFile === targetFolderPath) {
+      setDraggedFile(null);
+      return;
+    }
+
+    const fileName = draggedFile.split('/').pop() || '';
+    const targetPath = targetFolderPath === '/' ? `/${fileName}` : `${targetFolderPath}/${fileName}`;
+
+    // Check if target exists
+    const exists = vfsSnapshot?.files.some(f => f.path === targetPath && f.path !== draggedFile);
+    if (exists) {
+      setConfirmDialogData({
+        title: 'File Exists',
+        message: `A file named "${fileName}" already exists in this folder. Overwrite?`,
+        onConfirm: async () => {
+          await performMove(targetPath, draggedFile);
+          setShowConfirmDialog(false);
+          setConfirmDialogData(null);
+        },
+      });
+      setShowConfirmDialog(true);
+      setDraggedFile(null);
+      return;
+    }
+
+    await performMove(targetPath, draggedFile);
+    setDraggedFile(null);
+  }, [draggedFile, vfsSnapshot?.files]);
+
+  const performMove = async (targetPath: string, sourcePath: string) => {
+    if (!sourcePath) return;
+
+    // Bail out when the target path equals the source path
+    if (targetPath === sourcePath) {
+      return;
+    }
+
+    try {
+      // Read source
+      const readResponse = await fetch('/api/filesystem/read', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({ path: resolveScopedPath(sourcePath, vfs?.currentPath || '/') }),
+      });
+
+      if (!readResponse.ok) throw new Error('Failed to read file');
+      const payload = await readResponse.json().catch(() => null);
+      const content = payload?.data?.content || '';
+
+      // Write to target
+      await writeFile(targetPath, content);
+
+      // Delete source
+      const deleteResponse = await fetch('/api/filesystem/delete', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({ path: resolveScopedPath(sourcePath, vfs?.currentPath || '/') }),
+      });
+      if (!deleteResponse.ok) throw new Error('Failed to delete source file');
+
+      await listDirectory(vfs?.currentPath || '/');
+      toast.success('File moved successfully');
+    } catch (err: any) {
+      toast.error(`Move failed: ${err.message}`);
+    }
+  };
+
+  // Context menu state
+  const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string; isDirectory: boolean } | null>(null);
+
   const renderFileTree = useCallback((node: FileNode, depth = 0) => {
     const isExpanded = expandedFolders.has(node.path);
     const indent = depth * 16;
 
     if (node.type === "directory") {
+      // Check if this folder is drag target
+      const isDragTarget = dragOverFolder === node.path;
+
       return (
-        <div key={node.path} className="group">
-          <div className="flex items-center">
+        <div 
+          key={node.path} 
+          className="group"
+          onDragOver={(e) => handleDragOver(e, node.path)}
+          onDragLeave={handleDragLeave}
+          onDrop={(e) => handleDrop(e, node.path)}
+        >
+          <div className={`flex items-center rounded ${isDragTarget ? 'bg-cyan-500/30 border border-cyan-500/50' : ''}`}>
             <button
               onClick={() => toggleFolder(node.path)}
+              onDoubleClick={() => handleRenameFile(node.path, node.name)}
               className="flex items-center gap-1 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors"
               style={{ paddingLeft: indent + 8 }}
             >
@@ -759,8 +1178,36 @@ export function ExperimentalWorkspacePanel() {
                 <ChevronRight className="h-3 w-3 text-white/60" />
               )}
               <Folder className="h-3 w-3 text-blue-400" />
-              <span className="text-white/80">{node.name}</span>
+              {renamingFile === node.path ? (
+                <Input
+                  value={renameValue}
+                  onChange={(e) => setRenameValue(e.target.value)}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter') confirmRename();
+                    if (e.key === 'Escape') cancelRename();
+                  }}
+                  onBlur={confirmRename}
+                  className="h-5 text-xs bg-black/50 border-white/30"
+                  autoFocus
+                  onClick={(e) => e.stopPropagation()}
+                />
+              ) : (
+                <span className="text-white/80">{node.name}</span>
+              )}
             </button>
+            {/* Paste button when clipboard has content */}
+            {clipboard && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  handlePasteToFolder(node.path);
+                }}
+                className="p-1 hover:bg-white/10 rounded opacity-0 group-hover:opacity-100 transition-opacity text-green-400"
+                title="Paste file here"
+              >
+                <Plus className="h-3 w-3" />
+              </button>
+            )}
             {/* Add file button for folders */}
             <button
               onClick={(e) => {
@@ -789,20 +1236,66 @@ export function ExperimentalWorkspacePanel() {
       );
     }
 
+    // File node
     return (
-      <button
+      <div
         key={node.path}
+        draggable
+        onDragStart={() => handleDragStart(node.path)}
         onClick={() => handleFileSelect(node)}
-        className={`flex items-center gap-2 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors ${
+        onDoubleClick={() => handleRenameFile(node.path, node.name)}
+        onContextMenu={(e) => {
+          e.preventDefault();
+          setContextMenu({ x: e.clientX, y: e.clientY, path: node.path, isDirectory: false });
+        }}
+        className={`flex items-center gap-2 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors cursor-pointer ${
           selectedFile?.path === node.path ? "bg-white/20" : ""
         }`}
         style={{ paddingLeft: indent + 24 }}
       >
-        <FileCode className="h-3 w-3 text-green-400" />
-        <span className="text-white/80 truncate">{node.name}</span>
-      </button>
+        <FileCode className="h-3 w-3 text-green-400 flex-shrink-0" />
+        {renamingFile === node.path ? (
+          <Input
+            value={renameValue}
+            onChange={(e) => setRenameValue(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') confirmRename();
+              if (e.key === 'Escape') cancelRename();
+            }}
+            onBlur={confirmRename}
+            className="h-5 text-xs bg-black/50 border-white/30 flex-1 min-w-0"
+            autoFocus
+            onClick={(e) => e.stopPropagation()}
+          />
+        ) : (
+          <span className="text-white/80 truncate">{node.name}</span>
+        )}
+        {/* Hover actions */}
+        <div className="hidden group-hover:flex gap-1 flex-shrink-0">
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCutFile(node.path);
+            }}
+            className="p-0.5 hover:bg-white/10 rounded"
+            title="Cut"
+          >
+            <Edit className="h-3 w-3 text-yellow-400" />
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
+              handleCopyFile(node.path);
+            }}
+            className="p-0.5 hover:bg-white/10 rounded"
+            title="Copy"
+          >
+            <Copy className="h-3 w-3 text-blue-400" />
+          </button>
+        </div>
+      </div>
     );
-  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile]);
+  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile, handleRenameFile, renamingFile, renameValue, confirmRename, cancelRename, clipboard, handlePasteToFolder, dragOverFolder, handleDragOver, handleDragLeave, handleDrop, handleDragStart, handleCutFile, handleCopyFile]);
 
   return (
     <>
@@ -813,25 +1306,33 @@ export function ExperimentalWorkspacePanel() {
         onEnded={nextSong}
       />
 
-      <AnimatePresence>
-        {isOpen && (
-          <motion.div
-            initial={{ x: "-100%", opacity: 0 }}
-            animate={{ x: 0, opacity: 1 }}
-            exit={{ x: "-100%", opacity: 0 }}
-            transition={{ type: "spring", damping: 25, stiffness: 200 }}
-            className="fixed inset-y-0 left-0 z-0 w-[400px] md:w-[450px] pointer-events-auto"
-            style={{
-              top: "200px", // Below interaction-panel
-              bottom: 0,
-              left: 0,
-            }}
-          >
-            {/* Glassmorphism background */}
-            <div className="absolute inset-0 bg-black/40 backdrop-blur-xl border-r border-white/10" />
+      <div className="pointer-events-auto">
+        <AnimatePresence>
+          {isOpen && (
+            <motion.div
+              initial={{ x: "-100%", opacity: 0 }}
+              animate={{ x: 0, opacity: 1 }}
+              exit={{ x: "-100%", opacity: 0 }}
+              transition={{ type: "spring", damping: 25, stiffness: 200 }}
+              className="fixed inset-y-0 left-0 z-[60] pointer-events-auto flex flex-col"
+              style={{
+                top: "60px",
+                bottom: 0,
+                left: 0,
+                width: panelWidth,
+              }}
+            >
+              {/* Resize handle on right edge */}
+              <div
+                className="absolute right-0 top-0 bottom-0 w-1 cursor-ew-resize hover:bg-blue-400/50 transition-colors z-10"
+                onMouseDown={handleMouseDown}
+              />
+              
+              {/* Glassmorphism background */}
+              <div className="absolute inset-0 bg-black/60 backdrop-blur-xl border-r border-white/10" />
 
-            {/* Content */}
-            <div className="relative h-full flex flex-col">
+              {/* Content - full height with proper overflow */}
+              <div className="relative flex-1 flex flex-col overflow-hidden">
               {/* Header */}
               <div className="flex items-center justify-between px-4 py-3 border-b border-white/10">
                 <div className="flex items-center gap-2">
@@ -1050,6 +1551,18 @@ export function ExperimentalWorkspacePanel() {
                           <Badge variant="secondary" className="text-[10px] bg-white/10">
                             {filesystem?.files?.length || 0} files
                           </Badge>
+                          {/* Paste button when clipboard has content */}
+                          {clipboard && (
+                            <Button
+                              variant="ghost"
+                              size="icon"
+                              onClick={() => handlePasteToFolder("/")}
+                              className="h-6 w-6 hover:bg-white/10 text-green-400"
+                              title={`Paste ${clipboard.sourcePath.split('/').pop()}`}
+                            >
+                              <Plus className="h-3 w-3" />
+                            </Button>
+                          )}
                           <Button
                             variant="ghost"
                             size="icon"
@@ -1058,6 +1571,24 @@ export function ExperimentalWorkspacePanel() {
                             title="New File"
                           >
                             <Plus className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={async () => {
+                              const snapshot = await vfs.getSnapshot();
+                              setVfsSnapshot(snapshot);
+                              // Also refresh the filesystem state
+                              setFilesystem({
+                                sessionId: filesystem?.sessionId || "default",
+                                version: snapshot?.version || 1,
+                                files: snapshot?.files || [],
+                              });
+                            }}
+                            className="h-6 w-6 hover:bg-white/10"
+                            title="Refresh Files"
+                          >
+                            <RefreshCw className="h-3 w-3" />
                           </Button>
                         </div>
                       </div>
@@ -1124,19 +1655,36 @@ export function ExperimentalWorkspacePanel() {
                             </div>
                             <p className="text-[10px] text-white/50">{selectedFile.path}</p>
                             {selectedFile.content && (
-                              <pre className="mt-2 p-2 bg-black/50 rounded text-[10px] text-white/70 overflow-x-auto max-h-48">
-                                <code>{selectedFile.content.slice(0, 500)}{selectedFile.content.length > 500 ? "..." : ""}</code>
-                              </pre>
+                              <div className="w-full overflow-x-auto">
+                                <pre className="mt-2 p-2 bg-black/50 rounded text-[10px] text-white/70 whitespace-pre-wrap break-all min-h-[200px] max-h-[60vh] overflow-y-auto">
+                                  <code>{selectedFile.content}</code>
+                                </pre>
+                              </div>
                             )}
                           </div>
                         </>
+                      )}
+
+                      {/* Clipboard indicator */}
+                      {clipboard && (
+                        <div className="mb-2 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded flex items-center justify-between">
+                          <span className="text-xs text-yellow-300">
+                            {clipboard.operation === 'cut' ? '✂️ Cut' : '📋 Copied'}: {clipboard.sourcePath.split('/').pop()}
+                          </span>
+                          <button
+                            onClick={() => setClipboard(null)}
+                            className="text-white/60 hover:text-white"
+                          >
+                            <X className="h-3 w-3" />
+                          </button>
+                        </div>
                       )}
 
                       {/* Version History Integration */}
                       <Separator className="my-4 bg-white/10" />
                       <div className="space-y-2">
                         <div className="flex items-center gap-2 mb-2">
-                          <GitHistory className="h-3 w-3 text-purple-400" />
+                          <LucideHistory className="h-3 w-3 text-purple-400" />
                           <span className="text-xs font-medium text-white/90">Version History</span>
                         </div>
                         <VersionHistoryPanel
@@ -1161,6 +1709,17 @@ export function ExperimentalWorkspacePanel() {
                       </Badge>
                     </div>
                     <div className="flex gap-1">
+                      <Button
+                        variant="ghost"
+                        size="sm"
+                        onClick={() => handleSendChat("Please continue the work. If there are more files to edit or improvements to make, proceed with them.")}
+                        disabled={chatMessages.length === 0 || isChatLoading}
+                        className="h-6 text-[10px] bg-green-500/10 hover:bg-green-500/20 text-green-400 border border-green-500/20"
+                        title="Request AI to continue its previous task"
+                      >
+                        <RotateCcw className="h-3 w-3 mr-1" />
+                        Continue
+                      </Button>
                       <Button
                         variant="ghost"
                         size="sm"
@@ -1230,14 +1789,23 @@ export function ExperimentalWorkspacePanel() {
                         onKeyDown={(e) => {
                           if (e.key === "Enter" && !e.shiftKey) {
                             e.preventDefault();
-                            handleSendChat();
+                            void handleSendChat();
                           }
                         }}
-                        placeholder="Send message..."
+                        placeholder="Send message... (with attached files for context)"
                         className="flex-1 min-h-[60px] bg-white/5 border-white/10 text-white/90 placeholder:text-white/40 text-sm resize-none"
                       />
                       <Button
-                        onClick={handleSendChat}
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setShowFilePicker(!showFilePicker)}
+                        className="h-[60px] w-10 text-white/60 hover:text-white hover:bg-white/10"
+                        title="Attach files from VFS"
+                      >
+                        <Paperclip className="h-4 w-4" />
+                      </Button>
+                      <Button
+                        onClick={() => void handleSendChat()}
                         disabled={!chatInput.trim() || isChatLoading}
                         className="h-[60px] w-[60px] bg-blue-500/20 hover:bg-blue-500/30 border border-blue-500/30"
                       >
@@ -1248,6 +1816,59 @@ export function ExperimentalWorkspacePanel() {
                         )}
                       </Button>
                     </div>
+                    
+                    {/* Attached Files Display */}
+                    {attachedFiles.length > 0 && (
+                      <div className="flex flex-wrap gap-2 p-2 border-t border-white/10">
+                        {attachedFiles.map((file, idx) => (
+                          <div key={idx} className="flex items-center gap-1 px-2 py-1 bg-blue-500/20 border border-blue-500/30 rounded text-xs text-white/80">
+                            <FileCode className="h-3 w-3" />
+                            <span className="max-w-[100px] truncate">{file.path.split('/').pop()}</span>
+                            <button
+                              onClick={() => setAttachedFiles(attachedFiles.filter((_, i) => i !== idx))}
+                              className="ml-1 hover:text-red-400"
+                            >
+                              <X className="h-3 w-3" />
+                            </button>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                    
+                    {/* File Picker Dropdown */}
+                    {showFilePicker && (
+                      <div className="border-t border-white/10 p-2 max-h-48 overflow-y-auto bg-black/60">
+                        <div className="text-xs text-white/60 mb-2">Click files to attach (they'll be sent as context):</div>
+                        {vfsSnapshot?.files?.slice(0, 20).map((file: { path: string; content?: string }, idx: number) => (
+                          <button
+                            key={idx}
+                            onClick={() => {
+                              const isAttached = attachedFiles.some(f => f.path === file.path);
+                              if (isAttached) {
+                                setAttachedFiles(attachedFiles.filter(f => f.path !== file.path));
+                              } else {
+                                setAttachedFiles([...attachedFiles, { path: file.path, content: file.content || '' }]);
+                              }
+                            }}
+                            className={`flex items-center gap-2 w-full px-2 py-1 text-left text-xs rounded ${
+                              attachedFiles.some(f => f.path === file.path)
+                                ? 'bg-blue-500/30 text-blue-300'
+                                : 'hover:bg-white/10 text-white/70'
+                            }`}
+                          >
+                            {attachedFiles.some(f => f.path === file.path) && <CheckCircle className="h-3 w-3" />}
+                            <FileCode className="h-3 w-3 text-blue-400" />
+                            <span className="truncate">{file.path}</span>
+                          </button>
+                        ))}
+                        <button
+                          onClick={() => setShowFilePicker(false)}
+                          className="mt-2 w-full text-center text-xs text-white/40 hover:text-white"
+                        >
+                          Done
+                        </button>
+                      </div>
+                    )}
                   </div>
                 </TabsContent>
 
@@ -1827,7 +2448,7 @@ export function ExperimentalWorkspacePanel() {
                       {/* YouTube Iframe */}
                       <iframe
                         className="absolute inset-0 w-full h-full"
-                        src={`https://www.youtube.com/embed/${getYouTubeVideoId(youtubeVideoId)}?autoplay=1&loop=1&modestbranding=1&rel=0&iv_load_policy=3&playlist=${getYouTubeVideoId(youtubeVideoId)}&controls=1`}
+                        src={getYouTubeEmbedUrl(youtubeVideoId)}
                         title="YouTube video player"
                         frameBorder="0"
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; web-share"
@@ -1855,7 +2476,7 @@ export function ExperimentalWorkspacePanel() {
                         className="absolute top-4 right-4 h-8 w-8 bg-black/70 hover:bg-black/90 text-white z-20 border border-white/20"
                         title="Change video"
                       >
-                        <Settings className="h-4 w-4" />
+                        <RotateCcw className="h-4 w-4" />
                       </Button>
                       
                       {/* Minimize button */}
@@ -2458,6 +3079,70 @@ export function ExperimentalWorkspacePanel() {
           </motion.div>
         )}
       </AnimatePresence>
+      </div>
+
+      {/* Confirmation Dialog */}
+      {showConfirmDialog && confirmDialogData && (
+        <ConfirmationDialog
+          isOpen={showConfirmDialog}
+          title={confirmDialogData.title}
+          message={confirmDialogData.message}
+          confirmLabel="Confirm"
+          cancelLabel="Cancel"
+          onConfirm={confirmDialogData.onConfirm}
+          onCancel={() => {
+            setShowConfirmDialog(false);
+            setConfirmDialogData(null);
+          }}
+        />
+      )}
+
+      {/* Context Menu */}
+      {contextMenu && (
+        <>
+          <div
+            className="fixed inset-0 z-40"
+            onClick={() => setContextMenu(null)}
+          />
+          <div
+            className="fixed z-50 bg-black/90 border border-white/20 rounded-lg shadow-xl py-1 min-w-[140px]"
+            style={{ left: contextMenu.x, top: contextMenu.y }}
+          >
+            {!contextMenu.isDirectory && (
+              <>
+                <button
+                  onClick={() => {
+                    handleCutFile(contextMenu.path);
+                    setContextMenu(null);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-white/10 flex items-center gap-2"
+                >
+                  <Edit className="h-3 w-3 text-yellow-400" /> Cut
+                </button>
+                <button
+                  onClick={() => {
+                    handleCopyFile(contextMenu.path);
+                    setContextMenu(null);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-white/10 flex items-center gap-2"
+                >
+                  <Copy className="h-3 w-3 text-blue-400" /> Copy
+                </button>
+              </>
+            )}
+            <button
+              onClick={() => {
+                const name = contextMenu.path.split('/').pop() || '';
+                handleRenameFile(contextMenu.path, name);
+                setContextMenu(null);
+              }}
+              className="w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-white/10 flex items-center gap-2"
+            >
+              <FileText className="h-3 w-3 text-purple-400" /> Rename
+            </button>
+          </div>
+        </>
+      )}
     </>
   );
 }

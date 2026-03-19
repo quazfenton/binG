@@ -89,7 +89,7 @@ export class ObjectStorageService {
       } else {
         // For streams, we'd need to handle differently in Node.js
         // This is a simplified version
-        throw new Error('Stream content not yet supported in this implementation')
+        throw new Error('Stream content not yet supported in this implementation' as any)
       }
 
       formData.append('file', content, request.key)
@@ -113,7 +113,7 @@ export class ObjectStorageService {
         throw new Error(`Failed to upload: ${response.statusText}`)
       }
 
-      const data = await response.json()
+      const data = await (response as any).json()
       return { success: true, etag: data.etag }
     } catch (error: any) {
       return { success: false, error: error.message }
@@ -131,7 +131,7 @@ export class ObjectStorageService {
     try {
       const content = createReadStream(filePath)
       
-      // For Node.js streams, we need to use a different approach
+      // For Node.js streams, we need duplex mode for streaming upload
       const response = await fetch(
         `${this.apiBaseUrl}/sandboxes/${this.sandboxId}/storage/upload`,
         {
@@ -143,14 +143,15 @@ export class ObjectStorageService {
             ...(metadata ? { 'X-Storage-Metadata': JSON.stringify(metadata) } : {}),
           },
           body: content,
-        }
+          duplex: 'half',
+        } as any
       )
 
       if (!response.ok) {
         throw new Error(`Failed to upload: ${response.statusText}`)
       }
 
-      const data = await response.json()
+      const data = await (response as any).json()
       return { success: true, etag: data.etag }
     } catch (error: any) {
       return { success: false, error: error.message }
@@ -271,7 +272,7 @@ export class ObjectStorageService {
         throw new Error(`Failed to list objects: ${response.statusText}`)
       }
 
-      const data = await response.json()
+      const data = await (response as any).json()
       return {
         success: true,
         data: {

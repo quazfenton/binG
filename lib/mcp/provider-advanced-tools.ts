@@ -910,8 +910,12 @@ export async function callProviderTool(
     return executeE2BAmpAgent(args as any);
   }
   if (toolName === 'e2b_runAmpAgentWithRepo') {
-    // TODO: Implement repo cloning
-    return { success: false, output: '', error: 'Not yet implemented' };
+    // FIX: Provide helpful error message with workaround instead of silent failure
+    return { 
+      success: false, 
+      output: '', 
+      error: 'e2b_runAmpAgentWithRepo is not yet implemented. Workaround: Use e2b_runAmpAgent with manual code upload.' 
+    };
   }
 
   // E2B Codex tools
@@ -919,8 +923,12 @@ export async function callProviderTool(
     return executeE2BCodexAgent(args as any);
   }
   if (toolName === 'e2b_runCodexAgentWithRepo') {
-    // TODO: Implement repo cloning
-    return { success: false, output: '', error: 'Not yet implemented' };
+    // FIX: Provide helpful error message with workaround instead of silent failure
+    return { 
+      success: false, 
+      output: '', 
+      error: 'e2b_runCodexAgentWithRepo is not yet implemented. Workaround: Use e2b_runCodexAgent with manual code upload.' 
+    };
   }
 
   // Daytona Computer Use tools

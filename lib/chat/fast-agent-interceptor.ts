@@ -35,8 +35,8 @@ class FastAgentInterceptor {
   async intercept(request: InterceptorRequest): Promise<InterceptorResponse> {
     try {
       const lastMessage = request.messages[request.messages.length - 1];
-      const content = lastMessage?.content || '';
-      
+      const content = typeof lastMessage?.content === 'string' ? lastMessage?.content : '';
+
       // Use unified ComplexityAnalyzer
       const metrics = ComplexityAnalyzer.analyze(content);
       
@@ -55,7 +55,7 @@ class FastAgentInterceptor {
       const fastAgentRequest: FastAgentRequest = {
         messages: request.messages.map(msg => ({
           role: msg.role as 'user' | 'assistant' | 'system',
-          content: msg.content
+          content: typeof msg.content === 'string' ? msg.content : '',
         })),
         provider: request.provider,
         model: request.model,
@@ -77,7 +77,15 @@ class FastAgentInterceptor {
         };
       }
 
-      // ... (rest of the intercept logic)
+      // Intercept and optimize the request
+      const optimizedRequest: InterceptorRequest = {
+        ...request,
+        messages: fastAgentRequest.messages,
+        temperature: optimizedParams.temperature,
+        maxTokens: optimizedParams.maxTokens,
+        enableReflection: optimizedParams.enableReflection,
+        stepByStep: optimizedParams.stepByStep
+      } as any;
     } catch (error) {
       // ...
     }
@@ -88,7 +96,8 @@ class FastAgentInterceptor {
    */
   private analyzeRequestContext(request: InterceptorRequest): any {
     const lastMessage = request.messages[request.messages.length - 1];
-    return ComplexityAnalyzer.analyze(lastMessage?.content || '');
+    const content = lastMessage?.content;
+    return ComplexityAnalyzer.analyze(typeof content === 'string' ? content : '');
   }
 
   /**

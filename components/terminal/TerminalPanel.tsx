@@ -16,7 +16,7 @@ import { checkCommandSecurity, formatSecurityWarning, detectObfuscation, DEFAULT
 import { createLogger } from '@/lib/utils/logger';
 import { useVirtualFilesystem } from '@/hooks/use-virtual-filesystem';
 import { wireTerminalHandlers, cleanupHandlers, type TerminalHandlers } from '@/lib/terminal/commands/terminal-handler-wiring';
-import type { LocalFilesystemEntry } from '@/lib/terminal/local-filesystem-executor';
+import type { LocalFilesystemEntry } from '@/lib/terminal/commands/local-filesystem-executor';
 import { extractSessionIdFromPath, normalizeScopePath } from '@/lib/virtual-filesystem/scope-utils';
 import { emitFilesystemUpdated, onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { createRefreshScheduler } from '@/lib/virtual-filesystem/refresh-scheduler';
@@ -100,16 +100,14 @@ function getAnonymousSessionId(): string | null {
 
 function getAuthHeaders(): Record<string, string> {
   const token = getAuthToken();
-  const anonymousSessionId = getAnonymousSessionId();
   const headers: Record<string, string> = {};
 
   if (token) {
     headers.Authorization = `Bearer ${token}`;
   }
 
-  if (anonymousSessionId) {
-    headers['x-anonymous-session-id'] = anonymousSessionId;
-  }
+  // Anonymous session is now handled via HttpOnly cookie - no need to send header
+  // The server sets anon-session-id cookie and credentials: 'include' sends it automatically
 
   return headers;
 }
@@ -202,11 +200,8 @@ export default function TerminalPanel({
   const lastWorkspaceVersionRef = useRef(0);
   
   useEffect(() => {
-   if (!isOpen) {
-     console.log('[TerminalPanel] isOpen is false, skipping VFS sync');
-     return;
-   }
-
+   // NOTE: We sync VFS regardless of isOpen state to ensure VFS is available
+   // for on-demand commands (like 'ls') when terminal opens
    console.log('[TerminalPanel] Starting VFS sync, scopePath:', filesystemScopePath);
    
    const syncVfsToLocal = async () => {
@@ -228,7 +223,7 @@ export default function TerminalPanel({
        if (files.length === 0) {
          const existingFs = localFileSystemRef.current;
          const existingKeys = Object.keys(existingFs).filter(k => k !== 'project');
-         
+
          if (existingKeys.length > 0) {
            // VFS is temporarily empty but we have existing files - keep them
            console.log('[TerminalPanel] VFS appears empty but keeping existing', existingKeys.length, 'entries');
@@ -236,7 +231,7 @@ export default function TerminalPanel({
            // Don't reset vfsFileCount - keep showing previous count
            return;
          }
-         
+
          // VFS is truly empty and we have no existing files - create minimal structure
          localFileSystemRef.current = createMinimalProject(filesystemScopePath);
          setIsVfsSynced(true);
@@ -300,14 +295,14 @@ export default function TerminalPanel({
         setVfsFileCount(files.length);
         console.log('[TerminalPanel] Synced VFS files:', Object.keys(fs).length, 'entries');
         console.log('[TerminalPanel] Sample paths:', Object.keys(fs).slice(0, 10));
-        
+
         // Sync VFS to all terminal executors
         Object.values(terminalHandlersRef.current).forEach(handlers => {
           if (handlers?.localFS) {
             handlers.localFS.syncFileSystem(fs);
           }
         });
-        
+
         setIsVfsSynced(true);
      } catch (error) {
        console.error('[TerminalPanel] Failed to sync VFS:', error);
@@ -315,12 +310,20 @@ export default function TerminalPanel({
      }
    };
 
-   syncVfsToLocal();
+   // Debounce initial sync to prevent flood on mount
+   const timeoutId = setTimeout(() => {
+     syncVfsToLocal();
+   }, 500);
+
+   return () => clearTimeout(timeoutId);
   }, [isOpen, filesystemScopePath, getVfsSnapshotMemoized]);
 
   // Update terminal display when VFS sync completes
+  // NOTE: We sync VFS regardless of isOpen state to ensure VFS is available
+  // for on-demand commands (like 'ls') when terminal is closed
   useEffect(() => {
-    if (!isOpen || !isVfsSynced || terminals.length === 0) return;
+    // Always sync VFS regardless of isOpen - needed for shell on-demand commands
+    if (!isVfsSynced || terminals.length === 0) return;
     
     // Update terminal display with loaded files
     terminals.forEach(term => {
@@ -363,8 +366,8 @@ export default function TerminalPanel({
 
   // Bidirectional sync: Event-driven refresh from code-preview/editor updates
   useEffect(() => {
-    if (!isOpen) return;
-
+    // NOTE: We listen to filesystem-updated events regardless of isOpen state
+    // to keep VFS in sync for on-demand commands
     const refresh = async (detail?: any) => {
       log('[filesystem-updated event] received in TerminalPanel', detail);
 
@@ -446,7 +449,7 @@ export default function TerminalPanel({
       }
     };
 
-    const scheduler = createRefreshScheduler(refresh, { minIntervalMs: 1000, maxDelayMs: 3000 });
+    const scheduler = createRefreshScheduler(refresh, { minIntervalMs: 5000, maxDelayMs: 10000 });
     const unsubscribe = onFilesystemUpdated((event) => scheduler.schedule(event.detail));
     log('[TerminalPanel] registered filesystem-updated event listener');
     return () => {
@@ -1726,9 +1729,11 @@ export default function TerminalPanel({
     );
   }, [activeTerminalId, terminals.length, closeTerminal]);
 
-  if (!isOpen) return null;
-
-  if (isMinimized) {
+  // NOTE: Keep component mounted even when closed to allow VFS sync for on-demand shell commands
+  // Priority: minimized bar > full terminal > hidden (mounted for VFS sync)
+  
+  if (isMinimized && isOpen) {
+    // Minimized but still open - render minimized bar (original behavior)
     return (
       <motion.div
         initial={{ y: 100, opacity: 0 }}
@@ -1757,6 +1762,18 @@ export default function TerminalPanel({
           </div>
         </div>
       </motion.div>
+    );
+  }
+
+  if (!isOpen) {
+    // Keep component mounted but hidden - allows VFS sync effects to continue running
+    // This ensures VFS is available for on-demand shell commands like 'ls' when terminal is closed
+    return (
+      <div
+        data-terminal-hidden
+        data-scope-path={filesystemScopePath}
+        style={{ display: 'none' }}
+      />
     );
   }
 
