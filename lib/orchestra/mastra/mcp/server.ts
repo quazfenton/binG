@@ -157,7 +157,8 @@ const mcpTools: MCPTool[] = [
       const codeArg = language === 'python' ? '-c' : '-e';
 
       const startTime = Date.now();
-      const result = await sandbox.executeCommand(`${command} ${codeArg} "${code.replace(/"/g, '\\"')}"`);
+      const escapedCode = code.replace(/'/g, "'\\''");
+      const result = await sandbox.executeCommand(`${command} ${codeArg} '${escapedCode}'`);
       const executionTime = Date.now() - startTime;
 
       return {

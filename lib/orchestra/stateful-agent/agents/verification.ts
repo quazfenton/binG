@@ -785,13 +785,13 @@ async function runEnhancedJavaScriptChecks(
 
     // Visit all nodes to find errors
     const visit = (node: any) => {
-      if (node.kind === (globalThis as any).ts?.SyntaxKind.Unknown) {
+      if (node.kind === ts.SyntaxKind.Unknown) {
         diagnostics.push({
           messageText: `Unknown syntax at line ${sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1}`,
           start: node.getStart(),
         });
       }
-      (globalThis as any).ts?.forEachChild(node, visit);
+      ts.forEachChild(node, visit);
     };
 
     visit(sourceFile);

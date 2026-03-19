@@ -131,7 +131,7 @@ export class ObjectStorageService {
     try {
       const content = createReadStream(filePath)
       
-      // For Node.js streams, we need to use a different approach
+      // For Node.js streams, we need duplex mode for streaming upload
       const response = await fetch(
         `${this.apiBaseUrl}/sandboxes/${this.sandboxId}/storage/upload`,
         {
@@ -142,8 +142,9 @@ export class ObjectStorageService {
             'X-Storage-Key': key,
             ...(metadata ? { 'X-Storage-Metadata': JSON.stringify(metadata) } : {}),
           },
-          body: content as any,
-        }
+          body: content,
+          duplex: 'half',
+        } as any
       )
 
       if (!response.ok) {

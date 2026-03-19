@@ -42,7 +42,7 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
     if (mcpGatewayUrl) {
       try {
         const client = new MCPClient({
-          type: 'http' as any,
+          type: 'sse' as any,
           url: mcpGatewayUrl,
           authToken: process.env.MCP_GATEWAY_AUTH_TOKEN,
         } as any);

@@ -88,16 +88,15 @@ export class SandboxService {
     log.debug(`Provider ${providerType} instance obtained, creating sandbox...`)
     
      const handle = await provider.createSandbox({
-      language: config?.language ?? 'typescript',
-      resources: config?.resources ?? this.getDefaultResources(),
-      // @ts-ignore - env may not be in SandboxCreateConfig type
-      env: {
-        TERM: 'xterm-256color',
-        LANG: 'en_US.UTF-8',
-        ...config?.env,
-      },
-      labels: { userId },
-    })
+       language: config?.language ?? 'typescript',
+       resources: config?.resources ?? this.getDefaultResources(),
+       envVars: {
+         TERM: 'xterm-256color',
+         LANG: 'en_US.UTF-8',
+         ...config?.env,
+       },
+       labels: { userId },
+     })
 
     log.debug(`Sandbox created successfully with ID: ${handle.id}`)
 

@@ -42,6 +42,8 @@ beforeEach(() => {
   Object.defineProperty(global, 'window', {
     value: {
       storage: mockStorage,
+      addEventListener: vi.fn(),
+      removeEventListener: vi.fn(),
     },
     writable: true,
   });
@@ -56,7 +58,7 @@ beforeEach(() => {
           usage: 1000000,
         }),
         persist: vi.fn().mockResolvedValue(true),
-        getDirectory: vi.fn().mockResolvedValue({}),
+        getDirectory: vi.fn().mockResolvedValue(mockDirHandle),
       },
       userAgent: 'Chrome/120.0.0.0',
       onLine: true,

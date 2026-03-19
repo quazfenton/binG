@@ -67,7 +67,8 @@ export interface DesktopHandle {
   leftClick(x?: number, y?: number, button?: 'left' | 'right' | 'middle'): Promise<ToolResult>
   rightClick(x?: number, y?: number): Promise<ToolResult>
   middleClick?(x?: number, y?: number): Promise<ToolResult>
-  write(text: string): Promise<ToolResult>
+  type(text: string): Promise<ToolResult>
+  write?(text: string): Promise<ToolResult> // Optional for compatibility adapters
   press(key: string | string[]): Promise<ToolResult>
 }
 

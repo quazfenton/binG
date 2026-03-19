@@ -227,26 +227,24 @@ export async function* subscribeToSessionEvents(sessionId: string): AsyncGenerat
   const redis = getRedisClient()
   const channel = `agent:events:${sessionId}`
 
+  const messageQueue: V2AgentEvent[] = []
+  let errorOccurred: Error | null = null
+  let isDone = false
+
+  // Create named listener so we can remove it later (prevents memory leak)
+  const messageListener = (pattern: string, pchannel: string, message: string) => {
+    try {
+      const event: V2AgentEvent = JSON.parse(message)
+      if (event.sessionId === sessionId || pchannel.includes(sessionId)) {
+        messageQueue.push(event)
+      }
+    } catch (err: any) {
+      errorOccurred = err
+    }
+  }
+
   try {
     await redis.psubscribe(channel)
-
-    // Create async iterator for Redis messages
-    const messageQueue: V2AgentEvent[] = []
-    let errorOccurred: Error | null = null
-    let isDone = false
-
-    // Create named listener so we can remove it later (prevents memory leak)
-    const messageListener = (pattern: string, pchannel: string, message: string) => {
-      try {
-        const event: V2AgentEvent = JSON.parse(message)
-        if (event.sessionId === sessionId || pchannel.includes(sessionId)) {
-          messageQueue.push(event)
-        }
-      } catch (err: any) {
-        errorOccurred = err
-      }
-    }
-
     redis.on('pmessage', messageListener)
 
     // Poll for messages
@@ -265,7 +263,7 @@ export async function* subscribeToSessionEvents(sessionId: string): AsyncGenerat
   } finally {
     redis.punsubscribe(channel)
     // Remove listener to prevent memory leak on shared Redis client
-    // messageListener is defined in the scope where this function is called
+    redis.off('pmessage', messageListener)
   }
 }
 
