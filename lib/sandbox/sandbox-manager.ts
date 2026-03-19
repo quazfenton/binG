@@ -173,11 +173,9 @@ export class SandboxManager extends EventEmitter {
         };
         
         // METRICS: Record command execution
-        sandboxMetrics.commandExecutions.inc({ status: 'success' }, 1);
+        const status = exitCode === 0 ? 'success' : 'failed';
+        sandboxMetrics.commandExecutions.inc({ status }, 1);
         sandboxMetrics.commandExecutionDuration.observe(duration);
-        if (exitCode !== 0) {
-          sandboxMetrics.commandExecutions.inc({ status: 'failed' }, 1);
-        }
         
         this.emit('executed', { sandboxId, result });
         resolve(result);

@@ -964,11 +964,14 @@ export function ExperimentalWorkspacePanel() {
 
       // If cut, delete source
       if (activeClipboard.operation === 'cut') {
-        await fetch('/api/filesystem/delete', {
+        const deleteResponse = await fetch('/api/filesystem/delete', {
           method: 'POST',
           headers: buildApiHeaders(),
           body: JSON.stringify({ path: resolveScopedPath(activeClipboard.sourcePath, vfs?.currentPath || '/') }),
         });
+        if (!deleteResponse.ok) {
+          throw new Error('Failed to delete source file');
+        }
       }
 
       await listDirectory(vfs?.currentPath || '/');

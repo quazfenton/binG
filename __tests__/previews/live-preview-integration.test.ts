@@ -601,16 +601,16 @@ describe('LivePreview Integration', () => {
       expect(template).toBe('vanilla');
     });
 
-    it('should map Python frameworks to vanilla template', () => {
-      expect(getCodeSandboxTemplate('flask')).toBe('vanilla');
-      expect(getCodeSandboxTemplate('fastapi')).toBe('vanilla');
-      expect(getCodeSandboxTemplate('streamlit')).toBe('vanilla');
-      expect(getCodeSandboxTemplate('django')).toBe('vanilla');
+    it('should map Python frameworks to python template', () => {
+      expect(getCodeSandboxTemplate('flask')).toBe('python');
+      expect(getCodeSandboxTemplate('fastapi')).toBe('python');
+      expect(getCodeSandboxTemplate('streamlit')).toBe('python');
+      expect(getCodeSandboxTemplate('django')).toBe('python');
     });
 
-    it('should return vanilla for unknown frameworks', () => {
+    it('should return node for unknown frameworks', () => {
       const template = getCodeSandboxTemplate('unknown' as AppFramework);
-      expect(template).toBe('vanilla');
+      expect(template).toBe('node');
     });
   });
 

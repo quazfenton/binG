@@ -299,8 +299,27 @@ export class SmitheryService {
       method: 'PATCH',
       body: JSON.stringify(config),
     });
-    // @ts-ignore - SmitheryServerSchema may accept partial input
-    return SmitheryServerSchema.parse(response);
+    const result = SmitheryServerSchema.safeParse(response);
+    if (!result.success) {
+      // If parsing fails, return response with defaults applied manually
+      return {
+        namespace: response.namespace || 'unknown',
+        name: response.name || qualifiedName,
+        displayName: response.displayName || response.name || qualifiedName,
+        description: response.description || '',
+        verified: response.verified || false,
+        deploymentStatus: response.deploymentStatus || 'external',
+        tools: response.tools || [],
+        mcpEndpoint: response.mcpEndpoint,
+        iconUrl: response.iconUrl,
+        starCount: response.starCount,
+      } as SmitheryServiceServer;
+    }
+    // Ensure required fields are present
+    return {
+      ...result.data,
+      name: result.data.name || qualifiedName,
+    } as SmitheryServiceServer;
   }
 
   /**
@@ -466,8 +485,27 @@ export class SmitheryService {
     }
 
     const result = await response.json();
-    // @ts-ignore - SmitheryServerSchema may accept partial input
-    return SmitheryServerSchema.parse(result);
+    const parsedResult = SmitheryServerSchema.safeParse(result);
+    if (!parsedResult.success) {
+      // If parsing fails, return result with defaults applied manually
+      return {
+        namespace: result.namespace || 'unknown',
+        name: result.name || qualifiedName,
+        displayName: result.displayName || result.name || qualifiedName,
+        description: result.description || '',
+        verified: result.verified || false,
+        deploymentStatus: result.deploymentStatus || 'external',
+        tools: result.tools || [],
+        mcpEndpoint: result.mcpEndpoint,
+        iconUrl: result.iconUrl,
+        starCount: result.starCount,
+      } as SmitheryServiceServer;
+    }
+    // Ensure required fields are present
+    return {
+      ...parsedResult.data,
+      name: parsedResult.data.name || qualifiedName,
+    } as SmitheryServiceServer;
   }
 
   /**

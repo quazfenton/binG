@@ -147,9 +147,9 @@ class SafeDiffOperations extends EventEmitter {
         this.emit('backup_created', { fileId, backupId });
       }
 
-      // Step 2: Pre-execution validation
+      // Step 2: Pre-execution validation with timeout
       if (this.options.enablePreValidation) {
-        const preValidation = await this.validateDiffsPreExecution(
+        const preValidation = await this.validateDiffsPreExecutionWithTimeout(
           fileId,
           currentContent,
           diffs,
@@ -449,6 +449,39 @@ class SafeDiffOperations extends EventEmitter {
         suggestions: ['Manual review recommended']
       };
     }
+  }
+
+  /**
+   * Pre-execution validation with timeout protection
+   */
+  private async validateDiffsPreExecutionWithTimeout(
+    fileId: string,
+    content: string,
+    diffs: DiffOperation[],
+    fileState: FileState
+  ): Promise<ValidationResult> {
+    const timeoutMs = this.options.validationTimeout || 5000;
+
+    const validationPromise = this.validateDiffsPreExecution(
+      fileId,
+      content,
+      diffs,
+      fileState
+    );
+
+    const timeoutPromise = new Promise<ValidationResult>((resolve) => {
+      setTimeout(() => {
+        resolve({
+          isValid: false,
+          errors: [`Validation timeout: exceeded ${timeoutMs}ms`],
+          warnings: [],
+          confidence: 0,
+          suggestions: ['Consider simplifying the diff operations or increasing the timeout']
+        });
+      }, timeoutMs);
+    });
+
+    return Promise.race([validationPromise, timeoutPromise]);
   }
 
   /**

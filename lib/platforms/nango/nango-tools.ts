@@ -27,7 +27,7 @@ async function executeNangoProxy<T = any>(
 ): Promise<{ success: boolean; data?: T; error?: string }> {
   // Check rate limit first
   const rateLimit = await nangoRateLimiter.checkLimit();
-  if (!(rateLimit as any).allowed) {
+  if ((rateLimit as any).allowed === false) {
     return {
       success: false,
       error: `Rate limit exceeded for ${provider}. Try again in ${(rateLimit as any).retryAfter} seconds.`,

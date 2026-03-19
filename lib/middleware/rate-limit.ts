@@ -350,13 +350,11 @@ export function checkRateLimitMiddleware(
     if (forwardedFor) {
       clientIp = forwardedFor.split(',')[0].trim();
     } else {
-      // @ts-ignore - ip property may exist on extended NextRequest
-      clientIp = request.ip || 'unknown';
+      clientIp = (request as any).ip || 'unknown';
     }
   } else {
     // Don't trust headers - use Next.js request.ip if available
-    // @ts-ignore - ip property may exist on extended NextRequest
-    clientIp = request.ip || 'unknown';
+    clientIp = (request as any).ip || 'unknown';
   }
 
   // Validate IP format

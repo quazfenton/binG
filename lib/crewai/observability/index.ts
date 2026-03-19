@@ -396,7 +396,7 @@ export class LangSmithExporter {
     return {
       id: span.spanId,
       name: span.name,
-      run_type: this.spanTypeToRunType(spanAny.type || 'unknown'),
+      run_type: this.spanTypeToRunType(spanAny.type ?? 'unknown'),
       start_time: new Date(span.startTime).toISOString(),
       end_time: span.endTime ? new Date(span.endTime).toISOString() : null,
       inputs: span.attributes.input,

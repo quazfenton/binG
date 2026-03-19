@@ -378,6 +378,10 @@ export class SandboxMetrics {
       ['status']
     );
 
+    // Register command metrics
+    this.registry.register(this.commandExecutions);
+    this.registry.register(this.commandExecutionDuration);
+
     // Snapshot metrics
     this.snapshotCreatedTotal = new Counter('snapshot_created_total', 'Total number of snapshots created', ['status']);
     this.snapshotRestoredTotal = new Counter('snapshot_restored_total', 'Total number of snapshots restored', ['status']);

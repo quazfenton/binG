@@ -153,10 +153,11 @@ function initializeRegistry() {
     failureCount: 0,
     // Note: BlaxelMcpServer requires a sandboxHandle argument, so it cannot be initialized as a singleton provider
     // Use createBlaxelMcpServer() function directly with a sandbox handle instead
-    // asyncFactory: async () => {
-    //   const { BlaxelMcpServer } = await import('./blaxel-mcp-server')
-    //   return new BlaxelMcpServer()
-    // },
+    // However, we need a provider factory for getSandboxProvider('blaxel-mcp') to work
+    asyncFactory: async () => {
+      const { BlaxelProvider } = await import('./blaxel-provider')
+      return new BlaxelProvider()
+    },
   })
 
   providerRegistry.set('sprites', {

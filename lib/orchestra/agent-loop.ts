@@ -73,6 +73,10 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
         sandboxEvents.emit(sandboxId, 'agent:tool_start', { toolName: name, args })
         return executeToolOnSandbox(sandboxHandle, name as ToolName, args, userId)
       },
+      onReasoningChunk(chunk: string, type?: 'thought' | 'reasoning' | 'plan' | 'reflection') {
+        sandboxEvents.emit(sandboxId, 'agent:reasoning_chunk', { text: chunk, type })
+        onReasoningChunk?.(chunk, type)
+      },
     } as any)
 
     sandboxEvents.emit(sandboxId, 'agent:complete', {

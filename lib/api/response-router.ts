@@ -1018,15 +1018,11 @@ export class ResponseRouter {
         }
         
         const diffsContent = block.substring(startIdx + 1, endIdx)
-        const rawItems = diffsContent.split(/\},\s*\{/)
+        const items = diffsContent
+          .split(/\},\s*\{/)
           .map(s => s.trim())
           .filter(Boolean)
-        const items = rawItems.map((s, idx) => {
-          if (rawItems.length === 1) return s
-          if (idx === 0) return `${s}}`
-          if (idx === rawItems.length - 1) return `{${s}`
-          return `{${s}}`
-        })
+          .map(s => s.replace(/^\{/, '').replace(/\}$/, ''))
 
         write_diffs = items.map(raw => {
           const pathMatch = raw.match(/path:\s*"([^"]+)"/)

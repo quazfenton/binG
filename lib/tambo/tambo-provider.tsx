@@ -157,6 +157,7 @@ export function EnhancedTamboProvider({
       tools={tools as any}
       components={components}
       contextHelpers={allContextHelpers}
+      {...(mcpServers ? { mcpServers } : {})}
     >
       {children}
     </OriginalTamboProvider>

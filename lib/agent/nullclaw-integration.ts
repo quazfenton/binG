@@ -118,7 +118,11 @@ class NullclawIntegration {
     poolSize: parseInt(process.env.NULLCLAW_POOL_SIZE || '2'),
     image: process.env.NULLCLAW_IMAGE || 'ghcr.io/nullclaw/nullclaw:latest',
     basePort: parseInt(process.env.NULLCLAW_PORT || '3001'),
-    timeout: parseInt(process.env.NULLCLAW_TIMEOUT || '300000'), // milliseconds
+    timeout: (() => {
+      const rawTimeout = Number(process.env.NULLCLAW_REQUEST_TIMEOUT_MS ?? process.env.NULLCLAW_TIMEOUT ?? '300000');
+      if (!Number.isFinite(rawTimeout) || rawTimeout <= 0) return 300000;
+      return rawTimeout < 1000 ? rawTimeout * 1000 : rawTimeout;
+    })(),
     allowedDomains: (process.env.NULLCLAW_ALLOWED_DOMAINS || 'openrouter.ai,api.discord.com,api.telegram.org').split(','),
     healthCheckTimeout: parseInt(process.env.NULLCLAW_HEALTH_TIMEOUT || '30000'),
     dockerNetwork: process.env.NULLCLAW_NETWORK || 'bing-network',
