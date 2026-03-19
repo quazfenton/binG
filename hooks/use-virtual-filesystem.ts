@@ -69,9 +69,13 @@ interface SnapshotCacheEntry {
 
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
 const inFlightRequests = new Map<string, Promise<any>>();
-const SNAPSHOT_CACHE_TTL_MS = 30000; // 30 seconds for snapshots (was 5s)
-const LIST_CACHE_TTL_MS = 15000;     // 15 seconds for directory listings
-const SNAPSHOT_CACHE_MAX_ENTRIES = 50; // Increased from 10
+const SNAPSHOT_CACHE_TTL_MS = 60000; // 60 seconds for snapshots (increased from 30s)
+const LIST_CACHE_TTL_MS = 30000;     // 30 seconds for directory listings (increased from 15s)
+const SNAPSHOT_CACHE_MAX_ENTRIES = 100; // Increased from 50
+
+// Debounce map to prevent duplicate API calls within short time windows
+const lastApiCallTime = new Map<string, number>();
+const API_CALL_DEBOUNCE_MS = 500; // Minimum 500ms between same API calls
 
 function getCacheKey(path: string, ownerId: string): string {
   return `${ownerId}:${path}`;
@@ -268,8 +272,19 @@ export function useVirtualFilesystem(
     options: RequestInit & { includeJsonContentType?: boolean } = {},
   ): Promise<TData> => {
     const { includeJsonContentType = true, ...rest } = options;
-    log(`request: ${options.method || 'GET'} ${url}`);
     
+    // Debounce duplicate API calls - wait if same URL called too recently
+    const now = Date.now();
+    const lastCall = lastApiCallTime.get(url);
+    if (lastCall && (now - lastCall) < API_CALL_DEBOUNCE_MS) {
+      const waitTime = API_CALL_DEBOUNCE_MS - (now - lastCall);
+      log(`request: debouncing duplicate call to ${url} (waiting ${waitTime}ms)`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    lastApiCallTime.set(url, Date.now());
+    
+    log(`request: ${options.method || 'GET'} ${url}`);
+
     const response = await fetch(url, {
       ...rest,
       headers: {
@@ -280,7 +295,7 @@ export function useVirtualFilesystem(
     });
 
     log(`request: response status=${response.status}`);
-    
+
     let payload: ApiResponse<TData> | null = null;
     try {
       payload = await response.json();
@@ -595,7 +610,7 @@ export function useVirtualFilesystem(
     attachedFileList,
     isLoading,
     error,
-    syncStatus,  // NEW: OPFS sync status
+    syncStatus,
     setCurrentPath,
     listDirectory,
     readFile,
@@ -607,6 +622,6 @@ export function useVirtualFilesystem(
     detachFile,
     clearAttachedFiles,
     uploadBrowserFile,
-    syncWithServer,  // NEW: Manual sync trigger
+    syncWithServer,
   };
 }

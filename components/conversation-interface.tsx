@@ -971,7 +971,7 @@ export default function ConversationInterface() {
     setShowHistory(false);
   };
 
-  const handleProviderChange = (provider: string, model: string) => {
+  const handleProviderChange = useCallback((provider: string, model: string) => {
     setCurrentProvider(provider);
     setCurrentModel(model);
     // Persist selection
@@ -980,21 +980,21 @@ export default function ConversationInterface() {
       localStorage.setItem("chat_model", model);
     } catch {}
     toast.success(`Switched to ${provider} - ${model}`);
-  };
+  }, []);
 
   // Auto-rotate to next provider
   const rotateToNextProvider = useCallback(() => {
     if (availableProviders.length <= 1) return;
 
     const currentProviderIndex = availableProviders.findIndex(
-      (p) => p.name === currentProvider,
+      (p) => p.id === currentProvider,
     );
     const nextIndex = (currentProviderIndex + 1) % availableProviders.length;
     const nextProvider = availableProviders[nextIndex];
 
     if (nextProvider && nextProvider.models.length > 0) {
       const nextModel = nextProvider.models[0]; // Use first model of next provider
-      handleProviderChange(nextProvider.name, nextModel);
+      handleProviderChange(nextProvider.id, nextModel);
     }
   }, [availableProviders, currentProvider, handleProviderChange]);
 
@@ -1480,6 +1480,13 @@ export default function ConversationInterface() {
     toast.info("File edits denied");
   }, []);
 
+  // Memoized callbacks for InteractionPanel to prevent unnecessary re-renders
+  const toggleAccessibility = useCallback(() => setShowAccessibility(prev => !prev), []);
+  const toggleHistory = useCallback(() => setShowHistory(prev => !prev), []);
+  const toggleCodePreview = useCallback(() => {
+    handleToggleCodePreview();
+  }, [handleToggleCodePreview]);
+
   return (
     <div className="relative w-full h-screen overflow-hidden touch-pan-y z-[1]">
       {/* Subtle animated background */}
@@ -1565,30 +1572,27 @@ export default function ConversationInterface() {
 
       {/* Interaction Controls - Positioned absolutely to avoid layout conflicts */}
       <InteractionPanel
-        onSubmit={handleChatSubmit} // Pass the intermediary function
+        onSubmit={handleChatSubmit}
         onNewChat={handleNewChat}
         isProcessing={isLoading}
-        toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
-        toggleHistory={() => setShowHistory(!showHistory)}
-        toggleCodePreview={() => {
-          handleToggleCodePreview();
-        }} // Pass the function with an additional log
-        onStopGeneration={stop} // Pass useChat's stop function
-        onRetry={handleRetry} // Pass the retry function
+        toggleAccessibility={toggleAccessibility}
+        toggleHistory={toggleHistory}
+        toggleCodePreview={toggleCodePreview}
+        onStopGeneration={stop}
+        onRetry={handleRetry}
         currentProvider={currentProvider}
         currentModel={currentModel}
         error={error?.message}
-        input={input} // Pass input to InteractionPanel
-        setInput={setInput} // Pass setInput to InteractionPanel
+        input={input}
+        setInput={setInput}
         availableProviders={availableProviders}
         onProviderChange={handleProviderChange}
         hasCodeBlocks={hasCodeBlocks}
         activeTab={activeTab}
         onActiveTabChange={setActiveTab as any}
-        userId={user?.id?.toString() || getStableSessionId()} // Use stable user ID or session ID
+        userId={user?.id?.toString() || getStableSessionId()}
         onAttachedFilesChange={handleAttachedFilesChange}
         filesystemScopePath={filesystemScopePath}
-        // Diffs poller controls
         isPollingDiffs={diffsPoller.isPolling}
         pollCount={diffsPoller.pollCount}
         onStartPollingDiffs={diffsPoller.startPolling}

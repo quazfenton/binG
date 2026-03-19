@@ -158,6 +158,7 @@ export interface AuthResult {
   error?: string;
   message?: string;
   requiresVerification?: boolean;
+  source?: 'jwt' | 'session' | 'cookie' | 'anonymous' | 'none';
 }
 
 export interface LoginCredentials {

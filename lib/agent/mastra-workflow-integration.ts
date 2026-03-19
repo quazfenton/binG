@@ -423,7 +423,8 @@ export class MastraWorkflowIntegration extends EventEmitter {
       const { codeAgentWorkflow } = await import('../orchestra/mastra/workflows/code-agent-workflow');
 
       // Execute the workflow
-      const result = await codeAgentWorkflow.execute({
+      const run = await codeAgentWorkflow.createRun();
+      const result = await run.start({
         inputData: {
           task: data.task || data.taskId,
           ownerId: data.ownerId,
@@ -448,7 +449,8 @@ export class MastraWorkflowIntegration extends EventEmitter {
     try {
       const { hitlWorkflow } = await import('../orchestra/mastra/workflows/hitl-workflow');
 
-      const result = await hitlWorkflow.execute({
+      const run = await hitlWorkflow.createRun();
+      const result = await run.start({
         inputData: {
           ownerId: data.ownerId,
           code: data.code,
@@ -474,7 +476,8 @@ export class MastraWorkflowIntegration extends EventEmitter {
     try {
       const { parallelWorkflow } = await import('../orchestra/mastra/workflows/parallel-workflow');
 
-      const result = await parallelWorkflow.execute({
+      const run = await parallelWorkflow.createRun();
+      const result = await run.start({
         inputData: {
           ownerId: data.ownerId,
           paths: data.paths,

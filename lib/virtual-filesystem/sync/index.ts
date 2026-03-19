@@ -21,11 +21,11 @@ export { sandboxFilesystemSync } from './sandbox-filesystem-sync';
 
 // VFS sync back
 export { vfsSyncBackService, syncSandboxToVFS } from './vfs-sync-back';
-export type { VFSFileEntry, SyncMode, VFSyncConfig, VFSyncResult, VFSyncStatus } from './vfs-sync-back';
+export type { VFSFileEntry, SyncMode, VFSyncConfig, VFSyncResult, VFSyncStatus } from './vfs-sync-back.types';
 
-// Tar pipe sync
-export { tarPipeSync } from './tar-pipe-sync';
+// Tar pipe sync - re-export from tar-pipe-sync
+export { syncVFSToSandbox, syncSandboxToVFS as syncSandboxToVFSTarPipe } from './tar-pipe-sync';
 export type { TarPipeSyncOptions, TarPipeSyncResult } from './tar-pipe-sync';
 
 // Universal VFS sync
-export { universalVFSSync } from './universal-vfs-sync';
+export { UniversalVfsSync as universalVFSSync } from './universal-vfs-sync';

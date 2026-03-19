@@ -440,21 +440,23 @@ declare global {
 }
 
 // Custom matcher for date validation
-expect.extend({
-  toBeValidDate(received: any) {
-    const date = new Date(received);
-    const pass = !isNaN(date.getTime());
-    return {
-      pass,
-      message: () => `expected ${received} ${pass ? 'not ' : ''}to be a valid date`,
-    };
-  },
-  toBeWithinRange(received: number, a: number, b: number) {
-    const pass = received >= a && received <= b;
-    return {
-      pass,
-      message: () => `expected ${received} ${pass ? 'not ' : ''}to be within range [${a}, ${b}]`,
-    };
-  },
-});
+if (typeof globalThis.expect !== 'undefined') {
+  globalThis.expect.extend({
+    toBeValidDate(received: any) {
+      const date = new Date(received);
+      const pass = !isNaN(date.getTime());
+      return {
+        pass,
+        message: () => `expected ${received} ${pass ? 'not ' : ''}to be a valid date`,
+      };
+    },
+    toBeWithinRange(received: number, a: number, b: number) {
+      const pass = received >= a && received <= b;
+      return {
+        pass,
+        message: () => `expected ${received} ${pass ? 'not ' : ''}to be within range [${a}, ${b}]`,
+      };
+    },
+  });
+}
 

@@ -378,7 +378,7 @@ export default function CodePreviewPanel({
   }, []);
 
   // Use ref for debounced function to avoid forward reference issues
-  const debouncedListDirectoryRef = useRef<(path: string) => Promise<void>>();
+  const debouncedListDirectoryRef = useRef<(path: string) => Promise<void> | null>(null);
   
   const openFilesystemDirectory = useCallback((path: string) => {
     const cleanPath = normalizeProjectPath(path);
@@ -950,18 +950,30 @@ export default function CodePreviewPanel({
   // Manual preview handler
   // FIXED: Add ref guard to prevent multiple concurrent calls
   const handleManualPreviewRef = useRef(false);
-  
+  const lastManualPreviewTime = useRef<number>(0);
+  const MANUAL_PREVIEW_COOLDOWN_MS = 2000; // Minimum 2 seconds between calls
+
   const handleManualPreview = useCallback(async (
     directoryPath?: string,
     mode?: 'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'opensandbox' | 'local' | 'cloud',
     options?: { silent?: boolean; preserveTab?: boolean },
   ) => {
+    const now = Date.now();
+    
     // Prevent multiple concurrent calls
     if (handleManualPreviewRef.current) {
       log('[handleManualPreview] already running, skipping duplicate call');
       return;
     }
+    
+    // Prevent calls too frequently (cooldown period)
+    if (now - lastManualPreviewTime.current < MANUAL_PREVIEW_COOLDOWN_MS) {
+      log(`[handleManualPreview] called too soon (${now - lastManualPreviewTime.current}ms < ${MANUAL_PREVIEW_COOLDOWN_MS}ms), skipping`);
+      return;
+    }
+    
     handleManualPreviewRef.current = true;
+    lastManualPreviewTime.current = now;
     const silent = options?.silent ?? false;
     const preserveTab = options?.preserveTab ?? false;
     
@@ -1560,7 +1572,14 @@ export default function CodePreviewPanel({
             },
             {} as Record<string, string>,
           );
-          setScopedPreviewFiles(files);
+          // Only update if content actually changed to prevent infinite loops
+          setScopedPreviewFiles((prev) => {
+            const prevKeys = Object.keys(prev);
+            const newKeys = Object.keys(files);
+            if (prevKeys.length !== newKeys.length) return files;
+            const hasChanges = newKeys.some(key => prev[key] !== files[key]);
+            return hasChanges ? files : prev;
+          });
           log(`[filesystem-updated] refreshed scopedPreviewFiles (${Object.keys(files).length} files)`);
         }
 
@@ -1779,9 +1798,19 @@ export default function CodePreviewPanel({
     return 'vanilla';
   }, []);
 
+  // Memoize scopedPreviewFiles serialization to prevent visualEditorProjectData recalculation
+  const scopedPreviewFilesSerialized = useMemo(() => {
+    return JSON.stringify(
+      Object.entries(scopedPreviewFiles || {}).sort(([a], [b]) => a.localeCompare(b))
+    );
+  }, [scopedPreviewFiles]);
+
+  // Track last logged visualEditorProjectData to prevent spam
+  const lastLoggedProjectDataRef = useRef<string>('');
+
   const visualEditorProjectData = useMemo(() => {
     let structure = projectStructureWithScopedFiles || projectStructure;
-    
+
     if (!structure && scopedPreviewFiles && Object.keys(scopedPreviewFiles).length > 0) {
       structure = {
         name: 'filesystem-project',
@@ -1792,7 +1821,7 @@ export default function CodePreviewPanel({
         filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath)
       };
     }
-    
+
     if (!structure && projectFiles && Object.keys(projectFiles).length > 0) {
       structure = {
         name: 'filesystem-project',
@@ -1806,7 +1835,7 @@ export default function CodePreviewPanel({
 
     const files = structure?.files || {};
     const filePaths = Object.keys(files);
-    
+
     if (filePaths.length === 0) {
       return null;
     }
@@ -1832,7 +1861,7 @@ export default function CodePreviewPanel({
     const nextJsInPackageJson = packageJsonContent && packageJsonContent.includes('"next"');
     const nextJsConfig = filePaths.some((p) => p.includes('next.config'));
     const nextJsPagesOrApp = filePaths.some((p) => p.startsWith('pages/') || p.startsWith('app/'));
-    
+
     const previewModeHint =
       inferredBundler === 'vite' ? 'vite'
       : inferredBundler === 'webpack' ? 'webpack'
@@ -1844,16 +1873,33 @@ export default function CodePreviewPanel({
       : filePaths.some((p) => p.endsWith('.py')) ? 'pyodide'
       : 'sandpack';
 
-    log(`[visualEditorProjectData] bundler="${inferredBundler}", entryFile="${entryFile}", previewModeHint="${previewModeHint}"`);
-
-    return {
+    const result = {
       ...structure,
       filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath),
       bundler: inferredBundler,
       entryFile,
       previewModeHint,
     };
-  }, [filesystemScopePath, normalizeProjectPath, normalizedFilesystemPath, projectFiles, projectStructure, projectStructureWithScopedFiles, scopedPreviewFiles]);
+
+    // Log only when project data changes (prevent spam)
+    const logKey = `${inferredBundler}-${entryFile}-${previewModeHint}`;
+    if (lastLoggedProjectDataRef.current !== logKey) {
+      lastLoggedProjectDataRef.current = logKey;
+      log(`[visualEditorProjectData] bundler="${inferredBundler}", entryFile="${entryFile}", previewModeHint="${previewModeHint}"`);
+    }
+
+    return result;
+  }, [
+    filesystemScopePath, 
+    normalizeProjectPath, 
+    normalizedFilesystemPath, 
+    projectFiles, 
+    projectStructure, 
+    projectStructureWithScopedFiles,
+    scopedPreviewFilesSerialized,
+    detectEntryFile,
+    detectFrameworkFromFiles
+  ]);
 
   const applySimpleLineDiff = (
     originalContent: string,
@@ -2264,6 +2310,9 @@ Generated on: ${new Date().toLocaleString()}
     }
     return deps;
   };
+
+  // Refs for preventing log spam in renderLivePreview
+  const sandpackLogKeyRef = useRef<string>('');
 
   const renderLivePreview = () => {
     // Use manual preview files if active, otherwise use auto-detected structure (must be defined FIRST)
@@ -2690,10 +2739,11 @@ export default app;`,
 
         // Apply normalization to filter build outputs and cache files
         const normalizedSandpackFiles = normalizeFilesForSandpack(sandpackFiles);
-        
-        // Detect best entry file and log for debugging
+
+        // Detect best entry file (log only when changed to prevent spam)
         const detectedEntryFile = detectBestEntryFile(normalizedSandpackFiles, effectiveFramework);
-        if (detectedEntryFile) {
+        if (detectedEntryFile && sandpackLogKeyRef.current !== detectedEntryFile) {
+          sandpackLogKeyRef.current = detectedEntryFile;
           log(`[Sandpack] Detected entry file: ${detectedEntryFile}`);
         }
 

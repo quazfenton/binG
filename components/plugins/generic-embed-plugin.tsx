@@ -457,7 +457,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                     onLoad={() => {
                       setIsReloading(false);
                       setIframeError(null);
-                      handleLoad(); // Sync with useIframeLoader hook
+                      handleLoad(currentUrl); // Sync with useIframeLoader hook
                     }}
                     onError={() => {
                       setIframeError('Failed to load content. This site may block embedding. Try opening externally.');
