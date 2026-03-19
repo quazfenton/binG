@@ -47,10 +47,16 @@
  * - NULLCLAW_TIMEOUT: Request timeout in milliseconds (default: 300000 = 5 minutes)
  */
 export interface NullclawConfig {
-  timeout?: number;           // Request timeout in milliseconds
-  allowedDomains?: string[];  // Network egress rules
-  healthCheckTimeout?: number; // Health check timeout in ms
-  dockerNetwork?: string;     // Docker network for communication
+  baseUrl?: string;
+  apiKey?: string;
+  mode?: 'shared' | 'per-session';
+  poolSize?: number;
+  image?: string;
+  basePort?: number;
+  timeout?: number;
+  allowedDomains?: string[];
+  healthCheckTimeout?: number;
+  dockerNetwork?: string;
 }
 
 export interface NullclawContainer {

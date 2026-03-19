@@ -79,6 +79,8 @@ export interface EnhancedJob extends Omit<EnhancedJobConfig, 'interval' | 'timeo
   // Internal: milliseconds (not exposed in public API)
   intervalMs: number;
   timeoutMs?: number;
+  // Loop token to prevent duplicate loops on resume
+  loopToken?: number;
 }
 
 export interface JobExecutionResult {
@@ -138,6 +140,7 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     io: 1000, // operations
     api: 100, // calls
   };
+  private loopTokens: Map<string, number> = new Map(); // jobId -> current loop token
 
   constructor() {
     super();
@@ -352,17 +355,23 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
    * Execute job loop with comprehensive tracking
    */
   private async executeJobLoop(job: EnhancedJob): Promise<void> {
+    // Check if a newer loop token exists (prevents duplicate loops on resume)
+    const currentToken = (this.loopTokens.get(job.jobId) || 0) + 1;
+    this.loopTokens.set(job.jobId, currentToken);
+    job.loopToken = currentToken;
+
     logger.debug('Starting job execution loop', {
       jobId: job.jobId,
       command: job.command.substring(0, 100),
       interval: job.interval,
       maxExecutions: job.maxExecutions,
+      loopToken: currentToken,
     });
 
     const executeLoop = async () => {
       let executionAttempt = 0;
       
-      while (job.status === 'running') {
+      while (job.status === 'running' && job.loopToken === currentToken) {
         executionAttempt++;
         const startTime = Date.now();
 
@@ -788,6 +797,11 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
     const job = this.jobs.get(jobId);
     if (!job || job.status !== 'paused') return false;
 
+    // Increment loop token to cancel any stale loops
+    const newToken = (this.loopTokens.get(jobId) || 0) + 1;
+    this.loopTokens.set(jobId, newToken);
+    job.loopToken = newToken;
+
     job.status = 'running';
     // Use internal intervalMs for next execution calculation
     job.nextExecution = new Date(Date.now() + job.intervalMs);
@@ -797,7 +811,7 @@ export class EnhancedBackgroundJobsManager extends EventEmitter {
 
     this.emit('job:resumed', jobId);
 
-    logger.info('Background job resumed', { jobId });
+    logger.info('Background job resumed', { jobId, loopToken: newToken });
 
     return true;
   }
