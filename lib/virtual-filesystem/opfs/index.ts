@@ -190,7 +190,7 @@ export function isOPFSAvailable(): boolean {
     return false;
   }
 
-  return 'storage' in window && typeof window.storage === 'object' && window.storage !== null && 'getDirectory' in window.storage;
+  return 'storage' in navigator && typeof navigator.storage === 'object' && navigator.storage !== null && 'getDirectory' in navigator.storage;
 }
 
 /**

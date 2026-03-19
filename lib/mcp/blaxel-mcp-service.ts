@@ -106,6 +106,33 @@ export class BlaxelMcpService {
     return !!this.apiKey;
   }
 
+  /**
+   * Safely parse a Blaxel MCP server response with fallback defaults
+   */
+  private parseServerResponse(data: any, serverId?: string): BlaxelMcpServer {
+    const result = BlaxelMcpServerSchema.safeParse(data);
+    if (!result.success) {
+      // If parsing fails, return data with defaults applied manually
+      return {
+        id: data.id || serverId || `blaxel-${Date.now()}`,
+        name: data.name || serverId || 'unknown',
+        status: (data.status as any) || 'deployed',
+        endpoint: data.endpoint,
+        transport: (data.transport as any) || 'http-stream',
+        tools: data.tools || [],
+        createdAt: data.createdAt || new Date().toISOString(),
+        updatedAt: data.updatedAt || new Date().toISOString(),
+        runtime: data.runtime,
+        region: data.region,
+      } as BlaxelMcpServer;
+    }
+    // Ensure required fields are present
+    return {
+      ...result.data,
+      name: result.data.name || serverId || 'unknown',
+    } as BlaxelMcpServer;
+  }
+
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
     if (!this.apiKey) {
       throw new Error('Blaxel API key not configured');
@@ -140,8 +167,7 @@ export class BlaxelMcpService {
    */
   async listServers(): Promise<BlaxelMcpServer[]> {
     const servers = await this.request<BlaxelMcpServer[]>('/functions/mcp');
-    // @ts-ignore - BlaxelMcpServerSchema may accept partial input
-    return servers.map(s => BlaxelMcpServerSchema.parse(s));
+    return servers.map(s => this.parseServerResponse(s));
   }
 
   /**
@@ -150,8 +176,7 @@ export class BlaxelMcpService {
    */
   async getServer(serverId: string): Promise<BlaxelMcpServer> {
     const server = await this.request<BlaxelMcpServer>(`/functions/mcp/${serverId}`);
-    // @ts-ignore - BlaxelMcpServerSchema may accept partial input
-    return BlaxelMcpServerSchema.parse(server);
+    return this.parseServerResponse(server, serverId);
   }
 
   /**
@@ -193,8 +218,7 @@ export class BlaxelMcpService {
       body: JSON.stringify(payload),
     });
 
-    // @ts-ignore - BlaxelMcpServerSchema may accept partial input
-    return BlaxelMcpServerSchema.parse(server);
+    return this.parseServerResponse(server, config.name);
   }
 
   /**
@@ -232,8 +256,7 @@ export class BlaxelMcpService {
       }),
     });
 
-    // @ts-ignore - BlaxelMcpServerSchema may accept partial input
-    return BlaxelMcpServerSchema.parse(server);
+    return this.parseServerResponse(server, name);
   }
 
   /**
@@ -257,7 +280,7 @@ export class BlaxelMcpService {
    * @see https://docs.blaxel.ai/api-reference/functions/update-mcp-server
    */
   async updateServer(
-    serverId: string, 
+    serverId: string,
     config: Partial<BlaxelDeploymentConfig>
   ): Promise<BlaxelMcpServer> {
     const server: any = await this.request(`/functions/mcp/${serverId}`, {
@@ -265,7 +288,7 @@ export class BlaxelMcpService {
       body: JSON.stringify(config),
     });
 
-    return BlaxelMcpServerSchema.parse(server) as any;
+    return this.parseServerResponse(server, serverId);
   }
 
   /**
@@ -326,8 +349,7 @@ export class BlaxelMcpService {
       `/functions/mcp/${serverId}/resume`,
       { method: 'POST' }
     );
-    // @ts-ignore - BlaxelMcpServerSchema may accept partial input
-    return BlaxelMcpServerSchema.parse(server);
+    return this.parseServerResponse(server, serverId);
   }
 
   /**
@@ -338,8 +360,7 @@ export class BlaxelMcpService {
       `/functions/mcp/${serverId}/pause`,
       { method: 'POST' }
     );
-    // @ts-ignore - BlaxelMcpServerSchema may accept partial input
-    return BlaxelMcpServerSchema.parse(server);
+    return this.parseServerResponse(server, serverId);
   }
 
   /**
@@ -350,8 +371,7 @@ export class BlaxelMcpService {
       `/functions/mcp/${serverId}/restart`,
       { method: 'POST' }
     );
-    // @ts-ignore - BlaxelMcpServerSchema may accept partial input
-    return BlaxelMcpServerSchema.parse(server);
+    return this.parseServerResponse(server, serverId);
   }
 
   /**

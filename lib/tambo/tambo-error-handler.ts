@@ -62,7 +62,7 @@ export async function withRetry<T extends (...args: any[]) => Promise<any>>(
     }
   }
   
-  throw lastError;
+  throw lastError ?? new Error('withRetry requires maxRetries to be at least 1');
 }
 
 export function withTamboErrorHandling<T extends (...args: any[]) => any>(fn: T): T {

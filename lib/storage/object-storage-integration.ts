@@ -86,9 +86,11 @@ export class ObjectStorageIntegration {
       // Try Daytona Object Storage service first
       const storageService = (handle as any).getObjectStorageService?.();
       if (storageService) {
+        const readResult = await (handle as any).readFile(options.localPath);
         const result = await (storageService as any).upload({
           key: options.storageKey,
-          content: await (handle as any).readFile(options.localPath),
+          content: readResult.output,
+          contentType: options.contentType,
         });
 
         return {
@@ -141,7 +143,10 @@ export class ObjectStorageIntegration {
       // Try Daytona Object Storage service
       const storageService = (handle as any).getObjectStorageService?.();
       if (storageService) {
-        const result = await (storageService as any).download(options.storageKey, options.localPath);
+        const result = await (storageService as any).download({
+          storageKey: options.storageKey,
+          localPath: options.localPath,
+        });
         
         return {
           success: true,
@@ -190,9 +195,9 @@ export class ObjectStorageIntegration {
       
       const storageService = (handle as any).getObjectStorageService?.();
       if (storageService) {
-        const result = await (storageService as any).list(prefix);
+        const result = await (storageService as any).list({ prefix });
         
-        return result.files?.map((f: any) => ({
+        return result.data?.objects?.map((f: any) => ({
           key: f.key,
           size: f.size,
           lastModified: f.lastModified,

@@ -42,10 +42,7 @@ COPY lib/agent/services/agent-gateway/src ./services/agent-gateway/src
 
 # Build the gateway service
 WORKDIR /app/services/agent-gateway
-RUN pnpm install --frozen-lockfile && pnpm build
-
-# Remove dev dependencies and cache
-RUN pnpm prune --prod
+RUN pnpm install --frozen-lockfile --lockfile-dir /app && pnpm build && pnpm prune --prod
 
 # Set environment variables
 WORKDIR /app

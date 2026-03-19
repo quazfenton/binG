@@ -646,13 +646,13 @@ export class DesktopSandboxHandle {
       case 'double_click':
         return this.doubleClick(action.x, action.y)
       case 'drag':
-        return { success: true };
+        return this.drag(action.startX, action.startY, action.endX, action.endY);
       case 'scroll':
         return this.scroll(action.scrollY > 0 ? 'down' : 'up', Math.abs(action.scrollY))
       case 'type':
         return this.type(action.text)
       case 'keypress':
-        return { success: true };
+        return this.press(action.keys);
       case 'screenshot':
         const base64 = await this.screenshotBase64()
         return { success: true, output: `Screenshot taken (${base64.length} bytes)` }
@@ -807,7 +807,7 @@ export class E2BDesktopProvider {
 
       // Start VNC streaming if requested
       if (config.startStreaming !== false) {
-        streamUrl = await sandbox.screen?.getStreamUrl() || (sandbox as any).display?.getStreamUrl();
+        streamUrl = (await sandbox.screen?.getStreamUrl()) || (await (sandbox as any).display?.getStreamUrl());
         console.log(`[E2BDesktopProvider] VNC stream available at: ${streamUrl}`)
       }
 

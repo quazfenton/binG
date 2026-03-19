@@ -280,7 +280,7 @@ export class GitBackedVFS {
       // Find commit at target version - match by workspaceVersion or fall back to commit message
       const targetCommit = history.find(c => 
         c.workspaceVersion === targetVersion ||
-        (c.workspaceVersion === null && c.message?.includes(`v${targetVersion}`))
+        (c.workspaceVersion === null && new RegExp(`\\bv${targetVersion}\\b`).test(c.message ?? ''))
       );
 
       if (!targetCommit) {

@@ -200,11 +200,8 @@ export default function TerminalPanel({
   const lastWorkspaceVersionRef = useRef(0);
   
   useEffect(() => {
-   if (!isOpen) {
-     console.log('[TerminalPanel] isOpen is false, skipping VFS sync');
-     return;
-   }
-
+   // NOTE: We sync VFS regardless of isOpen state to ensure VFS is available
+   // for on-demand commands (like 'ls') when terminal opens
    console.log('[TerminalPanel] Starting VFS sync, scopePath:', filesystemScopePath);
    
    const syncVfsToLocal = async () => {
@@ -322,8 +319,11 @@ export default function TerminalPanel({
   }, [isOpen, filesystemScopePath, getVfsSnapshotMemoized]);
 
   // Update terminal display when VFS sync completes
+  // NOTE: We sync VFS regardless of isOpen state to ensure VFS is available
+  // for on-demand commands (like 'ls') when terminal is closed
   useEffect(() => {
-    if (!isOpen || !isVfsSynced || terminals.length === 0) return;
+    // Always sync VFS regardless of isOpen - needed for shell on-demand commands
+    if (!isVfsSynced || terminals.length === 0) return;
     
     // Update terminal display with loaded files
     terminals.forEach(term => {
@@ -366,8 +366,8 @@ export default function TerminalPanel({
 
   // Bidirectional sync: Event-driven refresh from code-preview/editor updates
   useEffect(() => {
-    if (!isOpen) return;
-
+    // NOTE: We listen to filesystem-updated events regardless of isOpen state
+    // to keep VFS in sync for on-demand commands
     const refresh = async (detail?: any) => {
       log('[filesystem-updated event] received in TerminalPanel', detail);
 
@@ -1729,9 +1729,11 @@ export default function TerminalPanel({
     );
   }, [activeTerminalId, terminals.length, closeTerminal]);
 
-  if (!isOpen) return null;
-
-  if (isMinimized) {
+  // NOTE: Keep component mounted even when closed to allow VFS sync for on-demand shell commands
+  // Priority: minimized bar > full terminal > hidden (mounted for VFS sync)
+  
+  if (isMinimized && isOpen) {
+    // Minimized but still open - render minimized bar (original behavior)
     return (
       <motion.div
         initial={{ y: 100, opacity: 0 }}
@@ -1760,6 +1762,18 @@ export default function TerminalPanel({
           </div>
         </div>
       </motion.div>
+    );
+  }
+
+  if (!isOpen) {
+    // Keep component mounted but hidden - allows VFS sync effects to continue running
+    // This ensures VFS is available for on-demand shell commands like 'ls' when terminal is closed
+    return (
+      <div
+        data-terminal-hidden
+        data-scope-path={filesystemScopePath}
+        style={{ display: 'none' }}
+      />
     );
   }
 

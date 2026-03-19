@@ -41,9 +41,8 @@ class MCPorterIntegration {
                 command: transport.command,
                 args: transport.args || [],
                 cwd: transport.cwd || process.cwd(),
+                ...(transport.env && { env: transport.env }),
               },
-              // @ts-ignore - env is optional for http transport
-              env: transport.env,
             } as any,
           ]
         }

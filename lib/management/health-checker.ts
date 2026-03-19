@@ -63,6 +63,13 @@ export class ProviderHealthChecker extends EventEmitter {
   }
 
   /**
+   * Reset configuration to defaults
+   */
+  resetToDefaults(): void {
+    this.config = { ...DEFAULT_CONFIG }
+  }
+
+  /**
    * Start periodic health checking
    */
   start(): void {
@@ -303,11 +310,13 @@ export async function startProviderHealthCheck(config?: Partial<HealthCheckerCon
   const { getEnabledProviders } = await import('../sandbox/providers/index');
   const enabledProviders = getEnabledProviders();
   providerHealthChecker.setEnabledProviders(enabledProviders);
-  
-  providerHealthChecker.start()
+
+  // Reset to defaults before applying overrides to avoid stale settings
+  (providerHealthChecker as any).resetToDefaults?.();
   if (config) {
     providerHealthChecker.setConfig(config)
   }
+  providerHealthChecker.start()
   return providerHealthChecker
 }
 

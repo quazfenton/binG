@@ -273,17 +273,19 @@ describe('Safe Diff Operations Integration', () => {
     });
 
     it('should detect invalid JSON syntax', async () => {
+      // Start with valid JSON
       const currentContent = `{
   "name": "test-package",
-  "version": "1.0.0",
+  "version": "1.0.0"
 }`;
 
+      // Apply diff that creates invalid JSON (trailing comma)
       const diffs: DiffOperation[] = [
         {
           operation: 'replace',
-          lineRange: [2, 2],
-          content: '  "extra": "invalid"',
-          description: 'Add extra property to make JSON invalid (duplicate key)',
+          lineRange: [3, 3],
+          content: '  "version": "1.0.0",',
+          description: 'Add trailing comma to make JSON invalid',
         },
       ];
 
@@ -518,6 +520,11 @@ describe('Safe Diff Operations Integration', () => {
 
       expect(result.success).toBe(true);
       expect(result.backupId).toBeDefined();
+      
+      // Verify backup actually contains the original content
+      const backup = await diffOps.getBackup(fileId, result.backupId!);
+      expect(backup).toBeDefined();
+      expect(backup.content).toBe(originalContent);
     });
   });
 
@@ -711,12 +718,19 @@ export function Component() {
     it('should provide conflict resolution options', async () => {
       const currentContent = `export const shared = 'value';`;
 
+      // Create overlapping diffs that will trigger a conflict
       const diffs: DiffOperation[] = [
         {
           operation: 'replace',
           lineRange: [1, 1],
           content: "export const shared = 'change1';",
           description: 'First change',
+        },
+        {
+          operation: 'replace',
+          lineRange: [1, 1],
+          content: "export const shared = 'change2';",
+          description: 'Second overlapping change',
         },
       ];
 
@@ -730,6 +744,7 @@ export function Component() {
 
       const result = await diffOps.safelyApplyDiffs('resolution-test', currentContent, diffs, fileState);
 
+      // Should have conflicts due to overlapping line ranges
       expect(result.conflicts.length).toBeGreaterThan(0);
       const conflict = result.conflicts[0];
       expect(conflict.resolutionOptions).toBeDefined();
@@ -1126,10 +1141,24 @@ export class MyClass {}`;
         conflictResolutionStrategy: 'hybrid',
       });
 
+      // Spy on the validation method to simulate a slow validation
+      const originalValidate = (fastTimeoutDiffOps as any).validateDiffsPreExecution.bind(fastTimeoutDiffOps);
+      vi.spyOn(fastTimeoutDiffOps as any, 'validateDiffsPreExecution').mockImplementation(
+        async (...args: any[]) => {
+          // Simulate a validation that takes longer than the timeout
+          await new Promise(resolve => setTimeout(resolve, 500));
+          return originalValidate(...args);
+        }
+      );
+
       const result = await fastTimeoutDiffOps.safelyApplyDiffs('timeout-test', currentContent, diffs, fileState);
 
-      // Should either succeed quickly or timeout gracefully
-      expect(result).toBeDefined();
+      // Should timeout and return validation error
+      expect(result.success).toBe(false);
+      expect(result.validationResult.isValid).toBe(false);
+      expect(result.validationResult.errors).toContainEqual(
+        expect.stringContaining('Validation timeout')
+      );
     });
 
     it('should handle concurrent operations', async () => {

@@ -37,8 +37,8 @@ const mockStorage = {
 // Set up global mocks
 beforeEach(() => {
   vi.clearAllMocks();
-  
-  // Mock window.storage
+
+  // Mock window.storage (for legacy reference)
   Object.defineProperty(global, 'window', {
     value: {
       storage: mockStorage,
@@ -46,15 +46,17 @@ beforeEach(() => {
     writable: true,
   });
 
-  // Mock navigator.storage
+  // Mock navigator.storage (primary OPFS API)
   Object.defineProperty(global, 'navigator', {
     value: {
       storage: {
+        ...mockStorage,
         estimate: vi.fn().mockResolvedValue({
           quota: 1000000000,
           usage: 1000000,
         }),
         persist: vi.fn().mockResolvedValue(true),
+        getDirectory: vi.fn().mockResolvedValue({}),
       },
       userAgent: 'Chrome/120.0.0.0',
       onLine: true,
@@ -74,14 +76,14 @@ describe('OPFSCore', () => {
     });
 
     it('should return false when storage API is not available', () => {
-      // Temporarily remove storage API
-      const originalStorage = (global.window as any).storage;
-      (global.window as any).storage = undefined;
-      
+      // Temporarily remove storage API from navigator
+      const originalStorage = (global.navigator as any).storage;
+      (global.navigator as any).storage = undefined;
+
       expect(OPFSCore.isSupported()).toBe(false);
-      
+
       // Restore
-      (global.window as any).storage = originalStorage;
+      (global.navigator as any).storage = originalStorage;
     });
 
     it('should return false in server-side environment', () => {

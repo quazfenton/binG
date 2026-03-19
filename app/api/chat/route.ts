@@ -1460,12 +1460,18 @@ async function handleGatewayStreaming(params: {
             for (const event of events) {
               // Convert gateway event to chat SSE format
               // The chat client expects: data: {...}\n\n with choices[0].delta.content for streaming
-              if (event.type === 'message' || event.type === 'delta') {
+              if (event.type === 'token' || event.type === 'message' || event.type === 'delta') {
+                const content =
+                  typeof event.data?.content === 'string'
+                    ? event.data.content
+                    : typeof event.content === 'string'
+                      ? event.content
+                      : typeof event.delta === 'string'
+                        ? event.delta
+                        : '';
                 const sseData = {
                   choices: [{
-                    delta: {
-                      content: event.content || event.delta || ''
-                    }
+                    delta: { content }
                   }]
                 };
                 controller.enqueue(encoder.encode(`data: ${JSON.stringify(sseData)}\n\n`));

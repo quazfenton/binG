@@ -64,6 +64,7 @@ interface EventStore {
 const eventStores = new Map<string, EventStore>()
 const MAX_EVENTS_PER_SANDBOX = parseInt(process.env.MAX_EVENTS_PER_SANDBOX || '1000', 10)
 const EVENT_TTL_MS = parseInt(process.env.EVENT_TTL_MS || (4 * 60 * 60 * 1000).toString(), 10) // 4 hours default
+const listenerCounts = new Map<string, number>()
 
 /**
  * Enhanced sandbox event emitter with persistence and replay
@@ -177,10 +178,12 @@ export class EnhancedSandboxEventEmitter extends UniversalEventEmitter {
     
     const targetChannel = sandboxId === '*' ? '*' : sandboxId
     this.on(targetChannel, listener)
+    listenerCounts.set(sandboxId, (listenerCounts.get(sandboxId) || 0) + 1)
     
     // Return unsubscribe function
     return () => {
       this.off(targetChannel, listener)
+      listenerCounts.set(sandboxId, Math.max(0, (listenerCounts.get(sandboxId) || 0) - 1))
     }
   }
 
@@ -383,9 +386,7 @@ export class EnhancedSandboxEventEmitter extends UniversalEventEmitter {
    * Get subscriber count for a sandbox
    */
   getSubscriberCount(sandboxId: string): number {
-    // Note: We don't track actual subscriber count, return 1 if sandbox has events
-    const store = eventStores.get(sandboxId);
-    return store && store.events.length > 0 ? 1 : 0;
+    return listenerCounts.get(sandboxId) || 0;
   }
 
   /**

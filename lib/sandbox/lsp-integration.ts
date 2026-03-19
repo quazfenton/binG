@@ -118,7 +118,10 @@ export class LSPIntegration {
       
       // Try Daytona LSP service first
       // @ts-ignore - getLSPService may not exist on all sandbox implementations
-      const lspService = (handle as any).getLSPService?.();
+      const lspService = (() => {
+        const svc = (handle as any).getLSPService?.();
+        return typeof (svc as any)?.getCompletions === 'function' ? svc : null;
+      })();
       if (lspService) {
         const result = await (lspService as any).getCompletions(position.filePath, {
           line: position.line,
