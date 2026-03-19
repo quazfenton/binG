@@ -9,7 +9,7 @@
 
 import { EventEmitter } from 'node:events';
 import { spawn, ChildProcess } from 'child_process';
-import { createWriteStream, mkdirSync, existsSync, readdirSync, statSync } from 'fs';
+import { createWriteStream, mkdirSync, readdirSync, statSync, existsSync } from 'fs';
 import { join, resolve, normalize } from 'path';
 import { pipeline } from 'stream/promises';
 import { createReadStream } from 'fs';
@@ -17,6 +17,7 @@ import * as zlib from 'zlib';
 import { pack as createTarWriteStream, extract as createTarReadStream } from 'tar-stream';
 import { safeJoin, isValidResourceId, validateRelativePath, commandSchema } from '@/lib/security/security-utils';
 import { sandboxMetrics } from '../backend/metrics';
+import { secureRandomId } from '@/lib/utils/crypto-random';
 
 export interface SandboxConfig {
   sandboxId?: string;
@@ -70,7 +71,8 @@ export class SandboxManager extends EventEmitter {
 
   async createSandbox(config?: SandboxConfig): Promise<Sandbox> {
     const startTime = Date.now();
-    const sandboxId = config?.sandboxId || `sandbox_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+
+    const sandboxId = config?.sandboxId || secureRandomId('sandbox_');
 
     // SECURITY: Validate sandboxId format
     if (!isValidResourceId(sandboxId)) {

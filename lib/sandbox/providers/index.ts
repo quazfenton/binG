@@ -142,20 +142,20 @@ function initializeRegistry() {
   })
 
   // Blaxel MCP mode - uses blaxel-mcp-server for tool-based access
+  // NOTE: This provider cannot be initialized as a singleton because BlaxelMcpServer
+  // requires a sandboxHandle argument. Use createBlaxelMcpServer() directly instead.
+  // Marked as disabled to prevent fallback/discovery flows from repeatedly retrying and failing.
   providerRegistry.set('blaxel-mcp', {
     provider: null as any as any,
     priority: 5,
-    enabled: true,
+    enabled: false, // Disabled - use createBlaxelMcpServer() directly
     available: false,
     healthy: false,
     initializing: false,
     initPromise: null,
     failureCount: 0,
-    // Note: BlaxelMcpServer requires a sandboxHandle argument, so it cannot be initialized as a singleton provider
-    // Use createBlaxelMcpServer() function directly with a sandbox handle instead
-    // This provider is not available for standalone initialization
     asyncFactory: async () => {
-      throw new Error('blaxel-mcp requires a sandbox handle - use createBlaxelMcpServer() directly')
+      throw new Error('blaxel-mcp is disabled - use createBlaxelMcpServer() with a sandbox handle')
     },
   })
 

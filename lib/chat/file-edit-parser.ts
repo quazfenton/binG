@@ -24,8 +24,6 @@
  * - ```diff path\ncontent\n``` (fenced diff blocks)
  */
 
-import { isFullFileContent as sharedIsFullFileContent } from './file-diff-utils';
-
 export { isFullFileContent } from './file-diff-utils';
 
 export interface FileEdit {
@@ -101,17 +99,6 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
   }
 
   return edits;
-}
-
-/**
- * Strip heredoc markers (<<< and >>>) from content
- */
-export function stripHeredocMarkers(content: string): string {
-  return content
-    .replace(/^\s*<<<\s*$/gm, '')
-    .replace(/^\s*>>>\s*$/gm, '')
-    .replace(/<<<[\s\S]*?>>>/g, '')
-    .trim();
 }
 
 /**

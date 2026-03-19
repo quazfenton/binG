@@ -1,6 +1,6 @@
 "use client"
 
-import { ExperimentalWorkspacePanel } from "./experimental-workspace-panel"
+import { ExperimentalWorkspacePanel } from "./workspace-panel"
 
 /**
  * HorizontalSpaceFiller - Invisible component that fills horizontal space

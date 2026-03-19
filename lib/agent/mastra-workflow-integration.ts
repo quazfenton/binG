@@ -466,10 +466,14 @@ export class MastraWorkflowIntegration extends EventEmitter {
         throw new Error((result as any).error || `HITL workflow ended with status ${(result as any).status}`);
       }
 
+      // 'suspended' means HITL is waiting for human approval - not completed yet
+      const isPending = (result as any)?.status === 'suspended';
+      
       return {
         workflowType: 'hitl',
         result,
         success: true,
+        pendingApproval: isPending,
       };
     } catch (error: any) {
       logger.error('HITL workflow execution failed', { error: error.message });

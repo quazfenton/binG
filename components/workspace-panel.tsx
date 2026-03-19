@@ -87,8 +87,11 @@ import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
 import { getOrCreateAnonymousSessionId } from "@/lib/utils";
 import type { Message } from "@/types";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
+import MultiModelComparison from "@/components/multi-model-comparison";
+import type { LLMProvider } from "@/lib/chat/llm-providers";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { buildApiHeaders } from "@/lib/utils";
+import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer";
 
 interface FileNode {
   name: string;
@@ -108,6 +111,32 @@ interface Song {
   localPath?: string;
 }
 
+// Automation data - defined outside component
+interface AutomationItem {
+  id: string;
+  name: string;
+  description: string;
+  icon: React.ComponentType<{ className?: string }>;
+  category: 'productivity' | 'ai' | 'media' | 'learning';
+  available: boolean;
+  duration?: string;
+  tags: string[];
+}
+
+const automationData: AutomationItem[] = [
+  { id: 'learn-js', name: 'Learn JavaScript', description: 'Interactive hands-on coding tutorial', icon: Code, category: 'learning', available: true, duration: '~15 min', tags: ['Code', 'JavaScript', 'Interactive'] },
+  { id: 'learn-json', name: 'Learn JSON Basics', description: 'Step-by-step interactive tutorial', icon: GraduationCap, category: 'learning', available: true, duration: '~10 min', tags: ['Education', 'JSON', 'Beginner'] },
+  { id: 'life-manager', name: 'Personal Life Manager', description: 'Telegram, Google & voice AI', icon: Bot, category: 'productivity', available: false, tags: ['Telegram', 'Google', 'Voice AI'] },
+  { id: 'video-gen', name: 'AI Viral Video Generator', description: 'VEO 3 → TikTok automation', icon: Video, category: 'media', available: false, tags: ['VEO 3', 'TikTok', 'Automation'] },
+  { id: 'db-chat', name: 'Database Chat', description: 'Natural language database queries', icon: Database, category: 'ai', available: false, tags: ['Database', 'AI', 'NLP'] },
+  { id: 'rag-chatbot', name: 'RAG Company Chatbot', description: 'Google Drive + Gemini', icon: BookOpen, category: 'ai', available: false, tags: ['RAG', 'Drive', 'Gemini'] },
+  { id: 'gmail-label', name: 'Gmail Auto-Label', description: 'OpenAI + Gmail API', icon: Mail, category: 'productivity', available: false, tags: ['Gmail', 'OpenAI'] },
+  { id: 'music-gen', name: 'AI Music Generator', description: 'ElevenLabs + Sheets + Drive', icon: Music2, category: 'media', available: false, tags: ['ElevenLabs', 'Sheets'] },
+  { id: 'voice-clone', name: 'AI Voice Cloning', description: 'YouTube → ElevenLabs', icon: Mic, category: 'media', available: false, tags: ['YouTube', 'ElevenLabs'] },
+  { id: 'angie', name: 'Angie AI Assistant', description: 'Telegram voice & text AI', icon: MessageCircle, category: 'ai', available: false, tags: ['Telegram', 'Voice', 'AI'] },
+  { id: 'nanobanana', name: 'NanoBanana Video Gen', description: 'Auto-share to socials via Blotato', icon: Share2, category: 'media', available: false, tags: ['NanoBanana', 'VEO3', 'Blotato'] },
+];
+
 export function ExperimentalWorkspacePanel() {
   const { isOpen, activeTab, closePanel, setTab } = usePanel();
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
@@ -117,6 +146,12 @@ export function ExperimentalWorkspacePanel() {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ path: string; content: string }>>([]);
   const [showFilePicker, setShowFilePicker] = useState(false);
+  
+  // GitHub Import state
+  const [showGithubImport, setShowGithubImport] = useState(false);
+  const [githubUrl, setGithubUrl] = useState('');
+  const [isImporting, setIsImporting] = useState(false);
+  const [importError, setImportError] = useState<string | null>(null);
   
   // Resizable panel width
   const [panelWidth, setPanelWidth] = useState(400);
@@ -272,6 +307,26 @@ export function ExperimentalWorkspacePanel() {
   ]);
   const [newPostContent, setNewPostContent] = useState("");
   const [isAnonymousPost, setIsAnonymousPost] = useState(true);
+
+  // Automation tab state
+  const [automationCategory, setAutomationCategory] = useState('all');
+  const [automationSearch, setAutomationSearch] = useState('');
+
+  // Filter automations based on category and search
+  const filteredAutomations = React.useMemo(() => {
+    return automationData.filter(automation => {
+      const matchesCategory = automationCategory === 'all' || automation.category === automationCategory;
+      const matchesSearch = !automationSearch || 
+        automation.name.toLowerCase().includes(automationSearch.toLowerCase()) ||
+        automation.description.toLowerCase().includes(automationSearch.toLowerCase()) ||
+        automation.tags.some(tag => tag.toLowerCase().includes(automationSearch.toLowerCase()));
+      return matchesCategory && matchesSearch;
+    });
+  }, [automationCategory, automationSearch]);
+
+  // Separate available and coming soon
+  const availableAutomations = filteredAutomations.filter(a => a.available);
+  const comingSoonAutomations = filteredAutomations.filter(a => !a.available);
   const [expandedComments, setExpandedComments] = useState<Set<string>>(new Set());
   const [newCommentContent, setNewCommentContent] = useState<{[key: string]: string}>({});
 
@@ -585,6 +640,22 @@ export function ExperimentalWorkspacePanel() {
         if (fsData && fsData.errors && fsData.errors.length > 0) {
           console.warn('[ExperimentalWorkspace] Filesystem errors:', fsData.errors);
           toast.error(`Errors applying some changes: ${fsData.errors[0]}`);
+        }
+        
+        // Update agentActivity with diffs from the response
+        if (fsData && fsData.applied && fsData.applied.length > 0) {
+          const diffs = fsData.applied.map((applied: any) => ({
+            path: applied.path || 'unknown',
+            diff: applied.diff || applied.content || '',
+            changeType: applied.type || 'UPDATE',
+          }));
+          
+          setAgentActivity((prev) => ({
+            ...prev,
+            status: 'completed',
+            currentAction: `Applied ${fsData.applied.length} file change(s)`,
+            diffs: [...prev.diffs, ...diffs],
+          }));
         }
         
         const assistantMessage: Message = {
@@ -1482,7 +1553,7 @@ export function ExperimentalWorkspacePanel() {
 
               {/* Tabs */}
               <Tabs value={activeTab} onValueChange={(v) => setTab(v as PanelTab)} className="flex-1 flex flex-col">
-                <TabsList className="grid grid-cols-8 gap-1 mx-4 mt-4 bg-white/5 border border-white/10 p-1">
+                <TabsList className="grid grid-cols-9 gap-1 mx-4 mt-4 bg-white/5 border border-white/10 p-1">
                   <TabsTrigger
                     value="explorer"
                     className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
@@ -1494,8 +1565,8 @@ export function ExperimentalWorkspacePanel() {
                     value="chat"
                     className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
                   >
-                    <MessageSquare className="h-3 w-3 mr-1" />
-                    Chat
+                    <Cpu className="h-3 w-3 mr-1" />
+                    Agent
                   </TabsTrigger>
                   <TabsTrigger
                     value="thinking"
@@ -1533,11 +1604,11 @@ export function ExperimentalWorkspacePanel() {
                     Forum
                   </TabsTrigger>
                   <TabsTrigger
-                    value="agent"
+                    value="compare"
                     className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
                   >
-                    <Cpu className="h-3 w-3 mr-1" />
-                    Agent
+                    <Zap className="h-3 w-3 mr-1" />
+                    Compare
                   </TabsTrigger>
                 </TabsList>
 
@@ -1589,6 +1660,17 @@ export function ExperimentalWorkspacePanel() {
                             title="Refresh Files"
                           >
                             <RefreshCw className="h-3 w-3" />
+                          </Button>
+                          <Button
+                            variant="ghost"
+                            size="icon"
+                            onClick={() => setShowGithubImport(true)}
+                            className="h-6 w-6 hover:bg-white/10"
+                            title="Import from GitHub"
+                          >
+                            <svg className="h-3 w-3" viewBox="0 0 24 24" fill="currentColor">
+                              <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                            </svg>
                           </Button>
                         </div>
                       </div>
@@ -1742,8 +1824,135 @@ export function ExperimentalWorkspacePanel() {
                       </Button>
                     </div>
                   </div>
-                  
+                   
                   <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                    {/* Agent Status Banner */}
+                    {agentActivity.status !== 'idle' && (
+                      <div className={`p-3 rounded-lg border ${
+                        agentActivity.status === 'thinking' ? 'bg-purple-500/10 border-purple-500/30' :
+                        agentActivity.status === 'executing' ? 'bg-blue-500/10 border-blue-500/30' :
+                        agentActivity.status === 'completed' ? 'bg-green-500/10 border-green-500/30' :
+                        'bg-white/5 border-white/10'
+                      }`}>
+                        <div className="flex items-center gap-3">
+                          {agentActivity.status === 'thinking' && <Brain className="h-5 w-5 text-purple-400 animate-pulse" />}
+                          {agentActivity.status === 'executing' && <Terminal className="h-5 w-5 text-blue-400" />}
+                          {agentActivity.status === 'completed' && <CheckCircle2 className="h-5 w-5 text-green-400" />}
+                          <div className="flex-1">
+                            <p className="text-sm font-medium text-white/90">
+                              {agentActivity.status === 'thinking' && 'Agent thinking...'}
+                              {agentActivity.status === 'executing' && 'Executing tasks...'}
+                              {agentActivity.status === 'completed' && 'Task completed'}
+                            </p>
+                            {agentActivity.currentAction && (
+                              <p className="text-xs text-white/60 mt-1">{agentActivity.currentAction}</p>
+                            )}
+                          </div>
+                          {agentActivity.status === 'executing' && <Loader2 className="h-4 w-4 animate-spin text-blue-400" />}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Processing Steps */}
+                    {agentActivity.processingSteps.length > 0 && (
+                      <Card className="bg-white/5 border-white/10">
+                        <CardHeader className="pb-2">
+                          <div className="flex items-center gap-2">
+                            <Clock3 className="h-4 w-4 text-blue-400" />
+                            <span className="text-sm font-medium text-white/90">Processing Steps</span>
+                          </div>
+                        </CardHeader>
+                        <CardContent>
+                          <div className="space-y-1">
+                            {agentActivity.processingSteps.map((step) => (
+                              <div key={step.id} className="flex items-center gap-2 text-xs">
+                                {step.status === 'completed' && <CheckCircle className="h-3 w-3 text-green-400" />}
+                                {step.status === 'started' && <Loader2 className="h-3 w-3 text-blue-400 animate-spin" />}
+                                {step.status === 'failed' && <AlertCircle className="h-3 w-3 text-red-400" />}
+                                {step.status === 'pending' && <div className="h-3 w-3 rounded-full border border-white/30" />}
+                                <span className={step.status === 'completed' ? 'text-white/50' : 'text-white/80'}>
+                                  {step.step}
+                                </span>
+                              </div>
+                            ))}
+                          </div>
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* Tool Invocations */}
+                    {agentActivity.toolInvocations.length > 0 && (
+                      <Card className="bg-white/5 border-white/10">
+                        <CardHeader className="pb-2">
+                          <div className="flex items-center gap-2">
+                            <Terminal className="h-4 w-4 text-orange-400" />
+                            <span className="text-sm font-medium text-white/90">Tool Invocations</span>
+                            <Badge variant="secondary" className="text-[10px] bg-orange-500/20">
+                              {agentActivity.toolInvocations.length}
+                            </Badge>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-2">
+                          {agentActivity.toolInvocations.slice(-3).map((tool) => (
+                            <div
+                              key={tool.id}
+                              className={`p-2 rounded border text-xs ${
+                                tool.state === 'result' ? 'bg-green-500/10 border-green-500/30' :
+                                tool.state === 'call' ? 'bg-blue-500/10 border-blue-500/30' :
+                                'bg-white/5 border-white/10'
+                              }`}
+                            >
+                              <div className="flex items-center justify-between">
+                                <div className="flex items-center gap-2">
+                                  {tool.state === 'result' && <CheckCircle2 className="h-3 w-3 text-green-400" />}
+                                  {tool.state === 'call' && <Loader2 className="h-3 w-3 text-blue-400 animate-spin" />}
+                                  <span className="font-mono text-white/90">{tool.toolName}</span>
+                                </div>
+                                <span className="text-white/50">
+                                  {tool.state === 'partial-call' ? 'Streaming' :
+                                   tool.state === 'call' ? 'Executing' : 'Done'}
+                                </span>
+                              </div>
+                              {tool.result && (
+                                <pre className="mt-1 max-h-16 overflow-auto bg-black/30 rounded p-1 text-[10px] text-white/70">
+                                  {typeof tool.result === 'string' ? tool.result.slice(0, 200) : JSON.stringify(tool.result).slice(0, 200)}
+                                </pre>
+                              )}
+                            </div>
+                          ))}
+                          {agentActivity.toolInvocations.length > 3 && (
+                            <p className="text-xs text-white/50 text-center">+{agentActivity.toolInvocations.length - 3} more</p>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )}
+
+                    {/* File Changes */}
+                    {agentActivity.diffs.length > 0 && (
+                      <Card className="bg-white/5 border-white/10">
+                        <CardHeader className="pb-2">
+                          <div className="flex items-center gap-2">
+                            <FileDiff className="h-4 w-4 text-yellow-400" />
+                            <span className="text-sm font-medium text-white/90">File Changes</span>
+                            <Badge variant="secondary" className="text-[10px] bg-yellow-500/20">
+                              {agentActivity.diffs.length}
+                            </Badge>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-2">
+                          {agentActivity.diffs.slice(-2).map((diff, i) => (
+                            <div key={i} className="p-2 rounded bg-yellow-500/10 border border-yellow-500/30 text-xs">
+                              <span className="font-mono text-yellow-300">{diff.path}</span>
+                              <span className="ml-2 text-white/50">{diff.changeType}</span>
+                            </div>
+                          ))}
+                          {agentActivity.diffs.length > 2 && (
+                            <p className="text-xs text-white/50 text-center">+{agentActivity.diffs.length - 2} more changes</p>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )}
+
                     {chatMessages.length === 0 ? (
                       <div className="text-center text-white/40 text-sm mt-8">
                         <MessageSquare className="h-8 w-8 mx-auto mb-2 opacity-50" />
@@ -2151,286 +2360,175 @@ export function ExperimentalWorkspacePanel() {
                   </ScrollArea>
                 </TabsContent>
 
-                {/* Automations Tab */}
+                {/* Automations Tab - Redesigned */}
                 <TabsContent value="automations" className="flex-1 mt-0 overflow-hidden">
                   <ScrollArea className="h-full">
                     <div className="p-4 space-y-4">
-                      <div className="flex items-center gap-2 mb-4">
-                        <Workflow className="h-4 w-4 text-cyan-400" />
-                        <span className="text-sm font-medium text-white/90">Automation Templates</span>
-                        <Badge variant="secondary" className="text-[10px] bg-cyan-500/20 text-cyan-300">
-                          Coming Soon
-                        </Badge>
+                      {/* Header with Stats */}
+                      <div className="flex items-center justify-between mb-4">
+                        <div className="flex items-center gap-3">
+                          <div className="p-2 bg-gradient-to-br from-cyan-500/20 to-blue-500/20 rounded-lg border border-cyan-500/30">
+                            <Workflow className="h-5 w-5 text-cyan-400" />
+                          </div>
+                          <div>
+                            <h3 className="text-sm font-semibold text-white/90">Automation Hub</h3>
+                            <p className="text-[10px] text-white/50">Build powerful workflows with AI</p>
+                          </div>
+                        </div>
+                        <div className="flex gap-2">
+                          <Badge variant="secondary" className="text-[10px] bg-green-500/20 text-green-300 border border-green-500/30">
+                            <Zap className="h-2 w-2 mr-1" />
+                            {availableAutomations.length} Available
+                          </Badge>
+                          <Badge variant="secondary" className="text-[10px] bg-yellow-500/20 text-yellow-300 border border-yellow-500/30">
+                            {comingSoonAutomations.length} Coming
+                          </Badge>
+                        </div>
                       </div>
 
-                      {/* Automation Cards Grid */}
-                      <div className="grid grid-cols-1 gap-3">
-                        {/* Personal Life Manager */}
-                        <Card 
-                          className="bg-gradient-to-br from-purple-500/10 to-blue-500/10 border-purple-500/30 hover:border-purple-500/50 cursor-pointer transition-all duration-300"
-                          onClick={() => toast.info("Coming Soon", { description: "Personal life manager with Telegram, Google services & voice-enabled AI" })}
-                        >
-                          <CardContent className="p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-2">
-                                <Bot className="h-4 w-4 text-purple-400" />
-                                <div>
-                                  <p className="text-sm font-medium text-white/90">Personal Life Manager</p>
-                                  <p className="text-xs text-white/50">Telegram, Google services & voice-enabled AI</p>
-                                </div>
-                              </div>
-                              <ExternalLink className="h-3 w-3 text-white/40" />
-                            </div>
-                            <div className="flex gap-1 mt-2">
-                              <Badge variant="secondary" className="text-[9px] bg-purple-500/20">Telegram</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-blue-500/20">Google</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-green-500/20">Voice AI</Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
+                      {/* Category Filter Tabs */}
+                      <div className="flex gap-2 pb-3 border-b border-white/10 overflow-x-auto">
+                        {[
+                          { id: 'all', label: 'All', icon: null },
+                          { id: 'productivity', label: 'Productivity', icon: Zap },
+                          { id: 'ai', label: 'AI & ML', icon: Bot },
+                          { id: 'media', label: 'Media', icon: Video },
+                          { id: 'learning', label: 'Learning', icon: GraduationCap },
+                        ].map((cat) => (
+                          <Button
+                            key={cat.id}
+                            variant="ghost"
+                            size="sm"
+                            className={`text-xs whitespace-nowrap ${automationCategory === cat.id ? 'bg-cyan-500/20 text-cyan-300 border border-cyan-500/30' : 'text-white/50 hover:text-white/80 hover:bg-white/5'}`}
+                            onClick={() => setAutomationCategory(cat.id)}
+                          >
+                            {cat.icon && <cat.icon className="h-3 w-3 mr-1" />}
+                            {cat.label}
+                          </Button>
+                        ))}
+                      </div>
 
-                        {/* Viral Video Generator */}
-                        <Card 
-                          className="bg-gradient-to-br from-pink-500/10 to-orange-500/10 border-pink-500/30 hover:border-pink-500/50 cursor-pointer transition-all duration-300"
-                          onClick={() => toast.info("Coming Soon", { description: "Generate AI viral videos with VEO 3 and upload to TikTok" })}
-                        >
-                          <CardContent className="p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-2">
-                                <Video className="h-4 w-4 text-pink-400" />
-                                <div>
-                                  <p className="text-sm font-medium text-white/90">AI Viral Video Generator</p>
-                                  <p className="text-xs text-white/50">VEO 3 → TikTok automation</p>
-                                </div>
-                              </div>
-                              <ExternalLink className="h-3 w-3 text-white/40" />
-                            </div>
-                            <div className="flex gap-1 mt-2">
-                              <Badge variant="secondary" className="text-[9px] bg-pink-500/20">VEO 3</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-black/40">TikTok</Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
+                      {/* Search */}
+                      <div className="relative">
+                        <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-3 w-3 text-white/40" />
+                        <Input
+                          value={automationSearch}
+                          onChange={(e) => setAutomationSearch(e.target.value)}
+                          placeholder="Search automations..."
+                          className="pl-9 h-9 bg-white/5 border-white/10 text-white/90 placeholder:text-white/40 text-sm"
+                        />
+                      </div>
 
-                        {/* JSON Tutorial */}
-                        <Card 
-                          className="bg-gradient-to-br from-yellow-500/10 to-amber-500/10 border-yellow-500/30 hover:border-yellow-500/50 cursor-pointer transition-all duration-300"
-                          onClick={() => toast.info("Coming Soon", { description: "Learn JSON basics with an interactive step-by-step tutorial" })}
-                        >
-                          <CardContent className="p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-2">
-                                <GraduationCap className="h-4 w-4 text-yellow-400" />
-                                <div>
-                                  <p className="text-sm font-medium text-white/90">Learn JSON Basics</p>
-                                  <p className="text-xs text-white/50">Interactive step-by-step tutorial</p>
-                                </div>
-                              </div>
-                              <ExternalLink className="h-3 w-3 text-white/40" />
+                      {/* Automation Cards - Dynamic from filtered data */}
+                      <div className="grid grid-cols-1 gap-4">
+                        {/* Available Automations */}
+                        {availableAutomations.length > 0 && (
+                          <div className="space-y-2">
+                            <div className="flex items-center gap-2">
+                              <div className="h-1 w-1 rounded-full bg-green-400 animate-pulse" />
+                              <span className="text-xs font-medium text-green-400">Available Now</span>
                             </div>
-                            <div className="flex gap-1 mt-2">
-                              <Badge variant="secondary" className="text-[9px] bg-yellow-500/20">Education</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-blue-500/20">JSON</Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
+                            {availableAutomations.map((automation) => (
+                              <Card 
+                                key={automation.id}
+                                className="bg-gradient-to-br from-green-500/20 to-emerald-500/10 border-green-500/40 hover:border-green-500/60 cursor-pointer transition-all duration-300 group"
+                                onClick={() => toast.success(`Launching ${automation.name}`, { description: `Starting ${automation.description.toLowerCase()}...` })}
+                              >
+                                <CardContent className="p-4">
+                                  <div className="flex items-start justify-between">
+                                    <div className="flex items-center gap-3">
+                                      <div className="p-2 bg-green-500/20 rounded-lg group-hover:scale-110 transition-transform">
+                                        <automation.icon className="h-5 w-5 text-green-400" />
+                                      </div>
+                                      <div>
+                                        <div className="flex items-center gap-2">
+                                          <p className="text-sm font-semibold text-white/90">{automation.name}</p>
+                                          <Badge className="text-[9px] bg-green-500/30 text-green-300 border-0">Live</Badge>
+                                        </div>
+                                        <p className="text-xs text-white/50 mt-1">{automation.description}</p>
+                                        <div className="flex gap-1 mt-2">
+                                          {automation.tags.map((tag, idx) => (
+                                            <Badge key={idx} variant="secondary" className="text-[9px] bg-green-500/20">{tag}</Badge>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <div className="flex flex-col items-end gap-2">
+                                      <Button className="h-7 bg-green-500/20 hover:bg-green-500/30 border border-green-500/30 text-green-300 text-xs">
+                                        <Play className="h-3 w-3 mr-1" />
+                                        Start
+                                      </Button>
+                                      {automation.duration && <p className="text-[9px] text-white/40">{automation.duration}</p>}
+                                    </div>
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            ))}
+                          </div>
+                        )}
 
-                        {/* Code Tutorial */}
-                        <Card 
-                          className="bg-gradient-to-br from-green-500/10 to-emerald-500/10 border-green-500/30 hover:border-green-500/50 cursor-pointer transition-all duration-300"
-                          onClick={() => toast.info("Coming Soon", { description: "Learn Code Node (JavaScript) with an Interactive Hands-On Tutorial" })}
-                        >
-                          <CardContent className="p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-2">
-                                <Code className="h-4 w-4 text-green-400" />
-                                <div>
-                                  <p className="text-sm font-medium text-white/90">Learn JavaScript</p>
-                                  <p className="text-xs text-white/50">Interactive hands-on tutorial</p>
-                                </div>
-                              </div>
-                              <ExternalLink className="h-3 w-3 text-white/40" />
+                        {/* Coming Soon Automations */}
+                        {comingSoonAutomations.length > 0 && (
+                          <div className="space-y-2 mt-4">
+                            <div className="flex items-center gap-2">
+                              <Clock className="h-3 w-3 text-white/40" />
+                              <span className="text-xs font-medium text-white/50">Coming Soon</span>
                             </div>
-                            <div className="flex gap-1 mt-2">
-                              <Badge variant="secondary" className="text-[9px] bg-green-500/20">Code</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-yellow-500/20">JavaScript</Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
+                            {comingSoonAutomations.map((automation) => (
+                              <Card 
+                                key={automation.id}
+                                className="bg-gradient-to-br from-purple-500/10 to-blue-500/10 border-purple-500/30 hover:border-purple-500/50 cursor-pointer transition-all duration-300 group"
+                                onClick={() => toast.info("Coming Soon", { description: automation.description })}
+                              >
+                                <CardContent className="p-4">
+                                  <div className="flex items-start justify-between">
+                                    <div className="flex items-center gap-3">
+                                      <div className="p-2 bg-purple-500/20 rounded-lg group-hover:scale-110 transition-transform">
+                                        <automation.icon className="h-5 w-5 text-purple-400" />
+                                      </div>
+                                      <div>
+                                        <p className="text-sm font-medium text-white/90">{automation.name}</p>
+                                        <p className="text-xs text-white/50 mt-1">{automation.description}</p>
+                                        <div className="flex gap-1 mt-2">
+                                          {automation.tags.map((tag, idx) => (
+                                            <Badge key={idx} variant="secondary" className="text-[9px] bg-purple-500/20">{tag}</Badge>
+                                          ))}
+                                        </div>
+                                      </div>
+                                    </div>
+                                    <ExternalLink className="h-4 w-4 text-white/30 group-hover:text-white/60 transition-colors" />
+                                  </div>
+                                </CardContent>
+                              </Card>
+                            ))}
+                          </div>
+                        )}
 
-                        {/* Angie AI Assistant */}
-                        <Card 
-                          className="bg-gradient-to-br from-indigo-500/10 to-purple-500/10 border-indigo-500/30 hover:border-indigo-500/50 cursor-pointer transition-all duration-300"
-                          onClick={() => toast.info("Coming Soon", { description: "Angie, personal AI assistant with Telegram voice and text" })}
-                        >
-                          <CardContent className="p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-2">
-                                <MessageCircle className="h-4 w-4 text-indigo-400" />
-                                <div>
-                                  <p className="text-sm font-medium text-white/90">Angie AI Assistant</p>
-                                  <p className="text-xs text-white/50">Telegram voice & text AI</p>
-                                </div>
-                              </div>
-                              <ExternalLink className="h-3 w-3 text-white/40" />
-                            </div>
-                            <div className="flex gap-1 mt-2">
-                              <Badge variant="secondary" className="text-[9px] bg-indigo-500/20">Telegram</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-purple-500/20">Voice</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-cyan-500/20">AI</Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
-
-                        {/* NanoBanana Video */}
-                        <Card 
-                          className="bg-gradient-to-br from-red-500/10 to-pink-500/10 border-red-500/30 hover:border-red-500/50 cursor-pointer transition-all duration-300"
-                          onClick={() => toast.info("Coming Soon", { description: "Generate AI viral videos with NanoBanana & VEO3, shared on socials via Blotato" })}
-                        >
-                          <CardContent className="p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-2">
-                                <Share2 className="h-4 w-4 text-red-400" />
-                                <div>
-                                  <p className="text-sm font-medium text-white/90">NanoBanana Video Gen</p>
-                                  <p className="text-xs text-white/50">Auto-share to socials via Blotato</p>
-                                </div>
-                              </div>
-                              <ExternalLink className="h-3 w-3 text-white/40" />
-                            </div>
-                            <div className="flex gap-1 mt-2">
-                              <Badge variant="secondary" className="text-[9px] bg-red-500/20">NanoBanana</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-pink-500/20">VEO3</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-blue-500/20">Blotato</Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
-
-                        {/* Database Chat */}
-                        <Card 
-                          className="bg-gradient-to-br from-cyan-500/10 to-blue-500/10 border-cyan-500/30 hover:border-cyan-500/50 cursor-pointer transition-all duration-300"
-                          onClick={() => toast.info("Coming Soon", { description: "Chat with a database using AI" })}
-                        >
-                          <CardContent className="p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-2">
-                                <Database className="h-4 w-4 text-cyan-400" />
-                                <div>
-                                  <p className="text-sm font-medium text-white/90">Database Chat</p>
-                                  <p className="text-xs text-white/50">Natural language database queries</p>
-                                </div>
-                              </div>
-                              <ExternalLink className="h-3 w-3 text-white/40" />
-                            </div>
-                            <div className="flex gap-1 mt-2">
-                              <Badge variant="secondary" className="text-[9px] bg-cyan-500/20">Database</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-purple-500/20">AI</Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
-
-                        {/* RAG Chatbot */}
-                        <Card 
-                          className="bg-gradient-to-br from-orange-500/10 to-yellow-500/10 border-orange-500/30 hover:border-orange-500/50 cursor-pointer transition-all duration-300"
-                          onClick={() => toast.info("Coming Soon", { description: "RAG chatbot for company documents using Google Drive and Gemini" })}
-                        >
-                          <CardContent className="p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-2">
-                                <BookOpen className="h-4 w-4 text-orange-400" />
-                                <div>
-                                  <p className="text-sm font-medium text-white/90">RAG Company Chatbot</p>
-                                  <p className="text-xs text-white/50">Google Drive + Gemini</p>
-                                </div>
-                              </div>
-                              <ExternalLink className="h-3 w-3 text-white/40" />
-                            </div>
-                            <div className="flex gap-1 mt-2">
-                              <Badge variant="secondary" className="text-[9px] bg-orange-500/20">RAG</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-blue-500/20">Drive</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-green-500/20">Gemini</Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
-
-                        {/* Gmail Labeling */}
-                        <Card 
-                          className="bg-gradient-to-br from-red-500/10 to-orange-500/10 border-red-500/30 hover:border-red-500/50 cursor-pointer transition-all duration-300"
-                          onClick={() => toast.info("Coming Soon", { description: "Basic automatic Gmail email labelling with OpenAI and Gmail API" })}
-                        >
-                          <CardContent className="p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-2">
-                                <Mail className="h-4 w-4 text-red-400" />
-                                <div>
-                                  <p className="text-sm font-medium text-white/90">Gmail Auto-Label</p>
-                                  <p className="text-xs text-white/50">OpenAI + Gmail API</p>
-                                </div>
-                              </div>
-                              <ExternalLink className="h-3 w-3 text-white/40" />
-                            </div>
-                            <div className="flex gap-1 mt-2">
-                              <Badge variant="secondary" className="text-[9px] bg-red-500/20">Gmail</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-green-500/20">OpenAI</Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
-
-                        {/* AI Music Generation */}
-                        <Card 
-                          className="bg-gradient-to-br from-purple-500/10 to-pink-500/10 border-purple-500/30 hover:border-purple-500/50 cursor-pointer transition-all duration-300"
-                          onClick={() => toast.info("Coming Soon", { description: "Automated 🤖🎵 AI music generation with ElevenLabs, Google Sheets & Drive" })}
-                        >
-                          <CardContent className="p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-2">
-                                <Music2 className="h-4 w-4 text-purple-400" />
-                                <div>
-                                  <p className="text-sm font-medium text-white/90">AI Music Generator</p>
-                                  <p className="text-xs text-white/50">ElevenLabs + Sheets + Drive</p>
-                                </div>
-                              </div>
-                              <ExternalLink className="h-3 w-3 text-white/40" />
-                            </div>
-                            <div className="flex gap-1 mt-2">
-                              <Badge variant="secondary" className="text-[9px] bg-purple-500/20">ElevenLabs</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-green-500/20">Sheets</Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
-
-                        {/* Voice Cloning */}
-                        <Card 
-                          className="bg-gradient-to-br from-blue-500/10 to-cyan-500/10 border-blue-500/30 hover:border-blue-500/50 cursor-pointer transition-all duration-300"
-                          onClick={() => toast.info("Coming Soon", { description: "Automated AI voice cloning 🤖🎤 from YouTube videos to ElevenLab" })}
-                        >
-                          <CardContent className="p-3">
-                            <div className="flex items-start justify-between">
-                              <div className="flex items-center gap-2">
-                                <Mic className="h-4 w-4 text-blue-400" />
-                                <div>
-                                  <p className="text-sm font-medium text-white/90">AI Voice Cloning</p>
-                                  <p className="text-xs text-white/50">YouTube → ElevenLabs</p>
-                                </div>
-                              </div>
-                              <ExternalLink className="h-3 w-3 text-white/40" />
-                            </div>
-                            <div className="flex gap-1 mt-2">
-                              <Badge variant="secondary" className="text-[9px] bg-red-500/20">YouTube</Badge>
-                              <Badge variant="secondary" className="text-[9px] bg-purple-500/20">ElevenLabs</Badge>
-                            </div>
-                          </CardContent>
-                        </Card>
+                        {/* Empty state when no matches */}
+                        {filteredAutomations.length === 0 && (
+                          <div className="text-center py-8">
+                            <Search className="h-8 w-8 mx-auto mb-2 text-white/30" />
+                            <p className="text-white/50 text-sm">No automations match your search</p>
+                            <Button 
+                              variant="ghost" 
+                              size="sm" 
+                              onClick={() => { setAutomationSearch(''); setAutomationCategory('all'); }}
+                              className="mt-2 text-cyan-400"
+                            >
+                              Clear filters
+                            </Button>
+                          </div>
+                        )}
                       </div>
 
                       {/* Info Footer */}
-                      <div className="mt-6 p-4 bg-white/5 rounded-lg border border-white/10">
+                      <div className="mt-6 p-4 bg-gradient-to-r from-cyan-500/10 to-blue-500/10 rounded-lg border border-cyan-500/20">
                         <div className="flex items-center gap-2 mb-2">
-                          <Clock className="h-3 w-3 text-white/40" />
-                          <span className="text-xs text-white/60">Coming Soon</span>
+                          <Sparkles className="h-4 w-4 text-cyan-400" />
+                          <span className="text-sm font-medium text-white/80">Powerful AI Automations</span>
                         </div>
-                        <p className="text-xs text-white/40">
-                          These automation templates are currently in development. Click on any card to learn more about what's coming.
+                        <p className="text-xs text-white/50">
+                          Click on any available automation to start. More coming soon - request new automations via chat!
                         </p>
                       </div>
                     </div>
@@ -2671,406 +2769,26 @@ export function ExperimentalWorkspacePanel() {
                   </ScrollArea>
                 </TabsContent>
 
-                {/* Agent Activity Tab */}
-                <TabsContent value="agent" className="flex-1 mt-0 overflow-hidden">
+                {/* Compare Tab - Multi-Model Comparison */}
+                <TabsContent value="compare" className="flex-1 mt-0 overflow-hidden">
                   <ScrollArea className="h-full">
-                    <div className="p-4 space-y-4">
-                      {/* Status Banner */}
-                      <div className={`p-4 rounded-lg border ${
-                        agentActivity.status === 'thinking' ? 'bg-purple-500/10 border-purple-500/30' :
-                        agentActivity.status === 'executing' ? 'bg-blue-500/10 border-blue-500/30' :
-                        agentActivity.status === 'completed' ? 'bg-green-500/10 border-green-500/30' :
-                        'bg-white/5 border-white/10'
-                      }`}>
-                        <div className="flex items-center gap-3">
-                          {agentActivity.status === 'thinking' && <Brain className="h-5 w-5 text-purple-400 animate-pulse" />}
-                          {agentActivity.status === 'executing' && <Terminal className="h-5 w-5 text-blue-400" />}
-                          {agentActivity.status === 'completed' && <CheckCircle2 className="h-5 w-5 text-green-400" />}
-                          {agentActivity.status === 'idle' && <Activity className="h-5 w-5 text-white/40" />}
-                          <div className="flex-1">
-                            <p className="text-sm font-medium text-white/90">
-                              {agentActivity.status === 'thinking' && 'Agent is thinking...'}
-                              {agentActivity.status === 'executing' && 'Executing tasks...'}
-                              {agentActivity.status === 'completed' && 'Task completed'}
-                              {agentActivity.status === 'idle' && 'Agent idle'}
-                            </p>
-                            {agentActivity.currentAction && (
-                              <p className="text-xs text-white/60 mt-1">{agentActivity.currentAction}</p>
-                            )}
-                          </div>
-                          {agentActivity.status === 'executing' && <Loader2 className="h-4 w-4 animate-spin text-blue-400" />}
-                        </div>
+                    <div className="p-4">
+                      <div className="mb-4">
+                        <h3 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-2">
+                          <Zap className="h-4 w-4 text-yellow-400" />
+                          Multi-Model Comparison
+                        </h3>
+                        <p className="text-xs text-white/50">
+                          Compare responses from multiple AI models. Direct API calls (not OpenCode Agent).
+                        </p>
                       </div>
-
-                      {/* Processing Steps */}
-                      {agentActivity.processingSteps.length > 0 && (
-                        <Card className="bg-white/5 border-white/10">
-                          <CardHeader className="pb-2">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <Clock3 className="h-4 w-4 text-blue-400" />
-                                <span className="text-sm font-medium text-white/90">Processing Steps</span>
-                              </div>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setShowSteps(!showSteps)}
-                                className="h-6 hover:bg-white/10"
-                              >
-                                {showSteps ? <ChevronUp className="h-3 w-3" /> : <ChevronDownIcon className="h-3 w-3" />}
-                              </Button>
-                            </div>
-                          </CardHeader>
-                          {showSteps && (
-                            <CardContent>
-                              <div className="space-y-2">
-                                {agentActivity.processingSteps.map((step) => (
-                                  <div key={step.id} className="flex items-center gap-3 text-sm">
-                                    {step.status === 'completed' && <CheckCircle className="h-4 w-4 text-green-400" />}
-                                    {step.status === 'started' && <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />}
-                                    {step.status === 'failed' && <AlertCircle className="h-4 w-4 text-red-400" />}
-                                    {step.status === 'pending' && <div className="h-4 w-4 rounded-full border border-white/30" />}
-                                    <span className={step.status === 'completed' ? 'text-white/70' : 'text-white/90'}>
-                                      {step.step}
-                                    </span>
-                                  </div>
-                                ))}
-                              </div>
-                            </CardContent>
-                          )}
-                        </Card>
-                      )}
-
-                      {/* Tool Invocations */}
-                      {agentActivity.toolInvocations.length > 0 && (
-                        <Card className="bg-white/5 border-white/10">
-                          <CardHeader className="pb-2">
-                            <div className="flex items-center gap-2">
-                              <Terminal className="h-4 w-4 text-orange-400" />
-                              <span className="text-sm font-medium text-white/90">Tool Invocations</span>
-                              <Badge variant="secondary" className="text-[10px] bg-orange-500/20">
-                                {agentActivity.toolInvocations.length}
-                              </Badge>
-                            </div>
-                          </CardHeader>
-                          <CardContent className="space-y-2">
-                            {agentActivity.toolInvocations.map((tool) => (
-                              <div
-                                key={tool.id}
-                                className={`p-3 rounded-lg border cursor-pointer transition-all ${
-                                  tool.state === 'result' ? 'bg-green-500/10 border-green-500/30' :
-                                  tool.state === 'call' ? 'bg-blue-500/10 border-blue-500/30' :
-                                  'bg-white/5 border-white/10'
-                                }`}
-                                onClick={() => setExpandedToolId(expandedToolId === tool.id ? null : tool.id)}
-                              >
-                                <div className="flex items-center justify-between">
-                                  <div className="flex items-center gap-2">
-                                    {tool.state === 'result' && <CheckCircle className="h-4 w-4 text-green-400" />}
-                                    {tool.state === 'call' && <Loader2 className="h-4 w-4 text-blue-400 animate-spin" />}
-                                    {tool.state === 'partial-call' && <Activity className="h-4 w-4 text-orange-400" />}
-                                    <span className="text-sm font-medium text-white/90">{tool.toolName}</span>
-                                  </div>
-                                  <div className="flex items-center gap-2">
-                                    <span className="text-xs text-white/60">
-                                      {tool.state === 'partial-call' && 'Streaming...'}
-                                      {tool.state === 'call' && 'Executing...'}
-                                      {tool.state === 'result' && 'Completed'}
-                                    </span>
-                                    <ChevronDownIcon className={`h-3 w-3 transition-transform ${
-                                      expandedToolId === tool.id ? 'rotate-180' : ''
-                                    }`} />
-                                  </div>
-                                </div>
-                                
-                                {expandedToolId === tool.id && (
-                                  <div className="mt-3 space-y-2 text-xs">
-                                    {tool.args && (
-                                      <div>
-                                        <p className="text-white/60 mb-1">Arguments:</p>
-                                        <pre className="bg-black/30 rounded p-2 text-white/80 overflow-x-auto">
-                                          {JSON.stringify(tool.args, null, 2)}
-                                        </pre>
-                                      </div>
-                                    )}
-                                    {tool.result && (
-                                      <div>
-                                        <p className="text-white/60 mb-1">Result:</p>
-                                        <pre className="bg-black/30 rounded p-2 text-white/80 overflow-x-auto">
-                                          {typeof tool.result === 'string' ? tool.result : JSON.stringify(tool.result, null, 2)}
-                                        </pre>
-                                      </div>
-                                    )}
-                                  </div>
-                                )}
-                              </div>
-                            ))}
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      {/* Reasoning Chunks */}
-                      {agentActivity.reasoningChunks.length > 0 && (
-                        <Card className="bg-white/5 border-white/10">
-                          <CardHeader className="pb-2">
-                            <div className="flex items-center justify-between">
-                              <div className="flex items-center gap-2">
-                                <Brain className="h-4 w-4 text-purple-400" />
-                                <span className="text-sm font-medium text-white/90">Agent Reasoning</span>
-                              </div>
-                              <Button
-                                variant="ghost"
-                                size="sm"
-                                onClick={() => setShowReasoning(!showReasoning)}
-                                className="h-6 hover:bg-white/10"
-                              >
-                                {showReasoning ? <ChevronUp className="h-3 w-3" /> : <ChevronDownIcon className="h-3 w-3" />}
-                              </Button>
-                            </div>
-                          </CardHeader>
-                          {showReasoning && (
-                            <CardContent className="space-y-2">
-                              {agentActivity.reasoningChunks.map((chunk) => (
-                                <div
-                                  key={chunk.id}
-                                  className={`p-3 rounded-lg border ${
-                                    chunk.type === 'thought' ? 'bg-blue-500/10 border-blue-500/30' :
-                                    chunk.type === 'plan' ? 'bg-green-500/10 border-green-500/30' :
-                                    chunk.type === 'reasoning' ? 'bg-purple-500/10 border-purple-500/30' :
-                                    'bg-orange-500/10 border-orange-500/30'
-                                  }`}
-                                >
-                                  <div className="flex items-center gap-2 mb-1">
-                                    {chunk.type === 'thought' && <MessageCircle className="h-3 w-3 text-blue-400" />}
-                                    {chunk.type === 'plan' && <FileText className="h-3 w-3 text-green-400" />}
-                                    {chunk.type === 'reasoning' && <Brain className="h-3 w-3 text-purple-400" />}
-                                    {chunk.type === 'reflection' && <RotateCcw className="h-3 w-3 text-orange-400" />}
-                                    <span className="text-xs font-medium text-white/70 capitalize">{chunk.type}</span>
-                                  </div>
-                                  <p className="text-sm text-white/80">{chunk.content}</p>
-                                </div>
-                              ))}
-                            </CardContent>
-                          )}
-                        </Card>
-                      )}
-
-                      {/* Git Commits */}
-                      {agentActivity.gitCommits.length > 0 && (
-                        <Card className="bg-white/5 border-white/10">
-                          <CardHeader className="pb-2">
-                            <div className="flex items-center gap-2">
-                              <GitCommit className="h-4 w-4 text-green-400" />
-                              <span className="text-sm font-medium text-white/90">Git Commits</span>
-                              <Badge variant="secondary" className="text-[10px] bg-green-500/20">
-                                {agentActivity.gitCommits.length}
-                              </Badge>
-                            </div>
-                          </CardHeader>
-                          <CardContent className="space-y-2">
-                            {agentActivity.gitCommits.map((commit) => (
-                              <div key={commit.version} className="p-3 rounded-lg border bg-green-500/10 border-green-500/30">
-                                <div className="flex items-center justify-between mb-2">
-                                  <div className="flex items-center gap-2">
-                                    <GitCommit className="h-3 w-3 text-green-400" />
-                                    <span className="text-sm font-medium text-white/90">Version {commit.version}</span>
-                                  </div>
-                                  <span className="text-xs text-white/60">
-                                    {new Date(commit.timestamp).toLocaleTimeString()}
-                                  </span>
-                                </div>
-                                <p className="text-xs text-white/70 mb-2">
-                                  {commit.filesChanged} file{commit.filesChanged > 1 ? 's' : ''} changed
-                                </p>
-                                <div className="flex flex-wrap gap-1">
-                                  {commit.paths.slice(0, 5).map((path, i) => (
-                                    <Badge key={i} variant="secondary" className="text-[8px] bg-white/10">
-                                      {path.split('/').pop()}
-                                    </Badge>
-                                  ))}
-                                  {commit.paths.length > 5 && (
-                                    <Badge variant="secondary" className="text-[8px] bg-white/10">
-                                      +{commit.paths.length - 5} more
-                                    </Badge>
-                                  )}
-                                </div>
-                              </div>
-                            ))}
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      {/* Diffs */}
-                      {agentActivity.diffs.length > 0 && (
-                        <Card className="bg-white/5 border-white/10">
-                          <CardHeader className="pb-2">
-                            <div className="flex items-center gap-2">
-                              <FileDiff className="h-4 w-4 text-yellow-400" />
-                              <span className="text-sm font-medium text-white/90">File Changes</span>
-                              <Badge variant="secondary" className="text-[10px] bg-yellow-500/20">
-                                {agentActivity.diffs.length}
-                              </Badge>
-                            </div>
-                          </CardHeader>
-                          <CardContent className="space-y-2">
-                            {agentActivity.diffs.map((diff, i) => (
-                              <div key={i} className="p-3 rounded-lg border bg-yellow-500/10 border-yellow-500/30">
-                                <div className="flex items-center justify-between mb-2">
-                                  <div className="flex items-center gap-2">
-                                    <FileCode className="h-3 w-3 text-yellow-400" />
-                                    <span className="text-sm font-medium text-white/90">{diff.path}</span>
-                                  </div>
-                                  <Badge variant="secondary" className="text-[8px] bg-yellow-500/20 capitalize">
-                                    {diff.changeType}
-                                  </Badge>
-                                </div>
-                                <pre className="bg-black/30 rounded p-2 text-[10px] text-white/70 overflow-x-auto max-h-32">
-                                  {diff.diff}
-                                </pre>
-                              </div>
-                            ))}
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      {/* Token Usage */}
-                      {agentActivity.tokenUsage && (
-                        <Card className="bg-white/5 border-white/10">
-                          <CardContent className="p-3">
-                            <div className="grid grid-cols-3 gap-4 text-center">
-                              <div>
-                                <p className="text-[10px] text-white/50 mb-1">Prompt</p>
-                                <p className="text-sm font-medium text-white/90">{agentActivity.tokenUsage.prompt.toLocaleString()}</p>
-                              </div>
-                              <div>
-                                <p className="text-[10px] text-white/50 mb-1">Completion</p>
-                                <p className="text-sm font-medium text-white/90">{agentActivity.tokenUsage.completion.toLocaleString()}</p>
-                              </div>
-                              <div>
-                                <p className="text-[10px] text-white/50 mb-1">Total</p>
-                                <p className="text-sm font-medium text-green-400">{agentActivity.tokenUsage.total.toLocaleString()}</p>
-                              </div>
-                            </div>
-                          </CardContent>
-                        </Card>
-                      )}
-
-                      {/* Empty State */}
-                      {agentActivity.status === 'idle' && agentActivity.toolInvocations.length === 0 && (
-                        <div className="text-center text-white/40 text-sm py-12">
-                          <Cpu className="h-12 w-12 mx-auto mb-4 opacity-50" />
-                          <p>No agent activity yet</p>
-                          <p className="text-xs mt-1">Start a task to see real-time agent actions</p>
-                        </div>
-                      )}
-
-                      {/* Demo Controls */}
-                      <div className="pt-4 border-t border-white/10">
-                        <p className="text-xs text-white/40 mb-2">Demo Controls (for testing)</p>
-                        <div className="flex flex-wrap gap-2">
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setAgentActivity(prev => ({
-                                ...prev,
-                                status: 'thinking',
-                                currentAction: 'Analyzing request...',
-                                reasoningChunks: [...prev.reasoningChunks, {
-                                  id: Date.now().toString(),
-                                  type: 'thought',
-                                  content: 'Let me analyze this request carefully to understand what the user needs...',
-                                  timestamp: Date.now(),
-                                }],
-                              }));
-                              toast.info('Added reasoning chunk');
-                            }}
-                            className="h-6 text-xs"
-                          >
-                            Add Thought
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setAgentActivity(prev => ({
-                                ...prev,
-                                status: 'executing',
-                                currentAction: 'Writing file...',
-                                toolInvocations: [...prev.toolInvocations, {
-                                  id: Date.now().toString(),
-                                  toolName: 'write_file',
-                                  state: 'call',
-                                  args: { path: 'src/index.ts', content: 'console.log("Hello")' },
-                                  timestamp: Date.now(),
-                                }],
-                              }));
-                              toast.info('Added tool invocation');
-                            }}
-                            className="h-6 text-xs"
-                          >
-                            Add Tool
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setAgentActivity(prev => ({
-                                ...prev,
-                                gitCommits: [...prev.gitCommits, {
-                                  version: prev.gitCommits.length + 1,
-                                  filesChanged: 2,
-                                  paths: ['src/index.ts', 'src/utils.ts'],
-                                  timestamp: Date.now(),
-                                }],
-                              }));
-                              toast.info('Added git commit');
-                            }}
-                            className="h-6 text-xs"
-                          >
-                            Add Commit
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setAgentActivity(prev => ({
-                                ...prev,
-                                status: 'completed',
-                                currentAction: 'Task completed successfully',
-                                tokenUsage: {
-                                  prompt: 1250,
-                                  completion: 850,
-                                  total: 2100,
-                                },
-                              }));
-                              toast.success('Marked as completed');
-                            }}
-                            className="h-6 text-xs"
-                          >
-                            Complete
-                          </Button>
-                          <Button
-                            size="sm"
-                            variant="outline"
-                            onClick={() => {
-                              setAgentActivity({
-                                status: 'idle',
-                                currentAction: '',
-                                toolInvocations: [],
-                                reasoningChunks: [],
-                                processingSteps: [],
-                                gitCommits: [],
-                                diffs: [],
-                              });
-                              toast.info('Reset agent activity');
-                            }}
-                            className="h-6 text-xs"
-                          >
-                            Reset
-                          </Button>
-                        </div>
-                      </div>
+                      <MultiModelComparison
+                        isOpen={true}
+                        onClose={() => setTab("explorer")}
+                        availableProviders={[]}
+                        currentProvider=""
+                        currentModel=""
+                      />
                     </div>
                   </ScrollArea>
                 </TabsContent>
@@ -3142,6 +2860,138 @@ export function ExperimentalWorkspacePanel() {
             </button>
           </div>
         </>
+      )}
+
+      {/* GitHub Import Modal */}
+      {showGithubImport && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 backdrop-blur-sm">
+          <div className="bg-gray-900 border border-white/20 rounded-lg shadow-2xl w-full max-w-md p-6">
+            <div className="flex items-center justify-between mb-4">
+              <div className="flex items-center gap-3">
+                <svg className="h-6 w-6 text-white" viewBox="0 0 24 24" fill="currentColor">
+                  <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                </svg>
+                <h2 className="text-lg font-semibold text-white">Import from GitHub</h2>
+              </div>
+              <Button
+                variant="ghost"
+                size="icon"
+                onClick={() => {
+                  setShowGithubImport(false);
+                  setGithubUrl('');
+                  setImportError(null);
+                }}
+                className="h-8 w-8 text-white/70 hover:text-white"
+              >
+                <X className="h-4 w-4" />
+              </Button>
+            </div>
+            
+            <p className="text-sm text-white/60 mb-4">
+              Enter a GitHub repository URL to import files into your workspace.
+            </p>
+            
+            <Input
+              value={githubUrl}
+              onChange={(e) => {
+                setGithubUrl(e.target.value);
+                setImportError(null);
+              }}
+              placeholder="https://github.com/owner/repo"
+              className="mb-4 bg-black/40 border-white/20 text-white"
+              disabled={isImporting}
+            />
+            
+            {importError && (
+              <div className="mb-4 p-3 bg-red-500/20 border border-red-500/30 rounded text-red-400 text-sm">
+                {importError}
+              </div>
+            )}
+            
+            <div className="flex gap-3 justify-end">
+              <Button
+                variant="outline"
+                onClick={() => {
+                  setShowGithubImport(false);
+                  setGithubUrl('');
+                  setImportError(null);
+                }}
+                disabled={isImporting}
+                className="border-white/20 text-white/70"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={async () => {
+                  if (!githubUrl.trim()) {
+                    setImportError('Please enter a GitHub URL');
+                    return;
+                  }
+                  
+                  setIsImporting(true);
+                  setImportError(null);
+                  
+                  try {
+                    const response = await fetch('/api/github/import', {
+                      method: 'POST',
+                      headers: { 'Content-Type': 'application/json' },
+                      body: JSON.stringify({ url: githubUrl }),
+                    });
+                    
+                    const data = await response.json();
+                    
+                    if (!response.ok) {
+                      setImportError(data.error || 'Failed to import from GitHub');
+                      setIsImporting(false);
+                      return;
+                    }
+                    
+                    // Write imported files to VFS
+                    const files = data.files;
+                    let importedCount = 0;
+                    
+                    for (const [path, content] of Object.entries(files)) {
+                      try {
+                        await vfs.writeFile(path, content as string);
+                        importedCount++;
+                      } catch (err) {
+                        console.error(`Failed to write ${path}:`, err);
+                      }
+                    }
+                    
+                    // Refresh the filesystem state
+                    const snapshot = await vfs.getSnapshot();
+                    setVfsSnapshot(snapshot);
+                    setFilesystem({
+                      sessionId: filesystem?.sessionId || "default",
+                      version: snapshot?.version || 1,
+                      files: snapshot?.files || [],
+                    });
+                    
+                    toast.success(`Imported ${importedCount} files from ${data.repo.fullName}`);
+                    setShowGithubImport(false);
+                    setGithubUrl('');
+                  } catch (err) {
+                    setImportError(err instanceof Error ? err.message : 'Failed to import from GitHub');
+                  } finally {
+                    setIsImporting(false);
+                  }
+                }}
+                disabled={isImporting || !githubUrl.trim()}
+                className="bg-green-600 hover:bg-green-700 text-white"
+              >
+                {isImporting ? (
+                  <>
+                    <Loader2 className="h-4 w-4 mr-2 animate-spin" />
+                    Importing...
+                  </>
+                ) : (
+                  'Import'
+                )}
+              </Button>
+            </div>
+          </div>
+        </div>
       )}
     </>
   );

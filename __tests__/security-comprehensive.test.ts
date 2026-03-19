@@ -84,28 +84,29 @@ describe('Auth Token Invalidation', () => {
   it('should invalidate anonymous user cache', async () => {
     const { authCache } = await import('@/lib/auth/request-auth')
     
-    const anonId = 'anon-user-xyz'
+    // Use session ID without 'anon_' prefix (simulating cookie value format)
+    const sessionId = 'user-xyz'
     
     // Add anonymous entries
-    authCache.set(`auth::anon:${anonId}`, { 
+    authCache.set(`auth::anon:${sessionId}`, { 
       success: true, 
-      userId: `anon:${anonId}`, 
+      userId: `anon:${sessionId}`, 
       source: 'anonymous' as const 
     })
-    authCache.set(`auth::${anonId}`, { 
+    authCache.set(`auth::${sessionId}`, { 
       success: true, 
-      userId: anonId, 
+      userId: sessionId, 
       source: 'anonymous' as const 
     })
     
     // Invalidate anonymous
-    authCache.invalidateAnonymous(anonId)
+    authCache.invalidateAnonymous(sessionId)
     
     // Verify anonymous entries are removed
     const stats = authCache.getStats()
     for (const key of stats.keys) {
-      expect(key).not.toContain(`:anon:${anonId}`)
-      expect(key).not.toMatch(new RegExp(`:${anonId}$`))
+      expect(key).not.toContain(`:anon:${sessionId}`)
+      expect(key).not.toMatch(new RegExp(`:${sessionId}$`))
     }
   })
 

@@ -23,6 +23,7 @@ import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 import { toast } from "sonner"
 import { buildApiHeaders } from "@/lib/utils"
 import { sanitizeFileEditTags } from "@/lib/chat/file-edit-parser"
+import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer"
 
 /**
  * Client-side sanitization for message content
@@ -994,6 +995,32 @@ export default function MessageBubble({
                 Deny + Revert
               </Button>
             </div>
+            {/* Enhanced Diff Viewer */}
+            {fileEditInfo.applied.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-white/10">
+                <div className="flex items-center gap-2 mb-2">
+                  <FileCode className="w-4 h-4 text-white/60" />
+                  <span className="text-xs text-white/80 font-medium">Change Details</span>
+                </div>
+                <div className="space-y-2 max-h-64 overflow-y-auto">
+                  {fileEditInfo.applied.slice(0, 3).map((edit: any) => (
+                    <EnhancedDiffViewer
+                      key={`${edit.path}-${edit.version}`}
+                      path={edit.path}
+                      serverContent={edit.diff || edit.content || ''}
+                      compareWithLocal={false}
+                      compareWithGit={false}
+                      showUnsynced={false}
+                    />
+                  ))}
+                  {fileEditInfo.applied.length > 3 && (
+                    <div className="text-xs text-white/50 text-center py-2">
+                      +{fileEditInfo.applied.length - 3} more changes
+                    </div>
+                  )}
+                </div>
+              </div>
+            )}
           </div>
         )}
 
