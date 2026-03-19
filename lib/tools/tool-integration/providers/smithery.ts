@@ -15,7 +15,7 @@
  */
 
 import { z } from 'zod';
-import type { ToolProvider, ProviderExecutionRequest, ToolExecutionResult } from '../../types';
+import type { ToolProvider, ProviderExecutionRequest, ToolExecutionResult } from '../types';
 
 export interface SmitheryServerConfig {
   id: string;

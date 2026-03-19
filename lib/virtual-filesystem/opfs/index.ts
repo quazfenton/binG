@@ -1,8 +1,10 @@
 /**
  * OPFS Module Exports
- * 
+ *
  * Central export point for all OPFS functionality
  */
+
+import { getOPFSSupportInfo } from './utils';
 
 // Core service
 export {
@@ -187,8 +189,8 @@ export function isOPFSAvailable(): boolean {
   if (typeof window === 'undefined') {
     return false;
   }
-  
-  return 'storage' in window && 'getDirectory' in window.storage;
+
+  return 'storage' in window && typeof window.storage === 'object' && window.storage !== null && 'getDirectory' in window.storage;
 }
 
 /**
@@ -201,7 +203,9 @@ export function getOPFSReadiness(): {
   minVersion: string;
   recommended: boolean;
 } {
-  const supportInfo = getOPFSSupportInfo();
+  const supportInfo = typeof getOPFSSupportInfo === 'function'
+    ? getOPFSSupportInfo()
+    : { supported: false, browser: 'Unknown' };
   
   return {
     available: supportInfo.supported,

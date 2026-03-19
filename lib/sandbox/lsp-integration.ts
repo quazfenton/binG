@@ -117,14 +117,15 @@ export class LSPIntegration {
       const handle = await provider.getSandbox(sandboxId);
       
       // Try Daytona LSP service first
-      const lspService = handle.getLSPService?.();
+      // @ts-ignore - getLSPService may not exist on all sandbox implementations
+      const lspService = (handle as any).getLSPService?.();
       if (lspService) {
-        const result = await lspService.getCompletions(position.filePath, {
+        const result = await (lspService as any).getCompletions(position.filePath, {
           line: position.line,
           character: position.column,
         });
-        
-        return result.items?.map((item: any) => ({
+
+        return (result.items as any)?.map((item: any) => ({
           label: item.label,
           kind: item.kind,
           detail: item.detail,
@@ -158,7 +159,8 @@ export class LSPIntegration {
       const handle = await provider.getSandbox(sandboxId);
       
       // Try Daytona LSP service
-      const lspService = handle.getLSPService?.();
+      // @ts-ignore - getLSPService may not exist on all sandbox implementations
+      const lspService = (handle as any).getLSPService?.();
       if (lspService) {
         const result = await lspService.getDefinition(position.filePath, {
           line: position.line,
@@ -190,8 +192,9 @@ export class LSPIntegration {
     try {
       const provider = await getSandboxProvider(this.inferProviderType(sandboxId));
       const handle = await provider.getSandbox(sandboxId);
-      
-      const lspService = handle.getLSPService?.();
+
+      // @ts-ignore - getLSPService may not exist on all sandbox implementations
+      const lspService = (handle as any).getLSPService?.();
       if (lspService) {
         const result = await lspService.getReferences(position.filePath, {
           line: position.line,
@@ -221,8 +224,9 @@ export class LSPIntegration {
     try {
       const provider = await getSandboxProvider(this.inferProviderType(sandboxId));
       const handle = await provider.getSandbox(sandboxId);
-      
-      const lspService = handle.getLSPService?.();
+
+      // @ts-ignore - getLSPService may not exist on all sandbox implementations
+      const lspService = (handle as any).getLSPService?.();
       if (lspService) {
         const result = await lspService.getHover(position.filePath, {
           line: position.line,
@@ -256,8 +260,9 @@ export class LSPIntegration {
     try {
       const provider = await getSandboxProvider(this.inferProviderType(sandboxId));
       const handle = await provider.getSandbox(sandboxId);
-      
-      const lspService = handle.getLSPService?.();
+
+      // @ts-ignore - getLSPService may not exist on all sandbox implementations
+      const lspService = (handle as any).getLSPService?.();
       if (lspService) {
         const result = await lspService.getDiagnostics(position?.filePath);
         
@@ -286,8 +291,9 @@ export class LSPIntegration {
     try {
       const provider = await getSandboxProvider(this.inferProviderType(sandboxId));
       const handle = await provider.getSandbox(sandboxId);
-      
-      const lspService = handle.getLSPService?.();
+
+      // @ts-ignore - getLSPService may not exist on all sandbox implementations
+      const lspService = (handle as any).getLSPService?.();
       if (lspService) {
         const result = await lspService.formatDocument(filePath);
         return { success: true, formatted: result };

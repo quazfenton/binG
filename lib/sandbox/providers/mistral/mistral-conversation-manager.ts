@@ -69,7 +69,7 @@ export class MistralConversationManager {
   ): Promise<Conversation> {
     const normalizedInputs = this.normalizeInputs(inputs)
 
-    const response = await this.client.beta.conversations.start({
+    const response = await (this.client as any).beta.conversations.start({
       agentId,
       inputs: normalizedInputs as any,
       store: options?.store ?? true,
@@ -78,9 +78,9 @@ export class MistralConversationManager {
     })
 
     return {
-      conversationId: response.conversationId,
-      outputs: response.outputs || [],
-      usage: response.usage as unknown as TokenUsage,
+      conversationId: (response as any).conversationId,
+      outputs: (response as any).outputs || [],
+      usage: (response as any).usage as unknown as TokenUsage,
       createdAt: new Date(),
     }
   }
@@ -95,9 +95,9 @@ export class MistralConversationManager {
   ): AsyncGenerator<StreamChunk> {
     const normalizedInputs = this.normalizeInputs(inputs)
 
-    const stream = await this.client.beta.conversations.startStream({
+    const stream = await (this.client as any).beta.conversations.startStream({
       agentId,
-      inputs: normalizedInputs,
+      inputs: normalizedInputs as any,
       store: options?.store ?? true,
     })
 
@@ -121,7 +121,7 @@ export class MistralConversationManager {
   ): Promise<Conversation> {
     const normalizedInputs = this.normalizeInputs(inputs)
 
-    const response = await this.client.beta.conversations.append({
+    const response = await (this.client as any).beta.conversations.append({
       conversationId,
       conversationAppendRequest: {
         inputs: normalizedInputs as any,
@@ -131,9 +131,9 @@ export class MistralConversationManager {
     })
 
     return {
-      conversationId: response.conversationId,
-      outputs: response.outputs || [],
-      usage: response.usage as unknown as TokenUsage,
+      conversationId: (response as any).conversationId,
+      outputs: (response as any).outputs || [],
+      usage: (response as any).usage as unknown as TokenUsage,
       createdAt: new Date(),
     }
   }
@@ -148,7 +148,7 @@ export class MistralConversationManager {
   ): AsyncGenerator<StreamChunk> {
     const normalizedInputs = this.normalizeInputs(inputs)
 
-    const stream = await this.client.beta.conversations.appendStream({
+    const stream = await (this.client as any).beta.conversations.appendStream({
       conversationId,
       conversationAppendStreamRequest: {
         inputs: normalizedInputs as any,
@@ -178,19 +178,19 @@ export class MistralConversationManager {
   ): Promise<Conversation> {
     const normalizedInputs = this.normalizeInputs(inputs)
 
-    const response = await this.client.beta.conversations.restart({
+    const response = await (this.client as any).beta.conversations.restart({
       conversationId,
       conversationRestartRequest: {
         fromEntryId,
-        inputs: normalizedInputs,
+        inputs: normalizedInputs as any,
         store: options?.store ?? true,
       },
     })
 
     return {
-      conversationId: response.conversationId,
-      outputs: response.outputs || [],
-      usage: response.usage as TokenUsage,
+      conversationId: (response as any).conversationId,
+      outputs: (response as any).outputs || [],
+      usage: (response as any).usage as TokenUsage,
       createdAt: new Date(),
     }
   }
@@ -202,10 +202,10 @@ export class MistralConversationManager {
    * @returns Array of conversation entries
    */
   async getHistory(conversationId: string): Promise<ConversationEntry[]> {
-    const response = await this.client.beta.conversations.getHistory({
+    const response = await (this.client as any).beta.conversations.getHistory({
       conversationId,
     })
-    return response.entries || []
+    return (response as any).entries || []
   }
 
   /**
@@ -215,10 +215,10 @@ export class MistralConversationManager {
    * @returns Array of messages
    */
   async getMessages(conversationId: string): Promise<ConversationEntry[]> {
-    const response = await this.client.beta.conversations.getMessages({
+    const response = await (this.client as any).beta.conversations.getMessages({
       conversationId,
     })
-    return response.messages || []
+    return (response as any).messages || []
   }
 
   /**
@@ -231,12 +231,12 @@ export class MistralConversationManager {
     page?: number
     pageSize?: number
   }): Promise<Conversation[]> {
-    const response = await this.client.beta.conversations.list({
+    const response = await (this.client as any).beta.conversations.list({
       page: options?.page ?? 0,
       pageSize: options?.pageSize ?? 100,
     })
 
-    return (response || []).map((conv: any) => ({
+    return ((response as any) || []).map((conv: any) => ({
       conversationId: conv.id,
       outputs: [],
       createdAt: new Date(conv.createdAt),
@@ -257,14 +257,14 @@ export class MistralConversationManager {
     agentId?: string
     model?: string
   }> {
-    const response = await this.client.beta.conversations.get({
+    const response = await (this.client as any).beta.conversations.get({
       conversationId,
     })
 
     return {
-      id: response.id,
-      createdAt: new Date((response as any).createdAt || response.created_at),
-      updatedAt: new Date((response as any).updatedAt || response.updated_at),
+      id: (response as any).id,
+      createdAt: new Date((response as any).createdAt || (response as any).created_at),
+      updatedAt: new Date((response as any).updatedAt || (response as any).updated_at),
       agentId: (response as any).agentId || (response as any).agent_id,
       model: (response as any).model,
     }
@@ -288,18 +288,18 @@ export class MistralConversationManager {
 
     for (const entry of conversation.outputs) {
       const entryAny = entry as any
-      if (entryAny.type === 'tool.execution') {
+      if ((entryAny as any).type === 'tool.execution') {
         const execution: any = {
-          name: entryAny.name,
+          name: (entryAny as any).name,
         }
 
-        if (entryAny.info) {
-          if (entryAny.name === 'code_interpreter') {
-            execution.code = entryAny.info.code
-            execution.codeOutput = entryAny.info.code_output
+        if ((entryAny as any).info) {
+          if ((entryAny as any).name === 'code_interpreter') {
+            execution.code = (entryAny as any).info.code
+            execution.codeOutput = (entryAny as any).info.code_output
           }
-          if (entryAny.name === 'image_generation') {
-            execution.fileId = entryAny.info.file_id
+          if ((entryAny as any).name === 'image_generation') {
+            execution.fileId = (entryAny as any).info.file_id
           }
         }
 
@@ -307,8 +307,8 @@ export class MistralConversationManager {
       }
 
       // Also check message outputs for tool_file chunks
-      if (entryAny.type === 'message.output' && Array.isArray(entryAny.content)) {
-        for (const chunk of entryAny.content) {
+      if ((entryAny as any).type === 'message.output' && Array.isArray((entryAny as any).content)) {
+        for (const chunk of (entryAny as any).content) {
           if (chunk.type === 'tool_file') {
             executions.push({
               name: chunk.tool,
@@ -360,11 +360,11 @@ export class MistralConversationManager {
     code: string
     output: string
   } | null {
-    for (const entry of conversation.outputs) {
-      if (entry.type === 'tool.execution' && entry.name === 'code_interpreter') {
+    for (const entry of conversation.outputs as any) {
+      if ((entry as any).type === 'tool.execution' && (entry as any).name === 'code_interpreter') {
         return {
-          code: entry.info?.code || '',
-          output: entry.info?.code_output || '',
+          code: (entry as any).info?.code || '',
+          output: (entry as any).info?.code_output || '',
         }
       }
     }

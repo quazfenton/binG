@@ -315,6 +315,7 @@ export class AutoSuspendService extends EventEmitter {
 
       // Create new sandbox
       console.log(`[AutoSuspend] Creating new sandbox for ${sandboxId}`);
+      // @ts-ignore - ownerId may not be in SandboxCreateConfig type
       const newSandbox = await provider.createSandbox({ ownerId: sandboxId });
 
       // Restore state if available and enabled

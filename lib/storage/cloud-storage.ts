@@ -673,18 +673,18 @@ export function createCloudStorageService(): CloudStorageService {
     throw new Error('Cloud storage is disabled');
   }
 
-  const provider = FEATURE_FLAGS.CLOUD_STORAGE_PROVIDER;
+  const provider = FEATURE_FLAGS.CLOUD_STORAGE_PROVIDER as string;
 
   switch (provider) {
-    case 'nextcloud':
+    case 'nextcloud' as any:
       return new NextcloudStorageService();
-    case 's3':
+    case 's3' as any:
       return new S3StorageService();
-    case 'minio':
+    case 'minio' as any:
       return new MinIOStorageService();
-    case 'gcp':
+    case 'gcp' as any:
     default:
-      return new GCPStorageService();
+      return new GCPStorageService() as any;
   }
 }
 

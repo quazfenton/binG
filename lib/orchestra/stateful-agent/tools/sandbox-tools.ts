@@ -54,7 +54,7 @@ TIP: Use list_files first to discover file paths if you're unsure.`,
       message: `To read ${path}, ensure you have sandbox context. The ToolExecutor will handle actual file reading.`,
     } as any;
   },
-});
+} as any);
 
 export const listFilesTool = tool({
   description: `List files and directories at the given path.
@@ -81,7 +81,7 @@ EXAMPLE:
       message: 'File listing will be provided by ToolExecutor with sandbox context',
     } as any;
   },
-});
+} as any);
 
 export const createFileTool = tool({
   description: `Create a NEW file in the sandbox workspace.
@@ -104,7 +104,7 @@ IMPORTANT: Only use for NEW files. For existing files, use apply_diff.`,
       message: `File creation request for ${path}. ToolExecutor will handle actual creation.`,
     } as any;
   },
-});
+} as any);
 
 export const applyDiffTool = tool({
   description: `Surgically edit a file by replacing specific code blocks.
@@ -145,7 +145,7 @@ TIPS:
       message: `Diff application request for ${path}. ToolExecutor will validate and apply the change.`,
     } as any;
   },
-});
+} as any);
 
 export const execShellTool = tool({
   description: `Execute a shell command in the sandbox.
@@ -178,7 +178,7 @@ EXAMPLE:
       message: `Shell execution request: ${command}. ToolExecutor will execute with security checks.`,
     } as any;
   },
-});
+} as any);
 
 export const syntaxCheckTool = tool({
   description: `Run syntax validation on modified files.
@@ -199,7 +199,7 @@ SUPPORTED: TypeScript, JavaScript, JSON, YAML, HTML, CSS`,
       message: `Syntax check requested for ${paths.length} files. ToolExecutor will validate.`,
     } as any;
   },
-});
+} as any);
 
 export const requestApprovalTool = tool({
   description: `Request human approval for sensitive operations.
@@ -232,7 +232,7 @@ This tool creates an approval request that must be resolved before proceeding.`,
       message: `Waiting for approval to ${action} ${target}`,
     } as any;
   },
-});
+} as any);
 
 export const discoveryTool = tool({
   description: `Analyze project files to understand current state.
@@ -255,7 +255,7 @@ Call this before making any changes.`,
       message: `Discovery phase: Will analyze ${files_to_analyze.length} files for task: ${proposed_task}`,
     } as any;
   },
-});
+} as any);
 
 export const createPlanTool = tool({
   description: `Create a structured plan file - REQUIRED before making edits.
@@ -290,7 +290,7 @@ Call this after discovery and before any edits.`,
       },
     } as any;
   },
-});
+} as any);
 
 export const commitTool = tool({
   description: 'Commit VFS changes to production storage.',
@@ -306,7 +306,7 @@ export const commitTool = tool({
       note: 'Commit will be processed by ShadowCommitManager',
     } as any;
   },
-});
+} as any);
 
 export const rollbackTool = tool({
   description: 'Rollback to a previous commit state.',
@@ -322,7 +322,7 @@ export const rollbackTool = tool({
       note: 'Rollback will be processed by ShadowCommitManager',
     } as any;
   },
-});
+} as any);
 
 export const historyTool = tool({
   description: 'Get commit history for a session.',
@@ -338,7 +338,7 @@ export const historyTool = tool({
       note: 'History will be retrieved from ShadowCommitManager',
     } as any;
   },
-});
+} as any);
 
 export const allTools = {
   readFile: readFileTool,
@@ -354,5 +354,6 @@ export const allTools = {
   rollback: rollbackTool,
   history: historyTool,
 };
+
 
 

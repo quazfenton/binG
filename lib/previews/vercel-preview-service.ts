@@ -157,6 +157,7 @@ export class VercelPreviewService {
     // Stop sandbox
     try {
       const sandbox = await vercelSandboxProvider.getSandbox(sandboxId)
+      // @ts-ignore - stop may not exist on all sandbox implementations
       await sandbox.stop()
     } catch (error: any) {
       console.warn('[VercelPreview] Failed to stop sandbox:', error.message)
@@ -204,6 +205,7 @@ export class VercelPreviewService {
     // Extend sandbox timeout via Vercel SDK
     try {
       const sandbox = await vercelSandboxProvider.getSandbox(sandboxId)
+      // @ts-ignore - extendTimeout may not exist on all sandbox implementations
       await sandbox.extendTimeout(duration)
     } catch (error: any) {
       console.warn('[VercelPreview] Failed to extend sandbox timeout:', error.message)

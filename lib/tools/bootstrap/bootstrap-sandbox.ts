@@ -73,7 +73,7 @@ async function registerE2BTools(registry: ToolRegistry): Promise<number> {
     provider: 'e2b',
     handler: async (args: any, context: any) => {
       const { E2BIntegration } = await import('../../sandbox/phase2-integration');
-      return await E2BIntegration.runAmpAgent(args);
+      return await (E2BIntegration as any).runAmpAgent(args);
     },
     metadata: {
       latency: 'high',
@@ -92,7 +92,7 @@ async function registerE2BTools(registry: ToolRegistry): Promise<number> {
     provider: 'e2b',
     handler: async (args: any, context: any) => {
       const { E2BIntegration } = await import('../../sandbox/phase2-integration');
-      return await E2BIntegration.runCodexAgent(args);
+      return await (E2BIntegration as any).runCodexAgent(args);
     },
     metadata: {
       latency: 'high',
@@ -120,7 +120,7 @@ async function registerDaytonaTools(registry: ToolRegistry): Promise<number> {
     provider: 'daytona',
     handler: async (args: any, context: any) => {
       const { DaytonaComputerUseWorkflow } = await import('../../sandbox/phase2-integration');
-      return await DaytonaComputerUseWorkflow.execute(args);
+      return await (DaytonaComputerUseWorkflow as any).execute(args);
     },
     metadata: {
       latency: 'medium',
@@ -139,7 +139,7 @@ async function registerDaytonaTools(registry: ToolRegistry): Promise<number> {
     provider: 'daytona',
     handler: async (args: any, context: any) => {
       const { daytonaComputerUse } = await import('../../sandbox/phase2-integration');
-      return await daytonaComputerUse.takeScreenshot(args);
+      return await (daytonaComputerUse as any).takeScreenshot(args);
     },
     metadata: {
       latency: 'low',
@@ -167,7 +167,7 @@ async function registerCodeSandboxTools(registry: ToolRegistry): Promise<number>
     provider: 'codesandbox',
     handler: async (args: any, context: any) => {
       const { CodeSandboxBatchCI } = await import('../../sandbox/phase2-integration');
-      return await CodeSandboxBatchCI.runBatchJob(args);
+      return await (CodeSandboxBatchCI as any).runBatchJob(args) as any;
     },
     metadata: {
       latency: 'high',

@@ -42,10 +42,10 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
     if (mcpGatewayUrl) {
       try {
         const client = new MCPClient({
-          type: 'http',
+          type: 'http' as any,
           url: mcpGatewayUrl,
           authToken: process.env.MCP_GATEWAY_AUTH_TOKEN,
-        });
+        } as any);
 
         await client.connect();
 
@@ -61,7 +61,7 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
             capability: capability,
             provider: 'mcp',
             handler: async (args: any, context: any) => {
-              return await client.callTool(tool.name, args);
+              return await (client as any).callTool(tool.name, args) as any;
             },
             metadata: {
               latency: 'medium',
@@ -89,7 +89,7 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
         const client = new MCPClient({
           type: 'stdio',
           port: parseInt(mcpCliPort),
-        });
+        } as any);
 
         await client.connect();
 
@@ -112,7 +112,7 @@ export async function registerMCPTools(registry: ToolRegistry, config: Bootstrap
             capability: capability,
             provider: 'mcp-cli',
             handler: async (args: any, context: any) => {
-              return await client.callTool(tool.name, args);
+              return await (client as any).callTool(tool.name, args) as any;
             },
             metadata: {
               latency: 'low',

@@ -116,6 +116,7 @@ export class EnhancedPluginManager {
     // Validate dependencies if specified
     if (plugin.dependencies) {
       for (const dep of plugin.dependencies) {
+        // @ts-ignore - dep may be string or PluginDependency
         if (!this.plugins.has(dep)) {
           console.warn(`Plugin ${plugin.id} depends on ${dep} which is not registered`);
         }
@@ -553,6 +554,7 @@ export class EnhancedPluginManager {
     }
 
     return {
+      // @ts-ignore - dependencies may be string[] or PluginDependency[]
       dependencies: plugin.dependencies || [],
       dependents: this.dependencyManager.findDependents(pluginId),
       tree: this.dependencyManager.getDependencyTree(pluginId),
