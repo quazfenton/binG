@@ -10,17 +10,80 @@ import { getComposioService } from '@/lib/platforms/composio-service';
 
 const composioService = getComposioService();
 
-// Stub implementations for missing session manager
-// TODO: Implement proper session management
 export const composioSessionManager = {
-  getUserTools: async (_userId: string, _options?: any) => [],
-  searchTools: async (_userId: string, _query: string, _options?: any) => [],
-  connectAccount: async (_userId: string, _toolkit: string, _authMode?: any) => ({ success: false, error: 'Not implemented' }),
-  getConnectedAccounts: async (_userId: string) => [],
+  getUserTools: async (userId: string, options?: any) => {
+    if (!composioService) return [];
+    try {
+      const { Composio } = await import('@composio/core');
+      const client = new Composio({ apiKey: process.env.COMPOSIO_API_KEY || '' });
+      if (typeof client.create === 'function') {
+        const session = await client.create(userId);
+        if (typeof session.tools === 'function') {
+          return await session.tools();
+        }
+      }
+      return [];
+    } catch {
+      return [];
+    }
+  },
+  searchTools: async (userId: string, query: string, options?: any) => {
+    if (!composioService) return [];
+    try {
+      const { Composio } = await import('@composio/core');
+      const client = new Composio({ apiKey: process.env.COMPOSIO_API_KEY || '' });
+      const toolkits = await composioService.getAvailableToolkits();
+      const filtered = toolkits.filter((t: any) => 
+        t.name?.toLowerCase().includes(query.toLowerCase())
+      );
+      return filtered;
+    } catch {
+      return [];
+    }
+  },
+  connectAccount: async (userId: string, toolkit: string, _authMode?: any) => {
+    if (!composioService) return { success: false, error: 'Service not initialized' };
+    try {
+      const authUrl = await composioService.getAuthUrl(toolkit, userId);
+      return { success: true, authUrl };
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  },
+  getConnectedAccounts: async (userId: string) => {
+    if (!composioService) return [];
+    return composioService.getConnectedAccounts(userId);
+  },
 };
 
-export async function executeToolCall(_userId: string, _tool: string, _args?: any): Promise<any> {
-  throw new Error('Tool execution not implemented - use composioService directly');
+export async function executeToolCall(userId: string, tool: string, args?: any): Promise<any> {
+  if (!userId) {
+    throw new Error('userId is required for tool execution (security requirement)');
+  }
+
+  if (!composioService) {
+    throw new Error('Composio service not available');
+  }
+
+  try {
+    // Execute tool via Composio SDK directly
+    const { Composio } = await import('@composio/core');
+    const client = new Composio({ apiKey: process.env.COMPOSIO_API_KEY || '' });
+    const session = await client.create(userId);
+    // Session has different APIs depending on version - try executeTool
+    if (typeof (session as any).executeTool === 'function') {
+      const result = await (session as any).executeTool(tool, args || {});
+      return result;
+    }
+    if (typeof (session as any).execute === 'function') {
+      const result = await (session as any).execute(tool, args || {});
+      return result;
+    }
+    throw new Error('Session execute method not available');
+  } catch (error: any) {
+    console.error('[composio-adapter] executeToolCall failed:', error);
+    throw error;
+  }
 }
 
 export interface ToolCall {

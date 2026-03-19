@@ -35,9 +35,10 @@ export type SandboxEvent = EnhancedSandboxEvent
 // Legacy event emitter (kept for backward compatibility)
 class LegacySandboxEventEmitter extends UniversalEventEmitter {
   emit(event: string, ...args: any[]): boolean {
-    // Delegate to enhanced events - args[0] is sandboxId, args[1] is type, args[2] is data
+    // Support legacy emit(sandboxId, type, data) format for backward compatibility
     if (args.length >= 3) {
-      emitEvent(args[0] as string, args[1] as SandboxEventType, args[2] as any)
+      // Legacy format: emit(sandboxId, type, data)
+      emitEvent(args[0] as string, args[1] as SandboxEventType, args[2] as any, args[3] as any)
     }
     return super.emit(event, ...args)
   }

@@ -38,7 +38,9 @@ export function getRedisClient(): Redis {
 
 export async function closeRedisClient(): Promise<'OK' | void> {
   if (redisClient) {
-    return redisClient.quit();
+    const client = redisClient;
+    redisClient = null;
+    return client.quit();
   }
   return;
 }

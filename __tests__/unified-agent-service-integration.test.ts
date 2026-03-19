@@ -304,9 +304,15 @@ describe('Unified Agent Service', () => {
     it('should include error details in result', async () => {
       process.env.LLM_PROVIDER = 'invalid';
       delete process.env.INVALID_API_KEY;
-
+      
+      const { getLLMProvider } = await import('@/lib/sandbox/providers/llm-factory');
+      vi.mocked(getLLMProvider).mockImplementation(() => {
+        throw new Error('Unknown LLM provider: invalid');
+      });
+      
       const config: UnifiedAgentConfig = {
         userMessage: 'Task that will fail',
+        mode: 'v1-api',
       };
 
       const result = await processUnifiedAgentRequest(config);

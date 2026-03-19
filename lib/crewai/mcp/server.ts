@@ -84,8 +84,8 @@ export class MCPServer extends EventEmitter {
           this.emit('crew:completed', { name, result });
           return {
             success: true,
-            result: result.raw || result,
-            json: result.json || JSON.stringify(result),
+            result: result.raw ?? result,
+            json: result.json ?? JSON.stringify(result),
             pydantic: result.pydantic,
           };
         } catch (error) {

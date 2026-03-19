@@ -4,8 +4,6 @@
 
 export const puterFS = {
   async write(path: string, content: string) {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
     const puter = typeof window !== 'undefined' ? (window as any).puter : undefined
     if (puter?.fs?.write) return puter.fs.write(path, content)
     if (typeof (window as any).__COMPOSIO_CALL__ === 'function') return (window as any).__COMPOSIO_CALL__('cloud.fs.write', { path, content })
@@ -13,8 +11,6 @@ export const puterFS = {
   },
 
   async read(path: string) {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
     const puter = typeof window !== 'undefined' ? (window as any).puter : undefined
     if (puter?.fs?.read) return puter.fs.read(path)
     if (typeof (window as any).__COMPOSIO_CALL__ === 'function') return (window as any).__COMPOSIO_CALL__('cloud.fs.read', { path })
@@ -22,8 +18,6 @@ export const puterFS = {
   },
 
   async list(prefix = '') {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
     const puter = typeof window !== 'undefined' ? (window as any).puter : undefined
     if (puter?.fs?.list) return puter.fs.list(prefix)
     if (typeof (window as any).__COMPOSIO_CALL__ === 'function') return (window as any).__COMPOSIO_CALL__('cloud.fs.list', { prefix })
@@ -33,8 +27,6 @@ export const puterFS = {
 
 export const puterKV = {
   async set(key: string, value: string) {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
     const puter = typeof window !== 'undefined' ? (window as any).puter : undefined
     if (puter?.kv?.set) return puter.kv.set(key, value)
     if (typeof (window as any).__COMPOSIO_CALL__ === 'function') return (window as any).__COMPOSIO_CALL__('cloud.kv.set', { key, value })
@@ -42,8 +34,6 @@ export const puterKV = {
   },
 
   async get(key: string) {
-    // eslint-disable-next-line @typescript-eslint/ban-ts-comment
-    // @ts-ignore
     const puter = typeof window !== 'undefined' ? (window as any).puter : undefined
     if (puter?.kv?.get) return puter.kv.get(key)
     if (typeof (window as any).__COMPOSIO_CALL__ === 'function') return (window as any).__COMPOSIO_CALL__('cloud.kv.get', { key })

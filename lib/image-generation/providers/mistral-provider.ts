@@ -223,11 +223,10 @@ export class MistralImageProvider implements ImageGenerationProvider {
       tools: [
         {
           type: 'image_generation' as any,
-          // Explicitly configure the image_generation connector
-          // @ts-ignore - config is supported by the API but not in the type definition
-          config: {
+          // Explicitly configure the image_generation connector - cast to any to bypass type limitations
+          ...( { config: {
             model: 'flux-pro-1.1-ultra',
-          }
+          }} as any)
         }
       ],
     });
@@ -401,10 +400,11 @@ export class MistralImageProvider implements ImageGenerationProvider {
               } else if (typeof fileResponse === 'object' && fileResponse !== null) {
                 // Check if it's a ReadableStream (Node.js fetch) - actually consume it!
                 const objWithBody = fileResponse as any;
-                if (objWithBody.body instanceof ReadableStream) {
+                const fr = fileResponse as any;
+                if (fr instanceof ReadableStream || objWithBody.body instanceof ReadableStream) {
                   console.log('[MistralProvider] Got ReadableStream, consuming...');
                   try {
-                    const stream = objWithBody.body;
+                    const stream = fr instanceof ReadableStream ? fr : objWithBody.body;
                     const reader = stream.getReader();
                     const chunks: Uint8Array[] = [];
                     

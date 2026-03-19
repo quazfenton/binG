@@ -375,7 +375,7 @@ export class E2BStructuredOutputManager {
                 required: ['file', 'category', 'comment'],
               },
             },
-            overallScore: { type: 'number' as any },
+            overallScore: { type: 'number', minimum: 0, maximum: 100 } as any,
           },
           required: ['feedback', 'overallScore'],
         };

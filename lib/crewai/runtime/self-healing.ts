@@ -238,7 +238,7 @@ export class SelfHealingExecutor extends EventEmitter {
         this.emit('execution:start', { agentId, attempt: retryBudget.getState().totalAttempts + 1 });
 
         const crewAny = crew as any;
-        const result = await crewAny.kickoff(input);
+        const result = await crewAny.kickoff({ inputs: { message: input } });
 
         retryBudget.recordSuccess();
         this.emit('execution:success', { agentId, result });

@@ -196,8 +196,7 @@ export function validateCommand(
       if (typeof allowed === 'string') {
         return command.startsWith(allowed);
       }
-      // @ts-ignore - allowed could be RegExp
-      return allowed.test(command);
+      return (allowed as RegExp).test(command);
     });
 
     if (!isAllowed) {
@@ -286,13 +285,13 @@ export function validateCommandArgs(
  * }
  * ```
  */
-export function validateCommandExecution(
+export async function validateCommandExecution(
   command: string,
   args: string[] = [],
   cwd?: string,
   env?: Record<string, string>,
   config: CommandSecurityConfig = DEFAULT_COMMAND_SECURITY_CONFIG
-): CommandValidationResult {
+): Promise<CommandValidationResult> {
   // Validate main command
   const commandValidation = validateCommand(command, config);
   if (!commandValidation.valid) {
@@ -307,7 +306,6 @@ export function validateCommandExecution(
 
   // Validate working directory if provided
   if (cwd) {
-    // @ts-ignore - dynamic import returns Promise
     const { validatePath } = await import('./filesystem-security');
     const cwdValidation = validatePath(cwd);
     if (!cwdValidation.valid) {
@@ -423,7 +421,7 @@ export function createCommandValidator(config: Partial<CommandSecurityConfig> = 
     ...config,
   };
 
-  return function validate(command: string, args?: string[]): CommandValidationResult {
+  return async function validate(command: string, args?: string[]): Promise<CommandValidationResult> {
     return validateCommandExecution(command, args, undefined, undefined, fullConfig);
   };
 }
@@ -460,7 +458,7 @@ export const CommandExecutionSchema = z.object({
  * @param data - Request data
  * @returns Validation result
  */
-export function validateCommandExecutionRequest(data: unknown): {
+export async function validateCommandExecutionRequest(data: unknown): Promise<{
   valid: true;
   data: z.infer<typeof CommandExecutionSchema>;
 } | {
@@ -471,7 +469,7 @@ export function validateCommandExecutionRequest(data: unknown): {
     code?: string;
     details?: any;
   };
-} {
+}> {
   const result = CommandExecutionSchema.safeParse(data);
 
   if (!result.success) {
@@ -490,7 +488,7 @@ export function validateCommandExecutionRequest(data: unknown): {
 
   // Additional security validation
   const { command, args, cwd, env } = result.data;
-  const validation = validateCommandExecution(command, args, cwd, env);
+  const validation = await validateCommandExecution(command, args, cwd, env);
 
   if (!validation.valid) {
     return {
@@ -499,8 +497,6 @@ export function validateCommandExecutionRequest(data: unknown): {
         type: 'security_error',
         message: validation.error!.message,
         code: validation.error!.code,
-        // @ts-ignore - blockedPattern may exist on extended error type
-        blockedPattern: validation.error!.blockedPattern,
       },
     };
   }

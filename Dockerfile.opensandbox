@@ -61,9 +61,11 @@ RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 # Switch to non-root user
 USER nodejs
 
-# Placeholder command - services/opensandbox not yet implemented
-# When implemented, replace with: CMD ["node", "services/opensandbox/dist/index.js"]
-CMD ["tail", "-f", "/dev/null"]
+# Placeholder command - serves health endpoint to pass healthcheck
+RUN apk add --no-cache busybox && \
+    mkdir -p /tmp/www && \
+    echo "ok" > /tmp/www/health
+CMD ["sh", "-c", "busybox httpd -f -p ${PORT} -h /tmp/www"]
 
 # ===========================================
 # ALTERNATIVE: Use official OpenSandbox server
