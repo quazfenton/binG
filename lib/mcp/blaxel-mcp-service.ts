@@ -114,16 +114,16 @@ export class BlaxelMcpService {
     if (!result.success) {
       // If parsing fails, return data with defaults applied manually
       return {
-        id: data.id || serverId || `blaxel-${Date.now()}`,
-        name: data.name || serverId || 'unknown',
-        status: (data.status as any) || 'deployed',
-        endpoint: data.endpoint,
-        transport: (data.transport as any) || 'http-stream',
-        tools: data.tools || [],
-        createdAt: data.createdAt || new Date().toISOString(),
-        updatedAt: data.updatedAt || new Date().toISOString(),
-        runtime: data.runtime,
-        region: data.region,
+        id: data?.id || serverId || `blaxel-${Date.now()}`,
+        name: data?.name || serverId || 'unknown',
+        status: data?.status === 'deploying' || data?.status === 'deployed' || data?.status === 'error' || data?.status === 'deleted' ? data.status : 'deployed',
+        endpoint: data?.endpoint,
+        transport: data?.transport === 'websocket' || data?.transport === 'http-stream' ? data.transport : 'http-stream',
+        tools: Array.isArray(data?.tools) ? data.tools : [],
+        createdAt: data?.createdAt || new Date().toISOString(),
+        updatedAt: data?.updatedAt || new Date().toISOString(),
+        runtime: data?.runtime,
+        region: data?.region,
       } as BlaxelMcpServer;
     }
     // Ensure required fields are present

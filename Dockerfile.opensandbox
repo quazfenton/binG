@@ -58,13 +58,12 @@ HEALTHCHECK --interval=30s --timeout=10s --start-period=40s --retries=3 \
 # Create non-root user
 RUN addgroup -g 1001 -S nodejs && adduser -S nodejs -u 1001
 
-# Switch to non-root user
-USER nodejs
-
 # Placeholder command - serves health endpoint to pass healthcheck
+USER root
 RUN apk add --no-cache busybox && \
     mkdir -p /tmp/www && \
     echo "ok" > /tmp/www/health
+USER nodejs
 CMD ["sh", "-c", "busybox httpd -f -p ${PORT} -h /tmp/www"]
 
 # ===========================================

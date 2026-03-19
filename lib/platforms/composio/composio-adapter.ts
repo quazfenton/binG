@@ -34,7 +34,7 @@ export const composioSessionManager = {
       const client = new Composio({ apiKey: process.env.COMPOSIO_API_KEY || '' });
       const toolkits = await composioService.getAvailableToolkits();
       const filtered = toolkits.filter((t: any) => 
-        t.name?.toLowerCase().includes(query.toLowerCase())
+        String(t.name || '').toLowerCase().includes(query.toLowerCase())
       );
       return filtered;
     } catch {

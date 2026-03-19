@@ -64,12 +64,13 @@ interface EventStore {
 const eventStores = new Map<string, EventStore>()
 const MAX_EVENTS_PER_SANDBOX = parseInt(process.env.MAX_EVENTS_PER_SANDBOX || '1000', 10)
 const EVENT_TTL_MS = parseInt(process.env.EVENT_TTL_MS || (4 * 60 * 60 * 1000).toString(), 10) // 4 hours default
-const listenerCounts = new Map<string, number>()
 
 /**
  * Enhanced sandbox event emitter with persistence and replay
  */
 export class EnhancedSandboxEventEmitter extends UniversalEventEmitter {
+  private listenerCounts = new Map<string, number>()
+  
   /**
    * Emit event with persistence
    * 
@@ -178,12 +179,17 @@ export class EnhancedSandboxEventEmitter extends UniversalEventEmitter {
     
     const targetChannel = sandboxId === '*' ? '*' : sandboxId
     this.on(targetChannel, listener)
-    listenerCounts.set(sandboxId, (listenerCounts.get(sandboxId) || 0) + 1)
+    this.listenerCounts.set(sandboxId, (this.listenerCounts.get(sandboxId) || 0) + 1)
     
     // Return unsubscribe function
     return () => {
       this.off(targetChannel, listener)
-      listenerCounts.set(sandboxId, Math.max(0, (listenerCounts.get(sandboxId) || 0) - 1))
+      const nextCount = (this.listenerCounts.get(sandboxId) || 0) - 1
+      if (nextCount <= 0) {
+        this.listenerCounts.delete(sandboxId)
+      } else {
+        this.listenerCounts.set(sandboxId, nextCount)
+      }
     }
   }
 
@@ -386,7 +392,7 @@ export class EnhancedSandboxEventEmitter extends UniversalEventEmitter {
    * Get subscriber count for a sandbox
    */
   getSubscriberCount(sandboxId: string): number {
-    return listenerCounts.get(sandboxId) || 0;
+    return this.listenerCounts.get(sandboxId) || 0;
   }
 
   /**

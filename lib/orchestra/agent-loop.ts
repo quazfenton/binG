@@ -77,6 +77,9 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
         sandboxEvents.emit(sandboxId, 'agent:reasoning_chunk', { text: chunk, type })
         onReasoningChunk?.(chunk, type)
       },
+      onReasoningComplete: () => {
+        sandboxEvents.emit(sandboxId, 'agent:reasoning_complete', {})
+      },
     } as any)
 
     sandboxEvents.emit(sandboxId, 'agent:complete', {

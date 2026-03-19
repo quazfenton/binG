@@ -87,6 +87,9 @@ export class ObjectStorageIntegration {
       const storageService = (handle as any).getObjectStorageService?.();
       if (storageService) {
         const readResult = await (handle as any).readFile(options.localPath);
+        if (!readResult?.success || readResult.output === undefined) {
+          throw new Error(readResult?.output || `Failed to read file: ${options.localPath}`);
+        }
         const result = await (storageService as any).upload({
           key: options.storageKey,
           content: readResult.output,
@@ -144,14 +147,21 @@ export class ObjectStorageIntegration {
       const storageService = (handle as any).getObjectStorageService?.();
       if (storageService) {
         const result = await (storageService as any).download({
-          storageKey: options.storageKey,
-          localPath: options.localPath,
+          key: options.storageKey,
         });
         
+        if (result.success && result.data?.content) {
+          // Write content to localPath
+          const fs = require('fs');
+          const dir = require('path').dirname(options.localPath);
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(options.localPath, result.data.content);
+        }
+        
         return {
-          success: true,
+          success: result.success,
           localPath: options.localPath,
-          size: result.size,
+          size: result.data?.size || 0,
         };
       }
       

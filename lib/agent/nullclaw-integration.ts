@@ -121,7 +121,7 @@ class NullclawIntegration {
     timeout: (() => {
       const rawTimeout = Number(process.env.NULLCLAW_REQUEST_TIMEOUT_MS ?? process.env.NULLCLAW_TIMEOUT ?? '300000');
       if (!Number.isFinite(rawTimeout) || rawTimeout <= 0) return 300000;
-      return rawTimeout < 1000 ? rawTimeout * 1000 : rawTimeout;
+      return rawTimeout;
     })(),
     allowedDomains: (process.env.NULLCLAW_ALLOWED_DOMAINS || 'openrouter.ai,api.discord.com,api.telegram.org').split(','),
     healthCheckTimeout: parseInt(process.env.NULLCLAW_HEALTH_TIMEOUT || '30000'),

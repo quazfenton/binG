@@ -301,19 +301,7 @@ export class SmitheryService {
     });
     const result = SmitheryServerSchema.safeParse(response);
     if (!result.success) {
-      // If parsing fails, return response with defaults applied manually
-      return {
-        namespace: response.namespace || 'unknown',
-        name: response.name || qualifiedName,
-        displayName: response.displayName || response.name || qualifiedName,
-        description: response.description || '',
-        verified: response.verified || false,
-        deploymentStatus: response.deploymentStatus || 'external',
-        tools: response.tools || [],
-        mcpEndpoint: response.mcpEndpoint,
-        iconUrl: response.iconUrl,
-        starCount: response.starCount,
-      } as SmitheryServiceServer;
+      throw new Error(`Invalid Smithery server response: ${result.error?.message || 'Unknown error'}`);
     }
     // Ensure required fields are present
     return {

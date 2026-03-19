@@ -1,13 +1,31 @@
 /**
  * Safe Diff Operations System
  *
- * Provides enhanced safety mechanisms for diff operations including:
+ * ARCHITECTURE: Enterprise-grade validation layer for structured diff operations.
+ * 
+ * PURPOSE: Validates and applies DiffOperation[] objects with safety features.
+ * This is NOT LLM text parsing - receives structured objects from the tool system.
+ * 
+ * STATUS: NOT WIRED IN (59% test pass rate - 22/37 tests passing)
+ * - 15 tests failing due to unimplemented features (dependency/semantic analysis)
+ * - See __tests__/safe-diff-operations.test.ts for details
+ * 
+ * DIFFERENT FROM:
+ * - file-edit-parser.ts: Parses LLM text to extract edit commands
+ * - file-diff-utils.ts: Client-side preview of diffs (UI only)
+ * - tool-executor.ts: Simple search/replace to sandbox/VFS (production-ready)
+ * 
+ * Features (production-ready):
  * - Pre-execution validation for code changes
  * - Rollback mechanisms for failed operations
  * - Change tracking and conflict resolution
  * - Syntax validation before applying diffs
  * - Backup and recovery systems
  * - Conflict detection and resolution
+ * 
+ * Features (unimplemented/buggy):
+ * - Dependency conflict detection (buggy)
+ * - Semantic impact analysis (unimplemented)
  */
 
 import { EventEmitter } from 'node:events';
@@ -469,8 +487,9 @@ class SafeDiffOperations extends EventEmitter {
       fileState
     );
 
+    let timeoutHandle: NodeJS.Timeout | undefined;
     const timeoutPromise = new Promise<ValidationResult>((resolve) => {
-      setTimeout(() => {
+      timeoutHandle = setTimeout(() => {
         resolve({
           isValid: false,
           errors: [`Validation timeout: exceeded ${timeoutMs}ms`],
@@ -481,7 +500,11 @@ class SafeDiffOperations extends EventEmitter {
       }, timeoutMs);
     });
 
-    return Promise.race([validationPromise, timeoutPromise]);
+    try {
+      return await Promise.race([validationPromise, timeoutPromise]);
+    } finally {
+      if (timeoutHandle) clearTimeout(timeoutHandle);
+    }
   }
 
   /**

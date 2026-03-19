@@ -37,6 +37,10 @@ const nextConfig = {
   },
   images: {
     unoptimized: false,
+    // SECURITY: Use custom loader for dynamic image validation instead of wildcard
+    // This allows custom images while blocking SSRF-prone domains at runtime
+    loader: 'custom',
+    loaderFile: './lib/utils/image-loader.ts',
     remotePatterns: [
       {
         protocol: 'https',
@@ -86,6 +90,7 @@ const nextConfig = {
         protocol: 'https',
         hostname: 'media.giphy.com',
       },
+      // Allow any HTTPS hostname for custom images (validated at runtime)
       {
         protocol: 'https',
         hostname: '**',

@@ -10,6 +10,7 @@ import { OPFSCore, OPFSError, opfsCore } from '@/lib/virtual-filesystem/opfs/opf
 
 // Mock browser storage API
 const mockFileHandle = {
+  kind: 'file',
   getFile: vi.fn().mockResolvedValue({
     text: vi.fn().mockResolvedValue('test content'),
     size: 12,
@@ -21,9 +22,20 @@ const mockFileHandle = {
   }),
 };
 
-const mockDirHandle = {
+const mockSubDirHandle = {
+  kind: 'directory',
   getFileHandle: vi.fn().mockResolvedValue(mockFileHandle),
   getDirectoryHandle: vi.fn().mockResolvedValue({}),
+  removeEntry: vi.fn().mockResolvedValue(undefined),
+  entries: vi.fn().mockImplementation(async function* () {
+    // Empty directory
+  }),
+};
+
+const mockDirHandle = {
+  kind: 'directory',
+  getFileHandle: vi.fn().mockResolvedValue(mockFileHandle),
+  getDirectoryHandle: vi.fn().mockResolvedValue(mockSubDirHandle),
   removeEntry: vi.fn().mockResolvedValue(undefined),
   entries: vi.fn().mockImplementation(async function* () {
     yield ['test.txt', mockFileHandle];
@@ -121,20 +133,20 @@ describe('OPFSCore', () => {
     it('should initialize successfully with valid workspace ID', async () => {
       const core = new OPFSCore();
       await core.initialize('test-workspace');
-      
+
       expect(core.isInitialized()).toBe(true);
       expect(core.getWorkspaceId()).toBe('test-workspace');
-      expect(mockStorage.getDirectory).toHaveBeenCalledWith('vfs-workspace/test-workspace');
+      expect((global.navigator as any).storage.getDirectory).toHaveBeenCalledWith('vfs-workspace/test-workspace');
     });
 
     it('should throw error when storage API is not available', async () => {
-      const originalStorage = (global.window as any).storage;
-      (global.window as any).storage = undefined;
-      
+      const originalStorage = (global.navigator as any).storage;
+      (global.navigator as any).storage = undefined;
+
       const core = new OPFSCore();
       await expect(core.initialize('test')).rejects.toThrow('OPFS not supported');
-      
-      (global.window as any).storage = originalStorage;
+
+      (global.navigator as any).storage = originalStorage;
     });
 
     it('should emit initialized event', async () => {

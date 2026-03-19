@@ -6,6 +6,8 @@
  * and code preview panel triggers.
  */
 
+import { extractFileEdits, extractFencedDiffEdits, isFullFileContent } from './file-edit-parser';
+
 export type AppMode = 'chat' | 'code' | 'extras' | 'integrations' | 'shell';
 
 export interface ProcessedResponse {
@@ -229,22 +231,29 @@ export class ModeManager {
   private detectFileDiffs(content: string): FileDiff[] {
     const diffs: FileDiff[] = [];
 
-    // Look for diff blocks
-    const diffRegex = /```diff\s+(.+?)\n([\s\S]*?)```/g;
-    let match;
-
-    while ((match = diffRegex.exec(content)) !== null) {
-      const [, path, diffContent] = match;
-      
+    // Use shared parser for <file_edit> tags (both compact and multi-line formats)
+    const fileEdits = extractFileEdits(content);
+    for (const edit of fileEdits) {
       diffs.push({
-        path: path.trim(),
-        diff: diffContent.trim(),
-        type: this.determineDiffType(diffContent),
+        path: edit.path,
+        diff: edit.content,
+        type: isFullFileContent(edit.content) ? 'create' : 'modify',
+      });
+    }
+
+    // Use shared parser for fenced diff blocks
+    const fencedDiffs = extractFencedDiffEdits(content);
+    for (const diff of fencedDiffs) {
+      diffs.push({
+        path: diff.path,
+        diff: diff.diff,
+        type: this.determineDiffType(diff.diff),
       });
     }
 
     // Look for COMMANDS blocks with write_diffs
     const commandsRegex = /=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/g;
+    let match;
     while ((match = commandsRegex.exec(content)) !== null) {
       const commandBlock = match[1];
       const diffsMatch = commandBlock.match(/write_diffs:\s*\[([\s\S]*?)\]/);
