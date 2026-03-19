@@ -244,11 +244,10 @@ export {
   getProviderPreviewUrl,
   getPreview,
   createSmartPreview,
-  type PreviewProvider,
+  type PreviewMode,
   type AppFramework,
-  type PreviewContext,
-  type PreviewResult,
-  type SmartPreviewConfig,
+  type PreviewRequest,
+  type ProjectDetection,
 } from './phase2-integration';
 
 // ==================== Phase 3 Integration (NEW) ====================

@@ -187,7 +187,7 @@ export const checkSyntaxParallelStep = createStep({
         const result = await syntaxCheckTool.execute({
           context: {
             code: file.content,
-            language: language as 'python' | 'typescript' | 'javascript',
+            language: (language === 'typescript' ? 'javascript' : language) as 'python' | 'javascript',
           },
         });
 

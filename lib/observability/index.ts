@@ -263,7 +263,7 @@ export class ObservabilityManager {
     });
 
     // Record error metric
-    this.recordMetric('errors', { count: 1 });
+    this.recordError('errors', error);
   }
 
   /**

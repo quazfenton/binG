@@ -17,8 +17,7 @@ import fetch from 'node-fetch';
 import * as fs from 'fs/promises';
 import { getOpenCodeEngine, OpenCodeEngine, type OpenCodeEvent } from './opencode-engine';
 import { checkpointManager, type AgentCheckpoint } from './checkpoint-manager';
-import { taskRouter } from '../../task-router';
-import { executeV2Task } from '../../v2-executor';
+import { taskRouter } from '../../../task-router';
 import { providerRouter, latencyTracker } from '../../../../sandbox/provider-router';
 import { determineExecutionPolicy } from '../../../../sandbox/types';
 
@@ -180,7 +179,7 @@ async function runOpenCode(job: AgentJob): Promise<void> {
     logger.info('Execution policy determined', { policy: executionPolicy, jobId });
 
     // Step 2: Select optimal provider using provider-router
-    const providerSelection = await providerRouter.selectOptimalProvider({
+    const providerSelection = await providerRouter.selectWithServices({
       type: 'agent',
       duration: executionPolicy === 'local-safe' ? 'short' : 'medium',
       requiresPersistence: executionPolicy === 'persistent-sandbox',
@@ -249,7 +248,7 @@ async function runOpenCode(job: AgentJob): Promise<void> {
 
     // Record latency for provider router
     const latency = Date.now() - startTime;
-    latencyTracker.record(providerSelection.provider, latency, result.success !== false);
+    latencyTracker.record(providerSelection.provider, latency);
 
     // Emit completion
     await publishEvent({
@@ -278,7 +277,7 @@ async function runOpenCode(job: AgentJob): Promise<void> {
 
     // Record failed latency
     try {
-      latencyTracker.record('daytona' as any, latency, false);
+      latencyTracker.record('daytona' as any, latency);
     } catch {}
 
     await publishEvent({

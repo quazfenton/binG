@@ -194,7 +194,7 @@ export class TerminalEditorHandler {
 
     // Enter/Return
     if (input === '\r' || input === '\n') {
-      writeLine('')
+      this.writeLine('')
 
       // Handle vim command mode
       const currentLine = this.session.lines[this.session.cursorLine] || ''
@@ -270,7 +270,7 @@ export class TerminalEditorHandler {
     }
 
     if (input === '\x12') { // ^R - Insert file
-      writeLine('\x1b[90mFile to insert [from ./]: \x1b[0m')
+      this.writeLine('\x1b[90mFile to insert [from ./]: \x1b[0m')
       this.render()
       return
     }
@@ -320,8 +320,8 @@ export class TerminalEditorHandler {
       // Quit without saving
       this.updateTerminalState({ mode: 'local' })
       const cwd = this.getCwd()
-      writeLine(`\x1b[90mExit without saving.\x1b[0m`)
-      write(this.getPrompt(cwd))
+      this.writeLine(`\x1b[90mExit without saving.\x1b[0m`)
+      this.write(this.getPrompt(cwd))
       this.session = null
       return
     }

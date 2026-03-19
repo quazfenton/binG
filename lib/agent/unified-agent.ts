@@ -56,8 +56,8 @@ const log = createLogger('UnifiedAgent')
 
 export interface UnifiedAgentConfig {
   /** Sandbox provider (e2b, daytona, blaxel, etc.) */
-  provider: 'e2b' | 'daytona' | 'blaxel' | 'sprites' | 'codesandbox' | 'microsandbox'
-  
+  provider?: 'e2b' | 'daytona' | 'blaxel' | 'sprites' | 'codesandbox' | 'microsandbox'
+
   /** User ID for session ownership */
   userId?: string
   

@@ -17,7 +17,7 @@ import { createLogger } from '@/lib/utils/logger';
 import { getSandboxProvider, getSandboxProviderWithFallback } from '../../lib/sandbox/providers';
 import type { SandboxHandle, SandboxCreateConfig, SandboxProviderType } from '@/lib/sandbox/providers';
 import { backgroundExecutor } from '@/lib/agent/background-jobs';
-import { createResourceMonitor, type ResourceMonitor } from '@/lib/management/resource-monitor';
+import { resourceMonitor, createResourceMonitor } from '@/lib/management/resource-monitor';
 import Redis from 'ioredis';
 
 const logger = createLogger('SandboxPool');
@@ -37,7 +37,7 @@ interface PooledSandbox {
   createdAt: number;
   lastUsed: number;
   status: 'available' | 'in-use' | 'draining' | 'error';
-  resourceMonitor?: ResourceMonitor;
+  resourceMonitor?: ReturnType<typeof createResourceMonitor>;
 }
 
 class SandboxPoolService {
@@ -255,7 +255,7 @@ class SandboxPoolService {
 
     // Destroy the sandbox
     try {
-      const { getSandboxProvider } = await import('../lib/sandbox/providers');
+      const { getSandboxProvider } = await import('../../lib/sandbox/providers');
       const provider = await getSandboxProvider(pooled.provider);
       await provider.destroySandbox(sandboxId);
     } catch (error: any) {

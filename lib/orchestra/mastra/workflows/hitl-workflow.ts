@@ -95,7 +95,7 @@ export const syntaxCheckStep = createStep({
 
       // @ts-ignore - language 'typescript' may not be in enum but is supported
       const result = await syntaxCheckTool.execute({
-        context: { code, language: 'typescript' },
+        context: { code, language: 'javascript' },
       });
 
       return {

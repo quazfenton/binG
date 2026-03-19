@@ -844,6 +844,7 @@ export class LivePreviewOffloading {
     const hasJsx = filePaths.some(p => p.endsWith('.jsx') || p.endsWith('.tsx'));
     const hasTsx = filePaths.some(p => p.endsWith('.tsx'));
     const hasAngularFiles = filePaths.some(p => p.includes('.component.') || p.includes('.module.'));
+    const hasAngular = deps['@angular/core'] || hasAngularFiles;
 
     // Check for config files
     const hasNextConfig = filePaths.some(p => p.includes('next.config'));

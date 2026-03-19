@@ -61,7 +61,7 @@ async function processWorkflowJob(job: Job<JobData>): Promise<JobResult> {
     await job.updateProgress(50);
 
     // Execute workflow
-    const result = await run.execute({ inputData });
+    const result = await run.start({ inputData });
 
     // Update progress
     await job.updateProgress(90);

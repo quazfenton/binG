@@ -158,7 +158,7 @@ export function useAgent(options: UseAgentOptions = {}): UseAgentReturn {
       // Get MCP tools if available
       try {
         const tools = await newAgent.mcpListTools()
-        setMcpTools(tools)
+        setMcpTools(tools.map(t => ({ name: t.name, description: t.description || '' })))
       } catch {
         // MCP not enabled
       }

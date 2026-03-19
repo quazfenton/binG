@@ -6,8 +6,12 @@ import {
   LocalParticipant,
   AudioTrack,
   LocalAudioTrack,
-  type LocalTrackOptions,
 } from "livekit-client";
+
+// LocalTrackOptions type from livekit-client
+interface LocalTrackOptions {
+  name?: string;
+}
 
 export interface VoiceSettings {
   enabled: boolean;
@@ -35,7 +39,7 @@ class VoiceService {
   private room: Room | null = null;
   private isConnected = false;
   private eventHandlers: VoiceEventHandler[] = [];
-  private recognition: SpeechRecognition | null = null;
+  private recognition: any | null = null;
   private synthesis: SpeechSynthesis | null = null;
   private voices: SpeechSynthesisVoice[] = [];
   private isListening = false;
@@ -572,7 +576,7 @@ export type { VoiceService };
 // Note: These are ambient declarations that augment the global scope
 declare global {
   interface Window {
-    SpeechRecognition: typeof SpeechRecognition;
-    webkitSpeechRecognition: typeof SpeechRecognition;
+    SpeechRecognition: any;
+    webkitSpeechRecognition: any;
   }
 }

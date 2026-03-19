@@ -2295,10 +2295,13 @@ function SettingsPanel() {
     const [id] = state.events.selected;
     if (!id) return { selected: null };
     const node = state.nodes[id];
+    const nodeType = node?.data?.type;
     return {
       selected: {
         id,
-        name: node?.data?.type?.resolvedName ?? node?.data?.displayName ?? "Unknown",
+        name: (typeof nodeType === 'object' && nodeType && 'resolvedName' in nodeType) 
+          ? (nodeType as any).resolvedName 
+          : node?.data?.displayName ?? "Unknown",
         props: node?.data?.props ?? {},
       },
     };
@@ -2731,9 +2734,9 @@ function SettingsPanel() {
                     key={presetName}
                     onClick={() => {
                       const preset = FRAMER_PRESETS[presetName as keyof typeof FRAMER_PRESETS];
-                      if (preset.initial) setFramerInitial(preset.initial);
-                      if (preset.animate) setFramerAnimate(preset.animate);
-                      if (preset.exit) setFramerExit(preset.exit);
+                      if ('initial' in preset && preset.initial) setFramerInitial(preset.initial as any);
+                      if ('animate' in preset && preset.animate) setFramerAnimate(preset.animate as any);
+                      if ('exit' in preset && preset.exit) setFramerExit(preset.exit as any);
                       toast.success(`Applied preset: ${presetName}`);
                     }}
                     className="px-2 py-1.5 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[9px] text-[#8b949e] hover:text-white transition-colors capitalize"

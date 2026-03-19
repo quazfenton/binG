@@ -110,6 +110,8 @@ const TaskGraphSchema = z.object({
 
 export class StatefulAgent {
   private sessionId: string;
+  private conversationId: string;
+  private userId: string;
   private sandboxHandle?: SandboxHandle;
   private vfs: Record<string, string> = {};
   private transactionLog: Array<{ path: string; type: string; timestamp: number; originalContent?: string }> = [];
@@ -121,6 +123,7 @@ export class StatefulAgent {
   private retryCount: number = 0;
   private steps: number = 0;
   private toolExecutor: ToolExecutor;
+  public executionMode: 'quick' | 'standard' | 'thorough' = 'standard';
 
   // Task Decomposition Engine
   private taskGraph?: TaskGraph;
@@ -736,29 +739,31 @@ Use 'createFile' for new files.`;
           // Execute tool calls via ToolExecutor
           for (const call of toolCalls) {
             try {
-              const execResult = await this.toolExecutor.execute(call.toolName, call.toolCallId ? call.args : {});
-              
+              const callArgs = (call as any).args || (call as any).input || {};
+              const execResult = await this.toolExecutor.execute(call.toolName, call.toolCallId ? callArgs : {});
+
               // Record for loop detection
-              const loopResult = this.loopDetector.recordToolCall(call.toolName, call.args, execResult);
+              const loopResult = this.loopDetector.recordToolCall(call.toolName, callArgs, execResult);
               if (loopResult.isLoop) {
-                log.warn('Loop detected in tool execution', { 
+                log.warn('Loop detected in tool execution', {
                   tool: call.toolName,
                   reason: loopResult.reason,
                   severity: loopResult.severity,
                 });
-                
+
                 if (loopResult.suggestedAction === 'terminate') {
                   throw new Error(`Infinite loop detected: ${loopResult.reason}`);
                 }
               }
-              
+
               // Update local state based on result
-              if (execResult.success && execResult.content && call.toolCallId && call.args && 'path' in call.args) {
-                this.vfs[call.args.path] = execResult.content;
+              const callArgs = (call as any).args || (call as any).input || {};
+              if (execResult.success && execResult.content && call.toolCallId && callArgs && 'path' in callArgs) {
+                this.vfs[(callArgs as any).path] = execResult.content;
 
                 // Auto-write to Tool Memory Graph
-                if (call.args && 'path' in call.args) {
-                  await this.addMemoryNode('file', execResult.content, call.args.path);
+                if (callArgs && 'path' in callArgs) {
+                  await this.addMemoryNode('file', execResult.content, (callArgs as any).path);
                 }
 
                 // Update execution graph if tracking
@@ -768,7 +773,7 @@ Use 'createFile' for new files.`;
                     const readyNodes = executionGraphEngine.getReadyNodes(graph);
                     if (readyNodes.length > 0) {
                       executionGraphEngine.markComplete(graph, readyNodes[0].id, {
-                        file: call.args && 'path' in call.args ? call.args.path : 'unknown',
+                        file: callArgs && 'path' in callArgs ? (callArgs as any).path : 'unknown',
                         success: true,
                       });
                     }
@@ -778,7 +783,7 @@ Use 'createFile' for new files.`;
             } catch (err: any) {
               this.errors.push({
                 step: this.steps,
-                path: call.toolCallId && call.args && 'path' in call.args ? call.args.path : 'unknown',
+                path: call.toolCallId && callArgs && 'path' in callArgs ? (callArgs as any).path : 'unknown',
                 message: err.message,
                 timestamp: Date.now(),
               });

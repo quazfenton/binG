@@ -50,11 +50,13 @@ export interface OracleVMConfig {
 
 export class OracleVMSandboxHandle implements SandboxHandle {
   readonly provider = 'oracle-vm';
+  readonly id: string;
   readonly sandboxId: string;
   readonly language: string;
   readonly createdAt: number;
   readonly workspace: string;
-  
+  readonly workspaceDir: string;
+
   private config: OracleVMConfig;
   private sshConnection: any = null;
   private lastUsed: number;
@@ -66,11 +68,32 @@ export class OracleVMSandboxHandle implements SandboxHandle {
     config: OracleVMConfig
   ) {
     this.sandboxId = sandboxId;
+    this.id = sandboxId;
     this.language = language;
     this.createdAt = Date.now();
     this.lastUsed = Date.now();
     this.config = config;
     this.workspace = config.workspace;
+    this.workspaceDir = config.workspace;
+  }
+
+  async writeFile(path: string, content: string): Promise<ToolResult> {
+    return { success: false, error: 'Not implemented' };
+  }
+
+  async readFile(path: string): Promise<ToolResult> {
+    return { success: false, error: 'Not implemented' };
+  }
+
+  async listDirectory(path: string): Promise<ToolResult> {
+    return { success: false, error: 'Not implemented' };
+  }
+
+  async destroySandbox(): Promise<void> {
+    if (this.sshConnection) {
+      this.sshConnection.end();
+      this.sshConnection = null;
+    }
   }
 
   /**
@@ -134,28 +157,19 @@ export class OracleVMSandboxHandle implements SandboxHandle {
   /**
    * Execute command via SSH
    */
-  async executeCommand(command: string, options?: {
-    cwd?: string;
-    timeout?: number;
-    env?: Record<string, string>;
-  }): Promise<ToolResult> {
+  async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
     const startTime = Date.now();
     this.lastUsed = Date.now();
 
     try {
       const conn = await this.getConnection();
-      
+
       return new Promise((resolve, reject) => {
-        const timeout = options?.timeout || this.config.commandTimeout;
-        const cwd = options?.cwd || this.workspace;
-        const env = options?.env || {};
-        
-        // Build command with environment and working directory
-        const envVars = Object.entries(env)
-          .map(([k, v]) => `${k}="${v.replace(/"/g, '\\"')}"`)
-          .join(' ');
-        
-        const fullCommand = `cd "${cwd}" && ${envVars} ${command}`;
+        const timeoutMs = timeout || this.config.commandTimeout;
+        const workingDir = cwd || this.workspace;
+
+        // Build command with working directory
+        const fullCommand = `cd "${workingDir}" && ${command}`;
         
         conn.exec(fullCommand, (err: any, stream: any) => {
           if (err) {
@@ -176,11 +190,6 @@ export class OracleVMSandboxHandle implements SandboxHandle {
               output: stdout || stderr,
               exitCode: code,
               executionTime: duration,
-              metadata: {
-                provider: 'oracle-vm',
-                sandboxId: this.sandboxId,
-                host: this.config.host,
-              },
             });
           });
 
@@ -199,8 +208,8 @@ export class OracleVMSandboxHandle implements SandboxHandle {
           // Timeout handling
           setTimeout(() => {
             stream.kill('SIGKILL');
-            reject(new Error(`Command timeout after ${timeout}ms`));
-          }, timeout);
+            reject(new Error(`Command timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
         });
       });
     } catch (error: any) {
@@ -209,11 +218,6 @@ export class OracleVMSandboxHandle implements SandboxHandle {
         output: error.message || 'SSH execution failed',
         exitCode: -1,
         executionTime: Date.now() - startTime,
-        metadata: {
-          provider: 'oracle-vm',
-          sandboxId: this.sandboxId,
-          error: error.message,
-        },
       };
     }
   }
@@ -418,6 +422,14 @@ export class OracleVMProvider implements SandboxProvider {
         latency, 
         details: { error: error.message } 
       };
+    }
+  }
+
+  async destroySandbox(sandboxId: string): Promise<void> {
+    const handle = this.sandboxes.get(sandboxId);
+    if (handle) {
+      await handle.destroySandbox();
+      this.sandboxes.delete(sandboxId);
     }
   }
 

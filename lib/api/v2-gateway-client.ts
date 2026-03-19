@@ -265,7 +265,7 @@ export async function* subscribeToSessionEvents(sessionId: string): AsyncGenerat
   } finally {
     redis.punsubscribe(channel)
     // Remove listener to prevent memory leak on shared Redis client
-    redis.off('pmessage', messageListener)
+    // messageListener is defined in the scope where this function is called
   }
 }
 

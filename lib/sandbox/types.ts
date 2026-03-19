@@ -23,6 +23,12 @@ export interface ToolResult {
   executionTime?: number;
   /** Exit code (0 for success, non-zero for failure) */
   exitCode?: number;
+  /** Content result */
+  content?: string;
+  /** Blocked flag */
+  blocked?: boolean;
+  /** Hint for user */
+  hint?: string;
 }
 
 /**

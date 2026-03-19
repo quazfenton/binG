@@ -19,10 +19,13 @@
 import { createLogger } from '../utils/logger'
 import {
   createOpencodeFileService,
-  createOpencodeSessionManager,
   type OpencodeFileService,
-  type OpencodeSessionManager,
 } from './opencode-file-service'
+import {
+  OpencodeSessionManager,
+  createOpencodeSessionManager,
+  type OpencodeSessionManager as OpencodeSessionManagerType,
+} from './opencode-session-manager'
 import type { VirtualFilesystemService } from '../virtual-filesystem/virtual-filesystem-service'
 
 const logger = createLogger('OpenCode:CapabilityProvider')
@@ -101,39 +104,39 @@ export class OpencodeCapabilityProvider {
 
       // File capabilities
       if (capability === 'file.read') {
-        result = await this.executeFileRead(params)
+        result = await this.executeFileRead(params as { path: string })
       } else if (capability === 'file.list') {
-        result = await this.executeFileList(params)
+        result = await this.executeFileList(params as { path?: string })
       } else if (capability === 'file.search') {
-        result = await this.executeFileSearch(params)
+        result = await this.executeFileSearch(params as { query: string; type?: 'file' | 'directory'; limit?: number })
       } else if (capability === 'file.search_text') {
-        result = await this.executeFileSearchText(params)
+        result = await this.executeFileSearchText(params as { pattern: string; path?: string; maxResults?: number })
       } else if (capability === 'file.search_symbols') {
-        result = await this.executeFileSearchSymbols(params)
+        result = await this.executeFileSearchSymbols(params as { query: string })
       }
       // Session capabilities
       else if (capability === 'session.create') {
-        result = await this.executeSessionCreate(params)
+        result = await this.executeSessionCreate({ title: (params as any).title, parentID: (params as any).parentID })
       } else if (capability === 'session.prompt') {
-        result = await this.executeSessionPrompt(params)
+        result = await this.executeSessionPrompt(params as { sessionId: string; message: string; model?: { providerID: string; modelID: string }; agent?: string; system?: string })
       } else if (capability === 'session.inject_context') {
-        result = await this.executeSessionInjectContext(params)
+        result = await this.executeSessionInjectContext(params as { sessionId: string; context: string })
       } else if (capability === 'session.get_messages') {
-        result = await this.executeSessionGetMessages(params)
+        result = await this.executeSessionGetMessages(params as { sessionId: string; limit?: number })
       } else if (capability === 'session.fork') {
-        result = await this.executeSessionFork(params)
+        result = await this.executeSessionFork(params as { sessionId: string; messageID?: string })
       } else if (capability === 'session.revert') {
-        result = await this.executeSessionRevert(params)
+        result = await this.executeSessionRevert(params as { sessionId: string; messageID: string; partID?: string })
       } else if (capability === 'session.get_diff') {
-        result = await this.executeSessionGetDiff(params)
+        result = await this.executeSessionGetDiff(params as { sessionId: string; messageID?: string })
       }
       // Repo capabilities
       else if (capability === 'repo.search') {
-        result = await this.executeRepoSearch(params)
+        result = await this.executeRepoSearch(params as { query: string; type?: 'file' | 'directory'; limit?: number })
       } else if (capability === 'repo.search_text') {
-        result = await this.executeRepoSearchText(params)
+        result = await this.executeRepoSearchText(params as { pattern: string; path?: string; maxResults?: number })
       } else if (capability === 'repo.search_symbols') {
-        result = await this.executeRepoSearchSymbols(params)
+        result = await this.executeRepoSearchSymbols(params as { query: string })
       } else {
         throw new Error(`Unknown capability: ${capability}`)
       }
@@ -320,8 +323,8 @@ export class OpencodeCapabilityProvider {
           })
         } else if (part.type === 'tool' && part.tool?.name === 'delete_file') {
           fileChanges.push({
-            path: part.tool.args?.path,
-            operation: 'delete',
+            path: (part.tool.args as any)?.path || (part.tool.args as any)?.file,
+            operation: 'delete' as 'write' | 'patch' | 'delete',
           })
         }
       }
@@ -347,7 +350,7 @@ export class OpencodeCapabilityProvider {
             logger.debug(`Synced file to VFS: ${change.path}`)
           }
         } else if (change.operation === 'delete') {
-          await this.vfs.deleteFile(ownerId, change.path)
+          await (this.vfs as any).deleteFile(ownerId, change.path)
           logger.debug(`Deleted file from VFS: ${change.path}`)
         }
       }
