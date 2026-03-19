@@ -8,7 +8,7 @@
  */
 
 import { Annotation } from '@langchain/langgraph';
-import type { VfsState } from './state';
+import type { VfsState } from '../stateful-agent/state';
 
 /**
  * LangGraph-enhanced Agent State

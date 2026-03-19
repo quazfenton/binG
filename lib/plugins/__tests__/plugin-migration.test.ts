@@ -2,6 +2,7 @@
  * Tests for plugin migration utilities
  */
 
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { PluginMigrationService, PluginCategorizer } from '../plugin-migration';
 
 describe('PluginMigrationService', () => {
