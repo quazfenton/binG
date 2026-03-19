@@ -249,13 +249,17 @@ export function useVirtualFilesystem(
       // Invalidate cache when files are updated from anywhere in the app
       // This fixes Bug #4: Stale snapshot cache never invalidated during edit flow
       if (detail.path || detail.paths || detail.scopePath) {
-        const pathToInvalidate = detail.scopePath || detail.path || (detail.paths && detail.paths[0]);
-        if (pathToInvalidate) {
-          log(`[filesystem-updated] Invalidating snapshot cache for: ${pathToInvalidate}`);
-          invalidateSnapshotCache(pathToInvalidate, ownerId);
-        } else {
-          log(`[filesystem-updated] Invalidating all snapshot caches`);
-          invalidateSnapshotCache(undefined, ownerId);
+        // Invalidate all provided paths
+        if (detail.scopePath) {
+          invalidateSnapshotCache(detail.scopePath, ownerId);
+        }
+        if (detail.path) {
+          invalidateSnapshotCache(detail.path, ownerId);
+        }
+        if (detail.paths && detail.paths.length > 0) {
+          for (const path of detail.paths) {
+            invalidateSnapshotCache(path, ownerId);
+          }
         }
       } else {
         // No path info - invalidate all caches to be safe
