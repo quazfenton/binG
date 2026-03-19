@@ -18,6 +18,7 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '../utils/logger';
 import type { ExecutionPolicy } from '../sandbox/types';
+import { registerActiveSession, unregisterActiveSession } from '../session-naming';
 import {
   getExecutionPolicyConfig,
   requiresCloudSandbox,
@@ -27,6 +28,8 @@ import {
 import { getSandboxProvider, getSandboxProviderWithFallback } from '../sandbox/providers';
 import type { SandboxHandle, SandboxCreateConfig } from '../sandbox/providers/sandbox-provider';
 import { createOpencodeSessionManager, type OpencodeSessionManager } from '@/lib/opencode';
+import { enhancedBackgroundJobsManager, type EnhancedJobConfig, type EnhancedJob } from '../agent/enhanced-background-jobs';
+import { executionGraphEngine } from '../agent/execution-graph';
 
 const logger = createLogger('Session:Manager');
 
@@ -70,35 +73,35 @@ export interface Session {
   createdAt: number;
   lastActivity: number;
   status: 'starting' | 'active' | 'idle' | 'stopping' | 'stopped';
-  
+
   // Sandbox info
   sandboxId?: string;
   sandboxProvider?: string;
   sandboxHandle?: SandboxHandle;
   workspaceDir: string;
   workspacePath: string;
-  
+
   // Nullclaw integration
   nullclawEnabled: boolean;
   nullclawEndpoint?: string;
-  
+
   // MCP integration
   mcpEnabled: boolean;
   mcpServerUrl?: string;
-  
+
   // Quota tracking
   quota: SessionQuota;
-  
+
   // Metrics
   totalSteps: number;
   totalBashCommands: number;
   totalFileChanges: number;
   totalCost?: number;
-  
+
   // Checkpointing
   lastCheckpoint?: number;
   checkpointCount: number;
-  
+
   // Agent-specific (backward compatible)
   state: 'initializing' | 'ready' | 'busy' | 'idle' | 'error';
   executionPolicy: ExecutionPolicy;
@@ -107,6 +110,10 @@ export interface Session {
     cloudOffloadEnabled: boolean;
     mcpEnabled: boolean;
   };
+
+  // Background Jobs tracking
+  backgroundJobs?: Map<string, EnhancedJob>;
+  executionGraphId?: string;
 }
 
 interface SessionMetrics {
@@ -243,6 +250,13 @@ export class SessionManager {
   }
 
   /**
+   * List sessions for a user (alias for getUserSessions)
+   */
+  listSessions(userId: string): Session[] {
+    return this.getUserSessions(userId);
+  }
+
+  /**
    * Destroy session and cleanup
    */
   async destroySession(userId: string, conversationId: string): Promise<void> {
@@ -257,6 +271,33 @@ export class SessionManager {
     try {
       logger.info(`Destroying session ${key}`);
 
+      // Stop all background jobs
+      if (session.backgroundJobs && session.backgroundJobs.size > 0) {
+        logger.info(`Stopping ${session.backgroundJobs.size} background jobs for session ${key}`);
+        const jobIds = Array.from(session.backgroundJobs.keys());
+        for (const jobId of jobIds) {
+          try {
+            await enhancedBackgroundJobsManager.stopJob(jobId, 'Session destroyed');
+          } catch (error: any) {
+            logger.warn(`Failed to stop background job ${jobId}:`, error.message);
+          }
+        }
+        session.backgroundJobs.clear();
+      }
+
+      // Cleanup execution graph
+      if (session.executionGraphId) {
+        try {
+          const graph = executionGraphEngine.getGraph(session.executionGraphId);
+          if (graph) {
+            graph.status = 'cancelled';
+            logger.debug(`Execution graph ${session.executionGraphId} marked as cancelled`);
+          }
+        } catch (error: any) {
+          logger.warn(`Failed to cleanup execution graph:`, error.message);
+        }
+      }
+
       // Cleanup sandbox if exists
       if (session.sandboxHandle) {
         try {
@@ -269,7 +310,15 @@ export class SessionManager {
       // Remove from tracking maps
       this.sessions.delete(key);
       this.sessionsById.delete(session.id);
-      
+
+      // Cleanup session from session-naming.ts tracking
+      try {
+        unregisterActiveSession(conversationId);
+      } catch (e) {
+        // Non-fatal - session naming cleanup is optional
+        logger.debug(`Failed to cleanup session name for ${conversationId}:`, e);
+      }
+
       const userSessionIds = this.userSessions.get(userId);
       if (userSessionIds) {
         userSessionIds.delete(session.id);
@@ -467,6 +516,110 @@ export class SessionManager {
     logger.info(`Created checkpoint ${checkpointId} for session ${sessionId}`);
 
     return { checkpointId, timestamp };
+  }
+
+  // ============================================================================
+  // Public API - Background Jobs Management
+  // ============================================================================
+
+  /**
+   * Start a background job for session
+   */
+  async startBackgroundJob(
+    sessionId: string,
+    config: Omit<EnhancedJobConfig, 'sessionId'>
+  ): Promise<{ jobId: string; status: string }> {
+    const session = this.sessionsById.get(sessionId);
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    // Check quota before starting job
+    const quotaCheck = this.checkQuota(sessionId, 0, 0);
+    if (!quotaCheck.allowed) {
+      throw new Error(`Cannot start background job: ${quotaCheck.reason}`);
+    }
+
+    // Start job with enhanced manager
+    const job = await enhancedBackgroundJobsManager.startJob({
+      ...config,
+      sessionId,
+    });
+
+    // Track job in session
+    if (!session.backgroundJobs) {
+      session.backgroundJobs = new Map();
+    }
+    session.backgroundJobs.set(job.jobId, job);
+
+    logger.info(`Background job started for session ${sessionId}`, {
+      jobId: job.jobId,
+      command: job.command,
+      interval: job.interval,
+    });
+
+    return { jobId: job.jobId, status: job.status };
+  }
+
+  /**
+   * Stop a background job for session
+   */
+  async stopBackgroundJob(sessionId: string, jobId: string, reason?: string): Promise<boolean> {
+    const session = this.sessionsById.get(sessionId);
+    if (!session) {
+      throw new Error('Session not found');
+    }
+
+    const success = await enhancedBackgroundJobsManager.stopJob(jobId, reason || 'Manual stop');
+
+    if (success && session.backgroundJobs) {
+      session.backgroundJobs.delete(jobId);
+    }
+
+    logger.info(`Background job stopped for session ${sessionId}`, { jobId, success });
+
+    return success;
+  }
+
+  /**
+   * Get background job status
+   */
+  getBackgroundJobStatus(sessionId: string, jobId: string): EnhancedJob | null {
+    const session = this.sessionsById.get(sessionId);
+    if (!session) {
+      return null;
+    }
+
+    return enhancedBackgroundJobsManager.getJob(jobId);
+  }
+
+  /**
+   * List background jobs for session
+   */
+  listBackgroundJobs(sessionId: string, filters?: { status?: string }): EnhancedJob[] {
+    const session = this.sessionsById.get(sessionId);
+    if (!session) {
+      return [];
+    }
+
+    return enhancedBackgroundJobsManager.listJobs({
+      sessionId,
+      ...filters,
+    });
+  }
+
+  /**
+   * Get background jobs statistics for session
+   */
+  getBackgroundJobsStats(sessionId: string): {
+    total: number;
+    running: number;
+    paused: number;
+    stopped: number;
+    completed: number;
+    totalExecutions: number;
+  } {
+    return enhancedBackgroundJobsManager.getStats(sessionId);
   }
 
   // ============================================================================
@@ -674,6 +827,9 @@ export class SessionManager {
 
       const sessionId = uuidv4();
 
+      // Create execution graph for session tracking
+      const executionGraph = executionGraphEngine.createGraph(sessionId);
+
       const session: Session = {
         id: sessionId,
         userId,
@@ -701,11 +857,21 @@ export class SessionManager {
           cloudOffloadEnabled: config.enableCloudOffload || false,
           mcpEnabled: config.enableMcp || false,
         },
+        // Initialize background jobs tracking
+        backgroundJobs: new Map(),
+        executionGraphId: executionGraph.id,
       };
+
+      // Initialize enhanced background jobs manager with session integration
+      enhancedBackgroundJobsManager.setSessionManager(this);
+      enhancedBackgroundJobsManager.setExecutionGraphEngine(executionGraphEngine);
 
       // Track session
       this.sessions.set(this.getSessionKey(userId, conversationId), session);
       this.sessionsById.set(sessionId, session);
+
+      // Register session as active for cleanup tracking
+      registerActiveSession(conversationId);
 
       if (!this.userSessions.has(userId)) {
         this.userSessions.set(userId, new Set());

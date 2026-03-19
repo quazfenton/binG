@@ -69,7 +69,7 @@ export class SpritesCheckpointManager {
         id: info.id,
         // Prefer the name we generated/passed if the handle returns a generic one
         name: name || checkpointName,
-        createdAt: info.createdAt || info.created_at || new Date().toISOString(),
+        createdAt: (info as any).createdAt || (info as any).created_at || new Date().toISOString(),
         comment: options.comment,
         tags: options.tags || [],
       }

@@ -2,43 +2,56 @@ import { NextRequest, NextResponse } from 'next/server';
 import { virtualFilesystem } from '@/lib/virtual-filesystem';
 import { resolveScopedPath } from '@/lib/virtual-filesystem/scope-utils';
 import { parsePatch, applyPatch } from 'diff';
+import { verifyAuth } from '@/lib/auth/jwt';
 
 /**
- * Extract user identity from server-side headers
- * CRITICAL: Never use buildApiHeaders() in server routes - it's client-only
+ * Custom error class for authentication/validation failures
+ * Allows proper HTTP status code handling (401/400 instead of 500)
  */
-function getUserIdFromRequest(request: NextRequest): string {
-  // Try multiple header sources for user identity
-  const userId =
-    request.headers.get('x-user-id') ||
-    request.headers.get('x-auth-user-id') ||
-    request.headers.get('x-vercel-user-id') ||
-    request.headers.get('x-authenticated-user-id') ||
-    'default-user';
-
-  // Validate userId format (prevent injection)
-  if (!/^[a-zA-Z0-9_-:]+$/.test(userId)) {
-    console.warn('[DiffsApply] Invalid user ID format, using default:', userId);
-    return 'default-user';
+class ApiError extends Error {
+  constructor(
+    public status: number,
+    message: string,
+    public code?: string
+  ) {
+    super(message);
+    this.name = 'ApiError';
   }
+}
 
-  return userId;
+/**
+ * Extract and verify user ID from JWT token
+ * SECURITY: Never trust client-provided headers - always verify with JWT
+ */
+async function getUserIdFromRequest(request: NextRequest): Promise<string> {
+  const authResult = await verifyAuth(request);
+  
+  if (!authResult.success || !authResult.userId) {
+    throw new ApiError(401, authResult.error || 'Authentication failed', 'AUTH_FAILED');
+  }
+  
+  return authResult.userId;
 }
 
 /**
  * Extract session ID from request with validation
+ * SECURITY: Reject requests with invalid session IDs to prevent unauthorized access
  */
 function getSessionId(request: NextRequest, bodySessionId?: string): string {
   const sessionId =
     bodySessionId ||
     request.headers.get('x-session-id') ||
-    request.headers.get('x-conversation-id') ||
-    'default';
+    request.headers.get('x-conversation-id');
 
-  // Validate session ID format
-  if (!/^[a-zA-Z0-9_-]+$/.test(sessionId)) {
-    console.warn('[DiffsApply] Invalid session ID format, using default:', sessionId);
-    return 'default';
+  // SECURITY: Require valid session ID
+  if (!sessionId) {
+    throw new ApiError(400, 'Session ID required', 'MISSING_SESSION_ID');
+  }
+
+  // Validate session ID format - allow colons to match IDs produced by chat route
+  if (!/^[a-zA-Z0-9:_-]+$/.test(sessionId)) {
+    console.warn('[DiffsApply] Invalid session ID format:', sessionId);
+    throw new ApiError(400, 'Invalid session ID format', 'INVALID_SESSION_ID_FORMAT');
   }
 
   return sessionId;
@@ -56,14 +69,14 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // SECURITY: Get real user ID from server-side headers (NOT client-side buildApiHeaders)
-    const userId = getUserIdFromRequest(request);
+    // SECURITY: Verify user identity with JWT (never trust client headers)
+    const userId = await getUserIdFromRequest(request);
     const sessionId = getSessionId(request, bodySessionId);
     const effectiveScopePath = scopePath || `project/sessions/${sessionId}`;
 
     // Log for audit trail (without exposing sensitive data)
-    console.log('[DiffsApply] Processing diffs for user:', {
-      userId: userId === 'default-user' ? 'ANONYMOUS' : userId.substring(0, 8) + '...',
+    console.log('[DiffsApply] Processing diffs for authenticated user:', {
+      userId: userId.substring(0, 8) + '...',
       sessionId: sessionId.substring(0, 8) + '...',
       diffCount: diffs.length,
       scopePath: effectiveScopePath.substring(0, 50) + '...',
@@ -158,6 +171,20 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error('[DiffsApply] Error:', error);
+    
+    // Handle ApiError with proper status code
+    if (error instanceof ApiError) {
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: error.message,
+          code: error.code,
+        },
+        { status: error.status }
+      );
+    }
+    
+    // Generic error handler for unexpected errors (500)
     return NextResponse.json(
       { success: false, error: error.message || 'Internal server error' },
       { status: 500 }

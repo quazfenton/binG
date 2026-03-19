@@ -50,6 +50,8 @@ import {
   type CodeBlock as ParsedCodeBlock,
 } from "../lib/code-parser";
 import { createDebugLogger } from "@/config/features";
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
+import { checkFileConflicts } from "@/lib/session-naming";
 
 // Import live preview offloading functions
 import {
@@ -324,6 +326,33 @@ export default function CodePreviewPanel({
     path: string;
     type: 'file' | 'directory';
   } | null>(null);
+
+  // Double-click rename state
+  const [editingFilePath, setEditingFilePath] = useState<string | null>(null);
+  const [editingFileName, setEditingFileName] = useState("");
+  
+  // Clipboard state for cut/copy/paste
+  const [clipboard, setClipboard] = useState<{
+    path: string;
+    operation: 'cut' | 'copy';
+    sourcePath: string;
+  } | null>(null);
+  
+  // Drag and drop state
+  const [dragOverPath, setDragOverPath] = useState<string | null>(null);
+  const [draggedFile, setDraggedFile] = useState<{ path: string; name: string } | null>(null);
+  
+  // Confirmation dialog state for file operations
+  const [confirmDialog, setConfirmDialog] = useState<{
+    isOpen: boolean;
+    title: string;
+    message: string;
+    confirmLabel?: string;
+    cancelLabel?: string;
+    variant?: 'default' | 'warning' | 'danger';
+    onConfirm: () => void;
+    onCancel: () => void;
+  } | null>(null);
   
   // Monaco editor state (commented out for future use)
   // const [editingFile, setEditingFile] = useState<{ path: string; content: string } | null>(null);
@@ -348,12 +377,16 @@ export default function CodePreviewPanel({
     return normalized;
   }, []);
 
+  // Use ref for debounced function to avoid forward reference issues
+  const debouncedListDirectoryRef = useRef<(path: string) => Promise<void> | null>(null);
+  
   const openFilesystemDirectory = useCallback((path: string) => {
     const cleanPath = normalizeProjectPath(path);
     log(`openFilesystemDirectory: "${path}" -> "${cleanPath}"`);
     setFilesystemCurrentPath(cleanPath);
-    void listFilesystemDirectory(cleanPath);
-  }, [listFilesystemDirectory, normalizeProjectPath, setFilesystemCurrentPath]);
+    // Use ref to avoid forward reference
+    debouncedListDirectoryRef.current?.(cleanPath);
+  }, [normalizeProjectPath, setFilesystemCurrentPath, log]);
 
   const openFilesystemParent = useCallback(() => {
     const cleanedCurrentPath = normalizeProjectPath(filesystemCurrentPath);
@@ -460,7 +493,7 @@ export default function CodePreviewPanel({
       const createdPath = normalizeProjectPath(createdFile?.path || newPath);
       log(`handleCreateFile: normalized created path "${createdPath}"`);
       
-      await listFilesystemDirectory(cleanParentPath);
+      await debouncedListDirectory(cleanParentPath);
       log(`handleCreateFile: refreshed directory "${cleanParentPath}"`);
       
       // Select the newly created file
@@ -499,7 +532,7 @@ export default function CodePreviewPanel({
     const newPath = `${cleanParentPath.replace(/\/+$/, '')}/${folderName}/.gitkeep`;
 
     writeFilesystemFile(newPath, '').then(async (createdFolderMarker) => {
-      await listFilesystemDirectory(cleanParentPath);
+      await debouncedListDirectory(cleanParentPath);
       
       // Dispatch event for cross-panel sync
       const folderPath = `${cleanParentPath.replace(/\/+$/, '')}/${folderName}`;
@@ -520,7 +553,7 @@ export default function CodePreviewPanel({
     });
   }, [listFilesystemDirectory, normalizeProjectPath, normalizedFilesystemPath, writeFilesystemFile]);
 
-  const handleRenameFile = useCallback((oldPath: string) => {
+  const handleRenameFile = useCallback(async (oldPath: string) => {
     const oldName = oldPath.split('/').pop() || '';
     const newName = prompt('Rename to:', oldName);
     if (!newName || newName === oldName) return;
@@ -528,23 +561,328 @@ export default function CodePreviewPanel({
     const parentPath = oldPath.split('/').slice(0, -1).join('/');
     const newPath = parentPath ? `${parentPath}/${newName}` : newName;
     
-    // Read old file, write new file, delete old file
-    readFilesystemFile(oldPath).then((file: any) => {
-      return writeFilesystemFile(newPath, file.content).then(() => {
-        return deleteFilesystemPath(oldPath);
-      });
-    }).then(() => {
-      toast.success('Renamed to: ' + newName);
-      void listFilesystemDirectory(filesystemCurrentPath);
-      setContextMenu(null);
-      if (selectedFilesystemPath === oldPath) {
-        setSelectedFilesystemPath('');
-        setSelectedFilesystemContent('');
+    // Check if target already exists
+    try {
+      const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
+      
+      if (targetExists && oldPath !== newPath) {
+        // Show confirmation dialog for overwrite
+        setConfirmDialog({
+          isOpen: true,
+          title: 'File Already Exists',
+          message: `A file named "${newName}" already exists in this directory. Do you want to overwrite it?`,
+          confirmLabel: 'Overwrite',
+          cancelLabel: 'Cancel',
+          variant: 'warning',
+          onConfirm: async () => {
+            setConfirmDialog(null);
+            await performRename(oldPath, newPath);
+          },
+          onCancel: () => {
+            setConfirmDialog(null);
+          },
+        });
+        return;
       }
-    }).catch((err: any) => {
+      
+      await performRename(oldPath, newPath);
+    } catch (err: any) {
       toast.error('Failed to rename: ' + err.message);
-    });
+    }
+    
+    async function performRename(sourcePath: string, targetPath: string) {
+      // Bail out when the target path equals the source path
+      if (sourcePath === targetPath) {
+        toast.info('Cannot rename file to itself');
+        return;
+      }
+
+      try {
+        const file = await readFilesystemFile(sourcePath);
+        await writeFilesystemFile(targetPath, file.content);
+        await deleteFilesystemPath(sourcePath);
+        
+        toast.success('Renamed to: ' + newName);
+        void debouncedListDirectory(filesystemCurrentPath);
+        setContextMenu(null);
+        if (selectedFilesystemPath === sourcePath) {
+          setSelectedFilesystemPath('');
+          setSelectedFilesystemContent('');
+        }
+        
+        emitFilesystemUpdated({
+          path: targetPath,
+          scopePath: normalizedFilesystemPath,
+          source: 'code-preview',
+          type: 'update',
+        });
+      } catch (err: any) {
+        toast.error('Failed to rename: ' + err.message);
+      }
+    }
   }, [filesystemCurrentPath, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, listFilesystemDirectory, selectedFilesystemPath]);
+
+  // Handle double-click to rename file
+  const handleDoubleClickFile = useCallback((node: { path: string; name: string; type: string }) => {
+    if (node.type === 'file') {
+      setEditingFilePath(node.path);
+      setEditingFileName(node.name);
+    }
+  }, []);
+
+  // Confirm rename from double-click editing
+  const confirmRenameFromEdit = useCallback(async () => {
+    if (!editingFilePath || !editingFileName.trim()) {
+      setEditingFilePath(null);
+      setEditingFileName("");
+      return;
+    }
+    
+    const oldPath = editingFilePath;
+    const oldName = oldPath.split('/').pop() || '';
+    const newName = editingFileName.trim();
+    
+    if (newName === oldName) {
+      setEditingFilePath(null);
+      setEditingFileName("");
+      return;
+    }
+    
+    const parentPath = oldPath.split('/').slice(0, -1).join('/');
+    const newPath = parentPath ? `${parentPath}/${newName}` : newName;
+    
+    // Check if target already exists
+    try {
+      const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
+      
+      if (targetExists && oldPath !== newPath) {
+        setConfirmDialog({
+          isOpen: true,
+          title: 'File Already Exists',
+          message: `A file named "${newName}" already exists. Do you want to overwrite it?`,
+          confirmLabel: 'Overwrite',
+          cancelLabel: 'Cancel',
+          variant: 'warning',
+          onConfirm: async () => {
+            setConfirmDialog(null);
+            await performRename(oldPath, newPath);
+            setEditingFilePath(null);
+            setEditingFileName("");
+          },
+          onCancel: () => {
+            setConfirmDialog(null);
+            setEditingFilePath(null);
+            setEditingFileName("");
+          },
+        });
+        return;
+      }
+      
+      await performRename(oldPath, newPath);
+    } catch (err: any) {
+      toast.error('Failed to rename: ' + err.message);
+    }
+    
+    setEditingFilePath(null);
+    setEditingFileName("");
+    
+    async function performRename(sourcePath: string, targetPath: string) {
+      try {
+        const file = await readFilesystemFile(sourcePath);
+        await writeFilesystemFile(targetPath, file.content);
+        await deleteFilesystemPath(sourcePath);
+        toast.success('Renamed to: ' + newName);
+        void debouncedListDirectory(filesystemCurrentPath);
+        if (selectedFilesystemPath === sourcePath) {
+          setSelectedFilesystemPath(targetPath);
+        }
+        emitFilesystemUpdated({
+          path: targetPath,
+          scopePath: normalizedFilesystemPath,
+          source: 'code-preview',
+          type: 'update',
+        });
+      } catch (err: any) {
+        toast.error('Failed to rename: ' + err.message);
+      }
+    }
+  }, [editingFilePath, editingFileName, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, selectedFilesystemPath, normalizedFilesystemPath]);
+
+  // Cancel rename editing
+  const cancelRenameEdit = useCallback(() => {
+    setEditingFilePath(null);
+    setEditingFileName("");
+  }, []);
+
+  // Handle cut operation
+  const handleCutFile = useCallback((path: string, name: string, sourcePath: string) => {
+    setClipboard({ path, operation: 'cut', sourcePath });
+    setContextMenu(null);
+    toast.info('File cut. Click a folder and paste to move.');
+  }, []);
+
+  // Handle copy operation
+  const handleCopyFile = useCallback((path: string, name: string, sourcePath: string) => {
+    setClipboard({ path, operation: 'copy', sourcePath });
+    setContextMenu(null);
+    toast.info('File copied. Click a folder and paste to copy.');
+  }, []);
+
+  // Handle paste operation
+  const handlePasteFile = useCallback(async (targetPath: string, isDirectory: boolean) => {
+    if (!clipboard) {
+      toast.error('No file in clipboard');
+      return;
+    }
+    
+    const targetDir = isDirectory ? targetPath : targetPath.split('/').slice(0, -1).join('/');
+    const fileName = clipboard.path.split('/').pop() || '';
+    const newPath = `${targetDir.replace(/\/+$/, '')}/${fileName}`;
+    
+    try {
+      // Check if target already exists
+      const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
+      
+      if (targetExists && clipboard.path !== newPath) {
+        // Generate unique name
+        const ext = fileName.includes('.') ? '.' + fileName.split('.').pop() : '';
+        const baseName = fileName.replace(ext, '');
+        let counter = 1;
+        let uniquePath = newPath;
+        while (await readFilesystemFile(uniquePath).then(() => true).catch(() => false)) {
+          uniquePath = `${targetDir.replace(/\/+$/, '')}/${baseName}-${counter}${ext}`;
+          counter++;
+        }
+        
+        await performPaste(clipboard.path, uniquePath, targetDir);
+      } else {
+        await performPaste(clipboard.path, newPath, targetDir);
+      }
+    } catch (err: any) {
+      toast.error('Failed to paste: ' + err.message);
+    }
+    
+    async function performPaste(sourcePath: string, destPath: string, targetDir: string) {
+      // Bail out when the target path equals the source path
+      if (sourcePath === destPath) {
+        toast.info('Cannot paste file into itself');
+        return;
+      }
+
+      try {
+        const file = await readFilesystemFile(sourcePath);
+        await writeFilesystemFile(destPath, file.content);
+        
+        // If cut, delete original
+        if (clipboard.operation === 'cut') {
+          await deleteFilesystemPath(sourcePath);
+          setClipboard(null);
+        }
+        
+        toast.success(clipboard.operation === 'cut' ? 'File moved' : 'File copied');
+        await debouncedListDirectory(filesystemCurrentPath);
+        await debouncedListDirectory(targetDir);
+        
+        emitFilesystemUpdated({
+          path: destPath,
+          scopePath: normalizedFilesystemPath,
+          source: 'code-preview',
+          type: 'update',
+        });
+      } catch (err: any) {
+        toast.error('Failed to paste: ' + err.message);
+      }
+    }
+  }, [clipboard, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, normalizedFilesystemPath]);
+
+  // Handle drag start
+  const handleDragStart = useCallback((e: React.DragEvent, node: { path: string; name: string }) => {
+    e.dataTransfer.setData('text/plain', JSON.stringify({ path: node.path, name: node.name }));
+    setDraggedFile({ path: node.path, name: node.name });
+  }, []);
+
+  // Handle drag over (for drop target)
+  const handleDragOver = useCallback((e: React.DragEvent, path: string) => {
+    e.preventDefault();
+    e.dataTransfer.dropEffect = 'move';
+    setDragOverPath(path);
+  }, []);
+
+  // Handle drag leave
+  const handleDragLeave = useCallback(() => {
+    setDragOverPath(null);
+  }, []);
+
+  // Handle drop
+  const handleDrop = useCallback(async (e: React.DragEvent, targetPath: string, isDirectory: boolean) => {
+    e.preventDefault();
+    setDragOverPath(null);
+    
+    const data = e.dataTransfer.getData('text/plain');
+    if (!data) return;
+    
+    try {
+      const { path: sourcePath, name } = JSON.parse(data);
+      
+      if (sourcePath === targetPath || sourcePath.split('/').slice(0, -1).join('/') === targetPath) {
+        toast.info('File is already in this location');
+        return;
+      }
+      
+      const targetDir = isDirectory ? targetPath : targetPath.split('/').slice(0, -1).join('/');
+      const newPath = `${targetDir.replace(/\/+$/, '')}/${name}`;
+      
+      // Check if target exists
+      const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
+      
+      if (targetExists && sourcePath !== newPath) {
+        // Show confirmation for overwrite
+        setConfirmDialog({
+          isOpen: true,
+          title: 'File Already Exists',
+          message: `A file named "${name}" already exists in this folder. Do you want to overwrite it?`,
+          confirmLabel: 'Overwrite',
+          cancelLabel: 'Cancel',
+          variant: 'warning',
+          onConfirm: async () => {
+            setConfirmDialog(null);
+            await performMove(sourcePath, newPath);
+          },
+          onCancel: () => {
+            setConfirmDialog(null);
+          },
+        });
+      } else {
+        await performMove(sourcePath, newPath);
+      }
+      
+      async function performMove(source: string, dest: string) {
+        // Bail out when the target path equals the source path
+        if (source === dest) {
+          toast.info('Cannot move file into itself');
+          return;
+        }
+
+        const file = await readFilesystemFile(source);
+        await writeFilesystemFile(dest, file.content);
+        await deleteFilesystemPath(source);
+        toast.success(`Moved "${name}" to new location`);
+        await debouncedListDirectory(filesystemCurrentPath);
+        await debouncedListDirectory(targetDir);
+        
+        emitFilesystemUpdated({
+          path: dest,
+          scopePath: normalizedFilesystemPath,
+          source: 'code-preview',
+          type: 'update',
+        });
+      }
+    } catch (err: any) {
+      toast.error('Failed to move file: ' + err.message);
+    }
+    
+    setDraggedFile(null);
+  }, [readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, normalizedFilesystemPath]);
 
   // Helper to detect shell code blocks
   const isShellCodeBlock = useCallback((language: string, code: string): boolean => {
@@ -637,18 +975,30 @@ export default function CodePreviewPanel({
   // Manual preview handler
   // FIXED: Add ref guard to prevent multiple concurrent calls
   const handleManualPreviewRef = useRef(false);
-  
+  const lastManualPreviewTime = useRef<number>(0);
+  const MANUAL_PREVIEW_COOLDOWN_MS = 2000; // Minimum 2 seconds between calls
+
   const handleManualPreview = useCallback(async (
     directoryPath?: string,
     mode?: 'sandpack' | 'iframe' | 'raw' | 'parcel' | 'devbox' | 'pyodide' | 'vite' | 'webpack' | 'webcontainer' | 'nextjs' | 'codesandbox' | 'opensandbox' | 'local' | 'cloud',
     options?: { silent?: boolean; preserveTab?: boolean },
   ) => {
+    const now = Date.now();
+    
     // Prevent multiple concurrent calls
     if (handleManualPreviewRef.current) {
       log('[handleManualPreview] already running, skipping duplicate call');
       return;
     }
+    
+    // Prevent calls too frequently (cooldown period)
+    if (now - lastManualPreviewTime.current < MANUAL_PREVIEW_COOLDOWN_MS) {
+      log(`[handleManualPreview] called too soon (${now - lastManualPreviewTime.current}ms < ${MANUAL_PREVIEW_COOLDOWN_MS}ms), skipping`);
+      return;
+    }
+    
     handleManualPreviewRef.current = true;
+    lastManualPreviewTime.current = now;
     const silent = options?.silent ?? false;
     const preserveTab = options?.preserveTab ?? false;
     
@@ -920,7 +1270,7 @@ export default function CodePreviewPanel({
       }
 
       try {
-        await listFilesystemDirectory(normalizedScope);
+        await debouncedListDirectory(normalizedScope);
       } catch (err) {
         logError(`[VFS_SAVE] failed to refresh filesystem`, err);
       }
@@ -1018,12 +1368,14 @@ export default function CodePreviewPanel({
 
   // Auto-load preview when panel opens
   // FIXED: Use refs to avoid dependency loop with handleManualPreview
+  // NOTE: VFS sync runs regardless of isOpen to support on-demand operations when closed
   const autoLoadPreviewRef = useRef(false);
   
   useEffect(() => {
+    // Keep ref reset for open/close cycles, but allow other effects to run when closed
     if (!isOpen) {
       autoLoadPreviewRef.current = false;
-      return;
+      // Don't return early - allow VFS sync to continue for on-demand commands
     }
     
     // Only run once when panel opens
@@ -1054,10 +1406,12 @@ export default function CodePreviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]); // Only depend on isOpen - run once when panel opens
 
+  // Files explorer - run regardless of isOpen to keep VFS synced
   useEffect(() => {
-    if (!isOpen || selectedTab !== "files") {
+    if (selectedTab !== "files") {
       return;
     }
+    // Always sync VFS regardless of isOpen - needed for shell on-demand commands
     let cancelled = false;
     let isInitialized = false;
 
@@ -1107,10 +1461,8 @@ export default function CodePreviewPanel({
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [filesystemScopePath, isOpen, selectedTab]); // Removed listFilesystemDirectory from deps
 
+  // Load scoped preview files - sync VFS regardless of isOpen state
   useEffect(() => {
-    if (!isOpen) {
-      return;
-    }
     let cancelled = false;
     let isRunning = false;
     
@@ -1161,6 +1513,29 @@ export default function CodePreviewPanel({
     filesystemScopePathRef.current = filesystemScopePath;
   }, [filesystemScopePath]);
 
+  // Debounce ref for directory listing to prevent polling storms
+  const lastDirectoryListRef = useRef<{ path: string; timestamp: number } | null>(null);
+  const DIRECTORY_LIST_DEBOUNCE_MS = 500;
+
+  // Debounced list directory function to prevent excessive API calls
+  const debouncedListDirectory = useCallback(async (path: string) => {
+    const now = Date.now();
+    const last = lastDirectoryListRef.current;
+
+    if (last && last.path === path && (now - last.timestamp) < DIRECTORY_LIST_DEBOUNCE_MS) {
+      log(`[debouncedListDirectory] skipping duplicate call for "${path}" (${now - last.timestamp}ms since last)`);
+      return;
+    }
+
+    lastDirectoryListRef.current = { path, timestamp: now };
+    await listFilesystemDirectory(path);
+  }, [listFilesystemDirectory, log]);
+  
+  // Assign to ref so openFilesystemDirectory can access it
+  useEffect(() => {
+    debouncedListDirectoryRef.current = debouncedListDirectory;
+  }, [debouncedListDirectory]);
+
   // Clear preview state on navigation (filesystemScopePath change)
   // This ensures fresh state when user navigates to a different session/directory
   useEffect(() => {
@@ -1181,13 +1556,16 @@ export default function CodePreviewPanel({
       // Reset workspace version tracking for new scope
       lastWorkspaceVersionRef.current = 0;
       
+      // Reset debounce on navigation
+      lastDirectoryListRef.current = null;
+      
       previousScopePathRef.current = filesystemScopePath;
     }
   }, [filesystemScopePath, log]);
 
+  // Bidirectional sync: Event-driven refresh from terminal/editor updates
+  // Always register listener regardless of isOpen - needed for on-demand shell commands
   useEffect(() => {
-    if (!isOpen) return;
-
     const refresh = async (detail?: any) => {
       log(`[filesystem-updated event] received`, detail);
 
@@ -1202,7 +1580,7 @@ export default function CodePreviewPanel({
         const currentPath = filesystemCurrentPathRef.current || filesystemScopePathRef.current || 'project';
         const normalizedScopePath = normalizeProjectPath(currentPath);
         log(`[filesystem-updated] refreshing directory: "${normalizedScopePath}"`);
-        await listFilesystemDirectory(normalizedScopePath);
+        await debouncedListDirectory(normalizedScopePath);
         log(`[filesystem-updated] directory refreshed`);
 
         // Also refresh scoped preview files using ref
@@ -1221,7 +1599,14 @@ export default function CodePreviewPanel({
             },
             {} as Record<string, string>,
           );
-          setScopedPreviewFiles(files);
+          // Only update if content actually changed to prevent infinite loops
+          setScopedPreviewFiles((prev) => {
+            const prevKeys = Object.keys(prev);
+            const newKeys = Object.keys(files);
+            if (prevKeys.length !== newKeys.length) return files;
+            const hasChanges = newKeys.some(key => prev[key] !== files[key]);
+            return hasChanges ? files : prev;
+          });
           log(`[filesystem-updated] refreshed scopedPreviewFiles (${Object.keys(files).length} files)`);
         }
 
@@ -1275,7 +1660,7 @@ export default function CodePreviewPanel({
       }
     };
 
-    const scheduler = createRefreshScheduler(refresh, { minIntervalMs: 1000, maxDelayMs: 3000 });
+    const scheduler = createRefreshScheduler(refresh, { minIntervalMs: 5000, maxDelayMs: 10000 });
     const unsubscribe = onFilesystemUpdated((event) => scheduler.schedule(event.detail));
     log('[CodePreviewPanel] registered filesystem-updated event listener');
     return () => {
@@ -1351,9 +1736,108 @@ export default function CodePreviewPanel({
     return null;
   }, [filesystemScopePath, normalizedFilesystemPath, scopedPreviewFiles, projectStructure, normalizeProjectPath]);
 
+  // Enhanced entry point detection with framework-specific patterns
+  const detectEntryFile = useCallback((filePaths: string[], framework?: string): string | null => {
+    // Framework-specific entry file patterns with higher priority
+    const frameworkEntryPatterns: Record<string, RegExp[]> = {
+      nuxt: [/\/app\.vue$/, /\/src\/main\.(ts|js)$/, /\/pages\/index\.(vue|ts|js)$/, /\/nuxt\.config\.ts$/],
+      vue: [/\/src\/main\.(ts|js)$/, /\/src\/App\.vue$/, /\/main\.(ts|js)$/, /\/App\.vue$/],
+      next: [/\/src\/app\/page\.(tsx|jsx|ts|js)$/, /\/src\/app\/layout\.(tsx|jsx|ts|js)$/, /\/pages\/index\.(tsx|jsx|ts|js)$/, /\/src\/pages\/index\.(tsx|jsx|ts|js)$/],
+      react: [/\/src\/index\.(tsx|jsx|ts|js)$/, /\/src\/main\.(tsx|jsx|ts|js)$/, /\/src\/App\.(tsx|jsx)$/, /\/index\.(tsx|jsx|ts|js)$/],
+      svelte: [/\/src\/main\.(ts|js)$/, /\/src\/App\.svelte$/, /\/main\.(ts|js)$/],
+      angular: [/\/src\/main\.(ts|js)$/, /\/src\/app\/app\.component\.(ts|js)$/],
+      solid: [/\/src\/index\.(tsx|jsx)$/, /\/src\/App\.(tsx|jsx)$/],
+      astro: [/\/src\/pages\/index\.astro$/, /\/pages\/index\.astro$/],
+      vanilla: [/\/index\.html$/, /\/src\/index\.(js|ts)$/, /\/main\.(js|ts)$/],
+    };
+
+    const patterns = framework ? frameworkEntryPatterns[framework] : null;
+    
+    // Try framework-specific patterns first
+    if (patterns) {
+      for (const pattern of patterns) {
+        const match = filePaths.find(path => pattern.test(path));
+        if (match) return match;
+      }
+    }
+
+    // Fallback to common entry patterns (in priority order)
+    const commonPatterns = [
+      /\/src\/index\.(tsx|jsx|ts|js|vue)$/,
+      /\/src\/main\.(tsx|jsx|ts|js|vue)$/,
+      /\/app\.vue$/,
+      /\/App\.vue$/,
+      /\/src\/App\.(tsx|jsx|vue)$/,
+      /\/index\.(tsx|jsx|ts|js|html)$/,
+      /\/main\.(tsx|jsx|ts|js)$/,
+      /\/pages\/index\.(tsx|jsx|ts|js|vue)$/,
+      /\/src\/pages\/index\.(tsx|jsx|ts|js|vue)$/,
+      /\/src\/app\/page\.(tsx|jsx|ts|js)$/,
+      /.*\.html$/,
+    ];
+
+    for (const pattern of commonPatterns) {
+      const match = filePaths.find(path => pattern.test(path));
+      if (match) return match;
+    }
+
+    // Last resort: return first file or null
+    return filePaths[0] || null;
+  }, []);
+
+  // Detect framework from files
+  const detectFrameworkFromFiles = useCallback((filePaths: string[], files: Record<string, string>): string => {
+    const hasNuxtConfig = filePaths.some(p => p.includes('nuxt.config'));
+    const hasNextConfig = filePaths.some(p => p.includes('next.config'));
+    const hasVue = filePaths.some(p => p.endsWith('.vue'));
+    const hasSvelte = filePaths.some(p => p.endsWith('.svelte'));
+    const hasReact = filePaths.some(p => p.endsWith('.tsx') || p.endsWith('.jsx'));
+    const hasAngular = filePaths.some(p => p.includes('.component.') || p.includes('.module.'));
+    const hasAstro = filePaths.some(p => p.endsWith('.astro'));
+    const hasPython = filePaths.some(p => p.endsWith('.py'));
+
+    // Check package.json for framework detection
+    const packageJsonPath = filePaths.find(p => p === 'package.json' || p.endsWith('/package.json'));
+    const packageJson = packageJsonPath ? files[packageJsonPath] : '';
+    if (packageJson) {
+      try {
+        const pkg = JSON.parse(packageJson);
+        const deps = { ...pkg.dependencies, ...pkg.devDependencies };
+        if (deps.next || deps['next']) return 'next';
+        if (deps.nuxt || deps['@nuxt/core']) return 'nuxt';
+        if (deps.vue || deps['@vue/core']) return 'vue';
+        if (deps.svelte || deps['@sveltejs/kit']) return 'svelte';
+        if (deps.react) return 'react';
+        if (deps['@angular/core']) return 'angular';
+        if (deps.astro) return 'astro';
+      } catch {}
+    }
+
+    if (hasNuxtConfig) return 'nuxt';
+    if (hasNextConfig) return 'next';
+    if (hasAstro) return 'astro';
+    if (hasAngular) return 'angular';
+    if (hasSvelte) return 'svelte';
+    if (hasVue) return 'vue';
+    if (hasReact) return 'react';
+    if (hasPython) return 'python';
+
+    return 'vanilla';
+  }, []);
+
+  // Memoize scopedPreviewFiles serialization to prevent visualEditorProjectData recalculation
+  const scopedPreviewFilesSerialized = useMemo(() => {
+    return JSON.stringify(
+      Object.entries(scopedPreviewFiles || {}).sort(([a], [b]) => a.localeCompare(b))
+    );
+  }, [scopedPreviewFiles]);
+
+  // Track last logged visualEditorProjectData to prevent spam
+  const lastLoggedProjectDataRef = useRef<string>('');
+
   const visualEditorProjectData = useMemo(() => {
     let structure = projectStructureWithScopedFiles || projectStructure;
-    
+
     if (!structure && scopedPreviewFiles && Object.keys(scopedPreviewFiles).length > 0) {
       structure = {
         name: 'filesystem-project',
@@ -1364,7 +1848,7 @@ export default function CodePreviewPanel({
         filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath)
       };
     }
-    
+
     if (!structure && projectFiles && Object.keys(projectFiles).length > 0) {
       structure = {
         name: 'filesystem-project',
@@ -1378,13 +1862,16 @@ export default function CodePreviewPanel({
 
     const files = structure?.files || {};
     const filePaths = Object.keys(files);
-    
+
     if (filePaths.length === 0) {
       return null;
     }
 
     const packageJsonPath = filePaths.find((p) => p === 'package.json' || p.endsWith('/package.json'));
     const packageJsonContent = packageJsonPath ? files[packageJsonPath] : '';
+
+    // Detect framework from files
+    const detectedFramework = detectFrameworkFromFiles(filePaths, files);
 
     // Infer bundler from config files or package.json
     const inferredBundler = structure.bundler
@@ -1394,27 +1881,14 @@ export default function CodePreviewPanel({
             : filePaths.some((p) => p.includes('next.config')) || packageJsonContent.includes('"next"') || filePaths.some((p) => p.startsWith('pages/') || p.startsWith('app/')) ? 'nextjs'
               : undefined);
 
-    // Detect entry file from common patterns
-    const entryCandidates = [
-      'src/main.tsx', 'src/main.jsx', 'src/main.ts', 'src/main.js',
-      'src/index.tsx', 'src/index.jsx', 'src/index.ts', 'src/index.js',
-      'app.tsx', 'app.jsx', 'page.tsx', 'index.tsx', 'index.jsx', 'index.ts', 'index.js', 'index.html',
-      'main.py', 'app.py', 'manage.py', 'server.js', 'app.js', 'index.js'
-    ];
-    
-    const entryFile =
-      entryCandidates.find((candidate) => filePaths.includes(candidate))
-      || filePaths.find((path) => path.endsWith('/index.html'))
-      || filePaths.find((path) => path.endsWith('/main.tsx') || path.endsWith('/main.jsx') || path.endsWith('/main.ts') || path.endsWith('/main.js'))
-      || filePaths.find((path) => path.endsWith('/index.tsx') || path.endsWith('/index.jsx') || path.endsWith('/index.ts') || path.endsWith('/index.js'))
-      || filePaths[0]
-      || null;
+    // Use enhanced entry file detection with framework awareness
+    const entryFile = detectEntryFile(filePaths, detectedFramework);
 
     // Infer preview mode hint
     const nextJsInPackageJson = packageJsonContent && packageJsonContent.includes('"next"');
     const nextJsConfig = filePaths.some((p) => p.includes('next.config'));
     const nextJsPagesOrApp = filePaths.some((p) => p.startsWith('pages/') || p.startsWith('app/'));
-    
+
     const previewModeHint =
       inferredBundler === 'vite' ? 'vite'
       : inferredBundler === 'webpack' ? 'webpack'
@@ -1426,16 +1900,33 @@ export default function CodePreviewPanel({
       : filePaths.some((p) => p.endsWith('.py')) ? 'pyodide'
       : 'sandpack';
 
-    log(`[visualEditorProjectData] bundler="${inferredBundler}", entryFile="${entryFile}", previewModeHint="${previewModeHint}"`);
-
-    return {
+    const result = {
       ...structure,
       filesystemScopePath: normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath),
       bundler: inferredBundler,
       entryFile,
       previewModeHint,
     };
-  }, [filesystemScopePath, normalizeProjectPath, normalizedFilesystemPath, projectFiles, projectStructure, projectStructureWithScopedFiles, scopedPreviewFiles]);
+
+    // Log only when project data changes (prevent spam)
+    const logKey = `${inferredBundler}-${entryFile}-${previewModeHint}`;
+    if (lastLoggedProjectDataRef.current !== logKey) {
+      lastLoggedProjectDataRef.current = logKey;
+      log(`[visualEditorProjectData] bundler="${inferredBundler}", entryFile="${entryFile}", previewModeHint="${previewModeHint}"`);
+    }
+
+    return result;
+  }, [
+    filesystemScopePath, 
+    normalizeProjectPath, 
+    normalizedFilesystemPath, 
+    projectFiles, 
+    projectStructure, 
+    projectStructureWithScopedFiles,
+    scopedPreviewFilesSerialized,
+    detectEntryFile,
+    detectFrameworkFromFiles
+  ]);
 
   const applySimpleLineDiff = (
     originalContent: string,
@@ -1847,6 +2338,9 @@ Generated on: ${new Date().toLocaleString()}
     return deps;
   };
 
+  // Refs for preventing log spam in renderLivePreview
+  const sandpackLogKeyRef = useRef<string>('');
+
   const renderLivePreview = () => {
     // Use manual preview files if active, otherwise use auto-detected structure (must be defined FIRST)
     const useStructure = isManualPreviewActive && manualPreviewFiles
@@ -2155,7 +2649,7 @@ export default app;`,
           const buildDirs = ['dist', 'build', '.next', '.nuxt', '.output', 'public'];
           
           for (const [path, fileObj] of Object.entries(files)) {
-            const content = fileObj?.code || '';
+            let content = fileObj?.code || '';
             
             // Skip build output files - they shouldn't be in source
             const isBuildOutput = buildDirs.some(dir => path.startsWith(dir + '/') || path.startsWith('/' + dir + '/'));
@@ -2171,6 +2665,32 @@ export default app;`,
             if (path.includes('.cache/') || path.includes('__pycache__/')) continue;
             
             if (typeof content === 'string' && content.trim()) {
+              // Strip leaked heredoc markers (<<<, >>>) from WRITE command artifacts
+              content = content.replace(/^\s*<<<\s*\n?/, '').replace(/\n?\s*>>>\s*$/, '');
+              
+              // For JSON files, validate and fix content to prevent Sandpack parse errors
+              if (path.endsWith('.json') || path.endsWith('.json5')) {
+                try {
+                  JSON.parse(content);
+                } catch {
+                  // Try to extract valid JSON from corrupted content
+                  const jsonStart = content.indexOf('{');
+                  const jsonEnd = content.lastIndexOf('}');
+                  if (jsonStart >= 0 && jsonEnd > jsonStart) {
+                    const extracted = content.slice(jsonStart, jsonEnd + 1);
+                    try {
+                      JSON.parse(extracted);
+                      content = extracted;
+                    } catch {
+                      // Still invalid — skip this file to prevent Sandpack crash
+                      continue;
+                    }
+                  } else {
+                    continue;
+                  }
+                }
+              }
+              
               const sandpackPath = path.startsWith('/') ? path : `/${path}`;
               normalized[sandpackPath] = { code: content };
             }
@@ -2246,10 +2766,11 @@ export default app;`,
 
         // Apply normalization to filter build outputs and cache files
         const normalizedSandpackFiles = normalizeFilesForSandpack(sandpackFiles);
-        
-        // Detect best entry file and log for debugging
+
+        // Detect best entry file (log only when changed to prevent spam)
         const detectedEntryFile = detectBestEntryFile(normalizedSandpackFiles, effectiveFramework);
-        if (detectedEntryFile) {
+        if (detectedEntryFile && sandpackLogKeyRef.current !== detectedEntryFile) {
+          sandpackLogKeyRef.current = detectedEntryFile;
           log(`[Sandpack] Detected entry file: ${detectedEntryFile}`);
         }
 
@@ -2372,7 +2893,13 @@ root.render(<App />);` };
           for (const [path, fileObj] of Object.entries(normalized)) {
             let relativePath = path;
 
+            // First, ensure path has leading slash for consistent handling
+            if (!relativePath.startsWith('/')) {
+              relativePath = '/' + relativePath;
+            }
+
             // Strip VFS scope prefix first (e.g. /project/sessions/draft-chat_xxx/my-vue-app/src/main.js -> /my-vue-app/src/main.js)
+            // Try both with and without leading slash variants
             const prefixVariants = [
               `/${scopePrefix}/`,
               `${scopePrefix}/`,
@@ -2380,10 +2907,10 @@ root.render(<App />);` };
             ];
             for (const prefix of prefixVariants) {
               if (relativePath.startsWith(prefix)) {
-                relativePath = '/' + relativePath.slice(prefix.length);
+                relativePath = relativePath.slice(prefix.length);
                 // If we stripped a sessions prefix, also strip the session ID folder
                 if (prefix === '/project/sessions/' || prefix === 'project/sessions/') {
-                  const slashIdx = relativePath.indexOf('/', 1);
+                  const slashIdx = relativePath.indexOf('/');
                   if (slashIdx > 0) {
                     relativePath = relativePath.slice(slashIdx);
                   }
@@ -2393,6 +2920,7 @@ root.render(<App />);` };
             }
 
             // Try to strip leading project folder if path contains a known subfolder pattern
+            // e.g., /my-vue-app/src/main.js -> /src/main.js
             for (const pattern of projectSubfolderPatterns) {
               const match = relativePath.match(pattern);
               if (match) {
@@ -2618,7 +3146,7 @@ root.render(<App />);` };
           );
         }
 
-        // CodeSandbox DevBox preview mode (for backend/full-stack apps) - Pending state
+        // CodeSandbox DevBox preview mode (for backend/full-stack apps)
         if (isManualPreviewActive && previewMode === 'devbox') {
           const packageJson = Object.entries(useStructure.files).find(
             ([path]) => path === 'package.json' || path.endsWith('/package.json')
@@ -2636,36 +3164,167 @@ root.render(<App />);` };
             runtime = 'python';
           }
 
+          // Function to create DevBox
+          const startDevBox = async () => {
+            setIsCodesandboxLoading(true);
+            setCodesandboxUrl(null);
+
+            try {
+              log('[DevBox] Creating cloud dev environment...');
+
+              // Call API to create CodeSandbox devbox
+              const response = await fetch('/api/sandbox/devbox', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  files: useStructure.files,
+                  template: runtime === 'python' ? 'python' : 'node',
+                }),
+              });
+
+              // Check content type before parsing JSON
+              const contentType = response.headers.get('content-type');
+              if (!contentType?.includes('application/json')) {
+                // Response is likely HTML error page
+                const text = await response.text();
+                throw new Error(
+                  `Server returned ${response.status} ${response.statusText} (not JSON). ` +
+                  `This may indicate a server error or maintenance.`
+                );
+              }
+
+              if (!response.ok) {
+                const errorData = await response.json().catch(() => ({}));
+                const errorMsg = errorData.error || `Failed to create CodeSandbox environment (${response.status})`;
+                throw new Error(errorMsg);
+              }
+
+              const data = await response.json();
+              const sandboxUrl = data.url || `https://${data.sandboxId}.csb.app`;
+
+              setCodesandboxUrl(sandboxUrl);
+              log(`[DevBox] DevBox ready: ${sandboxUrl}`);
+              toast.success('DevBox environment created successfully');
+            } catch (err: any) {
+              logError('[DevBox] Error:', err);
+              toast.error('DevBox creation failed', {
+                description: err.message,
+                duration: 5000,
+              });
+              setCodesandboxUrl(`Error: ${err.message}`);
+            } finally {
+              setIsCodesandboxLoading(false);
+            }
+          };
+
           return (
-            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex items-center justify-center p-8">
-              <div className="text-center max-w-md">
-                <div className="w-20 h-20 mx-auto mb-6 bg-blue-500/20 rounded-full flex items-center justify-center">
-                  <Zap className="w-10 h-10 text-blue-400" />
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
+              <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-white text-sm font-medium">🏗️ DevBox</span>
+                  <span className="text-blue-300 text-xs">Cloud Dev Environment</span>
                 </div>
-                <h3 className="text-white text-xl font-medium mb-2">DevBox Environment</h3>
-                <p className="text-gray-400 text-sm mb-2">
-                  Full-stack {runtime} environment for backend applications
-                </p>
-                <p className="text-gray-500 text-xs mb-6">
-                  Starts a cloud development container with your project files
-                </p>
-                <div className="flex gap-3 justify-center">
+                <div className="flex gap-2">
                   <Button
-                    onClick={() => {
-                      // TODO: Integrate CodeSandbox API to start real DevBox
-                      toast.info('DevBox integration coming soon');
-                    }}
-                    className="bg-blue-600 hover:bg-blue-700 text-white px-6"
+                    size="sm"
+                    variant="outline"
+                    onClick={startDevBox}
+                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                    disabled={isCodesandboxLoading}
                   >
-                    ▶ Start DevBox
+                    {isCodesandboxLoading ? '⏳ Creating...' : '▶ Start DevBox'}
                   </Button>
                   <Button
+                    size="sm"
                     variant="outline"
                     onClick={() => setPreviewMode('sandpack')}
-                    className="border-gray-600 text-gray-300 hover:bg-gray-800"
+                    className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
                   >
                     Use Sandpack
                   </Button>
+                </div>
+              </div>
+
+              <div className="flex-1 flex flex-col">
+                <div className="p-2 bg-gray-900 border-b border-gray-800">
+                  <div className="grid grid-cols-3 gap-2 text-xs">
+                    <div>
+                      <p className="text-gray-400">📦 Runtime:</p>
+                      <p className="text-blue-300">{runtime}</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">📁 Files:</p>
+                      <p className="text-blue-300">{Object.keys(useStructure.files).length} files</p>
+                    </div>
+                    <div>
+                      <p className="text-gray-400">🐍 Python files:</p>
+                      <p className="text-blue-300">{pythonFiles.length} files</p>
+                    </div>
+                  </div>
+                </div>
+
+                <div className="flex-1 flex items-center justify-center p-8">
+                  {isCodesandboxLoading ? (
+                    <div className="text-center space-y-4">
+                      <div className="w-16 h-16 mx-auto bg-blue-500/20 rounded-full flex items-center justify-center">
+                        <RefreshCw className="w-8 h-8 text-blue-400 animate-spin" />
+                      </div>
+                      <h3 className="text-white text-lg font-medium">Creating DevBox Environment</h3>
+                      <p className="text-gray-400 text-sm max-w-md">
+                        Setting up a cloud development container with your {runtime} project...
+                      </p>
+                      <p className="text-gray-500 text-xs">
+                        This may take 30-60 seconds for complex projects
+                      </p>
+                    </div>
+                  ) : codesandboxUrl ? (
+                    codesandboxUrl.startsWith('http') ? (
+                      <div className="w-full h-full flex flex-col">
+                        <div className="mb-2 text-blue-400 flex items-center justify-between px-4">
+                          <span>✓ DevBox ready: <a href={codesandboxUrl} target="_blank" rel="noopener noreferrer" className="underline">{codesandboxUrl}</a></span>
+                          <Button
+                            size="sm"
+                            variant="outline"
+                            onClick={() => window.open(codesandboxUrl, '_blank')}
+                            className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
+                          >
+                            Open in New Tab ↗
+                          </Button>
+                        </div>
+                        <iframe
+                          src={codesandboxUrl}
+                          className="flex-1 w-full bg-white rounded"
+                          sandbox="allow-scripts allow-same-origin allow-forms allow-popups"
+                        />
+                      </div>
+                    ) : (
+                      <div className="text-center space-y-4">
+                        <AlertCircle className="w-12 h-12 mx-auto text-red-400" />
+                        <p className="text-red-400">{codesandboxUrl}</p>
+                        <Button onClick={startDevBox} variant="outline" className="border-gray-600 text-gray-300 hover:bg-gray-800">
+                          <RefreshCw className="w-4 h-4 mr-2" />
+                          Retry
+                        </Button>
+                      </div>
+                    )
+                  ) : (
+                    <div className="text-center space-y-4">
+                      <div className="w-20 h-20 mx-auto bg-blue-500/20 rounded-full flex items-center justify-center">
+                        <Zap className="w-10 h-10 text-blue-400" />
+                      </div>
+                      <h3 className="text-white text-xl font-medium">DevBox Environment</h3>
+                      <p className="text-gray-400 text-sm max-w-md">
+                        Full-stack {runtime} environment for backend applications
+                      </p>
+                      <p className="text-gray-500 text-xs max-w-md">
+                        Starts a cloud development container with your project files, including a full VS Code editor
+                      </p>
+                      <Button onClick={startDevBox} className="bg-blue-600 hover:bg-blue-700 text-white px-6">
+                        <Play className="w-4 h-4 mr-2" />
+                        Start DevBox
+                      </Button>
+                    </div>
+                  )}
                 </div>
               </div>
             </div>
@@ -3444,10 +4103,21 @@ root.render(<App />);` };
                 }),
               });
 
+              // Check content type before parsing JSON
+              const contentType = response.headers.get('content-type');
+              if (!contentType?.includes('application/json')) {
+                // Response is likely HTML error page
+                const text = await response.text();
+                throw new Error(
+                  `Server returned ${response.status} ${response.statusText} (not JSON). ` +
+                  `This may indicate a server error or maintenance.`
+                );
+              }
+
               if (!response.ok) {
                 const errorData = await response.json().catch(() => ({}));
                 const errorMsg = errorData.error || `Failed to create CodeSandbox environment (${response.status})`;
-                
+
                 // If error mentions "Unauthorized", suggest clearing sessions
                 if (errorMsg.includes('Unauthorized') || errorMsg.includes('not found')) {
                   log('[CodeSandbox] Session may be stale, suggesting cleanup');
@@ -4336,9 +5006,12 @@ root.render(<App />);` };
     }
   }, [isOpen]);
 
+  // NOTE: Keep component mounted even when closed to allow VFS sync for on-demand shell commands
+  // The component will render nothing when isOpen is false, but effects will still run
   return (
     <AnimatePresence>
-      {isOpen && (
+      {/* Always render the component but hide when isOpen is false - allows VFS sync effects to continue */}
+      {isOpen ? (
         <motion.div
           key={isOpen ? "visible" : "hidden"}
           initial={{ opacity: 0, x: "100%" }}
@@ -4454,7 +5127,6 @@ root.render(<App />);` };
                     </div>
                   )}
                   <PreviewErrorBoundary
-                    fallback={<div className="h-full flex items-center justify-center bg-gray-900 rounded-lg p-4"><div className="text-center text-gray-400"><AlertCircle className="w-12 h-12 mx-auto mb-3 text-yellow-500" /><p className="text-lg font-medium mb-2">Preview Error</p><p className="text-sm mb-4">The preview encountered an error and could not be displayed.</p><Button onClick={() => window.location.reload()} variant="outline" size="sm">Retry</Button></div></div>}
                     onReset={() => {
                       log('[PreviewErrorBoundary] Reset triggered, clearing preview state');
                       handleClearManualPreview();
@@ -4520,7 +5192,7 @@ root.render(<App />);` };
                                 if (name?.trim()) {
                                   const fullPath = `${filesystemCurrentPath.replace(/\/+$/, '')}/${name.trim()}/.keep`;
                                   writeFilesystemFile(fullPath, '').then(() => {
-                                    void listFilesystemDirectory(filesystemCurrentPath);
+                                    void debouncedListDirectory(filesystemCurrentPath);
                                     toast.success('Folder created');
                                   });
                                 }
@@ -4590,7 +5262,7 @@ root.render(<App />);` };
                                       setNewFileName('');
                                       setIsCreatingFile(false);
                                       toast.success(`Created ${newFileName.trim()}`);
-                                      void listFilesystemDirectory(filesystemCurrentPath);
+                                      void debouncedListDirectory(filesystemCurrentPath);
                                     }).catch(() => toast.error('Failed to create file'));
                                   } else if (e.key === 'Escape') {
                                     setIsCreatingFile(false);
@@ -4619,7 +5291,7 @@ root.render(<App />);` };
                                 selectedFilesystemPath === node.path
                                   ? "bg-gray-700"
                                   : "hover:bg-gray-800"
-                              }`}
+                              } ${dragOverPath === node.path ? 'bg-blue-500/30 border border-blue-500/50' : ''}`}
                               key={node.path}
                               onClick={() => {
                                 if (node.type === "directory") {
@@ -4628,6 +5300,7 @@ root.render(<App />);` };
                                   void selectFilesystemFile(node.path);
                                 }
                               }}
+                              onDoubleClick={() => handleDoubleClickFile(node)}
                               onContextMenu={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -4638,6 +5311,11 @@ root.render(<App />);` };
                                   type: node.type,
                                 });
                               }}
+                              draggable={node.type === 'file'}
+                              onDragStart={(e) => handleDragStart(e, { path: node.path, name: node.name })}
+                              onDragOver={(e) => node.type === 'directory' && handleDragOver(e, node.path)}
+                              onDragLeave={handleDragLeave}
+                              onDrop={(e) => node.type === 'directory' && handleDrop(e, node.path, true)}
                             >
                               <div className="flex items-center flex-1 min-w-0">
                                 {node.type === "directory" ? (
@@ -4645,36 +5323,69 @@ root.render(<App />);` };
                                 ) : (
                                   <FileText className="w-4 h-4 mr-2 flex-shrink-0" />
                                 )}
-                                <span className="truncate flex-1">{node.name}</span>
-                              </div>
-                              <button
-                                className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-all"
-                                onClick={(e) => {
-                                  e.stopPropagation();
-                                  const label = node.type === 'directory' ? `Delete folder "${node.name}" and all contents?` : `Delete ${node.name}?`;
-                                  if (confirm(label)) {
-                                    deleteFilesystemPath(node.path).then((deleteResult) => {
-                                      toast.success(`Deleted ${node.name}`);
-                                      void listFilesystemDirectory(filesystemCurrentPath);
-                                      if (selectedFilesystemPath === node.path) {
-                                        setSelectedFilesystemPath('');
-                                        setSelectedFilesystemContent('');
+                                {editingFilePath === node.path ? (
+                                  <input
+                                    type="text"
+                                    value={editingFileName}
+                                    onChange={(e) => setEditingFileName(e.target.value)}
+                                    onKeyDown={(e) => {
+                                      if (e.key === 'Enter') {
+                                        confirmRenameFromEdit();
+                                      } else if (e.key === 'Escape') {
+                                        cancelRenameEdit();
                                       }
-                                      // Dispatch event for cross-panel sync (Terminal, Chat)
-                                      emitFilesystemUpdated({
-                                        path: node.path,
-                                        scopePath: normalizedFilesystemPath,
-                                        source: 'code-preview',
-                                        type: 'delete',
+                                    }}
+                                    onBlur={confirmRenameFromEdit}
+                                    className="bg-black/50 border border-blue-500 rounded px-1 py-0.5 text-xs text-white outline-none flex-1 min-w-0"
+                                    autoFocus
+                                    onClick={(e) => e.stopPropagation()}
+                                  />
+                                ) : (
+                                  <span className="truncate flex-1">{node.name}</span>
+                                )}
+                              </div>
+                              <div className="flex items-center gap-1">
+                                {clipboard && node.type === 'directory' && (
+                                  <button
+                                    className="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-all text-xs"
+                                    onClick={(e) => {
+                                      e.stopPropagation();
+                                      handlePasteFile(node.path, true);
+                                    }}
+                                    title="Paste file here"
+                                  >
+                                    📋
+                                  </button>
+                                )}
+                                <button
+                                  className="opacity-0 group-hover:opacity-100 p-1 hover:text-red-400 transition-all"
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    const label = node.type === 'directory' ? `Delete folder "${node.name}" and all contents?` : `Delete ${node.name}?`;
+                                    if (confirm(label)) {
+                                      deleteFilesystemPath(node.path).then((deleteResult) => {
+                                        toast.success(`Deleted ${node.name}`);
+                                        void debouncedListDirectory(filesystemCurrentPath);
+                                        if (selectedFilesystemPath === node.path) {
+                                          setSelectedFilesystemPath('');
+                                          setSelectedFilesystemContent('');
+                                        }
+                                        // Dispatch event for cross-panel sync (Terminal, Chat)
+                                        emitFilesystemUpdated({
+                                          path: node.path,
+                                          scopePath: normalizedFilesystemPath,
+                                          source: 'code-preview',
+                                          type: 'delete',
+                                        });
+                                      }).catch((err: any) => {
+                                        toast.error('Failed to delete: ' + err.message);
                                       });
-                                    }).catch((err: any) => {
-                                      toast.error('Failed to delete: ' + err.message);
-                                    });
-                                  }
-                                }}
-                              >
-                                <Trash2 className="w-3 h-3" />
-                              </button>
+                                    }
+                                  }}
+                                >
+                                  <Trash2 className="w-3 h-3" />
+                                </button>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -4852,7 +5563,7 @@ root.render(<App />);` };
                       </div>
                     </div>
 
-                    <div className="flex-1 overflow-y-auto">
+                    <div className="flex-1 overflow-y-auto min-h-0">
                       {isFilesystemFileLoading ? (
                         <div className="h-full flex items-center justify-center text-sm text-gray-400">
                           Loading file...
@@ -4954,7 +5665,7 @@ root.render(<App />);` };
                                         setIsEditingFile(false);
                                         
                                         // Refresh directory listing
-                                        await listFilesystemDirectory(normalizedFilesystemPath);
+                                        await debouncedListDirectory(normalizedFilesystemPath);
                                         log(`handleSave: refreshed directory`);
                                         
                                         // Dispatch event for cross-panel sync
@@ -5117,6 +5828,9 @@ root.render(<App />);` };
             </CardContent>
           </Card>
         </motion.div>
+      ) : (
+        // Hidden but mounted - allows VFS sync effects to continue running for shell on-demand commands
+        <div data-code-preview-hidden style={{ display: 'none' }} />
       )}
       
       {/* Context Menu for File Operations */}
@@ -5130,6 +5844,21 @@ root.render(<App />);` };
             className="fixed z-50 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 min-w-[180px]"
             style={{ left: contextMenu.x, top: contextMenu.y }}
           >
+            {/* Paste option if clipboard has content and it's a directory */}
+            {clipboard && contextMenu.type === 'directory' && (
+              <>
+                <button
+                  className="w-full px-4 py-2 text-left text-sm text-blue-400 hover:bg-gray-800 flex items-center gap-2"
+                  onClick={() => {
+                    handlePasteFile(contextMenu.path, true);
+                  }}
+                >
+                  <span className="w-4">📋</span> Paste {clipboard.operation === 'cut' ? '(Move)' : '(Copy)'}
+                </button>
+                <hr className="my-1 border-gray-700" />
+              </>
+            )}
+            
             <button
               className="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
               onClick={() => {
@@ -5154,6 +5883,26 @@ root.render(<App />);` };
                 <button
                   className="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
                   onClick={() => {
+                    const name = contextMenu.path.split('/').pop() || '';
+                    const parentPath = contextMenu.path.split('/').slice(0, -1).join('/');
+                    handleCutFile(contextMenu.path, name, parentPath);
+                  }}
+                >
+                  <span className="w-4">✂️</span> Cut
+                </button>
+                <button
+                  className="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
+                  onClick={() => {
+                    const name = contextMenu.path.split('/').pop() || '';
+                    const parentPath = contextMenu.path.split('/').slice(0, -1).join('/');
+                    handleCopyFile(contextMenu.path, name, parentPath);
+                  }}
+                >
+                  <span className="w-4">📄</span> Copy
+                </button>
+                <button
+                  className="w-full px-4 py-2 text-left text-sm text-gray-300 hover:bg-gray-800 flex items-center gap-2"
+                  onClick={() => {
                     handleRenameFile(contextMenu.path);
                   }}
                 >
@@ -5173,7 +5922,7 @@ root.render(<App />);` };
                 if (confirm(label)) {
                   deleteFilesystemPath(contextMenu.path).then((deleteResult) => {
                     toast.success('Deleted ' + contextMenu.path.split('/').pop());
-                    void listFilesystemDirectory(filesystemCurrentPath);
+                    void debouncedListDirectory(filesystemCurrentPath);
                     setContextMenu(null);
                     if (selectedFilesystemPath === contextMenu.path) {
                       setSelectedFilesystemPath('');
@@ -5196,6 +5945,20 @@ root.render(<App />);` };
             </button>
           </div>
         </>
+      )}
+      
+      {/* Confirmation Dialog for File Operations */}
+      {confirmDialog && (
+        <ConfirmationDialog
+          isOpen={confirmDialog.isOpen}
+          title={confirmDialog.title}
+          message={confirmDialog.message}
+          confirmLabel={confirmDialog.confirmLabel}
+          cancelLabel={confirmDialog.cancelLabel}
+          variant={confirmDialog.variant}
+          onConfirm={confirmDialog.onConfirm}
+          onCancel={confirmDialog.onCancel}
+        />
       )}
     </AnimatePresence>
   );

@@ -14,6 +14,7 @@ import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesyste
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil } from '@/lib/virtual-filesystem/scope-utils';
+import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import type { LLMMessage } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
@@ -23,6 +24,7 @@ import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@/lib/agent/workforce-manager';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
+import { sanitizeFileEditTags, extractFileEdits, extractFencedDiffEdits as extractFencedDiffEditsShared } from '@/lib/chat/file-edit-parser';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -916,9 +918,15 @@ export async function POST(request: NextRequest) {
           events.splice(Math.max(0, events.length - 1), 0, filesystemEvent);
         }
 
+        // Bug #9 Fix: hasFilesystemEdits should be true only when there are actual filesystem write events
+        // Not just when the function ran (enableFilesystemEdits was true)
+        const hasActualFilesystemEdits = filesystemEdits && 
+          (filesystemEdits.applied.length > 0 || filesystemEdits.requestedFiles.length > 0);
         chatLogger.info('Starting streaming response', { requestId: streamRequestId, provider, model }, {
           eventsCount: events.length,
-          hasFilesystemEdits: !!filesystemEdits,
+          hasFilesystemEdits: hasActualFilesystemEdits,
+          appliedEditsCount: filesystemEdits?.applied?.length || 0,
+          requestedFilesCount: filesystemEdits?.requestedFiles?.length || 0,
         });
 
         const encoder = new TextEncoder();
@@ -1148,20 +1156,40 @@ function sanitizeAssistantDisplayContent(content: string): string {
   // Remove explicit command envelopes
   next = next.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
   next = next.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
-  next = next.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
+  // Remove file_edit tags using shared parser
+  next = sanitizeFileEditTags(next);
 
   // Remove <fs-actions>...</fs-actions> XML tag blocks (LLM sometimes uses XML instead of code blocks)
   next = next.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
 
   // Remove raw WRITE/PATCH/APPLY_DIFF heredoc command blocks that leak into visible output
-  // Handle variations: blank lines between path and <<<, different whitespace
-  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){1,2}<<<[\s\S]*?>>>(?=\n|$)/g, '\n');
-  next = next.replace(/(?:^|\n)\s*DELETE\s+[^\n]+(?=\n|$)/g, '\n');
-  // Remove <apply_diff> XML tags
+  // Enhanced regex to handle more edge cases: no whitespace, different line breaks, nested markers
+  // Using line-start anchors (^) with /m flag to avoid matching inside code blocks
+  
+  // Pattern 1: Standard format with optional newlines between path and <<<
+  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){0,3}<<<[\s\S]*?>>>(?=\n|$)/gim, '\n');
+  
+  // Pattern 2: Handle cases where <<< is on same line as path (WRITE path<<< content >>>)
+  // Only match at line start to avoid false positives in code blocks
+  next = next.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+<<<[\s\S]*?>>>/gim, '');
+  
+  // Pattern 3: Remove DELETE commands (line start only)
+  next = next.replace(/^\s*DELETE\s+[^\n]+(?=\n|$)/gim, '\n');
+  
+  // Pattern 4: Remove <apply_diff> XML tags with content
   next = next.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
+  
+  // Pattern 5: Handle any remaining fs-actions style commands (outside of code blocks)
+  // Match WRITE/PATCH/APPLY_DIFF at start of line with heredoc markers anywhere
+  next = next.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]*\n?\s*<<<[\s\S]*?>>>/gim, '');
+  
+  // Pattern 6: Clean up leftover <<< and >>> markers that weren't properly paired
+  next = next.replace(/^\s*<<<\s*$/gm, '');
+  next = next.replace(/^\s*>>>\s*$/gm, '');
 
   // Normalize leftover spacing
   next = next.replace(/\n{3,}/g, '\n\n').trim();
+  
   return next;
 }
 
@@ -1411,6 +1439,7 @@ async function handleGatewayStreaming(params: {
   // Transform gateway events to our SSE format
   const encoder = new TextEncoder();
   const decoder = new TextDecoder();
+  const parser = createNDJSONParser();
 
   const readableStream = new ReadableStream({
     async start(controller) {
@@ -1419,17 +1448,49 @@ async function handleGatewayStreaming(params: {
       try {
         while (true) {
           const { done, value } = await reader.read();
-          
+
           if (done) break;
 
-          const text = decoder.decode(value);
+          // Decode chunk and parse complete NDJSON lines
+          const chunk = decoder.decode(value, { stream: true });
+
+          // Parse NDJSON and re-emit as SSE
+          const events = parser.parse(chunk);
           
-          // Gateway sends: event: type\ndata: {...}\n\n
-          // We pass through as-is for now
-          controller.enqueue(value);
+          if (events.length > 0) {
+            // Successfully parsed NDJSON events - normalize to chat SSE format
+            for (const event of events) {
+              // Convert gateway event to chat SSE format
+              // The chat client expects: data: {...}\n\n with choices[0].delta.content for streaming
+              if (event.type === 'token' || event.type === 'message' || event.type === 'delta') {
+                const content =
+                  typeof event.data?.content === 'string'
+                    ? event.data.content
+                    : typeof event.content === 'string'
+                      ? event.content
+                      : typeof event.delta === 'string'
+                        ? event.delta
+                        : '';
+                const sseData = {
+                  choices: [{
+                    delta: { content }
+                  }]
+                };
+                controller.enqueue(encoder.encode(`data: ${JSON.stringify(sseData)}\n\n`));
+              } else if (event.type === 'done' || event.type === 'complete') {
+                controller.enqueue(encoder.encode('data: [DONE]\n\n'));
+              }
+            }
+          } else {
+            // No events parsed - NDJSON parser buffers incomplete lines
+            // Only consider this an error AFTER stream finalization or explicit parser error
+            // Skip transient/partial reads like "[]", empty buffers, or incomplete JSON
+            // Let the parser signal end/error explicitly rather than inferring from chunk content
+          }
         }
       } catch (error) {
         chatLogger.error('Stream error', { requestId }, { error: String(error) });
+        controller.error(error);
       } finally {
         controller.close();
       }
@@ -1451,7 +1512,7 @@ async function buildWorkspaceSessionContext(
   scopePath?: string,
   options?: { useContextPack?: boolean; maxTokens?: number }
 ): Promise<string> {
-  // Use context pack if requested and available
+  // Use context pack if requested and available - includes file contents!
   if (options?.useContextPack) {
     try {
       const contextPack = await contextPackService.generateContextPack(ownerId, scopePath || '/', {
@@ -1474,7 +1535,7 @@ async function buildWorkspaceSessionContext(
       });
       
       return [
-        `=== WORKSPACE CONTEXT (Context Pack) ===`,
+        `=== WORKSPACE CONTEXT (Context Pack - Full File Contents) ===`,
         `Root: ${scopePath || '/'}`,
         `Files: ${contextPack.fileCount}`,
         `Directories: ${contextPack.directoryCount}`,
@@ -1485,34 +1546,96 @@ async function buildWorkspaceSessionContext(
       ].filter(Boolean).join('\n');
     } catch (error: unknown) {
       console.warn('[Chat] Context pack generation failed, falling back to basic context:', error);
-      // Fall through to basic context
+      // Fall through to enhanced context with key file contents
     }
   }
   
-  // Basic workspace context (existing implementation)
+  // Enhanced workspace context with key file contents for editing
   try {
     const snapshot = await virtualFilesystem.exportWorkspace(ownerId);
     const scopedFiles = scopePath
       ? snapshot.files.filter((file) => file.path === scopePath || file.path.startsWith(`${scopePath}/`))
       : snapshot.files;
+    
     if (scopedFiles.length === 0) {
       return 'Workspace is currently empty.';
     }
 
-    const MAX_PATHS = 120;
-    const filePaths = scopedFiles
+    // Identify key files that might need editing (source code, config, etc.)
+    // Exclude ALL .env files to prevent secret leakage into LLM prompts
+    const keyExtensions = ['.ts', '.tsx', '.js', '.jsx', '.json', '.py', '.vue', '.svelte', '.html', '.css', '.md', '.yaml', '.yml', 'Dockerfile', 'docker-compose.yml', '.env.example'];
+    const keyFiles = scopedFiles
+      .filter(f => keyExtensions.some(ext => f.path.toLowerCase().endsWith(ext) || f.path.toLowerCase().includes('dockerfile')))
+      .filter(f => {
+        // Block all .env* files including .env, .env.local, .env.production, etc.
+        const pathLower = f.path.toLowerCase();
+        if (pathLower.includes('.env')) {
+          // Allow .env.example but block all other .env files
+          return pathLower.endsWith('.env.example');
+        }
+        return true;
+      })
+      .sort((a, b) => a.path.localeCompare(b.path))
+      .slice(0, 30); // Limit to 30 key files to avoid token explosion
+
+    const MAX_FILE_SIZE = 8000; // Max chars per file to include
+    const MAX_TOTAL_CHARS = options?.maxTokens ? options.maxTokens * 4 : 50000; // Respect maxTokens if provided (4 chars ≈ 1 token)
+    const fileContents: string[] = [];
+    
+    // Read files in parallel for better performance
+    const fileReadResults = await Promise.allSettled(
+      keyFiles.map(async (file) => {
+        const fileData = await virtualFilesystem.readFile(ownerId, file.path);
+        const content = fileData.content || '';
+        const truncatedContent = content.length > MAX_FILE_SIZE 
+          ? content.slice(0, MAX_FILE_SIZE) + '\n\n[...truncated...]'
+          : content;
+        return {
+          path: file.path,
+          content: truncatedContent,
+          success: true
+        };
+      })
+    );
+    
+    let failedReads = 0;
+    for (const result of fileReadResults) {
+      if (result.status === 'fulfilled') {
+        const { path, content } = result.value;
+        fileContents.push(
+          `### FILE: ${path}`,
+          '```' + (path.endsWith('.json') ? 'json' : path.endsWith('.ts') || path.endsWith('.tsx') ? 'typescript' : path.endsWith('.py') ? 'python' : ''),
+          content,
+          '```'
+        );
+      } else {
+        failedReads++;
+      }
+    }
+    if (failedReads > 0) {
+      fileContents.push(`\n(${failedReads} additional files could not be read)`);
+    }
+
+    // Also include file tree for remaining files
+    const remainingFiles = scopedFiles
+      .filter(f => !keyFiles.includes(f))
       .map((file) => file.path)
       .sort((a, b) => a.localeCompare(b))
-      .slice(0, MAX_PATHS);
+      .slice(0, 100);
 
-    const clipped = scopedFiles.length > MAX_PATHS;
+    const clipped = scopedFiles.length > 130;
     return [
+      `=== WORKSPACE CONTEXT (Files with Contents + Tree) ===`,
       `Workspace root: ${snapshot.root}`,
       `Workspace version: ${snapshot.version}`,
       scopePath ? `Active scope: ${scopePath}` : '',
-      `Files (${scopedFiles.length} total):`,
-      ...filePaths.map((path) => `- ${path}`),
-      clipped ? `- ... (${scopedFiles.length - MAX_PATHS} more files)` : '',
+      `Key source files (${keyFiles.length} - full contents for editing):`,
+      '',
+      ...fileContents,
+      '',
+      remainingFiles.length > 0 ? `Other files (${remainingFiles.length}):` : '',
+      ...remainingFiles.map((path) => `- ${path}`),
+      clipped ? `- ... (${scopedFiles.length - 130} more files)` : '',
     ]
       .filter(Boolean)
       .join('\n');
@@ -1619,6 +1742,7 @@ function appendFilesystemContextMessages(
             'When the user asks how to run code, include shell commands in ```bash blocks.',
             'The user has a terminal that can execute these commands.',
             'For multi-step setups, provide all commands in a single bash block so they can be run together.',
+            'If a task is too large for a single response, end with the exact token: [CONTINUE_REQUESTED]',
             'Example: ```bash',
             'npm install',
             'npm run dev',
@@ -1700,34 +1824,13 @@ function buildAgenticContext(messages: LLMMessage[]): string {
   return parts.join('\n\n');
 }
 
+// Use shared extractors from file-edit-parser.ts
 function extractTaggedFileEdits(content: string): Array<{ path: string; content: string }> {
-  const edits: Array<{ path: string; content: string }> = [];
-  const regex = /<file_edit\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_edit>/gi;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(content)) !== null) {
-    const filePath = match[1]?.trim();
-    const fileContent = match[2] ?? '';
-    if (!filePath) continue;
-    edits.push({ path: filePath, content: fileContent });
-  }
-
-  return edits;
+  return extractFileEdits(content).map(edit => ({ path: edit.path, content: edit.content }));
 }
 
 function extractFencedDiffEdits(content: string): Array<{ path: string; diff: string }> {
-  const edits: Array<{ path: string; diff: string }> = [];
-  const regex = /```diff\s+([^\n]+)\n([\s\S]*?)```/gi;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(content)) !== null) {
-    const targetPath = match[1]?.trim();
-    const diff = match[2] ?? '';
-    if (!targetPath) continue;
-    edits.push({ path: targetPath, diff });
-  }
-
-  return edits;
+  return extractFencedDiffEditsShared(content);
 }
 
 function extractFsActionWrites(content: string): Array<{ path: string; content: string }> {
@@ -1739,9 +1842,9 @@ function extractFsActionWrites(content: string): Array<{ path: string; content: 
 
   while ((blockMatch = blockRegex.exec(content)) !== null) {
     const blockContent = blockMatch[1] || '';
-    // FIX: Support both "WRITE path <<<" and "WRITE path\n<<<" formats
-    // Also support optional whitespace before <<<
-    const writeRegex = /WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    // FIX: Support "WRITE<path>", "WRITE <path>", "WRITE path", etc.
+    // Make whitespace optional between WRITE and path
+    const writeRegex = /WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
@@ -1757,8 +1860,8 @@ function extractFsActionWrites(content: string): Array<{ path: string; content: 
 
   while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
     const blockContent = xmlBlockMatch[1] || '';
-    // FIX: Support both "WRITE path <<<" and "WRITE path\n<<<" formats
-    const writeRegex = /WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    // FIX: Support "WRITE<path>", "WRITE <path>", "WRITE path", etc.
+    const writeRegex = /WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
@@ -1776,7 +1879,8 @@ function extractFsActionWrites(content: string): Array<{ path: string; content: 
   while ((regularBlockMatch = regularBlockRegex.exec(content)) !== null) {
     const blockContent = regularBlockMatch[1] || '';
     // Only match if it looks like a WRITE command (not actual code that happens to contain WRITE)
-    const writeRegex = /^WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
+    // Support "WRITE<path>", "WRITE <path>", etc.
+    const writeRegex = /^WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
@@ -1996,12 +2100,29 @@ function extractFilenameHintCodeBlocks(content: string): Array<{ path: string; c
 
   while ((match = regex.exec(content)) !== null) {
     const path = match[1]?.trim();
-    const fileContent = match[2] ?? '';
+    let fileContent = match[2] ?? '';
     if (!path) continue;
+    // Strip heredoc markers that may wrap the content (WRITE path <<< content >>>)
+    fileContent = stripHeredocMarkers(fileContent);
     writes.push({ path, content: fileContent });
   }
 
   return writes;
+}
+
+/**
+ * Strip heredoc markers (<<<, >>>) that may wrap file content.
+ * Also strips a leading WRITE/PATCH command line if present.
+ */
+function stripHeredocMarkers(content: string): string {
+  let cleaned = content;
+  // Remove leading "WRITE path" or "PATCH path" line if the whole block is a command
+  cleaned = cleaned.replace(/^\s*(?:WRITE|PATCH)\s+\S+\s*\n/, '');
+  // Strip leading <<< marker (with optional whitespace/newline)
+  cleaned = cleaned.replace(/^\s*<<<\s*\n?/, '');
+  // Strip trailing >>> marker (with optional whitespace/newline)
+  cleaned = cleaned.replace(/\n?\s*>>>\s*$/, '');
+  return cleaned;
 }
 
 function extractFileWriteFolderCreateTags(content: string): {
@@ -2224,7 +2345,11 @@ async function applyFilesystemEditsFromResponse(input: {
     ...extractBashHereDocWrites(input.responseContent || ''),
     ...extractFilenameHintCodeBlocks(input.responseContent || ''),
     ...fileWriteFolderCreateOps.writes.map(w => ({ path: w.path, content: w.content })),
-  ];
+  ].map(edit => ({
+    ...edit,
+    // Universal sanitization: strip any leaked heredoc markers from all extractors
+    content: stripHeredocMarkers(edit.content),
+  }));
   const combinedDiffOperations = [
     ...extractFencedDiffEdits(input.responseContent || ''),
     ...extractFsActionPatches(input.responseContent || ''),

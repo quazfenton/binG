@@ -82,29 +82,37 @@ export class ObjectStorageIntegration {
     try {
       const provider = await getSandboxProvider(this.inferProviderType(sandboxId));
       const handle = await provider.getSandbox(sandboxId);
-      
+
       // Try Daytona Object Storage service first
-      const storageService = handle.getObjectStorageService?.();
+      const storageService = (handle as any).getObjectStorageService?.();
       if (storageService) {
-        const result = await storageService.upload(options.localPath, options.storageKey);
-        
+        const readResult = await (handle as any).readFile(options.localPath);
+        if (!readResult?.success || readResult.output === undefined) {
+          throw new Error(readResult?.output || `Failed to read file: ${options.localPath}`);
+        }
+        const result = await (storageService as any).upload({
+          key: options.storageKey,
+          content: readResult.output,
+          contentType: options.contentType,
+        });
+
         return {
           success: true,
           storageKey: options.storageKey,
-          size: result.size,
-          url: result.url,
+          size: (result as any).size,
+          url: (result as any).url,
         };
       }
-      
+
       // Fallback: Use provider's native upload if available
-      if (handle.uploadToStorage) {
-        const result = await handle.uploadToStorage(options.localPath, options.storageKey);
-        
+      if ((handle as any).uploadToStorage) {
+        const result = await (handle as any).uploadToStorage(options.localPath, options.storageKey);
+
         return {
           success: true,
           storageKey: options.storageKey,
-          size: result.size,
-          url: result.url,
+          size: (result as any).size,
+          url: (result as any).url,
         };
       }
       
@@ -136,20 +144,31 @@ export class ObjectStorageIntegration {
       const handle = await provider.getSandbox(sandboxId);
       
       // Try Daytona Object Storage service
-      const storageService = handle.getObjectStorageService?.();
+      const storageService = (handle as any).getObjectStorageService?.();
       if (storageService) {
-        const result = await storageService.download(options.storageKey, options.localPath);
+        const result = await (storageService as any).download({
+          key: options.storageKey,
+        });
+        
+        if (result.success && result.data?.content) {
+          // Write content to localPath
+          const fs = require('fs');
+          const dir = require('path').dirname(options.localPath);
+          fs.mkdirSync(dir, { recursive: true });
+          fs.writeFileSync(options.localPath, result.data.content);
+        }
         
         return {
-          success: true,
+          success: result.success,
           localPath: options.localPath,
-          size: result.size,
+          size: result.data?.size || 0,
         };
       }
       
       // Fallback: Use provider's native download
-      if (handle.downloadFromStorage) {
-        const result = await handle.downloadFromStorage(options.storageKey, options.localPath);
+      // @ts-ignore - downloadFromStorage may not exist on all sandbox implementations
+      if ((handle as any).downloadFromStorage) {
+        const result = await (handle as any).downloadFromStorage(options.storageKey, options.localPath);
         
         return {
           success: true,
@@ -184,11 +203,11 @@ export class ObjectStorageIntegration {
       const provider = await getSandboxProvider(this.inferProviderType(sandboxId));
       const handle = await provider.getSandbox(sandboxId);
       
-      const storageService = handle.getObjectStorageService?.();
+      const storageService = (handle as any).getObjectStorageService?.();
       if (storageService) {
-        const result = await storageService.list(prefix);
+        const result = await (storageService as any).list({ prefix });
         
-        return result.files?.map((f: any) => ({
+        return result.data?.objects?.map((f: any) => ({
           key: f.key,
           size: f.size,
           lastModified: f.lastModified,
@@ -214,9 +233,9 @@ export class ObjectStorageIntegration {
       const provider = await getSandboxProvider(this.inferProviderType(sandboxId));
       const handle = await provider.getSandbox(sandboxId);
       
-      const storageService = handle.getObjectStorageService?.();
+      const storageService = (handle as any).getObjectStorageService?.();
       if (storageService) {
-        await storageService.delete(storageKey);
+        await (storageService as any).delete(storageKey);
         return { success: true };
       }
       
@@ -243,9 +262,9 @@ export class ObjectStorageIntegration {
       const provider = await getSandboxProvider(this.inferProviderType(sandboxId));
       const handle = await provider.getSandbox(sandboxId);
       
-      const storageService = handle.getObjectStorageService?.();
+      const storageService = (handle as any).getObjectStorageService?.();
       if (storageService) {
-        const url = await storageService.getUrl(storageKey);
+        const url = await (storageService as any).getUrl(storageKey);
         return { url };
       }
       

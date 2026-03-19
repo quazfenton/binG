@@ -1,5 +1,6 @@
 import { defineHandler, getRouterParam, readBody } from "nitro/h3";
 import { getOpencodeClient } from "../../../../lib/opencode-client";
+import { validatePort } from "../../_utils";
 
 interface PromptBody {
   text: string;
@@ -14,9 +15,8 @@ export default defineHandler(async (event) => {
   const port = Number(getRouterParam(event, "port"));
   const id = getRouterParam(event, "id");
 
-  if (!port || isNaN(port)) {
-    throw new Error("Invalid port");
-  }
+  // SECURITY: Validate port to prevent SSRF attacks
+  validatePort(port);
 
   if (!id) {
     throw new Error("Session ID required");

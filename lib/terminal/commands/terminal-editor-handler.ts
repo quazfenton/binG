@@ -145,9 +145,6 @@ export class TerminalEditorHandler {
   async handleInput(input: string): Promise<void> {
     if (!this.session) return
 
-    const write = this.write
-    const writeLine = this.writeLine
-
     // Handle pending exit confirmation
     if (this.session.pendingExit) {
       await this.handlePendingExit(input)
@@ -194,7 +191,7 @@ export class TerminalEditorHandler {
 
     // Enter/Return
     if (input === '\r' || input === '\n') {
-      writeLine('')
+      this.writeLine('')
 
       // Handle vim command mode
       const currentLine = this.session.lines[this.session.cursorLine] || ''
@@ -270,7 +267,7 @@ export class TerminalEditorHandler {
     }
 
     if (input === '\x12') { // ^R - Insert file
-      writeLine('\x1b[90mFile to insert [from ./]: \x1b[0m')
+      this.writeLine('\x1b[90mFile to insert [from ./]: \x1b[0m')
       this.render()
       return
     }
@@ -290,18 +287,16 @@ export class TerminalEditorHandler {
    * Handle pending exit confirmation
    */
   private async handlePendingExit(input: string): Promise<void> {
-    const write = this.write
-    const writeLine = this.writeLine
 
     const key = input.toLowerCase()
     if (key === 'y') {
       // Save and exit
       await this.save()
-      writeLine(`\x1b[32m"${this.session?.filePath}" saved\x1b[0m`)
+      this.writeLine(`\x1b[32m"${this.session?.filePath}" saved\x1b[0m`)
       await this.close()
     } else if (key === 'n') {
       // Exit without saving
-      writeLine('\x1b[90mChanges discarded.\x1b[0m')
+      this.writeLine('\x1b[90mChanges discarded.\x1b[0m')
       await this.close()
     } else if (key === 'c' || input === '\x1b') {
       // Cancel exit
@@ -314,14 +309,13 @@ export class TerminalEditorHandler {
    * Handle vim commands
    */
   private async handleVimCommand(cmd: string): Promise<void> {
-    const writeLine = this.writeLine
 
     if (cmd === 'q' || cmd === 'q!') {
       // Quit without saving
       this.updateTerminalState({ mode: 'local' })
       const cwd = this.getCwd()
-      writeLine(`\x1b[90mExit without saving.\x1b[0m`)
-      write(this.getPrompt(cwd))
+      this.writeLine(`\x1b[90mExit without saving.\x1b[0m`)
+      this.write(this.getPrompt(cwd))
       this.session = null
       return
     }
@@ -329,7 +323,7 @@ export class TerminalEditorHandler {
     if (cmd === 'wq' || cmd === 'x' || cmd === 'w') {
       // Write and quit
       await this.save()
-      writeLine(`\x1b[32m"${this.session?.filePath}" ${this.session?.lines.length}L ${this.session?.content.length}C written\x1b[0m`)
+      this.writeLine(`\x1b[32m"${this.session?.filePath}" ${this.session?.lines.length}L ${this.session?.content.length}C written\x1b[0m`)
 
       if (cmd === 'wq' || cmd === 'x') {
         await this.close()
@@ -337,18 +331,18 @@ export class TerminalEditorHandler {
         this.session!.originalContent = this.session!.lines.join('\n')
         this.session!.cursorLine = 0
         this.session!.cursorCol = 0
-        writeLine('\x1b[33mNORMAL MODE\x1b[0m')
+        this.writeLine('\x1b[33mNORMAL MODE\x1b[0m')
         this.render()
       }
       return
     }
 
     if (cmd === 'w') {
-      writeLine('\x1b[90mUse :w to save or :wq to save and quit\x1b[0m')
+      this.writeLine('\x1b[90mUse :w to save or :wq to save and quit\x1b[0m')
       return
     }
 
-    writeLine(`\x1b[31mUnknown command: ${cmd}\x1b[0m`)
+    this.writeLine(`\x1b[31mUnknown command: ${cmd}\x1b[0m`)
     this.session!.lines[this.session!.cursorLine] = ''
     this.render()
   }
@@ -417,13 +411,12 @@ export class TerminalEditorHandler {
    * Show help (nano ^G)
    */
   private showHelp(): void {
-    const writeLine = this.writeLine
 
-    writeLine('\x1b[36m==== Nano Help ====\x1b[0m')
-    writeLine('\x1b[33m^G\x1b[0m  \x1b[37mDisplay this help     \x1b[33m^X\x1b[0m  \x1b[37mExit editor\x1b[0m')
-    writeLine('\x1b[33m^O\x1b[0m  \x1b[37mSave (WriteOut)       \x1b[33m^K\x1b[0m  \x1b[37mCut line\x1b[0m')
-    writeLine('\x1b[33m^U\x1b[0m  \x1b[37mPaste (Uncut)        \x1b[33m^Y\x1b[0m  \x1b[37mPrevious page\x1b[0m')
-    writeLine('\x1b[33m^C\x1b[0m  \x1b[37mShow cursor position\x1b[0m')
+    this.writeLine('\x1b[36m==== Nano Help ====\x1b[0m')
+    this.writeLine('\x1b[33m^G\x1b[0m  \x1b[37mDisplay this help     \x1b[33m^X\x1b[0m  \x1b[37mExit editor\x1b[0m')
+    this.writeLine('\x1b[33m^O\x1b[0m  \x1b[37mSave (WriteOut)       \x1b[33m^K\x1b[0m  \x1b[37mCut line\x1b[0m')
+    this.writeLine('\x1b[33m^U\x1b[0m  \x1b[37mPaste (Uncut)        \x1b[33m^Y\x1b[0m  \x1b[37mPrevious page\x1b[0m')
+    this.writeLine('\x1b[33m^C\x1b[0m  \x1b[37mShow cursor position\x1b[0m')
     this.render()
   }
 
@@ -433,16 +426,13 @@ export class TerminalEditorHandler {
   private render(): void {
     if (!this.session) return
 
-    const write = this.write
-    const writeLine = this.writeLine
-
     // Clear screen
-    write('\x1b[2J\x1b[H')
+    this.write('\x1b[2J\x1b[H')
 
     // Title bar
     const fileName = this.session.filePath.split('/').pop() || 'Untitled'
-    writeLine(`\x1b[1;32m ${this.session.type === 'nano' ? 'Nano' : 'Vim'} - ${fileName}\x1b[0m`)
-    writeLine('\x1b[90m─────────────────────────────────────\x1b[0m')
+    this.writeLine(`\x1b[1;32m ${this.session.type === 'nano' ? 'Nano' : 'Vim'} - ${fileName}\x1b[0m`)
+    this.writeLine('\x1b[90m─────────────────────────────────────\x1b[0m')
 
     // Display lines (15 lines max)
     const maxLines = 15
@@ -452,23 +442,23 @@ export class TerminalEditorHandler {
     displayLines.forEach((line, i) => {
       const actualLine = scrollOffset + i
       const prefix = actualLine === this.session!.cursorLine ? '\x1b[32m>\x1b[0m ' : '  '
-      writeLine(`${prefix}${line || ''}`)
+      this.writeLine(`${prefix}${line || ''}`)
     })
 
     if (this.session.lines.length > scrollOffset + maxLines) {
-      writeLine(`\x1b[90m... ${this.session.lines.length - scrollOffset - maxLines} more lines ...\x1b[0m`)
+      this.writeLine(`\x1b[90m... ${this.session.lines.length - scrollOffset - maxLines} more lines ...\x1b[0m`)
     }
 
-    writeLine('\x1b[90m─────────────────────────────────────\x1b[0m')
+    this.writeLine('\x1b[90m─────────────────────────────────────\x1b[0m')
 
     // Status bar
     if (this.session.type === 'nano') {
-      writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m')
+      this.writeLine('\x1b[36m^G Help  ^O Save  ^X Exit  ^K Cut  ^U Paste\x1b[0m')
     } else {
-      writeLine('\x1b[33mNORMAL MODE\x1b[0m')
+      this.writeLine('\x1b[33mNORMAL MODE\x1b[0m')
     }
 
-    writeLine(`\x1b[90mLine ${this.session.cursorLine + 1}/${this.session.lines.length} | Col ${this.session.cursorCol}\x1b[0m`)
+    this.writeLine(`\x1b[90mLine ${this.session.cursorLine + 1}/${this.session.lines.length} | Col ${this.session.cursorCol}\x1b[0m`)
   }
 
   /**
@@ -526,3 +516,5 @@ export class TerminalEditorHandler {
 export function createTerminalEditorHandler(config: TerminalEditorHandlerConfig): TerminalEditorHandler {
   return new TerminalEditorHandler(config)
 }
+
+

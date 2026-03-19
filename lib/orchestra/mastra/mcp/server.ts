@@ -153,12 +153,12 @@ const mcpTools: MCPTool[] = [
 
       // @ts-ignore - ownerId is passed in config
       const sandbox = await (await getProvider()).createSandbox({ ownerId });
-       const command = language === 'python' ? 'python3' : 'node';
-       // @ts-ignore - executeCommand accepts args array in some implementations
-       const args = language === 'python' ? ['-c', code] : ['-e', code];
+      const command = language === 'python' ? 'python3' : 'node';
+      const codeArg = language === 'python' ? '-c' : '-e';
 
       const startTime = Date.now();
-      const result = await sandbox.executeCommand(command, args);
+      const escapedCode = code.replace(/'/g, "'\\''");
+      const result = await sandbox.executeCommand(`${command} ${codeArg} '${escapedCode}'`);
       const executionTime = Date.now() - startTime;
 
       return {
@@ -209,11 +209,9 @@ const mcpTools: MCPTool[] = [
 
       // @ts-ignore - ownerId is passed in config
       const sandbox = await (await getProvider()).createSandbox({ ownerId });
-       const command = language === 'python' ? 'pip' : 'npm';
-       // @ts-ignore - executeCommand accepts args array in some implementations
-       const args = ['install', ...packages];
+      const command = language === 'python' ? 'pip install' : 'npm install';
 
-      const result = await sandbox.executeCommand(command, args);
+      const result = await sandbox.executeCommand(`${command} ${packages.join(' ')}`);
       return {
         success: result.exitCode === 0,
         output: result.output || '',

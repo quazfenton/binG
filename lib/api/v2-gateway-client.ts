@@ -227,27 +227,43 @@ export async function* subscribeToSessionEvents(sessionId: string): AsyncGenerat
   const redis = getRedisClient()
   const channel = `agent:events:${sessionId}`
 
+  const messageQueue: V2AgentEvent[] = []
+  let errorOccurred: Error | null = null
+  let isDone = false
+
+  // Create named listener so we can remove it later (prevents memory leak)
+  const messageListener = (pattern: string, pchannel: string, message: string) => {
+    try {
+      const event: V2AgentEvent = JSON.parse(message)
+      if (event.sessionId === sessionId || pchannel.includes(sessionId)) {
+        messageQueue.push(event)
+      }
+    } catch (err: any) {
+      errorOccurred = err
+    }
+  }
+
   try {
     await redis.psubscribe(channel)
+    redis.on('pmessage', messageListener)
 
-    const listener = new Promise.AsyncIterator<V2AgentEvent>((resolve, reject) => {
-      redis.on('pmessage', (pattern, channel, message) => {
-        try {
-          const event: V2AgentEvent = JSON.parse(message)
-          if (event.sessionId === sessionId || channel.includes(sessionId)) {
-            resolve({ value: event, done: false })
-          }
-        } catch (err: any) {
-          reject(err)
-        }
-      })
-    })
+    // Poll for messages
+    while (!isDone && !errorOccurred) {
+      if (messageQueue.length > 0) {
+        yield messageQueue.shift()!
+      } else {
+        // Wait a bit before checking again
+        await new Promise(resolve => setTimeout(resolve, 100))
+      }
+    }
 
-    for await (const event of listener) {
-      yield event
+    if (errorOccurred) {
+      throw errorOccurred
     }
   } finally {
     redis.punsubscribe(channel)
+    // Remove listener to prevent memory leak on shared Redis client
+    redis.off('pmessage', messageListener)
   }
 }
 

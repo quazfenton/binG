@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem';
+import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { searchQuerySchema, pathSchema } from '@/lib/validation/schemas';
 
 export const runtime = 'nodejs';
@@ -57,22 +58,26 @@ export async function GET(req: NextRequest) {
 
     // SECURITY: Always derive ownerId from authenticated request context
     // Reject any attempt to override ownerId via query parameter
-    const authResolution = await resolveFilesystemOwner(req);
+    const authResolution = await resolveFilesystemOwnerWithFallback(req, {
+      route: 'search',
+      requestId: Math.random().toString(36).slice(2, 8),
+    });
     const ownerId = authResolution.ownerId;
 
     // If ownerId was explicitly provided in query, verify it matches authenticated user
     if (ownerIdFromQuery && ownerIdFromQuery !== ownerId) {
-      return NextResponse.json(
+      const errorResponse = NextResponse.json(
         {
           success: false,
           error: 'Unauthorized: cannot search filesystems for other users',
         },
         { status: 403 },
       );
+      return withAnonSessionCookie(errorResponse, authResolution);
     }
 
     const results = await virtualFilesystem.search(ownerId, query, { path, limit });
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: {
         query,
@@ -80,8 +85,14 @@ export async function GET(req: NextRequest) {
         results,
       },
     });
+    return withAnonSessionCookie(response, authResolution);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : 'Search failed';
-    return NextResponse.json({ success: false, error: message }, { status: 400 });
+    const errorResponse = NextResponse.json({ success: false, error: message }, { status: 400 });
+    return withAnonSessionCookie(errorResponse, {
+      ownerId: 'unknown',
+      source: 'anonymous',
+      isAuthenticated: false,
+    });
   }
 }

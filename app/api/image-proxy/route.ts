@@ -49,10 +49,9 @@ function isPrivateIP(ip: string): boolean {
       if (ipv4.range() === 'multicast') return true;
     } else {
       const ipv6 = addr as ipaddr.IPv6;
-      // Block IPv6 private ranges
-      if (ipv6.range() === 'private') return true;
-      if (ipv6.range() === 'loopback') return true;
-      if (ipv6.range() === 'linkLocal') return true;
+      // Block IPv6 private ranges - use string comparison for type compatibility
+      const range: string = ipv6.range();
+      if (range === 'private' || range === 'loopback' || range === 'linkLocal') return true;
       // Block IPv4-mapped IPv6 addresses pointing to private IPs
       if (ipv6.isIPv4MappedAddress()) {
         return isPrivateIP(ipv6.toIPv4Address().toString());

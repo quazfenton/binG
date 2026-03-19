@@ -34,6 +34,8 @@ import {
 } from 'lucide-react';
 import { toast } from 'sonner';
 import { transformToEmbed, isEmbeddableUrl, detectEmbeddableLinks, EmbedInfo, formatUrlForDisplay } from '@/lib/utils/iframe-helper';
+import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
+import useIframeLoader from '@/hooks/use-iframe-loader';
 
 interface BookmarkEntry {
   url: string;
@@ -113,8 +115,6 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
     return initialUrl || 'https://duckduckgo.com/html';
   });
   const [embedInfo, setEmbedInfo] = useState<EmbedInfo | null>(null);
-  const [isLoading, setIsLoading] = useState(true);
-  const [iframeError, setIframeError] = useState<string | null>(null);
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [bookmarks, setBookmarks] = useState<BookmarkEntry[]>([]);
   const [history, setHistory] = useState<HistoryEntry[]>([]);
@@ -123,6 +123,40 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
   const [activeTab, setActiveTab] = useState<'embed' | 'bookmarks' | 'history'>('embed');
   const [copied, setCopied] = useState(false);
   const [detectedLinks, setDetectedLinks] = useState<Array<{ url: string; provider: string; embedUrl: string }>>([]);
+
+  // Use iframe loader hook
+  const {
+    isLoading,
+    isLoaded,
+    isFailed,
+    failureReason,
+    errorMessage,
+    retryCount,
+    canRetry,
+    isUsingFallback,
+    fallbackUrl,
+    handleLoad,
+    handleRetry,
+    handleReset,
+    handleFallback,
+  } = useIframeLoader({
+    url: currentUrl,
+    timeout: 30000,
+    maxRetries: 3,
+    retryDelay: 5000,
+    enableAutoRetry: true,
+    enableFallback: true,
+    onLoaded: () => {
+      setIsReloading(false);
+      setIframeError(null);
+    },
+    onFailed: (reason, error) => {
+      setIsReloading(false);
+      setIframeError(error || 'Failed to load content');
+    },
+  });
+
+  const [iframeError, setIframeError] = useState<string | null>(null);
 
   useEffect(() => {
     try {
@@ -143,7 +177,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
 
   useEffect(() => {
     const timer = setTimeout(() => {
-      setIsLoading(false);
+      setIsReloading(false);
     }, 2000);
     return () => clearTimeout(timer);
   }, [iframeKey]);
@@ -393,34 +427,40 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                     </div>
                   </div>
                 )}
-                
-                {iframeError ? (
-                  <div className="absolute inset-0 flex items-center justify-center">
-                    <div className="text-center space-y-4 max-w-md p-6">
-                      <AlertCircle className="w-12 h-12 mx-auto text-red-500" />
-                      <p className="text-slate-400">{iframeError}</p>
-                      <div className="flex gap-2 justify-center">
-                        <Button onClick={handleReload} className="bg-blue-600 hover:bg-blue-500">
-                          <RefreshCw className="w-4 h-4 mr-2" />
-                          Retry
-                        </Button>
-                        <Button onClick={handleOpenExternal} variant="outline" className="border-slate-600">
-                          <ExternalLink className="w-4 h-4 mr-2" />
-                          Open Externally
-                        </Button>
-                      </div>
-                    </div>
+
+                {isFailed || iframeError ? (
+                  <div className="absolute inset-0">
+                    <IframeUnavailableScreen
+                      url={currentUrl}
+                      reason={failureReason || 'failed'}
+                      errorMessage={errorMessage || iframeError || undefined}
+                      onRetry={() => {
+                        setIframeError(null);
+                        handleRetry();
+                      }}
+                      onTryFallback={() => {
+                        setIframeError(null);
+                        handleFallback();
+                      }}
+                      onOpenExternal={handleOpenExternal}
+                      onClose={onClose}
+                      autoRetryCount={retryCount}
+                      maxRetries={3}
+                    />
                   </div>
                 ) : (
                   <iframe
                     key={iframeKey}
-                    src={currentUrl}
+                    src={isUsingFallback && fallbackUrl ? fallbackUrl : currentUrl}
                     className="w-full h-full border-0"
                     title="Embed"
-                    onLoad={() => setIsLoading(false)}
+                    onLoad={() => {
+                      setIsReloading(false);
+                      setIframeError(null);
+                      // Do not restart loader on successful iframe load.
+                    }}
                     onError={() => {
                       setIframeError('Failed to load content. This site may block embedding. Try opening externally.');
-                      setIsLoading(false);
                     }}
                     sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-autoplay allow-top-navigation allow-top-navigation-by-user-activation"
                     allow="autoplay; encrypted-media; fullscreen; picture-in-picture"

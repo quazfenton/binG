@@ -55,7 +55,6 @@ function getMockDatabase(): Database.Database {
     close: function() { return this as Database.Database; },
     backup: () => Promise.resolve({ totalPages: 0, remainingPages: 0 }),
     defaultSafeIntegers: () => mockDb as Database.Database,
-    register: () => mockDb as Database.Database,
     loadExtension: () => mockDb as Database.Database,
     serialize: () => Buffer.alloc(0),
     table: () => null,
@@ -234,8 +233,7 @@ export function decryptApiKey(encryptedData: string): string {
   try {
     // Legacy format used createDecipher which derived IV from password
     // Note: This is deprecated but kept for backward compatibility with existing encrypted data
-    // @ts-ignore - createDecipher is deprecated but needed for legacy data
-    const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
+    const decipher = (crypto as any).createDecipher('aes-256-cbc', encryptionKey);
     let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
     decrypted += decipher.final('utf8');
     return decrypted;
@@ -280,8 +278,7 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
           continue;
         } catch {
           // New format failed, this is legacy - migrate it
-          // @ts-ignore - createDecipher is deprecated but needed for legacy data migration
-          const decipher = crypto.createDecipher('aes-256-cbc', encryptionKey);
+          const decipher = (crypto as any).createDecipher('aes-256-cbc', encryptionKey);
           let decrypted = decipher.update(encrypted, 'hex', 'utf8');
           decrypted += decipher.final('utf8');
 

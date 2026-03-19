@@ -451,7 +451,8 @@ export class ToolAuthorizationManager {
 
       if (result.success === false) {
         // Check if auth is required
-        if (result.output?.error?.type === 'authorization_required') {
+        const errorType = (result.output?.error as any)?.type;
+        if (errorType === 'authorization_required') {
           const authUrl = this.getAuthorizationUrl(provider);
           return {
             success: false,
@@ -463,7 +464,7 @@ export class ToolAuthorizationManager {
 
         return {
           success: false,
-          error: result.output?.error?.message || 'Tool execution failed',
+          error: (result.output?.error as any)?.message || 'Tool execution failed',
         };
       }
 
@@ -557,9 +558,9 @@ export class ToolAuthorizationManager {
 
       // Create or get session for user
       const session = await composio.create(userId);
-      
+
       // Execute tool
-      const result = await session.execute(action, params);
+      const result = await (session as any).execute(action, params);
 
       return {
         success: true,

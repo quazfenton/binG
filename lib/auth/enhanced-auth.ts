@@ -112,10 +112,11 @@ export async function resolveEnhancedRequestAuth(
   }
 
   // 3. Try anonymous authentication
+  // SECURITY: Only use HttpOnly cookie for anonymous identity - never trust client-controlled headers
   if (allowAnonymous) {
-    const anonRaw = req.headers.get(anonymousHeaderName);
-    if (anonRaw) {
-      const normalized = normalizeAnonymousId(anonRaw);
+    const anonCookie = req.cookies.get('anon-session-id')?.value;
+    if (anonCookie) {
+      const normalized = normalizeAnonymousId(anonCookie);
       if (normalized) {
         return {
           success: true,

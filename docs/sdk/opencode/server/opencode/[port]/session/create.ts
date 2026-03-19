@@ -1,5 +1,6 @@
 import { defineHandler, getRouterParam, readBody } from "nitro/h3";
 import { getOpencodeClient } from "../../../lib/opencode-client";
+import { validatePort } from "../_utils";
 
 interface CreateSessionBody {
   title?: string;
@@ -9,9 +10,8 @@ interface CreateSessionBody {
 export default defineHandler(async (event) => {
   const port = Number(getRouterParam(event, "port"));
 
-  if (!port || isNaN(port)) {
-    throw new Error("Invalid port");
-  }
+  // SECURITY: Validate port to prevent SSRF attacks
+  validatePort(port);
 
   const body = await readBody<CreateSessionBody>(event);
   const client = getOpencodeClient(port);

@@ -10,6 +10,14 @@
  */
 
 import { UniversalEventEmitter } from '@/lib/utils/universal-event-emitter'
+import type { EnhancedSandboxEventType, EnhancedSandboxEvent } from './sandbox-events-enhanced'
+
+// Import enhanced events for use in legacy emitter
+import {
+  enhancedSandboxEvents,
+  emitEvent,
+  subscribeToEvents,
+} from './sandbox-events-enhanced'
 
 // Re-export enhanced events for backward compatibility
 export {
@@ -18,8 +26,6 @@ export {
   emitEvent,
   subscribeToEvents,
   getEventHistory,
-  type EnhancedSandboxEvent,
-  type EnhancedSandboxEventType,
 } from './sandbox-events-enhanced'
 
 // Legacy types for backward compatibility
@@ -28,9 +34,13 @@ export type SandboxEvent = EnhancedSandboxEvent
 
 // Legacy event emitter (kept for backward compatibility)
 class LegacySandboxEventEmitter extends UniversalEventEmitter {
-  emit(sandboxId: string, type: SandboxEventType, data: any): void {
-    // Delegate to enhanced events
-    emitEvent(sandboxId, type, data)
+  emit(event: string, ...args: any[]): boolean {
+    // Support legacy emit(sandboxId, type, data) format for backward compatibility
+    if (args.length >= 3) {
+      // Legacy format: emit(sandboxId, type, data)
+      emitEvent(args[0] as string, args[1] as SandboxEventType, args[2] as any, args[3] as any)
+    }
+    return super.emit(event, ...args)
   }
 
   subscribe(sandboxId: string, callback: (event: SandboxEvent) => void): () => void {

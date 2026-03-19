@@ -150,7 +150,7 @@ FORMAT:
       model: modelResult.model,
       system: systemPrompt,
       prompt: `${systemPrompt}\n\nCONTEXT:\n${context.projectStructure}\n\nFILES:\n${context.files?.join('\n') || 'None specified'}\n\nREQUEST:\n${prompt}`,
-      maxTokens: config.maxTokens,
+      maxOutputTokens: config.maxTokens,
       temperature: config.temperature,
     });
 
@@ -221,7 +221,7 @@ If no errors, return: {"errors": [], "passed": true}`;
     const result = await generateText({
       model: modelResult.model,
       prompt,
-      maxTokens: config.maxTokens,
+      maxOutputTokens: config.maxTokens,
       temperature: config.temperature,
     });
 

@@ -4,7 +4,7 @@
  * Basic tests to verify the enhanced API client functionality
  */
 
-import { describe, it, expect, beforeEach, vi } from 'vitest';
+import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import { EnhancedAPIClient } from '../enhanced-api-client';
 
 const createMockResponse = (overrides: any = {}) => ({
@@ -206,7 +206,6 @@ describe('EnhancedAPIClient', () => {
       const response = await client.request({
         url: 'https://api.example.com/test',
         method: 'GET',
-        responseType: 'text'
       });
 
       expect(response.data).toBe('plain text');

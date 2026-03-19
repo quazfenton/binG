@@ -271,10 +271,8 @@ export class NangoService {
           success: false,
           requiresAuth: true,
           authUrl,
-          toolName: providerConfigKey,
-          provider: providerConfigKey,
           error: `Authorization required for ${providerConfigKey}`,
-        };
+        } as any;
       }
 
       // Make proxy request
@@ -297,10 +295,8 @@ export class NangoService {
             success: false,
             requiresAuth: true,
             authUrl,
-            toolName: providerConfigKey,
-            provider: providerConfigKey,
             error: 'Authorization expired',
-          };
+          } as any;
         }
 
         return {

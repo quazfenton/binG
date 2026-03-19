@@ -163,9 +163,10 @@ export async function verifierNode(state: AgentStateType): Promise<Partial<Agent
     const verified = await agent.runVerificationPhase();
 
     // @ts-ignore - verified may have errors property from StatefulAgent
-    if (verified && 'errors' in verified && verified.errors && verified.errors.length > 0) {
+    const verifiedAny = verified as any;
+    if (verifiedAny && Array.isArray(verifiedAny.errors) && verifiedAny.errors.length > 0) {
       return {
-        errors: [...state.errors, ...verified.errors.map((e: any) => ({
+        errors: [...(state.errors || []), ...verifiedAny.errors.map((e: any) => ({
           ...e,
           step: 'verification',
           timestamp: new Date().toISOString(),

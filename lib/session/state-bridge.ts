@@ -29,8 +29,8 @@
  * ```
  */
 
-import { createLogger } from '../../utils/logger'
-import { sessionManager } from '../session-manager'
+import { createLogger } from '@/lib/utils/logger'
+import { sessionManager } from './session-manager'
 import {
   createUnifiedAgentState,
   type UnifiedAgentState,
@@ -40,7 +40,7 @@ import {
   stateFromJSON,
   validateState,
 } from '../orchestra/unified-agent-state'
-import type { SandboxHandle } from '../../sandbox/providers/sandbox-provider'
+import type { SandboxHandle } from '../sandbox/providers/sandbox-provider'
 
 const logger = createLogger('Session:StateBridge')
 

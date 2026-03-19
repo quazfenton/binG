@@ -528,7 +528,7 @@ export class BlaxelMcpServer {
       this.server = new McpServer({
         name: 'blaxel-sandbox',
         version: '1.0.0',
-      } as any)
+      } as any as any)
 
       this.registerTools()
 
@@ -580,14 +580,14 @@ export class BlaxelMcpServer {
       this.server = new McpServer({
         name: 'blaxel-sandbox',
         version: '1.0.0',
-      } as any)
+      } as any as any)
 
       this.registerTools()
 
       const transport = new StreamableHTTPServerTransport({
-        port,
+        port: port as unknown as number,
         endpoint: '/mcp',
-      })
+      } as any)
 
       await this.server.connect(transport)
 

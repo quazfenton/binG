@@ -89,8 +89,8 @@ export class S3StorageBackend extends StorageBackend {
     const startTime = Date.now();
 
     this.emit('upload_start', { localPath, remoteKey, size: fileSize });
-    sandboxMetrics.storageUploadsTotal.inc({ backend: 's3', status: 'started' });
-    sandboxMetrics.storageUploadSize.observe({ backend: 's3' }, fileSize);
+    sandboxMetrics.storageUploadsTotal.inc({ backend: 's3', status: 'started' }, 1);
+    sandboxMetrics.storageUploadSize.observe(fileSize, { backend: 's3' });
 
     try {
       const { PutObjectCommand, CreateMultipartUploadCommand, UploadPartCommand, CompleteMultipartUploadCommand } = await import('@aws-sdk/client-s3');
@@ -116,21 +116,17 @@ export class S3StorageBackend extends StorageBackend {
       const duration = (Date.now() - startTime) / 1000;
 
       this.emit('upload_complete', { location, size: fileSize, etag });
-      sandboxMetrics.storageUploadsTotal.inc({ backend: 's3', status: 'success' });
-      sandboxMetrics.storageOperationDuration.observe(
-        { backend: 's3', operation: 'upload' },
-        duration
-      );
+      sandboxMetrics.storageUploadsTotal.inc({ backend: 's3', status: 'success' }, 1);
+      sandboxMetrics.storageOperationDuration.observe(duration
+      , { backend: 's3', operation: 'upload' });
 
       return { location, size: fileSize, etag };
     } catch (error: any) {
       const duration = (Date.now() - startTime) / 1000;
       this.emit('upload_error', { localPath, remoteKey, error });
-      sandboxMetrics.storageUploadsTotal.inc({ backend: 's3', status: 'failure' });
-      sandboxMetrics.storageOperationDuration.observe(
-        { backend: 's3', operation: 'upload' },
-        duration
-      );
+      sandboxMetrics.storageUploadsTotal.inc({ backend: 's3', status: 'failure' }, 1);
+      sandboxMetrics.storageOperationDuration.observe(duration
+      , { backend: 's3', operation: 'upload' });
       throw new Error(`Upload failed: ${error.message}`);
     }
   }
@@ -217,7 +213,7 @@ export class S3StorageBackend extends StorageBackend {
     const startTime = Date.now();
 
     this.emit('download_start', { remoteKey, localPath });
-    sandboxMetrics.storageDownloadsTotal.inc({ backend: 's3', status: 'started' });
+    sandboxMetrics.storageDownloadsTotal.inc({ backend: 's3', status: 'started' }, 1);
 
     try {
       const { GetObjectCommand } = await import('@aws-sdk/client-s3');
@@ -242,21 +238,17 @@ export class S3StorageBackend extends StorageBackend {
       const duration = (Date.now() - startTime) / 1000;
 
       this.emit('download_complete', { remoteKey, localPath });
-      sandboxMetrics.storageDownloadsTotal.inc({ backend: 's3', status: 'success' });
-      sandboxMetrics.storageDownloadSize.observe({ backend: 's3' }, stats.size);
-      sandboxMetrics.storageOperationDuration.observe(
-        { backend: 's3', operation: 'download' },
-        duration
-      );
+      sandboxMetrics.storageDownloadsTotal.inc({ backend: 's3', status: 'success' }, 1);
+      sandboxMetrics.storageDownloadSize.observe(stats.size, { backend: 's3' });
+      sandboxMetrics.storageOperationDuration.observe(duration
+      , { backend: 's3', operation: 'download' });
       return true;
     } catch (error: any) {
       const duration = (Date.now() - startTime) / 1000;
       this.emit('download_error', { remoteKey, localPath, error });
-      sandboxMetrics.storageDownloadsTotal.inc({ backend: 's3', status: 'failure' });
-      sandboxMetrics.storageOperationDuration.observe(
-        { backend: 's3', operation: 'download' },
-        duration
-      );
+      sandboxMetrics.storageDownloadsTotal.inc({ backend: 's3', status: 'failure' }, 1);
+      sandboxMetrics.storageOperationDuration.observe(duration
+      , { backend: 's3', operation: 'download' });
       return false;
     }
   }
@@ -363,7 +355,7 @@ export class LocalStorageBackend extends StorageBackend {
     const startTime = Date.now();
 
     this.emit('upload_start', { localPath, remoteKey });
-    sandboxMetrics.storageUploadsTotal.inc({ backend: 'local', status: 'started' });
+    sandboxMetrics.storageUploadsTotal.inc({ backend: 'local', status: 'started' }, 1);
 
     try {
       // Ensure directory exists
@@ -378,22 +370,18 @@ export class LocalStorageBackend extends StorageBackend {
       const duration = (Date.now() - startTime) / 1000;
 
       this.emit('upload_complete', { location, size: stats.size, etag: '' });
-      sandboxMetrics.storageUploadsTotal.inc({ backend: 'local', status: 'success' });
-      sandboxMetrics.storageUploadSize.observe({ backend: 'local' }, stats.size);
-      sandboxMetrics.storageOperationDuration.observe(
-        { backend: 'local', operation: 'upload' },
-        duration
-      );
+      sandboxMetrics.storageUploadsTotal.inc({ backend: 'local', status: 'success' }, 1);
+      sandboxMetrics.storageUploadSize.observe(stats.size, { backend: 'local' });
+      sandboxMetrics.storageOperationDuration.observe(duration
+      , { backend: 'local', operation: 'upload' });
 
       return { location, size: stats.size, etag: '' };
     } catch (error: any) {
       const duration = (Date.now() - startTime) / 1000;
       this.emit('upload_error', { localPath, remoteKey, error });
-      sandboxMetrics.storageUploadsTotal.inc({ backend: 'local', status: 'failure' });
-      sandboxMetrics.storageOperationDuration.observe(
-        { backend: 'local', operation: 'upload' },
-        duration
-      );
+      sandboxMetrics.storageUploadsTotal.inc({ backend: 'local', status: 'failure' }, 1);
+      sandboxMetrics.storageOperationDuration.observe(duration
+      , { backend: 'local', operation: 'upload' });
       throw error;
     }
   }
@@ -403,11 +391,11 @@ export class LocalStorageBackend extends StorageBackend {
     const startTime = Date.now();
 
     this.emit('download_start', { remoteKey, localPath });
-    sandboxMetrics.storageDownloadsTotal.inc({ backend: 'local', status: 'started' });
+    sandboxMetrics.storageDownloadsTotal.inc({ backend: 'local', status: 'started' }, 1);
 
     try {
       if (!existsSync(srcPath)) {
-        sandboxMetrics.storageDownloadsTotal.inc({ backend: 'local', status: 'not_found' });
+        sandboxMetrics.storageDownloadsTotal.inc({ backend: 'local', status: 'not_found' }, 1);
         return false;
       }
 
@@ -422,21 +410,17 @@ export class LocalStorageBackend extends StorageBackend {
       const duration = (Date.now() - startTime) / 1000;
 
       this.emit('download_complete', { remoteKey, localPath });
-      sandboxMetrics.storageDownloadsTotal.inc({ backend: 'local', status: 'success' });
-      sandboxMetrics.storageDownloadSize.observe({ backend: 'local' }, stats.size);
-      sandboxMetrics.storageOperationDuration.observe(
-        { backend: 'local', operation: 'download' },
-        duration
-      );
+      sandboxMetrics.storageDownloadsTotal.inc({ backend: 'local', status: 'success' }, 1);
+      sandboxMetrics.storageDownloadSize.observe(stats.size, { backend: 'local' });
+      sandboxMetrics.storageOperationDuration.observe(duration
+      , { backend: 'local', operation: 'download' });
       return true;
     } catch (error: any) {
       const duration = (Date.now() - startTime) / 1000;
       this.emit('download_error', { remoteKey, localPath, error });
-      sandboxMetrics.storageDownloadsTotal.inc({ backend: 'local', status: 'failure' });
-      sandboxMetrics.storageOperationDuration.observe(
-        { backend: 'local', operation: 'download' },
-        duration
-      );
+      sandboxMetrics.storageDownloadsTotal.inc({ backend: 'local', status: 'failure' }, 1);
+      sandboxMetrics.storageOperationDuration.observe(duration
+      , { backend: 'local', operation: 'download' });
       return false;
     }
   }
@@ -527,3 +511,8 @@ export function getLocalBackend(baseDir: string = '/tmp/snapshots'): LocalStorag
   }
   return localBackend;
 }
+
+
+
+
+

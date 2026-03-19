@@ -16,7 +16,9 @@
  */
 
 import { EventEmitter } from 'node:events';
-import type { SandboxHandle, SandboxProvider } from './types';
+import type { SandboxHandle, SandboxProvider } from './providers';
+import type { SandboxProviderType } from './providers';
+import type { WorkspaceSession, SandboxConfig } from './types';
 import { sandboxBridge } from './sandbox-service-bridge';
 
 export interface AutoSuspendConfig {
@@ -313,6 +315,7 @@ export class AutoSuspendService extends EventEmitter {
 
       // Create new sandbox
       console.log(`[AutoSuspend] Creating new sandbox for ${sandboxId}`);
+      // @ts-ignore - ownerId may not be in SandboxCreateConfig type
       const newSandbox = await provider.createSandbox({ ownerId: sandboxId });
 
       // Restore state if available and enabled

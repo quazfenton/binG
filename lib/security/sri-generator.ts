@@ -34,6 +34,8 @@ export interface SRIHash {
   hash: string;
   /** Full integrity attribute value */
   integrity: string;
+  /** Optional error message if hashing failed */
+  error?: string;
 }
 
 /**

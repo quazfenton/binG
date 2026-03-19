@@ -130,12 +130,9 @@ export async function addMessage(
 
   try {
     // @ts-ignore - addMessage API may vary
-    await memory.addMessage({
-      threadId,
-      message: {
-        ...message,
-        metadata,
-      },
+    await memory.addMessage(threadId, {
+      ...message,
+      metadata,
     });
   } catch (error) {
     console.error('[Memory] Failed to add message:', error);

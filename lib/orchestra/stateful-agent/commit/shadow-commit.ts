@@ -37,6 +37,7 @@ export interface CommitHistoryEntry {
   message: string;
   author?: string;
   filesChanged: number;
+  workspaceVersion?: number | null;
   diff?: string;
   createdAt: string;
 }
@@ -307,6 +308,7 @@ export class ShadowCommitManager {
         author: d.author,
         createdAt: d.created_at,
         filesChanged: 0, // Would need to query files separately
+        workspaceVersion: d.workspace_version ?? null,
       }));
     }
 
@@ -331,6 +333,7 @@ export class ShadowCommitManager {
         author: data.author,
         createdAt: data.timestamp,
         filesChanged: data.transactions?.length || 0,
+        workspaceVersion: data.workspaceVersion ?? null,
         diff: data.diff,
       };
     });
@@ -530,15 +533,16 @@ export const commitTool = tool({
     message: z.string().describe('Commit message describing changes'),
     author: z.string().optional().describe('Author of the commit'),
   }),
-  execute: async ({ session_id, message, author }) => {
-    const manager = new ShadowCommitManager();
-    return { 
-      success: true, 
+  execute: async ({ session_id, message, author }: { session_id: string; message: string; author?: string }, context: any) => {
+    // Placeholder - actual commit happens via ShadowCommitManager in agent context
+    return {
+      success: true,
       message: 'Commit functionality available via ShadowCommitManager',
-      note: 'Use ShadowCommitManager.commit() in the agent context'
+      note: 'Use ShadowCommitManager.commit() in the agent context',
+      sessionId: session_id,
     };
   },
-});
+} as any);
 
 export const rollbackTool = tool({
   description: 'Rollback to a previous commit state',
@@ -546,12 +550,12 @@ export const rollbackTool = tool({
     session_id: z.string().describe('Session ID'),
     commit_id: z.string().describe('Commit ID to rollback to'),
   }),
-  execute: async ({ session_id, commit_id }) => {
+  execute: async ({ session_id, commit_id }: { session_id: string; commit_id: string }, context: any) => {
     const manager = new ShadowCommitManager();
     const result = await manager.rollback(session_id, commit_id);
     return result;
   },
-});
+} as any);
 
 export const historyTool = tool({
   description: 'Get commit history for a session',
@@ -559,9 +563,10 @@ export const historyTool = tool({
     session_id: z.string().describe('Session ID'),
     limit: z.number().optional().describe('Number of commits to return'),
   }),
-  execute: async ({ session_id, limit = 10 }) => {
+  execute: async ({ session_id, limit = 10 }: { session_id: string; limit?: number }, context: any) => {
     const manager = new ShadowCommitManager();
     const history = await manager.getCommitHistory(session_id, limit);
     return { success: true, history };
   },
-});
+} as any);
+

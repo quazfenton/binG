@@ -487,15 +487,15 @@ export function initializeDefaultTools(): void {
     },
   ]);
 
-  tamboToolRegistry.initialized = true;
-  console.log(`[TamboToolRegistry] Initialized ${tamboToolRegistry.count} default tools`);
+  (tamboToolRegistry as any).initialized = true;
+  console.log(`[TamboToolRegistry] Initialized ${(tamboToolRegistry as any).count} default tools`);
 }
 
 /**
  * Get the unified tool registry
  */
 export function getTamboToolRegistry(): TamboToolRegistry {
-  if (!tamboToolRegistry.initialized) {
+  if (!(tamboToolRegistry as any).initialized) {
     initializeDefaultTools();
   }
   return tamboToolRegistry;

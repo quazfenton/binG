@@ -327,7 +327,8 @@ class EmailService {
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.message || 'Failed to send via Brevo');
+      console.error('Brevo API error response:', error);
+      throw new Error(error.message || error.error || 'Failed to send via Brevo');
     }
 
     return { success: true };
@@ -395,7 +396,8 @@ class EmailService {
 
     if (!response.ok) {
       const error = await response.json();
-      throw new Error(error.message || 'Failed to send via MailerSend');
+      console.error('MailerSend API error response:', error);
+      throw new Error(error.message || error.error || 'Failed to send via MailerSend');
     }
 
     return { success: true };

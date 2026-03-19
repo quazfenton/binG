@@ -1,47 +1,87 @@
 "use client"
 
-import React, { useCallback } from "react"
+import React, { useCallback, useRef } from "react"
 import type { Message, ChatHistory } from "@/types"
-import { v4 as uuidv4 } from 'uuid';
+import { v4 as uuidv4 } from 'uuid'
 
 const STORAGE_KEY = "ayooo_chat_chat_history"
 
+// Cache for chat history to avoid repeated localStorage reads
+let chatHistoryCache: { chats: ChatHistory[]; timestamp: number } | null = null
+const CACHE_TTL_MS = 2000 // 2 seconds cache TTL
+
 export function useChatHistory() {
+  const cacheRef = useRef<{ chats: ChatHistory[]; timestamp: number } | null>(null)
+
   const getAllChats = useCallback((): ChatHistory[] => {
-    const stored = localStorage.getItem(STORAGE_KEY);
-    const isStoredEmpty = !stored;
-    if (isStoredEmpty) return [];
+    const now = Date.now()
+    
+    // Check local component cache first (for current render cycle)
+    if (cacheRef.current && (now - cacheRef.current.timestamp) < CACHE_TTL_MS) {
+      return cacheRef.current.chats
+    }
+    
+    // Check global cache
+    if (chatHistoryCache && (now - chatHistoryCache.timestamp) < CACHE_TTL_MS) {
+      cacheRef.current = chatHistoryCache
+      return chatHistoryCache.chats
+    }
+
+    const stored = localStorage.getItem(STORAGE_KEY)
+    const isStoredEmpty = !stored
+    if (isStoredEmpty) {
+      const emptyChats: ChatHistory[] = []
+      chatHistoryCache = { chats: emptyChats, timestamp: now }
+      cacheRef.current = chatHistoryCache
+      return emptyChats
+    }
 
     try {
-      const chats: ChatHistory[] = JSON.parse(stored);
+      const chats: ChatHistory[] = JSON.parse(stored)
       
       // Ensure all messages have IDs for backward compatibility
-      return chats.map((chat: ChatHistory) => ({
+      const processedChats = chats.map((chat: ChatHistory) => ({
         ...chat,
         messages: chat.messages.map((message: Message) => ({
           ...message,
           id: message.id || uuidv4()
         }))
-      }));
+      }))
+      
+      chatHistoryCache = { chats: processedChats, timestamp: now }
+      cacheRef.current = chatHistoryCache
+      return processedChats
     } catch (error) {
-      console.error("[useChatHistory] Error parsing chat history, clearing invalid data:", error);
-      localStorage.removeItem(STORAGE_KEY);
-      return [];
+      console.error("[useChatHistory] Error parsing chat history, clearing invalid data:", error)
+      localStorage.removeItem(STORAGE_KEY)
+      const emptyChats: ChatHistory[] = []
+      chatHistoryCache = { chats: emptyChats, timestamp: now }
+      cacheRef.current = chatHistoryCache
+      return emptyChats
     }
-  }, []);
+  }, [])
+
+  // Invalidate cache when chat is saved, loaded, or deleted
+  const invalidateCache = useCallback(() => {
+    chatHistoryCache = null
+    cacheRef.current = null
+  }, [])
 
   const saveCurrentChat = useCallback((messages: Message[], chatIdToUpdate?: string): string => {
-    const isEmpty = messages.length === 0;
-    if (isEmpty) return chatIdToUpdate || ""; // Return existing ID or empty if no messages
+    const isEmpty = messages.length === 0
+    if (isEmpty) return chatIdToUpdate || "" // Return existing ID or empty if no messages
 
-    const existingChats = getAllChats();
+    // Invalidate cache before saving
+    invalidateCache()
+    
+    const existingChats = getAllChats()
 
-    let updatedChats: ChatHistory[];
-    let finalChatId: string;
+    let updatedChats: ChatHistory[]
+    let finalChatId: string
 
     if (chatIdToUpdate) {
       // Try to find and update the existing chat
-      const chatIndex = existingChats.findIndex((chat: ChatHistory) => chat.id === chatIdToUpdate);
+      const chatIndex = existingChats.findIndex((chat: ChatHistory) => chat.id === chatIdToUpdate)
 
       if (chatIndex !== -1) {
         // Chat found, update it
@@ -50,29 +90,29 @@ export function useChatHistory() {
           title: messages[0]?.content ? messages[0].content.slice(0, 50) + (messages[0].content.length > 50 ? "..." : "") : "Untitled Chat",
           messages,
           timestamp: Date.now(), // Update timestamp
-        };
+        }
 
         // Replace the old chat with the updated one
-        updatedChats = [...existingChats];
-        updatedChats[chatIndex] = updatedChat;
+        updatedChats = [...existingChats]
+        updatedChats[chatIndex] = updatedChat
 
         // Reorder to keep the most recently updated chat at the top
         // Filter out the old version and add the new one at the beginning
-        updatedChats = [updatedChat, ...updatedChats.filter((chat: ChatHistory) => chat.id !== chatIdToUpdate)];
-        finalChatId = chatIdToUpdate;
+        updatedChats = [updatedChat, ...updatedChats.filter((chat: ChatHistory) => chat.id !== chatIdToUpdate)]
+        finalChatId = chatIdToUpdate
 
       } else {
         // Chat not found, save as a new chat
-        console.warn(`[useChatHistory] Chat with ID ${chatIdToUpdate} not found for update. Saving as new.`);
-        const newChatId = uuidv4(); // Use uuid for new chats
+        console.warn(`[useChatHistory] Chat with ID ${chatIdToUpdate} not found for update. Saving as new.`)
+        const newChatId = uuidv4() // Use uuid for new chats
         const chatHistory: ChatHistory = {
           id: newChatId,
           title: messages[0]?.content ? messages[0].content.slice(0, 50) + (messages[0].content.length > 50 ? "..." : "") : "Untitled Chat",
           messages,
           timestamp: Date.now(),
-        };
-        updatedChats = [chatHistory, ...existingChats];
-        finalChatId = newChatId;
+        }
+        updatedChats = [chatHistory, ...existingChats]
+        finalChatId = newChatId
       }
     } else {
       // Save as a new chat
@@ -83,35 +123,38 @@ export function useChatHistory() {
           existingMsg.content === messages[index].content &&
           existingMsg.role === messages[index].role
         )
-      );
+      )
 
       if (isDuplicate) {
-        console.log("[useChatHistory] Duplicate chat content detected. Not saving.");
-        return existingChats[0]?.id || ""; // Return the ID of the existing duplicate, or empty
+        console.log("[useChatHistory] Duplicate chat content detected. Not saving.")
+        return existingChats[0]?.id || "" // Return the ID of the existing duplicate, or empty
       }
 
-      const newChatId = uuidv4(); // Use uuid for new chats
+      const newChatId = uuidv4() // Use uuid for new chats
       const chatHistory: ChatHistory = {
         id: newChatId,
         title: messages[0]?.content ? messages[0].content.slice(0, 50) + (messages[0].content.length > 50 ? "..." : "") : "Untitled Chat",
         messages,
         timestamp: Date.now(),
-      };
-      updatedChats = [chatHistory, ...existingChats];
-      finalChatId = newChatId;
+      }
+      updatedChats = [chatHistory, ...existingChats]
+      finalChatId = newChatId
     }
 
     // Limit to 50 chats and save
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedChats.slice(0, 50)));
-    return finalChatId;
-  }, [getAllChats]);
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedChats.slice(0, 50)))
+    invalidateCache()
+    return finalChatId
+  }, [getAllChats, invalidateCache])
 
   const loadChat = useCallback(
     (chatId: string): ChatHistory | null => {
+      // Invalidate cache before loading
+      invalidateCache()
       const chats = getAllChats()
       return chats.find((chat: ChatHistory) => chat.id === chatId) || null
     },
-    [getAllChats],
+    [getAllChats, invalidateCache],
   )
 
   const deleteChat = useCallback(
@@ -119,8 +162,9 @@ export function useChatHistory() {
       const chats = getAllChats()
       const updatedChats = chats.filter((chat: ChatHistory) => chat.id !== chatId)
       localStorage.setItem(STORAGE_KEY, JSON.stringify(updatedChats))
+      invalidateCache()
     },
-    [getAllChats],
+    [getAllChats, invalidateCache],
   )
 
   const downloadAllHistory = useCallback(() => {
@@ -152,4 +196,4 @@ export function useChatHistory() {
     deleteChat,
     downloadAllHistory,
   }
-}
+}

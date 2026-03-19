@@ -117,7 +117,7 @@ export async function runBuild(config: BuildConfig): Promise<BuildResult> {
       success: false,
       output: error.stdout || '',
       duration: Date.now() - startTime,
-      error: error.message || stderr || 'Build failed',
+      error: error.message || 'Build failed',
     };
   }
 }
@@ -192,8 +192,8 @@ export async function runDeploy(config: DeployConfig): Promise<DeployResult> {
       cwd: config.cwd,
       env: {
         ...process.env,
-        NODE_ENV: config.environment,
-      },
+        NODE_ENV: config.environment === 'staging' ? 'production' : config.environment,
+      } as NodeJS.ProcessEnv,
       timeout: 5 * 60 * 1000,
       maxBuffer: 10 * 1024 * 1024,
     });

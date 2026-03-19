@@ -97,10 +97,9 @@ export async function getSyncStatus(
     return {
       success: status.status !== 'ERROR',
       status: status.status,
-      lastSyncDate: status.lastSyncDate,
-      nextSyncDate: status.nextSyncDate,
+      lastSyncDate: status.lastSyncDate != null ? String(status.lastSyncDate) : undefined,
       error: status.error,
-    };
+    } as SyncToolResult & { status: string; lastSyncDate?: string };
   } catch (error: any) {
     return {
       success: false,

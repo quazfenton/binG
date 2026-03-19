@@ -101,7 +101,7 @@ EXAMPLES:
       };
     }
   },
-});
+} as any);
 
 /**
  * Unsubscribe from webhooks
@@ -161,7 +161,7 @@ USE CASES:
       };
     }
   },
-});
+} as any);
 
 /**
  * List webhook subscriptions
@@ -230,7 +230,7 @@ RETURNS: Array of subscriptions with types, URLs, and status`,
       };
     }
   },
-});
+} as any);
 
 /**
  * Process incoming webhook (for custom webhook handling)
@@ -307,7 +307,7 @@ Nango can also process webhooks directly (see subscribe_webhook).`,
       };
     }
   },
-});
+} as any);
 
 /**
  * Configure webhook forwarding
@@ -385,7 +385,7 @@ RETURNS: Webhook configuration with URL and secret`,
       };
     }
   },
-});
+} as any);
 
 // ===========================================
 // Helper Functions
@@ -480,3 +480,6 @@ export const nangoWebhookTools = {
 };
 
 export type NangoWebhookToolName = keyof typeof nangoWebhookTools;
+
+
+

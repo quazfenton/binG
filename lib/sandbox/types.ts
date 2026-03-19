@@ -13,6 +13,8 @@ export interface ToolResult {
   success: boolean;
   /** Tool output */
   output?: string;
+  /** Binary output (base64 encoded) */
+  binary?: string;
   /** Error message if failed */
   error?: string;
   /** Tool name */
@@ -21,6 +23,12 @@ export interface ToolResult {
   executionTime?: number;
   /** Exit code (0 for success, non-zero for failure) */
   exitCode?: number;
+  /** Content result */
+  content?: string;
+  /** Blocked flag */
+  blocked?: boolean;
+  /** Hint for user */
+  hint?: string;
 }
 
 /**
@@ -540,4 +548,37 @@ export function assessRisk(input: string, context?: {
     shouldBlock,
     blockReason,
   };
+}
+
+/**
+ * Workspace session - represents an active sandbox workspace
+ * Legacy type for backwards compatibility
+ */
+export interface WorkspaceSession {
+  sessionId: string;
+  sandboxId: string;
+  userId: string;
+  ptySessionId?: string;
+  cwd: string;
+  createdAt: string;
+  lastActive: string;
+  status: 'creating' | 'ready' | 'active' | 'suspended' | 'closed';
+  // Extended properties for PTY support
+  sandboxHandle?: any;
+  workspacePath?: string;
+}
+
+/**
+ * Sandbox configuration - legacy type for backwards compatibility
+ */
+export interface SandboxConfig {
+  provider?: string;
+  language?: string;
+  template?: string;
+  resources?: {
+    cpu?: number;
+    memory?: number;
+    disk?: number;
+  };
+  env?: Record<string, string>;
 }

@@ -24,7 +24,7 @@
  */
 
 import { ToolRegistry } from './registry';
-import { CapabilityRouter, getCapabilityRouter } from './router';
+import { getCapabilityRouter, type CapabilityRouter } from './router';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Tools:Bootstrap');

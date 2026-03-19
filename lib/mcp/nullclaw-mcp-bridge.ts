@@ -197,7 +197,6 @@ class NullclawMCPBridge {
     logger.debug(`Executing Nullclaw tool: ${toolName}`, { args, sessionId });
 
     // Ensure container is available for this session
-    // @ts-ignore - getContainerForSession is defined in class
     const container = await this.getContainerForSession(sessionId);
     if (!container) {
       return {
@@ -252,6 +251,59 @@ class NullclawMCPBridge {
 
     // Initialize (will use URL or spawn containers based on config)
     await nullclawIntegration.initialize();
+  }
+
+  /**
+   * Get container for session (from pool or ensure initialized)
+   */
+  private async getContainerForSession(sessionId: string): Promise<NullclawContainer | null> {
+    // Check if session already has a container
+    const containerId = this.sessionToContainer.get(sessionId);
+    if (containerId) {
+      const container = this.containerPool.get(containerId);
+      if (container && container.status === 'ready') {
+        return container;
+      }
+      // Container not ready, remove mapping
+      this.sessionToContainer.delete(sessionId);
+    }
+
+    // Find an available container from pool
+    for (const [id, container] of this.containerPool) {
+      if (container.status === 'ready') {
+        this.sessionToContainer.set(sessionId, id);
+        return container;
+      }
+    }
+
+    // No available container - initialize session-specific container
+    // For per-session mode, this spawns a dedicated container
+    // For shared mode, this ensures the global pool is initialized
+    await nullclawIntegration.initializeForSession(sessionId, sessionId);
+
+    // Try to find a ready container again after initialization
+    for (const [id, container] of this.containerPool) {
+      if (container.status === 'ready') {
+        this.sessionToContainer.set(sessionId, id);
+        return container;
+      }
+    }
+
+    // If still no container, check if URL mode is available
+    if (nullclawIntegration.isAvailable()) {
+      // In URL mode, we don't need a local container
+      // Return a placeholder to indicate success
+      return {
+        id: 'external',
+        endpoint: process.env.NULLCLAW_URL || 'http://localhost:3000',
+        port: 3000,
+        status: 'ready',
+        isExternal: true,
+        assignedSessions: [sessionId],
+      };
+    }
+
+    return null;
   }
 
   /**

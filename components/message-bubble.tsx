@@ -22,6 +22,52 @@ import { normalizeToolInvocations } from "@/lib/types/tool-invocation"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 import { toast } from "sonner"
 import { buildApiHeaders } from "@/lib/utils"
+import { sanitizeFileEditTags } from "@/lib/chat/file-edit-parser"
+
+/**
+ * Client-side sanitization for message content
+ * Removes heredoc command blocks (WRITE/PATCH/APPLY_DIFF) that may have leaked through
+ * This is a safety net in case the backend sanitization missed any edge cases
+ */
+function sanitizeMessageContent(content: string): string {
+  if (!content || typeof content !== 'string') return '';
+  let sanitized = content;
+
+  // Use shared parser for file_edit tags
+  sanitized = sanitizeFileEditTags(sanitized);
+
+  // Remove explicit command envelopes
+  sanitized = sanitized.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
+  sanitized = sanitized.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
+
+  // Remove <fs-actions> XML tag blocks
+  sanitized = sanitized.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
+
+  // Remove heredoc command blocks - line start patterns with /m flag
+  // Pattern 1: Standard format with optional newlines between path and <<<
+  sanitized = sanitized.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){0,3}<<<[\s\S]*?>>>(?=\n|$)/gim, '\n');
+  
+  // Pattern 2: Handle cases where <<< is on same line as path
+  sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+<<<[\s\S]*?>>>/gim, '');
+  
+  // Pattern 3: Remove DELETE commands
+  sanitized = sanitized.replace(/^\s*DELETE\s+[^\n]+(?=\n|$)/gim, '\n');
+  
+  // Pattern 4: Remove <apply_diff> XML tags
+  sanitized = sanitized.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
+  
+  // Pattern 5: Handle remaining fs-actions style commands
+  sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]*\n?\s*<<<[\s\S]*?>>>/gim, '');
+  
+  // Pattern 6: Clean up leftover <<< and >>> markers
+  sanitized = sanitized.replace(/^\s*<<<\s*$/gm, '');
+  sanitized = sanitized.replace(/^\s*>>>\s*$/gm, '');
+
+  // Normalize spacing
+  sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
+  
+  return sanitized;
+}
 
 interface MessageBubbleProps {
   message: Message
@@ -135,6 +181,7 @@ export default function MessageBubble({
       const response = await fetch("/api/filesystem/edits/accept", {
         method: "POST",
         headers: buildRequestHeaders(),
+        credentials: 'include',
         body: JSON.stringify({ transactionId: fileEditInfo.transactionId }),
       });
       const payload = await response.json().catch(() => null);
@@ -165,6 +212,7 @@ export default function MessageBubble({
       const response = await fetch("/api/filesystem/edits/deny", {
         method: "POST",
         headers: buildRequestHeaders(),
+        credentials: 'include',
         body: JSON.stringify({
           transactionId: fileEditInfo.transactionId,
           reason: "User denied AI file edits from chat UI",
@@ -174,22 +222,28 @@ export default function MessageBubble({
       if (!response.ok || !payload?.success) {
         throw new Error(payload?.error || `Failed to deny edits (${response.status})`);
       }
-      const txStatus = payload?.data?.transaction?.status;
-      const conflicts = payload?.data?.conflicts || [];
-      const revertedPaths = payload?.data?.revertedPaths || [];
       
+      // SECURITY: Add explicit checks for expected response structure
+      const txStatus = payload?.data?.transaction?.status ?? 'unknown';
+      const conflicts = Array.isArray(payload?.data?.conflicts) ? payload.data.conflicts : [];
+      const revertedPaths = Array.isArray(payload?.data?.revertedPaths) ? payload.data.revertedPaths : [];
+
       if (txStatus === "reverted_with_conflicts") {
         setFileEditDecision("reverted_with_conflicts");
         toast.error("Reverted with conflicts", {
-          description: conflicts.length > 0 
+          description: conflicts.length > 0
             ? `${revertedPaths.length} files reverted, ${conflicts.length} conflicts detected`
             : "Some files could not be fully reverted",
           duration: 5000,
         });
       } else {
         setFileEditDecision("denied");
+        // Check if Git-backed rollback was used (all files reverted without conflicts)
+        const usedGitRollback = revertedPaths.length === fileEditInfo.applied.length && conflicts.length === 0;
         toast.success("File edits reverted", {
-          description: `${revertedPaths.length} file(s) restored to previous state`,
+          description: usedGitRollback
+            ? `${revertedPaths.length} file(s) restored using Git-backed rollback`
+            : `${revertedPaths.length} file(s) restored to previous state`,
           duration: 3000,
         });
       }
@@ -203,7 +257,7 @@ export default function MessageBubble({
     } finally {
       setIsApplyingEditAction(false);
     }
-  }, [buildRequestHeaders, fileEditInfo?.transactionId, isApplyingEditAction]);
+  }, [buildRequestHeaders, fileEditInfo?.transactionId, isApplyingEditAction, fileEditInfo?.applied?.length]);
   
   const layout = useResponsiveLayout()
   
@@ -257,7 +311,8 @@ export default function MessageBubble({
   })
 
   const handleCopy = async () => {
-    const contentToCopy = isUser ? message.content : streamingDisplay.displayContent
+    // Use sanitized content for copy to match what's displayed in UI
+    const contentToCopy = isUser ? message.content : sanitizedContent;
     try {
       await navigator.clipboard.writeText(contentToCopy)
       setCopied(true)
@@ -345,13 +400,22 @@ export default function MessageBubble({
     ? message.content.replace(/AUTH_REQUIRED:[\s\S]*?(?=\n\n|$)/, '')
     : message.content;
 
+  // Memoize sanitized content to avoid expensive regex on every render
+  const sanitizedContent = useMemo(() => {
+    if (isUser) return message.content;
+    // Apply client-side sanitization to assistant messages as a safety net
+    const rawContent = streamingDisplay.displayContent || message.content;
+    return sanitizeMessageContent(rawContent);
+  }, [message.content, streamingDisplay.displayContent, isUser]);
+
   const getContentToDisplay = () => {
     if (isUser) return message.content
     // Use displayContent if auth was dismissed (strips AUTH_REQUIRED sentinel)
+    // Also apply sanitization to handle edge cases
     if (authInfo && authDismissed) {
-      return displayContent;
+      return sanitizeMessageContent(displayContent);
     }
-    return streamingDisplay.displayContent || message.content
+    return sanitizedContent;
   }
 
   const { reasoning, mainContent } = parseReasoningContent(getContentToDisplay())
@@ -417,6 +481,7 @@ export default function MessageBubble({
       const response = await fetch(isDelete ? '/api/filesystem/delete' : '/api/filesystem/write', {
         method: 'POST',
         headers: buildRequestHeaders(),
+        credentials: 'include',
         body: JSON.stringify({
           path: artifact.path,
           content: isDelete ? undefined : artifact.content ?? '',
@@ -508,6 +573,25 @@ export default function MessageBubble({
         {/* Streaming cursor - shown while receiving content */}
         {isStreaming && streamingDisplay.isStreaming && streamingDisplay.isAnimating && !streamingDisplay.showLoadingIndicator && (
           <span className="inline-block w-2 h-5 bg-gradient-to-t from-purple-400 to-purple-300 animate-typing-cursor ml-1 rounded-sm" />
+        )}
+
+        {/* Reasoning Display - Shows before main content when agent is thinking */}
+        {!isUser && activeReasoningChunks.length > 0 && (
+          reasoningStream.isExpanded || activeReasoningChunks.length === 1 ? (
+            <ReasoningDisplay
+              reasoningChunks={activeReasoningChunks}
+              isStreaming={reasoningStream.isStreaming}
+              isExpanded={reasoningStream.isExpanded}
+              onToggle={() => reasoningStream.setIsExpanded(!reasoningStream.isExpanded)}
+              fullReasoning={activeFullReasoning}
+            />
+          ) : (
+            <ReasoningSummary
+              fullReasoning={activeFullReasoning}
+              isStreaming={reasoningStream.isStreaming}
+              onExpand={() => reasoningStream.setIsExpanded(true)}
+            />
+          )
         )}
 
         {/* Main content */}
@@ -704,28 +788,10 @@ export default function MessageBubble({
                   </h4>
                 ),
               }}
-            >
-              {isUser ? message.content : mainContent}
+        >
+          {/* Main content */}
+          {isUser ? message.content : mainContent}
         </ReactMarkdown>
-
-        {/* Reasoning Display - Shows before main content when agent is thinking */}
-        {!isUser && activeReasoningChunks.length > 0 && (
-          reasoningStream.isExpanded || activeReasoningChunks.length === 1 ? (
-            <ReasoningDisplay
-              reasoningChunks={activeReasoningChunks}
-              isStreaming={reasoningStream.isStreaming}
-              isExpanded={reasoningStream.isExpanded}
-              onToggle={() => reasoningStream.setIsExpanded(!reasoningStream.isExpanded)}
-              fullReasoning={activeFullReasoning}
-            />
-          ) : (
-            <ReasoningSummary
-              fullReasoning={activeFullReasoning}
-              isStreaming={reasoningStream.isStreaming}
-              onExpand={() => reasoningStream.setIsExpanded(true)}
-            />
-          )
-        )}
 
         {/* Tool Invocations Display - Enhanced with new component */}
         {!isUser && toolInvocations.length > 0 && (
@@ -909,6 +975,7 @@ export default function MessageBubble({
                   fileEditDecision === "accepted" ||
                   fileEditDecision === "auto_applied"
                 }
+                title="Accept the AI's file changes permanently"
               >
                 Accept
               </Button>
@@ -922,6 +989,7 @@ export default function MessageBubble({
                   fileEditDecision === "denied" ||
                   fileEditDecision === "reverted_with_conflicts"
                 }
+                title="Revert all file changes to their previous state using Git-backed rollback"
               >
                 Deny + Revert
               </Button>

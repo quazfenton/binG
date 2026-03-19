@@ -82,15 +82,15 @@ async function encrypt(value: string): Promise<string> {
     // Encode string to bytes
     const encoder = new TextEncoder()
     const data = encoder.encode(value)
-    
+
     // Encrypt
     const encrypted = await crypto.subtle.encrypt(
       {
         name: 'AES-GCM',
-        iv: iv,
+        iv: iv as any,
       },
       key,
-      data
+      data as any
     )
     
     // Combine IV + ciphertext and encode as base64
@@ -132,7 +132,7 @@ async function decrypt(encrypted: string): Promise<string> {
     const decrypted = await crypto.subtle.decrypt(
       {
         name: 'AES-GCM',
-        iv: iv,
+        iv: iv as any,
       },
       key,
       ciphertext

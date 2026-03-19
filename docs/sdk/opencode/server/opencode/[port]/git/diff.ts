@@ -2,15 +2,15 @@ import { defineHandler, getRouterParam } from "nitro/h3";
 import { getOpencodeClient } from "../../../lib/opencode-client";
 import { exec } from "node:child_process";
 import { promisify } from "node:util";
+import { validatePort } from "../_utils";
 
 const execAsync = promisify(exec);
 
 export default defineHandler(async (event) => {
   const port = Number(getRouterParam(event, "port"));
 
-  if (!port || isNaN(port)) {
-    throw new Error("Invalid port");
-  }
+  // SECURITY: Validate port to prevent SSRF attacks
+  validatePort(port);
 
   const client = getOpencodeClient(port);
   const project = await client.project.current();

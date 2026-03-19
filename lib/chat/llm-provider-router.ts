@@ -134,6 +134,13 @@ class LLMProviderLatencyTracker {
   }
 
   /**
+   * Get all metrics
+   */
+  getAllMetrics(): IterableIterator<ProviderLatencyMetrics> {
+    return this.metrics.values();
+  }
+
+  /**
    * Get all providers sorted by latency (fastest first)
    */
   getProvidersByLatency(): LLMProviderType[] {
@@ -384,7 +391,7 @@ export class LLMProviderRouter {
    * Get all provider metrics
    */
   getAllProviderMetrics(): ProviderLatencyMetrics[] {
-    return Array.from(this.latencyTracker.metrics.values());
+    return Array.from(this.latencyTracker.getAllMetrics());
   }
 
   /**

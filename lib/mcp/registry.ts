@@ -235,8 +235,9 @@ export class MCPToolRegistry {
           // Handle image content
           if ('mimeType' in c && 'data' in c) return `[Image: ${c.mimeType}]`
           // Handle resource content
-          // @ts-ignore - resource may have uri property
-          if ('resource' in c && c.resource && 'uri' in c.resource) return `[Resource: ${c.resource.uri}]`
+          if ('resource' in c && c.resource && typeof c.resource === 'object' && 'uri' in c.resource) {
+            return `[Resource: ${(c.resource as any).uri}]`
+          }
           // Fallback: stringify unknown content types
           return JSON.stringify(c)
         })

@@ -46,7 +46,12 @@ export async function POST(
         ...(token ? { Authorization: `Bearer ${token}` } : {}),
       },
     });
-    const data = await upstream.json().catch(() => ({}));
+    let data;
+    try {
+      data = await upstream.json();
+    } catch {
+      data = {};
+    }
     if (!upstream.ok) {
       auditLogger.failure('pipeline_restart', { upstreamStatus: upstream.status, error: data?.error }, id);
       return NextResponse.json({ error: data?.error || 'Failed to restart pipeline' }, { status: upstream.status });

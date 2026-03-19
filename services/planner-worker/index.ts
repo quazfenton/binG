@@ -13,10 +13,10 @@
  */
 
 import { createServer } from 'http';
-import { createLogger } from '../lib/utils/logger';
-import { taskRouter } from '../lib/agent/task-router';
-import type { ExecutionPolicy } from '../lib/sandbox/types';
-import { determineExecutionPolicy } from '../lib/sandbox/types';
+import { createLogger } from '@/lib/utils/logger';
+import { taskRouter } from '@/lib/agent/task-router';
+import type { ExecutionPolicy } from '@/lib/sandbox/types';
+import { determineExecutionPolicy } from '@/lib/sandbox/types';
 import Redis from 'ioredis';
 
 const logger = createLogger('PlannerWorker');
@@ -52,6 +52,7 @@ class PlannerService {
   private taskGraphs: Map<string, TaskGraph> = new Map();
   private redisClient?: any;
   private qdrantAvailable = false;
+  public initialized = false;
 
   async initialize(): Promise<void> {
     logger.info('Initializing planner worker service...', {
@@ -82,6 +83,8 @@ class PlannerService {
     } catch (error: any) {
       logger.warn('Qdrant not available, semantic search disabled:', error.message);
     }
+    
+    this.initialized = true;
   }
 
   /**

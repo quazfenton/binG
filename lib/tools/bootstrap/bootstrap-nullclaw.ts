@@ -97,7 +97,7 @@ export async function registerNullclawTools(registry: ToolRegistry, config: Boot
       provider: 'nullclaw',
       handler: async (args: any, context: any) => {
         const { nullclawIntegration } = await import('../../agent/nullclaw-integration');
-        return await nullclawIntegration.searchWeb(args.query);
+        return await (nullclawIntegration as any).searchWeb(args.query);
       },
       metadata: {
         latency: 'medium',

@@ -26,7 +26,10 @@
 import { useState, useEffect, useCallback, useRef } from 'react'
 import { createAgent, type UnifiedAgentConfig, type UnifiedAgent, type TerminalOutput, type AgentSession } from '@/lib/agent/unified-agent'
 
-export interface UseAgentOptions extends UnifiedAgentConfig {
+export interface UseAgentOptions extends Omit<UnifiedAgentConfig, 'provider'> {
+  /** Sandbox provider (e2b, daytona, blaxel, etc.) - optional, can be provided later */
+  provider?: UnifiedAgentConfig['provider']
+
   /** Auto-connect on mount */
   autoConnect?: boolean
   
@@ -137,7 +140,11 @@ export function useAgent(options: UseAgentOptions = {}): UseAgentReturn {
     setError(null)
 
     try {
-      const newAgent = await createAgent(agentConfig)
+      // Provider is required for agent creation
+      if (!agentConfig.provider) {
+        throw new Error('Provider is required to create agent')
+      }
+      const newAgent = await createAgent(agentConfig as UnifiedAgentConfig)
       
       setAgent(newAgent)
       agentRef.current = newAgent
@@ -158,7 +165,7 @@ export function useAgent(options: UseAgentOptions = {}): UseAgentReturn {
       // Get MCP tools if available
       try {
         const tools = await newAgent.mcpListTools()
-        setMcpTools(tools)
+        setMcpTools(tools.map(t => ({ name: t.name, description: t.description || '' })))
       } catch {
         // MCP not enabled
       }

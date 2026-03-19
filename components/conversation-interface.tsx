@@ -12,6 +12,7 @@ import { ChatPanel } from "@/components/chat-panel";
 import { HorizontalSpaceFiller } from "@/components/space-filler";
 import CodePreviewPanel from "@/components/code-preview-panel";
 import TerminalPanel from "@/components/terminal/TerminalPanel";
+import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 // import { useConversation } from "@/hooks/use-conversation"; // No longer needed
 import { useChatHistory } from "@/hooks/use-chat-history";
 import { voiceService } from "@/lib/voice/voice-service";
@@ -19,7 +20,7 @@ import { toast } from "sonner";
 import type { LLMProvider } from "@/lib/chat/llm-providers";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
-import { setCurrentMode } from "@/lib/mode-manager";
+import { setCurrentMode, detectNewProjectFolder } from "@/lib/chat/mode-manager";
 import {
   createInputContext,
   processSafeContent,
@@ -28,6 +29,7 @@ import {
 } from "@/lib/input-response-separator";
 import { useAuth } from "@/contexts/auth-context";
 import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from "@/lib/utils";
+import { generateSessionName, checkFileConflicts } from "@/lib/session-naming";
 import type { AttachedVirtualFile } from "@/hooks/use-virtual-filesystem";
 import { parsePatch, applyPatch } from "diff";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
@@ -108,42 +110,8 @@ function writePersistedConversationUiState(state: Omit<PersistedConversationUiSt
 
 const buildFilesystemHeaders = (): HeadersInit => buildApiHeaders();
 
-function applyUnifiedDiffToContent(currentContent: string, path: string, diffBody: string): string | null {
-  const diffText = diffBody.endsWith("\n") ? diffBody : `${diffBody}\n`;
-  const hasHeaders = diffText.includes("--- ") && diffText.includes("+++ ");
-  const unifiedDiff = hasHeaders
-    ? diffText
-    : `--- ${path}\n+++ ${path}\n${diffText}`;
-  const parsed = parsePatch(unifiedDiff);
-  if (!parsed.length) return null;
-  const patched = applyPatch(currentContent, parsed[0]);
-  return patched === false ? null : patched;
-}
-
-function applySimpleLineDiff(currentContent: string, diffBody: string): string | null {
-  // For new files (empty content), still try to apply the diff as it may contain the full file content
-  // Only skip if there's existing content that would be overwritten
-  if (currentContent && currentContent.trim().length > 0) {
-    // Still try to apply - the diff might be for modifying existing content
-  }
-  const lines = diffBody
-    .split("\n")
-    .filter((l) => /^(\+\s|\-\s|\s\s)/.test(l.trimStart()))
-    .map((l) => l.replace(/^\s+/, ""));
-  if (!lines.length) return null;
-  const resultLines: string[] = [];
-  for (const line of lines) {
-    if (line.startsWith("+ ")) {
-      resultLines.push(line.slice(2));
-    } else if (line.startsWith("- ")) {
-      continue;
-    } else if (line.startsWith("  ")) {
-      resultLines.push(line.slice(2));
-    }
-  }
-  const result = resultLines.join("\n");
-  return result && result !== currentContent ? result : null;
-}
+// Use shared file diff utilities
+import { applyDiffToContent } from '@/lib/chat/file-diff-utils';
 
 export default function ConversationInterface() {
   const { user } = useAuth();
@@ -219,19 +187,21 @@ export default function ConversationInterface() {
     }
     return null;
   });
-  const [filesystemSessionId, setFilesystemSessionId] = useState<string>(
-    () => {
-      const persisted = readPersistedConversationUiState();
-      if (persisted?.filesystemSessionId) {
-        return persisted.filesystemSessionId;
-      }
-      if (typeof window !== 'undefined') {
-        const saved = sessionStorage.getItem('current_filesystem_session_id');
-        if (saved) return saved;
-      }
-      return `draft-chat_${Date.now()}_${generateSecureId("chat")}`;
-    },
-  );
+  // Generate initial session ID using new naming system
+  const generateInitialSessionId = () => {
+    const persisted = readPersistedConversationUiState();
+    if (persisted?.filesystemSessionId) {
+      return persisted.filesystemSessionId;
+    }
+    if (typeof window !== 'undefined') {
+      const saved = sessionStorage.getItem('current_filesystem_session_id');
+      if (saved) return saved;
+    }
+    // Use new stock naming (OneXX, TwoXX, ThreeXX, then stock words)
+    return generateSessionName(undefined, true, false);
+  };
+  
+  const [filesystemSessionId, setFilesystemSessionId] = useState<string>(generateInitialSessionId);
 
   // Persist filesystemSessionId to sessionStorage so page refresh restores it
   useEffect(() => {
@@ -242,6 +212,13 @@ export default function ConversationInterface() {
   
   // Project name for simpler terminal paths (e.g., "webGame" instead of long session ID)
   const [projectName, setProjectName] = useState<string>('workspace');
+  
+  // Track if LLM folder detection has already run for this session (one-time only)
+  const [llmFolderDetected, setLlmFolderDetected] = useState(false);
+  
+  // Track pending approval required for existing session file edits
+  const [pendingApprovalDiffs, setPendingApprovalDiffs] = useState<{ path: string; diff: string }[]>([]);
+  const [showApprovalDialog, setShowApprovalDialog] = useState(false);
   
   const filesystemScopePath = useMemo(
     () => `project/sessions/${filesystemSessionId}`,
@@ -257,6 +234,8 @@ export default function ConversationInterface() {
   });
   const filesystemSessionIdRef = useRef(filesystemSessionId);
   const persistedUiStateUpdatedAtRef = useRef(0);
+  const continueProcessedRef = useRef<string | null>(null);
+  const chatHistorySavedRef = useRef<string | null>(null);
 
   useEffect(() => {
     providerRef.current = currentProvider;
@@ -526,6 +505,13 @@ export default function ConversationInterface() {
       // Only save if the last message is from assistant (completed response)
       const lastMessage = messages[messages.length - 1];
       if (lastMessage && lastMessage.role === "assistant") {
+        // Track last message ID to prevent duplicate saves
+        const lastMessageId = lastMessage.id;
+        if (chatHistorySavedRef.current === lastMessageId) {
+          return; // Skip if we already saved this message
+        }
+        chatHistorySavedRef.current = lastMessageId;
+
         const savedChatId = saveCurrentChat(
           messages,
           currentConversationId || undefined,
@@ -536,13 +522,37 @@ export default function ConversationInterface() {
           persistFilesystemScope(savedChatId, filesystemSessionId);
         }
 
-        // Update chat history state to reflect the saved chat
-        setChatHistory(getAllChats());
-
         // Auto-speak AI responses if voice is enabled
         if (isVoiceEnabled && voiceService.getSettings().autoSpeak) {
           voiceService.speak(lastMessage.content).catch(console.error);
         }
+
+        // Track last CONTINUE_REQUESTED message ID to prevent duplicate auto-submits
+        const lastContinueMessageId = lastMessage.id;
+        const lastContinueContent = lastMessage.content;
+
+        // Check if we already processed this CONTINUE_REQUESTED message
+        const alreadyProcessed = continueProcessedRef.current === lastContinueMessageId;
+        if (alreadyProcessed) {
+          return; // Skip duplicate processing
+        }
+        continueProcessedRef.current = lastContinueMessageId;
+
+        console.log('[Continuance] Auto-triggering next request');
+        toast.info('Continuance requested by AI - sending next message');
+
+        setTimeout(() => {
+          const fakeEvent = {
+            preventDefault: () => {},
+            currentTarget: { reset: () => {} },
+          } as React.FormEvent<HTMLFormElement>;
+
+          setInput('Please continue with the remaining tasks or improvements.');
+
+          setTimeout(() => {
+            handleSubmit(fakeEvent);
+          }, 50);
+        }, 1000);
       }
     }
   }, [
@@ -552,7 +562,8 @@ export default function ConversationInterface() {
     currentConversationId,
     filesystemSessionId,
     isVoiceEnabled,
-    getAllChats, // Added dependency
+    handleSubmit,
+    setInput
   ]);
 
   // Extract and persist streamed COMMANDS blocks into a per-file map
@@ -574,12 +585,120 @@ export default function ConversationInterface() {
     // Only process diffs if context allows it
     if (!shouldGenerateDiffsForContext(lastAssistant.content, responseContext) || !processedResponse.fileDiffs) return;
 
+    // LLM Folder Detection: Check if AI response indicates a new project with single folder structure
+    // This only applies to NEW sessions (no prior messages/files) with multiple files under one folder
+    // Only run once per session to avoid re-triggering
+    const detectedFolder = !llmFolderDetected && detectNewProjectFolder(lastAssistant.content);
+    if (detectedFolder && messages.length === 0) {
+      // Only apply for new sessions with no prior messages - use LLM-suggested folder name
+      const newSessionId = generateSessionName(detectedFolder, true, true);
+      setFilesystemSessionId(newSessionId);
+      setLlmFolderDetected(true); // Mark as detected to prevent re-triggering
+      toast.success(`Project initialized: ${newSessionId}`);
+    }
+
     const newEntries: { path: string; diff: string }[] = processedResponse.fileDiffs.map(fileDiff => ({
       path: fileDiff.path,
       diff: fileDiff.diff,
     }));
 
     if (newEntries.length === 0) return;
+
+    // Rule #2: For existing sessions, check if edits would overwrite existing files
+    // If so, require user approval instead of auto-applying
+    const isExistingSession = currentConversationId !== null || messages.length > 0;
+    
+    if (isExistingSession) {
+      // Query actual filesystem state for accurate conflict detection
+      let existingFilePaths: string[] = [];
+      
+      // Wrap async code in an async IIFE since useEffect can't be async
+      const checkConflicts = async () => {
+        try {
+          const listResponse = await fetch('/api/filesystem/list', {
+            method: 'POST',
+            headers: buildFilesystemHeaders(),
+            body: JSON.stringify({ 
+              path: filesystemScopePath,
+              recursive: true 
+            }),
+          });
+          
+          if (listResponse.ok) {
+            const payload = await listResponse.json().catch(() => null);
+            if (payload?.success && payload?.data?.nodes) {
+              // Get file paths from the actual filesystem
+              existingFilePaths = payload.data.nodes
+                .filter((node: any) => node.type === 'file')
+                .map((node: any) => node.path);
+            } else {
+              // Malformed payload - treat as error
+              throw new Error('Invalid filesystem list response');
+            }
+          } else {
+            // Non-OK response - treat as error
+            throw new Error(`Filesystem list failed: ${listResponse.status}`);
+          }
+        } catch (listError) {
+          console.warn('Failed to query filesystem for conflict detection:', listError);
+          // Fall back to attached files if API fails
+          existingFilePaths = Object.keys(attachedFilesystemFiles);
+        }
+        
+        const newFilePaths = newEntries.map(e => e.path);
+        const conflictCheck = checkFileConflicts(existingFilePaths, newFilePaths, true);
+        
+        if (conflictCheck.needsApproval) {
+          // Store pending diffs for approval instead of auto-applying
+          setPendingApprovalDiffs(newEntries);
+          setShowApprovalDialog(true);
+          toast.info(`${conflictCheck.existingFiles.length} file(s) would be overwritten. Review required.`);
+          
+          // Still store in commandsByFile for manual review
+          setCommandsByFile((prev) => {
+            const next: Record<string, string[]> = { ...prev };
+            for (const { path, diff } of newEntries) {
+              if (!path) continue;
+              const list = next[path] ? [...next[path]] : [];
+              if (list.length === 0 || list[list.length - 1] !== diff) {
+                list.push(diff);
+                next[path] = list;
+              }
+            }
+            return next;
+          });
+          return; // Don't auto-apply - require approval
+        }
+
+        // Auto-apply the detected diffs immediately to trigger filesystem event for MessageBubble UI
+        // The diffs will also be stored in commandsByFile for manual review/revert
+        if (applyDiffsRef.current) {
+          void applyDiffsRef.current(newEntries);
+        }
+
+        setCommandsByFile((prev) => {
+          const next: Record<string, string[]> = { ...prev };
+          for (const { path, diff } of newEntries) {
+            if (!path) continue;
+            const list = next[path] ? [...next[path]] : [];
+            if (list.length === 0 || list[list.length - 1] !== diff) {
+              list.push(diff);
+              next[path] = list;
+            }
+          }
+          return next;
+        });
+      };
+      
+      void checkConflicts();
+      return;
+    }
+
+    // Auto-apply the detected diffs immediately to trigger filesystem event for MessageBubble UI
+    // The diffs will also be stored in commandsByFile for manual review/revert
+    if (applyDiffsRef.current) {
+      void applyDiffsRef.current(newEntries);
+    }
 
     setCommandsByFile((prev) => {
       const next: Record<string, string[]> = { ...prev };
@@ -749,6 +868,24 @@ export default function ConversationInterface() {
     }
   }, [error]);
 
+  // Function to update session ID based on LLM's suggested folder name
+  // Called when AI response indicates a single-folder project structure
+  const updateSessionFromLLM = useCallback((suggestedFolderName: string) => {
+    // Only update if this is a new session (no existing files)
+    // and the name is valid
+    const cleanName = suggestedFolderName.replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 50);
+    if (cleanName.length > 0 && messages.length === 0) {
+      const newSessionId = generateSessionName(cleanName, true, true);
+      setFilesystemSessionId(newSessionId);
+      toast.success(`Project initialized: ${newSessionId}`);
+    }
+  }, [messages.length]);
+
+  // Expose the LLM folder detection function globally for AI responses
+  useEffect(() => {
+    (window as any).__updateSessionFromLLM = updateSessionFromLLM;
+  }, [updateSessionFromLLM]);
+
   const handleNewChat = () => {
     const isEmpty = messages.length === 0;
     if (!isEmpty) {
@@ -761,7 +898,13 @@ export default function ConversationInterface() {
 
     setMessages([]);
     setCurrentConversationId(null); // Ensure current conversation ID is reset for a new chat
-    setFilesystemSessionId(`draft-chat_${Date.now()}_${generateSecureId("chat")}`);
+    // Use new stock naming for new sessions
+    setFilesystemSessionId(generateSessionName(undefined, true, false));
+    // Reset LLM folder detection flag for new session
+    setLlmFolderDetected(false);
+    // Reset approval state for new session
+    setPendingApprovalDiffs([]);
+    setShowApprovalDialog(false);
 
     // Update chat history to reflect the saved chat
     setChatHistory(getAllChats());
@@ -787,6 +930,9 @@ export default function ConversationInterface() {
       setCurrentConversationId(chatId);
       const restoredScopeId = restoreFilesystemScope(chatId);
       setFilesystemSessionId(restoredScopeId || chatId);
+      // Reset approval state when loading different chat
+      setPendingApprovalDiffs([]);
+      setShowApprovalDialog(false);
       toast.success("Chat loaded");
     }
 
@@ -795,7 +941,7 @@ export default function ConversationInterface() {
     setShowHistory(false);
   };
 
-  const handleProviderChange = (provider: string, model: string) => {
+  const handleProviderChange = useCallback((provider: string, model: string) => {
     setCurrentProvider(provider);
     setCurrentModel(model);
     // Persist selection
@@ -804,21 +950,21 @@ export default function ConversationInterface() {
       localStorage.setItem("chat_model", model);
     } catch {}
     toast.success(`Switched to ${provider} - ${model}`);
-  };
+  }, []);
 
   // Auto-rotate to next provider
   const rotateToNextProvider = useCallback(() => {
     if (availableProviders.length <= 1) return;
 
     const currentProviderIndex = availableProviders.findIndex(
-      (p) => p.name === currentProvider,
+      (p) => p.id === currentProvider,
     );
     const nextIndex = (currentProviderIndex + 1) % availableProviders.length;
     const nextProvider = availableProviders[nextIndex];
 
     if (nextProvider && nextProvider.models.length > 0) {
       const nextModel = nextProvider.models[0]; // Use first model of next provider
-      handleProviderChange(nextProvider.name, nextModel);
+      handleProviderChange(nextProvider.id, nextModel);
     }
   }, [availableProviders, currentProvider, handleProviderChange]);
 
@@ -970,9 +1116,7 @@ export default function ConversationInterface() {
         currentContent = "";
       }
 
-      const nextContent =
-        applyUnifiedDiffToContent(currentContent, resolvedPath, entry.diff) ??
-        applySimpleLineDiff(currentContent, entry.diff);
+      const nextContent = applyDiffToContent(currentContent, entry.path, entry.diff);
 
       if (nextContent == null) {
         failed[entry.path] = failed[entry.path] || [];
@@ -1043,9 +1187,25 @@ export default function ConversationInterface() {
     }
     const failedCount = Object.values(failed).reduce((sum, list) => sum + list.length, 0);
     if (failedCount > 0) {
-      toast.error(`Failed to apply ${failedCount} diff${failedCount === 1 ? "" : "s"}.`);
+      // failed contains diff payloads (strings), not error messages
+      // Group by file path for better user feedback
+      const failedPaths = Object.keys(failed);
+      const totalFailedDiffs = failedCount;
+      
+      toast.error(`Diff application failed: ${totalFailedDiffs} edit(s) could not be applied to ${failedPaths.length} file(s). This usually means the file content has changed since the diff was generated. Please review the files and try again.`);
+      console.error('[Diff Application Failed]', {
+        failedFiles: failedPaths,
+        failedDiffs: failed,
+        reason: 'Search blocks not found or patches could not be applied',
+      });
     }
   }, [filesystemScopePath, filesystemSessionId]);
+
+  // Ref to hold applyDiffsToFilesystem for use in useEffect (before callback definition)
+  const applyDiffsRef = useRef(applyDiffsToFilesystem);
+  useEffect(() => {
+    applyDiffsRef.current = applyDiffsToFilesystem;
+  }, [applyDiffsToFilesystem]);
 
   // Apply polled diffs to filesystem (defined after applyDiffsToFilesystem)
   const applyPolledDiffs = useCallback(async (pathsToApply?: string[]) => {
@@ -1269,6 +1429,32 @@ export default function ConversationInterface() {
     }
   };
 
+  // Handle approval for pending file edits in existing sessions
+  const handleApproveEdits = useCallback(async () => {
+    if (pendingApprovalDiffs.length === 0) return;
+    
+    if (applyDiffsRef.current) {
+      await applyDiffsRef.current(pendingApprovalDiffs);
+    }
+    
+    setPendingApprovalDiffs([]);
+    setShowApprovalDialog(false);
+    toast.success("File edits approved and applied");
+  }, [pendingApprovalDiffs]);
+
+  const handleDenyEdits = useCallback(() => {
+    setPendingApprovalDiffs([]);
+    setShowApprovalDialog(false);
+    toast.info("File edits denied");
+  }, []);
+
+  // Memoized callbacks for InteractionPanel to prevent unnecessary re-renders
+  const toggleAccessibility = useCallback(() => setShowAccessibility(prev => !prev), []);
+  const toggleHistory = useCallback(() => setShowHistory(prev => !prev), []);
+  const toggleCodePreview = useCallback(() => {
+    handleToggleCodePreview();
+  }, [handleToggleCodePreview]);
+
   return (
     <div className="relative w-full h-screen overflow-hidden touch-pan-y z-[1]">
       {/* Subtle animated background */}
@@ -1354,30 +1540,31 @@ export default function ConversationInterface() {
 
       {/* Interaction Controls - Positioned absolutely to avoid layout conflicts */}
       <InteractionPanel
-        onSubmit={handleChatSubmit} // Pass the intermediary function
+        onSubmit={(content) => {
+          setTimeout(() => {
+            void handleChatSubmit(content);
+          }, 0);
+        }}
         onNewChat={handleNewChat}
         isProcessing={isLoading}
-        toggleAccessibility={() => setShowAccessibility(!showAccessibility)}
-        toggleHistory={() => setShowHistory(!showHistory)}
-        toggleCodePreview={() => {
-          handleToggleCodePreview();
-        }} // Pass the function with an additional log
-        onStopGeneration={stop} // Pass useChat's stop function
-        onRetry={handleRetry} // Pass the retry function
+        toggleAccessibility={toggleAccessibility}
+        toggleHistory={toggleHistory}
+        toggleCodePreview={toggleCodePreview}
+        onStopGeneration={stop}
+        onRetry={handleRetry}
         currentProvider={currentProvider}
         currentModel={currentModel}
         error={error?.message}
-        input={input} // Pass input to InteractionPanel
-        setInput={setInput} // Pass setInput to InteractionPanel
+        input={input}
+        setInput={setInput}
         availableProviders={availableProviders}
         onProviderChange={handleProviderChange}
         hasCodeBlocks={hasCodeBlocks}
         activeTab={activeTab}
         onActiveTabChange={setActiveTab as any}
-        userId={user?.id?.toString() || getStableSessionId()} // Use stable user ID or session ID
+        userId={user?.id?.toString() || getStableSessionId()}
         onAttachedFilesChange={handleAttachedFilesChange}
         filesystemScopePath={filesystemScopePath}
-        // Diffs poller controls
         isPollingDiffs={diffsPoller.isPolling}
         pollCount={diffsPoller.pollCount}
         onStartPollingDiffs={diffsPoller.startPolling}
@@ -1442,6 +1629,19 @@ export default function ConversationInterface() {
         isMinimized={terminalMinimized}
         filesystemScopePath={filesystemScopePath}
       />
+
+      {/* Approval Dialog for existing session file edits */}
+      {showApprovalDialog && (
+        <ConfirmationDialog
+          isOpen={showApprovalDialog}
+          title="Review File Changes"
+          message={`The AI wants to modify ${pendingApprovalDiffs.length} existing file(s) in this session. Do you want to approve these changes?`}
+          confirmLabel="Approve"
+          cancelLabel="Deny"
+          onConfirm={handleApproveEdits}
+          onCancel={handleDenyEdits}
+        />
+      )}
     </div>
   );
 }

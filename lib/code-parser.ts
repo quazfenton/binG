@@ -131,7 +131,9 @@ export function parseCodeBlocksFromMessages(messages: Message[]): ParsedCodeData
     // ```javascript src/App.js
     // ```javascript filename="src/App.js"
     // ```javascript // src/App.js
+    // <content>...</content> format (alternative to markdown code blocks)
     const codeBlockRegex = /```(\w+)?(?:\s*[:\s]\s*(?:filename\s*=\s*)?["']?([^"'\s\n]+)["']?)?\s*(?:\/\/\s*(.+?))?\n([\s\S]*?)```/g
+    const contentTagRegex = /<content(?:\s+name=["']([^"']+)["'])?[^>]*>([\s\S]*?)<\/content>/gi
     let match
 
     while ((match = codeBlockRegex.exec(content)) !== null) {
@@ -147,9 +149,15 @@ export function parseCodeBlocksFromMessages(messages: Message[]): ParsedCodeData
         // From ```javascript // src/App.js
         filename = filenameFromComment.trim()
       } else {
-        // Generate default filename
+        // Generate default filename with better naming for shell scripts
         const ext = getExtensionForLanguage(language)
-        filename = `file-${blockIndex}.${ext}`
+        // For shell scripts, use more descriptive names based on index
+        if (ext === 'sh' && language?.toLowerCase() === 'bash') {
+          const shNames = ['start', 'setup', 'deploy', 'build', 'test', 'run', 'install', 'clean', 'init', 'script'];
+          filename = `${shNames[Math.min(blockIndex, shNames.length - 1)]}.sh`;
+        } else {
+          filename = `file-${blockIndex}.${ext}`
+        }
       }
 
       codeBlocks.push({
@@ -166,8 +174,30 @@ export function parseCodeBlocksFromMessages(messages: Message[]): ParsedCodeData
       }
     }
 
+    // Also parse <content>...</content> tags (alternative format from some LLMs)
+    while ((match = contentTagRegex.exec(content)) !== null) {
+      const [, filenameFromTag, code] = match
+      
+      let filename = filenameFromTag?.trim() || ''
+      if (!filename) {
+        const ext = getExtensionForLanguage('text')
+        filename = `file-${blockIndex}.${ext}`
+      }
+
+      codeBlocks.push({
+        language: 'text',
+        code: code.trim(),
+        filename: cleanFilename(filename),
+        index: blockIndex++,
+        isError: false
+      })
+    }
+
     // Extract non-code text
-    const textWithoutCode = content.replace(/```[\s\S]*?```/g, '').trim()
+    const textWithoutCode = content
+      .replace(/```[\s\S]*?```/g, '')
+      .replace(/<content[^>]*>[\s\S]*?<\/content>/gi, '')
+      .trim()
     if (textWithoutCode) {
       nonCodeText += textWithoutCode + '\n\n'
     }

@@ -55,7 +55,7 @@ export class CircuitBreaker extends EventEmitter {
 
   constructor(options: Partial<CircuitBreakerOptions> = {}) {
     super();
-    this.options = { ...DEFAULT_OPTIONS, ...options };
+    this.options = { ...DEFAULT_OPTIONS, ...options } as Required<CircuitBreakerOptions>;
   }
 
   /**
@@ -347,13 +347,13 @@ export function createCircuitBreakerWithMetrics(
       provider,
       operation: 'call',
       result: 'success',
-    });
+    } as any);
     sandboxMetrics.circuitBreakerDuration.observe(
+      duration / 1000, // Convert milliseconds to seconds
       {
         provider,
         operation: 'call',
-      },
-      duration / 1000
+      } as any
     );
   });
 
@@ -362,13 +362,13 @@ export function createCircuitBreakerWithMetrics(
       provider,
       operation: 'call',
       result: 'failure',
-    });
+    } as any);
     sandboxMetrics.circuitBreakerDuration.observe(
+      duration / 1000, // Convert milliseconds to seconds
       {
         provider,
         operation: 'call',
-      },
-      duration / 1000
+      } as any
     );
   });
 
@@ -377,7 +377,7 @@ export function createCircuitBreakerWithMetrics(
       provider,
       from: oldState,
       to: newState,
-    });
+    } as any);
   });
 
   return breaker;

@@ -106,6 +106,7 @@ export default function Settings({
   livekitEnabled = false,
   onLivekitToggle,
 }: SettingsProps) {
+  const { isAuthenticated, user, login, logout, register, getApiKeys, setApiKeys, isLoading } = useAuth();
   const [textSize, setTextSize] = useState(100);
   const [highContrast, setHighContrast] = useState(false);
   const [screenReader, setScreenReader] = useState(false);
@@ -328,13 +329,12 @@ export default function Settings({
   const [showAuthModal, setShowAuthModal] = useState(false);
   const [authMode, setAuthMode] = useState<'login' | 'signup'>('login');
   const [authError, setAuthError] = useState<string>('');
-  const { isAuthenticated, user, login, logout, register, getApiKeys, setApiKeys, isLoading } = useAuth();
-  
+
   // Use next-themes for theme management
   const { theme, setTheme, themes, resolvedTheme } = useTheme();
 
   const speechSynthesis = useRef<SpeechSynthesis | null>(null);
-  const recognition = useRef<SpeechRecognition | null>(null);
+  const recognition = useRef<any | null>(null);
   const currentUtterance = useRef<SpeechSynthesisUtterance | null>(null);
 
   // Initialize speech synthesis and recognition

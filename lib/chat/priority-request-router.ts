@@ -1250,8 +1250,9 @@ class PriorityRequestRouter {
     }
     
     // Check for function call patterns
-    if (lastMessage?.tool_calls?.length > 0) {
-      const toolCall = lastMessage.tool_calls[0];
+    const lastMessageAny = lastMessage as any;
+    if (lastMessageAny?.tool_calls?.length > 0) {
+      const toolCall = lastMessageAny.tool_calls[0];
       return {
         detectedTool: toolCall.function?.name || null,
         toolInput: toolCall.function?.arguments ? JSON.parse(toolCall.function.arguments) : {},

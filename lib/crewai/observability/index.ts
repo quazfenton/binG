@@ -230,14 +230,15 @@ export class TraceRecorder extends EventEmitter {
     const span = this.activeSpans.get(spanId);
     if (!span) return;
 
-    span.tokenUsage = usage;
-    
+    const spanAny = span as any;
+    spanAny.tokenUsage = usage;
+
     const pricing = TOKEN_PRICING[model] || { prompt: 0, completion: 0 };
-    span.cost = 
+    spanAny.cost =
       (usage.prompt_tokens * pricing.prompt) +
       (usage.completion_tokens * pricing.completion);
 
-    this.emit('span:tokens', { spanId, usage, cost: span.cost });
+    this.emit('span:tokens', { spanId, usage, cost: spanAny.cost });
   }
 
   getTrace(traceId: string): Trace | undefined {
@@ -391,10 +392,11 @@ export class LangSmithExporter {
   }
 
   private spanToChildRun(span: Span, trace: Trace): any {
+    const spanAny = span as any;
     return {
       id: span.spanId,
       name: span.name,
-      run_type: this.spanTypeToRunType(span.type),
+      run_type: this.spanTypeToRunType(spanAny.type ?? 'unknown'),
       start_time: new Date(span.startTime).toISOString(),
       end_time: span.endTime ? new Date(span.endTime).toISOString() : null,
       inputs: span.attributes.input,
@@ -402,8 +404,8 @@ export class LangSmithExporter {
       error: span.status.code === 'error' ? span.status.message : null,
       extra: {
         metadata: {
-          tokenUsage: span.tokenUsage,
-          cost: span.cost,
+          tokenUsage: spanAny.tokenUsage,
+          cost: spanAny.cost,
         },
       },
     };

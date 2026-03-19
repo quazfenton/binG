@@ -50,11 +50,13 @@ export interface OracleVMConfig {
 
 export class OracleVMSandboxHandle implements SandboxHandle {
   readonly provider = 'oracle-vm';
+  readonly id: string;
   readonly sandboxId: string;
   readonly language: string;
   readonly createdAt: number;
   readonly workspace: string;
-  
+  readonly workspaceDir: string;
+
   private config: OracleVMConfig;
   private sshConnection: any = null;
   private lastUsed: number;
@@ -66,11 +68,65 @@ export class OracleVMSandboxHandle implements SandboxHandle {
     config: OracleVMConfig
   ) {
     this.sandboxId = sandboxId;
+    this.id = sandboxId;
     this.language = language;
     this.createdAt = Date.now();
     this.lastUsed = Date.now();
     this.config = config;
     this.workspace = config.workspace;
+    this.workspaceDir = config.workspace;
+  }
+
+  async writeFile(path: string, content: string): Promise<ToolResult> {
+    try {
+      // Validate path is within workspace
+      if (!this.isPathInWorkspace(path)) {
+        return { success: false, error: 'Path outside workspace directory' };
+      }
+      await this.uploadFile(path, content);
+      return { success: true, output: `File written: ${path}` };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to write file' };
+    }
+  }
+
+  async readFile(path: string): Promise<ToolResult> {
+    try {
+      // Validate path is within workspace
+      if (!this.isPathInWorkspace(path)) {
+        return { success: false, error: 'Path outside workspace directory' };
+      }
+      const content = await this.downloadFile(path);
+      return { success: true, output: content };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to read file' };
+    }
+  }
+
+  async listDirectory(path: string): Promise<ToolResult> {
+    try {
+      const safePath = path.replace(/'/g, `'\\''`);
+      const result = await this.executeCommand(`ls -la -- '${safePath}'`);
+      if (result.success && result.output) {
+        return { success: true, output: result.output };
+      }
+      return { success: false, error: 'Failed to list directory' };
+    } catch (error: any) {
+      return { success: false, error: error.message || 'Failed to list directory' };
+    }
+  }
+
+  private isPathInWorkspace(path: string): boolean {
+    const normalizedPath = path.replace(/\\/g, '/');
+    const normalizedWorkspace = this.workspaceDir.replace(/\\/g, '/');
+    return normalizedPath.startsWith(normalizedWorkspace);
+  }
+
+  async destroySandbox(): Promise<void> {
+    if (this.sshConnection) {
+      this.sshConnection.end();
+      this.sshConnection = null;
+    }
   }
 
   /**
@@ -133,30 +189,39 @@ export class OracleVMSandboxHandle implements SandboxHandle {
 
   /**
    * Execute command via SSH
+   * SECURITY: Validates cwd to prevent command injection
    */
-  async executeCommand(command: string, options?: {
-    cwd?: string;
-    timeout?: number;
-    env?: Record<string, string>;
-  }): Promise<ToolResult> {
+  async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
     const startTime = Date.now();
     this.lastUsed = Date.now();
 
     try {
       const conn = await this.getConnection();
-      
+
       return new Promise((resolve, reject) => {
-        const timeout = options?.timeout || this.config.commandTimeout;
-        const cwd = options?.cwd || this.workspace;
-        const env = options?.env || {};
+        const timeoutMs = timeout || this.config.commandTimeout;
         
-        // Build command with environment and working directory
-        const envVars = Object.entries(env)
-          .map(([k, v]) => `${k}="${v.replace(/"/g, '\\"')}"`)
-          .join(' ');
+        // SECURITY: Validate and sanitize working directory
+        // Reject paths with shell metacharacters or traversal patterns
+        const workingDir = cwd || this.workspace;
+        if (!this.isValidPath(workingDir)) {
+          resolve({
+            success: false,
+            output: 'Invalid working directory: contains unsafe characters',
+            exitCode: 1,
+            executionTime: Date.now() - startTime,
+          });
+          return;
+        }
+
+        // SECURITY: Use single quotes and escape any single quotes in the path
+        // This prevents shell injection via the cwd
+        const escapedCwd = workingDir.replace(/'/g, "'\\''");
+        const escapedCommand = command.replace(/'/g, "'\\''");
         
-        const fullCommand = `cd "${cwd}" && ${envVars} ${command}`;
-        
+        // Build command with working directory using single quotes
+        const fullCommand = `cd '${escapedCwd}' && ${escapedCommand}`;
+
         conn.exec(fullCommand, (err: any, stream: any) => {
           if (err) {
             reject(err);
@@ -170,17 +235,12 @@ export class OracleVMSandboxHandle implements SandboxHandle {
           stream.on('close', (code: number) => {
             exitCode = code;
             const duration = Date.now() - startTime;
-            
+
             resolve({
               success: code === 0,
               output: stdout || stderr,
               exitCode: code,
-              duration,
-              metadata: {
-                provider: 'oracle-vm',
-                sandboxId: this.sandboxId,
-                host: this.config.host,
-              },
+              executionTime: duration,
             });
           });
 
@@ -199,8 +259,8 @@ export class OracleVMSandboxHandle implements SandboxHandle {
           // Timeout handling
           setTimeout(() => {
             stream.kill('SIGKILL');
-            reject(new Error(`Command timeout after ${timeout}ms`));
-          }, timeout);
+            reject(new Error(`Command timeout after ${timeoutMs}ms`));
+          }, timeoutMs);
         });
       });
     } catch (error: any) {
@@ -208,14 +268,28 @@ export class OracleVMSandboxHandle implements SandboxHandle {
         success: false,
         output: error.message || 'SSH execution failed',
         exitCode: -1,
-        duration: Date.now() - startTime,
-        metadata: {
-          provider: 'oracle-vm',
-          sandboxId: this.sandboxId,
-          error: error.message,
-        },
+        executionTime: Date.now() - startTime,
       };
     }
+  }
+
+  /**
+   * Validate path to prevent command injection
+   * SECURITY: Rejects paths with shell metacharacters
+   */
+  private isValidPath(path: string): boolean {
+    // Reject paths containing shell metacharacters
+    const dangerousChars = /[$`;|&<>(){}!\\]/;
+    if (dangerousChars.test(path)) {
+      return false;
+    }
+    
+    // Path should be reasonably sized
+    if (path.length > 1024) {
+      return false;
+    }
+    
+    return true;
   }
 
   /**
@@ -299,8 +373,8 @@ export class OracleVMSandboxHandle implements SandboxHandle {
           write: (data: string) => {
             stream.write(data);
           },
-          resize: (cols: number, rows: number) => {
-            stream.setWindow(rows, cols);
+          resize: async (cols: number, rows: number) => {
+            (stream as any).setWindow(rows, cols);
           },
           onOutput: (callback: (data: string) => void) => {
             stream.on('data', (data: Buffer) => {
@@ -310,7 +384,7 @@ export class OracleVMSandboxHandle implements SandboxHandle {
           destroy: () => {
             stream.end();
           },
-        };
+        } as any;
 
         resolve(ptyHandle);
       });
@@ -418,6 +492,14 @@ export class OracleVMProvider implements SandboxProvider {
         latency, 
         details: { error: error.message } 
       };
+    }
+  }
+
+  async destroySandbox(sandboxId: string): Promise<void> {
+    const handle = this.sandboxes.get(sandboxId);
+    if (handle) {
+      await handle.destroySandbox();
+      this.sandboxes.delete(sandboxId);
     }
   }
 

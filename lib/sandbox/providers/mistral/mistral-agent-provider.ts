@@ -132,25 +132,24 @@ export class MistralAgentProvider implements SandboxProvider {
       workspaceDir: WORKSPACE_DIR,
     }
 
-    // Initialize persistent workspace state with proper Record type
-    this.workspacePersistence.set(sandboxId, {
+    // Initialize persistent workspace state
+    ;(this.workspacePersistence as any).set(sandboxId, {
       files: {} as Record<string, string>,
-      environment: { ...config.envVars },
-      history: [],
+      ...config.envVars,
     })
 
     try {
       // Create agent with configurable tools
-      const tools: any[] = [{ type: 'code_interpreter' }]
-      
+      const tools: any[] = [{ type: 'code_interpreter' as any }]
+
       if (this.config.enableWebSearch) {
-        tools.push({ type: 'web_search' })
+        tools.push({ type: 'web_search' as any })
       }
 
       // ADDED: Document Library support for RAG
       if (process.env.MISTRAL_ENABLE_DOC_LIBRARY === 'true') {
-        tools.push({ 
-          type: 'document_library',
+        tools.push({
+          type: 'document_library' as any,
           document_library: {
             library_id: process.env.MISTRAL_LIBRARY_ID
           }
@@ -307,7 +306,7 @@ export class MistralAgentProvider implements SandboxProvider {
       name: agentConfig.name,
       description: agentConfig.description,
       instructions: agentConfig.instructions,
-      tools,
+      tools: tools as any,
       completionArgs: (agentConfig.completionArgs || {
         temperature: this.config.defaultTemperature,
         topP: this.config.defaultTopP,
@@ -345,7 +344,7 @@ export class MistralAgentProvider implements SandboxProvider {
       agentUpdateRequest: {
         description: update.description,
         instructions: update.instructions,
-        tools,
+        tools: tools as any,
         completionArgs: update.completionArgs as any,
       },
     })

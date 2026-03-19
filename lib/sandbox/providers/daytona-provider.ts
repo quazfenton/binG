@@ -275,30 +275,30 @@ class DaytonaSandboxHandle implements SandboxHandle {
    * @see https://www.daytona.io/docs/en/computer-use.md#start-recording
    */
   async startRecording(options?: ScreenRecordingRequest): Promise<{ recordingId: string }> {
-    const service = this.getComputerUseService()
+    const service = (this.getComputerUseService() as any)
     if (!service) throw new Error('Computer Use Service not available')
-    const result = await service.startRecording()
-    return { recordingId: result.output }
+    const result = await (service as any).startRecording(options)
+    return { recordingId: result?.recordingId || result?.output || '' }
   }
 
   /**
    * Stop screen recording
    */
   async stopRecording(recordingId: string): Promise<{ video: string }> {
-    const service = this.getComputerUseService()
+    const service = (this.getComputerUseService() as any)
     if (!service) throw new Error('Computer Use Service not available')
-    const result = await service.stopRecording(recordingId)
-    return { video: result.output }
+    const result = await (service as any).stopRecording(recordingId)
+    return { video: result.output || '' }
   }
 
   /**
    * Take regional screenshot
    */
   async takeRegionScreenshot(x: number, y: number, width: number, height: number): Promise<{ image: string }> {
-    const service = this.getComputerUseService()
+    const service = (this.getComputerUseService() as any)
     if (!service) throw new Error('Computer Use Service not available')
-    const result = await service.takeRegion({ x, y, width, height })
-    return { image: result.binary ? Buffer.from(result.binary).toString('base64') : result.output }
+    const result = await (service as any).takeRegion({ x, y, width, height })
+    return { image: result.binary ? Buffer.from(result.binary).toString('base64') : (result.output || '') }
   }
 
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {

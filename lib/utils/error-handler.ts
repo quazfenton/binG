@@ -18,7 +18,9 @@
  * - Memory leak fixes
  */
 
-import { logger, sanitizeForLogging } from './secure-logger';
+import { createLogger, sanitizeForLogging } from './logger';
+
+const logger = createLogger('ErrorHandler', { secure: true });
 
 // ============================================================================
 // TYPE DEFINITIONS
@@ -315,6 +317,20 @@ export class UnifiedErrorHandler {
     }
 
     return processedError;
+  }
+
+  /**
+   * Create a validation error
+   */
+  createValidationError(message: string, parameters?: any): ToolErrorClass {
+    return createValidationError(message, parameters);
+  }
+
+  /**
+   * Create an authentication error
+   */
+  createAuthError(message: string, authUrl?: string): ToolErrorClass {
+    return createAuthError(message, authUrl);
   }
 
   // ============================================================================

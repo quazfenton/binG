@@ -76,9 +76,11 @@ const logger = createLogger('API:ResponseRouter')
 // Type Definitions
 // ============================================================================
 
+export type LLMMessageRole = 'user' | 'assistant' | 'system' | 'tool';
+
 export interface LLMMessage {
-  role: 'user' | 'assistant' | 'system'
-  content: string
+  role: LLMMessageRole
+  content: string | Array<{ type: 'text' | 'image_url'; text?: string; image_url?: { url: string } }>
   toolCalls?: Array<{
     id: string
     name: string
@@ -436,21 +438,13 @@ export class ResponseRouter {
       {
         name: 'fast-agent',
         priority: 0,
-        // DISABLED by default - fast-agent has known issues with quality and routing
-        enabled: process.env.FAST_AGENT_ENABLED === 'true',
+        // DISABLED - Fast-agent has known issues with empty responses and routing
+        // Even if FAST_AGENT_ENABLED is set, skip this endpoint
+        enabled: false,
         service: fastAgentService,
         healthCheck: () => fastAgentService.healthCheck(),
         // Use shouldHandle for proper provider support and complexity gating
-        canHandle: (req: RouterRequest) =>
-          fastAgentService.shouldHandle({
-            messages: req.messages,
-            provider: req.provider,
-            model: req.model,
-            temperature: req.temperature,
-            maxTokens: req.maxTokens,
-            requestId: req.requestId,
-            userId: req.userId,
-          } as FastAgentRequest),
+        canHandle: (req: RouterRequest) => false,  // Always skip fast-agent
         processRequest: async (req: RouterRequest) => {
           const response = await fastAgentService.processRequest({
             messages: req.messages,
@@ -472,13 +466,17 @@ export class ResponseRouter {
         service: enhancedLLMService,
         healthCheck: async () => true,
         // Do not handle tool/sandbox requests - let specialized endpoints handle those
+        // Tool requests need actual tool execution (Arcade/Nango APIs), not just LLM responses
+        // Sandbox requests need actual sandbox execution, not just LLM responses
         canHandle: (req: RouterRequest) => {
           const detectedType = detectRequestType(req.messages)
           // Skip if this is a tool request and tools are enabled
-          if (detectedType === 'tool' && (req.enableTools !== false || req.enableComposio !== false)) {
+          // Tool requests should go to tool-execution (priority 4) or composio-tools (priority 5)
+          if (detectedType === 'tool' && req.enableTools !== false) {
             return false
           }
           // Skip if this is a sandbox request and sandbox is enabled
+          // Sandbox requests should go to sandbox-agent (priority 6) or v2-gateway (priority 7)
           if (detectedType === 'sandbox' && req.enableSandbox !== false) {
             return false
           }
@@ -497,8 +495,8 @@ export class ResponseRouter {
             userId: req.userId,
             requestId: req.requestId,
             conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
-            enableTools: req.enableTools ?? detectedType === 'tool',
-            enableSandbox: req.enableSandbox ?? detectedType === 'sandbox',
+            enableTools: req.enableTools ?? (detectedType === 'tool' && !!req.userId),
+            enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
             isSandboxCommand: detectedType === 'sandbox',
           } as EnhancedLLMRequest)
           return this.normalizeOriginalResponse(response)
@@ -510,7 +508,13 @@ export class ResponseRouter {
         enabled: process.env.N8N_ENABLED === 'true',
         service: n8nAgentService,
         healthCheck: () => n8nAgentService.healthCheck(),
-        canHandle: (req: RouterRequest) => true,
+        canHandle: (req: RouterRequest) => {
+          const detectedType = detectRequestType(req.messages)
+          if (detectedType === 'tool' || detectedType === 'sandbox') {
+            return false
+          }
+          return true
+        },
         processRequest: async (req: RouterRequest) => {
           const response = await n8nAgentService.processRequest({
             messages: req.messages,
@@ -526,7 +530,13 @@ export class ResponseRouter {
         enabled: process.env.CUSTOM_FALLBACK_ENABLED === 'true',
         service: customFallbackService,
         healthCheck: () => customFallbackService.healthCheck(),
-        canHandle: () => true,
+        canHandle: (req: RouterRequest) => {
+          const detectedType = detectRequestType(req.messages)
+          if (detectedType === 'tool' || detectedType === 'sandbox') {
+            return false
+          }
+          return true
+        },
         processRequest: async (req: RouterRequest) => {
           const response = await customFallbackService.processRequest({
             messages: req.messages,
@@ -610,6 +620,49 @@ export class ResponseRouter {
           return requestType === 'sandbox' || requestType === 'tool' || req.enableTools === true
         },
         processRequest: async (req: RouterRequest) => this.processV2GatewayRequest(req),
+      },
+      {
+        name: 'emergency-llm-fallback',
+        priority: 8,
+        enabled: true,
+        service: enhancedLLMService,
+        healthCheck: async () => true,
+        // Always handle as last resort - even tool/sandbox requests if all else failed
+        canHandle: () => true,
+        processRequest: async (req: RouterRequest) => {
+          logger.warn('Using emergency LLM fallback - specialized endpoints unavailable', {
+            requestId: req.requestId,
+            userId: req.userId,
+          })
+          // Call LLM without tool/sandbox execution - just get text response
+          const response = await enhancedLLMService.generateResponse({
+            messages: req.messages,
+            provider: req.provider,
+            model: req.model,
+            temperature: req.temperature,
+            maxTokens: req.maxTokens,
+            stream: req.stream,
+            userId: req.userId,
+            requestId: req.requestId,
+            conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
+            enableTools: false,  // Disable tools for fallback
+            enableSandbox: false,  // Disable sandbox for fallback
+            isSandboxCommand: false,
+          } as EnhancedLLMRequest)
+          
+          // Preserve normalized metadata (usage, model, provider) while adding fallback flags
+          const normalized = this.normalizeOriginalResponse(response)
+          return {
+            ...normalized,
+            data: {
+              ...normalized.data,
+              // Include any additional metadata from response if present
+              ...(response as any).metadata,
+              isFallback: true,
+              fallbackReason: 'Specialized endpoints unavailable, using LLM text response',
+            },
+          }
+        },
       },
     ]
 
@@ -718,6 +771,7 @@ export class ResponseRouter {
 
   /**
    * Format response through unified handler
+   * Enhanced with empty content detection and fallback handling
    */
   private formatResponse(response: RouterResponse, requestId: string): UnifiedResponse {
     const content = this.extractContent(response)
@@ -727,35 +781,74 @@ export class ResponseRouter {
     const authProvider = this.inferProviderFromToolName(toolName)
     const requiresAuth = !!response.data?.requiresAuth
 
+    // Detect empty/missing content and add diagnostic info
+    let finalContent = content
+    if (!content || !content.trim()) {
+      // Check if we have tool invocations, files, or processing steps
+      const hasTools = !!response.data?.toolCalls?.length || !!response.data?.toolInvocations?.length
+      const hasFiles = !!response.data?.files?.length
+      const hasSteps = !!response.data?.processingSteps?.length
+      const hasMultiModal = !!response.data?.multiModalContent?.length
+
+      if (hasTools || hasFiles || hasSteps || hasMultiModal) {
+        // Content is empty but we have data - this is a parsing issue
+        logger.warn('Response has data but no content - extraction may have failed', {
+          requestId,
+          hasTools,
+          hasFiles,
+          hasSteps,
+          hasMultiModal,
+          source: response.source,
+        })
+        // Content will be built from data in extractContent, so this should not happen
+        // If it does, add a diagnostic message
+        finalContent = `[Response received from ${response.source} with ${
+          hasSteps ? `${response.data.processingSteps.length} processing steps` :
+          hasTools ? `${response.data.toolCalls?.length || 0} tool calls` :
+          hasFiles ? `${response.data.files?.length || 0} files` :
+          hasMultiModal ? `${response.data.multiModalContent?.length || 0} media items` :
+          'data'
+        }. Check tool invocations or files for results.]`
+      } else if (response.success !== false) {
+        // Successfully routed but no content at all - this is an error
+        logger.error('Empty response received from successful endpoint', {
+          requestId,
+          source: response.source,
+          priority: response.priority,
+        })
+        finalContent = `[Warning: Empty response received from ${response.source}. This may indicate a parsing or routing issue.]`
+      }
+    }
+
     return {
       success: response.success !== false,
-      content,
+      content: finalContent,
       source: response.source || 'unknown',
       priority: response.priority || 999,
       data: {
-        content,
+        content: finalContent,
         usage: this.calculateUsage(response),
-        model: response.metadata?.actualModel || response.data?.model || response.model,
-        provider: response.metadata?.actualProvider || response.data?.provider || response.provider,
-        toolCalls: response.data?.toolCalls,
+        model: response.metadata?.actualModel || (response.data as any)?.model || (response as any).model,
+        provider: response.metadata?.actualProvider || (response.data as any)?.provider || (response as any).provider,
+        toolCalls: (response.data as any)?.toolCalls,
         toolInvocations,
-        files: response.data?.files,
-        chainedAgents: response.data?.chainedAgents,
-        qualityScore: response.data?.qualityScore,
-        processingSteps: response.data?.processingSteps,
-        reflectionResults: response.data?.reflectionResults,
-        multiModalContent: response.data?.multiModalContent,
-        iterations: response.data?.iterations,
-        classifications: response.data?.classifications,
-        optimizations: response.data?.optimizations,
-        isFallback: response.data?.isFallback,
-        fallbackReason: response.data?.fallbackReason,
+        files: (response.data as any)?.files,
+        chainedAgents: (response.data as any)?.chainedAgents,
+        qualityScore: (response.data as any)?.qualityScore,
+        processingSteps: (response.data as any)?.processingSteps,
+        reflectionResults: (response.data as any)?.reflectionResults,
+        multiModalContent: (response.data as any)?.multiModalContent,
+        iterations: (response.data as any)?.iterations,
+        classifications: (response.data as any)?.classifications,
+        optimizations: (response.data as any)?.optimizations,
+        isFallback: (response.data as any)?.isFallback,
+        fallbackReason: (response.data as any)?.fallbackReason,
         requiresAuth,
-        authUrl: response.data?.authUrl,
+        authUrl: (response.data as any)?.authUrl,
         toolName,
         authProvider,
-        composioMcp: response.data?.composioMcp || response.metadata?.composioMcp,
-        messageMetadata: response.data?.messageMetadata,
+        composioMcp: (response.data as any)?.composioMcp || response.metadata?.composioMcp,
+        messageMetadata: (response.data as any)?.messageMetadata,
         reasoning: this.extractReasoning(response),
       },
       commands,
@@ -770,7 +863,7 @@ export class ResponseRouter {
         messageMetadata: requiresAuth
           ? {
               requiresAuth: true,
-              authUrl: response.data?.authUrl,
+              authUrl: (response.data as any)?.authUrl,
               toolName,
               provider: authProvider,
             }
@@ -781,61 +874,197 @@ export class ResponseRouter {
 
   /**
    * Extract content from response
+   * Enhanced to handle FastAgent responses with processingSteps, toolCalls, and files
    */
   private extractContent(response: any): string {
-    if (typeof response.content === 'string') {
-      return response.content
+    // Direct content string
+    if (typeof response.content === 'string' && response.content.trim()) {
+      return response.content.trim()
     }
 
-    if (response.data?.content) {
-      return response.data.content
+    // Content in data object
+    if (response.data?.content && typeof response.data.content === 'string') {
+      return response.data.content.trim()
     }
 
+    // LLM-style response (choices[0].message.content)
     if (response.choices?.[0]?.message?.content) {
       return response.choices[0].message.content
     }
 
+    // FastAgent: Build content from processingSteps if content is empty
+    if (response.data?.processingSteps?.length > 0) {
+      const completedSteps = response.data.processingSteps
+        .filter((step: any) => step.status === 'completed' || step.result)
+        .map((step: any, idx: number) => {
+          const stepText = `Step ${idx + 1}: ${step.step || 'Unknown step'}`
+          const resultText = step.result ? `\n  Result: ${step.result}` : ''
+          return stepText + resultText
+        })
+      
+      if (completedSteps.length > 0) {
+        return completedSteps.join('\n\n')
+      }
+    }
+
+    // FastAgent: Build content from toolCalls if no text content
+    if (response.data?.toolCalls?.length > 0) {
+      const toolSummary = response.data.toolCalls
+        .map((tool: any, idx: number) => {
+          const name = tool.name || tool.function?.name || 'unknown'
+          const args = tool.arguments || tool.function?.arguments || '{}'
+          return `Tool ${idx + 1}: ${name}(${args})`
+        })
+        .join('\n')
+      
+      return `Tools executed:\n${toolSummary}`
+    }
+
+    // FastAgent: Build content from files if no text content
+    if (response.data?.files?.length > 0) {
+      const fileSummary = response.data.files
+        .map((file: any, idx: number) => {
+          const path = file.path || 'unknown'
+          const type = file.type || 'file'
+          // Include first few lines of content if available
+          const contentPreview = file.content 
+            ? `\n  Content preview:\n${file.content.split('\n').slice(0, 5).join('\n  ')}`
+            : ''
+          return `File ${idx + 1}: ${path} (${type})${contentPreview}`
+        })
+        .join('\n')
+      
+      return `Files created/modified:\n${fileSummary}`
+    }
+
+    // FastAgent: Build content from chainedAgents
+    if (response.data?.chainedAgents?.length > 0) {
+      return `Chained agents: ${response.data.chainedAgents.join(' → ')}`
+    }
+
+    // FastAgent: Build content from multiModalContent
+    if (response.data?.multiModalContent?.length > 0) {
+      const multimodalSummary = response.data.multiModalContent
+        .map((item: any, idx: number) => {
+          const type = item.type || 'unknown'
+          const metadata = item.metadata ? ` (${JSON.stringify(item.metadata)})` : ''
+          return `${idx + 1}. ${type}${metadata}`
+        })
+        .join('\n')
+      
+      return `Multi-modal content:\n${multimodalSummary}`
+    }
+
+    // Fallback: Return empty string if nothing found
     return ''
   }
 
   /**
    * Extract commands from content
    */
+  /**
+   * Extract commands from content
+   * Enhanced with fallback parser for raw code blocks (Bug #1 fix)
+   * Fixed regex to handle ] in content (Bug #8 fix)
+   */
   private extractCommands(content: string): { request_files?: string[]; write_diffs?: Array<{ path: string; diff: string }> } | undefined {
     try {
+      // Primary: Parse structured command block format
       const match = content.match(/=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/)
-      if (!match) return undefined
+      if (match) {
+        return this.parseStructuredCommands(match[1])
+      }
 
-      const block = match[1]
+      // Fallback: Parse raw markdown code blocks with filenames
+      // Return as write_diffs to apply the file changes
+      const rawFiles = this.parseRawCodeBlocks(content)
+      if (rawFiles && rawFiles.length > 0) {
+        return { write_diffs: rawFiles }
+      }
 
+      return undefined
+    } catch {
+      return undefined
+    }
+  }
+
+  /**
+   * Parse structured command block format
+   */
+  private parseStructuredCommands(block: string): { request_files?: string[]; write_diffs?: Array<{ path: string; diff: string }> } | undefined {
+    try {
       const reqMatch = block.match(/request_files:\s*\[(.*?)\]/s)
       const request_files = reqMatch
         ? JSON.parse(`[${reqMatch[1]}]`.replace(/([a-zA-Z0-9_./-]+)(?=\s*[\],])/g, '"$1"'))
         : []
 
       let write_diffs: Array<{ path: string; diff: string }> = []
-      const diffsMatch = block.match(/write_diffs:\s*\[([\s\S]*?)\]/)
-      if (diffsMatch) {
-        const items = diffsMatch[1]
-          .split(/},/)
-          .map(s => (s.endsWith('}') ? s : s + '}'))
+      // Bug #8 fix: Use bracket counting to find the end of the array properly
+      const diffsSectionMatch = block.match(/write_diffs:\s*\[/)
+      if (diffsSectionMatch) {
+        const startIdx = block.indexOf('[', diffsSectionMatch.index)
+        let bracketDepth = 0
+        let endIdx = startIdx + 1
+        
+        for (let i = startIdx + 1; i < block.length; i++) {
+          if (block[i] === '[') bracketDepth++
+          else if (block[i] === ']') {
+            if (bracketDepth === 0) {
+              endIdx = i
+              break
+            }
+            bracketDepth--
+          }
+        }
+        
+        const diffsContent = block.substring(startIdx + 1, endIdx)
+        const items = diffsContent
+          .split(/\},\s*\{/)
           .map(s => s.trim())
           .filter(Boolean)
+          .map(s => s.replace(/^\{/, '').replace(/\}$/, ''))
 
         write_diffs = items.map(raw => {
           const pathMatch = raw.match(/path:\s*"([^"]+)"/)
-          const diffMatch = raw.match(/diff:\s*"([\s\S]*)"/)
+          const diffMatch = raw.match(/diff:\s*"([\s\S]*?)"\s*$/)
           return {
             path: pathMatch?.[1] || '',
             diff: (diffMatch?.[1] || '').replace(/\\n/g, '\n'),
           }
-        })
+        }).filter(d => d.path)
       }
 
       return { request_files, write_diffs }
     } catch {
       return undefined
     }
+  }
+
+  /**
+   * Fallback parser for raw markdown code blocks (Bug #1 fix)
+   */
+  private parseRawCodeBlocks(content: string): Array<{ path: string; diff: string }> | undefined {
+    const write_diffs: Array<{ path: string; diff: string }> = []
+    
+    const codeBlockRegex = /```(\w+)\s+(?:\/?([^\s]+(?:\/[^\s]+)*))?\s*\n([\s\S]*?)```/g
+    let match
+    
+    while ((match = codeBlockRegex.exec(content)) !== null) {
+      const [, language, filePath, code] = match
+      
+      if (['bash', 'sh', 'shell', 'zsh'].includes(language.toLowerCase())) continue
+      if (!filePath || filePath.includes('.') === false) continue
+      
+      const validExtensions = ['.ts', '.tsx', '.js', '.jsx', '.vue', '.py', '.html', '.css', '.json', '.md', '.yaml', '.yml', '.toml', '.config']
+      if (!validExtensions.some(ext => filePath.toLowerCase().endsWith(ext))) continue
+      
+      let cleanPath = filePath.replace(/^\//, '').trim()
+      if (cleanPath.includes('://') || cleanPath.startsWith('http')) continue
+      
+      write_diffs.push({ path: cleanPath, diff: code.trim() })
+    }
+    
+    return write_diffs.length > 0 ? write_diffs : undefined
   }
 
   /**
@@ -937,12 +1166,26 @@ export class ResponseRouter {
 
   /**
    * Normalize FastAgent response
+   * Ensures all FastAgent-specific fields are properly passed through
    */
   private normalizeFastAgentResponse(response: FastAgentResponse): RouterResponse {
     return {
       success: response.success,
-      content: response.content,
-      data: response.data,
+      content: response.content || '',  // Keep original content (may be empty if tools/files only)
+      data: {
+        ...(response as any).data,
+        // Ensure all FastAgent fields are preserved
+        toolCalls: (response as any).toolCalls,
+        files: (response as any).files,
+        chainedAgents: (response as any).chainedAgents,
+        processingSteps: (response as any).processingSteps,
+        reflectionResults: (response as any).reflectionResults,
+        multiModalContent: (response as any).multiModalContent,
+        qualityScore: (response as any).qualityScore,
+        estimatedDuration: (response as any).estimatedDuration,
+        iterationCount: (response as any).iterationCount,
+        fallbackToOriginal: (response as any).fallbackToOriginal,
+      },
       source: 'fast-agent',
       priority: 0,
     }
@@ -971,8 +1214,8 @@ export class ResponseRouter {
   private normalizeN8nResponse(response: N8nAgentResponse): RouterResponse {
     return {
       success: response.success,
-      content: response.content,
-      data: response.data,
+      content: (response as any).content,
+      data: (response as any).data,
       source: 'n8n-agents',
       priority: 2,
     }
@@ -984,8 +1227,8 @@ export class ResponseRouter {
   private normalizeCustomFallbackResponse(response: CustomFallbackResponse): RouterResponse {
     return {
       success: response.success,
-      content: response.content,
-      data: response.data,
+      content: (response as any).content,
+      data: (response as any).data,
       source: 'custom-fallback',
       priority: 3,
     }

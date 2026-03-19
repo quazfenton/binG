@@ -782,9 +782,9 @@ async function runEnhancedJavaScriptChecks(
 
     // Check for syntax errors
     const diagnostics: Array<{ messageText: string; start?: number }> = [];
-    
+
     // Visit all nodes to find errors
-    const visit = (node: ts.Node) => {
+    const visit = (node: any) => {
       if (node.kind === ts.SyntaxKind.Unknown) {
         diagnostics.push({
           messageText: `Unknown syntax at line ${sourceFile.getLineAndCharacterOfPosition(node.getStart()).line + 1}`,
@@ -793,7 +793,7 @@ async function runEnhancedJavaScriptChecks(
       }
       ts.forEachChild(node, visit);
     };
-    
+
     visit(sourceFile);
 
     for (const diag of diagnostics) {

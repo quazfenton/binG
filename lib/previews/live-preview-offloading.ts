@@ -9,6 +9,8 @@
  * - Preview offloading decision logic
  * - Robust framework detection
  * - Enhanced entry point detection with relative path normalization
+ * - Port detection for server previews
+ * - CodeSandbox template mapping
  *
  * Priority:
  * 1. Local/Client-side (Sandpack, WebContainer, Pyodide) - preferred
@@ -24,25 +26,38 @@
  * - codesandbox: CodeSandbox cloud environment
  * - nextjs: Next.js via WebContainer
  *
+ * Key Functions:
+ * - detectProject(): Full project analysis with heuristics
+ * - detectFramework(): Framework detection from files and package.json
+ * - detectEntryPoint(): Entry point detection with path normalization
+ * - detectPort(): Port detection from package.json or code content
+ * - getCodeSandboxTemplate(): Map frameworks to CodeSandbox templates
+ * - getSandpackConfig(): Get Sandpack configuration for project
+ * - analyzeHeuristics(): Analyze project for cloud offload decision
+ *
  * @example
  * ```typescript
- * import { livePreviewOffloading } from '@/lib/previews/live-preview-offloading';
+ * import {
+ *   detectProject,
+ *   detectFramework,
+ *   detectPort,
+ *   getCodeSandboxTemplate,
+ *   getSandpackConfig,
+ *   analyzeHeuristics
+ * } from '@/lib/previews/live-preview-offloading';
  *
- * // Detect project and select preview mode
- * const previewMode = livePreviewOffloading.detectPreviewMode(files, packageJson);
- * // Returns: 'sandpack', 'webcontainer', 'pyodide', 'devbox', etc.
+ * // Full project analysis
+ * const detection = detectProject({ files });
+ * console.log(`Framework: ${detection.framework}, Port: ${detectPort(files)}`);
  *
- * // Get framework from project files
- * const framework = livePreviewOffloading.detectFramework(files, packageJson);
- * // Returns: 'react', 'vue', 'next', 'flask', etc.
+ * // Get CodeSandbox template
+ * const template = getCodeSandboxTemplate(detection.framework);
  *
- * // Detect entry point with relative path normalization
- * const entryPoint = livePreviewOffloading.detectEntryPoint(files, framework);
- * // Returns: '/src/main.tsx', '/src/index.js', etc.
- *
- * // Get preview mode configuration for Sandpack
- * const sandpackConfig = livePreviewOffloading.getSandpackConfig(files, framework);
- * // Returns: { template, files, customSetup }
+ * // Check if should offload to cloud
+ * const heuristics = analyzeHeuristics({ files });
+ * if (heuristics.shouldOffload) {
+ *   console.log(`Offload recommended: ${heuristics.offloadReason}`);
+ * }
  * ```
  */
 
@@ -261,8 +276,10 @@ const FRAMEWORK_ENTRY_POINTS: Record<AppFramework, string[]> = {
   ],
   // Vue-based
   nuxt: [
-    '/src/main.ts', '/src/main.js', '/src/App.vue', '/app.vue',
-    '/pages/index.ts', '/pages/index.js', '/nuxt.config.ts'
+    '/app.vue', '/App.vue', '/src/app.vue',
+    '/src/main.ts', '/src/main.js',
+    '/pages/index.vue', '/pages/index.ts', '/pages/index.js',
+    '/pages/index.page.vue'
   ],
   vue: [
     '/src/main.ts', '/src/main.js', '/src/App.vue', '/main.ts', '/main.js',
@@ -647,7 +664,7 @@ export class LivePreviewOffloading {
    * Detect project configuration from files
    * 
    * Enhanced with heuristics analysis for auto-offload decision
-   * 
+   *
    * Analyzes project files to determine:
    * - Framework (React, Vue, Next.js, Flask, etc.)
    * - Bundler (Vite, Webpack, Parcel)
@@ -658,40 +675,49 @@ export class LivePreviewOffloading {
    */
   detectProject(request: PreviewRequest): ProjectDetection & { heuristics?: OffloadHeuristics } {
     const { files, scopePath } = request;
-    const filePaths = Object.keys(files);
+    
+    // Handle both object format and array format for backward compatibility
+    const filesObj = Array.isArray(files) 
+      ? (files as Array<{name: string; content: string}>).reduce((acc, f) => {
+          if (f.name && f.content !== undefined) acc[f.name] = f.content;
+          return acc;
+        }, {} as Record<string, string>)
+      : files as Record<string, string>;
+    
+    const filePaths = Object.keys(filesObj);
     const fileCount = filePaths.length;
 
     // Detect package manager
     const packageManager = this.detectPackageManager(filePaths);
 
     // Parse package.json if exists
-    const packageJson = this.parsePackageJson(files['package.json'] || files['/package.json']);
+    const packageJson = this.parsePackageJson(filesObj['package.json'] || filesObj['/package.json']);
 
     // Detect framework
-    const framework = this.detectFramework(filePaths, files, packageJson);
+    const framework = this.detectFramework(filePaths, filesObj, packageJson);
 
     // Detect bundler
-    const bundler = this.detectBundler(filePaths, files, packageJson);
+    const bundler = this.detectBundler(filePaths, filesObj, packageJson);
 
     // Detect entry point
     const entryPoint = this.detectEntryPoint(filePaths, framework);
 
     // Compute root directory scores
-    const rootScores = this.computeRootScores(files);
+    const rootScores = this.computeRootScores(filesObj);
 
     // Select best root
     const selectedRoot = this.selectRoot(rootScores);
 
     // Normalize files relative to selected root
-    const normalizedFiles = this.normalizeFiles(files, selectedRoot, scopePath);
+    const normalizedFiles = this.normalizeFiles(filesObj, selectedRoot, scopePath);
 
     // Detect project characteristics
     const hasPython = filePaths.some(p => p.endsWith('.py'));
     const hasNodeServer = filePaths.some(p => SERVER_FILES.includes(p));
     const hasNextJS = this.detectNextJS(filePaths, packageJson);
     const hasBackend = hasPython || hasNodeServer || framework === 'next' || framework === 'nuxt' || framework === 'remix';
-    const hasHeavyComputation = this.detectHeavyComputation(Object.values(files));
-    const hasAPIKeys = this.detectAPIKeys(Object.values(files));
+    const hasHeavyComputation = this.detectHeavyComputation(Object.values(filesObj));
+    const hasAPIKeys = this.detectAPIKeys(Object.values(filesObj));
 
     // Analyze heuristics for offload decision
     const heuristics = this.analyzeHeuristics(request);
@@ -818,6 +844,7 @@ export class LivePreviewOffloading {
     const hasJsx = filePaths.some(p => p.endsWith('.jsx') || p.endsWith('.tsx'));
     const hasTsx = filePaths.some(p => p.endsWith('.tsx'));
     const hasAngularFiles = filePaths.some(p => p.includes('.component.') || p.includes('.module.'));
+    const hasAngular = deps['@angular/core'] || hasAngularFiles;
 
     // Check for config files
     const hasNextConfig = filePaths.some(p => p.includes('next.config'));
@@ -965,6 +992,7 @@ export class LivePreviewOffloading {
 
   /**
    * Compute root directory scores based on config files
+   * Enhanced to properly detect subdirectory projects (e.g., nuxt-app/)
    */
   computeRootScores(files: Record<string, string>): Map<string, number> {
     const scores = new Map<string, number>();
@@ -974,6 +1002,26 @@ export class LivePreviewOffloading {
       scores.set(root, (scores.get(root) || 0) + score);
     };
 
+    // First pass: Identify all potential project roots (directories with config files)
+    const projectRoots = new Set<string>();
+    for (const filePath of Object.keys(files)) {
+      const cleanPath = filePath.replace(/^\/+/, '');
+      const parts = cleanPath.split('/').filter(Boolean);
+      if (parts.length < 2) continue;
+
+      const fileName = parts[parts.length - 1];
+      const dir = parts.slice(0, -1).join('/');
+
+      // High-value config files indicate a project root
+      if (fileName === 'package.json' || 
+          CONFIG_FILES.nuxtConfig.includes(fileName) ||
+          CONFIG_FILES.nextConfig.includes(fileName) ||
+          CONFIG_FILES.astroConfig.includes(fileName) ||
+          CONFIG_FILES.viteConfig.includes(fileName)) {
+        projectRoots.add(dir);
+      }
+    }
+
     for (const filePath of Object.keys(files)) {
       const cleanPath = filePath.replace(/^\/+/, '');
       const parts = cleanPath.split('/').filter(Boolean);
@@ -982,24 +1030,79 @@ export class LivePreviewOffloading {
       const fileName = parts[parts.length - 1];
       const dir = parts.slice(0, -1).join('/');
 
-      // Score based on config files presence
+      // Check if this file's directory is a known project root
+      const isInProjectRoot = projectRoots.has(dir);
+
+      // Score based on config files presence - highest priority for framework configs
       if (fileName === 'package.json') addScore(dir, 8);
-      if (fileName === 'index.html') addScore(dir, 6);
+      if (fileName === 'index.html') {
+        // Only score index.html in root if no other project root exists
+        if (!projectRoots.size || dir === '') addScore(dir, 6);
+      }
       if (CONFIG_FILES.viteConfig.includes(fileName)) addScore(dir, 6);
       if (CONFIG_FILES.webpackConfig.includes(fileName)) addScore(dir, 6);
       if (CONFIG_FILES.parcelConfig.includes(fileName)) addScore(dir, 6);
-      if (CONFIG_FILES.nextConfig.includes(fileName)) addScore(dir, 6);
+      if (CONFIG_FILES.nextConfig.includes(fileName)) addScore(dir, 8);
+      
+      // Nuxt config - highest score for Nuxt projects
+      if (CONFIG_FILES.nuxtConfig.includes(fileName)) {
+        addScore(dir, 10); // Nuxt config gets highest priority
+      }
+      if (CONFIG_FILES.astroConfig.includes(fileName)) addScore(dir, 8);
 
-      // Entry point scoring
+      // Docker files - moderate score but indicate a runnable project
+      if (fileName === 'Dockerfile' || fileName === 'docker-compose.yml' || fileName === 'docker-compose.yaml') {
+        // If in a known project root, give higher score; otherwise lower
+        if (isInProjectRoot) {
+          addScore(dir, 6);
+        } else {
+          addScore(dir, 3);
+        }
+      }
+
+      // Entry point scoring - prioritize framework-specific entry files
       if (/^main\.(js|jsx|ts|tsx)$/.test(fileName)) {
         if (dir.endsWith('/src')) addScore(dir.replace(/\/src$/, ''), 5);
         addScore(dir, 2);
       }
-      if (/^index\.(js|jsx|ts|tsx|html)$/.test(fileName)) {
-        addScore(dir, 3);
+      
+      // Nuxt/Vue specific entry points - higher score
+      if (fileName === 'app.vue' || fileName === 'App.vue') {
+        addScore(dir, 7); // Higher score for app.vue
+        // If app.vue is in a subdirectory and that directory has a project root, boost it
+        if (dir && !projectRoots.has(dir)) {
+          const parentDir = dir.split('/').slice(0, -1).join('/');
+          if (projectRoots.has(parentDir)) {
+            addScore(parentDir, 5);
+          }
+        }
+      }
+      
+      // Pages directory indicates a framework app
+      if (parts.includes('pages')) {
+        const pagesIdx = parts.indexOf('pages');
+        const appRoot = parts.slice(0, pagesIdx).join('/');
+        addScore(appRoot, 6);
+      }
+      
+      // Components directory also indicates a framework
+      if (parts.includes('components') && !parts.includes('node_modules')) {
+        const componentsIdx = parts.indexOf('components');
+        const appRoot = parts.slice(0, componentsIdx).join('/');
+        if (appRoot) addScore(appRoot, 5);
+      }
+
+      if (/^index\.(js|jsx|ts|tsx|html|vue)$/.test(fileName)) {
+        // Don't score index files in hidden/dot directories as project roots
+        if (!fileName.startsWith('.') && !dir.startsWith('.')) {
+          addScore(dir, 3);
+        }
       }
     }
 
+    // Debug: Log scores for diagnosis
+    logger.debug(`[computeRootScores] projectRoots: ${Array.from(projectRoots).join(', ')}`);
+    
     return scores;
   }
 
@@ -1165,6 +1268,11 @@ export class LivePreviewOffloading {
       return 'webcontainer';  // Local Node.js
     }
 
+    // Nuxt with Docker -> DevBox (cloud)
+    if (framework === 'nuxt' && hasDocker) {
+      return 'devbox';
+    }
+
     // Vue, Nuxt -> Sandpack
     if (framework === 'vue' || framework === 'nuxt') {
       return 'sandpack';
@@ -1261,6 +1369,113 @@ export class LivePreviewOffloading {
 
     // Default: Sandpack for frontend projects
     return 'sandpack';
+  }
+
+  /**
+   * Detect port from package.json or code content
+   * Migrated from preview-offloader.ts
+   */
+  detectPort(files: Record<string, string>): number {
+    const packageJson = this.parsePackageJson(files['package.json'] || files['/package.json']);
+    if (packageJson) {
+      const scripts = packageJson.scripts || {};
+      const startScript = scripts.dev || scripts.start || '';
+
+      // Extract port from start script
+      const portMatch = startScript.match(/-p\s+(\d+)|--port\s+(\d+)|PORT=(\d+)/);
+      if (portMatch) {
+        return parseInt(portMatch[1] || portMatch[2] || portMatch[3], 10);
+      }
+
+      // Framework defaults from dependencies
+      const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
+      if (deps.next || deps['next']) return 3000;
+      if (deps.nuxt || deps['@nuxt/core']) return 3000;
+      if (deps.vite) return 5173;
+      if (deps.react) return 3000;
+      if (deps.vue) return 3000;
+      if (deps.svelte) return 3000;
+      if (deps.astro) return 4321;
+      if (deps.gatsby) return 8000;
+      if (deps.remix) return 3000;
+    }
+
+    // Check Python files for port
+    for (const [path, content] of Object.entries(files)) {
+      if (path.endsWith('.py')) {
+        // Flask/FastAPI pattern: app.run(port=8000) or uvicorn.run(port=8000)
+        const portMatch =
+          content.match(/\b(?:app|uvicorn)\.run\([\s\S]*?\bport\s*=\s*(\d+)\b/) ??
+          content.match(/\bport\s*=\s*(\d+)\b/);
+        if (portMatch) {
+          return parseInt(portMatch[1], 10);
+        }
+        // Framework defaults
+        if (content.includes('from flask import') || content.includes('Flask(')) return 5000;
+        if (content.includes('from fastapi import') || content.includes('FastAPI(') || content.includes('uvicorn.')) return 8000;
+        if (path.endsWith('manage.py') || content.includes('from django import')) return 8000;
+        // Streamlit default
+        if (content.includes('import streamlit') || content.includes('st.')) return 8501;
+        // Gradio default
+        if (content.includes('import gradio')) return 7860;
+      }
+    }
+
+    // Check JavaScript/TypeScript files for port
+    for (const [path, content] of Object.entries(files)) {
+      if (path.endsWith('.js') || path.endsWith('.ts') || path.endsWith('.jsx') || path.endsWith('.tsx')) {
+        // Express pattern: app.listen(3000) or app.listen({ port: 3000 })
+        const portMatch = content.match(/app\.listen\((\d+)|app\.listen\(\{.*port:\s*(\d+)/);
+        if (portMatch) {
+          return parseInt(portMatch[1] || portMatch[2], 10);
+        }
+        // HTTP server pattern: http.createServer().listen(3000)
+        const httpMatch = content.match(/\.listen\((\d+)/);
+        if (httpMatch) {
+          return parseInt(httpMatch[1], 10);
+        }
+      }
+    }
+
+    // Default port
+    return 3000;
+  }
+
+  /**
+   * Get CodeSandbox template for framework
+   * Migrated from preview-offloader.ts with enhancements
+   *
+   * Maps detected frameworks to CodeSandbox templates:
+   * @see https://codesandbox.io/docs/sdk/templates
+   */
+  getCodeSandboxTemplate(framework: AppFramework): string {
+    const templateMap: Record<AppFramework, string> = {
+      // JavaScript/TypeScript frameworks
+      'react': 'react',
+      'vite-react': 'react',
+      'next': 'nextjs',
+      'nuxt': 'nuxt',
+      'vue': 'vue',
+      'svelte': 'svelte',
+      'solid': 'solid',
+      'angular': 'angular',
+      'astro': 'astro',
+      'remix': 'remix',
+      'qwik': 'qwik',
+      'gatsby': 'react',  // Gatsby uses React template
+      'vite': 'vanilla-vite',
+      'vanilla': 'vanilla',
+      'node': 'node',
+      // Python frameworks (use Python template)
+      'gradio': 'python',
+      'streamlit': 'python',
+      'flask': 'python',
+      'fastapi': 'python',
+      'django': 'python',
+      'unknown': 'node',  // Default to Node.js template
+    };
+
+    return templateMap[framework] || 'node';
   }
 
   /**
@@ -1565,8 +1780,56 @@ export const detectEntryPoint = (filePaths: string[], framework: AppFramework) =
 export const analyzeHeuristics = (request: PreviewRequest): OffloadHeuristics =>
   livePreviewOffloading.analyzeHeuristics(request);
 
-export const shouldUseLocalPreview = (detection: ProjectDetection) => 
+export const shouldUseLocalPreview = (detection: ProjectDetection) =>
   livePreviewOffloading.shouldUseLocalPreview(detection);
 
-export const getCloudFallback = (localMode: PreviewMode) => 
+export const getCloudFallback = (localMode: PreviewMode) =>
   livePreviewOffloading.getCloudFallback(localMode);
+
+export const detectPort = (files: Record<string, string>) =>
+  livePreviewOffloading.detectPort(files);
+
+export const getCodeSandboxTemplate = (framework: AppFramework) =>
+  livePreviewOffloading.getCodeSandboxTemplate(framework);
+
+/**
+ * Extract YouTube video ID from URL or plain ID
+ *
+ * @param url - YouTube URL or video ID
+ * @returns Video ID or null if invalid
+ *
+ * @example
+ * ```typescript
+ * extractYouTubeId('https://www.youtube.com/watch?v=dQw4w9WgXcQ') // 'dQw4w9WgXcQ'
+ * extractYouTubeId('https://youtu.be/dQw4w9WgXcQ') // 'dQw4w9WgXcQ'
+ * extractYouTubeId('dQw4w9WgXcQ') // 'dQw4w9WgXcQ'
+ * ```
+ */
+export function extractYouTubeId(url: string): string | null {
+  if (!url) return null;
+
+  // If it's already just an ID (11 characters, alphanumeric)
+  if (/^[a-zA-Z0-9_-]{11}$/.test(url)) {
+    return url;
+  }
+
+  // Standard YouTube URL: https://www.youtube.com/watch?v=VIDEO_ID
+  const watchMatch = url.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
+  if (watchMatch) {
+    return watchMatch[1];
+  }
+
+  // Shortened URL: https://youtu.be/VIDEO_ID
+  const shortMatch = url.match(/youtu\.be\/([a-zA-Z0-9_-]{11})/);
+  if (shortMatch) {
+    return shortMatch[1];
+  }
+
+  // Embed URL: https://www.youtube.com/embed/VIDEO_ID
+  const embedMatch = url.match(/\/embed\/([a-zA-Z0-9_-]{11})/);
+  if (embedMatch) {
+    return embedMatch[1];
+  }
+
+  return null;
+}

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { resolveFilesystemOwner } from '@/lib/virtual-filesystem';
+import { withAnonSessionCookie } from '@/lib/virtual-filesystem';
+import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { sessionIdSchema } from '@/lib/validation/schemas';
 
@@ -43,7 +44,11 @@ export async function GET(req: NextRequest) {
     
     const { sessionId, limit } = parseResult.data;
 
-    const authResolution = await resolveFilesystemOwner(req);
+    // Resolve auth upfront for cookie wrapping
+    const authResolution = await resolveFilesystemOwnerWithFallback(req, {
+      route: 'commits',
+      requestId: Math.random().toString(36).slice(2, 8),
+    });
     const ownerId = authResolution.ownerId;
 
     // Session IDs are scoped to owner
@@ -52,19 +57,25 @@ export async function GET(req: NextRequest) {
     const commitManager = new ShadowCommitManager();
     const history = await commitManager.getCommitHistory(scopedSessionId, limit);
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       data: {
         sessionId,
         commits: history,
       },
     });
+    return withAnonSessionCookie(response, authResolution);
   } catch (error: unknown) {
     console.error('[VFS Commits] Error:', error);
     const message = error instanceof Error ? error.message : 'Failed to get commit history';
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       { success: false, error: message },
       { status: 400 },
     );
+    return withAnonSessionCookie(errorResponse, {
+      ownerId: 'unknown',
+      source: 'anonymous',
+      isAuthenticated: false,
+    });
   }
 }

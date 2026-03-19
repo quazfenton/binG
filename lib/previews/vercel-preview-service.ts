@@ -22,7 +22,7 @@
  * ```
  */
 
-import { vercelSandboxProvider } from './vercel-sandbox-provider'
+import { vercelSandboxProvider } from '../sandbox/providers/vercel-sandbox-provider'
 import type { PreviewInfo } from '../sandbox/types'
 
 export interface PreviewConfig {
@@ -157,6 +157,7 @@ export class VercelPreviewService {
     // Stop sandbox
     try {
       const sandbox = await vercelSandboxProvider.getSandbox(sandboxId)
+      // @ts-ignore - stop may not exist on all sandbox implementations
       await sandbox.stop()
     } catch (error: any) {
       console.warn('[VercelPreview] Failed to stop sandbox:', error.message)
@@ -204,6 +205,7 @@ export class VercelPreviewService {
     // Extend sandbox timeout via Vercel SDK
     try {
       const sandbox = await vercelSandboxProvider.getSandbox(sandboxId)
+      // @ts-ignore - extendTimeout may not exist on all sandbox implementations
       await sandbox.extendTimeout(duration)
     } catch (error: any) {
       console.warn('[VercelPreview] Failed to extend sandbox timeout:', error.message)
@@ -217,9 +219,9 @@ export class VercelPreviewService {
     sandboxId: string,
     policy: 'allow-all' | 'deny-all' | { allow: string[] }
   ): Promise<void> {
-    const { vercelSandboxProvider } = await import('./vercel-sandbox-provider')
+    const { vercelSandboxProvider } = await import('../sandbox/providers/vercel-sandbox-provider')
     const sandbox = await vercelSandboxProvider.getSandbox(sandboxId)
-    
+
     // @ts-ignore - updateNetworkPolicy is available on VercelSandboxHandle
     if (typeof (sandbox as any).updateNetworkPolicy === 'function') {
       // @ts-ignore

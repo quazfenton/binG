@@ -11,6 +11,7 @@ import type {
 } from '@/lib/virtual-filesystem/filesystem-types';
 import { opfsAdapter, OPFSAdapter } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
 import { opfsCore } from '@/lib/virtual-filesystem/opfs/opfs-core';
+import { onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 
 export interface AttachedVirtualFile {
   path: string;
@@ -67,8 +68,14 @@ interface SnapshotCacheEntry {
 }
 
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
-const SNAPSHOT_CACHE_TTL_MS = 5000; // 5 seconds cache TTL
-const SNAPSHOT_CACHE_MAX_ENTRIES = 10; // Limit cache entries
+const inFlightRequests = new Map<string, Promise<any>>();
+const SNAPSHOT_CACHE_TTL_MS = 60000; // 60 seconds for snapshots (increased from 30s)
+const LIST_CACHE_TTL_MS = 30000;     // 30 seconds for directory listings (increased from 15s)
+const SNAPSHOT_CACHE_MAX_ENTRIES = 100; // Increased from 50
+
+// Debounce map to prevent duplicate API calls within short time windows
+const lastApiCallTime = new Map<string, number>();
+const API_CALL_DEBOUNCE_MS = 500; // Minimum 500ms between same API calls
 
 function getCacheKey(path: string, ownerId: string): string {
   return `${ownerId}:${path}`;
@@ -119,6 +126,7 @@ function invalidateSnapshotCache(path?: string, ownerId?: string): void {
   if (!path && !ownerId) {
     // Clear all
     snapshotCache.clear();
+    inFlightRequests.clear();
     return;
   }
   
@@ -127,6 +135,13 @@ function invalidateSnapshotCache(path?: string, ownerId?: string): void {
     if (ownerId && !key.startsWith(ownerId + ':')) continue;
     if (path && !key.includes(path)) continue;
     snapshotCache.delete(key);
+  }
+  
+  // Also remove matching keys from inFlightRequests to fence off stale in-flight promises
+  for (const key of inFlightRequests.keys()) {
+    if (ownerId && !key.startsWith(ownerId + ':')) continue;
+    if (path && !key.includes(path)) continue;
+    inFlightRequests.delete(key);
   }
 }
 
@@ -222,23 +237,79 @@ export function useVirtualFilesystem(
     return () => clearInterval(interval);
   }, [useOPFS]);
 
+  // Listen for filesystem-updated events from other panels (code-preview-panel, conversation-interface, etc.)
+  // and invalidate the snapshot cache to ensure fresh data
+  useEffect(() => {
+    const unsubscribe = onFilesystemUpdated((event) => {
+      const detail = event.detail;
+      
+      // Get current session ID when event fires (not at effect creation time)
+      const ownerId = getOrCreateAnonymousSessionId();
+      
+      // Invalidate cache when files are updated from anywhere in the app
+      // This fixes Bug #4: Stale snapshot cache never invalidated during edit flow
+      if (detail.path || detail.paths || detail.scopePath) {
+        // Invalidate all provided paths
+        if (detail.scopePath) {
+          invalidateSnapshotCache(detail.scopePath, ownerId);
+        }
+        if (detail.path) {
+          invalidateSnapshotCache(detail.path, ownerId);
+        }
+        if (detail.paths && detail.paths.length > 0) {
+          for (const path of detail.paths) {
+            invalidateSnapshotCache(path, ownerId);
+          }
+        }
+      } else {
+        // No path info - invalidate all caches to be safe
+        log(`[filesystem-updated] Invalidating all snapshot caches (no path info)`);
+        invalidateSnapshotCache(undefined, ownerId);
+      }
+    });
+
+    return unsubscribe;
+  }, [log]);
+
   const request = useCallback(async <TData>(
     url: string,
     options: RequestInit & { includeJsonContentType?: boolean } = {},
   ): Promise<TData> => {
     const { includeJsonContentType = true, ...rest } = options;
-    log(`request: ${options.method || 'GET'} ${url}`);
     
+    // Debounce duplicate GET requests only - POST/PUT/DELETE should not be debounced
+    const method = (options.method || 'GET').toUpperCase();
+    if (method === 'GET') {
+      const now = Date.now();
+      const requestKey = `${method}:${url}`;
+      const lastCall = lastApiCallTime.get(requestKey);
+      if (lastCall && (now - lastCall) < API_CALL_DEBOUNCE_MS) {
+        const waitTime = API_CALL_DEBOUNCE_MS - (now - lastCall);
+        log(`request: debouncing duplicate call to ${url} (waiting ${waitTime}ms)`);
+        await new Promise(resolve => setTimeout(resolve, waitTime));
+      }
+      const callTime = Date.now();
+      lastApiCallTime.set(requestKey, callTime);
+      setTimeout(() => {
+        if (lastApiCallTime.get(requestKey) === callTime) {
+          lastApiCallTime.delete(requestKey);
+        }
+      }, API_CALL_DEBOUNCE_MS);
+    }
+    
+    log(`request: ${method} ${url}`);
+
     const response = await fetch(url, {
       ...rest,
       headers: {
         ...buildApiHeaders({ json: includeJsonContentType }),
         ...(rest.headers || {}),
       },
+      credentials: 'include',
     });
 
     log(`request: response status=${response.status}`);
-    
+
     let payload: ApiResponse<TData> | null = null;
     try {
       payload = await response.json();
@@ -313,13 +384,25 @@ export function useVirtualFilesystem(
     log(`writeFile: writing "${filePath}" (contentLength=${content.length})`);
     
     // Invalidate snapshot cache on write
-    invalidateSnapshotCache();
+    invalidateSnapshotCache(filePath, getOrCreateAnonymousSessionId());
     
-    // OPFS-first strategy
+    // OPFS write-through strategy: write to OPFS for instant local reads,
+    // then also write to server so listDirectory (server-backed) stays in sync
     if (useOPFS && !offlineMode) {
-      // Write to OPFS instantly
+      // Write to OPFS instantly for local cache
       const opfsFile = await opfsAdapter.writeFile('current-user', filePath, content);
       log(`writeFile: OPFS write complete for "${filePath}", version=${opfsFile.version}`);
+      
+      // Also write to server so list/snapshot APIs reflect the change
+      try {
+        await request<any>('/api/filesystem/write', {
+          method: 'POST',
+          body: JSON.stringify({ path: filePath, content, source: 'use-virtual-filesystem-opfs' }),
+        });
+        log(`writeFile: server write-through complete for "${filePath}"`);
+      } catch (err) {
+        logWarn(`writeFile: server write-through failed for "${filePath}", OPFS has the data`, err);
+      }
       
       // Update local state immediately
       await listDirectory(currentPathRef.current);
@@ -345,19 +428,26 @@ export function useVirtualFilesystem(
     log(`writeFile: server write complete for "${data.path}", version=${data.version}`);
     await listDirectory(currentPathRef.current);
     return data;
-  }, [listDirectory, request, useOPFS, offlineMode, log]);
+  }, [listDirectory, request, useOPFS, offlineMode, log, logWarn]);
 
   const deletePath = useCallback(async (targetPath: string) => {
     // Invalidate snapshot cache on delete
     invalidateSnapshotCache(targetPath, getOrCreateAnonymousSessionId());
     
-    const data = await request<{ deletedCount: number }>('/api/filesystem/delete', {
-      method: 'POST',
-      body: JSON.stringify({ path: targetPath }),
-    });
-    await listDirectory(currentPathRef.current);
-    return data;
-  }, [listDirectory, request]);
+    try {
+      const data = await request<{ deletedCount: number }>('/api/filesystem/delete', {
+        method: 'POST',
+        body: JSON.stringify({ path: targetPath }),
+      });
+      await listDirectory(currentPathRef.current);
+      return data;
+    } catch (err) {
+      const message = err instanceof Error ? err.message : 'Failed to delete path';
+      log(`deletePath: failed - ${message}`);
+      setError(message);
+      return null;
+    }
+  }, [listDirectory, request, log, setError]);
 
   const search = useCallback(async (
     query: string,
@@ -382,31 +472,56 @@ export function useVirtualFilesystem(
   const getSnapshot = useCallback(async (pathForSnapshot?: string) => {
     const targetPath = pathForSnapshot || currentPathRef.current;
     const ownerId = getOrCreateAnonymousSessionId();
-    
+    const cacheKey = `${ownerId}:${targetPath}`;
+
     // Check shared cache first
     const cached = getCachedSnapshot(targetPath, ownerId);
     if (cached) {
       vfsLogger.log(`getSnapshot: cache hit for "${targetPath}" (fresh: ${cached.isFresh})`);
       return cached.snapshot;
     }
-    
-    vfsLogger.log(`getSnapshot: cache miss for "${targetPath}", fetching from API`);
-    
-    const data = await request<{
-      root: string;
-      version: number;
-      updatedAt: string;
-      path: string;
-      files: VirtualWorkspaceSnapshot['files'];
-    }>(
-      `/api/filesystem/snapshot?path=${encodeURIComponent(targetPath)}`,
-      { method: 'GET', includeJsonContentType: false },
-    );
-    
-    // Store in shared cache
-    setCachedSnapshot(targetPath, ownerId, data);
-    
-    return data;
+
+    // Check if request is already in-flight (prevent duplicate concurrent calls)
+    const existingRequest = inFlightRequests.get(cacheKey);
+    if (existingRequest) {
+      log(`getSnapshot: joining in-flight request for "${targetPath}"`);
+      return existingRequest;
+    }
+
+    log(`getSnapshot: cache miss for "${targetPath}", fetching from API`);
+
+    const requestPromise = (async () => {
+      try {
+        const data = await request<{
+          root: string;
+          version: number;
+          updatedAt: string;
+          path: string;
+          files: VirtualWorkspaceSnapshot['files'];
+        }>(
+          `/api/filesystem/snapshot?path=${encodeURIComponent(targetPath)}`,
+          { method: 'GET', includeJsonContentType: false },
+        );
+        // Only write to cache if the promise stored is still the same one
+        const currentPromise = inFlightRequests.get(cacheKey);
+        if (currentPromise === requestPromise) {
+          setCachedSnapshot(targetPath, ownerId, data);
+          inFlightRequests.delete(cacheKey);
+        }
+        return data;
+      } catch (error) {
+        logError(`getSnapshot: failed for "${targetPath}"`, error);
+        // Remove promise entry on error to avoid repopulating with stale data
+        const currentPromise = inFlightRequests.get(cacheKey);
+        if (currentPromise === requestPromise) {
+          inFlightRequests.delete(cacheKey);
+        }
+        throw error;
+      }
+    })();
+
+    inFlightRequests.set(cacheKey, requestPromise);
+    return requestPromise;
   }, [request]);
 
   /**
@@ -509,7 +624,7 @@ export function useVirtualFilesystem(
     attachedFileList,
     isLoading,
     error,
-    syncStatus,  // NEW: OPFS sync status
+    syncStatus,
     setCurrentPath,
     listDirectory,
     readFile,
@@ -521,6 +636,6 @@ export function useVirtualFilesystem(
     detachFile,
     clearAttachedFiles,
     uploadBrowserFile,
-    syncWithServer,  // NEW: Manual sync trigger
+    syncWithServer,
   };
 }

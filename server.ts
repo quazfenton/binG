@@ -130,9 +130,9 @@ app.prepare().then(startup).then(() => {
         token = query.token as string;
       }
       
-      // Get anonymous session ID from header (if no auth token)
-      const anonymousSessionId = query.anonymousSessionId as string || 
-                                 req.headers['x-anonymous-session-id'] as string;
+      // Get anonymous session ID from HttpOnly cookie only (if no auth token)
+      // SECURITY: Never trust client-controlled headers for identity (IDOR vulnerability)
+      const anonymousSessionId = req.headers.cookie?.match(/anon-session-id=([^;]+)/)?.[1] || '';
 
       if (!sessionId || !sandboxId) {
         console.warn('[WebSocket] Missing sessionId or sandboxId');
@@ -190,9 +190,9 @@ app.prepare().then(startup).then(() => {
       const { getDatabaseSessionStore } = await import('@/lib/database/session-store');
       const sessionStore = getDatabaseSessionStore();
       const session = await sessionStore.getSession(anonymousSessionId);
-      
-      if (session && session.userId) {
-        userId = session.userId;
+
+      if (session && (session as any).userId) {
+        userId = (session as any).userId;
         console.log(`[WebSocket] Authenticated anonymous user ${userId}`);
       }
     }

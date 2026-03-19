@@ -104,6 +104,7 @@ let stmtGet: BetterSqlite3.Statement | null = null
 let stmtUpdate: BetterSqlite3.Statement | null = null
 let stmtDelete: BetterSqlite3.Statement | null = null
 let stmtAll: BetterSqlite3.Statement | null = null
+let stmtAllActive: BetterSqlite3.Statement | null = null
 let stmtCleanup: BetterSqlite3.Statement | null = null
 let stmtGetByUser: BetterSqlite3.Statement | null = null
 
@@ -172,6 +173,8 @@ try {
   stmtDelete = db.prepare(`DELETE FROM terminal_sessions WHERE sessionId = ?`)
 
   stmtAll = db.prepare(`SELECT * FROM terminal_sessions WHERE lastActive > datetime('now', '-4 hours')`)
+
+  stmtAllActive = db.prepare(`SELECT * FROM terminal_sessions WHERE status = 'active' AND lastActive > datetime('now', '-4 hours')`)
 
   stmtCleanup = db.prepare(`DELETE FROM terminal_sessions WHERE lastActive <= datetime('now', '-4 hours')`)
 
@@ -501,7 +504,7 @@ export class TerminalSessionManager {
   async createSessionSnapshot(
     sessionId: string,
     name?: string,
-    reason: 'user_request' | 'auto_disconnect' | 'idle_timeout' | 'manual' = 'user_request'
+    reason: 'user_request' | 'auto_disconnect' | 'idle_timeout' | 'manual' | 'error' = 'user_request'
   ): Promise<string> {
     const session = this.getActiveSession(sessionId) ||
                     this.getSessionsByUserId(sessionId.split('-')[1] || 'unknown')[0]
@@ -1122,6 +1125,5 @@ export const getSessionByUserId = terminalSessionManager.getSessionByUserId.bind
  */
 export const deleteSessionsByUserId = terminalSessionManager.deleteSessionsByUserId.bind(terminalSessionManager)
 
-// Re-export types for backward compatibility
-export type { TerminalSessionState as UserTerminalSession }
+// Re-export types for backward compatibility (already exported as interfaces above)
 export type { WorkspaceSession } from '../../sandbox/types'
