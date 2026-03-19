@@ -1125,7 +1125,5 @@ export const getSessionByUserId = terminalSessionManager.getSessionByUserId.bind
  */
 export const deleteSessionsByUserId = terminalSessionManager.deleteSessionsByUserId.bind(terminalSessionManager)
 
-// Re-export types for backward compatibility
-export type { TerminalSessionState }
-// Note: UserTerminalSession is already exported as interface on line 56
+// Re-export types for backward compatibility (already exported as interfaces above)
 export type { WorkspaceSession } from '../../sandbox/types'

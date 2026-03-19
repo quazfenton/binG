@@ -91,16 +91,6 @@ class TaskRouter {
     const primaryType = (Object.entries(scores)
       .find(([, score]) => score === maxScore)?.[0] ?? 'unknown') as TaskType;
 
-    // FIX (Bug 6): Normalise confidence against the keyword count of the
-    // winning category so it stays in [0, 1] and is actually meaningful.
-    const keywordSets: Record<string, string[]> = {
-      coding:     this.CODING_KEYWORDS,
-      messaging:  this.MESSAGING_KEYWORDS,
-      browsing:   this.BROWSING_KEYWORDS,
-      automation: this.AUTOMATION_KEYWORDS,
-    };
-    const totalKeywordsInWinningSet = keywordSets[primaryType]?.length ?? 1;
-
     // FIX (Bug 5 & 7): Explicit target assignment with no fall-through ambiguity.
     let target: RoutingTarget;
     let reasoning: string;

@@ -56,6 +56,13 @@ export class ProviderHealthChecker extends EventEmitter {
   }
 
   /**
+   * Set configuration
+   */
+  setConfig(config: Partial<HealthCheckerConfig>): void {
+    this.config = { ...this.config, ...config }
+  }
+
+  /**
    * Start periodic health checking
    */
   start(): void {
@@ -185,13 +192,13 @@ export class ProviderHealthChecker extends EventEmitter {
 
     // Update metrics
     sandboxMetrics.providerHealthCheckTotal.inc({
-      provider,
+      provider: provider as any,
       status: healthy ? 'success' : 'failure',
     })
 
     if (latency) {
       sandboxMetrics.providerHealthCheckDuration.observe(
-        { provider },
+        { provider: provider as any },
         latency / 1000
       )
     }
@@ -299,7 +306,7 @@ export async function startProviderHealthCheck(config?: Partial<HealthCheckerCon
   
   providerHealthChecker.start()
   if (config) {
-    providerHealthChecker.config = { ...DEFAULT_CONFIG, ...config }
+    providerHealthChecker.setConfig(config)
   }
   return providerHealthChecker
 }

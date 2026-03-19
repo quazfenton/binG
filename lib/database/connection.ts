@@ -55,7 +55,6 @@ function getMockDatabase(): Database.Database {
     close: function() { return this as Database.Database; },
     backup: () => Promise.resolve({ totalPages: 0, remainingPages: 0 }),
     defaultSafeIntegers: () => mockDb as Database.Database,
-    register: () => mockDb as Database.Database,
     loadExtension: () => mockDb as Database.Database,
     serialize: () => Buffer.alloc(0),
     table: () => null,
