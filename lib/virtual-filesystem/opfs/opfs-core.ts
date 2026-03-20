@@ -75,6 +75,7 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
   private options: Required<OPFSOptions>;
   private initialized = false;
   private workspaceId: string | null = null;
+  private initPromise: Promise<void> | null = null; // Prevent concurrent initialization
 
   constructor(options: OPFSOptions = {}) {
     super();
@@ -121,8 +122,18 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
    * @throws OPFSError if initialization fails
    */
   async initialize(workspaceId: string): Promise<void> {
+    // If already initialized for this workspace, return immediately
     if (this.initialized && this.workspaceId === workspaceId) {
       return;
+    }
+
+    // If initialization is already in progress, wait for it
+    if (this.initPromise) {
+      await this.initPromise;
+      // After waiting, check if we need to initialize again
+      if (this.initialized && this.workspaceId === workspaceId) {
+        return;
+      }
     }
 
     if (!OPFSCore.isSupported()) {
@@ -131,26 +142,33 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
       throw error;
     }
 
-    try {
-      // Get root directory handle from OPFS
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      this.rootHandle = await (navigator as any).storage.getDirectory(
-        `${this.options.rootName}/${workspaceId}`
-      );
-      
-      this.workspaceId = workspaceId;
-      this.initialized = true;
-      
-      // Load handle cache from metadata
-      await this.loadHandleCache();
-      
-      this.emit('initialized', { workspaceId });
-      
-      console.log('[OPFS] Initialized workspace:', workspaceId);
-    } catch (error) {
-      this.emit('error', { error, workspaceId });
-      throw new OPFSError('Failed to initialize OPFS', error);
-    }
+    // Create initialization promise to prevent concurrent initializations
+    this.initPromise = (async () => {
+      try {
+        // Get root directory handle from OPFS
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        this.rootHandle = await (navigator as any).storage.getDirectory(
+          `${this.options.rootName}/${workspaceId}`
+        );
+        
+        this.workspaceId = workspaceId;
+        this.initialized = true;
+        
+        // Load handle cache from metadata
+        await this.loadHandleCache();
+        
+        this.emit('initialized', { workspaceId });
+        
+        console.log('[OPFS] Initialized workspace:', workspaceId);
+      } catch (error) {
+        this.emit('error', { error, workspaceId });
+        throw new OPFSError('Failed to initialize OPFS', error);
+      } finally {
+        this.initPromise = null;
+      }
+    })();
+
+    await this.initPromise;
   }
 
   /**

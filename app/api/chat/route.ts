@@ -45,6 +45,10 @@ const CHAT_RATE_LIMIT_MAX_ANONYMOUS = 10;
 const CHAT_AGENTIC_PIPELINE = (process.env.CHAT_AGENTIC_PIPELINE || 'auto').toLowerCase();
 const WORKFORCE_ENABLED = process.env.WORKFORCE_ENABLED === 'true';
 
+// Provider/model validation cache to reduce repeated lookups
+const validationCache = new Map<string, { provider: string; isValid: boolean; timestamp: number }>();
+const VALIDATION_CACHE_TTL_MS = 30000;
+
 const chatMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
   content: z.union([z.string(), z.array(z.any())]),
@@ -181,8 +185,16 @@ export async function POST(request: NextRequest) {
       stream
     );
 
-    // Check if provider is valid (exists in our PROVIDERS constant)
-    if (!(provider in PROVIDERS)) {
+    // Validate provider and model with caching to avoid repeated lookups
+    // Cache validation results for 30 seconds to reduce overhead
+    const validationCacheKey = `${provider}:${model}`;
+    const cachedValidation = validationCache.get(validationCacheKey);
+    const now = Date.now();
+    
+    // Check if cache entry exists and hasn't expired
+    if (cachedValidation && (now - cachedValidation.timestamp) < VALIDATION_CACHE_TTL_MS) {
+      // Use cached validation - skip redundant checks
+    } else if (!(provider in PROVIDERS)) {
       chatLogger.error('Invalid provider', { requestId, provider }, {
         availableProviders: Object.keys(PROVIDERS),
       });
@@ -193,33 +205,36 @@ export async function POST(request: NextRequest) {
         },
         { status: 400 },
       );
+    } else {
+      const selectedProvider = PROVIDERS[provider as keyof typeof PROVIDERS];
+      const isModelSupported = selectedProvider.models.some(
+        m => m === model || m.startsWith(model + ':') || m.endsWith(':' + model.split(':')[0])
+      );
+      
+      if (!isModelSupported) {
+        chatLogger.error('Model not supported', { requestId, provider, model }, {
+          availableModels: selectedProvider.models,
+        });
+        return NextResponse.json(
+          {
+            error: `Model ${model} is not supported by ${provider}`,
+            availableModels: selectedProvider.models,
+          },
+          { status: 400 },
+        );
+      }
+
+      // Cache the validation result with timestamp
+      validationCache.set(validationCacheKey, { provider, isValid: true, timestamp: now });
     }
 
-    // Get provider info from PROVIDERS constant
+    // Get provider info from cached validation
     const selectedProvider = PROVIDERS[provider as keyof typeof PROVIDERS];
     chatLogger.debug('Selected provider', { requestId, provider, model }, {
       supportsStreaming: selectedProvider.supportsStreaming,
     });
 
-    // Check if model is supported by the provider (allow partial matches for models like "z-ai/glm-4.5-air" vs "z-ai/glm-4.5-air:free")
-    const isModelSupported = selectedProvider.models.some(
-      m => m === model || m.startsWith(model + ':') || m.endsWith(':' + model.split(':')[0])
-    );
-    
-    if (!isModelSupported) {
-      chatLogger.error('Model not supported', { requestId, provider, model }, {
-        availableModels: selectedProvider.models,
-      });
-      return NextResponse.json(
-        {
-          error: `Model ${model} is not supported by ${provider}`,
-          availableModels: selectedProvider.models,
-        },
-        { status: 400 },
-      );
-    }
-
-    // Normalize model name to match PROVIDERS constant (e.g., "z-ai/glm-4.5-air" -> "z-ai/glm-4.5-air:free")
+    // Normalize model name to match PROVIDERS constant
     const normalizedModel = selectedProvider.models.find(
       m => m === model || m.startsWith(model + ':') || m.endsWith(':' + model.split(':')[0])
     ) || model;
@@ -818,8 +833,8 @@ export async function POST(request: NextRequest) {
                       chunkCount++;
                     }
 
-                    // Small delay for smooth streaming
-                    await new Promise(resolve => setTimeout(resolve, 30));
+                    // Minimal delay for faster streaming (reduced from 30ms)
+                    await new Promise(resolve => setTimeout(resolve, 5));
                   }
 
                   // Send completion event
@@ -964,9 +979,9 @@ export async function POST(request: NextRequest) {
                 controller.enqueue(encoderRef.encode(event));
                 chunkCount++;
 
-                // Add small delays between events for smooth streaming
+                // Minimal delay between events for faster streaming (reduced from 50ms)
                 if (i < events.length - 1) {
-                  await new Promise(resolve => setTimeout(resolve, 50));
+                  await new Promise(resolve => setTimeout(resolve, 8));
                 }
               }
 

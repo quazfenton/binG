@@ -93,6 +93,16 @@ import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { buildApiHeaders } from "@/lib/utils";
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer";
 import IntegrationPanel from "@/components/integrations/IntegrationPanel";
+import { PROVIDERS } from "@/lib/chat/llm-providers";
+
+// Helper to normalize paths to relative format (project/...) for API compatibility
+// Moved outside component to avoid recreation on every render
+const normalizePath = (path: string): string => {
+  if (path.startsWith('project/') || path.startsWith('project')) return path;
+  if (path === '/') return 'project';
+  // Convert absolute paths like /folder/file to relative project/folder/file
+  return path.startsWith('/') ? `project${path}` : `project/${path}`;
+};
 
 interface FileNode {
   name: string;
@@ -110,6 +120,16 @@ interface Song {
   duration: string;
   url?: string;
   localPath?: string;
+}
+
+// Chat Thread Management - For simultaneous multitasked separate LLM threads
+export interface ChatThread {
+  id: string;
+  name: string;
+  messages: Message[];
+  createdAt: number;
+  taskId?: string;
+  lastActiveAt?: number;
 }
 
 // Automation data - defined outside component
@@ -142,11 +162,21 @@ export function ExperimentalWorkspacePanel() {
   const { isOpen, activeTab, closePanel, setTab } = usePanel();
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
-  const [chatMessages, setChatMessages] = useState<Message[]>([]);
+  
+  // Chat Thread Management - Multiple simultaneous chat threads
+  const [chatThreads, setChatThreads] = useState<ChatThread[]>([]);
+  const [activeThreadId, setActiveThreadId] = useState<string | null>(null);
   const [chatInput, setChatInput] = useState("");
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ path: string; content: string }>>([]);
   const [showFilePicker, setShowFilePicker] = useState(false);
+  
+  // Get active thread and its messages
+  const activeThread = useMemo(() => 
+    chatThreads.find(t => t.id === activeThreadId) || null, 
+    [chatThreads, activeThreadId]
+  );
+  const chatMessages = activeThread?.messages || [];
   
   // GitHub Import state
   const [showGithubImport, setShowGithubImport] = useState(false);
@@ -195,22 +225,95 @@ export function ExperimentalWorkspacePanel() {
     };
   }, [isResizing]);
 
-  // Load chat history from localStorage on mount
+  // Load chat threads from localStorage on mount
   useEffect(() => {
-    const savedChat = localStorage.getItem('experimental-chat-history');
-    if (savedChat) {
+    const savedThreads = localStorage.getItem('experimental-chat-threads');
+    const savedActiveId = localStorage.getItem('experimental-active-thread-id');
+    if (savedThreads) {
       try {
-        setChatMessages(JSON.parse(savedChat));
+        const parsed = JSON.parse(savedThreads);
+        setChatThreads(parsed);
+        // Set active thread to last active or first thread
+        if (parsed.length > 0) {
+          const activeId = savedActiveId || parsed[0].id;
+          setActiveThreadId(activeId);
+        }
       } catch (e) {
-        console.error('Failed to load chat history:', e);
+        console.error('Failed to load chat threads:', e);
       }
+    } else {
+      // Create default thread for backward compatibility
+      const defaultThread: ChatThread = {
+        id: `thread-${Date.now()}`,
+        name: 'Default Thread',
+        messages: [],
+        createdAt: Date.now(),
+        lastActiveAt: Date.now(),
+      };
+      setChatThreads([defaultThread]);
+      setActiveThreadId(defaultThread.id);
     }
   }, []);
 
-  // Save chat history to localStorage whenever it changes
+  // Save chat threads to localStorage whenever they change
   useEffect(() => {
-    localStorage.setItem('experimental-chat-history', JSON.stringify(chatMessages));
-  }, [chatMessages]);
+    if (chatThreads.length > 0) {
+      localStorage.setItem('experimental-chat-threads', JSON.stringify(chatThreads));
+    }
+  }, [chatThreads]);
+
+  // Save active thread ID
+  useEffect(() => {
+    if (activeThreadId) {
+      localStorage.setItem('experimental-active-thread-id', activeThreadId);
+    }
+  }, [activeThreadId]);
+
+  // Thread management functions
+  const createNewThread = useCallback((name?: string) => {
+    const newThread: ChatThread = {
+      id: `thread-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+      name: name || `Thread ${chatThreads.length + 1}`,
+      messages: [],
+      createdAt: Date.now(),
+      lastActiveAt: Date.now(),
+    };
+    setChatThreads(prev => [...prev, newThread]);
+    setActiveThreadId(newThread.id);
+    return newThread.id;
+  }, [chatThreads.length]);
+
+  const switchThread = useCallback((threadId: string) => {
+    setActiveThreadId(threadId);
+    // Update last active time
+    setChatThreads(prev => prev.map(t => 
+      t.id === threadId ? { ...t, lastActiveAt: Date.now() } : t
+    ));
+  }, []);
+
+  const deleteThread = useCallback((threadId: string) => {
+    setChatThreads(prev => {
+      const filtered = prev.filter(t => t.id !== threadId);
+      // If we deleted the active thread, switch to another
+      if (threadId === activeThreadId && filtered.length > 0) {
+        setActiveThreadId(filtered[0].id);
+      }
+      return filtered;
+    });
+  }, [activeThreadId]);
+
+  const renameThread = useCallback((threadId: string, newName: string) => {
+    setChatThreads(prev => prev.map(t => 
+      t.id === threadId ? { ...t, name: newName } : t
+    ));
+  }, []);
+
+  // Update messages for active thread
+  const setThreadMessages = useCallback((messages: Message[]) => {
+    setChatThreads(prev => prev.map(t => 
+      t.id === activeThreadId ? { ...t, messages, lastActiveAt: Date.now() } : t
+    ));
+  }, [activeThreadId]);
   const [thinkingNotes, setThinkingNotes] = useState<string[]>([]);
   const [newNote, setNewNote] = useState("");
 
@@ -451,11 +554,25 @@ export function ExperimentalWorkspacePanel() {
   const [vfsSnapshot, setVfsSnapshot] = useState<{ files: Array<{ path: string; content: string; language: string }> } | null>(null);
 
   // Filesystem state (alias for vfsSnapshot with additional metadata)
-  const [filesystem, setFilesystem] = useState<{ 
-    sessionId: string; 
-    version: number; 
-    files: Array<{ path: string; content: string; language: string }> 
+  const [filesystem, setFilesystem] = useState<{
+    sessionId: string;
+    version: number;
+    files: Array<{ path: string; content: string; language: string }>
   } | null>(null);
+
+  // Available LLM providers for comparison
+  const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>([]);
+
+  // Load available LLM providers
+  useEffect(() => {
+    try {
+      // Convert PROVIDERS object to array
+      const providers = Object.values(PROVIDERS);
+      setAvailableProviders(providers);
+    } catch (error) {
+      console.error('Failed to load LLM providers:', error);
+    }
+  }, []);
 
   // Fetch VFS snapshot on mount
   useEffect(() => {
@@ -575,6 +692,10 @@ export function ExperimentalWorkspacePanel() {
     const promptToSend = customPrompt || chatInput.trim();
     if (!promptToSend && !isChatLoading) return;
     if (isChatLoading) return;
+    if (!activeThreadId) {
+      // Create a new thread if none exists
+      createNewThread();
+    }
 
     const userMessage: Message = {
       id: `exp-chat-${Date.now()}`,
@@ -583,37 +704,62 @@ export function ExperimentalWorkspacePanel() {
       timestamp: new Date().toISOString(),
     };
 
-    setChatMessages((prev) => [...prev, userMessage]);
+    setThreadMessages([...chatMessages, userMessage]);
     if (!customPrompt) setChatInput("");
     setIsChatLoading(true);
 
-    // Try to call the actual chat API
+    // Streaming state
+    let streamedContent = '';
+    let assistantMessageId = `exp-chat-${Date.now()}`;
+    const vfsScope = filesystem?.sessionId || 'project/sessions/default';
+
+    // Add placeholder assistant message for streaming updates
+    const placeholderMessage: Message = {
+      id: assistantMessageId,
+      role: "assistant",
+      content: "",
+      timestamp: new Date().toISOString(),
+    };
+    setThreadMessages([...chatMessages, userMessage, placeholderMessage]);
+
+    // SSE Event type constants (matching backend)
+    const SSE_EVENT_TYPES = {
+      TOKEN: 'token',
+      TOOL_INVOCATION: 'tool_invocation',
+      STEP: 'step',
+      FILESYSTEM: 'filesystem',
+      DIFFS: 'diffs',
+      REASONING: 'reasoning',
+      SANDBOX_OUTPUT: 'sandbox_output',
+      DONE: 'done',
+      ERROR: 'error',
+      HEARTBEAT: 'heartbeat',
+    } as const;
+
     try {
       // Get the current chat messages as the messages array
       const messagesPayload = [
         ...chatMessages.map(m => ({ role: m.role, content: m.content })),
-        { 
-          role: 'user' as const, 
-          content: attachedFiles.length > 0 
+        {
+          role: 'user' as const,
+          content: attachedFiles.length > 0
             ? `${promptToSend}\n\n--- Attached Files for Context ---\n${attachedFiles.map(f => `File: ${f.path}\n\`\`\`\n${f.content.slice(0, 4000)}\n\`\`\``).join('\n\n')}`
-            : promptToSend 
+            : promptToSend
         }
       ];
 
-      // Get filesystem scope from the VFS
-      const vfsScope = filesystem?.sessionId || 'project/sessions/default';
-      
       const response = await fetch('/api/chat', {
         method: 'POST',
-        headers: { 
+        headers: {
           'Content-Type': 'application/json',
         },
         body: JSON.stringify({
           messages: messagesPayload,
           provider: 'openrouter',
           model: 'nvidia/nemotron-3-nano-30b-a3b:free',
-          conversationId: `exp-workspace-${vfsScope}`,
-          agentMode: 'auto', // Allow agentic behaviors
+          stream: true, // Enable SSE streaming
+          conversationId: `exp-workspace-thread-${activeThreadId}`,
+          agentMode: 'auto',
           filesystemContext: {
             scopePath: vfsScope,
             attachedFiles: attachedFiles.map(f => ({
@@ -625,62 +771,179 @@ export function ExperimentalWorkspacePanel() {
         }),
       });
 
-      if (response.ok) {
-        const data = await response.json();
-        const content = data?.data?.response || data?.data?.content || data?.content || data?.response || "Response received";
-        
-        const fsData = data?.data?.filesystem || data?.filesystem;
-        if (fsData && fsData.applied && fsData.applied.length > 0) {
-          console.log('[ExperimentalWorkspace] Filesystem operations applied:', fsData.applied);
-          toast.success(`Applied ${fsData.applied.length} file changes`);
-          
-          const snapshot = await vfs.getSnapshot();
-          setVfsSnapshot(snapshot);
-          setFilesystem({
-            sessionId: vfsScope,
-            version: snapshot?.version || 1,
-            files: snapshot?.files || [],
-          });
-        }
-        
-        if (fsData && fsData.errors && fsData.errors.length > 0) {
-          console.warn('[ExperimentalWorkspace] Filesystem errors:', fsData.errors);
-          toast.error(`Errors applying some changes: ${fsData.errors[0]}`);
-        }
-        
-        // Update agentActivity with diffs from the response
-        if (fsData && fsData.applied && fsData.applied.length > 0) {
-          const diffs = fsData.applied.map((applied: any) => ({
-            path: applied.path || 'unknown',
-            diff: applied.diff || applied.content || '',
-            changeType: applied.type || 'UPDATE',
-          }));
-          
-          setAgentActivity((prev) => ({
-            ...prev,
-            status: 'completed',
-            currentAction: `Applied ${fsData.applied.length} file change(s)`,
-            diffs: [...prev.diffs, ...diffs],
-          }));
-        }
-        
-        const assistantMessage: Message = {
-          id: `exp-chat-${Date.now()}`,
-          role: "assistant",
-          content: typeof content === 'string' ? content : JSON.stringify(content),
-          timestamp: new Date().toISOString(),
-        };
-        setChatMessages((prev) => [...prev, assistantMessage]);
-      } else {
-        throw new Error('API request failed');
+      if (!response.ok) {
+        throw new Error(`API request failed: ${response.status}`);
       }
+
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let buffer = '';
+
+      if (!reader) {
+        throw new Error('Response body is not readable');
+      }
+
+      // Process SSE stream
+      while (true) {
+        const { done, value } = await reader.read();
+        
+        if (done) break;
+        
+        buffer += decoder.decode(value, { stream: true });
+        
+        // Process complete SSE events in buffer
+        const lines = buffer.split('\n');
+        buffer = lines.pop() || ''; // Keep incomplete line in buffer
+        
+        for (const line of lines) {
+          // Parse SSE format: "event: type\ndata: {json}"
+          if (line.startsWith('event: ')) {
+            const eventType = line.slice(7).trim();
+            continue;
+          }
+          
+          if (line.startsWith('data: ')) {
+            const dataStr = line.slice(6).trim();
+            if (!dataStr) continue;
+            
+            try {
+              const data = JSON.parse(dataStr);
+              
+              switch (data.type) {
+                case SSE_EVENT_TYPES.TOKEN:
+                  // Streaming token - update message in real-time
+                  if (data.data?.content) {
+                    streamedContent += data.data.content;
+                    setThreadMessages(chatMessages.map((msg) =>
+                      msg.id === assistantMessageId
+                        ? { ...msg, content: streamedContent }
+                        : msg
+                    ));
+                  }
+                  break;
+
+                case SSE_EVENT_TYPES.STEP:
+                  // Update processing steps
+                  if (data.data) {
+                    setAgentActivity((prev) => ({
+                      ...prev,
+                      status: data.data.status === 'started' ? 'thinking' : prev.status,
+                      currentAction: data.data.step || prev.currentAction,
+                    }));
+                  }
+                  break;
+
+                case SSE_EVENT_TYPES.TOOL_INVOCATION:
+                  // Track tool calls
+                  if (data.data) {
+                    setAgentActivity((prev) => ({
+                      ...prev,
+                      status: 'executing',
+                      toolInvocations: [...prev.toolInvocations, data.data],
+                    }));
+                  }
+                  break;
+
+                case SSE_EVENT_TYPES.FILESYSTEM:
+                  // Handle filesystem operations
+                  if (data.data?.applied && data.data.applied.length > 0) {
+                    console.log('[ExperimentalWorkspace] Filesystem operations:', data.data.applied);
+
+                    // Refresh VFS snapshot
+                    const snapshot = await vfs.getSnapshot();
+                    setVfsSnapshot(snapshot);
+                    setFilesystem({
+                      sessionId: vfsScope,
+                      version: snapshot?.version || 1,
+                      files: snapshot?.files || [],
+                    });
+
+                    toast.success(`Applied ${data.data.applied.length} file changes`);
+                  }
+                  if (data.data?.errors?.length > 0) {
+                    console.warn('[ExperimentalWorkspace] Filesystem errors:', data.data.errors);
+                    toast.error(`Errors: ${data.data.errors[0]}`);
+                  }
+                  break;
+
+                case SSE_EVENT_TYPES.DIFFS:
+                  // Handle diffs
+                  if (data.data?.diffs) {
+                    setAgentActivity((prev) => ({
+                      ...prev,
+                      status: 'completed',
+                      diffs: [...prev.diffs, ...data.data.diffs],
+                    }));
+                  }
+                  break;
+
+                case SSE_EVENT_TYPES.REASONING:
+                  // Handle reasoning/thinking
+                  if (data.data?.content) {
+                    setAgentActivity((prev) => ({
+                      ...prev,
+                      status: 'thinking',
+                      reasoningChunks: [...prev.reasoningChunks, {
+                        id: `reason-${Date.now()}`,
+                        type: 'thought',
+                        content: data.data.content,
+                        timestamp: Date.now(),
+                      }],
+                    }));
+                  }
+                  break;
+
+                case SSE_EVENT_TYPES.ERROR:
+                  // Handle errors
+                  console.error('[ExperimentalWorkspace] Stream error:', data.data);
+                  toast.error(data.data?.message || 'Stream error occurred');
+                  break;
+
+                case SSE_EVENT_TYPES.DONE:
+                  // Stream completed
+                  setAgentActivity((prev) => ({
+                    ...prev,
+                    status: 'completed',
+                    currentAction: 'Completed',
+                  }));
+
+                  // Finalize the message
+                  setThreadMessages(chatMessages.map((msg) =>
+                    msg.id === assistantMessageId
+                      ? {
+                          ...msg,
+                          content: streamedContent || data.data?.content || "Response completed",
+                          timestamp: new Date().toISOString(),
+                        }
+                      : msg
+                  ));
+                  break;
+              }
+            } catch (parseError) {
+              // Skip malformed JSON
+              console.warn('[ExperimentalWorkspace] Failed to parse SSE data:', dataStr);
+            }
+          }
+        }
+      }
+
+      // If no done event, ensure message is finalized
+      setThreadMessages(chatMessages.map((msg) =>
+        msg.id === assistantMessageId && !msg.content
+          ? { ...msg, content: streamedContent || "Response completed" }
+          : msg
+      ));
+
     } catch (error) {
       console.error('[ExperimentalWorkspace] Chat error:', error);
       toast.error('Chat failed. Check console for details.');
+
+      // Remove placeholder message on error
+      setThreadMessages(chatMessages.filter((msg) => msg.id !== assistantMessageId));
     } finally {
       setIsChatLoading(false);
     }
-  }, [chatInput, isChatLoading, chatMessages, filesystem, vfs, attachedFiles]);
+  }, [chatInput, isChatLoading, chatMessages, filesystem, vfs, attachedFiles, activeThreadId, setThreadMessages, createNewThread]);
 
   // YouTube helper functions
   const getYouTubeEmbedUrl = useCallback((urlOrId: string): string => {
@@ -742,9 +1005,10 @@ export function ExperimentalWorkspacePanel() {
   }, []);
 
   const clearChatHistory = useCallback(() => {
-    setChatMessages([]);
+    if (!activeThreadId) return;
+    setThreadMessages([]);
     toast.success("Chat history cleared");
-  }, []);
+  }, [activeThreadId, setThreadMessages]);
 
   const exportChatHistory = useCallback(() => {
     const chatText = chatMessages.map((msg) => 
@@ -932,11 +1196,13 @@ export function ExperimentalWorkspacePanel() {
     }
 
     const cleanParentPath = creatingParentPath.replace(/\/+$/, '');
-    const newPath = `${cleanParentPath}/${newItemName.trim()}`;
+    // Use shared normalizePath helper for API compatibility
+    const normalizedParentPath = normalizePath(cleanParentPath);
+    const newPath = `${normalizedParentPath}/${newItemName.trim()}`;
 
     try {
       await writeFile(newPath, '');
-      await listDirectory(creatingParentPath);
+      await listDirectory(normalizedParentPath);
       toast.success(`File created: ${newItemName.trim()}`);
       setIsCreatingFile(false);
       setNewItemName("");
@@ -953,12 +1219,14 @@ export function ExperimentalWorkspacePanel() {
     }
 
     const cleanParentPath = creatingParentPath.replace(/\/+$/, '');
-    const folderPath = `${cleanParentPath}/${newItemName.trim()}`;
+    // Use shared normalizePath helper for API compatibility
+    const normalizedParentPath = normalizePath(cleanParentPath);
+    const folderPath = `${normalizedParentPath}/${newItemName.trim()}`;
     const gitkeepPath = `${folderPath}/.gitkeep`;
 
     try {
       await writeFile(gitkeepPath, '');
-      await listDirectory(creatingParentPath);
+      await listDirectory(normalizedParentPath);
       toast.success(`Folder created: ${newItemName.trim()}`);
       setIsCreatingFolder(false);
       setNewItemName("");
@@ -990,10 +1258,13 @@ export function ExperimentalWorkspacePanel() {
     if (!activeClipboard) return;
 
     const sourceName = activeClipboard.sourcePath.split('/').pop() || '';
-    const targetPath = targetFolderPath === '/' ? `/${sourceName}` : `${targetFolderPath}/${sourceName}`;
+    // Normalize target path to relative format (fixes 400 error)
+    const normalizedTargetFolder = normalizePath(targetFolderPath);
+    const targetPath = `${normalizedTargetFolder}/${sourceName}`;
 
-    // Bail out when the target path equals the source path
-    if (targetPath === activeClipboard.sourcePath) {
+    // Bail out when the target path equals the source path (normalize source for comparison)
+    const normalizedSource = normalizePath(activeClipboard.sourcePath);
+    if (targetPath === normalizedSource) {
       toast.info('Cannot paste file into itself');
       return;
     }
@@ -1077,7 +1348,9 @@ export function ExperimentalWorkspacePanel() {
     }
 
     const parentPath = renamingFile.substring(0, renamingFile.lastIndexOf('/')) || '/';
-    const newPath = parentPath === '/' ? `/${renameValue.trim()}` : `${parentPath}/${renameValue.trim()}`;
+    // Normalize path to relative format (fixes 400 error)
+    const normalizedParentPath = normalizePath(parentPath);
+    const newPath = `${normalizedParentPath}/${renameValue.trim()}`;
 
     // Check if new name exists
     const exists = vfsSnapshot?.files.some(f => f.path === newPath && f.path !== renamingFile);
@@ -1162,7 +1435,9 @@ export function ExperimentalWorkspacePanel() {
     }
 
     const fileName = draggedFile.split('/').pop() || '';
-    const targetPath = targetFolderPath === '/' ? `/${fileName}` : `${targetFolderPath}/${fileName}`;
+    // Normalize target path to relative format (fixes 400 error)
+    const normalizedTargetFolder = normalizePath(targetFolderPath);
+    const targetPath = `${normalizedTargetFolder}/${fileName}`;
 
     // Check if target exists
     const exists = vfsSnapshot?.files.some(f => f.path === targetPath && f.path !== draggedFile);
@@ -1181,7 +1456,8 @@ export function ExperimentalWorkspacePanel() {
       return;
     }
 
-    await performMove(targetPath, draggedFile);
+    // Normalize source path for proper self-move check
+    await performMove(targetPath, normalizePath(draggedFile));
     setDraggedFile(null);
   }, [draggedFile, vfsSnapshot?.files]);
 
@@ -1446,7 +1722,9 @@ export function ExperimentalWorkspacePanel() {
 
       for (const [path, content] of Object.entries(files)) {
         try {
-          await vfs.writeFile(path, content as string);
+          // Normalize path for API compatibility (fixes 400 error)
+          const normalizedPath = normalizePath(path);
+          await vfs.writeFile(normalizedPath, content as string);
           importedCount++;
         } catch (err) {
           console.error(`Failed to write ${path}:`, err);
@@ -1894,12 +2172,49 @@ export function ExperimentalWorkspacePanel() {
                 <TabsContent value="chat" className="flex-1 mt-0 flex flex-col overflow-hidden">
                   {/* Chat Header */}
                   <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/20">
-                    <div className="flex items-center gap-2">
+                    <div className="flex items-center gap-2 flex-1">
                       <MessageSquare className="h-4 w-4 text-blue-400" />
                       <span className="text-sm font-medium text-white/90">Parallel Chat</span>
                       <Badge variant="secondary" className="text-[10px] bg-blue-500/20 text-blue-300">
                         {chatMessages.length} messages
                       </Badge>
+                      
+                      {/* Thread Selector */}
+                      <div className="flex items-center gap-1 ml-4">
+                        <select
+                          value={activeThreadId || ''}
+                          onChange={(e) => switchThread(e.target.value)}
+                          className="text-xs bg-white/5 border border-white/10 rounded px-2 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50"
+                          title="Select chat thread"
+                        >
+                          {chatThreads.map(thread => (
+                            <option key={thread.id} value={thread.id} className="bg-gray-900">
+                              {thread.name} ({thread.messages.length})
+                            </option>
+                          ))}
+                        </select>
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => createNewThread()}
+                          className="h-6 w-6 p-0 hover:bg-green-500/20 text-green-400"
+                          title="Create new thread"
+                        >
+                          <Plus className="h-3 w-3" />
+                        </Button>
+                        {chatThreads.length > 1 && (
+                          <Button
+                            variant="ghost"
+                            size="sm"
+                            onClick={() => deleteThread(activeThreadId!)}
+                            className="h-6 w-6 p-0 hover:bg-red-500/20 text-red-400"
+                            title="Delete current thread"
+                            disabled={!activeThreadId}
+                          >
+                            <Trash2 className="h-3 w-3" />
+                          </Button>
+                        )}
+                      </div>
                     </div>
                     <div className="flex gap-1">
                       <Button
@@ -2896,7 +3211,7 @@ export function ExperimentalWorkspacePanel() {
                       <MultiModelComparison
                         isOpen={true}
                         onClose={() => setTab("explorer")}
-                        availableProviders={[]}
+                        availableProviders={availableProviders}
                         currentProvider=""
                         currentModel=""
                       />
@@ -3070,7 +3385,9 @@ export function ExperimentalWorkspacePanel() {
                           let importedCount = 0;
                           for (const [path, content] of Object.entries(files)) {
                             try {
-                              await vfs.writeFile(path, content as string);
+                              // Normalize path for API compatibility (fixes 400 error)
+                              const normalizedPath = normalizePath(path);
+                              await vfs.writeFile(normalizedPath, content as string);
                               importedCount++;
                             } catch (err) {
                               console.error(`Failed to write ${path}:`, err);
@@ -3249,7 +3566,9 @@ export function ExperimentalWorkspacePanel() {
                             let importedCount = 0;
                             for (const [path, content] of Object.entries(files)) {
                               try {
-                                await vfs.writeFile(path, content as string);
+                                // Normalize path for API compatibility (fixes 400 error)
+                                const normalizedPath = normalizePath(path);
+                                await vfs.writeFile(normalizedPath, content as string);
                                 importedCount++;
                               } catch (err) {
                                 console.error(`Failed to write ${path}:`, err);

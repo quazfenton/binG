@@ -1,16 +1,17 @@
 /**
  * Enhanced Diff Viewer with OPFS Local Comparisons
- * 
+ *
  * Extends the existing DiffViewer to show:
  * - Server vs Local (OPFS) differences
  * - Unsynced local changes
  * - Multi-version comparisons
- * 
+ *
  * Features:
  * - Side-by-side server vs local diff
  * - Unsynced changes indicator
  * - Version comparison
  * - Real-time diff updates
+ * - Sleek futuristic design with semitransparent black theme
  */
 
 'use client';
@@ -103,17 +104,17 @@ function parseUnifiedDiff(diff: string): ParsedDiff {
 function generateDiff(original: string, updated: string, path: string): string {
   const oldLines = original.split('\n');
   const newLines = updated.split('\n');
-  
+
   let result = `--- a/${path}\n+++ b/${path}\n`;
-  
+
   // Simple diff algorithm (for demonstration)
   // In production, use a proper diff library like 'diff'
   const maxLen = Math.max(oldLines.length, newLines.length);
-  
+
   for (let i = 0; i < maxLen; i++) {
     const oldLine = oldLines[i];
     const newLine = newLines[i];
-    
+
     if (oldLine === newLine) {
       result += ` ${oldLine || ''}\n`;
     } else {
@@ -125,12 +126,12 @@ function generateDiff(original: string, updated: string, path: string): string {
       }
     }
   }
-  
+
   return result;
 }
 
 /**
- * Diff Section Component
+ * Diff Section Component - Sleek Futuristic Design
  */
 function DiffHunk({ hunk, showLineNumbers = true }: { hunk: DiffSection[]; showLineNumbers?: boolean }) {
   return (
@@ -139,23 +140,29 @@ function DiffHunk({ hunk, showLineNumbers = true }: { hunk: DiffSection[]; showL
         <div
           key={idx}
           className={`
-            flex px-4 py-0.5 font-mono text-sm
-            ${section.type === 'add' ? 'bg-green-50 dark:bg-green-900/20' : ''}
-            ${section.type === 'remove' ? 'bg-red-50 dark:bg-red-900/20' : ''}
-            ${section.type === 'context' ? 'bg-white dark:bg-gray-900' : ''}
+            flex px-4 py-0.5 font-mono text-sm transition-all duration-200
+            ${section.type === 'add' 
+              ? 'bg-emerald-500/10 border-l-2 border-emerald-500/50 hover:bg-emerald-500/15' 
+              : ''}
+            ${section.type === 'remove' 
+              ? 'bg-rose-500/10 border-l-2 border-rose-500/50 hover:bg-rose-500/15' 
+              : ''}
+            ${section.type === 'context' 
+              ? 'bg-transparent hover:bg-white/5 border-l-2 border-transparent' 
+              : ''}
           `}
         >
           {showLineNumbers && (
-            <span className="w-12 text-right pr-4 text-gray-400 select-none">
+            <span className="w-12 text-right pr-4 text-gray-500 dark:text-gray-600 select-none">
               {section.lineNumber || ''}
             </span>
           )}
           <span className="w-6 select-none">
-            {section.type === 'add' && <Plus className="w-4 h-4 text-green-600" />}
-            {section.type === 'remove' && <Minus className="w-4 h-4 text-red-600" />}
+            {section.type === 'add' && <Plus className="w-4 h-4 text-emerald-400" />}
+            {section.type === 'remove' && <Minus className="w-4 h-4 text-rose-400" />}
             {section.type === 'context' && ' '}
           </span>
-          <span className="flex-1 whitespace-pre-wrap break-all">
+          <span className="flex-1 whitespace-pre-wrap break-all text-gray-300">
             {section.content}
           </span>
         </div>
@@ -169,16 +176,16 @@ function DiffHunk({ hunk, showLineNumbers = true }: { hunk: DiffSection[]; showL
  */
 function isDiffFormat(content: string): boolean {
   const lines = content.split('\n');
-  return lines.some(line => 
-    line.startsWith('---') || 
-    line.startsWith('+++') || 
+  return lines.some(line =>
+    line.startsWith('---') ||
+    line.startsWith('+++') ||
     line.startsWith('@@') ||
     /^[\+\-]/.test(line)
   );
 }
 
 /**
- * Enhanced Diff Viewer Component
+ * Enhanced Diff Viewer Component - Sleek Futuristic Design
  */
 export function EnhancedDiffViewer({
   path,
@@ -194,11 +201,11 @@ export function EnhancedDiffViewer({
   isFullContent: forceFullContent = false,
 }: EnhancedDiffViewerProps) {
   const [activeTab, setActiveTab] = useState<'server-local' | 'server-git' | 'local-git'>('server-local');
-  
-  const { 
-    readFile: readOPFSFile, 
+
+  const {
+    readFile: readOPFSFile,
     isEnabled: isOPFSEnabled,
-    syncStatus 
+    syncStatus
   } = useOPFS('current-user', { autoEnable: true });
 
   // Auto-detect if content is diff format
@@ -260,22 +267,24 @@ export function EnhancedDiffViewer({
   }, [activeDiff, maxLines]);
 
   return (
-    <div className="bg-white dark:bg-gray-900 rounded-lg border overflow-hidden">
+    <div className="bg-black/40 backdrop-blur-xl rounded-xl border border-white/10 overflow-hidden shadow-2xl">
       {/* Header */}
-      <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-b">
+      <div className="px-4 py-3 bg-gradient-to-r from-white/5 to-transparent border-b border-white/10">
         <div className="flex items-center justify-between mb-3">
           <div className="flex items-center gap-2">
-            <FileDiff className="w-5 h-5 text-gray-500" />
-            <code className="text-sm font-mono text-gray-700 dark:text-gray-300">
+            <div className="p-1.5 rounded-lg bg-white/5 border border-white/10">
+              <FileDiff className="w-4 h-4 text-cyan-400" />
+            </div>
+            <code className="text-sm font-mono text-gray-200">
               {path}
             </code>
           </div>
-          
+
           {/* Unsynced changes indicator */}
           {hasUnsyncedChanges && isOPFSEnabled && (
-            <div className="flex items-center gap-1.5 px-2 py-1 bg-orange-100 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400 rounded text-xs">
+            <div className="flex items-center gap-1.5 px-2.5 py-1 bg-amber-500/10 border border-amber-500/20 text-amber-400 rounded-full text-xs backdrop-blur-sm">
               <AlertCircle className="w-3.5 h-3.5" />
-              <span>Unsynced changes</span>
+              <span className="font-medium">Unsynced changes</span>
             </div>
           )}
         </div>
@@ -287,14 +296,15 @@ export function EnhancedDiffViewer({
               <button
                 onClick={() => setActiveTab('server-local')}
                 className={`
-                  px-3 py-1.5 text-xs font-medium rounded transition-colors
+                  px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200
+                  flex items-center gap-1.5
                   ${activeTab === 'server-local'
-                    ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
-                    : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+                    ? 'bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 shadow-lg shadow-cyan-500/10'
+                    : 'text-gray-400 hover:bg-white/5 hover:text-gray-200 border border-transparent'
                   }
                 `}
               >
-                <Cloud className="w-3.5 h-3.5 inline mr-1.5" />
+                <Cloud className="w-3.5 h-3.5" />
                 Server vs Local
               </button>
             )}
@@ -303,28 +313,30 @@ export function EnhancedDiffViewer({
                 <button
                   onClick={() => setActiveTab('server-git')}
                   className={`
-                    px-3 py-1.5 text-xs font-medium rounded transition-colors
+                    px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200
+                    flex items-center gap-1.5
                     ${activeTab === 'server-git'
-                      ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
-                      : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+                      ? 'bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 shadow-lg shadow-cyan-500/10'
+                      : 'text-gray-400 hover:bg-white/5 hover:text-gray-200 border border-transparent'
                     }
                   `}
                 >
-                  <Cloud className="w-3.5 h-3.5 inline mr-1.5" />
+                  <Cloud className="w-3.5 h-3.5" />
                   Server vs Git
                 </button>
                 {localContent && (
                   <button
                     onClick={() => setActiveTab('local-git')}
                     className={`
-                      px-3 py-1.5 text-xs font-medium rounded transition-colors
+                      px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200
+                      flex items-center gap-1.5
                       ${activeTab === 'local-git'
-                        ? 'bg-blue-100 dark:bg-blue-900/30 text-blue-700 dark:text-blue-400'
-                        : 'text-gray-600 dark:text-gray-400 hover:bg-gray-100 dark:hover:bg-gray-800'
+                        ? 'bg-violet-500/20 border border-violet-500/30 text-violet-300 shadow-lg shadow-violet-500/10'
+                        : 'text-gray-400 hover:bg-white/5 hover:text-gray-200 border border-transparent'
                       }
                     `}
                   >
-                    <HardDrive className="w-3.5 h-3.5 inline mr-1.5" />
+                    <HardDrive className="w-3.5 h-3.5" />
                     Local vs Git
                   </button>
                 )}
@@ -336,16 +348,16 @@ export function EnhancedDiffViewer({
         {/* Stats */}
         {activeDiff && (
           <div className="flex items-center gap-3 mt-3 text-xs">
-            <span className="flex items-center gap-1 text-green-600 dark:text-green-400">
+            <span className="flex items-center gap-1.5 px-2 py-1 bg-emerald-500/10 border border-emerald-500/20 text-emerald-400 rounded-full">
               <Plus className="w-3.5 h-3.5" />
-              {stats.additions} additions
+              <span className="font-medium">{stats.additions}</span> additions
             </span>
-            <span className="flex items-center gap-1 text-red-600 dark:text-red-400">
+            <span className="flex items-center gap-1.5 px-2 py-1 bg-rose-500/10 border border-rose-500/20 text-rose-400 rounded-full">
               <Minus className="w-3.5 h-3.5" />
-              {stats.deletions} deletions
+              <span className="font-medium">{stats.deletions}</span> deletions
             </span>
             {isTruncated && (
-              <span className="text-gray-500">
+              <span className="text-gray-500 ml-auto">
                 (showing first {maxLines} lines)
               </span>
             )}
@@ -354,15 +366,15 @@ export function EnhancedDiffViewer({
       </div>
 
       {/* Diff content */}
-      <div className="max-h-96 overflow-y-auto">
+      <div className="max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
         {activeDiff ? (
-          <div className="divide-y divide-gray-100 dark:divide-gray-800">
+          <div className="divide-y divide-white/5">
             {activeDiff.hunks.slice(0, maxLines).map((hunk, idx) => (
               <DiffHunk key={idx} hunk={hunk} />
             ))}
           </div>
         ) : contentIsDiff ? (
-          <div className="p-8 text-center text-gray-500 dark:text-gray-400">
+          <div className="p-8 text-center text-gray-500">
             {compareWithLocal && !localContent
               ? 'No local version available'
               : compareWithGit && !gitContent
@@ -372,11 +384,11 @@ export function EnhancedDiffViewer({
         ) : (
           /* Show full content when not in diff format */
           <div className="p-4 font-mono text-sm">
-            <pre className="whitespace-pre-wrap break-all text-gray-700 dark:text-gray-300">
+            <pre className="whitespace-pre-wrap break-all text-gray-300">
               {serverContent.slice(0, maxLines * 100)}
             </pre>
             {serverContent.length > maxLines * 100 && (
-              <div className="text-xs text-gray-400 text-center py-2">
+              <div className="text-xs text-gray-500 text-center py-2">
                 ... {serverContent.length - maxLines * 100} more characters
               </div>
             )}
@@ -386,11 +398,11 @@ export function EnhancedDiffViewer({
 
       {/* Action buttons */}
       {hasUnsyncedChanges && (onAcceptLocal || onAcceptServer) && (
-        <div className="px-4 py-3 bg-gray-50 dark:bg-gray-800 border-t flex justify-end gap-2">
+        <div className="px-4 py-3 bg-gradient-to-r from-white/5 to-transparent border-t border-white/10 flex justify-end gap-2">
           {onAcceptServer && (
             <button
               onClick={onAcceptServer}
-              className="px-3 py-1.5 text-sm text-gray-700 dark:text-gray-300 hover:bg-gray-200 dark:hover:bg-gray-700 rounded transition-colors"
+              className="px-4 py-2 text-sm text-gray-300 hover:text-white hover:bg-white/10 rounded-lg transition-all duration-200 border border-white/10"
             >
               Keep Server Version
             </button>
@@ -398,7 +410,7 @@ export function EnhancedDiffViewer({
           {onAcceptLocal && (
             <button
               onClick={onAcceptLocal}
-              className="px-3 py-1.5 text-sm bg-blue-600 text-white hover:bg-blue-700 rounded transition-colors"
+              className="px-4 py-2 text-sm bg-gradient-to-r from-cyan-500 to-blue-500 text-white hover:from-cyan-400 hover:to-blue-400 rounded-lg transition-all duration-200 shadow-lg shadow-cyan-500/25 border border-cyan-500/30"
             >
               Keep Local Version
             </button>
@@ -410,11 +422,11 @@ export function EnhancedDiffViewer({
 }
 
 /**
- * OPFS Sync Status Badge Component
+ * OPFS Sync Status Badge Component - Sleek Design
  */
 export function OPFSSyncStatusBadge({ path }: { path: string }) {
   const { syncStatus, isEnabled } = useOPFS('current-user', { autoEnable: true });
-  
+
   if (!isEnabled) {
     return null;
   }
@@ -422,10 +434,10 @@ export function OPFSSyncStatusBadge({ path }: { path: string }) {
   return (
     <div
       className={`
-        flex items-center gap-1.5 px-2 py-0.5 rounded text-xs
+        flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs backdrop-blur-sm transition-all duration-200
         ${syncStatus.pendingChanges > 0
-          ? 'bg-orange-100 dark:bg-orange-900/20 text-orange-700 dark:text-orange-400'
-          : 'bg-green-100 dark:bg-green-900/20 text-green-700 dark:text-green-400'
+          ? 'bg-amber-500/10 border border-amber-500/20 text-amber-400'
+          : 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
         }
       `}
       title={`${syncStatus.pendingChanges} pending changes`}
@@ -435,7 +447,7 @@ export function OPFSSyncStatusBadge({ path }: { path: string }) {
       ) : (
         <Cloud className="w-3 h-3" />
       )}
-      {syncStatus.pendingChanges > 0 ? 'Pending' : 'Synced'}
+      <span className="font-medium">{syncStatus.pendingChanges > 0 ? 'Pending' : 'Synced'}</span>
     </div>
   );
 }
