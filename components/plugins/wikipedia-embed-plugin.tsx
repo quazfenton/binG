@@ -332,7 +332,7 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                     src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
                     className="w-full h-full border-0"
                     title="Wikipedia"
-                    onLoad={() => setIsReloading(false)}
+                    onLoad={() => { setIsReloading(false); }}
                     onError={() => {
                       setIframeError('Failed to load Wikipedia. Note: Wikipedia restricts embedding in some contexts. Try using the external link button.');
                       setIsReloading(false);

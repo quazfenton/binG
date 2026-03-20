@@ -1,5 +1,6 @@
 import { oauthService } from '../auth/oauth-service';
 import { authService } from '../auth/auth-service';
+import { getAccessTokenForConnection, AUTH0_CONNECTIONS } from '@/lib/auth0';
 
 export interface ToolAuthorizationContext {
   userId: string;
@@ -124,9 +125,114 @@ export class ToolAuthorizationManager {
     }
 
     // Check if user has an active connection for this provider
-    // This works for both traditional OAuth and for Arcade/Nango connections
+    // Priority order: 1) Nango/Arcade/Composio, 2) Auth0 Connected Accounts (fallback)
     const connections = await oauthService.getUserConnections(numericUserId, provider);
-    return connections.some(c => c.isActive);
+    if (connections.some(c => c.isActive)) {
+      return true;
+    }
+
+    // Fallback: Check Auth0 Connected Accounts
+    if (await this.hasAuth0Connection(provider)) {
+      return true;
+    }
+
+    return false;
+  }
+
+  /**
+   * Check if user has an Auth0 connection for the provider
+   * Used as fallback when Nango/Arcade/Composio connections are not available
+   */
+  private async hasAuth0Connection(provider: string): Promise<boolean> {
+    try {
+      const auth0Connection = this.getAuth0ConnectionForProvider(provider);
+      if (!auth0Connection) {
+        return false;
+      }
+
+      const token = await getAccessTokenForConnection(auth0Connection);
+      return !!token;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Map provider names to Auth0 connection names
+   */
+  private getAuth0ConnectionForProvider(provider: string): string | null {
+    const providerToAuth0: Record<string, string> = {
+      'github': AUTH0_CONNECTIONS.GITHUB,
+      'google': AUTH0_CONNECTIONS.GOOGLE,
+      'gmail': AUTH0_CONNECTIONS.GOOGLE,
+      'googledocs': AUTH0_CONNECTIONS.GOOGLE,
+      'googlesheets': AUTH0_CONNECTIONS.GOOGLE,
+      'googlecalendar': AUTH0_CONNECTIONS.GOOGLE,
+      'googledrive': AUTH0_CONNECTIONS.GOOGLE,
+      'googlemaps': AUTH0_CONNECTIONS.GOOGLE,
+      'googlenews': AUTH0_CONNECTIONS.GOOGLE,
+    };
+
+    return providerToAuth0[provider] || null;
+  }
+
+  /**
+   * Get access token for tool execution
+   * 
+   * Priority order:
+   * 1. Nango/Arcade/Composio connections (existing flow)
+   * 2. Auth0 Connected Accounts (fallback)
+   * 
+   * @returns Token and source, or null if no token available
+   */
+  async getToolToken(userId: string, toolName: string): Promise<{
+    token: string | null;
+    source: 'nango' | 'arcade' | 'composio' | 'auth0' | null;
+  }> {
+    const provider = TOOL_PROVIDER_MAP[toolName];
+    if (!provider) {
+      return { token: null, source: null };
+    }
+
+    // Try Nango/Arcade/Composio first (existing flow)
+    const numericUserId = Number(userId);
+    if (!isNaN(numericUserId)) {
+      const connections = await oauthService.getUserConnections(numericUserId, provider);
+      const activeConnection = connections.find(c => c.isActive);
+      
+      if (activeConnection) {
+        // Return connection token - source depends on provider type
+        const source = this.getTokenSourceForProvider(provider);
+        return { token: activeConnection.providerAccountId, source };
+      }
+    }
+
+    // Fallback: Try Auth0 Connected Accounts
+    const auth0Connection = this.getAuth0ConnectionForProvider(provider);
+    if (auth0Connection) {
+      try {
+        const token = await getAccessTokenForConnection(auth0Connection);
+        if (token) {
+          return { token, source: 'auth0' };
+        }
+      } catch (error) {
+        console.warn(`[ToolAuth] Auth0 token fetch failed for ${toolName}:`, error);
+      }
+    }
+
+    return { token: null, source: null };
+  }
+
+  /**
+   * Determine token source based on provider
+   */
+  private getTokenSourceForProvider(provider: string): 'nango' | 'arcade' | 'composio' {
+    const arcadeProviders = ['google', 'gmail', 'googledocs', 'googlesheets', 'googlecalendar', 'googledrive', 'googlemaps', 'exa', 'twilio', 'spotify', 'vercel', 'railway'];
+    const nangoProviders = ['github', 'slack', 'discord', 'twitter', 'reddit'];
+
+    if (arcadeProviders.includes(provider)) return 'arcade';
+    if (nangoProviders.includes(provider)) return 'nango';
+    return 'composio';
   }
 
   getRequiredProvider(toolName: string): string | null {

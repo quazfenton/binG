@@ -246,7 +246,7 @@ const ObservableEmbedPlugin: React.FC<ObservableEmbedPluginProps> = ({ onOpenWin
                     onRetry={handleRetry}
                     onTryFallback={handleFallback}
                     onOpenExternal={() => window.open(currentNotebook.viewUrl, '_blank', 'noopener,noreferrer')}
-                    onClose={() => setCurrentNotebook(null)}
+                    onClose={() => { setCurrentNotebook(null); }}
                     autoRetryCount={retryCount}
                     maxRetries={3}
                   />

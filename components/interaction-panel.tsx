@@ -1891,7 +1891,7 @@ export default function InteractionPanel({
                             {selectedFilePaths.length > 0 && (
                               <button
                                 type="button"
-                                onClick={() => virtualFilesystem.clearAttachedFiles()}
+                                onClick={() => { virtualFilesystem.clearAttachedFiles(); }}
                                 className="text-[10px] text-red-400 hover:text-red-300 transition-colors mr-2"
                               >
                                 Clear All
@@ -1899,7 +1899,7 @@ export default function InteractionPanel({
                             )}
                             <button
                               type="button"
-                              onClick={() => setShowFileSelector(false)}
+                              onClick={() => { setShowFileSelector(false); }}
                               className="text-white/50 hover:text-white/80"
                             >
                               <X className="w-4 h-4" />

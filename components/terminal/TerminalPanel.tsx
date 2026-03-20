@@ -312,7 +312,7 @@ export default function TerminalPanel({
 
    // Debounce initial sync to prevent flood on mount
    const timeoutId = setTimeout(() => {
-     syncVfsToLocal();
+     void syncVfsToLocal();
    }, 500);
 
    return () => clearTimeout(timeoutId);

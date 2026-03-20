@@ -22,6 +22,13 @@ export interface TaskProposal {
   approvedAt?: number;
   completedAt?: number;
   result?: any;
+  assignedWorkerId?: string;
+  retryCount?: number;
+  execution?: {
+    startedAt?: number;
+    completedAt?: number;
+    lastError?: string;
+  };
 }
 
 export interface TaskReview {
@@ -37,9 +44,6 @@ class SimulatedOrchestrator {
   private reviews = new Map<string, TaskReview[]>();
   private executions = new Map<string, any>();
 
-  /**
-   * Propose a new task
-   */
   proposeTask(options: {
     title: string;
     description: string;
@@ -53,6 +57,8 @@ class SimulatedOrchestrator {
       status: 'proposed',
       createdAt: Date.now(),
       createdBy: options.createdBy || 'system',
+      retryCount: 0,
+      execution: {},
     };
     
     this.proposals.set(id, proposal);
@@ -62,9 +68,6 @@ class SimulatedOrchestrator {
     return proposal;
   }
 
-  /**
-   * Review a task
-   */
   reviewTask(
     taskId: string,
     reviewerId: string,
@@ -88,7 +91,6 @@ class SimulatedOrchestrator {
     taskReviews.push(review);
     this.reviews.set(taskId, taskReviews);
 
-    // Auto-approve if single reviewer approves
     if (decision === 'approve' && proposal.status === 'proposed') {
       proposal.status = 'approved';
       proposal.approvedBy = reviewerId;
@@ -100,34 +102,38 @@ class SimulatedOrchestrator {
     return review;
   }
 
-  /**
-   * Get ready tasks (approved but not started)
-   */
   getReadyTasks(): TaskProposal[] {
     return Array.from(this.proposals.values()).filter(
       p => p.status === 'approved'
     );
   }
 
-  /**
-   * Start task execution
-   */
   startExecution(taskId: string): void {
+    this.startExecutionWithWorker(taskId);
+  }
+
+  startExecutionWithWorker(taskId: string, workerId?: string): void {
     const proposal = this.proposals.get(taskId);
     if (!proposal) {
       throw new Error(`Task ${taskId} not found`);
     }
     
     proposal.status = 'in_progress';
+    proposal.assignedWorkerId = workerId || proposal.assignedWorkerId;
+    proposal.execution = {
+      ...proposal.execution,
+      startedAt: Date.now(),
+    };
     this.proposals.set(taskId, proposal);
-    this.executions.set(taskId, { startedAt: Date.now() });
+    this.executions.set(taskId, {
+      startedAt: Date.now(),
+      workerId: proposal.assignedWorkerId,
+      attempts: (proposal.retryCount || 0) + 1,
+    });
     
-    logger.info(`Task execution started: ${taskId}`);
+    logger.info(`Task execution started: ${taskId}${proposal.assignedWorkerId ? ` on ${proposal.assignedWorkerId}` : ''}`);
   }
 
-  /**
-   * Complete task execution
-   */
   completeTask(taskId: string, result: any): void {
     const proposal = this.proposals.get(taskId);
     if (!proposal) {
@@ -137,31 +143,46 @@ class SimulatedOrchestrator {
     proposal.status = 'completed';
     proposal.completedAt = Date.now();
     proposal.result = result;
+    proposal.execution = {
+      ...proposal.execution,
+      completedAt: proposal.completedAt,
+      lastError: undefined,
+    };
     this.proposals.set(taskId, proposal);
     this.executions.delete(taskId);
     
     logger.info(`Task completed: ${taskId}`);
   }
 
-  /**
-   * List all proposals
-   */
   listProposals(): TaskProposal[] {
     return Array.from(this.proposals.values());
   }
 
-  /**
-   * Get proposal by ID
-   */
   getProposal(taskId: string): TaskProposal | undefined {
     return this.proposals.get(taskId);
   }
 
-  /**
-   * Get reviews for a task
-   */
   getReviews(taskId: string): TaskReview[] {
     return this.reviews.get(taskId) || [];
+  }
+
+  failTask(taskId: string, error: string, options?: { retry?: boolean; workerId?: string }): void {
+    const proposal = this.proposals.get(taskId);
+    if (!proposal) {
+      throw new Error(`Task ${taskId} not found`);
+    }
+
+    proposal.retryCount = (proposal.retryCount || 0) + 1;
+    proposal.assignedWorkerId = options?.workerId || proposal.assignedWorkerId;
+    proposal.execution = {
+      ...proposal.execution,
+      lastError: error,
+    };
+    proposal.status = options?.retry ? 'approved' : 'rejected';
+    this.proposals.set(taskId, proposal);
+    this.executions.delete(taskId);
+
+    logger.warn(`Task execution failed: ${taskId} (${error})`);
   }
 }
 
