@@ -89,6 +89,9 @@ export class OPFSAdapter {
   private ownerId: string | null = null;
   private options: Required<OPFSAdapterOptions>;
   private onlineHandler: (() => void) | null = null;
+  // Reference count to track multiple enable/disable calls from different components
+  private enableCount = 0;
+  private currentWorkspaceId: string | null = null;
 
   constructor(options: OPFSAdapterOptions = {}) {
     this.core = opfsCore;
@@ -120,9 +123,26 @@ export class OPFSAdapter {
     }
 
     const wsId = workspaceId || ownerId;
+
+    // If already enabled for the same workspace, just increment reference count
+    if (this.enabled && this.currentWorkspaceId === wsId) {
+      this.enableCount++;
+      console.log('[OPFS] Already enabled for workspace, incrementing ref count to:', this.enableCount);
+      return;
+    }
+
+    // If enabled for a different workspace, we need to reinitialize
+    if (this.enabled && this.currentWorkspaceId !== wsId) {
+      console.log('[OPFS] Switching workspace from', this.currentWorkspaceId, 'to', wsId);
+      await this.core.close();
+      this.enableCount = 0;
+    }
+
     await this.core.initialize(wsId);
     this.enabled = true;
     this.ownerId = ownerId;
+    this.currentWorkspaceId = wsId;
+    this.enableCount = this.enableCount || 1;
 
     // Set up online/offline handlers
     if (typeof window !== 'undefined') {
@@ -149,10 +169,26 @@ export class OPFSAdapter {
 
   /**
    * Disable OPFS for current workspace
+   * Uses reference counting - only truly disables when all components have called disable()
    */
   async disable(): Promise<void> {
+    // Guard against negative reference count
+    if (this.enableCount <= 0) {
+      console.warn('[OPFS] disable() called without matching enable()');
+      return;
+    }
+    
+    this.enableCount--;
+    
+    // Only disable if all components have called disable
+    if (this.enableCount > 0) {
+      console.log('[OPFS] Postponing disable, ref count now:', this.enableCount);
+      return;
+    }
+
     this.enabled = false;
     this.ownerId = null;
+    this.currentWorkspaceId = null;
     this.stopBackgroundSync();
 
     // Remove event listeners

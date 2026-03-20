@@ -194,20 +194,24 @@ export class ToolAuthorizationManager {
       return { token: null, source: null };
     }
 
-    // Try Nango/Arcade/Composio first (existing flow)
     const numericUserId = Number(userId);
     if (!isNaN(numericUserId)) {
       const connections = await oauthService.getUserConnections(numericUserId, provider);
       const activeConnection = connections.find(c => c.isActive);
       
       if (activeConnection) {
-        // Return connection token - source depends on provider type
-        const source = this.getTokenSourceForProvider(provider);
-        return { token: activeConnection.providerAccountId, source };
+        try {
+          const decrypted = await oauthService.getDecryptedToken(activeConnection.id, numericUserId);
+          if (decrypted?.accessToken) {
+            const source = this.getTokenSourceForProvider(provider);
+            return { token: decrypted.accessToken, source };
+          }
+        } catch (error) {
+          console.warn(`[ToolAuth] Failed to decrypt token for ${toolName}:`, error);
+        }
       }
     }
 
-    // Fallback: Try Auth0 Connected Accounts
     const auth0Connection = this.getAuth0ConnectionForProvider(provider);
     if (auth0Connection) {
       try {

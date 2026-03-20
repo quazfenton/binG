@@ -23,12 +23,14 @@ import { getSandboxProvider, type SandboxProviderType } from './providers';
 const logger = createLogger('Sandbox:Orchestrator');
 
 export interface OrchestratorSession {
-  sessionId: string;
+  sessionId: string; // Handle-based ID (may change on migration)
+  logicalId: string; // Stable logical ID for identification across migrations
   userId: string;
   conversationId: string;
   handle: SandboxHandle;
   provider: SandboxProviderType;
   policy: ExecutionPolicy;
+  taskType: 'coding' | 'browsing' | 'automation' | 'general' | 'messaging' | 'api' | 'unknown'; // Persisted task type for migration
   riskAssessment?: RiskAssessment;
   createdAt: number;
   lastActivityAt: number;
@@ -110,11 +112,13 @@ export class SandboxOrchestrator {
 
     const orchestratorSession: OrchestratorSession = {
       sessionId: handle.id,
+      logicalId: `${userId}-${conversationId}`, // Stable logical ID across migrations
       userId,
       conversationId,
       handle,
       provider,
       policy,
+      taskType: routing.type, // Persist analyzed task type for migration
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
       riskAssessment: risk,
@@ -122,7 +126,7 @@ export class SandboxOrchestrator {
       isWarm: !!warmSandbox,
     };
 
-    this.sessions.set(orchestratorSession.sessionId, orchestratorSession);
+    this.sessions.set(orchestratorSession.logicalId, orchestratorSession);
     resourceMonitor.startMonitoring(handle.id, provider);
     void this.replenishWarmPool(provider);
 
@@ -210,7 +214,7 @@ export class SandboxOrchestrator {
     const fromProvider = session.provider;
 
     try {
-      const recommendations = await providerRouter.getRecommendations(this.buildTaskContext('coding', session.policy));
+      const recommendations = await providerRouter.getRecommendations(this.buildTaskContext(session.taskType, session.policy));
       const toProvider = [recommendations.primary, ...recommendations.alternatives.map((alt) => alt.provider)]
         .find((candidate) => candidate !== fromProvider);
 
@@ -236,14 +240,15 @@ export class SandboxOrchestrator {
       resourceMonitor.stopMonitoring(session.handle.id);
       resourceMonitor.startMonitoring(newHandle.id, toProvider);
 
+      const oldSessionId = session.sessionId;
       session.handle = newHandle;
       session.provider = toProvider;
+      session.sessionId = newHandle.id;
       session.migrationCount++;
       session.lastActivityAt = Date.now();
 
-      this.sessions.delete(sessionId);
-      session.sessionId = newHandle.id;
-      this.sessions.set(session.sessionId, session);
+      this.sessions.delete(oldSessionId);
+      this.sessions.set(session.logicalId, session);
 
       const duration = Date.now() - startTime;
 
@@ -279,19 +284,42 @@ export class SandboxOrchestrator {
     }
   }
 
-  async getSession(sessionId: string): Promise<OrchestratorSession | null> {
-    const session = this.sessions.get(sessionId);
+  async getSession(identifier: string): Promise<OrchestratorSession | null> {
+    let session = this.sessions.get(identifier);
+    if (!session) {
+      session = Array.from(this.sessions.values()).find(
+        s => s.sessionId === identifier || s.logicalId === identifier
+      );
+    }
     if (!session) {
       return null;
     }
 
     if (Date.now() - session.lastActivityAt > this.IDLE_TIMEOUT_MS) {
-      this.sessions.delete(sessionId);
-      resourceMonitor.stopMonitoring(session.handle.id);
+      this.evictSession(session);
       return null;
     }
 
     return session;
+  }
+
+  private async evictSession(session: OrchestratorSession): Promise<void> {
+    logger.info('Evicting idle session', {
+      sessionId: session.sessionId,
+      logicalId: session.logicalId,
+      lastActivity: new Date(session.lastActivityAt).toISOString(),
+    });
+
+    this.sessions.delete(session.logicalId);
+    resourceMonitor.stopMonitoring(session.handle.id);
+
+    if (session.isWarm) {
+      try {
+        await session.handle.executeCommand('echo "warm_sandbox_evicted"');
+      } catch {
+        logger.debug('Warm sandbox already terminated');
+      }
+    }
   }
 
   private async getFromWarmPool(provider: SandboxProviderType): Promise<SandboxHandle | null> {
@@ -355,12 +383,11 @@ export class SandboxOrchestrator {
   }
 
   private startIdleCleanup(): void {
-    setInterval(() => {
+    setInterval(async () => {
       const cutoff = Date.now() - this.IDLE_TIMEOUT_MS;
-      for (const [sessionId, session] of this.sessions.entries()) {
+      for (const [logicalId, session] of this.sessions.entries()) {
         if (session.lastActivityAt < cutoff) {
-          this.sessions.delete(sessionId);
-          resourceMonitor.stopMonitoring(session.handle.id);
+          await this.evictSession(session);
         }
       }
     }, 60000);
@@ -371,7 +398,7 @@ export class SandboxOrchestrator {
   }
 
   private buildTaskContext(
-    taskType: ReturnType<typeof taskRouter.analyzeTask>['type'],
+    taskType: 'coding' | 'browsing' | 'automation' | 'general' | 'messaging' | 'api' | 'unknown',
     policy: ExecutionPolicy,
   ): TaskContext {
     switch (policy) {
@@ -399,7 +426,10 @@ export class SandboxOrchestrator {
     const provider = await getSandboxProvider(providerType);
     const policyConfig = getExecutionPolicyConfig(policy);
     const preferredProviders = getPreferredProviders(policy);
-    const workspaceDir = `/workspace/users/${userId}/sessions/${conversationId}`;
+
+    const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+    const safeConvId = conversationId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+    const workspaceDir = `/workspace/users/${safeUserId}/sessions/${safeConvId}`;
     const handle = await provider.createSandbox({
       language: 'typescript',
       autoStopInterval: 3600,

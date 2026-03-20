@@ -68,14 +68,17 @@ interface SnapshotCacheEntry {
 }
 
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
+const listCache = new Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }>();
 const inFlightRequests = new Map<string, Promise<any>>();
-const SNAPSHOT_CACHE_TTL_MS = 60000; // 60 seconds for snapshots (increased from 30s)
-const LIST_CACHE_TTL_MS = 30000;     // 30 seconds for directory listings (increased from 15s)
-const SNAPSHOT_CACHE_MAX_ENTRIES = 100; // Increased from 50
+const SNAPSHOT_CACHE_TTL_MS = 60000; // 60 seconds for snapshots
+const LIST_CACHE_TTL_MS = 30000;     // 30 seconds for directory listings
+const SNAPSHOT_CACHE_MAX_ENTRIES = 100;
 
 // Debounce map to prevent duplicate API calls within short time windows
 const lastApiCallTime = new Map<string, number>();
-const API_CALL_DEBOUNCE_MS = 500; // Minimum 500ms between same API calls
+const API_CALL_DEBOUNCE_MS = 1000; // Increased to 1 second - reduces polling frequency
+const REQUEST_COOLDOWN_MS = 2000;  // Global cooldown between any VFS API calls
+let lastGlobalVfsCall = 0;
 
 function getCacheKey(path: string, ownerId: string): string {
   return `${ownerId}:${path}`;
@@ -122,10 +125,49 @@ function setCachedSnapshot(path: string, ownerId: string, snapshot: SnapshotCach
   snapshotCache.set(key, { snapshot, timestamp: Date.now() });
 }
 
+// Get cached directory listing
+function getCachedList(path: string, ownerId: string): { nodes: VirtualFilesystemNode[]; isFresh: boolean } | null {
+  const key = getCacheKey(path, ownerId);
+  const entry = listCache.get(key);
+  
+  if (!entry) return null;
+  
+  const age = Date.now() - entry.timestamp;
+  const isFresh = age < LIST_CACHE_TTL_MS;
+  
+  if (!isFresh) {
+    listCache.delete(key);
+    return null;
+  }
+  
+  return { nodes: entry.nodes, isFresh };
+}
+
+// Set cached directory listing
+function setCachedList(path: string, ownerId: string, nodes: VirtualFilesystemNode[]): void {
+  const key = getCacheKey(path, ownerId);
+  
+  // Limit cache size
+  if (listCache.size >= SNAPSHOT_CACHE_MAX_ENTRIES) {
+    let oldestKey: string | null = null;
+    let oldestTimestamp = Infinity;
+    for (const [k, v] of listCache.entries()) {
+      if (v.timestamp < oldestTimestamp) {
+        oldestTimestamp = v.timestamp;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) listCache.delete(oldestKey);
+  }
+  
+  listCache.set(key, { nodes, timestamp: Date.now() });
+}
+
 function invalidateSnapshotCache(path?: string, ownerId?: string): void {
   if (!path && !ownerId) {
     // Clear all
     snapshotCache.clear();
+    listCache.clear();
     inFlightRequests.clear();
     return;
   }
@@ -135,6 +177,12 @@ function invalidateSnapshotCache(path?: string, ownerId?: string): void {
     if (ownerId && !key.startsWith(ownerId + ':')) continue;
     if (path && !key.includes(path)) continue;
     snapshotCache.delete(key);
+  }
+  
+  for (const key of listCache.keys()) {
+    if (ownerId && !key.startsWith(ownerId + ':')) continue;
+    if (path && !key.includes(path)) continue;
+    listCache.delete(key);
   }
   
   // Also remove matching keys from inFlightRequests to fence off stale in-flight promises
@@ -277,10 +325,19 @@ export function useVirtualFilesystem(
   ): Promise<TData> => {
     const { includeJsonContentType = true, ...rest } = options;
     
+    // Global VFS cooldown - prevents all VFS calls from happening too frequently
+    const now = Date.now();
+    const timeSinceLastCall = now - lastGlobalVfsCall;
+    if (timeSinceLastCall < REQUEST_COOLDOWN_MS) {
+      const waitTime = REQUEST_COOLDOWN_MS - timeSinceLastCall;
+      log(`request: global cooldown active, waiting ${waitTime}ms`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    lastGlobalVfsCall = Date.now();
+    
     // Debounce duplicate GET requests only - POST/PUT/DELETE should not be debounced
     const method = (options.method || 'GET').toUpperCase();
     if (method === 'GET') {
-      const now = Date.now();
       const requestKey = `${method}:${url}`;
       const lastCall = lastApiCallTime.get(requestKey);
       if (lastCall && (now - lastCall) < API_CALL_DEBOUNCE_MS) {
@@ -335,19 +392,34 @@ export function useVirtualFilesystem(
   }, [currentPath]);
 
   const listDirectory = useCallback(async (pathToLoad?: string) => {
-    // Invalidate snapshot cache when directory changes
-    invalidateSnapshotCache(pathToLoad || currentPathRef.current, getOrCreateAnonymousSessionId());
+    const targetPath = pathToLoad || currentPathRef.current;
+    const ownerId = getOrCreateAnonymousSessionId();
     
-    log(`listDirectory: loading "${pathToLoad || currentPathRef.current}"`);
+    // Check list cache first
+    const cachedList = getCachedList(targetPath, ownerId);
+    if (cachedList) {
+      log(`listDirectory: cache hit for "${targetPath}" (fresh: ${cachedList.isFresh})`);
+      setCurrentPath(targetPath);
+      setNodes(cachedList.nodes);
+      return cachedList.nodes;
+    }
+    
+    // Invalidate snapshot cache when directory changes (not list cache since we're fetching new data)
+    invalidateSnapshotCache(targetPath, ownerId);
+    
+    log(`listDirectory: cache miss for "${targetPath}", fetching from API`);
     setIsLoading(true);
     setError(null);
     try {
-      const targetPath = pathToLoad || currentPathRef.current;
       const data = await request<{ path: string; nodes: VirtualFilesystemNode[] }>(
         `/api/filesystem/list?path=${encodeURIComponent(targetPath)}`,
         { method: 'GET', includeJsonContentType: false },
       );
       log(`listDirectory: loaded "${data.path}", ${data.nodes.length} entries`);
+      
+      // Cache the result
+      setCachedList(targetPath, ownerId, data.nodes);
+      
       setCurrentPath(data.path);
       setNodes(data.nodes);
       return data.nodes;
