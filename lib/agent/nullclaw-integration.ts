@@ -44,7 +44,8 @@
  * - NULLCLAW_POOL_SIZE: Number of containers in pool (default: 2, max: 4)
  * - NULLCLAW_IMAGE: Docker image (default: 'ghcr.io/nullclaw/nullclaw:latest')
  * - NULLCLAW_PORT: Base port (default: 3001)
- * - NULLCLAW_TIMEOUT: Request timeout in milliseconds (default: 300000 = 5 minutes)
+ * - NULLCLAW_REQUEST_TIMEOUT_MS: Request timeout in milliseconds (default: 300000 = 5 minutes)
+ * - NULLCLAW_TIMEOUT: (DEPRECATED - use NULLCLAW_REQUEST_TIMEOUT_MS) Legacy timeout - values < 1000 treated as seconds, >= 1000 as milliseconds
  */
 
 import { createLogger } from '../utils/logger';

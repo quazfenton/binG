@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 /**
  * POST /api/gateway/git/[sessionId]/rollback
@@ -14,10 +15,25 @@ export async function POST(
 ) {
   try {
     const { sessionId } = await params;
-    const body = await request.json();
-    const { version } = body;
+    
+    const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json(
+        { success: false, error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
 
-    if (!version || typeof version !== 'number') {
+    const body = await request.json().catch(() => null);
+    if (!body) {
+      return NextResponse.json(
+        { success: false, error: 'Invalid JSON body' },
+        { status: 400 }
+      );
+    }
+    const version = body?.version;
+
+    if (!Number.isInteger(version)) {
       return NextResponse.json(
         { success: false, error: 'Invalid version number' },
         { status: 400 }
@@ -26,14 +42,14 @@ export async function POST(
 
     const db = getDatabase();
 
-    // Verify session exists
+    // Verify session exists and belongs to the authenticated user
     const session = db.prepare(`
-      SELECT user_id FROM user_sessions WHERE id = ? AND is_active = TRUE
-    `).get(sessionId) as { user_id: number } | undefined;
+      SELECT user_id FROM user_sessions WHERE id = ? AND user_id = ? AND is_active = TRUE
+    `).get(sessionId, authResult.userId) as { user_id: number } | undefined;
 
     if (!session) {
       return NextResponse.json(
-        { success: false, error: 'Session not found' },
+        { success: false, error: 'Session not found or access denied' },
         { status: 404 }
       );
     }
@@ -51,20 +67,17 @@ export async function POST(
       );
     }
 
-    // For now, we just return success - the actual rollback would involve
-    // restoring files from the snapshot to the current VFS state
-    // In a full implementation, you would:
-    // 1. Read the snapshot's file contents
+    // TODO: Implement actual rollback logic
+    // 1. Read the snapshot's file contents from vfs_snapshots table
     // 2. Write them back to the current VFS state
     // 3. Update the current version reference
 
-    console.log(`[Git Rollback] Rolled back session ${sessionId} to version ${version}`);
+    console.log(`[Git Rollback] Not implemented: session ${sessionId} version ${version}`);
 
-    return NextResponse.json({
-      success: true,
-      message: `Successfully rolled back to version ${version}`,
-      version,
-    });
+    return NextResponse.json(
+      { success: false, error: 'Rollback not yet implemented' },
+      { status: 501 }
+    );
   } catch (error) {
     console.error('[Git Rollback] Error:', error);
     return NextResponse.json(

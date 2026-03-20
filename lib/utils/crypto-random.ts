@@ -92,23 +92,15 @@ export function secureRandomId(prefix: string = ''): string {
  * Generate a cryptographically secure random UUID v4
  */
 export function secureRandomUUID(): string {
-  if (typeof window !== 'undefined' && window.crypto && window.crypto.randomUUID) {
-    // Modern browsers
-    return window.crypto.randomUUID();
-  } else {
-    // Server-side or older browsers
-    const crypto = require('crypto');
-    if (crypto.randomUUID) {
-      return crypto.randomUUID();
+  if (typeof window !== 'undefined' && window.crypto) {
+    // Browser environment - use Web Crypto API
+    if (window.crypto.randomUUID) {
+      // Modern browsers with randomUUID
+      return window.crypto.randomUUID();
     }
-    
-    // Fallback: generate UUID manually
+    // Older browsers: generate UUID manually using getRandomValues
     const bytes = new Uint8Array(16);
-    if (typeof window !== 'undefined' && window.crypto) {
-      window.crypto.getRandomValues(bytes);
-    } else {
-      crypto.randomFillSync(Buffer.from(bytes));
-    }
+    window.crypto.getRandomValues(bytes);
     
     // Set version (4) and variant bits
     bytes[6] = (bytes[6] & 0x0f) | 0x40;
@@ -118,6 +110,23 @@ export function secureRandomUUID(): string {
       .map(b => b.toString(16).padStart(2, '0'))
       .join('');
     
+    return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
+  } else {
+    // Server-side (Node.js)
+    const crypto = require('crypto');
+    if (crypto.randomUUID) {
+      return crypto.randomUUID();
+    }
+    
+    // Fallback for older Node versions: generate UUID manually
+    const buffer = Buffer.alloc(16);
+    crypto.randomFillSync(buffer);
+    
+    // Set version (4) and variant bits
+    buffer[6] = (buffer[6] & 0x0f) | 0x40;
+    buffer[8] = (buffer[8] & 0x3f) | 0x80;
+    
+    const hex = buffer.toString('hex');
     return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`;
   }
 }

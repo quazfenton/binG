@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 /**
  * GET /api/gateway/git/[sessionId]/versions
@@ -15,34 +16,34 @@ export async function GET(
   try {
     const { sessionId } = await params;
     const { searchParams } = new URL(request.url);
-    const limit = parseInt(searchParams.get('limit') || '20', 10);
+    const rawLimit = searchParams.get('limit');
+    const limitValue = rawLimit ? Number.parseInt(rawLimit, 10) : 20;
+    if (!Number.isFinite(limitValue) || limitValue < 1 || limitValue > 100) {
+      return NextResponse.json({ error: 'limit must be an integer between 1 and 100' }, { status: 400 });
+    }
+    const limit = limitValue;
+
+    const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    }
 
     const db = getDatabase();
 
-    // Look up session by session_id to get the user_id
     const session = db.prepare(`
       SELECT user_id FROM user_sessions WHERE id = ? AND is_active = TRUE
     `).get(sessionId) as { user_id: number } | undefined;
 
     if (!session) {
-      // Try to find by anonymous session pattern
-      const anonSession = db.prepare(`
-        SELECT user_id FROM user_sessions 
-        WHERE id LIKE ? AND is_active = TRUE
-      `).get(`%${sessionId}%`) as { user_id: number } | undefined;
-      
-      if (!anonSession) {
-        return NextResponse.json(
-          { error: 'Session not found', versions: [] },
-          { status: 404 }
-        );
-      }
+      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
     }
 
-    const userId = session?.user_id;
+    const ownerId = session.user_id;
 
-    // Get version history from vfs_snapshots table
-    // The snapshots table should have version information
+    if (ownerId !== Number(authResult.userId)) {
+      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
+    }
+
     const snapshots = db.prepare(`
       SELECT 
         id as version,
@@ -62,7 +63,6 @@ export async function GET(
       message: string;
     }>;
 
-    // Transform to match expected format
     const versions = snapshots.map(s => ({
       version: s.version,
       commitId: `commit_${s.commitId}`,
