@@ -239,7 +239,46 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
     setLoading(integration.id);
 
     try {
-      // Determine the auth endpoint based on provider
+      // Check for Auth0 Connected Accounts support
+      const auth0Providers: Record<string, string> = {
+        'github': 'github',
+        'google': 'google-oauth2',
+        'gmail': 'google-oauth2',
+        'googledocs': 'google-oauth2',
+        'googlesheets': 'google-oauth2',
+        'googlecalendar': 'google-oauth2',
+        'googledrive': 'google-oauth2',
+        'twitter': 'twitter',
+        'linkedin': 'linkedin',
+        'facebook': 'facebook',
+      };
+
+      const auth0Connection = auth0Providers[integration.provider];
+      
+      if (auth0Connection) {
+        // Use Auth0 Connected Accounts for direct API access
+        const authUrl = `/auth/connect?connection=${auth0Connection}&returnTo=${encodeURIComponent(window.location.href)}`;
+        
+        // Calculate popup position centered on screen
+        const width = 600;
+        const height = 700;
+        const left = window.screenX + (window.outerWidth - width) / 2;
+        const top = window.screenY + (window.outerHeight - height) / 2;
+
+        const popup = window.open(
+          authUrl,
+          'auth0_connect',
+          `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes,noopener=yes,noreferrer=yes`
+        );
+
+        if (popup) {
+          setPopupWindow(popup);
+          toast.info(`Connecting to ${integration.name} via Auth0...`);
+          return;
+        }
+      }
+
+      // Fallback to existing OAuth flow (Arcade/Nango)
       let authEndpoint = `/api/auth/oauth/initiate?provider=${integration.provider}&userId=${userId}`;
 
       // Check if provider uses Arcade

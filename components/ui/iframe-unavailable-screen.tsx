@@ -69,7 +69,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
         });
       }, 1000);
 
-      return () => clearInterval(timer);
+      return () => { clearInterval(timer); };
     }
   }, [autoRetryCount, maxRetries]);
 
@@ -78,7 +78,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
       await navigator.clipboard.writeText(url);
       setCopied(true);
       toast.success('URL copied to clipboard');
-      setTimeout(() => setCopied(false), 2000);
+      setTimeout(() => { setCopied(false); }, 2000);
     } catch (error: any) {
       console.error('Failed to copy URL to clipboard:', error.message);
       toast.error('Failed to copy URL. Please copy it manually.');
@@ -243,7 +243,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
         {/* Troubleshooting Tips */}
         <div className="mb-6">
           <button
-            onClick={() => setIsExpanded(!isExpanded)}
+            onClick={() => { setIsExpanded(!isExpanded); }}
             className="flex items-center gap-2 text-sm text-yellow-300 hover:text-yellow-200 mb-3"
           >
             <Info className="w-4 h-4" />

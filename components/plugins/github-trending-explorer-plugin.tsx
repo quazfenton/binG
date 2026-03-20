@@ -73,7 +73,7 @@ const GitHubTrendingExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClo
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch('/api/github/trending');
+      const response = await fetch('/api/integrations/github?type=trending');
       if (!response.ok) {
         throw new Error('Failed to fetch trending repositories');
       }
@@ -126,10 +126,11 @@ const GitHubTrendingExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClo
     setIsCloning(true);
 
     try {
-      const response = await fetch('/api/github/clone', {
+      const response = await fetch('/api/integrations/github', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          action: 'clone',
           repoUrl,
           destinationPath: destPath,
         }),
