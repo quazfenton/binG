@@ -411,19 +411,63 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
             <div>
               <h3 className="text-sm font-medium mb-3">Generated Images</h3>
               <div className="grid grid-cols-2 gap-3">
-                {generatedImages.map((img, i) => (
+                {generatedImages.map((img, i) => {
+                  // Use image proxy for external URLs to bypass CORS restrictions
+                  const displayImgUrl = img.startsWith('http')
+                    ? `/api/image-proxy?url=${encodeURIComponent(img)}`
+                    : img;
+
+                  return (
                   <div key={i} className="relative group">
-                    <img src={img} alt={`Generated ${i}`} className="w-full h-40 object-cover rounded" />
+                    <img
+                      src={displayImgUrl}
+                      alt={`Generated ${i}`}
+                      className="w-full h-40 object-cover rounded"
+                      onError={(e) => {
+                        // Fallback to direct URL if proxy fails
+                        const target = e.target as HTMLImageElement;
+                        if (target.src.includes('/api/image-proxy') && target.src !== img) {
+                          target.src = img;
+                        }
+                      }}
+                    />
                     <Button
                       variant="secondary"
                       size="icon"
                       className="absolute bottom-2 right-2 opacity-0 group-hover:opacity-100"
-                      onClick={() => downloadImage(img, i)}
+                      onClick={async () => {
+                        // Try to download via proxy first for CORS bypass
+                        try {
+                          const proxyUrl = `/api/image-proxy?url=${encodeURIComponent(img)}`;
+                          const response = await fetch(proxyUrl);
+                          if (response.ok) {
+                            const blob = await response.blob();
+                            const url = URL.createObjectURL(blob);
+                            const a = document.createElement('a');
+                            a.href = url;
+                            a.download = `hf-image-${i + 1}.png`;
+                            document.body.appendChild(a);
+                            a.click();
+                            document.body.removeChild(a);
+                            URL.revokeObjectURL(url);
+                            return;
+                          }
+                        } catch (e) {
+                          console.warn('Proxy download failed, using fallback');
+                        }
+                        // Fallback: direct download
+                        const a = document.createElement('a');
+                        a.href = img;
+                        a.download = `hf-image-${i + 1}.png`;
+                        document.body.appendChild(a);
+                        a.click();
+                        document.body.removeChild(a);
+                      }}
                     >
                       <Download className="w-4 h-4" />
                     </Button>
                   </div>
-                ))}
+                )})}
                 {generatedImages.length === 0 && (
                   <div className="col-span-2 h-40 flex items-center justify-center border border-dashed border-white/20 rounded">
                     Images will appear here

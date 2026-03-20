@@ -42,6 +42,7 @@ import type { SandboxProviderType } from './providers';
 import type { ExecutionPolicy } from './types';
 import { getExecutionPolicyConfig, getPreferredProviders } from './types';
 import { createLogger } from '../utils/logger';
+import { providerHealthTracker } from './provider-health';
 
 const logger = createLogger('Phase2:ProviderRouter');
 
@@ -103,6 +104,8 @@ class LatencyTracker {
     metric.avgLatencyMs = this.calculateAverage(metric.recentLatencies);
     metric.p95LatencyMs = this.calculatePercentile(metric.recentLatencies, 95);
     metric.p99LatencyMs = this.calculatePercentile(metric.recentLatencies, 99);
+    // Also record to provider health tracker
+    providerHealthTracker.recordCall(provider, true, latencyMs);
   }
 
   /**
@@ -607,6 +610,12 @@ export class ProviderRouter {
       } else if (currentLatencyTier === 'high' && !latencyTracker.isLatencyAcceptable(profile.type, 10000)) {
         score -= 5; // Penalty for very slow providers
         reasons.push('Provider experiencing high latency');
+      }
+
+      // Provider health prediction scoring
+      if (providerHealthTracker.shouldDeprioritize(profile.type)) {
+        score -= 15;
+        reasons.push('Provider health degraded');
       }
 
       // Quota check (soft penalty, doesn't disqualify)

@@ -298,6 +298,25 @@ export default function Settings({
     { id: 'natura', name: 'Natura', url: 'https://64.media.tumblr.com/54f8f2ac56a71691c4d6e5c7fe290e68/tumblr_pgrkl8nswk1r7rste_500.gif' },
     { id: 'none', name: 'None', url: '' },
   ];
+
+  // Warm cache for preset backgrounds on mount (preload images)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    // Preload preset backgrounds with valid URLs
+    const validPresets = PRESET_BACKGROUNDS.filter(p => p.url && p.url.trim());
+    
+    validPresets.forEach((preset) => {
+      // Create image proxy URL for caching
+      const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(preset.url)}`;
+      
+      // Preload image to warm the server-side cache
+      const img = new Image();
+      img.src = proxiedUrl;
+      img.loading = 'lazy'; // Don't block page load
+      console.log(`[Settings] Preloading background: ${preset.name}`);
+    });
+  }, []);
   
   // Get saved backgrounds from localStorage
   const getSavedBackgrounds = (): Array<{ name: string; url: string }> => {
@@ -311,9 +330,23 @@ export default function Settings({
   };
   
   const [savedBackgrounds, setSavedBackgrounds] = useState<Array<{ name: string; url: string }>>([]);
-  
+
   useEffect(() => {
-    setSavedBackgrounds(getSavedBackgrounds());
+    const backgrounds = getSavedBackgrounds();
+    setSavedBackgrounds(backgrounds);
+    
+    // Warm cache for saved backgrounds
+    if (typeof window !== 'undefined' && backgrounds.length > 0) {
+      backgrounds.forEach((bg) => {
+        if (bg.url && bg.url.trim()) {
+          const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(bg.url)}`;
+          const img = new Image();
+          img.src = proxiedUrl;
+          img.loading = 'lazy';
+          console.log(`[Settings] Preloading saved background: ${bg.name}`);
+        }
+      });
+    }
   }, []);
   
   const saveToBackgroundHistory = (url: string, name?: string) => {
@@ -534,6 +567,12 @@ export default function Settings({
       if (typeof window !== "undefined") {
         localStorage.setItem(CUSTOM_BG_MEDIA_KEY, trimmed);
         saveToBackgroundHistory(trimmed, bgUrlName || undefined);
+        
+        // Warm cache for the new custom background
+        const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(trimmed)}`;
+        const img = new Image();
+        img.src = proxiedUrl;
+        console.log('[Settings] Preloading custom background:', trimmed);
       }
       applyCustomBackgroundMedia(trimmed);
       toast.success("Custom ambient background applied");
@@ -795,55 +834,79 @@ export default function Settings({
               <div className="space-y-3 mt-2 p-3 bg-black/30 rounded-lg border border-white/10">
                 <div className="text-xs text-gray-400 font-medium">Preset Backgrounds</div>
                 <div className="grid grid-cols-2 gap-2">
-                  {PRESET_BACKGROUNDS.map((preset) => (
-                    <button
-                      key={preset.id}
-                      onClick={() => handleSelectBackground(preset.url, preset.name)}
-                      className="relative overflow-hidden h-16 rounded-lg border border-white/10 hover:border-white/30 transition-all group"
-                    >
-                      {preset.url ? (
-                        <Image
-                          src={preset.url}
-                          alt={preset.name}
-                          fill
-                          className="object-cover"
-                          sizes="64px"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center bg-gray-800">
-                          <X className="w-6 h-6 text-gray-500" />
+                  {PRESET_BACKGROUNDS.map((preset) => {
+                    // Use image proxy for external URLs to bypass CORS and enable SSRF validation
+                    const proxiedUrl = preset.url ? `/api/image-proxy?url=${encodeURIComponent(preset.url)}` : null;
+                    return (
+                      <button
+                        key={preset.id}
+                        onClick={() => handleSelectBackground(preset.url, preset.name)}
+                        className="relative overflow-hidden h-16 rounded-lg border border-white/10 hover:border-white/30 transition-all group"
+                      >
+                        {preset.url ? (
+                          <Image
+                            src={proxiedUrl || preset.url}
+                            alt={preset.name}
+                            fill
+                            className="object-cover"
+                            sizes="64px"
+                            unoptimized={!proxiedUrl}
+                            onError={(e) => {
+                              // Fallback to direct URL if proxy fails
+                              const target = e.target as HTMLImageElement;
+                              if (target.src.includes('/api/image-proxy')) {
+                                target.src = preset.url;
+                              }
+                            }}
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center bg-gray-800">
+                            <X className="w-6 h-6 text-gray-500" />
+                          </div>
+                        )}
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <span className="text-xs text-white font-medium">{preset.name}</span>
                         </div>
-                      )}
-                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <span className="text-xs text-white font-medium">{preset.name}</span>
-                      </div>
-                    </button>
-                  ))}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {savedBackgrounds.length > 0 && (
                   <>
                     <div className="text-xs text-gray-400 font-medium mt-3">Saved Backgrounds</div>
                     <div className="space-y-1 max-h-32 overflow-auto">
-                      {savedBackgrounds.map((bg, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => handleSelectBackground(bg.url, bg.name)}
-                          className="w-full flex items-center gap-2 p-2 rounded bg-black/20 hover:bg-white/10 transition-all text-left"
-                        >
-                          <div className="w-8 h-6 rounded overflow-hidden flex-shrink-0 bg-gray-800 relative">
-                            <Image
-                              src={bg.url}
-                              alt={bg.name}
-                              fill
-                              className="object-cover"
-                              sizes="32px"
-                            />
-                          </div>
-                          <span className="text-xs text-white/80 truncate flex-1">{bg.name}</span>
-                          <span className="text-[10px] text-gray-500 truncate max-w-[100px]">{bg.url}</span>
-                        </button>
-                      ))}
+                      {savedBackgrounds.map((bg, idx) => {
+                        // Use image proxy for external URLs to bypass CORS and enable SSRF validation
+                        const proxiedUrl = bg.url ? `/api/image-proxy?url=${encodeURIComponent(bg.url)}` : null;
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => handleSelectBackground(bg.url, bg.name)}
+                            className="w-full flex items-center gap-2 p-2 rounded bg-black/20 hover:bg-white/10 transition-all text-left"
+                          >
+                            <div className="w-8 h-6 rounded overflow-hidden flex-shrink-0 bg-gray-800 relative">
+                              <Image
+                                src={proxiedUrl || bg.url}
+                                alt={bg.name}
+                                fill
+                                className="object-cover"
+                                sizes="32px"
+                                unoptimized={!proxiedUrl}
+                                onError={(e) => {
+                                  // Fallback to direct URL if proxy fails
+                                  const target = e.target as HTMLImageElement;
+                                  if (target.src.includes('/api/image-proxy')) {
+                                    target.src = bg.url;
+                                  }
+                                }}
+                              />
+                            </div>
+                            <span className="text-xs text-white/80 truncate flex-1">{bg.name}</span>
+                            <span className="text-[10px] text-gray-500 truncate max-w-[100px]">{bg.url}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </>
                 )}

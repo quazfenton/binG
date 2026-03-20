@@ -13,7 +13,20 @@
  */
 
 import { Auth0Client } from "@auth0/nextjs-auth0/server";
-import { getDatabase, encryptApiKey, decryptApiKey } from "./database/connection";
+
+// Lazy-loaded database functions to avoid Edge Runtime issues
+// Node.js modules (crypto, fs, path) in connection.ts are not compatible with Edge
+function getDatabase() {
+  return require('./database/connection').getDatabase;
+}
+
+function encryptApiKey(apiKey: string) {
+  return require('./database/connection').encryptApiKey(apiKey);
+}
+
+function decryptApiKey(encryptedData: string) {
+  return require('./database/connection').decryptApiKey(encryptedData);
+}
 
 // Lazy-loaded mapping functions to avoid circular dependency
 // These will be called inside callback to avoid import issues

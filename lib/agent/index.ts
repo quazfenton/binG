@@ -101,6 +101,18 @@ export {
   type ToolCallRecord,
 } from './loop-detection';
 
+// Timeout Escalation - Staged timeout strategy
+export {
+  createTimeoutEscalation,
+  TimeoutEscalation,
+  ESCALATION_PROFILES,
+  type EscalationConfig,
+  type EscalationStage,
+  type EscalationContext,
+  type EscalationResult,
+  type EscalationAction,
+} from './timeout-escalation';
+
 // Capability Chain - Chain multiple capabilities
 export {
   createCapabilityChain,

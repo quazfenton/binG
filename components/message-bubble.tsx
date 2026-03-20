@@ -54,8 +54,14 @@ function sanitizeMessageContent(content: string): string {
   // Pattern 3: Remove DELETE commands
   sanitized = sanitized.replace(/^\s*DELETE\s+[^\n]+(?=\n|$)/gim, '\n');
   
-  // Pattern 4: Remove <apply_diff> XML tags
+  // Pattern 4: Remove <apply_diff> XML tags with nested search/replace
   sanitized = sanitized.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
+  
+  // Pattern 4a: Handle apply_diff with search/replace/format content
+  sanitized = sanitized.replace(/<apply_diff[^>]*>[\s\S]*?(?:<search>[\s\S]*?<\/search>|(?:(?!<\/apply_diff>).)*)(?:<replace>[\s\S]*?<\/replace>|(?:(?!<\/apply_diff>).)*)(?:<format>[\s\S]*?<\/format>|(?:(?!<\/apply_diff>).)*)(?:<thought>[\s\S]*?<\/thought>|(?:(?!<\/apply_diff>).)*)?<\/apply_diff>/gi, '');
+  
+  // Pattern 4b: More aggressive apply_diff removal - match any format
+  sanitized = sanitized.replace(/<apply_diff[\s\S]*?<\/apply_diff>/gi, '');
   
   // Pattern 5: Handle remaining fs-actions style commands
   sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]*\n?\s*<<<[\s\S]*?>>>/gim, '');
