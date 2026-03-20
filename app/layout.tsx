@@ -1,7 +1,7 @@
 import type { Metadata } from 'next'
 import type { Viewport } from 'next'
-import { Providers } from '@/components/providers'
 import './globals.css'
+import { ClientProviders } from '@/components/client-providers'
 
 export const metadata: Metadata = {
   title: 'binG0 - AI Assistant',
@@ -38,9 +38,9 @@ export default function RootLayout({
   return (
     <html lang="en" suppressHydrationWarning>
       <body suppressHydrationWarning>
-        <Providers>
+        <ClientProviders>
           {children}
-        </Providers>
+        </ClientProviders>
       </body>
     </html>
   )

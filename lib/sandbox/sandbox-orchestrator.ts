@@ -5,6 +5,7 @@
  * DOES NOT replace existing components - orchestrates them.
  */
 
+import { ESCALATION_PROFILES } from '../agent/timeout-escalation';
 import { createLogger } from '../utils/logger';
 import { providerRouter, type TaskContext } from './provider-router';
 import { sessionManager } from '../session/session-manager';
@@ -173,12 +174,30 @@ export class SandboxOrchestrator {
     const startTime = Date.now();
     const timeout = options?.timeout || 60000;
 
-    const result = await Promise.race([
-      session.handle.executeCommand(command, undefined, timeout),
-      new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error('Command timeout')), timeout)
-      ),
-    ]);
+    const escalation = timeout <= 15000
+      ? ESCALATION_PROFILES.quick
+      : timeout <= 60000
+        ? ESCALATION_PROFILES.standard
+        : ESCALATION_PROFILES.thorough;
+
+    const escalationResult = await escalation.executeWithEscalation(
+      sessionId,
+      () => session.handle.executeCommand(command, undefined, timeout),
+      (ctx) => {
+        logger.warn('Sandbox execution escalation', {
+          sessionId,
+          action: ctx.action,
+          elapsedMs: ctx.elapsedMs,
+          stage: ctx.stageIndex + 1,
+        });
+      },
+    );
+
+    if (!escalationResult.success) {
+      throw new Error(escalationResult.error || 'Command execution failed');
+    }
+
+    const result = escalationResult.result!;
 
     const duration = Date.now() - startTime;
 

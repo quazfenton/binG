@@ -197,15 +197,29 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
   // Ref to store the generate function to avoid initialization order issues
   const generateFnRef = useRef<(() => Promise<void>) | null>(null);
 
-  // ✅ FIX: Helper to get image URL with CORS proxy fallback for blob storage URLs
+  // ✅ FIX: Helper to get image URL with CORS proxy fallback for external URLs
+  // Uses centralized /api/image-proxy for SSRF validation and CORS bypass
   const getImageUrl = useCallback((imageUrl: string): string => {
-    // Use CORS proxy for blob storage URLs that might have CORS restrictions
-    if (imageUrl.includes('.blob.core.windows.net') || imageUrl.includes('.amazonaws.com')) {
-      const corsProxy = process.env.NEXT_PUBLIC_CORS_PROXY_URL;
-      if (corsProxy) {
-        return `${corsProxy}${encodeURIComponent(imageUrl)}`;
-      }
+    // Skip relative paths and data URLs
+    if (imageUrl.startsWith('/') || imageUrl.startsWith('./') || imageUrl.startsWith('data:')) {
+      return imageUrl;
     }
+
+    // Use image proxy for all external HTTPS URLs
+    // This provides:
+    // 1. SSRF protection via validateImageUrl()
+    // 2. CORS bypass for CDNs that don't allow direct embedding
+    // 3. Hotlinking protection bypass
+    // 4. Timeout and size limit protection
+    if (imageUrl.startsWith('https://')) {
+      return `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+    }
+
+    // For HTTP URLs (less common), also use proxy for security
+    if (imageUrl.startsWith('http://')) {
+      return `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+    }
+
     return imageUrl;
   }, []);
 
@@ -388,24 +402,30 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
       if (imageUrl.startsWith('data:')) {
         const response = await fetch(imageUrl);
         blob = await response.blob();
-      } 
-      // Handle blob storage URLs with CORS proxy
-      else if (imageUrl.includes('.blob.core.windows.net') || imageUrl.includes('.amazonaws.com')) {
-        const corsProxy = process.env.NEXT_PUBLIC_CORS_PROXY_URL;
-        if (corsProxy) {
-          downloadUrl = `${corsProxy}${encodeURIComponent(imageUrl)}`;
-        }
-        // Try to fetch (with or without proxy)
+      }
+      // Handle external URLs via image proxy (for CORS bypass)
+      else if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
+        // Use the centralized image proxy for reliable downloads
+        const proxyUrl = `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
         try {
-          const response = await fetch(downloadUrl);
+          const response = await fetch(proxyUrl);
           if (response.ok) {
             blob = await response.blob();
           }
         } catch (fetchError) {
-          console.warn('Direct fetch failed, trying alternative method:', fetchError);
+          console.warn('Proxy fetch failed, trying direct:', fetchError);
+          // Fallback to direct fetch
+          try {
+            const response = await fetch(imageUrl);
+            if (response.ok) {
+              blob = await response.blob();
+            }
+          } catch (directError) {
+            console.warn('Direct fetch also failed:', directError);
+          }
         }
       }
-      
+
       // If we got a blob, download it
       if (blob) {
         const url = window.URL.createObjectURL(blob);

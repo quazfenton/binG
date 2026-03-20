@@ -244,25 +244,8 @@ export async function isProviderConnectedAny(userId: number, provider: string): 
   }
 }
 
-/**
- * Map provider names to Auth0 connection names
- */
-function getAuth0ConnectionName(provider: string): string | null {
-  const providerToAuth0: Record<string, string> = {
-    'github': AUTH0_CONNECTIONS.GITHUB,
-    'google': AUTH0_CONNECTIONS.GOOGLE,
-    'gmail': AUTH0_CONNECTIONS.GOOGLE,
-    'googledocs': AUTH0_CONNECTIONS.GOOGLE,
-    'googlesheets': AUTH0_CONNECTIONS.GOOGLE,
-    'googlecalendar': AUTH0_CONNECTIONS.GOOGLE,
-    'googledrive': AUTH0_CONNECTIONS.GOOGLE,
-    'slack': AUTH0_CONNECTIONS.SLACK,
-    'twitter': AUTH0_CONNECTIONS.TWITTER,
-    'linkedin': AUTH0_CONNECTIONS.LINKEDIN,
-    'microsoft': AUTH0_CONNECTIONS.MICROSOFT,
-  };
-  return providerToAuth0[provider] || null;
-}
+// Use centralized provider mapping (single source of truth)
+import { getAuth0ConnectionForPlatform as getAuth0ConnectionName } from './provider-map';
 
 /**
  * Get all connected providers for a user (consolidated across all systems)

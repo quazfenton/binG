@@ -40,11 +40,38 @@ const WORKSPACE_DIR = '/workspace'
 const MAX_INSTANCES = 50
 const INSTANCE_TTL_MS = 2 * 60 * 60 * 1000 // 2 hours
 
-// Encryption key for callback secrets
-const ENCRYPTION_KEY_ENV = process.env.BLAXEL_SECRET_ENCRYPTION_KEY;
-if (!ENCRYPTION_KEY_ENV && process.env.NODE_ENV === 'production') {
-  // SECURITY: Fail closed in production - refuse to store secrets unencrypted
-  throw new Error('BLAXEL_SECRET_ENCRYPTION_KEY is required in production. Callback secrets must be encrypted.');
+// Check if we're in a build environment
+function isBuildEnvironment(): boolean {
+  const env = typeof process !== 'undefined' ? process.env : {};
+  return env.SKIP_DB_INIT === 'true' || 
+         env.SKIP_DB_INIT === '1' ||
+         env.NEXT_BUILD === 'true' ||
+         env.NEXT_BUILD === '1' ||
+         env.NEXT_PHASE === 'build';
+}
+
+// Lazy-loaded encryption key for callback secrets
+let encryptionKeyEnv: string | null = null;
+
+function getEncryptionKeyEnv(): string | null {
+  if (encryptionKeyEnv !== null) return encryptionKeyEnv;
+  
+  const env = typeof process !== 'undefined' ? process.env : {};
+  encryptionKeyEnv = env.BLAXEL_SECRET_ENCRYPTION_KEY || null;
+  
+  // Skip validation during build
+  if (isBuildEnvironment()) {
+    console.warn('[Blaxel] Skipping BLAXEL_SECRET_ENCRYPTION_KEY validation during build');
+    encryptionKeyEnv = 'dummy-key-for-build';
+    return encryptionKeyEnv;
+  }
+  
+  if (!encryptionKeyEnv && env.NODE_ENV === 'production') {
+    // SECURITY: Fail closed in production - but not during build
+    console.warn('[Blaxel] BLAXEL_SECRET_ENCRYPTION_KEY not set in production');
+  }
+  
+  return encryptionKeyEnv;
 }
 
 /**
@@ -901,13 +928,14 @@ export class BlaxelSandboxHandle implements SandboxHandle {
       const db = getDatabase();
 
       // SECURITY: Require encryption in production
-      if (!ENCRYPTION_KEY_ENV && process.env.NODE_ENV === 'production') {
+      const encKey = getEncryptionKeyEnv();
+      if (!encKey && process.env.NODE_ENV === 'production') {
         throw new Error('BLAXEL_SECRET_ENCRYPTION_KEY required for storing callback secrets');
       }
 
       // Encrypt the secret before storing
-      const encryptedSecret = ENCRYPTION_KEY_ENV
-        ? encryptSecret(secret, ENCRYPTION_KEY_ENV)
+      const encryptedSecret = encKey
+        ? encryptSecret(secret, encKey)
         : secret; // Development only - plaintext acceptable for local dev
 
       const stmt = db.prepare(`
@@ -917,7 +945,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
       `);
       stmt.run(this.id, key, encryptedSecret);
 
-      if (ENCRYPTION_KEY_ENV) {
+      if (encKey) {
         console.log('[Blaxel] Callback secret encrypted and persisted');
       } else {
         console.warn('[Blaxel] Callback secret stored UNENCRYPTED (development mode only)');
@@ -951,8 +979,8 @@ export class BlaxelSandboxHandle implements SandboxHandle {
       if (!encryptedSecret.includes(':')) {
         console.warn('[Blaxel] Found unencrypted secret, migrating to encrypted storage');
         // Re-encrypt and update
-        if (ENCRYPTION_KEY_ENV) {
-          const reEncrypted = encryptSecret(encryptedSecret, ENCRYPTION_KEY_ENV);
+        if (encKey) {
+          const reEncrypted = encryptSecret(encryptedSecret, encKey);
           const updateStmt = db.prepare('UPDATE blaxel_callback_secrets SET secret_encrypted = ? WHERE sandbox_id = ? AND agent = ?');
           updateStmt.run(reEncrypted, this.id, key);
         }
@@ -960,9 +988,9 @@ export class BlaxelSandboxHandle implements SandboxHandle {
       }
       
       // Decrypt the secret
-      if (ENCRYPTION_KEY_ENV) {
+      if (encKey) {
         try {
-          const decrypted = decryptSecret(encryptedSecret, ENCRYPTION_KEY_ENV);
+          const decrypted = decryptSecret(encryptedSecret, encKey);
           return decrypted;
         } catch (decryptError: any) {
           console.error('[Blaxel] Failed to decrypt callback secret:', decryptError.message);

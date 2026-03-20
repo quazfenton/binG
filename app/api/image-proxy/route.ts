@@ -6,15 +6,20 @@
  *
  * SECURITY: Includes SSRF protection, timeout, and size limits
  * Uses centralized validateImageUrl() for consistent security checks
+ *
+ * CACHING: Implements multi-layer caching strategy:
+ * - Client-side: Strong caching with ETag support (1 year)
+ * - Server-side: In-memory LRU cache for frequently accessed images
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import ipaddr from 'ipaddr.js';
 import { validateImageUrl, isHostnameSafe } from '@/lib/utils/image-loader';
+import { createHash } from 'crypto';
 
 // Configuration
-const MAX_IMAGE_SIZE = 10 * 1024 * 1024; // 10MB max image size
-const FETCH_TIMEOUT = 10000; // 10 second timeout
+const MAX_IMAGE_SIZE = 25 * 1024 * 1024; // 25MB max image size (increased for high-res generated images)
+const FETCH_TIMEOUT = 15000; // 15 second timeout (increased for larger images)
 
 // Allowed image content types
 const ALLOWED_CONTENT_TYPES = [
@@ -25,6 +30,79 @@ const ALLOWED_CONTENT_TYPES = [
   'image/svg+xml',
   'image/avif',
 ];
+
+// In-memory cache for frequently accessed images (LRU-style with TTL)
+interface CachedImage {
+  data: ArrayBuffer;
+  contentType: string;
+  etag: string;
+  timestamp: number;
+  size: number;
+}
+
+const IMAGE_CACHE = new Map<string, CachedImage>();
+const CACHE_MAX_SIZE = 100; // Max number of images to cache
+const CACHE_TTL = 3600000; // 1 hour TTL for in-memory cache
+
+/**
+ * Generate cache key from URL
+ */
+function getCacheKey(url: string): string {
+  return createHash('sha256').update(url).digest('hex');
+}
+
+/**
+ * Clean up expired cache entries
+ */
+function cleanupCache(): void {
+  const now = Date.now();
+  for (const [key, value] of IMAGE_CACHE.entries()) {
+    if (now - value.timestamp > CACHE_TTL) {
+      IMAGE_CACHE.delete(key);
+    }
+  }
+  // Also enforce max size by removing oldest entries
+  if (IMAGE_CACHE.size > CACHE_MAX_SIZE) {
+    const entries = Array.from(IMAGE_CACHE.entries())
+      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+    const toDelete = entries.slice(0, entries.length - CACHE_MAX_SIZE);
+    for (const [key] of toDelete) {
+      IMAGE_CACHE.delete(key);
+    }
+  }
+}
+
+/**
+ * Get image from cache
+ */
+function getCachedImage(cacheKey: string): CachedImage | null {
+  const cached = IMAGE_CACHE.get(cacheKey);
+  if (!cached) return null;
+  
+  // Check if expired
+  if (Date.now() - cached.timestamp > CACHE_TTL) {
+    IMAGE_CACHE.delete(cacheKey);
+    return null;
+  }
+  
+  return cached;
+}
+
+/**
+ * Store image in cache
+ */
+function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string, etag: string): void {
+  // Cleanup before adding new entry
+  cleanupCache();
+  
+  IMAGE_CACHE.set(cacheKey, {
+    data,
+    contentType,
+    etag,
+    timestamp: Date.now(),
+    size: data.byteLength,
+  });
+}
 
 /**
  * Check if IP address is private/internal (SSRF protection)
@@ -96,6 +174,45 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // Generate cache key
+  const cacheKey = getCacheKey(imageUrl);
+
+  // Check in-memory cache first
+  const cached = getCachedImage(cacheKey);
+  if (cached) {
+    console.log('[Image Proxy] Cache hit:', imageUrl);
+    return new NextResponse(cached.data, {
+      headers: {
+        'Content-Type': cached.contentType,
+        'Cache-Control': 'public, max-age=31536000, immutable',
+        'ETag': cached.etag,
+        'X-Cache': 'HIT',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
+  }
+
+  // Check client cache with If-None-Match header
+  const ifNoneMatch = request.headers.get('if-none-match');
+  if (ifNoneMatch && cached) {
+    // Clean up quotes from ETag
+    const cleanEtag = ifNoneMatch.replace(/"/g, '');
+    if (cleanEtag === cached.etag) {
+      console.log('[Image Proxy] Cache hit (conditional):', imageUrl);
+      return new NextResponse(null, {
+        status: 304, // Not Modified
+        headers: {
+          'Cache-Control': 'public, max-age=31536000, immutable',
+          'ETag': cached.etag,
+          'X-Cache': 'HIT',
+          'Access-Control-Allow-Origin': '*',
+        },
+      });
+    }
+  }
+
+  console.log('[Image Proxy] Cache miss, fetching:', imageUrl);
+
   try {
     // Additional SSRF Protection: Resolve and check IP address
     // Note: This is a basic check; production should use DNS resolution with IP validation
@@ -159,11 +276,19 @@ export async function GET(request: NextRequest) {
       );
     }
 
+    // Generate ETag from content hash
+    const etag = createHash('sha256').update(new Uint8Array(arrayBuffer)).digest('hex').substring(0, 16);
+
+    // Store in cache for future requests
+    setCachedImage(cacheKey, arrayBuffer, contentType, etag);
+
     // Return the image with appropriate headers
     return new NextResponse(arrayBuffer, {
       headers: {
         'Content-Type': contentType,
         'Cache-Control': 'public, max-age=31536000, immutable',
+        'ETag': `"${etag}"`,
+        'X-Cache': 'MISS',
         // Allow CORS for CSS background usage
         'Access-Control-Allow-Origin': '*',
       },

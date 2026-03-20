@@ -1,11 +1,86 @@
-import OpenAI from 'openai'
-import Anthropic from '@anthropic-ai/sdk'
-import { GoogleGenerativeAI } from '@google/generative-ai'
-import { CohereClient } from 'cohere-ai'
-import Together from 'together-ai'
-import Replicate from 'replicate'
-import { Portkey } from 'portkey-ai'
-import { Mistral } from '@mistralai/mistralai'
+// Note: These imports are lazy-loaded to prevent Edge Runtime bundling issues
+// @opencode-ai/sdk uses node:child_process which is incompatible with Edge/client
+// AWS SDK (used by Cohere) uses node:fs/promises which is incompatible with Edge
+let OpenAI: any = null
+let Anthropic: any = null
+let GoogleGenerativeAI: any = null
+let CohereClient: any = null
+let Together: any = null
+let Replicate: any = null
+let Portkey: any = null
+let Mistral: any = null
+
+/**
+ * Lazy-load OpenAI SDK
+ */
+async function getOpenAI() {
+  if (!OpenAI) OpenAI = (await import('openai')).default
+  return OpenAI
+}
+
+/**
+ * Lazy-load Anthropic SDK
+ */
+async function getAnthropic() {
+  if (!Anthropic) Anthropic = (await import('@anthropic-ai/sdk')).Anthropic
+  return Anthropic
+}
+
+/**
+ * Lazy-load Google Generative AI SDK
+ */
+async function getGoogleGenerativeAI() {
+  if (!GoogleGenerativeAI) GoogleGenerativeAI = (await import('@google/generative-ai')).GoogleGenerativeAI
+  return GoogleGenerativeAI
+}
+
+/**
+ * Lazy-load Cohere SDK - WARNING: Uses AWS SDK which has Node.js dependencies
+ * Only use this on the server side
+ */
+async function getCohereClient() {
+  if (!CohereClient) {
+    // Check if we're in a browser environment
+    if (typeof window !== 'undefined' && typeof process === 'undefined') {
+      throw new Error('Cohere SDK is not available in browser. Use server-side rendering.')
+    }
+    CohereClient = (await import('cohere-ai')).CohereClient
+  }
+  return CohereClient
+}
+
+/**
+ * Lazy-load Together AI SDK
+ */
+async function getTogether() {
+  if (!Together) Together = (await import('together-ai')).default
+  return Together
+}
+
+/**
+ * Lazy-load Replicate SDK
+ */
+async function getReplicate() {
+  if (!Replicate) Replicate = (await import('replicate')).default
+  return Replicate
+}
+
+/**
+ * Lazy-load Portkey SDK
+ */
+async function getPortkey() {
+  if (!Portkey) Portkey = (await import('portkey-ai')).Portkey
+  return Portkey
+}
+
+/**
+ * Lazy-load Mistral SDK
+ */
+async function getMistral() {
+  if (!Mistral) Mistral = (await import('@mistralai/mistralai')).Mistral
+  return Mistral
+}
+
 import {
   createOrchestratorError,
   createStreamError,
@@ -357,81 +432,108 @@ export const PROVIDERS: Record<string, LLMProvider> = {
 }
 
 class LLMService {
-  private openai: OpenAI | null = null
-  private anthropic: Anthropic | null = null
-  private google: GoogleGenerativeAI | null = null
-  private cohere: CohereClient | null = null
-  private together: Together | null = null
-  private replicate: Replicate | null = null
-  private portkey: Portkey | null = null
-  private mistral: Mistral | null = null
-  private zenClient: OpenAI | null = null
+  private openai: any = null
+  private anthropic: any = null
+  private google: any = null
+  private cohere: any = null
+  private together: any = null
+  private replicate: any = null
+  private portkey: any = null
+  private mistral: any = null
+  private zenClient: any = null
   private composioService: ComposioService | null = null
   private opencodeClient: any = null
+  private config: ProviderConfig = {}
 
   constructor(config: ProviderConfig = {}) {
-    // Initialize providers with API keys
-    if (config.openai?.apiKey) {
-      this.openai = new OpenAI({
+    // Store config for lazy initialization
+    this.config = config
+
+    // OpenCode SDK configuration (initialized lazily)
+    if (config.opencode) {
+      this.opencodeClient = { config: config.opencode, initialized: false }
+    }
+  }
+
+  /**
+   * Initialize all lazy-loaded providers
+   * This is called once when first needed
+   */
+  private async initializeProviders(): Promise<void> {
+    const config = this.config
+    
+    // Initialize OpenAI
+    if (config.openai?.apiKey && !this.openai) {
+      const OpenAIClass = await getOpenAI()
+      this.openai = new OpenAIClass({
         apiKey: config.openai.apiKey,
         baseURL: config.openai.baseURL
       })
     }
 
-    if (config.anthropic?.apiKey) {
-      this.anthropic = new Anthropic({
+    // Initialize Anthropic
+    if (config.anthropic?.apiKey && !this.anthropic) {
+      const AnthropicClass = await getAnthropic()
+      this.anthropic = new AnthropicClass({
         apiKey: config.anthropic.apiKey,
         baseURL: config.anthropic.baseURL
       })
     }
 
-    if (config.google?.apiKey) {
-      this.google = new GoogleGenerativeAI(config.google.apiKey)
+    // Initialize Google
+    if (config.google?.apiKey && !this.google) {
+      const GoogleClass = await getGoogleGenerativeAI()
+      this.google = new GoogleClass(config.google.apiKey)
     }
 
-    if (config.cohere?.apiKey) {
-      this.cohere = new CohereClient({
+    // Initialize Cohere (server-side only)
+    if (config.cohere?.apiKey && !this.cohere) {
+      const CohereClass = await getCohereClient()
+      this.cohere = new CohereClass({
         token: config.cohere.apiKey
       })
     }
 
-    if (config.together?.apiKey) {
-      this.together = new Together({
+    // Initialize Together
+    if (config.together?.apiKey && !this.together) {
+      const TogetherClass = await getTogether()
+      this.together = new TogetherClass({
         auth: config.together.apiKey
       })
     }
 
-    if (config.replicate?.apiKey) {
-      this.replicate = new Replicate({
+    // Initialize Replicate
+    if (config.replicate?.apiKey && !this.replicate) {
+      const ReplicateClass = await getReplicate()
+      this.replicate = new ReplicateClass({
         auth: config.replicate.apiKey
       })
     }
 
-    if (config.portkey?.apiKey) {
-      this.portkey = new Portkey({
+    // Initialize Portkey
+    if (config.portkey?.apiKey && !this.portkey) {
+      const PortkeyClass = await getPortkey()
+      this.portkey = new PortkeyClass({
         apiKey: config.portkey.apiKey
       })
     }
 
-    if (config.mistral?.apiKey) {
-      this.mistral = new Mistral({
+    // Initialize Mistral
+    if (config.mistral?.apiKey && !this.mistral) {
+      const MistralClass = await getMistral()
+      this.mistral = new MistralClass({
         apiKey: config.mistral.apiKey,
         serverURL: config.mistral.baseURL
       })
     }
 
-    if (config.zen?.apiKey) {
-      // zen API is OpenAI-compatible
-      this.zenClient = new OpenAI({
+    // Initialize zen (uses OpenAI client)
+    if (config.zen?.apiKey && !this.zenClient) {
+      const OpenAIClass = await getOpenAI()
+      this.zenClient = new OpenAIClass({
         apiKey: config.zen.apiKey,
         baseURL: config.zen.baseURL || 'https://api.zen.ai/v1'
       })
-    }
-
-    // OpenCode SDK configuration (initialized lazily)
-    if (config.opencode) {
-      // Store config for lazy initialization
-      this.opencodeClient = { config: config.opencode, initialized: false }
     }
   }
 
@@ -515,6 +617,9 @@ class LLMService {
   }
 
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
+    // Initialize providers lazily on first use
+    await this.initializeProviders()
+    
     const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId } = request
     const requestStartTime = Date.now();
 
@@ -612,6 +717,9 @@ class LLMService {
   }
 
   async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingResponse> {
+    // Initialize providers lazily on first use
+    await this.initializeProviders()
+    
     const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId } = request
     const streamStartTime = Date.now();
     let chunkCount = 0;
@@ -929,8 +1037,9 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): Promise<LLMResponse> {
-    // OpenRouter is OpenAI-compatible, so we can use the OpenAI client with their base URL
-    const openrouter = new OpenAI({
+    // OpenRouter is OpenAI-compatible, lazy-load OpenAI client
+    const OpenAIClass = await getOpenAI()
+    const openrouter = new OpenAIClass({
       apiKey: process.env.OPENROUTER_API_KEY || '',
       baseURL: 'https://openrouter.ai/api/v1',
     });
@@ -959,10 +1068,11 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): Promise<LLMResponse> {
-    // Chutes is OpenAI-compatible, so we can use the OpenAI client with their base URL
-    const chutes = new OpenAI({
+    // Chutes is OpenAI-compatible, lazy-load OpenAI client
+    const OpenAIClass = await getOpenAI()
+    const chutes = new OpenAIClass({
       apiKey: process.env.CHUTES_API_KEY || '',
-      baseURL: process.env.CHUTES_BASE_URL || 'https://api.chutes.ai/v1', // Using a hypothetical URL
+      baseURL: process.env.CHUTES_BASE_URL || 'https://api.chutes.ai/v1',
     });
 
     const response = await chutes.chat.completions.create({
@@ -1047,8 +1157,9 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): Promise<LLMResponse> {
-    // GitHub Models is OpenAI-compatible via Azure endpoint
-    const github = new OpenAI({
+    // GitHub Models is OpenAI-compatible via Azure endpoint - lazy-load
+    const OpenAIClass = await getOpenAI()
+    const github = new OpenAIClass({
       apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY || '',
       baseURL: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com'
     });
@@ -1103,8 +1214,9 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    // OpenRouter is OpenAI-compatible, so we can use the OpenAI client with their base URL
-    const openrouter = new OpenAI({
+    // OpenRouter is OpenAI-compatible - lazy-load
+    const OpenAIClass = await getOpenAI()
+    const openrouter = new OpenAIClass({
       apiKey: process.env.OPENROUTER_API_KEY || '',
       baseURL: 'https://openrouter.ai/api/v1',
     });
@@ -1132,10 +1244,11 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    // Chutes is OpenAI-compatible, so we can use the OpenAI client with their base URL
-    const chutes = new OpenAI({
+    // Chutes is OpenAI-compatible - lazy-load
+    const OpenAIClass = await getOpenAI()
+    const chutes = new OpenAIClass({
       apiKey: process.env.CHUTES_API_KEY || '',
-      baseURL: process.env.CHUTES_BASE_URL || 'https://api.chutes.ai/v1', // Using a hypothetical URL
+      baseURL: process.env.CHUTES_BASE_URL || 'https://api.chutes.ai/v1',
     });
 
     const stream = await chutes.chat.completions.create({
@@ -1186,8 +1299,9 @@ class LLMService {
     temperature: number,
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
-    // GitHub Models is OpenAI-compatible via Azure endpoint
-    const github = new OpenAI({
+    // GitHub Models is OpenAI-compatible via Azure endpoint - lazy-load
+    const OpenAIClass = await getOpenAI()
+    const github = new OpenAIClass({
       apiKey: process.env.GITHUB_MODELS_API_KEY || process.env.AZURE_OPENAI_API_KEY || '',
       baseURL: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com'
     });
