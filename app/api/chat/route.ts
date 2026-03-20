@@ -4,6 +4,7 @@ import { llmService, PROVIDERS } from "@/lib/chat/llm-providers";
 import { errorHandler } from "@/lib/chat/error-handler";
 import { responseRouter } from "@/lib/api/response-router";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
+import { resolveFilesystemOwner, withAnonSessionCookie } from "@/lib/virtual-filesystem/resolve-filesystem-owner";
 import { detectRequestType } from "@/lib/utils/request-type-detector";
 import { generateSecureId } from '@/lib/utils';
 import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
@@ -195,7 +196,7 @@ export async function POST(request: NextRequest) {
     // Check if cache entry exists and hasn't expired
     if (cachedValidation && (now - cachedValidation.timestamp) < VALIDATION_CACHE_TTL_MS) {
       // Use cached validation - skip redundant checks
-    } else if (!(provider in PROVIDERS)) {
+    } else if (!Object.prototype.hasOwnProperty.call(PROVIDERS, provider)) {
       chatLogger.error('Invalid provider', { requestId, provider }, {
         availableProviders: Object.keys(PROVIDERS),
       });
@@ -249,7 +250,13 @@ export async function POST(request: NextRequest) {
       typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
         ? filesystemContext.scopePath.trim()
         : defaultScopePath;
-    const filesystemOwnerId = authResult.success && authResult.userId ? authResult.userId : `anon:${generateSecureId('anon').slice(5)}`;
+    // SECURITY: Use persistent anonymous session ID from cookie if available
+    const anonSessionCookie = request.cookies.get('anon-session-id')?.value;
+    const filesystemOwnerId = authResult.success && authResult.userId 
+      ? authResult.userId 
+      : anonSessionCookie 
+        ? `anon:${anonSessionCookie.startsWith('anon_') ? anonSessionCookie.slice(5) : anonSessionCookie}`
+        : `anon:${generateSecureId('anon').slice(5)}`;
     const denialContext = await filesystemEditSessionService.getRecentDenials(
       `${filesystemOwnerId}:${resolvedConversationId}`,
       4,
@@ -2580,6 +2587,7 @@ async function applyFilesystemEditsFromResponse(input: {
             version: file.version,
             previousVersion: null,
             existedBefore: false,
+            content: diffOp.replace,
           });
           filesystemEditSessionService.recordOperation(transaction.id, {
             path: file.path,
@@ -2614,6 +2622,8 @@ async function applyFilesystemEditsFromResponse(input: {
           version: file.version,
           previousVersion,
           existedBefore,
+          content: updatedContent,
+          diff: null,
         });
         filesystemEditSessionService.recordOperation(transaction.id, {
           path: file.path,

@@ -117,6 +117,8 @@ export class OPFSAdapter {
    * @param workspaceId - Workspace identifier (defaults to ownerId)
    * @throws OPFSError if OPFS is not supported
    */
+  private pendingEnableResolve: (() => void) | null = null;
+
   async enable(ownerId: string, workspaceId?: string): Promise<void> {
     if (!OPFSCore.isSupported()) {
       throw new OPFSError('OPFS not supported in this browser');
@@ -131,18 +133,43 @@ export class OPFSAdapter {
       return;
     }
 
-    // If enabled for a different workspace, we need to reinitialize
-    if (this.enabled && this.currentWorkspaceId !== wsId) {
-      console.log('[OPFS] Switching workspace from', this.currentWorkspaceId, 'to', wsId);
-      await this.core.close();
-      this.enableCount = 0;
+    // If another enable() is in progress, wait for it to complete
+    if (this.pendingEnableResolve) {
+      await new Promise<void>(resolve => {
+        const originalResolve = this.pendingEnableResolve!;
+        this.pendingEnableResolve = () => {
+          originalResolve();
+          resolve();
+        };
+      });
+      // After waiting, check again in case it completed for the same workspace
+      if (this.enabled && this.currentWorkspaceId === wsId) {
+        this.enableCount++;
+        console.log('[OPFS] Concurrent enable completed, incrementing ref count to:', this.enableCount);
+        return;
+      }
     }
 
-    await this.core.initialize(wsId);
-    this.enabled = true;
-    this.ownerId = ownerId;
-    this.currentWorkspaceId = wsId;
-    this.enableCount = this.enableCount || 1;
+    // Mark that we're in the process of enabling
+    let finished = false;
+    this.pendingEnableResolve = () => { finished = true; };
+
+    try {
+      // If enabled for a different workspace, we need to reinitialize
+      if (this.enabled && this.currentWorkspaceId !== wsId) {
+        console.log('[OPFS] Switching workspace from', this.currentWorkspaceId, 'to', wsId);
+        await this.core.close();
+        this.enableCount = 0;
+      }
+
+      await this.core.initialize(wsId);
+      this.enabled = true;
+      this.ownerId = ownerId;
+      this.currentWorkspaceId = wsId;
+      this.enableCount = 1;
+    } finally {
+      if (finished) this.pendingEnableResolve = null;
+    }
 
     // Set up online/offline handlers
     if (typeof window !== 'undefined') {

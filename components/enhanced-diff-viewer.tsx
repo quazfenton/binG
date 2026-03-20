@@ -172,16 +172,30 @@ function DiffHunk({ hunk, showLineNumbers = true }: { hunk: DiffSection[]; showL
 }
 
 /**
- * Check if content looks like a unified diff (has diff markers)
+ * Check if content looks like a unified diff (has proper diff markers)
+ * Requires actual unified-diff structure: ---/+++ headers and optionally @@ hunk markers
  */
 function isDiffFormat(content: string): boolean {
   const lines = content.split('\n');
-  return lines.some(line =>
-    line.startsWith('---') ||
-    line.startsWith('+++') ||
-    line.startsWith('@@') ||
-    /^[\+\-]/.test(line)
-  );
+  // Must have at least the --- and +++ headers to be considered a unified diff
+  let hasHeader = false;
+  let hasDiffContent = false;
+  
+  for (const line of lines) {
+    if (line.startsWith('---') || line.startsWith('+++')) {
+      hasHeader = true;
+    }
+    if (line.startsWith('@@')) {
+      hasDiffContent = true;
+    }
+    // Count diff content lines (must be more than just headers)
+    if (hasHeader && /^[\+\-]/.test(line) && !line.startsWith('+++') && !line.startsWith('---')) {
+      hasDiffContent = true;
+    }
+  }
+  
+  // Both header and diff content must be present
+  return hasHeader && hasDiffContent;
 }
 
 /**

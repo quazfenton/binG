@@ -125,7 +125,9 @@ let DatabaseConstructor: any = null;
 
 function getDatabaseConstructor(): any {
   if (!DatabaseConstructor) {
-    DatabaseConstructor = require('better-sqlite3').default;
+    const betterSqlite3 = require('better-sqlite3');
+    // Handle both ESM default export and CommonJS module
+    DatabaseConstructor = betterSqlite3.default || betterSqlite3;
   }
   return DatabaseConstructor;
 }

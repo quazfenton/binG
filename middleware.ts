@@ -24,18 +24,16 @@ export async function middleware(request: NextRequest) {
   // Auth0 middleware - handles /auth/* routes (login, logout, callback, profile)
   // Runs alongside existing auth system - NOT a replacement
   const auth0Response = await auth0.middleware(request);
-  
-  // If this is an Auth0 auth route (/auth/*), return Auth0's response
+
+  // If this is an Auth0 auth route (/auth/*), return Auth0's response directly
   // Auth0 handles login, logout, callback, profile, etc.
+  // CRITICAL: Must return auth0Response directly to preserve:
+  // - Redirect status codes (302/307)
+  // - Location header for redirects
+  // - Auth0 session cookies
+  // - OAuth state parameters
   if (request.nextUrl.pathname.startsWith('/auth/')) {
-    // Merge Auth0 cookies with our security headers
-    const mergedResponse = NextResponse.next();
-    auth0Response.headers.forEach((value, key) => {
-      if (key.toLowerCase() === 'set-cookie') {
-        mergedResponse.headers.append(key, value);
-      }
-    });
-    return mergedResponse;
+    return auth0Response;
   }
 
   // Generate unique nonces for this request

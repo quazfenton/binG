@@ -72,13 +72,15 @@ async function publishEvent(event: AgentEvent): Promise<void> {
 
 async function subscribeToSession(sessionId: string, callback: (event: AgentEvent) => void): Promise<Redis> {
   const subscriber = new Redis(REDIS_URL);
-  await subscriber.subscribe(PUBSUB_CHANNEL, `${PUBSUB_CHANNEL}:${sessionId}`);
-  subscriber.on('message', (_channel: string, message: string) => {
+  // Only subscribe to the session-specific channel to avoid processing unrelated events
+  const sessionChannel = `${PUBSUB_CHANNEL}:${sessionId}`;
+  await subscriber.subscribe(sessionChannel);
+  subscriber.on('message', (channel: string, message: string) => {
+    // Ignore messages from other channels
+    if (channel !== sessionChannel) return;
     try {
       const event: AgentEvent = JSON.parse(message);
-      if (event.sessionId === sessionId) {
-        callback(event);
-      }
+      callback(event);
     } catch (e) {
       logger.error('Failed to parse event', { error: e });
     }

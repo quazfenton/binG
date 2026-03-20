@@ -12,7 +12,8 @@
  * }
  */
 import { NextResponse } from 'next/server';
-import { auth0, getConnectedAccounts } from '@/lib/auth0';
+import { auth0, AUTH0_CONNECTIONS, getConnectedAccountsByUser } from '@/lib/auth0';
+import { getLocalUserIdFromAuth0 } from '@/lib/oauth/connections';
 
 export async function GET() {
   try {
@@ -25,8 +26,17 @@ export async function GET() {
       });
     }
 
-    // Get connection status for all providers
-    const connections = await getConnectedAccounts();
+    const auth0UserId = session.user.sub;
+    const localUserId = await getLocalUserIdFromAuth0(auth0UserId);
+    
+    const connectedProviders = new Set(
+      localUserId ? getConnectedAccountsByUser(localUserId).map((account) => account.provider) : []
+    );
+    const connections = Object.entries(AUTH0_CONNECTIONS).map(([name, connection]) => ({
+      provider: name.toLowerCase(),
+      connection,
+      connected: connectedProviders.has(connection),
+    }));
 
     return NextResponse.json({
       authenticated: true,

@@ -51,34 +51,60 @@ const tokenCache = new Map<string, TokenCacheEntry>();
 const CACHE_TTL_MS = 5 * 60 * 1000; // 5 minutes - tokens typically last longer
 
 /**
+ * Get cache key for connection and optional userId
+ */
+function getCacheKey(connection: string, userId?: number): string {
+  return userId ? `${userId}:${connection}` : connection;
+}
+
+/**
  * Get cached token if valid, otherwise returns null
  */
-function getCachedToken(connection: string): string | null {
-  const entry = tokenCache.get(connection);
+function getCachedToken(connection: string, userId?: number): string | null {
+  const key = getCacheKey(connection, userId);
+  const entry = tokenCache.get(key);
   if (entry && entry.expiresAt > Date.now()) {
     return entry.token;
   }
-  tokenCache.delete(connection);
+  tokenCache.delete(key);
   return null;
 }
 
 /**
- * Cache a token for a connection
+ * Cache a token for a connection and userId
  */
-function cacheToken(connection: string, token: string, expiresIn: number = 3600): void {
-  // Use min of expiresIn and CACHE_TTL_MS to be safe
+function cacheToken(connection: string, token: string, expiresIn: number = 3600, userId?: number): void {
+  const key = getCacheKey(connection, userId);
   const ttl = Math.min(expiresIn * 1000, CACHE_TTL_MS);
-  tokenCache.set(connection, {
+  tokenCache.set(key, {
     token,
     expiresAt: Date.now() + ttl,
   });
 }
 
 /**
- * Clear cached token for a connection
+ * Clear cached token for a connection (all user scopes)
  */
 export function clearCachedToken(connection: string): void {
+  // Clear without userId first
   tokenCache.delete(connection);
+  // Clear all entries that match this connection (with any userId)
+  for (const key of tokenCache.keys()) {
+    if (key.endsWith(`:${connection}`)) {
+      tokenCache.delete(key);
+    }
+  }
+}
+
+/**
+ * Clear cached tokens for a specific user
+ */
+export function clearCachedTokensForUser(userId: number): void {
+  for (const key of tokenCache.keys()) {
+    if (key.startsWith(`${userId}:`)) {
+      tokenCache.delete(key);
+    }
+  }
 }
 
 /**
@@ -347,6 +373,8 @@ export const auth0 = new Auth0Client({
  * Extended connection names for Auth0 social logins and enterprise connections
  * Includes all major providers supported by Auth0 Connected Accounts
  */
+// NOTE: Microsoft connection uses 'windowslive' (Legacy Microsoft Accounts)
+// For Azure AD / Microsoft Entra ID, a different Auth0 enterprise connection would be needed
 export const AUTH0_CONNECTIONS = {
   // Social connections
   GITHUB: 'github',
@@ -355,6 +383,8 @@ export const AUTH0_CONNECTIONS = {
   TWITTER: 'twitter',
   LINKEDIN: 'linkedin',
   // Microsoft / Azure AD
+  // NOTE: If TOOL_PROVIDER_MAP resolves Outlook tools to 'microsoft' provider,
+  // ensure getAuth0ConnectionForProvider() includes 'microsoft' in its mapping
   MICROSOFT: 'windowslive',
   // Apple
   APPLE: 'apple',
@@ -427,27 +457,32 @@ export async function getAuth0AccessToken() {
  * Used to access external APIs with OAuth tokens from social logins
  * Uses token caching and database persistence for tokens
  *
+ * SECURITY: When userId is provided, only return tokens scoped to that user.
+ * When userId is not provided, use session-based approach.
+ *
  * @param connection - The connection name (e.g., 'github', 'google-oauth2')
  * @param userId - Optional user ID to retrieve stored tokens from database
  * @returns The access token for the connection, or null if not available
  */
 export async function getAccessTokenForConnection(connection: string, userId?: number) {
-  // Check cache first
-  const cachedToken = getCachedToken(connection);
+  // Check cache first with userId scope if provided
+  const cachedToken = getCachedToken(connection, userId);
   if (cachedToken) {
     return cachedToken;
   }
   
-  // If userId provided, check database for stored token
+  // If userId provided, check database for stored token and ONLY use that
   if (userId) {
     const storedToken = getStoredAccessToken(userId, connection);
     if (storedToken) {
-      cacheToken(connection, storedToken, 3600);
+      cacheToken(connection, storedToken, 3600, userId);
       return storedToken;
     }
+    // User-specific token not found, don't fall back to session token
+    return null;
   }
   
-  // Try to get fresh token from Auth0
+  // No userId - use session-based approach (current behavior)
   try {
     const result = await auth0.getAccessTokenForConnection({ connection });
     if (result?.token) {
@@ -479,20 +514,12 @@ export async function getConnectedAccounts() {
   try {
     const connections = await Promise.all(
       Object.entries(AUTH0_CONNECTIONS).map(async ([name, connection]) => {
-        try {
-          const token = await getAccessTokenForConnection(connection);
-          return {
-            provider: name.toLowerCase(),
-            connection,
-            connected: !!token,
-          };
-        } catch {
-          return {
-            provider: name.toLowerCase(),
-            connection,
-            connected: false,
-          };
-        }
+        const token = await getAccessTokenForConnection(connection);
+        return {
+          provider: name.toLowerCase(),
+          connection,
+          connected: !!token,
+        };
       })
     );
     

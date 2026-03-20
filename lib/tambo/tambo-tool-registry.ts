@@ -155,10 +155,9 @@ export function initializeDefaultTools(): void {
   }
 
   // NOTE: Tambo tools are used by AI agents which don't have persistent sessions.
-  // Agents share a workspace when no ownerId is provided. This is acceptable for
-  // ephemeral agent contexts. For persistent user sessions, callers should provide
-  // an ownerId via resolveFilesystemOwner().
-  const DEFAULT_OWNER = 'anon:public';
+  // For mutating operations (write, delete), ownerId is REQUIRED to prevent cross-session pollution.
+  // For read-only operations, a shared anon workspace is acceptable.
+  const ANON_READONLY_OWNER = 'anon:public';
 
   // Filesystem tools (using API routes for server-side execution)
   tamboToolRegistry.registerMany([
@@ -176,7 +175,7 @@ export function initializeDefaultTools(): void {
         version: z.number(),
       }),
       tool: async ({ path, ownerId }: { path: string; ownerId?: string }) => {
-        const owner = ownerId || DEFAULT_OWNER;
+        const owner = ownerId || ANON_READONLY_OWNER;
         const response = await fetch('/api/filesystem/read', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -202,7 +201,7 @@ export function initializeDefaultTools(): void {
       inputSchema: z.object({
         path: z.string().describe('File path to write'),
         content: z.string().describe('Content to write'),
-        ownerId: z.string().optional().describe('Owner ID for persistent sessions (defaults to shared anon:public for agent contexts)'),
+        ownerId: z.string().describe('Owner ID is REQUIRED for write operations to prevent cross-session pollution'),
       }),
       outputSchema: z.object({
         path: z.string(),
@@ -210,8 +209,11 @@ export function initializeDefaultTools(): void {
         language: z.string(),
         size: z.number(),
       }),
-      tool: async ({ path, content, ownerId }: { path: string; content: string; ownerId?: string }) => {
-        const owner = ownerId || DEFAULT_OWNER;
+      tool: async ({ path, content, ownerId }: { path: string; content: string; ownerId: string }) => {
+        if (!ownerId || ownerId === ANON_READONLY_OWNER) {
+          throw new Error('ownerId is required for write operations');
+        }
+        const owner = ownerId;
         const response = await fetch('/api/filesystem/write', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -249,7 +251,7 @@ export function initializeDefaultTools(): void {
         })),
       }),
       tool: async ({ path, ownerId }: { path?: string; ownerId?: string }) => {
-        const owner = ownerId || DEFAULT_OWNER;
+        const owner = ownerId || ANON_READONLY_OWNER;
         const queryParams = new URLSearchParams({ path: path || 'project', ownerId: owner });
         const response = await fetch(`/api/filesystem/list?${queryParams.toString()}`);
         const result = await response.json();
@@ -273,13 +275,16 @@ export function initializeDefaultTools(): void {
       description: 'Delete a file or directory',
       inputSchema: z.object({
         path: z.string().describe('Path to delete'),
-        ownerId: z.string().optional().describe('Owner ID for persistent sessions (defaults to shared anon:public for agent contexts)'),
+        ownerId: z.string().describe('Owner ID is REQUIRED for delete operations to prevent cross-session pollution'),
       }),
       outputSchema: z.object({
         deletedCount: z.number(),
       }),
-      tool: async ({ path, ownerId }: { path: string; ownerId?: string }) => {
-        const owner = ownerId || DEFAULT_OWNER;
+      tool: async ({ path, ownerId }: { path: string; ownerId: string }) => {
+        if (!ownerId || ownerId === ANON_READONLY_OWNER) {
+          throw new Error('ownerId is required for delete operations');
+        }
+        const owner = ownerId;
         const response = await fetch('/api/filesystem/delete', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -313,7 +318,7 @@ export function initializeDefaultTools(): void {
         })),
       }),
       tool: async ({ query, path, ownerId }: { query: string; path?: string; ownerId?: string }) => {
-        const owner = ownerId || DEFAULT_OWNER;
+        const owner = ownerId || ANON_READONLY_OWNER;
         const queryParams = new URLSearchParams({ q: query, path: path || 'project', ownerId: owner });
         const response = await fetch(`/api/filesystem/search?${queryParams.toString()}`);
         const result = await response.json();

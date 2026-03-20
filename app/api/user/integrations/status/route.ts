@@ -1,34 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
 import { getToolServiceForPlatform } from '@/lib/oauth/provider-map';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 /**
  * GET /api/user/integrations/status
- * Returns all connected integrations for a user with their OAuth source
- * 
- * Query params:
- * - userId: The local user ID
+ * Returns all connected integrations for the authenticated user
  */
 export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(request.url);
-    const userId = searchParams.get('userId');
+    const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+    }
 
-    if (!userId) {
-      return NextResponse.json(
-        { error: 'userId is required' },
-        { status: 400 }
-      );
+    const localUserId = Number(authResult.userId);
+    if (!Number.isFinite(localUserId)) {
+      return NextResponse.json({ error: 'Invalid user' }, { status: 401 });
     }
 
     const db = getDatabase();
-    const localUserId = parseInt(userId, 10);
-    
-    if (isNaN(localUserId)) {
-      return NextResponse.json(
-        { error: 'Invalid userId' },
-        { status: 400 }
-      );
+
+    // Verify user exists
+    const userExists = db.prepare('SELECT 1 FROM users WHERE id = ?').get(localUserId);
+    if (!userExists) {
+      return NextResponse.json({ error: 'User not found' }, { status: 404 });
     }
 
     // Get all active external connections for the user
