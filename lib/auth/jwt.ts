@@ -1,48 +1,85 @@
 import { NextRequest } from 'next/server';
-import jwt from 'jsonwebtoken';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Auth:JWT');
 
-// CRITICAL FIX: STRICT enforcement of JWT_SECRET
-// No fallback in production - must be explicitly configured
-const JWT_SECRET = process.env.JWT_SECRET;
-
-// Validate JWT_SECRET is set in production
-if (process.env.NODE_ENV === 'production' && !JWT_SECRET) {
-  logger.error('CRITICAL: JWT_SECRET is not configured in production!');
-  throw new Error('JWT_SECRET is required in production environment');
+// Check if we're in a build/Edge environment
+function shouldSkipValidation(): boolean {
+  const env = typeof process !== 'undefined' ? process.env : {};
+  return env.SKIP_DB_INIT === 'true' || 
+         env.SKIP_DB_INIT === '1' ||
+         env.NEXT_BUILD === 'true' ||
+         env.NEXT_BUILD === '1' ||
+         env.NEXT_PHASE === 'build' ||
+         env.NEXT_PHASE === 'export';
 }
 
-// Validate JWT_SECRET format if provided
-if (JWT_SECRET && JWT_SECRET.length < 32) {
-  logger.error('CRITICAL: JWT_SECRET must be at least 32 characters for security');
-  throw new Error('JWT_SECRET must be at least 32 characters (256 bits)');
-}
+// Lazy-loaded JWT_SECRET - only validated at runtime, not at module load
+let jwtSecret: string | null = null;
 
-// Development fallback with prominent warning (only if not in production)
-const SECRET = JWT_SECRET || (() => {
-  if (process.env.NODE_ENV === 'production') {
+function getJwtSecret(): string {
+  if (jwtSecret) return jwtSecret;
+  
+  // Lazy require to avoid bundling issues
+  const jwt = require('jsonwebtoken');
+  
+  const env = typeof process !== 'undefined' ? process.env : {};
+  const JWT_SECRET = env.JWT_SECRET;
+  
+  // Skip validation during build
+  if (shouldSkipValidation()) {
+    logger.warn('[JWT] Skipping JWT_SECRET validation during build');
+    jwtSecret = 'dummy-key-for-build';
+    return jwtSecret;
+  }
+  
+  // Validate JWT_SECRET is set in production
+  if (env.NODE_ENV === 'production' && !JWT_SECRET) {
+    logger.error('CRITICAL: JWT_SECRET is not configured in production!');
     throw new Error('JWT_SECRET is required in production environment');
   }
-  logger.warn('⚠️  WARNING: JWT_SECRET not configured. Using random development key. DO NOT USE IN PRODUCTION.');
-  logger.warn('Generate a secure key: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
-  return require('crypto').randomBytes(32).toString('hex');
-})();
-
-// Token blacklist for immediate revocation
-// Stores token JTI (unique identifier) until expiration
-const tokenBlacklist = new Map<string, number>();
-
-// Cleanup expired blacklist entries every 5 minutes
-setInterval(() => {
-  const now = Date.now();
-  for (const [jti, expiresAt] of tokenBlacklist.entries()) {
-    if (now > expiresAt) {
-      tokenBlacklist.delete(jti);
-    }
+  
+  // Validate JWT_SECRET format if provided
+  if (JWT_SECRET && JWT_SECRET.length < 32) {
+    logger.error('CRITICAL: JWT_SECRET must be at least 32 characters for security');
+    throw new Error('JWT_SECRET must be at least 32 characters (256 bits)');
   }
-}, 5 * 60 * 1000);
+  
+  // Development fallback with prominent warning (only if not in production)
+  if (!JWT_SECRET) {
+    if (env.NODE_ENV === 'production') {
+      throw new Error('JWT_SECRET is required in production environment');
+    }
+    logger.warn('⚠️  WARNING: JWT_SECRET not configured. Using random development key. DO NOT USE IN PRODUCTION.');
+    logger.warn('Generate a secure key: node -e "console.log(require(\'crypto\').randomBytes(32).toString(\'hex\'))"');
+    jwtSecret = require('crypto').randomBytes(32).toString('hex');
+    return jwtSecret;
+  }
+  
+  jwtSecret = JWT_SECRET;
+  return jwtSecret;
+}
+
+// Token blacklist for immediate revocation - lazy initialized
+let tokenBlacklist: Map<string, number> | null = null;
+
+function getTokenBlacklist(): Map<string, number> {
+  if (!tokenBlacklist) {
+    tokenBlacklist = new Map<string, number>();
+    
+    // Cleanup expired blacklist entries every 5 minutes
+    setInterval(() => {
+      if (!tokenBlacklist) return;
+      const now = Date.now();
+      for (const [jti, expiresAt] of tokenBlacklist.entries()) {
+        if (now > expiresAt) {
+          tokenBlacklist.delete(jti);
+        }
+      }
+    }, 5 * 60 * 1000);
+  }
+  return tokenBlacklist;
+}
 
 export interface JwtPayload {
   userId: string;
@@ -64,7 +101,7 @@ export interface AuthResult {
  * Called when user logs out or token is compromised
  */
 export function blacklistToken(tokenJti: string, expiresAt: Date): void {
-  tokenBlacklist.set(tokenJti, expiresAt.getTime());
+  getTokenBlacklist().set(tokenJti, expiresAt.getTime());
   logger.debug('Token blacklisted', { jti: tokenJti, expiresAt });
 }
 
@@ -72,12 +109,13 @@ export function blacklistToken(tokenJti: string, expiresAt: Date): void {
  * Check if token is blacklisted
  */
 export function isTokenBlacklisted(tokenJti: string): boolean {
-  const expiresAt = tokenBlacklist.get(tokenJti);
+  const blacklist = getTokenBlacklist();
+  const expiresAt = blacklist.get(tokenJti);
   if (!expiresAt) return false;
   
   // Remove expired entry
   if (Date.now() > expiresAt) {
-    tokenBlacklist.delete(tokenJti);
+    blacklist.delete(tokenJti);
     return false;
   }
   
@@ -88,7 +126,7 @@ export function isTokenBlacklisted(tokenJti: string): boolean {
  * Get blacklist statistics (for monitoring)
  */
 export function getBlacklistStats(): { size: number } {
-  return { size: tokenBlacklist.size };
+  return { size: getTokenBlacklist().size };
 }
 
 export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
@@ -114,7 +152,7 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
       }
 
       // Add validation options for JWT verification
-      const decoded = (jwt as any).verify(token, SECRET, {
+      const decoded = (jwt as any).verify(token, getJwtSecret(), {
         algorithms: ['HS256'], // Enforce specific algorithm
         issuer: 'bing-app', // Validate issuer
         audience: 'bing-users', // Validate audience
@@ -159,7 +197,7 @@ export function generateToken(payload: { userId: string; email: string; type?: s
     aud: 'bing-users',
   } as any;
 
-  const token = jwt.sign(fullPayload, SECRET, {
+  const token = jwt.sign(fullPayload, getJwtSecret(), {
     expiresIn,
     algorithm: 'HS256', // Explicitly specify algorithm
   });

@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useRef, useCallback } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { usePanel, type PanelTab } from "@/contexts/panel-context";
 import { Button } from "@/components/ui/button";
@@ -88,12 +88,12 @@ import { getOrCreateAnonymousSessionId } from "@/lib/utils";
 import type { Message } from "@/types";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import MultiModelComparison from "@/components/multi-model-comparison";
-import type { LLMProvider } from "@/lib/chat/llm-providers";
+import type { LLMProvider } from "@/lib/chat/providers";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { buildApiHeaders } from "@/lib/utils";
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer";
 import IntegrationPanel from "@/components/integrations/IntegrationPanel";
-import { PROVIDERS } from "@/lib/chat/llm-providers";
+import { PROVIDERS } from "@/lib/chat/providers";
 
 // Helper to normalize paths to relative format (project/...) for API compatibility
 // Moved outside component to avoid recreation on every render

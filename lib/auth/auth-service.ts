@@ -1,6 +1,5 @@
 import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
-import * as crypto from 'crypto';
 import { getDatabase } from '../database/connection';
 import { DatabaseOperations } from '../database/connection';
 import { generateToken, blacklistToken, isTokenExpiringSoon } from './jwt';
@@ -9,22 +8,45 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Auth:Service');
 
-// Session token hashing utilities
-// We hash session tokens before storing them in the database
-// This prevents attackers from using stolen database contents to create valid sessions
+// Check if we're in a build/Edge environment
+function shouldSkipValidation(): boolean {
+  const env = typeof process !== 'undefined' ? process.env : {};
+  return env.SKIP_DB_INIT === 'true' || 
+         env.SKIP_DB_INIT === '1' ||
+         env.NEXT_BUILD === 'true' ||
+         env.NEXT_BUILD === '1' ||
+         env.NEXT_PHASE === 'build' ||
+         env.NEXT_PHASE === 'export';
+}
 
-// CRITICAL: Validate ENCRYPTION_KEY is set for session security
-const SESSION_TOKEN_HASH_SECRET = (() => {
-  const key = process.env.ENCRYPTION_KEY;
+// Lazy-loaded session token hash secret
+let sessionTokenHashSecret: Buffer | null = null;
+
+function getSessionTokenHashSecret(): Buffer {
+  if (sessionTokenHashSecret) return sessionTokenHashSecret;
+  
+  // Lazy require crypto
+  const crypto = require('crypto');
+  
+  const env = typeof process !== 'undefined' ? process.env : {};
+  const key = env.ENCRYPTION_KEY;
+
+  // Skip validation during build
+  if (shouldSkipValidation()) {
+    logger.warn('[Auth] Skipping ENCRYPTION_KEY validation during build');
+    sessionTokenHashSecret = Buffer.alloc(32, 'dummy-key-for-build');
+    return sessionTokenHashSecret;
+  }
 
   if (!key) {
-    if (process.env.NODE_ENV === 'production') {
+    if (env.NODE_ENV === 'production') {
       throw new Error('ENCRYPTION_KEY must be set in production for session token security');
     }
     // In development, generate a random key per session (not persistent)
-    console.warn('⚠️  WARNING: ENCRYPTION_KEY not set! Session tokens will not persist across restarts.');
-    console.warn('Set ENCRYPTION_KEY environment variable to a secure 32+ character random string.');
-    return crypto.randomBytes(32);
+    logger.warn('⚠️  WARNING: ENCRYPTION_KEY not set! Session tokens will not persist across restarts.');
+    logger.warn('Set ENCRYPTION_KEY environment variable to a secure 32+ character random string.');
+    sessionTokenHashSecret = crypto.randomBytes(32);
+    return sessionTokenHashSecret;
   }
 
   // Validate key strength
@@ -32,8 +54,9 @@ const SESSION_TOKEN_HASH_SECRET = (() => {
     throw new Error('ENCRYPTION_KEY must be at least 16 characters for session security');
   }
 
-  return Buffer.from(key);
-})();
+  sessionTokenHashSecret = Buffer.from(key);
+  return sessionTokenHashSecret;
+}
 
 /**
  * Account lockout tracking
@@ -133,8 +156,9 @@ export function clearAccountLockout(email: string): void {
  * The hash is stored in the database instead of the raw token
  */
 function hashSessionToken(token: string): string {
+  const crypto = require('crypto');
   return crypto
-    .createHmac('sha256', SESSION_TOKEN_HASH_SECRET)
+    .createHmac('sha256', getSessionTokenHashSecret())
     .update(token)
     .digest('hex');
 }

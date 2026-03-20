@@ -284,27 +284,60 @@ const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, ini
             <div>
               <h3 className="text-sm font-medium mb-3">Generated Images</h3>
               <div className="grid grid-cols-2 gap-3">
-                {generatedImages.map((img, index) => (
-                  <div key={index} className="relative group">
-                    <img 
-                      src={img} 
-                      alt={`Generated ${index + 1}`} 
-                      className="w-full h-40 object-cover rounded border border-white/10"
-                    />
-                    <div className="absolute bottom-0 right-0 p-1 opacity-0 group-hover:opacity-100 transition-opacity">
-                      <Button variant="secondary" size="icon" onClick={() => {
-                        const a = document.createElement('a');
-                        a.href = img;
-                        a.download = `image-${index + 1}.png`;
-                        document.body.appendChild(a);
-                        a.click();
-                        document.body.removeChild(a);
-                      }}>
-                        <Download className="w-4 h-4" />
-                      </Button>
+                {generatedImages.map((img, index) => {
+                  // Use image proxy for external URLs to bypass CORS restrictions
+                  const displayImgUrl = img.startsWith('http') 
+                    ? `/api/image-proxy?url=${encodeURIComponent(img)}`
+                    : img;
+                   
+                  return (
+                    <div key={index} className="relative group">
+                      <img
+                        src={displayImgUrl}
+                        alt={`Generated ${index + 1}`}
+                        className="w-full h-40 object-cover rounded border border-white/10"
+                        onError={(e) => {
+                          // Fallback to direct URL if proxy fails
+                          const target = e.target as HTMLImageElement;
+                          if (target.src.includes('/api/image-proxy') && target.src !== img) {
+                            target.src = img;
+                          }
+                        }}
+                      />
+                      <div className="absolute bottom-0 right-0 p-1 opacity-0 group-hover:opacity-100 transition-opacity">
+                        <Button variant="secondary" size="icon" onClick={async () => {
+                          // Try to download via proxy first for CORS bypass
+                          try {
+                            const response = await fetch(`/api/image-proxy?url=${encodeURIComponent(img)}`);
+                            if (response.ok) {
+                              const blob = await response.blob();
+                              const url = window.URL.createObjectURL(blob);
+                              const a = document.createElement('a');
+                              a.href = url;
+                              a.download = `image-${index + 1}.png`;
+                              document.body.appendChild(a);
+                              a.click();
+                              document.body.removeChild(a);
+                              window.URL.revokeObjectURL(url);
+                              return;
+                            }
+                          } catch (e) {
+                            console.warn('Proxy download failed, using fallback');
+                          }
+                          // Fallback: direct download
+                          const a = document.createElement('a');
+                          a.href = img;
+                          a.download = `image-${index + 1}.png`;
+                          document.body.appendChild(a);
+                          a.click();
+                          document.body.removeChild(a);
+                        }}>
+                          <Download className="w-4 h-4" />
+                        </Button>
+                      </div>
                     </div>
-                  </div>
-                ))}
+                  );
+                })}
                 {generatedImages.length === 0 && (
                   <div className="col-span-2 h-40 flex items-center justify-center border border-dashed border-white/20 rounded text-white/50">
                     Images will appear here after generation

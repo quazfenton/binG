@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
+import { getToolServiceForPlatform } from '@/lib/oauth/provider-map';
 
 /**
  * GET /api/user/integrations/status
@@ -53,30 +54,24 @@ export async function GET(request: NextRequest) {
       last_accessed_at?: string;
     }>;
 
-    // Determine OAuth source for each connection
-    // We infer the source based on provider patterns
+    // Determine OAuth source for each connection using centralized provider map
     const connectionsWithSource = connections.map(conn => {
-      let source: 'auth0' | 'arcade' | 'nango' | 'oauth' = 'oauth';
-      
-      // Auth0 Connected Accounts providers (social logins)
-      const auth0Providers = ['github', 'google', 'facebook', 'twitter', 'linkedin', 
-        'apple', 'microsoft', 'instagram', 'bitbucket', 'slack', 'windowslive'];
-      
-      // Arcade providers
-      const arcadeProviders = ['gmail', 'googledocs', 'googlesheets', 'googlecalendar', 
-        'googledrive', 'spotify', 'exa', 'twilio', 'vercel', 'railway'];
-      
-      // Nango providers
-      const nangoProviders = ['discord', 'reddit'];
-
       const provider = conn.provider.toLowerCase();
-      
-      if (auth0Providers.includes(provider)) {
-        source = 'auth0';
-      } else if (arcadeProviders.includes(provider)) {
+      const toolService = getToolServiceForPlatform(provider);
+
+      // Determine source: use tool service if available, fall back to 'auth0' for social logins, else 'oauth'
+      let source: 'auth0' | 'arcade' | 'nango' | 'oauth' = 'oauth';
+      if (toolService === 'arcade') {
         source = 'arcade';
-      } else if (nangoProviders.includes(provider)) {
+      } else if (toolService === 'nango') {
         source = 'nango';
+      } else {
+        // Social login providers handled by Auth0
+        const auth0Socials = new Set(['github', 'google', 'google-oauth2', 'facebook', 'twitter', 'linkedin',
+          'apple', 'microsoft', 'windowslive', 'instagram', 'bitbucket', 'slack']);
+        if (auth0Socials.has(provider)) {
+          source = 'auth0';
+        }
       }
 
       return {

@@ -1,19 +1,66 @@
-import type Database from 'better-sqlite3';
-import DatabaseConstructor from 'better-sqlite3';
-import { readFileSync, mkdirSync } from 'fs';
-import { join, dirname } from 'path';
-import * as crypto from 'crypto';
+// Database configuration - lazy initialized to avoid Edge Runtime issues
+// All Node.js modules are lazy-loaded inside functions, not at module load time
 
-// Database configuration
-const DB_PATH = process.env.DATABASE_PATH || join(process.cwd(), 'data', 'binG.db');
+// Check if we're in a build/Edge environment where database initialization should be skipped
+function shouldSkipDbInit(): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const env = typeof process !== 'undefined' ? (process as any).env : {};
+  return env.SKIP_DB_INIT === 'true' || 
+         env.SKIP_DB_INIT === '1' ||
+         env.NEXT_BUILD === 'true' ||
+         env.NEXT_BUILD === '1' ||
+         env.NEXT_PHASE === 'build' ||
+         env.NEXT_PHASE === 'export' ||
+         env.NEXT_PHASE === 'phase-production-build' ||
+         env.NEXT_PHASE === 'phase-export';
+}
+
+// Check if we're in Edge Runtime (no Node.js)
+function isEdgeRuntime(): boolean {
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  return typeof (process as any)?.versions?.node === 'undefined';
+}
+
+// Database path - lazy computed
+function getDBPath(): string {
+  // Lazy require to avoid bundling Node.js modules in Edge
+  const { join } = require('path');
+  
+  if (process.env.DATABASE_PATH) {
+    return process.env.DATABASE_PATH;
+  }
+  // Only call process.cwd() at runtime, not at module load
+  // eslint-disable-next-line @typescript-eslint/no-explicit-any
+  const cwd = typeof process !== 'undefined' ? (process as any).cwd?.() : undefined;
+  return cwd ? join(cwd, 'data', 'binG.db') : './data/binG.db';
+}
 
 // Encryption key - MUST be set via environment variable in production
-const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+// Lazy-loaded to avoid Edge Runtime and build-time errors
+let encryptionKey: Buffer | null = null;
 
-// CRITICAL: Validate and derive encryption key with proper security checks
-const encryptionKey = (() => {
+function getEncryptionKey(): Buffer {
+  if (encryptionKey) return encryptionKey;
+  
+  // Lazy require crypto
+  const crypto = require('crypto');
+  
+  const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
+  
+  // Skip validation during build/Edge
+  if (shouldSkipDbInit() || isEdgeRuntime()) {
+    // Return a dummy key for build/Edge - actual key loaded at runtime
+    console.warn('[DB] Skipping ENCRYPTION_KEY validation during build/Edge');
+    return Buffer.alloc(32, 'dummy-key-for-build');
+  }
+  
   if (!ENCRYPTION_KEY) {
     if (process.env.NODE_ENV === 'production') {
+      // Don't throw during build - use dummy key
+      if (shouldSkipDbInit()) {
+        console.warn('[DB] ENCRYPTION_KEY not set - using dummy key for build');
+        return Buffer.alloc(32, 'dummy-key-for-build');
+      }
       throw new Error('ENCRYPTION_KEY must be set in production for data security');
     }
     // In development, generate random key per session (not persistent)
@@ -29,8 +76,9 @@ const encryptionKey = (() => {
   }
   
   // Pad or truncate to exactly 32 bytes for AES-256
-  return Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
-})();
+  encryptionKey = Buffer.from(ENCRYPTION_KEY.padEnd(32, '0').slice(0, 32));
+  return encryptionKey;
+}
 
 /**
  * Create a mock database object for use during build or while migrations are pending
@@ -71,22 +119,40 @@ let db: Database.Database | null = null;
 
 let dbInitialized = false;
 
-export function getDatabase(): Database.Database {
+// Lazy-loaded imports - only loaded when needed, not at module load time
+type Database = any;
+let DatabaseConstructor: any = null;
+
+function getDatabaseConstructor(): any {
+  if (!DatabaseConstructor) {
+    DatabaseConstructor = require('better-sqlite3').default;
+  }
+  return DatabaseConstructor;
+}
+
+export function getDatabase(): any {
   if (!db) {
-    // Skip database initialization during build process
-    if (process.env.SKIP_DB_INIT) {
+    // Skip database initialization during build process or Edge Runtime
+    if (shouldSkipDbInit() || isEdgeRuntime()) {
       // Return a mock database object during build time
       // This allows the build to proceed without requiring the native module
-      console.log('Skipping database initialization during build');
+      console.log('[DB] Skipping database initialization during build/Edge');
       return getMockDatabase();
     }
+    
+    // Lazy load fs and path
+    const { mkdirSync, readFileSync } = require('fs');
+    const { join, dirname } = require('path');
+
+    const dbPath = getDBPath();
 
     try {
       // Create data directory if it doesn't exist
       // Using pre-imported functions from top-level imports
-      mkdirSync(dirname(DB_PATH), { recursive: true });
+      mkdirSync(dirname(dbPath), { recursive: true });
 
-      db = new DatabaseConstructor(DB_PATH);
+      const DBConstructor = getDatabaseConstructor();
+      db = new DBConstructor(dbPath);
 
       // Enable WAL mode for better performance
       db.pragma('journal_mode = WAL');
@@ -166,8 +232,18 @@ function initializeSchemaSync() {
   if (!db) return;
 
   try {
+    // Lazy load fs and path at runtime
+    const { readFileSync } = require('fs');
+    const { join } = require('path');
+    
+    // Get schema path at runtime, not at module load (Edge Runtime compatibility)
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const cwd = typeof process !== 'undefined' ? (process as any).cwd?.() : undefined;
+    const schemaPath = cwd 
+      ? join(cwd, 'lib', 'database', 'schema.sql')
+      : './lib/database/schema.sql';
+    
     // Execute base schema to ensure required tables exist
-    const schemaPath = join(process.cwd(), 'lib', 'database', 'schema.sql');
     const schema = readFileSync(schemaPath, 'utf-8');
     db.exec(schema);
 
@@ -193,11 +269,14 @@ async function initializeSchema() {
   }
 }
 
-// Encryption utilities for API keys
+// Encryption utilities for API keys - lazy-loaded
 export function encryptApiKey(apiKey: string): { encrypted: string; hash: string } {
+  const crypto = require('crypto');
+  const key = getEncryptionKey();
+  
   const iv = crypto.randomBytes(16);
   // Use createCipheriv which properly uses the IV (non-deprecated)
-  const cipher = crypto.createCipheriv('aes-256-cbc', encryptionKey, iv);
+  const cipher = crypto.createCipheriv('aes-256-cbc', key, iv);
 
   let encrypted = cipher.update(apiKey, 'utf8', 'hex');
   encrypted += cipher.final('hex');
@@ -212,6 +291,9 @@ export function encryptApiKey(apiKey: string): { encrypted: string; hash: string
 }
 
 export function decryptApiKey(encryptedData: string): string {
+  const crypto = require('crypto');
+  const key = getEncryptionKey();
+  
   const parts = encryptedData.split(':');
   
   // Check if it's new format (iv:encrypted) or legacy format (just encrypted)
@@ -220,7 +302,7 @@ export function decryptApiKey(encryptedData: string): string {
     const [ivHex, encrypted] = parts;
     try {
       const iv = Buffer.from(ivHex, 'hex');
-      const decipher = crypto.createDecipheriv('aes-256-cbc', encryptionKey, iv);
+      const decipher = crypto.createDecipheriv('aes-256-cbc', key, iv);
       let decrypted = decipher.update(encrypted, 'hex', 'utf8');
       decrypted += decipher.final('utf8');
       return decrypted;
@@ -233,7 +315,7 @@ export function decryptApiKey(encryptedData: string): string {
   try {
     // Legacy format used createDecipher which derived IV from password
     // Note: This is deprecated but kept for backward compatibility with existing encrypted data
-    const decipher = (crypto as any).createDecipher('aes-256-cbc', encryptionKey);
+    const decipher = crypto.createDecipher('aes-256-cbc', key);
     let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
     decrypted += decipher.final('utf8');
     return decrypted;
@@ -273,12 +355,12 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
         // If IV is 32 chars but doesn't work with new format, it's legacy
         try {
           const iv = Buffer.from(ivHex, 'hex');
-          crypto.createDecipheriv('aes-256-cbc', encryptionKey, iv);
+          crypto.createDecipheriv('aes-256-cbc', key, iv);
           // If this succeeds, it's new format - skip
           continue;
         } catch {
           // New format failed, this is legacy - migrate it
-          const decipher = (crypto as any).createDecipher('aes-256-cbc', encryptionKey);
+          const decipher = crypto.createDecipher('aes-256-cbc', getEncryptionKey());
           let decrypted = decipher.update(encrypted, 'hex', 'utf8');
           decrypted += decipher.final('utf8');
 
@@ -535,13 +617,7 @@ export class DatabaseOperations {
 // Export singleton instance
 export const dbOps = new DatabaseOperations();
 
-// Graceful shutdown
-process.on('SIGINT', () => {
-  if (db) {
-    db.close();
-    console.log('Database connection closed.');
-  }
-  process.exit(0);
-});
+// Note: Graceful shutdown removed - not compatible with Edge Runtime/serverless
+// Database connections will be cleaned up automatically by the runtime
 
 export default getDatabase;

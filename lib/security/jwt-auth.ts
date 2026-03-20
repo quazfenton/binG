@@ -8,6 +8,7 @@
 import { SignJWT, jwtVerify, JWTPayload, errors } from 'jose';
 const { JWTExpired, JWTInvalid, JOSEError } = errors;
 import { createSecureHash } from './crypto-utils';
+import { isBuildEnvironment } from '@/lib/utils/build-env';
 
 /**
  * JWT Token Payload Structure
@@ -42,24 +43,39 @@ export interface VerificationResult {
 /**
  * Default configuration
  *
- * SECURITY: Throws error in production if JWT_SECRET not set
+ * SECURITY: Lazy-loaded to avoid build failures
  */
-const DEFAULT_CONFIG: JWTConfig = {
-  secretKey: getSecretKey(),
-  issuer: process.env.JWT_ISSUER || 'binG',
-  audience: process.env.JWT_AUDIENCE || 'binG-app',
-  expiresIn: process.env.JWT_EXPIRES_IN || '24h',
-};
+let defaultConfig: JWTConfig | null = null;
+
+function getDefaultConfig(): JWTConfig {
+  if (defaultConfig) return defaultConfig;
+  
+  defaultConfig = {
+    secretKey: getSecretKey(),
+    issuer: process.env.JWT_ISSUER || 'binG',
+    audience: process.env.JWT_AUDIENCE || 'binG-app',
+    expiresIn: process.env.JWT_EXPIRES_IN || '24h',
+  };
+  
+  return defaultConfig;
+}
 
 /**
  * Get secret key from environment
  * Throws error in production if not configured
  */
 function getSecretKey(): string {
-  const secretKey = process.env.JWT_SECRET;
+  const env = typeof process !== 'undefined' ? process.env : {};
+  const secretKey = env.JWT_SECRET;
+
+  // Skip validation during build
+  if (isBuildEnvironment()) {
+    console.warn('[JWT] Skipping JWT_SECRET validation during build');
+    return 'dummy-key-for-build';
+  }
 
   if (!secretKey) {
-    if (process.env.NODE_ENV === 'production') {
+    if (env.NODE_ENV === 'production') {
       throw new Error(
         'CRITICAL: JWT_SECRET environment variable is required in production. ' +
         'Set a secure random string (min 32 characters).'
@@ -114,7 +130,7 @@ export async function generateToken(
   payload: TokenPayload,
   config: Partial<JWTConfig> = {}
 ): Promise<string> {
-  const fullConfig = { ...DEFAULT_CONFIG, ...config };
+  const fullConfig = { ...getDefaultConfig(), ...config };
   
   // Validate required fields
   if (!payload.userId) {
@@ -161,7 +177,7 @@ export async function verifyToken(
   token: string,
   config: Partial<JWTConfig> = {}
 ): Promise<VerificationResult> {
-  const fullConfig = { ...DEFAULT_CONFIG, ...config };
+  const fullConfig = { ...getDefaultConfig(), ...config };
   
   try {
     const { payload } = await jwtVerify(token, getSigningKey(fullConfig.secretKey), {
@@ -304,7 +320,7 @@ export async function revokeToken(
   token: string,
   config: Partial<JWTConfig> = {}
 ): Promise<void> {
-  const fullConfig = { ...DEFAULT_CONFIG, ...config };
+  const fullConfig = { ...getDefaultConfig(), ...config };
 
   try {
     const { payload } = await jwtVerify(token, getSigningKey(fullConfig.secretKey), {
@@ -531,29 +547,79 @@ export class InMemoryTokenBlacklist implements TokenBlacklistProvider {
 // Export singleton instances
 // SECURITY: Use Redis blacklist in production for distributed token revocation
 // Falls back to in-memory for development/single-instance deployments
-export const globalBlacklist: TokenBlacklistProvider = (() => {
-  // Check if Redis is available (production environment)
+let blacklistInstance: TokenBlacklistProvider | null = null;
+let cleanupIntervalStarted = false;
+
+/**
+ * Get the global blacklist instance with lazy initialization.
+ * 
+ * This function should be used instead of globalBlacklist for explicit
+ * lazy initialization. It ensures Redis connection is only created
+ * when actually needed (runtime), not at module load time.
+ * 
+ * @returns The token blacklist provider (in-memory or Redis-backed)
+ * 
+ * @example
+ * ```typescript
+ * import { getBlacklistInstance } from '@/lib/security/jwt-auth';
+ * 
+ * // Check if token is revoked
+ * const isRevoked = getBlacklistInstance().isRevoked(tokenJti);
+ * ```
+ */
+export function getBlacklistInstance(): TokenBlacklistProvider {
+  if (blacklistInstance) {
+    return blacklistInstance;
+  }
+
+  const skipRedisInit = 
+    process.env.SKIP_DB_INIT === 'true' ||
+    process.env.SKIP_DB_INIT === '1' ||
+    process.env.NEXT_BUILD === 'true' ||
+    process.env.NEXT_BUILD === '1' ||
+    process.env.NEXT_PHASE === 'build' ||
+    process.env.NEXT_PHASE === 'export';
+
   const redisUrl = process.env.REDIS_URL;
-  if (redisUrl && process.env.NODE_ENV === 'production') {
+  
+  if (redisUrl && process.env.NODE_ENV === 'production' && !skipRedisInit) {
     try {
       const { RedisTokenBlacklist } = require('./redis-token-blacklist');
       const redis = new (require('ioredis'))(redisUrl);
-      const blacklist = new RedisTokenBlacklist(redis);
+      blacklistInstance = new RedisTokenBlacklist(redis);
       console.log('[Security] Using Redis token blacklist for distributed revocation');
-      return blacklist;
+      return blacklistInstance;
     } catch (error) {
       console.warn('[Security] Failed to initialize Redis blacklist, falling back to in-memory:', error);
     }
   }
   
-  // Fallback to in-memory (development or Redis unavailable)
+  // Fallback to in-memory (development, build time, or Redis unavailable)
   console.log('[Security] Using in-memory token blacklist');
-  return new InMemoryTokenBlacklist();
-})();
-
-// Periodic cleanup (every hour) - only for in-memory blacklist
-if (typeof global !== 'undefined' && globalBlacklist instanceof InMemoryTokenBlacklist) {
-  setInterval(() => {
-    globalBlacklist.cleanup();
-  }, 60 * 60 * 1000);
+  blacklistInstance = new InMemoryTokenBlacklist();
+  
+  // Start periodic cleanup only for in-memory blacklist
+  if (typeof global !== 'undefined' && !cleanupIntervalStarted) {
+    cleanupIntervalStarted = true;
+    setInterval(() => {
+      blacklistInstance?.cleanup();
+    }, 60 * 60 * 1000);
+  }
+  
+  return blacklistInstance;
 }
+
+/**
+ * Global blacklist proxy for backward compatibility.
+ * 
+ * @deprecated Use getBlacklistInstance() directly for explicit lazy initialization.
+ * This proxy delegates to getBlacklistInstance() but creates the object eagerly.
+ */
+export const globalBlacklist: TokenBlacklistProvider = {
+  revoke: (tokenJti: string, expiryTimestamp: number) => 
+    getBlacklistInstance().revoke(tokenJti, expiryTimestamp),
+  isRevoked: (tokenJti: string) => 
+    getBlacklistInstance().isRevoked(tokenJti),
+  cleanup: () => 
+    getBlacklistInstance().cleanup(),
+};

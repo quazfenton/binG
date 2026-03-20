@@ -1,6 +1,15 @@
 import { oauthService } from '../auth/oauth-service';
 import { authService } from '../auth/auth-service';
-import { getAccessTokenForConnection, AUTH0_CONNECTIONS } from '@/lib/auth0';
+import { getAccessTokenForConnection } from '@/lib/auth0';
+import {
+  TOOL_PROVIDER_MAP,
+  NO_AUTH_TOOLS,
+  ARCADE_PLATFORMS,
+  NANGO_PLATFORMS,
+  getAuth0ConnectionForPlatform,
+  getToolServiceForPlatform,
+  getAuthorizationUrlForPlatform,
+} from '../oauth/provider-map';
 
 export interface ToolAuthorizationContext {
   userId: string;
@@ -46,67 +55,6 @@ export interface OAuthExecuteResult {
   authUrl?: string;
 }
 
-const TOOL_PROVIDER_MAP: Record<string, string> = {
-  // Gmail
-  'gmail.send': 'google', 'gmail.read': 'google', 'gmail.search': 'google', 'gmail.draft': 'google',
-  // Outlook
-  'outlook.send': 'microsoft', 'outlook.read': 'microsoft',
-  // Google Docs
-  'googledocs.create': 'google', 'googledocs.read': 'google', 'googledocs.update': 'google',
-  // Google Sheets
-  'googlesheets.create': 'google', 'googlesheets.read': 'google', 'googlesheets.write': 'google', 'googlesheets.append': 'google',
-  // Google Calendar
-  'googlecalendar.create': 'google', 'googlecalendar.read': 'google', 'googlecalendar.update': 'google', 'googlecalendar.delete': 'google',
-  // Google Drive
-  'googledrive.upload': 'google', 'googledrive.download': 'google', 'googledrive.list': 'google', 'googledrive.search': 'google',
-  // Google Maps
-  'googlemaps.search': 'google', 'googlemaps.directions': 'google', 'googlemaps.geocode': 'google',
-  // Notion
-  'notion.create_page': 'notion', 'notion.read_page': 'notion', 'notion.update_page': 'notion', 'notion.search': 'notion',
-  // Dropbox
-  'dropbox.upload': 'dropbox', 'dropbox.download': 'dropbox', 'dropbox.list': 'dropbox',
-  // GitHub
-  'github.create_issue': 'github', 'github.list_repos': 'github', 'github.create_pr': 'github', 'github.get_file': 'github', 'github.commit': 'github',
-  // Exa
-  'exa.search': 'exa', 'exa.find_similar': 'exa',
-  // Twilio
-  'twilio.send_sms': 'twilio', 'twilio.make_call': 'twilio', 'twilio.receive_sms': 'twilio',
-  // Slack
-  'slack.send_message': 'slack', 'slack.read_messages': 'slack',
-  // Discord
-  'discord.send_message': 'discord', 'discord.read_messages': 'discord',
-  // Twitter/X
-  'twitter.post': 'twitter', 'twitter.read': 'twitter', 'twitter.search': 'twitter',
-  // Reddit
-  'reddit.post': 'reddit', 'reddit.read': 'reddit', 'reddit.comment': 'reddit',
-  // Spotify
-  'spotify.play': 'spotify', 'spotify.search': 'spotify', 'spotify.create_playlist': 'spotify', 'spotify.get_current': 'spotify',
-  // Vercel
-  'vercel.deploy': 'vercel', 'vercel.list_deployments': 'vercel', 'vercel.get_project': 'vercel',
-  // Railway
-  'railway.deploy': 'railway',
-  // Google News
-  'googlenews.search': 'google',
-  // Composio generic/meta tools
-  'composio.search_tools': 'composio',
-  'composio.execute_tool': 'composio',
-  // Tambo local tools
-  'tambo.format_code': 'tambo',
-  'tambo.validate_input': 'tambo',
-  'tambo.calculate': 'tambo',
-  // MCP gateway tool
-  'mcp.call_tool': 'mcp',
-};
-
-// Tools that don't require user OAuth (use app-level API keys)
-const NO_AUTH_TOOLS = new Set([
-  'googlemaps.search', 'googlemaps.directions', 'googlemaps.geocode',
-  'googlenews.search',
-  'composio.search_tools',
-  'tambo.format_code', 'tambo.validate_input', 'tambo.calculate',
-  'mcp.call_tool',
-]);
-
 export class ToolAuthorizationManager {
   async isAuthorized(userId: string, toolName: string): Promise<boolean> {
     if (NO_AUTH_TOOLS.has(toolName)) return true;
@@ -145,7 +93,7 @@ export class ToolAuthorizationManager {
    */
   private async hasAuth0Connection(provider: string): Promise<boolean> {
     try {
-      const auth0Connection = this.getAuth0ConnectionForProvider(provider);
+      const auth0Connection = getAuth0ConnectionForPlatform(provider);
       if (!auth0Connection) {
         return false;
       }
@@ -155,25 +103,6 @@ export class ToolAuthorizationManager {
     } catch {
       return false;
     }
-  }
-
-  /**
-   * Map provider names to Auth0 connection names
-   */
-  private getAuth0ConnectionForProvider(provider: string): string | null {
-    const providerToAuth0: Record<string, string> = {
-      'github': AUTH0_CONNECTIONS.GITHUB,
-      'google': AUTH0_CONNECTIONS.GOOGLE,
-      'gmail': AUTH0_CONNECTIONS.GOOGLE,
-      'googledocs': AUTH0_CONNECTIONS.GOOGLE,
-      'googlesheets': AUTH0_CONNECTIONS.GOOGLE,
-      'googlecalendar': AUTH0_CONNECTIONS.GOOGLE,
-      'googledrive': AUTH0_CONNECTIONS.GOOGLE,
-      'googlemaps': AUTH0_CONNECTIONS.GOOGLE,
-      'googlenews': AUTH0_CONNECTIONS.GOOGLE,
-    };
-
-    return providerToAuth0[provider] || null;
   }
 
   /**
@@ -212,7 +141,7 @@ export class ToolAuthorizationManager {
       }
     }
 
-    const auth0Connection = this.getAuth0ConnectionForProvider(provider);
+    const auth0Connection = getAuth0ConnectionForPlatform(provider);
     if (auth0Connection) {
       try {
         const token = await getAccessTokenForConnection(auth0Connection);
@@ -231,12 +160,7 @@ export class ToolAuthorizationManager {
    * Determine token source based on provider
    */
   private getTokenSourceForProvider(provider: string): 'nango' | 'arcade' | 'composio' {
-    const arcadeProviders = ['google', 'gmail', 'googledocs', 'googlesheets', 'googlecalendar', 'googledrive', 'googlemaps', 'exa', 'twilio', 'spotify', 'vercel', 'railway'];
-    const nangoProviders = ['github', 'slack', 'discord', 'twitter', 'reddit'];
-
-    if (arcadeProviders.includes(provider)) return 'arcade';
-    if (nangoProviders.includes(provider)) return 'nango';
-    return 'composio';
+    return (getToolServiceForPlatform(provider) as 'arcade' | 'nango' | 'composio') ?? 'composio';
   }
 
   getRequiredProvider(toolName: string): string | null {
@@ -245,26 +169,7 @@ export class ToolAuthorizationManager {
   }
 
   getAuthorizationUrl(provider: string): string {
-    // Determine the correct authorization endpoint based on the provider
-    const arcadeProviders = ['google', 'gmail', 'googledocs', 'googlesheets', 'googlecalendar', 'googledrive', 'googlemaps', 'exa', 'twilio', 'spotify', 'vercel', 'railway'];
-    const nangoProviders = ['github', 'slack', 'discord', 'twitter', 'reddit'];
-
-    // Check if this provider uses Arcade
-    if (arcadeProviders.includes(provider)) {
-      return `${process.env.NEXT_PUBLIC_APP_URL || ''}/api/auth/arcade/authorize?provider=${provider}&redirect=1`;
-    }
-    // Check if this provider uses Nango
-    else if (nangoProviders.includes(provider)) {
-      return `${process.env.NEXT_PUBLIC_APP_URL || ''}/api/auth/nango/authorize?provider=${provider}&redirect=1`;
-    }
-    // Composio generally manages toolkit-level auth flow internally via connect links
-    else if (provider === 'composio') {
-      return `${process.env.NEXT_PUBLIC_APP_URL || ''}/api/auth/oauth/initiate?provider=composio`;
-    }
-    // Default to standard OAuth flow
-    else {
-      return `${process.env.NEXT_PUBLIC_APP_URL || ''}/api/auth/oauth/initiate?provider=${provider}`;
-    }
+    return getAuthorizationUrlForPlatform(provider);
   }
 
   // ============================================================================
@@ -421,16 +326,30 @@ export class ToolAuthorizationManager {
         };
       }
 
-      // Deactivate connections (soft delete)
-      // Note: oauthService would need a deactivateConnection method for full implementation
-      // For now, we return success and let the caller know the connection should be revoked
-      console.log(`[ToolAuth] Revoking connection for user ${userId}, provider ${provider}`);
+      // Revoke all active connections for this provider
+      let revokedCount = 0;
+      for (const conn of connections) {
+        if (connectionId && String(conn.id) !== connectionId) continue;
+        const revoked = await oauthService.revokeConnection(conn.id, numericUserId);
+        if (revoked) revokedCount++;
+      }
+
+      if (revokedCount === 0) {
+        return {
+          success: false,
+          provider,
+          revoked: false,
+          message: `Failed to revoke connection for ${provider}`,
+        };
+      }
+
+      console.log(`[ToolAuth] Revoked ${revokedCount} connection(s) for user ${userId}, provider ${provider}`);
 
       return {
         success: true,
         provider,
         revoked: true,
-        message: `Connection revoked for ${provider}. Please reconnect if needed.`,
+        message: `Revoked ${revokedCount} connection(s) for ${provider}.`,
       };
     } catch (error: any) {
       console.error('[ToolAuth] revokeConnection failed:', error);
@@ -506,16 +425,14 @@ export class ToolAuthorizationManager {
    * Check if provider uses Arcade
    */
   private isArcadeProvider(provider: string): boolean {
-    const arcadeProviders = ['google', 'gmail', 'googledocs', 'googlesheets', 'googlecalendar', 'googledrive', 'googlemaps', 'googlenews', 'exa', 'twilio', 'spotify', 'vercel', 'railway'];
-    return arcadeProviders.includes(provider);
+    return ARCADE_PLATFORMS.has(provider);
   }
 
   /**
    * Check if provider uses Nango
    */
   private isNangoProvider(provider: string): boolean {
-    const nangoProviders = ['github', 'slack', 'discord', 'twitter', 'reddit'];
-    return nangoProviders.includes(provider);
+    return NANGO_PLATFORMS.has(provider);
   }
 
   /**

@@ -1,4 +1,4 @@
-import { Nango } from '@nangohq/node';
+import type { Nango } from '@nangohq/node';
 
 export interface NangoConnectionConfig {
   providerConfigKey: string;
@@ -13,21 +13,63 @@ export interface NangoConnectionInfo {
 }
 
 export class NangoConnectionManager {
-  private nango: Nango;
+  private nango: Nango | null = null;
   private connectionCache: Map<string, { data: any; cachedAt: number }> = new Map();
   private cacheTtlMs: number;
+  private initialized = false;
 
   constructor(cacheTtlMs: number = 300000) {
-    const secretKey = process.env.NANGO_SECRET_KEY;
+    this.cacheTtlMs = cacheTtlMs;
+    // Lazy initialization - don't create Nango instance at construction time
+    // This prevents build failures when NANGO_SECRET_KEY is not set
+  }
+
+  /**
+   * Lazy initialization of Nango client
+   */
+  private initialize(): void {
+    if (this.initialized) return;
+    
+    // Skip initialization during build
+    const env = typeof process !== 'undefined' ? process.env : {};
+    const isBuild = env.NEXT_BUILD === 'true' || 
+                    env.NEXT_BUILD === '1' || 
+                    env.NEXT_PHASE === 'build' ||
+                    env.SKIP_DB_INIT === 'true';
+    
+    if (isBuild) {
+      console.warn('[NangoConnectionManager] Skipping initialization during build');
+      this.initialized = true;
+      return;
+    }
+    
+    const secretKey = env.NANGO_SECRET_KEY;
     
     if (!secretKey) {
       console.warn('[NangoConnectionManager] NANGO_SECRET_KEY not configured');
     }
 
+    // Lazy require to avoid bundling issues
+    const { Nango } = require('@nangohq/node');
     this.nango = new Nango({
       secretKey: secretKey || '',
     });
-    this.cacheTtlMs = cacheTtlMs;
+    this.initialized = true;
+  }
+
+  /**
+   * Get the Nango instance, initializing if needed
+   */
+  private getNango(): Nango {
+    if (!this.initialized) {
+      this.initialize();
+    }
+    if (!this.nango) {
+      // Return a mock Nango for build-time or when not configured
+      const { Nango } = require('@nangohq/node');
+      this.nango = new Nango({ secretKey: 'dummy-key-for-build' });
+    }
+    return this.nango;
   }
 
   /**
@@ -46,7 +88,7 @@ export class NangoConnectionManager {
     }
 
     try {
-      const connection = await this.nango.getConnection(
+      const connection = await this.getNango().getConnection(
         providerConfigKey,
         connectionId
       );
@@ -70,7 +112,7 @@ export class NangoConnectionManager {
    */
   async listConnections(): Promise<NangoConnectionInfo[]> {
     try {
-      const response = await this.nango.listConnections();
+      const response = await this.getNango().listConnections();
       // Handle both array and object response formats
       const connections = Array.isArray(response) ? response : (response as any).connections || [];
       return connections.map((c: any) => ({
@@ -128,7 +170,7 @@ export class NangoConnectionManager {
     headers?: Record<string, string>;
   }): Promise<{ success: boolean; data?: T; error?: string }> {
     try {
-      const result = await this.nango.proxy({
+      const result = await this.getNango().proxy({
         ...options,
         providerConfigKey: options.providerConfigKey,
       });

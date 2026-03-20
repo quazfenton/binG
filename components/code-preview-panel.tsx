@@ -4502,6 +4502,7 @@ root.render(<App />);` };
                   autorun: true,
                   recompileMode: "delayed",
                   recompileDelay: 300,
+                  externalResources: [],
                 }}
                 files={finalSandpackFiles}
                 customSetup={{

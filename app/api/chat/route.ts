@@ -23,6 +23,7 @@ import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orche
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@/lib/agent/workforce-manager';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
 import { sanitizeFileEditTags, extractFileEdits, extractFencedDiffEdits as extractFencedDiffEditsShared } from '@/lib/chat/file-edit-parser';
 
@@ -2453,6 +2454,15 @@ async function applyFilesystemEditsFromResponse(input: {
           previousContent,
           existedBefore,
         });
+
+        // Emit filesystem-updated event for existing files to notify UI panels
+        if (existedBefore) {
+          emitFilesystemUpdated({
+            path: file.path,
+            type: 'update',
+            sessionId: input.conversationId,
+          });
+        }
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'unknown error';
         const err = `Failed to write ${targetPath}: ${message}`;
@@ -2512,6 +2522,15 @@ async function applyFilesystemEditsFromResponse(input: {
           previousContent,
           existedBefore,
         });
+
+        // Emit filesystem-updated event for existing files to notify UI panels
+        if (existedBefore) {
+          emitFilesystemUpdated({
+            path: file.path,
+            type: 'update',
+            sessionId: input.conversationId,
+          });
+        }
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'unknown error';
         const err = `Failed to apply diff for ${targetPath}: ${message}`;
@@ -2550,11 +2569,37 @@ async function applyFilesystemEditsFromResponse(input: {
         }
 
         if (!existedBefore) {
-          result.errors.push(`APPLY_DIFF failed for ${targetPath}: file does not exist. Use WRITE for new files.`);
+          // Allow apply_diff to create new files - use the replace content as the new file content
+          // This is useful when the LLM uses apply_diff syntax but the file doesn't exist yet
+          console.log(`[apply_diff] File ${targetPath} does not exist, creating new file with replace content`);
+          const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, diffOp.replace);
+
+          result.applied.push({
+            path: file.path,
+            operation: 'write',
+            version: file.version,
+            previousVersion: null,
+            existedBefore: false,
+          });
+          filesystemEditSessionService.recordOperation(transaction.id, {
+            path: file.path,
+            operation: 'write',
+            newVersion: file.version,
+            previousVersion: null,
+            previousContent: null,
+            existedBefore: false,
+          });
+
+          // Emit event for new file creation
+          emitFilesystemUpdated({
+            path: file.path,
+            type: 'create',
+            sessionId: input.conversationId,
+          });
           continue;
         }
 
-        // Perform search & replace
+        // Perform search & replace on existing file
         if (!currentContent.includes(diffOp.search)) {
           result.errors.push(`APPLY_DIFF failed for ${targetPath}: search block not found in file.`);
           continue;
@@ -2577,6 +2622,14 @@ async function applyFilesystemEditsFromResponse(input: {
           previousVersion,
           previousContent,
           existedBefore,
+        });
+
+        // Emit filesystem-updated event to notify UI panels (code-preview-panel)
+        // This ensures existing file changes are reflected in the file editor
+        emitFilesystemUpdated({
+          path: file.path,
+          type: 'update',
+          sessionId: input.conversationId,
         });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'unknown error';
