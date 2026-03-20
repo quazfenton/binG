@@ -1524,7 +1524,7 @@ export default function ConversationInterface() {
             onStopGeneration={stop} // Pass stop from useChat
             availableProviders={availableProviders}
             onClearChat={handleNewChat} // Map to handleNewChat
-            onShowHistory={() => setShowHistory(true)} // Map to setShowHistory
+            onShowHistory={() => { setShowHistory(true); }} // Map to setShowHistory
             currentConversationId={currentConversationId}
             onSelectHistoryChat={handleLoadChat}
             currentProvider={currentProvider}
@@ -1599,7 +1599,7 @@ export default function ConversationInterface() {
         <CodePreviewPanel
           isOpen={showCodePreview}
           messages={messages}
-          onClose={() => setShowCodePreview(false)}
+          onClose={() => { setShowCodePreview(false); }}
           filesystemScopePath={filesystemScopePath}
           commandsByFile={commandsByFile}
           onApplyAllCommandDiffs={applyAllCommandDiffs}

@@ -1,16 +1,26 @@
 /**
  * Auth0 Client Configuration
- * 
- * PURPOSE: Sidelayer for AI agent-to-agent implementations, OAuth providers,
- * and 3rd party integrations (GitHub, Composio, Nango, Arcade, etc.)
- * 
- * This runs alongside existing auth system - NOT a replacement.
- * Used for future features requiring external OAuth/API access.
+ *
+ * PURPOSE: Additional OAuth integration layer for:
+ * 1. Social logins (GitHub, Google, etc.) via Connected Accounts
+ * 2. Direct API access via Auth0 Token Vault
+ * 3. Complementary to Nango/Composio/Arcade (not a replacement)
+ *
+ * Auth0 is used for:
+ * - UX-level integrations (GitHub repo import, etc.)
+ * - Fallback token source for agent tools
+ * - Direct user account connections
  */
 
 import { Auth0Client } from "@auth0/nextjs-auth0/server";
 
-export const auth0 = new Auth0Client();
+export const auth0 = new Auth0Client({
+  // Enable Connected Accounts endpoint at /auth/connect
+  enableConnectAccountEndpoint: true,
+  routes: {
+    connectAccount: "/auth/connect",
+  },
+});
 
 /**
  * Connection names for Auth0 social logins and enterprise connections
@@ -58,7 +68,7 @@ export async function getAuth0AccessToken() {
 /**
  * Get access token for a specific connection (e.g., GitHub, Google)
  * Used to access external APIs with OAuth tokens from social logins
- * 
+ *
  * @param connection - The connection name (e.g., 'github', 'google-oauth2')
  * @returns The access token for the connection, or null if not available
  */
@@ -74,9 +84,40 @@ export async function getAccessTokenForConnection(connection: string) {
 /**
  * Get GitHub access token for the authenticated user
  * Requires user to have connected their GitHub account via Auth0
- * 
+ *
  * @returns GitHub access token, or null if not available
  */
 export async function getGitHubToken() {
   return getAccessTokenForConnection(AUTH0_CONNECTIONS.GITHUB);
+}
+
+/**
+ * List all connected accounts for the user
+ * Returns connection status for all supported providers
+ */
+export async function getConnectedAccounts() {
+  try {
+    const connections = await Promise.all(
+      Object.entries(AUTH0_CONNECTIONS).map(async ([name, connection]) => {
+        try {
+          const token = await getAccessTokenForConnection(connection);
+          return {
+            provider: name.toLowerCase(),
+            connection,
+            connected: !!token,
+          };
+        } catch {
+          return {
+            provider: name.toLowerCase(),
+            connection,
+            connected: false,
+          };
+        }
+      })
+    );
+    
+    return connections;
+  } catch {
+    return [];
+  }
 }

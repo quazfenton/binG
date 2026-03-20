@@ -92,6 +92,7 @@ import type { LLMProvider } from "@/lib/chat/llm-providers";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { buildApiHeaders } from "@/lib/utils";
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer";
+import IntegrationPanel from "@/components/integrations/IntegrationPanel";
 
 interface FileNode {
   name: string;
@@ -1379,13 +1380,17 @@ export function ExperimentalWorkspacePanel() {
 
     const checkAuth = async () => {
       try {
-        const response = await fetch('/api/auth0/github-status');
+        // Call the integrations endpoint to check auth status
+        const response = await fetch('/api/integrations/github');
         if (response.ok) {
           const data = await response.json();
-          setIsGithubAuthenticated(data.authenticated);
-          if (data.authenticated && data.repos) {
+          setIsGithubAuthenticated(true);
+          if (data.repos) {
             setGithubRepos(data.repos);
           }
+        } else if (response.status === 401) {
+          // 401 means GitHub is not connected via Auth0
+          setIsGithubAuthenticated(false);
         }
       } catch {
         setIsGithubAuthenticated(false);
@@ -1396,13 +1401,14 @@ export function ExperimentalWorkspacePanel() {
   }, [showGithubImport]);
 
   const handleSignInWithGithub = () => {
-    window.location.href = '/api/auth/login?connection=github';
+    // Use Auth0 Connected Accounts endpoint for GitHub OAuth
+    window.location.href = '/auth/connect?connection=github';
   };
 
   const handleFetchRepos = async () => {
     setIsLoadingRepos(true);
     try {
-      const response = await fetch('/api/implementations/github');
+      const response = await fetch('/api/integrations/github');
       const data = await response.json();
       if (data.repos) {
         setGithubRepos(data.repos);
@@ -1420,10 +1426,10 @@ export function ExperimentalWorkspacePanel() {
     setImportError(null);
 
     try {
-      const response = await fetch('/api/implementations/github', {
+      const response = await fetch('/api/integrations/github', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ owner, repo: repoName, branch }),
+        body: JSON.stringify({ action: 'import', owner, repo: repoName, branch }),
       });
 
       const data = await response.json();
@@ -1651,7 +1657,7 @@ export function ExperimentalWorkspacePanel() {
 
               {/* Tabs */}
               <Tabs value={activeTab} onValueChange={(v) => setTab(v as PanelTab)} className="flex-1 flex flex-col">
-                <TabsList className="grid grid-cols-9 gap-1 mx-4 mt-4 bg-white/5 border border-white/10 p-1">
+                <TabsList className="grid grid-cols-10 gap-1 mx-4 mt-4 bg-white/5 border border-white/10 p-1">
                   <TabsTrigger
                     value="explorer"
                     className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
@@ -1707,6 +1713,13 @@ export function ExperimentalWorkspacePanel() {
                   >
                     <Zap className="h-3 w-3 mr-1" />
                     Compare
+                  </TabsTrigger>
+                  <TabsTrigger
+                    value="integrations"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                  >
+                    <Database className="h-3 w-3 mr-1" />
+                    Integrations
                   </TabsTrigger>
                 </TabsList>
 
@@ -2890,6 +2903,18 @@ export function ExperimentalWorkspacePanel() {
                     </div>
                   </ScrollArea>
                 </TabsContent>
+
+                {/* Integrations Tab - OAuth Connections */}
+                <TabsContent value="integrations" className="flex-1 mt-0 overflow-hidden">
+                  <ScrollArea className="h-full">
+                    <div className="p-4">
+                      <IntegrationPanel 
+                        userId={getOrCreateAnonymousSessionId()}
+                        onClose={() => setTab("explorer")}
+                      />
+                    </div>
+                  </ScrollArea>
+                </TabsContent>
               </Tabs>
             </div>
           </motion.div>
@@ -3030,7 +3055,7 @@ export function ExperimentalWorkspacePanel() {
                         setIsImporting(true);
                         setImportError(null);
                         try {
-                          const response = await fetch('/api/implementations/github', {
+                          const response = await fetch('/api/integrations/github', {
                             method: 'POST',
                             headers: { 'Content-Type': 'application/json' },
                             body: JSON.stringify({ url: githubUrl }),
@@ -3209,7 +3234,7 @@ export function ExperimentalWorkspacePanel() {
                           setIsImporting(true);
                           setImportError(null);
                           try {
-                            const response = await fetch('/api/implementations/github', {
+                            const response = await fetch('/api/integrations/github', {
                               method: 'POST',
                               headers: { 'Content-Type': 'application/json' },
                               body: JSON.stringify({ url: githubUrl }),
