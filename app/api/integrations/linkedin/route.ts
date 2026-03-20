@@ -40,12 +40,17 @@ async function fetchLinkedIn<T>(endpoint: string, token: string, options?: Reque
     headers: { ...headers, ...options?.headers },
   });
 
+  if (response.status === 204) {
+    return {} as T;
+  }
+
   if (!response.ok) {
     const error = await response.json().catch(() => ({ message: response.statusText }));
     throw new Error(error.message || `LinkedIn API error: ${response.status}`);
   }
 
-  return response.json();
+  const text = await response.text();
+  return (text ? JSON.parse(text) : {}) as T;
 }
 
 /**
@@ -59,7 +64,12 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const action = searchParams.get('action') || 'profile';
-    const count = searchParams.get('count') || '10';
+    const rawCount = searchParams.get('count');
+    const countValue = rawCount ? Number.parseInt(rawCount, 10) : 10;
+    if (!Number.isFinite(countValue) || countValue < 1 || countValue > 100) {
+      return NextResponse.json({ error: 'count must be an integer between 1 and 100' }, { status: 400 });
+    }
+    const count = String(countValue);
 
     // Try to get Auth0 LinkedIn token
     const auth0Token = await getAccessTokenForConnection(AUTH0_CONNECTIONS.LINKEDIN);
@@ -153,7 +163,7 @@ async function handleGetPosts(token: string, count: string) {
 async function handleGetConnections(token: string, count: string) {
   // LinkedIn API v2 doesn't provide full connection list, only count
   // This is a limitation of their API
-  const connections = await fetchLinkedIn<{ elements: Array<{ id: string }> }>(
+  const connections = await fetchLinkedIn<{ elements: Array<{ id: string }>; paging?: { total: number } }>(
     `/connections?count=${count}`,
     token
   );
@@ -161,8 +171,9 @@ async function handleGetConnections(token: string, count: string) {
   return NextResponse.json({
     success: true,
     action: 'connections',
-    count: (connections.elements || []).length,
-    note: 'LinkedIn API only provides connection count, not full connection list',
+    count: typeof connections.paging?.total === 'number'
+      ? connections.paging.total
+      : (connections.elements || []).length,
     authSource: 'auth0',
   });
 }

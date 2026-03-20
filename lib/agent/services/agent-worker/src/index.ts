@@ -149,20 +149,31 @@ async function runOpenCode(job: AgentJob): Promise<void> {
       latencyTracker.record(selectedProvider as any, latency);
     }
 
-    await publishEvent({
-      type: 'done',
-      sessionId,
-      data: {
-        response: responseContent,
+    // CRITICAL FIX: Publish done event in separate try-catch to avoid marking successful jobs as failed
+    // If notification fails, log error but don't overwrite successful job status
+    try {
+      await publishEvent({
+        type: 'done',
+        sessionId,
+        data: {
+          response: responseContent,
+          timestamp: Date.now(),
+          latency,
+          provider: selectedProvider,
+          executionPolicy,
+          routing,
+          result: resultData,
+        },
         timestamp: Date.now(),
-        latency,
-        provider: selectedProvider,
-        executionPolicy,
-        routing,
-        result: resultData,
-      },
-      timestamp: Date.now(),
-    });
+      });
+    } catch (publishError: any) {
+      logger.error('Failed to publish done event (job still completed successfully)', {
+        jobId,
+        sessionId,
+        error: publishError.message,
+      });
+      // Don't rethrow - job was successful, only notification failed
+    }
 
     job.status = 'completed';
     await redis.set(`agent:job:${jobId}`, JSON.stringify(job), 'EX', 3600);

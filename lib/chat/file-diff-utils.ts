@@ -83,18 +83,18 @@ export function applySimpleLineDiff(currentContent: string, diffBody: string): s
   // Parse diff lines preserving the diff marker prefix
   const diffLines = diffBody.split("\n");
   if (!diffLines.length) return null;
-  
+
   const resultLines: string[] = [];
   for (const line of diffLines) {
-    // Match diff lines while preserving the prefix marker
-    const trimmed = line.trimStart();
-    if (/^(\+\s|\-\s)/.test(trimmed)) {
-      // Added or removed line - skip removed, keep added content
-      if (trimmed.startsWith("+ ")) {
-        resultLines.push(trimmed.slice(2));
-      }
-      // Skip removed lines (continue)
-    } else if (/^\s{2}/.test(line)) {
+    // CRITICAL FIX: Check raw prefix first before any trimming
+    // This prevents misclassifying context lines that start with + or -
+    if (line.startsWith("+ ")) {
+      // Added line - keep content without the marker
+      resultLines.push(line.slice(2));
+    } else if (line.startsWith("- ")) {
+      // Removed line - skip it
+      continue;
+    } else if (line.startsWith("  ")) {
       // Context line (starts with exactly two spaces) - preserve content
       resultLines.push(line.slice(2));
     }

@@ -2,36 +2,48 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
 import { z } from 'zod';
 
-// Lazy-loaded JWT_SECRET to avoid build failures
+// Lazy-loaded JWT module and secret to avoid build failures
+// CRITICAL: These must be at module scope for use in route handlers
+let jwtModule: any = null;
 let jwtSecret: string | null = null;
 
+/**
+ * Get JWT module (lazy-loaded to avoid bundling issues)
+ */
+function getJwtModule() {
+  if (!jwtModule) {
+    jwtModule = require('jsonwebtoken');
+  }
+  return jwtModule;
+}
+
+/**
+ * Get JWT secret (lazy-loaded to avoid build failures)
+ */
 function getJwtSecret(): string {
   if (jwtSecret) return jwtSecret;
-  
-  // Lazy require to avoid bundling issues
-  const jwt = require('jsonwebtoken');
-  
+
   const env = typeof process !== 'undefined' ? process.env : {};
   const JWT_SECRET = env.JWT_SECRET;
-  
+
   // Check if we're in a build environment
-  const isBuild = env.SKIP_DB_INIT === 'true' || 
+  const isBuild = env.SKIP_DB_INIT === 'true' ||
                   env.SKIP_DB_INIT === '1' ||
                   env.NEXT_BUILD === 'true' ||
                   env.NEXT_BUILD === '1' ||
                   env.NEXT_PHASE === 'build';
-  
+
   if (isBuild) {
     console.warn('[Auth] Skipping JWT_SECRET validation during build');
     jwtSecret = 'dummy-key-for-build';
     return jwtSecret;
   }
-  
+
   if (!JWT_SECRET) {
     console.error('[Security] JWT_SECRET environment variable is not set');
     throw new Error('JWT_SECRET is required but not configured');
   }
-  
+
   jwtSecret = JWT_SECRET;
   return jwtSecret;
 }
@@ -76,6 +88,7 @@ export async function POST(req: NextRequest) {
     // Verify JWT token
     let decoded: any;
     try {
+      const jwt = getJwtModule();
       decoded = jwt.verify(token, getJwtSecret(), {
         algorithms: ['HS256'],
         issuer: 'bing-app',
@@ -218,6 +231,7 @@ export async function GET(req: NextRequest) {
 
     // Verify JWT token
     try {
+      const jwt = getJwtModule();
       const decoded: any = jwt.verify(token, getJwtSecret(), {
         algorithms: ['HS256'],
         issuer: 'bing-app',

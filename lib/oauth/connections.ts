@@ -163,21 +163,24 @@ export async function fetchGitHubRepoFiles(
   userId?: number
 ): Promise<Map<string, string>> {
   if (existingFiles.size >= maxFiles) return existingFiles;
-  
+
   const token = connectionToken || await getAccessTokenForConnection(AUTH0_CONNECTIONS.GITHUB, userId);
   const contents = await getGitHubRepoContents(owner, repo, path, token);
-  
+
   for (const item of contents) {
     if (existingFiles.size >= maxFiles) break;
-    
+
     if (item.type === 'file' && item.download_url) {
       const content = await getGitHubFileContent(item.download_url, token);
       existingFiles.set(item.path, content);
     } else if (item.type === 'dir') {
-      await fetchGitHubRepoFiles(owner, repo, item.path, token, maxFiles - existingFiles.size, existingFiles, userId);
+      // CRITICAL FIX: Pass original maxFiles (not maxFiles - existingFiles.size)
+      // The recursive call checks existingFiles.size against maxFiles at the start,
+      // so passing a reduced value causes premature termination in nested directories
+      await fetchGitHubRepoFiles(owner, repo, item.path, token, maxFiles, existingFiles, userId);
     }
   }
-  
+
   return existingFiles;
 }
 

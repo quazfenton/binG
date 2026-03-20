@@ -76,8 +76,8 @@ const SNAPSHOT_CACHE_MAX_ENTRIES = 100;
 
 // Debounce map to prevent duplicate API calls within short time windows
 const lastApiCallTime = new Map<string, number>();
-const API_CALL_DEBOUNCE_MS = 1000; // Increased to 1 second - reduces polling frequency
-const REQUEST_COOLDOWN_MS = 2000;  // Global cooldown between any VFS API calls
+const API_CALL_DEBOUNCE_MS = 500; // Reduced for faster response - mainly for GET requests
+const REQUEST_COOLDOWN_MS = 500;  // Reduced from 2000ms to 500ms for rapid edits
 let lastGlobalVfsCall = 0;
 
 function getCacheKey(path: string, ownerId: string): string {
@@ -325,18 +325,25 @@ export function useVirtualFilesystem(
   ): Promise<TData> => {
     const { includeJsonContentType = true, ...rest } = options;
     
-    // Global VFS cooldown - prevents all VFS calls from happening too frequently
+    // Global VFS cooldown - but don't delay write operations excessively
     const now = Date.now();
     const timeSinceLastCall = now - lastGlobalVfsCall;
-    if (timeSinceLastCall < REQUEST_COOLDOWN_MS) {
-      const waitTime = REQUEST_COOLDOWN_MS - timeSinceLastCall;
-      log(`request: global cooldown active, waiting ${waitTime}ms`);
+    
+    // Allow writes to proceed with shorter delay, GET requests have longer debounce
+    const method = (options.method || 'GET').toUpperCase();
+    const isWriteOperation = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+    
+    // Write operations have much shorter cooldown
+    const effectiveCooldown = isWriteOperation ? 100 : REQUEST_COOLDOWN_MS;
+    
+    if (timeSinceLastCall < effectiveCooldown) {
+      const waitTime = effectiveCooldown - timeSinceLastCall;
+      log(`request: cooldown active for ${method}, waiting ${waitTime}ms`);
       await new Promise(resolve => setTimeout(resolve, waitTime));
     }
     lastGlobalVfsCall = Date.now();
     
     // Debounce duplicate GET requests only - POST/PUT/DELETE should not be debounced
-    const method = (options.method || 'GET').toUpperCase();
     if (method === 'GET') {
       const requestKey = `${method}:${url}`;
       const lastCall = lastApiCallTime.get(requestKey);

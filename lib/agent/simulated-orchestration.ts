@@ -117,20 +117,28 @@ class SimulatedOrchestrator {
     if (!proposal) {
       throw new Error(`Task ${taskId} not found`);
     }
+
+    // CRITICAL FIX: Only allow starting tasks from 'approved' status
+    // This prevents bypassing the review gate and double-dispatching work
+    if (proposal.status !== 'approved') {
+      throw new Error(`Task ${taskId} cannot start from status '${proposal.status}'. Must be 'approved'.`);
+    }
+
+    const now = Date.now();
     
     proposal.status = 'in_progress';
     proposal.assignedWorkerId = workerId || proposal.assignedWorkerId;
     proposal.execution = {
       ...proposal.execution,
-      startedAt: Date.now(),
+      startedAt: now,
     };
     this.proposals.set(taskId, proposal);
     this.executions.set(taskId, {
-      startedAt: Date.now(),
+      startedAt: now,
       workerId: proposal.assignedWorkerId,
       attempts: (proposal.retryCount || 0) + 1,
     });
-    
+
     logger.info(`Task execution started: ${taskId}${proposal.assignedWorkerId ? ` on ${proposal.assignedWorkerId}` : ''}`);
   }
 
@@ -172,10 +180,13 @@ class SimulatedOrchestrator {
       throw new Error(`Task ${taskId} not found`);
     }
 
+    const now = Date.now();
+    
     proposal.retryCount = (proposal.retryCount || 0) + 1;
     proposal.assignedWorkerId = options?.workerId || proposal.assignedWorkerId;
     proposal.execution = {
       ...proposal.execution,
+      completedAt: now,  // CRITICAL FIX: Persist completion timestamp before deleting execution
       lastError: error,
     };
     proposal.status = options?.retry ? 'approved' : 'rejected';

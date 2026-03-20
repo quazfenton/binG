@@ -194,9 +194,10 @@ export class StatefulAgent {
    */
   private async createExecutionGraph(): Promise<void> {
     if (!this.taskGraph || this.taskGraph.tasks.length === 0) return;
-    
+
     const graph = executionGraphEngine.createGraph(this.sessionId);
     this.executionGraphId = graph.id;
+    this.activeNodeId = null; // Reset active node tracking
 
     // Add nodes for each task in the task graph
     for (const task of this.taskGraph.tasks) {
@@ -208,7 +209,7 @@ export class StatefulAgent {
         dependencies: task.dependencies,
       });
     }
-    
+
     log.info('Execution graph created', {
       graphId: graph.id,
       taskId: this.taskGraph.id,
@@ -217,25 +218,34 @@ export class StatefulAgent {
   }
 
   /**
+   * Track currently active node for accurate completion tracking
+   */
+  private activeNodeId: string | null = null;
+
+  /**
    * Update execution graph node status
    */
   private async updateExecutionGraphNode(nodeId: string, status: 'running' | 'completed' | 'failed', result?: any): Promise<void> {
     if (!this.executionGraphId) return;
-    
+
     const graph = executionGraphEngine.getGraph(this.executionGraphId);
     if (!graph) return;
-    
+
     const node = graph.nodes.get(nodeId);
     if (!node) return;
-    
+
     node.status = status;
     if (status === 'running') {
       node.startedAt = Date.now();
+      this.activeNodeId = nodeId; // Track active node
     } else if (status === 'completed' || status === 'failed') {
       node.completedAt = Date.now();
       if (result) node.result = result;
+      if (this.activeNodeId === nodeId) {
+        this.activeNodeId = null; // Clear active node on completion
+      }
     }
-    
+
     log.debug('Execution graph node updated', {
       graphId: this.executionGraphId,
       nodeId,
@@ -761,19 +771,48 @@ Use 'createFile' for new files.`;
               const contentForState = typeof execResult.content === 'string'
                 ? execResult.content
                 : (typeof (callArgs as any).content === 'string' ? (callArgs as any).content : undefined);
-              
-              // Update execution graph for ANY successful tool call (not just file operations)
-              // This prevents graphs from stalling on non-file tool calls like execShell
+
+              // Update execution graph for successful tool calls
+              // CRITICAL FIX: Use activeNodeId tracking instead of marking arbitrary readyNodes[0]
+              // This ensures we complete the correct node that corresponds to the actual task being executed
               if (execResult.success && this.executionGraphId) {
                 const graph = executionGraphEngine.getGraph(this.executionGraphId);
                 if (graph) {
-                  const readyNodes = executionGraphEngine.getReadyNodes(graph);
-                  if (readyNodes.length > 0) {
-                    executionGraphEngine.markComplete(graph, readyNodes[0].id, {
-                      tool: call.toolName,
-                      success: true,
-                      hasFilePath: callArgs && 'path' in callArgs,
-                    });
+                  // Prefer completing the active node if one is being tracked
+                  if (this.activeNodeId) {
+                    const activeNode = graph.nodes.get(this.activeNodeId);
+                    if (activeNode && activeNode.status === 'running') {
+                      executionGraphEngine.markComplete(graph, this.activeNodeId, {
+                        tool: call.toolName,
+                        success: true,
+                        hasFilePath: callArgs && 'path' in callArgs,
+                      });
+                      logger.info('Execution graph node completed (active node tracking)', {
+                        graphId: this.executionGraphId,
+                        nodeId: this.activeNodeId,
+                        tool: call.toolName,
+                      });
+                    } else {
+                      // Active node not found or not running, fall back to first ready node
+                      const readyNodes = executionGraphEngine.getReadyNodes(graph);
+                      if (readyNodes.length > 0) {
+                        executionGraphEngine.markComplete(graph, readyNodes[0].id, {
+                          tool: call.toolName,
+                          success: true,
+                          hasFilePath: callArgs && 'path' in callArgs,
+                        });
+                      }
+                    }
+                  } else {
+                    // No active node tracked, use first ready node as fallback
+                    const readyNodes = executionGraphEngine.getReadyNodes(graph);
+                    if (readyNodes.length > 0) {
+                      executionGraphEngine.markComplete(graph, readyNodes[0].id, {
+                        tool: call.toolName,
+                        success: true,
+                        hasFilePath: callArgs && 'path' in callArgs,
+                      });
+                    }
                   }
                 }
               }

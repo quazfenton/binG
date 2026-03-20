@@ -47,38 +47,42 @@ const SOURCE_LABELS: Record<string, string> = {
   oauth: 'OAuth',
 };
 
-// Provider configuration: which auth method to use for each provider
-// Priority: Auth0 Connected Accounts (if configured) > Arcade > Nango > Standard OAuth
-const PROVIDER_AUTH_CONFIG: Record<string, { method: 'auth0' | 'arcade' | 'nango' | 'oauth'; connection?: string }> = {
-  // Auth0 Connected Accounts (user account linking) - primary for social logins
-  github: { method: 'auth0', connection: 'github' },
-  google: { method: 'auth0', connection: 'google-oauth2' },
-  facebook: { method: 'auth0', connection: 'facebook' },
-  twitter: { method: 'auth0', connection: 'twitter' },
-  linkedin: { method: 'auth0', connection: 'linkedin' },
-  apple: { method: 'auth0', connection: 'apple' },
-  microsoft: { method: 'auth0', connection: 'windowslive' },
-  instagram: { method: 'auth0', connection: 'instagram' },
-  bitbucket: { method: 'auth0', connection: 'bitbucket' },
-  slack: { method: 'auth0', connection: 'slack' },
-  // Arcade providers
-  gmail: { method: 'arcade' },
-  googledocs: { method: 'arcade' },
-  googlesheets: { method: 'arcade' },
-  googlecalendar: { method: 'arcade' },
-  googledrive: { method: 'arcade' },
-  exa: { method: 'arcade' },
-  twilio: { method: 'arcade' },
-  spotify: { method: 'arcade' },
-  vercel: { method: 'arcade' },
-  railway: { method: 'arcade' },
-  // Nango providers
-  discord: { method: 'nango' },
-  reddit: { method: 'nango' },
-  // Standard OAuth
-  notion: { method: 'oauth' },
-  outlook: { method: 'oauth' },
+// Provider auth configuration — derived from centralized provider-map
+// Auth0 handles UX-level social logins; Arcade/Nango/Composio handle tool-level OAuth
+// For providers supported by both, Auth0 is used for the UI connect flow
+// and the tool service is used at execution time (tokens are shared via the database).
+
+// Auth0 Connected Accounts: social logins that link user accounts
+const AUTH0_CONNECT_PROVIDERS: Record<string, string> = {
+  github: 'github',
+  google: 'google-oauth2',
+  facebook: 'facebook',
+  twitter: 'twitter',
+  linkedin: 'linkedin',
+  apple: 'apple',
+  microsoft: 'windowslive',
+  instagram: 'instagram',
+  bitbucket: 'bitbucket',
+  slack: 'slack',
 };
+
+// Arcade tool providers (agent automation)
+const ARCADE_PROVIDERS = new Set([
+  'gmail', 'googledocs', 'googlesheets', 'googlecalendar', 'googledrive',
+  'exa', 'twilio', 'spotify', 'vercel', 'railway',
+]);
+
+// Nango tool providers (agent automation)
+const NANGO_PROVIDERS = new Set(['discord', 'reddit']);
+
+function getProviderAuthConfig(provider: string): { method: 'auth0' | 'arcade' | 'nango' | 'oauth'; connection?: string } {
+  if (AUTH0_CONNECT_PROVIDERS[provider]) {
+    return { method: 'auth0', connection: AUTH0_CONNECT_PROVIDERS[provider] };
+  }
+  if (ARCADE_PROVIDERS.has(provider)) return { method: 'arcade' };
+  if (NANGO_PROVIDERS.has(provider)) return { method: 'nango' };
+  return { method: 'oauth' };
+}
 
 const INTEGRATIONS: Integration[] = [
   // Auth0 Connected Accounts (primary for social logins)
@@ -360,7 +364,7 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
 
     try {
       // Get the auth config for this provider
-      const authConfig = PROVIDER_AUTH_CONFIG[integration.provider];
+      const authConfig = getProviderAuthConfig(integration.provider);
       
       // Handle Auth0 Connected Accounts (for GitHub, Google when Auth0 is configured)
       if (authConfig?.method === 'auth0' && authConfig.connection) {
@@ -392,41 +396,23 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
       // Determine which auth endpoint to use based on provider config
       let authEndpoint: string;
       
-      if (authConfig?.method === 'arcade') {
-        // Use Arcade authorization
+      // Resolve auth token once for all service types
+      const token = (() => {
+        try { return localStorage.getItem('token'); } catch { return null; }
+      })();
+      const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+      if (authConfig?.method === 'arcade' || authConfig?.method === 'nango') {
+        // Use Arcade or Nango authorization endpoint
+        const servicePath = authConfig.method === 'arcade' ? 'arcade' : 'nango';
         try {
-          const token = (() => {
-            try { return localStorage.getItem('token'); } catch { return null; }
-          })();
-          const response = await fetch(`/api/auth/arcade/authorize?provider=${integration.provider}&userId=${userId}`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          });
+          const response = await fetch(
+            `/api/auth/${servicePath}/authorize?provider=${integration.provider}&userId=${userId}`,
+            { headers: authHeaders },
+          );
           if (response.ok) {
             const data = await response.json();
-            authEndpoint = data.authUrl;
-          } else {
-            const errorData = await response.json().catch(() => ({}));
-            toast.error(errorData.error || `Failed to initialize ${integration.name} connection`);
-            setLoading(null);
-            return;
-          }
-        } catch {
-          toast.error(`Failed to reach authorization service for ${integration.name}`);
-          setLoading(null);
-          return;
-        }
-      } else if (authConfig?.method === 'nango') {
-        // Use Nango authorization
-        try {
-          const token = (() => {
-            try { return localStorage.getItem('token'); } catch { return null; }
-          })();
-          const response = await fetch(`/api/auth/nango/authorize?provider=${integration.provider}&userId=${userId}`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          });
-          if (response.ok) {
-            const data = await response.json();
-            authEndpoint = data.connectLink || data.authUrl || `/api/auth/oauth/initiate?provider=${integration.provider}&userId=${userId}`;
+            authEndpoint = data.authUrl || data.connectLink || `/api/auth/oauth/initiate?provider=${integration.provider}`;
           } else {
             const errorData = await response.json().catch(() => ({}));
             toast.error(errorData.error || `Failed to initialize ${integration.name} connection`);
@@ -439,8 +425,9 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
           return;
         }
       } else {
-        // Default: use standard OAuth
-        authEndpoint = `/api/auth/oauth/initiate?provider=${integration.provider}&userId=${userId}`;
+        // Standard OAuth — include token in query for popup redirect auth
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+        authEndpoint = `/api/auth/oauth/initiate?provider=${integration.provider}${tokenParam}`;
       }
 
       // Calculate popup position centered on screen

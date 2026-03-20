@@ -80,7 +80,7 @@ export class ToolAuthorizationManager {
     }
 
     // Fallback: Check Auth0 Connected Accounts
-    if (await this.hasAuth0Connection(provider)) {
+    if (await this.hasAuth0Connection(provider, numericUserId)) {
       return true;
     }
 
@@ -91,14 +91,14 @@ export class ToolAuthorizationManager {
    * Check if user has an Auth0 connection for the provider
    * Used as fallback when Nango/Arcade/Composio connections are not available
    */
-  private async hasAuth0Connection(provider: string): Promise<boolean> {
+  private async hasAuth0Connection(provider: string, userId: number): Promise<boolean> {
     try {
       const auth0Connection = getAuth0ConnectionForPlatform(provider);
       if (!auth0Connection) {
         return false;
       }
 
-      const token = await getAccessTokenForConnection(auth0Connection);
+      const token = await getAccessTokenForConnection(auth0Connection, userId);
       return !!token;
     } catch {
       return false;
@@ -144,7 +144,7 @@ export class ToolAuthorizationManager {
     const auth0Connection = getAuth0ConnectionForPlatform(provider);
     if (auth0Connection) {
       try {
-        const token = await getAccessTokenForConnection(auth0Connection);
+        const token = await getAccessTokenForConnection(auth0Connection, numericUserId);
         if (token) {
           return { token, source: 'auth0' };
         }

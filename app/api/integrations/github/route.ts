@@ -76,9 +76,14 @@ async function fetchRepoContents(
   owner: string,
   repo: string,
   repoPath: string = '',
-  token?: string
+  token?: string,
+  branch?: string
 ): Promise<GitHubFile[]> {
-  const url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${repoPath}`;
+  const encodedPath = encodeURIComponent(repoPath);
+  let url = `${GITHUB_API}/repos/${owner}/${repo}/contents/${encodedPath}`;
+  if (branch) {
+    url += `?ref=${encodeURIComponent(branch)}`;
+  }
   const response = await fetchGitHubApi(url, token);
   
   if (!response.ok) {
@@ -104,11 +109,12 @@ async function recursivelyFetchDirectory(
   repoPath: string,
   token?: string,
   maxFiles: number = 100,
-  existingFiles: Map<string, string> = new Map()
+  existingFiles: Map<string, string> = new Map(),
+  branch?: string
 ): Promise<Map<string, string>> {
   if (existingFiles.size >= maxFiles) return existingFiles;
   
-  const contents = await fetchRepoContents(owner, repo, repoPath, token);
+  const contents = await fetchRepoContents(owner, repo, repoPath, token, branch);
   
   for (const item of contents) {
     if (existingFiles.size >= maxFiles) break;
@@ -117,7 +123,7 @@ async function recursivelyFetchDirectory(
       const content = await fetchFileContent(item.download_url, token);
       existingFiles.set(item.path, content);
     } else if (item.type === 'dir') {
-      await recursivelyFetchDirectory(owner, repo, item.path, token, maxFiles - existingFiles.size, existingFiles);
+      await recursivelyFetchDirectory(owner, repo, item.path, token, maxFiles, existingFiles, branch);
     }
   }
   
@@ -303,6 +309,9 @@ function validateRepoUrl(repoUrl: string): { valid: boolean; error?: string; hos
     }
     if (!FULL_ALLOWED_HOSTS.includes(url.hostname)) {
       return { valid: false, error: `Git host "${url.hostname}" is not allowed. Allowed: ${FULL_ALLOWED_HOSTS.join(', ')}` };
+    }
+    if (url.username || url.password) {
+      return { valid: false, error: 'Credentials in URL are not allowed' };
     }
     const ipPattern = /^(10\.|172\.(1[6-9]|2[0-9]|3[01])\.|192\.168\.|127\.|169\.254\.)/;
     if (ipPattern.test(url.hostname)) {
@@ -543,11 +552,13 @@ export async function POST(request: NextRequest) {
 
     // POST /api/integrations/github { action: 'import', owner, repo, branch }
     if (action === 'import') {
-      const { owner, repo, branch, maxFiles = 50 } = body;
+      const { owner, repo, branch, maxFiles: rawMaxFiles = 50 } = body;
       
       if (!owner || !repo) {
         return NextResponse.json({ error: 'owner and repo are required for import action' }, { status: 400 });
       }
+      
+      const maxFiles = Math.min(Math.max(1, Number(rawMaxFiles) || 50), 500);
       
       const token = await getGitHubToken();
       
@@ -574,7 +585,9 @@ export async function POST(request: NextRequest) {
         repo, 
         '', 
         token || undefined,
-        maxFiles
+        maxFiles,
+        new Map(),
+        repoBranch
       );
       
       return NextResponse.json({
@@ -595,10 +608,12 @@ export async function POST(request: NextRequest) {
     }
 
     // POST /api/integrations/github { url, maxFiles } (legacy import from URL)
-    const { url, maxFiles = 50 } = body;
+    const { url, maxFiles: rawMaxFiles = 50 } = body;
     if (!url) {
       return NextResponse.json({ error: 'URL, or action (import/clone) is required' }, { status: 400 });
     }
+    
+    const maxFiles = Math.min(Math.max(1, Number(rawMaxFiles) || 50), 500);
     
     const parsed = parseGitHubUrl(url);
     if (!parsed) {
@@ -632,7 +647,9 @@ export async function POST(request: NextRequest) {
       parsed.repo, 
       '', 
       token || undefined,
-      maxFiles
+      maxFiles,
+      new Map(),
+      branch
     );
     
     return NextResponse.json({

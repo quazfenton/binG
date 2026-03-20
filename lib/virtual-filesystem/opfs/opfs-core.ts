@@ -129,7 +129,11 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
 
     // If initialization is already in progress, wait for it
     if (this.initPromise) {
-      await this.initPromise;
+      try {
+        await this.initPromise;
+      } catch {
+        // Previous initialization failed; continue with a fresh attempt
+      }
       // After waiting, check if we need to initialize again
       if (this.initialized && this.workspaceId === workspaceId) {
         return;
@@ -145,10 +149,19 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
     // Create initialization promise to prevent concurrent initializations
     this.initPromise = (async () => {
       try {
-        // Get root directory handle from OPFS
+        // Clear caches when switching to a different workspace
+        if (this.initialized && this.workspaceId !== workspaceId) {
+          this.fileHandleCache.clear();
+          this.directoryHandleCache.clear();
+        }
+        
+        // Get root directory handle from OPFS (getDirectory() takes no arguments)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
-        this.rootHandle = await (navigator as any).storage.getDirectory(
-          `${this.options.rootName}/${workspaceId}`
+        const rootDir = await (navigator as any).storage.getDirectory();
+        // Navigate to workspace-specific subdirectory
+        this.rootHandle = await rootDir.getDirectoryHandle(
+          `${this.options.rootName}/${workspaceId}`,
+          { create: true }
         );
         
         this.workspaceId = workspaceId;

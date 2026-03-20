@@ -232,12 +232,24 @@ export class OracleVMSandboxHandle implements SandboxHandle {
           return;
         }
 
+        // SECURITY: Validate command against allowed patterns to prevent shell injection
+        // Only allow git subcommands followed by safe arguments
+        const gitCommandPattern = /^(git\s+(?:status|diff|commit|push|pull|branch|log|stash|init|add|clone)(?:\s+[\w\-./=@:+|^<>,]+)*)$/;
+        if (!gitCommandPattern.test(command.trim())) {
+          resolve({
+            success: false,
+            output: 'Invalid git command: only safe git subcommands are allowed',
+            exitCode: 1,
+            executionTime: Date.now() - startTime,
+          });
+          return;
+        }
+
         // SECURITY: Use single quotes and escape any single quotes in the path
         // This prevents shell injection via the cwd
         const escapedCwd = workingDir.replace(/'/g, "'\\''");
 
         // Build command with working directory using single quotes
-        // Note: command is NOT escaped to preserve shell semantics for legitimate quotes
         const fullCommand = `cd '${escapedCwd}' && ${command}`;
 
         conn.exec(fullCommand, (err: any, stream: any) => {

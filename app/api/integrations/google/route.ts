@@ -126,7 +126,8 @@ async function handleDrive(token: string, action: string, fileId?: string | null
 
   if (action === 'download' && fileId) {
     // Download file content
-    const downloadResponse = await fetch(`${GOOGLE_APIS.DRIVE}/files/${fileId}?alt=media`, {
+    const encodedFileId = encodeURIComponent(fileId);
+    const downloadResponse = await fetch(`${GOOGLE_APIS.DRIVE}/files/${encodedFileId}?alt=media`, {
       headers: { 'Authorization': `Bearer ${token}` },
     });
 
@@ -165,7 +166,7 @@ async function handleCalendar(token: string, action: string) {
       success: true,
       service: 'calendar',
       action: 'list',
-      calendars: calendars.items.map(c => ({
+      calendars: (calendars.items || []).map(c => ({
         id: c.id,
         name: c.summary,
       })),
