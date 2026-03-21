@@ -6,7 +6,7 @@ const logger = createLogger('Auth:JWT');
 // Check if we're in a build/Edge environment
 function shouldSkipValidation(): boolean {
   const env = typeof process !== 'undefined' ? process.env : {};
-  return env.SKIP_DB_INIT === 'true' || 
+  return env.SKIP_DB_INIT === 'true' ||
          env.SKIP_DB_INIT === '1' ||
          env.NEXT_BUILD === 'true' ||
          env.NEXT_BUILD === '1' ||
@@ -14,37 +14,49 @@ function shouldSkipValidation(): boolean {
          env.NEXT_PHASE === 'export';
 }
 
-// Lazy-loaded JWT_SECRET - only validated at runtime, not at module load
+// Lazy-loaded JWT module and secret - only initialized at runtime
+// CRITICAL: These must be at module scope for use in functions
+let jwtModule: any = null;
 let jwtSecret: string | null = null;
 
+/**
+ * Get JWT module (lazy-loaded to avoid bundling issues)
+ */
+function getJwtModule() {
+  if (!jwtModule) {
+    jwtModule = require('jsonwebtoken');
+  }
+  return jwtModule;
+}
+
+/**
+ * Get JWT secret (lazy-loaded to avoid build failures)
+ */
 function getJwtSecret(): string {
   if (jwtSecret) return jwtSecret;
-  
-  // Lazy require to avoid bundling issues
-  const jwt = require('jsonwebtoken');
-  
+
   const env = typeof process !== 'undefined' ? process.env : {};
   const JWT_SECRET = env.JWT_SECRET;
-  
+
   // Skip validation during build
   if (shouldSkipValidation()) {
     logger.warn('[JWT] Skipping JWT_SECRET validation during build');
     jwtSecret = 'dummy-key-for-build';
     return jwtSecret;
   }
-  
+
   // Validate JWT_SECRET is set in production
   if (env.NODE_ENV === 'production' && !JWT_SECRET) {
     logger.error('CRITICAL: JWT_SECRET is not configured in production!');
     throw new Error('JWT_SECRET is required in production environment');
   }
-  
+
   // Validate JWT_SECRET format if provided
   if (JWT_SECRET && JWT_SECRET.length < 32) {
     logger.error('CRITICAL: JWT_SECRET must be at least 32 characters for security');
     throw new Error('JWT_SECRET must be at least 32 characters (256 bits)');
   }
-  
+
   // Development fallback with prominent warning (only if not in production)
   if (!JWT_SECRET) {
     if (env.NODE_ENV === 'production') {
@@ -197,18 +209,19 @@ export function generateToken(payload: { userId: string; email: string; type?: s
     aud: 'bing-users',
   } as any;
 
+  const jwt = getJwtModule();
   const token = jwt.sign(fullPayload, getJwtSecret(), {
     expiresIn,
     algorithm: 'HS256', // Explicitly specify algorithm
   });
-  
-  logger.debug('Token generated', { 
-    userId: payload.userId, 
-    jti, 
+
+  logger.debug('Token generated', {
+    userId: payload.userId,
+    jti,
     expiresIn,
-    type: payload.type 
+    type: payload.type
   });
-  
+
   return token;
 }
 
