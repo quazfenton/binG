@@ -80,7 +80,7 @@ export {
   releaseMemoryLock,
   isSessionLocked,
   getMemoryLockStats,
-  __clearAllLocks__,
+  // Note: __clearAllLocks__ is test-only, import from @/lib/session/__internal__
   type MemoryLockRelease,
   type MemoryLockResult,
 } from './memory-lock'
@@ -89,7 +89,7 @@ export {
 export {
   acquireQueueLock,
   getQueueStats,
-  __clearAllQueues__,
+  // Note: __clearAllQueues__ is test-only, import from @/lib/session/__internal__
   type QueueLockRelease,
   type QueueLockResult,
 } from './queue-lock'
@@ -102,7 +102,7 @@ export {
   getAlertHistory,
   startAlertMonitor,
   stopAlertMonitor,
-  __clearAllMetrics__,
+  // Note: __clearAllMetrics__ is test-only, import from @/lib/session/__internal__
   type LockMetric,
 } from './lock-metrics'
 

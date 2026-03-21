@@ -25,28 +25,27 @@ function getEnv(): ProcessEnv {
 
 /**
  * Check if we're in a build/Edge environment where validation should be skipped
- * 
- * Checks for:
+ *
+ * Checks for explicit build environment signals:
  * - SKIP_DB_INIT environment variable
- * - NEXT_BUILD environment variable  
+ * - NEXT_BUILD environment variable
  * - NEXT_PHASE set to 'build' or 'export'
- * - Edge Runtime (process.versions.node is undefined)
- * 
+ *
+ * Note: Does NOT check for Edge Runtime (process.versions.node) to avoid
+ * misclassifying actual Edge runtime traffic as build environment.
+ *
  * @returns true if in build/Edge environment
  */
 export function isBuildEnvironment(): boolean {
   const env = getEnv();
-  
+
   return (
     env.SKIP_DB_INIT === 'true' ||
     env.SKIP_DB_INIT === '1' ||
     env.NEXT_BUILD === 'true' ||
     env.NEXT_BUILD === '1' ||
     env.NEXT_PHASE === 'build' ||
-    env.NEXT_PHASE === 'export' ||
-    // Check for Edge Runtime (no Node.js)
-    (typeof process !== 'undefined' && 
-     typeof (process as any)?.versions?.node === 'undefined')
+    env.NEXT_PHASE === 'export'
   );
 }
 

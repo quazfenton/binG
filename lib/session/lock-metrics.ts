@@ -268,18 +268,38 @@ function getStrategyBreakdown(recentMetrics: LockMetric[]): Record<string, {
  * Emit metrics to external monitoring system
  */
 function emitToMonitoringSystem(successRate: number, totalAttempts: number): void {
-  // Hook for external monitoring (Datadog, Prometheus, etc.)
-  // Example: Send to StatsD
+  // StatsD integration
   if (process.env.STATSD_HOST) {
     try {
-      // Placeholder for StatsD integration
-      log.debug('Would emit to StatsD', { successRate, totalAttempts });
+      // Create UDP socket for StatsD
+      const dgram = require('dgram');
+      const socket = dgram.createSocket('udp4');
+      const statsdHost = process.env.STATSD_HOST.split(':')[0];
+      const statsdPort = parseInt(process.env.STATSD_HOST.split(':')[1] || '8125');
+      
+      // Send success rate metric
+      const successRateMsg = `session_lock.success_rate:${successRate * 100}|g`;
+      socket.send(Buffer.from(successRateMsg), 0, successRateMsg.length, statsdPort, statsdHost);
+      
+      // Send total attempts metric
+      const attemptsMsg = `session_lock.attempts:${totalAttempts}|c`;
+      socket.send(Buffer.from(attemptsMsg), 0, attemptsMsg.length, statsdPort, statsdHost);
+      
+      // Send by-strategy metrics
+      const metrics = getLockMetrics();
+      for (const [strategy, data] of Object.entries(metrics.byStrategy)) {
+        const strategyMsg = `session_lock.${strategy}.success_rate:${data.successRate * 100}|g`;
+        socket.send(Buffer.from(strategyMsg), 0, strategyMsg.length, statsdPort, statsdHost);
+      }
+      
+      socket.close();
+      log.debug('Emitted metrics to StatsD', { successRate, totalAttempts });
     } catch (error) {
-      log.warn('Failed to emit to monitoring system', { error });
+      log.warn('Failed to emit to StatsD', { error });
     }
   }
 
-  // Example: Send to webhook
+  // Prometheus/OpenTelemetry integration via webhook
   if (process.env.LOCK_ALERT_WEBHOOK_URL) {
     const payload = {
       alert: 'session_lock_low_success_rate',
@@ -287,6 +307,7 @@ function emitToMonitoringSystem(successRate: number, totalAttempts: number): voi
       totalAttempts,
       timestamp: Date.now(),
       threshold: ALERT_THRESHOLD,
+      metrics: getLockMetrics(),
     };
 
     fetch(process.env.LOCK_ALERT_WEBHOOK_URL, {
@@ -296,6 +317,24 @@ function emitToMonitoringSystem(successRate: number, totalAttempts: number): voi
     }).catch(error => {
       log.warn('Failed to send webhook alert', { error });
     });
+  }
+
+  // OpenTelemetry metrics (if available)
+  if (process.env.ENABLE_OTEL === 'true') {
+    try {
+      // Dynamic import to avoid hard dependency
+      import('@opentelemetry/api').then(({ metrics }) => {
+        const meter = metrics.getMeter('session-lock');
+        const successRateHistogram = meter.createHistogram('session_lock_success_rate', {
+          description: 'Session lock success rate',
+        });
+        successRateHistogram.record(successRate * 100);
+      }).catch(() => {
+        // OpenTelemetry not available
+      });
+    } catch (error) {
+      log.debug('OpenTelemetry metrics not available');
+    }
   }
 }
 

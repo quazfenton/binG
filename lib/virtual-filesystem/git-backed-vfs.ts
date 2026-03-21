@@ -335,13 +335,12 @@ export class GitBackedVFS {
           }
         }
 
-        // Restore filtered files directly
-        const vfsService = new VirtualFilesystemService();
+        // Restore filtered files using existing VFS instance (not a new one)
         let restoredCount = 0;
 
         for (const [filePath, content] of Object.entries(vfs)) {
           try {
-            await vfsService.writeFile(ownerId, filePath, content);
+            await this.vfs.writeFile(ownerId, filePath, content);
             restoredCount++;
           } catch (error: any) {
             return {

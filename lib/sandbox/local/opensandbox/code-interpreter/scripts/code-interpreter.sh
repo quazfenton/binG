@@ -33,7 +33,8 @@ record_env_selection() {
 		: >"$tmp_file"
 	fi
 
-	echo "source /opt/opensandbox/code-interpreter-env.sh ${lang} ${version}" >>"$tmp_file"
+	# SECURITY: Use printf with %q to escape shell metacharacters and prevent injection
+	printf 'source /opt/opensandbox/code-interpreter-env.sh %q %q\n' "$lang" "$version" >>"$tmp_file"
 	mv "$tmp_file" "$BASHRC_FILE"
 }
 
