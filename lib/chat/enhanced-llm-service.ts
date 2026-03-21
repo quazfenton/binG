@@ -384,6 +384,16 @@ export class EnhancedLLMService {
       throw new Error(`Provider ${provider} not configured`);
     }
 
+    // CRITICAL: Validate API key is present before making request
+    if (!config.apiKey || config.apiKey.trim() === '') {
+      chatLogger.error(`Provider ${provider} missing API key`, { requestId, provider }, {
+        hasApiKey: !!config.apiKey,
+        apiKeyLength: config.apiKey?.length || 0,
+        envVarName: this.getEnvVarNameForProvider(provider),
+      });
+      throw new Error(`${provider} API key not configured. Please set ${this.getEnvVarNameForProvider(provider)} in your environment variables.`);
+    }
+
     const callStartTime = Date.now();
 
     // Filter messages for provider compatibility
@@ -392,13 +402,20 @@ export class EnhancedLLMService {
 
     const providerRequest = {
       ...request,
-      messages: filteredMessages
+      messages: filteredMessages,
+      // CRITICAL FIX: Pass API key explicitly in request for providers that support it
+      // This ensures API keys from env vars are used even if llmService wasn't initialized properly
+      // Note: Using 'apiKey' (singular) which is read by generateResponse method
+      apiKey: config.apiKey,
     };
 
     chatLogger.debug('Calling provider', { requestId, provider, model: request.model }, {
       messageCount: filteredMessages.length,
       temperature: request.temperature,
       maxTokens: request.maxTokens,
+      apiKeySet: !!config.apiKey,
+      apiKeyPrefix: config.apiKey?.substring(0, 4) + '...',
+      requestHasKey: !!providerRequest.apiKey,
     });
 
     try {
@@ -418,6 +435,24 @@ export class EnhancedLLMService {
       });
       throw this.enhanceError(error as Error, provider);
     }
+  }
+
+  private getEnvVarNameForProvider(provider: string): string {
+    const envVarMap: Record<string, string> = {
+      'openrouter': 'OPENROUTER_API_KEY',
+      'chutes': 'CHUTES_API_KEY',
+      'anthropic': 'ANTHROPIC_API_KEY',
+      'google': 'GOOGLE_API_KEY',
+      'mistral': 'MISTRAL_API_KEY',
+      'github': 'GITHUB_MODELS_API_KEY or AZURE_OPENAI_API_KEY',
+      'portkey': 'PORTKEY_API_KEY',
+      'zen': 'ZEN_API_KEY',
+      'openai': 'OPENAI_API_KEY',
+      'cohere': 'COHERE_API_KEY',
+      'together': 'TOGETHER_API_KEY',
+      'replicate': 'REPLICATE_API_TOKEN',
+    };
+    return envVarMap[provider] || `${provider.toUpperCase()}_API_KEY`;
   }
 
   /**

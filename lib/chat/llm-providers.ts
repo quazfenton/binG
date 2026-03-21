@@ -458,9 +458,29 @@ class LLMService {
   /**
    * Initialize all lazy-loaded providers
    * This is called once when first needed
+   * CRITICAL: Re-reads process.env to ensure latest values are used
    */
   private async initializeProviders(): Promise<void> {
-    const config = this.config
+    // CRITICAL FIX: Re-read environment variables at initialization time
+    // This ensures we get the latest values, not stale values from module load time
+    const currentEnv = typeof process !== 'undefined' ? process.env : {};
+    
+    const config = {
+      ...this.config,
+      // Override with current environment variable values
+      openai: { ...this.config.openai, apiKey: currentEnv.OPENAI_API_KEY || this.config.openai?.apiKey },
+      anthropic: { ...this.config.anthropic, apiKey: currentEnv.ANTHROPIC_API_KEY || this.config.anthropic?.apiKey },
+      google: { ...this.config.google, apiKey: currentEnv.GOOGLE_API_KEY || this.config.google?.apiKey },
+      cohere: { ...this.config.cohere, apiKey: currentEnv.COHERE_API_KEY || this.config.cohere?.apiKey },
+      together: { ...this.config.together, apiKey: currentEnv.TOGETHER_API_KEY || this.config.together?.apiKey },
+      replicate: { ...this.config.replicate, apiKey: currentEnv.REPLICATE_API_TOKEN || this.config.replicate?.apiKey },
+      portkey: { ...this.config.portkey, apiKey: currentEnv.PORTKEY_API_KEY || this.config.portkey?.apiKey },
+      mistral: { ...this.config.mistral, apiKey: currentEnv.MISTRAL_API_KEY || this.config.mistral?.apiKey, baseURL: currentEnv.MISTRAL_BASE_URL || this.config.mistral?.baseURL },
+      chutes: { ...this.config.chutes, apiKey: currentEnv.CHUTES_API_KEY || this.config.chutes?.apiKey, baseURL: currentEnv.CHUTES_BASE_URL || this.config.chutes?.baseURL },
+      openrouter: { ...this.config.openrouter, apiKey: currentEnv.OPENROUTER_API_KEY || this.config.openrouter?.apiKey, baseURL: currentEnv.OPENROUTER_BASE_URL || this.config.openrouter?.baseURL },
+      github: { ...this.config.github, apiKey: currentEnv.GITHUB_MODELS_API_KEY || currentEnv.AZURE_OPENAI_API_KEY || this.config.github?.apiKey },
+      zen: { ...this.config.zen, apiKey: currentEnv.zen_API_KEY || this.config.zen?.apiKey },
+    };
     
     // Initialize OpenAI
     if (config.openai?.apiKey && !this.openai) {
@@ -619,14 +639,15 @@ class LLMService {
   async generateResponse(request: LLMRequest): Promise<LLMResponse> {
     // Initialize providers lazily on first use
     await this.initializeProviders()
-    
-    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId } = request
+
+    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId, apiKey } = request
     const requestStartTime = Date.now();
 
     chatLogger.debug('LLM generateResponse called', { requestId, provider, model }, {
       messageCount: messages.length,
       temperature,
       maxTokens,
+      apiKeyProvided: !!apiKey,
     });
 
     try {
@@ -635,40 +656,40 @@ class LLMService {
 
       switch (provider) {
         case 'openai':
-          response = await this.generateOpenAIResponse(model, messages, temperature, maxTokens)
+          response = await this.generateOpenAIResponse(model, messages, temperature, maxTokens, requestId, apiKey)
           break;
         case 'anthropic':
-          response = await this.generateAnthropicResponse(model, messages, temperature, maxTokens)
+          response = await this.generateAnthropicResponse(model, messages, temperature, maxTokens, requestId, apiKey)
           break;
         case 'google':
-          response = await this.generateGoogleResponse(model, messages, temperature, maxTokens)
+          response = await this.generateGoogleResponse(model, messages, temperature, maxTokens, requestId, apiKey)
           break;
         case 'cohere':
-          response = await this.generateCohereResponse(model, messages, temperature, maxTokens)
+          response = await this.generateCohereResponse(model, messages, temperature, maxTokens, requestId, apiKey)
           break;
         case 'together':
-          response = await this.generateTogetherResponse(model, messages, temperature, maxTokens)
+          response = await this.generateTogetherResponse(model, messages, temperature, maxTokens, requestId, apiKey)
           break;
         case 'replicate':
-          response = await this.generateReplicateResponse(model, messages, temperature, maxTokens)
+          response = await this.generateReplicateResponse(model, messages, temperature, maxTokens, requestId, apiKey)
           break;
         case 'portkey':
-          response = await this.generatePortkeyResponse(model, messages, temperature, maxTokens)
+          response = await this.generatePortkeyResponse(model, messages, temperature, maxTokens, requestId, apiKey)
           break;
         case 'openrouter':
-          response = await this.generateOpenRouterResponse(model, messages, temperature, maxTokens)
+          response = await this.generateOpenRouterResponse(model, messages, temperature, maxTokens, requestId, apiKey)
           break;
         case 'chutes':
-          response = await this.generateChutesResponse(model, messages, temperature, maxTokens)
+          response = await this.generateChutesResponse(model, messages, temperature, maxTokens, requestId, apiKey)
           break;
         case 'mistral':
-          response = await this.generateMistralResponse(model, messages, temperature, maxTokens)
+          response = await this.generateMistralResponse(model, messages, temperature, maxTokens, requestId, apiKey)
           break;
         case 'github':
-          response = await this.generateGitHubResponse(model, messages, temperature, maxTokens)
+          response = await this.generateGitHubResponse(model, messages, temperature, maxTokens, requestId, apiKey)
           break;
         case 'zen':
-          response = await this.generatezenResponse(model, messages, temperature, maxTokens)
+          response = await this.generatezenResponse(model, messages, temperature, maxTokens, requestId, apiKey)
           break;
         case 'opencode':
           await this.initOpencodeClient()
@@ -831,13 +852,65 @@ class LLMService {
     }
   }
 
+  /**
+   * Get API key with fallback logic
+   * Priority: 1) Override parameter, 2) process.env, 3) config
+   */
+  private getApiKey(provider: string, apiKeyOverride?: string): string {
+    if (apiKeyOverride) {
+      return apiKeyOverride;
+    }
+    
+    const currentEnv = typeof process !== 'undefined' ? process.env : {};
+    
+    switch (provider) {
+      case 'openai':
+        return currentEnv.OPENAI_API_KEY || this.config.openai?.apiKey || '';
+      case 'anthropic':
+        return currentEnv.ANTHROPIC_API_KEY || this.config.anthropic?.apiKey || '';
+      case 'google':
+        return currentEnv.GOOGLE_API_KEY || this.config.google?.apiKey || '';
+      case 'cohere':
+        return currentEnv.COHERE_API_KEY || this.config.cohere?.apiKey || '';
+      case 'together':
+        return currentEnv.TOGETHER_API_KEY || this.config.together?.apiKey || '';
+      case 'replicate':
+        return currentEnv.REPLICATE_API_TOKEN || this.config.replicate?.apiKey || '';
+      case 'portkey':
+        return currentEnv.PORTKEY_API_KEY || this.config.portkey?.apiKey || '';
+      case 'openrouter':
+        return currentEnv.OPENROUTER_API_KEY || this.config.openrouter?.apiKey || '';
+      case 'chutes':
+        return currentEnv.CHUTES_API_KEY || this.config.chutes?.apiKey || '';
+      case 'mistral':
+        return currentEnv.MISTRAL_API_KEY || this.config.mistral?.apiKey || '';
+      case 'github':
+        return currentEnv.GITHUB_MODELS_API_KEY || currentEnv.AZURE_OPENAI_API_KEY || this.config.github?.apiKey || '';
+      case 'zen':
+        return currentEnv.zen_API_KEY || this.config.zen?.apiKey || '';
+      default:
+        return '';
+    }
+  }
+
   private async generateOpenAIResponse(
     model: string,
     messages: LLMMessage[],
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    requestId?: string,
+    apiKeyOverride?: string
   ): Promise<LLMResponse> {
-    if (!this.openai) throw new Error('OpenAI not initialized');
+    const apiKey = this.getApiKey('openai', apiKeyOverride);
+    if (!apiKey) {
+      throw new Error('OpenAI API key not configured. Please set OPENAI_API_KEY in your environment variables.');
+    }
+    
+    // Re-initialize client with current API key if needed
+    if (!this.openai || apiKey !== this.config.openai?.apiKey) {
+      const OpenAIClass = await getOpenAI();
+      this.openai = new OpenAIClass({ apiKey, baseURL: this.config.openai?.baseURL });
+    }
 
     const response = await this.openai.chat.completions.create({
       model,
@@ -861,9 +934,20 @@ class LLMService {
     model: string,
     messages: LLMMessage[],
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    requestId?: string,
+    apiKeyOverride?: string
   ): Promise<LLMResponse> {
-    if (!this.anthropic) throw new Error('Anthropic not initialized');
+    const apiKey = this.getApiKey('anthropic', apiKeyOverride);
+    if (!apiKey) {
+      throw new Error('Anthropic API key not configured. Please set ANTHROPIC_API_KEY in your environment variables.');
+    }
+    
+    // Re-initialize client with current API key if needed
+    if (!this.anthropic || apiKey !== this.config.anthropic?.apiKey) {
+      const AnthropicClass = await getAnthropic();
+      this.anthropic = new AnthropicClass({ apiKey, baseURL: this.config.anthropic?.baseURL });
+    }
 
     // Convert messages to Anthropic format
     const anthropicMessages = messages
@@ -1035,13 +1119,43 @@ class LLMService {
     model: string,
     messages: LLMMessage[],
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    requestId?: string,
+    apiKeyOverride?: string  // NEW: Allow API key override
   ): Promise<LLMResponse> {
     // OpenRouter is OpenAI-compatible, lazy-load OpenAI client
     const OpenAIClass = await getOpenAI()
+
+    // CRITICAL FIX: Use API key from override if provided, otherwise fall back to env var
+    const apiKey = apiKeyOverride || process.env.OPENROUTER_API_KEY || '';
+    
+    chatLogger.error('OpenRouter API Key Debug', { 
+      requestId, 
+      apiKeyOverride: !!apiKeyOverride, 
+      apiKeyOverrideLength: apiKeyOverride?.length,
+      apiKeyOverridePrefix: apiKeyOverride ? apiKeyOverride.substring(0, 6) + '...' : 'N/A',
+      envVarSet: !!process.env.OPENROUTER_API_KEY,
+      envVarLength: process.env.OPENROUTER_API_KEY?.length,
+      finalApiKeySet: !!apiKey,
+      finalApiKeyLength: apiKey?.length
+    });
+
+    if (!apiKey) {
+      throw new Error('OpenRouter API key not configured. Please set OPENROUTER_API_KEY in your environment variables.');
+    }
+    
+    // CRITICAL: Create NEW client instance with the API key for EVERY request
+    // This ensures the API key is actually used (not cached from previous initialization)
     const openrouter = new OpenAIClass({
-      apiKey: process.env.OPENROUTER_API_KEY || '',
+      apiKey: apiKey,  // Explicitly pass the API key
       baseURL: 'https://openrouter.ai/api/v1',
+      dangerouslyAllowBrowser: true, // Allow in browser if needed
+    });
+
+    chatLogger.error('OpenRouter Client Created', {
+      requestId,
+      clientHasApiKey: !!openrouter.apiKey,
+      baseURL: openrouter.baseURL,
     });
 
     const response = await openrouter.chat.completions.create({
