@@ -10,8 +10,8 @@ const logger = createLogger('Auth:Service');
 
 // Check if we're in a build/Edge environment
 function shouldSkipValidation(): boolean {
-  const env = typeof process !== 'undefined' ? process.env : {};
-  return env.SKIP_DB_INIT === 'true' || 
+  const env: any = typeof process !== 'undefined' ? process.env : {};
+  return env.SKIP_DB_INIT === 'true' ||
          env.SKIP_DB_INIT === '1' ||
          env.NEXT_BUILD === 'true' ||
          env.NEXT_BUILD === '1' ||
@@ -24,11 +24,11 @@ let sessionTokenHashSecret: Buffer | null = null;
 
 function getSessionTokenHashSecret(): Buffer {
   if (sessionTokenHashSecret) return sessionTokenHashSecret;
-  
+
   // Lazy require crypto
   const crypto = require('crypto');
-  
-  const env = typeof process !== 'undefined' ? process.env : {};
+
+  const env: any = typeof process !== 'undefined' ? process.env : {};
   const key = env.ENCRYPTION_KEY;
 
   // Skip validation during build

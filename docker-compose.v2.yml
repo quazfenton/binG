@@ -6,26 +6,26 @@
 # │   (app)    │     │  (gateway)   │     │  (pubsub/jobs)  │
 # └─────────────┘     └──────────────┘     └────────┬────────┘
 #                                                   │
-#          ┌────────────────┬───────────────────────┼──────────────────────────────┐
+#          ┌────────────────┬───────────────────────┼──────────────────────────────┐─────────────────────Nullclaw 
 #          │                │                       │                              │
 #          ▼                ▼                       ▼                              ▼
 # ┌─────────────────┐ ┌──────────┐       ┌─────────────────┐           ┌─────────────────┐
 # │ Planner Worker  │ │Scheduler │       │Executor Workers │           │Background Worker│
-# │(task planning)  │ │ (cron)   │       │ (OpenCode loop) │           │ (indexing/search)│
-# └─────────────────┘ └──────────┘       └────────┬────────┘           └─────────────────┘
+# │(task planning)  │ │ (cron)   │       │ (OpenCode loop) │           │(indexing/search)│
+# └─────────────────┘ └──────────┘       └──────── ┬───────┘           └─────────────────┘
 #                                                  │
-#                          ┌───────────────────────┼────────────────┐
+#                          ┌───────────────────────┼────────────────┐──────────────────────────
 #                          │                       │                │
 #                          ▼                       ▼                ▼
-#                   ┌─────────────┐         ┌─────────────┐ ┌─────────────┐
-#                   │MCP Server   │         │ Nullclaw    │ │Sandbox Pool │
-#                   │(filesystem) │         │(automation) │ │(execution)  │
-#                   └─────────────┘         └──────┬──────┘ └──────┬──────┘
-#                                                  │               │
-#                                                  ▼               ▼
+#                   ┌─────────────┐         ┌─────────────┐    ┌─────────────┐
+#                   │MCP Server   │         │ Opensandbox │    │Sandbox Pool │
+#                   │(filesystem) │         │(alt sandbox)│    │(execution)  │
+#                   └─────────────┘         └──────┬──────┘    └──────┬──────┘
+#                                                  │                  │
+#                                                  ▼                  ▼
 #                                           ┌─────────────────────────┐
-#                                           │   OpenSandbox Server    │
-#                                           │ (container isolation)   │
+#                                           │       │
+#                                           │ (code exec isolation)   │
 #                                           └─────────────────────────┘
 #
 # Services:
@@ -148,7 +148,7 @@ services:
   gateway:
     build:
       context: .
-      dockerfile: Dockerfile.agent
+      dockerfile: Dockerfile.gateway
     ports:
       - "3002:3002"
     environment:
@@ -382,7 +382,10 @@ services:
 
   # OpenSandbox Server - Container runtime for isolated execution
   opensandbox:
-    image: registry.cn-hangzhou.aliyuncs.com/agent-sandbox/agent-sandbox:latest
+    build:
+      context: lib/sandbox/local/opensandbox/code-interpreter
+      dockerfile: Dockerfile
+    image: opensandbox/code-interpreter:latest
     ports:
       - "8787:8080"
     environment:

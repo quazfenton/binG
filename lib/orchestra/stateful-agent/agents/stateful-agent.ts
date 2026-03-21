@@ -16,16 +16,42 @@ const log = createLogger('StatefulAgent');
 
 /**
  * Acquire session lock to prevent concurrent access
- * Falls back to no-op if session lock module not available
+ * 
+ * Uses unified multi-strategy locking with automatic fallback:
+ * 1. Redis (primary) - distributed locking
+ * 2. Memory (secondary) - single-instance fallback
+ * 3. Queue (tertiary) - request serialization
+ * 
+ * Throws error if all strategies fail (no silent degradation).
  */
 async function acquireSessionLock(sessionId: string): Promise<() => void> {
+  const { acquireUnifiedLock } = await import('@/lib/session/unified-lock');
+  
   try {
-    const { acquireSessionLock: acquireLock } = await import('@/lib/session/session-lock');
-    return acquireLock(sessionId);
-  } catch {
-    // Session lock not available, return no-op
-    log.warn('Session lock not available, running without concurrency protection');
-    return () => { /* no-op */ };
+    const result = await acquireUnifiedLock({
+      sessionId,
+      timeout: parseInt(process.env.SESSION_LOCK_TIMEOUT || '10000'),
+      recordMetrics: process.env.SESSION_LOCK_METRICS_ENABLED !== 'false',
+    });
+    
+    log.debug('Session lock acquired', { 
+      sessionId, 
+      strategy: result.strategy,
+      duration: result.duration,
+    });
+    
+    return result.release;
+  } catch (error) {
+    // All strategies failed - throw error instead of silent fallback
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    log.error('Failed to acquire session lock - all strategies failed', {
+      sessionId,
+      error: errorMessage,
+    });
+    throw new Error(
+      `Session lock unavailable for ${sessionId}: ${errorMessage}. ` +
+      'This indicates a system-wide locking issue requiring immediate attention.'
+    );
   }
 }
 
@@ -787,7 +813,7 @@ Use 'createFile' for new files.`;
                         success: true,
                         hasFilePath: callArgs && 'path' in callArgs,
                       });
-                      logger.info('Execution graph node completed (active node tracking)', {
+                      log.info('Execution graph node completed (active node tracking)', {
                         graphId: this.executionGraphId,
                         nodeId: this.activeNodeId,
                         tool: call.toolName,

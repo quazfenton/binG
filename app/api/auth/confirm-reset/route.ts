@@ -23,7 +23,7 @@ function getJwtModule() {
 function getJwtSecret(): string {
   if (jwtSecret) return jwtSecret;
 
-  const env = typeof process !== 'undefined' ? process.env : {};
+  const env: any = typeof process !== 'undefined' ? process.env : {};
   const JWT_SECRET = env.JWT_SECRET;
 
   // Check if we're in a build environment
