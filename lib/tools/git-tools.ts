@@ -179,12 +179,13 @@ export function createGitTools(handle: SandboxHandle) {
             const vfsState: Record<string, string> = {};
             const transactions: TransactionEntry[] = [];
             
-            // Get staged files
-            const status = await gitManager.status();
-            const stagedFiles = status.files.filter(f => f.staged).map(f => f.path);
+            // Get committed files (after commit, staged files are now empty)
+            // Use git show to get the list of files in the latest commit
+            const committed = await handle.executeCommand('git show --name-only --pretty="" HEAD');
+            const committedFiles = committed.output.split('\n').map(f => f.trim()).filter(Boolean);
             
-            // Read each staged file and add to VFS state
-            for (const filePath of stagedFiles) {
+            // Read each committed file and add to VFS state
+            for (const filePath of committedFiles) {
               try {
                 const result = await handle.readFile(filePath);
                 if (result.success && result.content) {
@@ -197,7 +198,7 @@ export function createGitTools(handle: SandboxHandle) {
                   });
                 }
               } catch (error: any) {
-                log.warn(`Failed to read staged file ${filePath}: ${error.message}`);
+                log.warn(`Failed to read committed file ${filePath}: ${error.message}`);
               }
             }
 

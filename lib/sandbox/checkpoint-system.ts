@@ -72,8 +72,11 @@ export class CheckpointSystem {
     try {
       // Try provider-specific branching if available
       if (handle.createCheckpoint && handle.restoreCheckpoint) {
-        // Provider supports checkpoints - try branching
-        const checkpoints = await handle.listCheckpoints?.() || [];
+        // Provider supports checkpoints - verify listing capability
+        if (!handle.listCheckpoints) {
+          throw new Error('Provider does not support listing checkpoints');
+        }
+        const checkpoints = await handle.listCheckpoints();
         const checkpoint = checkpoints.find(c => c.id === checkpointId);
         
         if (!checkpoint) {
@@ -81,15 +84,38 @@ export class CheckpointSystem {
         }
 
         // Create new sandbox and restore checkpoint
+        // Get provider info from the source handle to maintain consistency
+        const providerInfo = (handle as any).getProviderInfo?.();
+        const providerName = providerInfo?.provider || 'daytona';
         const { getSandboxProvider } = await import('./providers');
-        const provider = await getSandboxProvider('daytona' as any);
+        const provider = await getSandboxProvider(providerName as any);
+        
+        // Validate provider exists and supports required methods
+        if (!provider) {
+          throw new Error(`Sandbox provider '${providerName}' not available`);
+        }
+        if (!provider.createSandbox) {
+          throw new Error('Sandbox provider does not support sandbox creation');
+        }
+        
         const newHandle = await provider.createSandbox({
-          name: newBranchName,
+          // Note: SandboxCreateConfig doesn't support name, use labels instead
+          labels: { branchName: newBranchName, checkpointId },
         });
 
-        // Restore checkpoint if method exists
-        if (newHandle.restoreCheckpoint) {
+        // Restore checkpoint - required for branching
+        if (!newHandle.restoreCheckpoint) {
+          // Clean up the orphaned sandbox before failing
+          await provider.destroySandbox(newHandle.id);
+          throw new Error('New sandbox does not support checkpoint restoration');
+        }
+        
+        try {
           await newHandle.restoreCheckpoint(checkpointId);
+        } catch (restoreError: any) {
+          // Clean up orphaned sandbox on restore failure
+          await provider.destroySandbox(newHandle.id);
+          throw new Error(`Failed to restore checkpoint: ${restoreError.message}`);
         }
 
         console.log(`[CheckpointSystem] Branch created: ${newHandle.id}`);
@@ -103,3 +129,4 @@ export class CheckpointSystem {
       throw error;
     }
   }
+}

@@ -85,7 +85,18 @@ export class LocalCommandExecutor {
       }
     }
 
-    this.cwd[this.terminalId] = 'project'
+    // Ensure project/sessions directory exists for default cwd
+    // This creates the sessions folder so the terminal can start there without errors
+    if (!this.fileSystem['project/sessions']) {
+      this.fileSystem['project/sessions'] = { 
+        type: 'directory', 
+        createdAt: Date.now(), 
+        modifiedAt: Date.now() 
+      }
+    }
+
+    // Default to project/sessions for local command mode
+    this.cwd[this.terminalId] = 'project/sessions'
   }
 
   /**

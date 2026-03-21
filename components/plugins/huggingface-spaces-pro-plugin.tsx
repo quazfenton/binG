@@ -412,10 +412,14 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
               <h3 className="text-sm font-medium mb-3">Generated Images</h3>
               <div className="grid grid-cols-2 gap-3">
                 {generatedImages.map((img, i) => {
+                  // Normalize image item to URL string (API may return objects or strings)
+                  const imageUrl = typeof img === 'string' ? img : (img as any)?.url;
+                  if (!imageUrl) return null;
+                  
                   // Use image proxy for external URLs to bypass CORS restrictions
-                  const displayImgUrl = img.startsWith('http')
-                    ? `/api/image-proxy?url=${encodeURIComponent(img)}`
-                    : img;
+                  const displayImgUrl = imageUrl.startsWith('http')
+                    ? `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`
+                    : imageUrl;
 
                   return (
                   <div key={i} className="relative group">
@@ -426,8 +430,8 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                       onError={(e) => {
                         // Fallback to direct URL if proxy fails
                         const target = e.target as HTMLImageElement;
-                        if (target.src.includes('/api/image-proxy') && target.src !== img) {
-                          target.src = img;
+                        if (target.src.includes('/api/image-proxy') && target.src !== imageUrl) {
+                          target.src = imageUrl;
                         }
                       }}
                     />
@@ -438,7 +442,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                       onClick={async () => {
                         // Try to download via proxy first for CORS bypass
                         try {
-                          const proxyUrl = `/api/image-proxy?url=${encodeURIComponent(img)}`;
+                          const proxyUrl = `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
                           const response = await fetch(proxyUrl);
                           if (response.ok) {
                             const blob = await response.blob();
@@ -457,7 +461,7 @@ export default function HuggingFaceSpacesProPlugin({ onClose }: PluginProps) {
                         }
                         // Fallback: direct download
                         const a = document.createElement('a');
-                        a.href = img;
+                        a.href = imageUrl;
                         a.download = `hf-image-${i + 1}.png`;
                         document.body.appendChild(a);
                         a.click();

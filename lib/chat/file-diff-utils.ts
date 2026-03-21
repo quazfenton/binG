@@ -101,7 +101,11 @@ export function applySimpleLineDiff(currentContent: string, diffBody: string): s
   }
   
   const result = resultLines.join("\n");
-  return result && result !== currentContent ? result : null;
+  if (!result) return null;
+  if (result === currentContent) {
+    return currentContent;
+  }
+  return result;
 }
 
 /**

@@ -97,6 +97,18 @@ const metrics: RouterMetrics = {
   toolDuration: [],
 }
 
+// Track previous values to detect changes
+let previousMetrics = {
+  requestCount: 0,
+  requestErrors: 0,
+  circuitBreakerTrips: 0,
+  v2JobSubmissions: 0,
+  v2JobCompletions: 0,
+  v2JobFailures: 0,
+  toolExecutions: 0,
+  toolErrors: 0,
+}
+
 // ============================================================================
 // Initialization
 // ============================================================================
@@ -234,9 +246,38 @@ function exportMetrics(): void {
 }
 
 /**
- * Log metrics summary to console
+ * Log metrics summary to console (only when values change)
  */
 function logMetricsSummary(): void {
+  // Check if any metrics have changed since last log
+  const hasChanges = (
+    metrics.requestCount !== previousMetrics.requestCount ||
+    metrics.requestErrors !== previousMetrics.requestErrors ||
+    metrics.circuitBreakerTrips !== previousMetrics.circuitBreakerTrips ||
+    metrics.v2JobSubmissions !== previousMetrics.v2JobSubmissions ||
+    metrics.v2JobCompletions !== previousMetrics.v2JobCompletions ||
+    metrics.v2JobFailures !== previousMetrics.v2JobFailures ||
+    metrics.toolExecutions !== previousMetrics.toolExecutions ||
+    metrics.toolErrors !== previousMetrics.toolErrors
+  );
+
+  // Skip logging if nothing has changed
+  if (!hasChanges) {
+    return;
+  }
+
+  // Update previous values
+  previousMetrics = {
+    requestCount: metrics.requestCount,
+    requestErrors: metrics.requestErrors,
+    circuitBreakerTrips: metrics.circuitBreakerTrips,
+    v2JobSubmissions: metrics.v2JobSubmissions,
+    v2JobCompletions: metrics.v2JobCompletions,
+    v2JobFailures: metrics.v2JobFailures,
+    toolExecutions: metrics.toolExecutions,
+    toolErrors: metrics.toolErrors,
+  };
+
   const avgRequestDuration = metrics.requestDuration.length > 0
     ? metrics.requestDuration.reduce((a, b) => a + b, 0) / metrics.requestDuration.length
     : 0

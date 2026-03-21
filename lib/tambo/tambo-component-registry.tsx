@@ -107,13 +107,16 @@ class TamboComponentRegistry {
 
   /**
    * Clear all components (for testing)
-   * Also resets initialization flags to allow re-initialization
+   * Safely resets initialization flags only if not currently initializing
    */
   clear(): void {
     this.components.clear();
     this.interactableComponents.clear();
-    // Reset initialization flags to allow re-initialization after clear
-    hasInitialized = false;
+    // Only reset initialization if there's no in-flight initialization
+    // This prevents race conditions where clear() is called during init
+    if (!initializationPromise) {
+      hasInitialized = false;
+    }
     initializationPromise = null;
   }
 
