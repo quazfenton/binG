@@ -42,6 +42,7 @@ interface CachedImage {
 
 const IMAGE_CACHE = new Map<string, CachedImage>();
 const CACHE_MAX_SIZE = 100; // Max number of images to cache
+const CACHE_MAX_BYTES = 100 * 1024 * 1024; // 100MB total in-memory cap
 const CACHE_TTL = 3600000; // 1 hour TTL for in-memory cache
 
 /**
@@ -92,15 +93,28 @@ function getCachedImage(cacheKey: string): CachedImage | null {
  * Store image in cache
  */
 function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string, etag: string): void {
+  const imageSize = data.byteLength;
+  
+  // Check if adding this image would exceed byte limit
+  const currentSize = Array.from(IMAGE_CACHE.values()).reduce((total, img) => total + img.size, 0);
+  if (currentSize + imageSize > CACHE_MAX_BYTES) {
+    console.log('[Image Proxy] Skipping cache: would exceed memory limit', {
+      currentSize,
+      imageSize,
+      limit: CACHE_MAX_BYTES,
+    });
+    return; // Don't cache - would exceed memory limit
+  }
+
   // Cleanup before adding new entry
   cleanupCache();
-  
+
   IMAGE_CACHE.set(cacheKey, {
     data,
     contentType,
     etag,
     timestamp: Date.now(),
-    size: data.byteLength,
+    size: imageSize,
   });
 }
 

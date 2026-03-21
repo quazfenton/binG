@@ -123,8 +123,13 @@ const mcpTools: MCPTool[] = [
       }
 
       const result = await vfs.deletePath(ownerId, path);
+      const deletedCount = result === null || result === undefined
+        ? 0
+        : typeof result === 'object'
+          ? result.deletedCount || 0
+          : (result ? 1 : 0);
       return {
-        deletedCount: result.deletedCount,
+        deletedCount,
         success: true,
       };
     },

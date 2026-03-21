@@ -252,6 +252,7 @@ export class VirtualFilesystemService {
       content: '',
       language: 'markdown',
       lastModified: now,
+      createdAt: now,
       version: 1,
       size: 0,
       isDirectoryMarker: true,
@@ -326,7 +327,7 @@ export class VirtualFilesystemService {
     };
   }
 
-  async deletePath(ownerId: string, targetPath: string): Promise<boolean> {
+  async deletePath(ownerId: string, targetPath: string): Promise<{ deletedCount: number }> {
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(targetPath);
     const normalizedPrefix = `${normalizedPath}/`;
@@ -362,7 +363,7 @@ export class VirtualFilesystemService {
       await this.persistWorkspace(ownerId, workspace);
     }
 
-    return deletedCount > 0;
+    return { deletedCount };
   }
 
   async listDirectory(ownerId: string, directoryPath: string = this.workspaceRoot): Promise<VirtualFilesystemDirectoryListing> {
@@ -427,7 +428,6 @@ export class VirtualFilesystemService {
     return {
       path: normalizedDirectoryPath,
       nodes,
-      entries: nodes, // Alias for backwards compatibility
     };
   }
 
@@ -936,13 +936,18 @@ class GitBackedVFSProxy {
     }
     
     const result = await this.vfs.deletePath(ownerId, targetPath);
-    
+
     // Commit the deletion
-    if (result.deletedCount > 0) {
+    if (result !== null && result !== undefined && typeof result === 'object' && result.deletedCount > 0) {
       await gitVFS.commitChanges(ownerId, `Delete ${targetPath}`);
     }
-    
-    return result;
+
+    const deletedCount = result === null || result === undefined
+      ? 0
+      : typeof result === 'object'
+        ? result.deletedCount || 0
+        : (result ? 1 : 0);
+    return { deletedCount };
   }
 
   async listDirectory(
@@ -957,7 +962,9 @@ class GitBackedVFSProxy {
     query: string,
     options?: { path?: string; limit?: number }
   ): Promise<import('./filesystem-types').VirtualFilesystemSearchResult[]> {
-    return this.vfs.search(ownerId, query, options);
+    const result = await this.vfs.search(ownerId, query, options);
+    // Handle both array and object return types
+    return Array.isArray(result) ? result : (result.files || []);
   }
 
   async getWorkspaceVersion(ownerId: string): Promise<number> {

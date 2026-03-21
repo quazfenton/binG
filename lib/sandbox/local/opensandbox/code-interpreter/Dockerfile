@@ -67,7 +67,7 @@ RUN set -euo pipefail \
 ENV JUPYTER_HOST=http://127.0.0.1:44771 \
     JUPYTER_PORT=44771 \
     JUPYTER_TOKEN=opensandboxcodeinterpreterjupyter \
-    PYTHON_VERSION=3.14 \
+    PYTHON_VERSION=3.13 \
     NODE_VERSION=22 \
     GO_VERSION=1.25 \
     JAVA_VERSION=21

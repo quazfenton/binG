@@ -39,7 +39,9 @@ const BLOCKED_PATTERNS = [
   // IPv6 localhost and link-local
   /^\[::1\]$/i,
   /^\[fe80:/i,
-  /^\[fc00:/i,
+  // IPv6 ULA (Unique Local Addresses) - RFC 4193: fc00::/7
+  // Blocks fc00: through fcff: (fd00:-fdff: is handled by the pattern below)
+  /^\[fc[0-9a-f]{2}:/i,
   /^\[fd[0-9a-f]{2}:/i,
 ];
 

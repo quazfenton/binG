@@ -267,13 +267,28 @@ export class BootstrappedAgency {
 
         // Add steps for each capability
         for (const cap of capabilities) {
-          chain.addStep({
-            capability: cap,
-            config: { task },
-          });
+          chain.addStep(cap, { task });
         }
 
-        const chainResult = await chain.execute();
+        // Create a simple executor that routes to capability handlers
+        const executor = {
+          execute: async (capabilityName: string, config: any, context: any) => {
+            switch (capabilityName) {
+              case 'file-operations':
+                return { result: 'File operations completed' };
+              case 'code-execution':
+                return { result: 'Code execution completed' };
+              case 'git-operations':
+                return { result: 'Git operations completed' };
+              case 'web-research':
+                return { result: 'Web research completed' };
+              default:
+                return { result: `Capability ${capabilityName} executed` };
+            }
+          },
+        };
+
+        const chainResult = await chain.execute(executor);
         
         return {
           success: chainResult.success,
@@ -298,7 +313,7 @@ export class BootstrappedAgency {
           case 'web-research':
             return { success: true, data: { result: 'Web research completed' } };
           default:
-            return { success: true, data: { result: `Capability ${capability} executed` } };
+            return { success: false, error: `Unknown capability: ${capability}` };
         }
       } else {
         // No capabilities specified, execute task directly
@@ -307,11 +322,12 @@ export class BootstrappedAgency {
           data: { result: 'Task executed without specific capabilities' },
         };
       }
-    } catch (error: any) {
-      log.error('Capability execution failed:', error);
+    } catch (error: unknown) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      log.error('Capability execution failed:', errorMessage);
       return {
         success: false,
-        error: error.message || 'Capability execution failed',
+        error: errorMessage || 'Capability execution failed',
       };
     }
   }

@@ -358,7 +358,7 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
         try {
           const iv = Buffer.from(ivHex, 'hex');
           const encKey = getEncryptionKey();
-          (crypto as any).createDecipheriv('aes-256-cbc', Buffer.from(encKey, 'hex'), iv);
+          (crypto as any).createDecipheriv('aes-256-cbc', encKey, iv);
           // If this succeeds, it's new format - skip
           continue;
         } catch (e) {

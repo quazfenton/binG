@@ -53,27 +53,133 @@ export function generateUnifiedDiff(
   updated: string | undefined,
   path: string
 ): string {
-  if (!original && !updated) return '';
+  if (original === undefined && updated === undefined) {
+    return `--- ${path}\n+++ ${path}\n@@ -0,0 +0,0 @@\n`;
+  }
   
-  const oldLines = original?.split('\n') || [];
-  const newLines = updated?.split('\n') || [];
+  const origLines = (original ?? '').split('\n');
+  const updatedLines = (updated ?? '').split('\n');
   
-  let result = `--- a/${path}\n+++ b/${path}\n`;
+  const hunks = computeDiffHunks(origLines, updatedLines);
+  if (hunks.length === 0) {
+    return '';
+  }
   
-  const maxLen = Math.max(oldLines.length, newLines.length);
+  const diffLines: string[] = [`--- ${path}`, `+++ ${path}`];
+  for (const hunk of hunks) {
+    diffLines.push(`@@ -${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount} @@`);
+    diffLines.push(...hunk.lines);
+  }
   
-  for (let i = 0; i < maxLen; i++) {
-    const oldLine = oldLines[i];
-    const newLine = newLines[i];
+  return diffLines.join('\n');
+}
+
+interface DiffHunk {
+  oldStart: number;
+  oldCount: number;
+  newStart: number;
+  newCount: number;
+  lines: string[];
+}
+
+function computeDiffHunks(oldLines: string[], newLines: string[]): DiffHunk[] {
+  const lcs = longestCommonSubsequence(oldLines, newLines);
+  const hunks: DiffHunk[] = [];
+  
+  let oldIdx = 0;
+  let newIdx = 0;
+  let hunkStart = 0;
+  let oldLineNum = 1;
+  let newLineNum = 1;
+  
+  while (oldIdx < oldLines.length || newIdx < newLines.length) {
+    const oldLine = oldLines[oldIdx];
+    const newLine = newLines[newIdx];
     
-    if (oldLine === newLine) {
-      result += ` ${oldLine || ''}\n`;
-    } else if (oldLine === undefined) {
-      result += `+${newLine}\n`;
-    } else if (newLine === undefined) {
-      result += `-${oldLine}\n`;
+    if (oldIdx < lcs.length && newIdx < lcs.length && oldLine === newLine && oldLine === lcs[hunkStart]) {
+      if (hunks.length > 0 && hunkStart - hunks[hunks.length - 1].lines.length < 3) {
+        const last = hunks[hunks.length - 1];
+        last.lines.push(` ${oldLine}`);
+        oldIdx++;
+        newIdx++;
+        hunkStart++;
+        oldLineNum++;
+        newLineNum++;
+        continue;
+      }
+      oldIdx++;
+      newIdx++;
+      hunkStart++;
+      oldLineNum++;
+      newLineNum++;
     } else {
-      result += `-${oldLine}\n+${newLine}\n`;
+      const hunkLines: string[] = [];
+      let hunkOldStart = oldLineNum;
+      let hunkNewStart = newLineNum;
+      let hunkOldCount = 0;
+      let hunkNewCount = 0;
+      let changes = 0;
+      
+      while (oldIdx < oldLines.length && (newIdx >= newLines.length || oldLines[oldIdx] !== lcs[hunkStart])) {
+        hunkLines.push(`-${oldLines[oldIdx]}`);
+        changes++;
+        hunkOldCount++;
+        oldIdx++;
+        oldLineNum++;
+      }
+      
+      while (newIdx < newLines.length && (oldIdx >= oldLines.length || newLines[newIdx] !== lcs[hunkStart])) {
+        hunkLines.push(`+${newLines[newIdx]}`);
+        changes++;
+        hunkNewCount++;
+        newIdx++;
+        newLineNum++;
+      }
+      
+      if (changes > 0) {
+        hunks.push({
+          oldStart: hunkOldStart,
+          oldCount: hunkOldCount,
+          newStart: hunkNewStart,
+          newCount: hunkNewCount,
+          lines: hunkLines,
+        });
+        hunkStart = oldIdx < lcs.length ? oldIdx : lcs.length;
+      }
+    }
+  }
+  
+  return hunks;
+}
+
+function longestCommonSubsequence(a: string[], b: string[]): string[] {
+  const m = a.length;
+  const n = b.length;
+  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
+  
+  for (let i = 1; i <= m; i++) {
+    for (let j = 1; j <= n; j++) {
+      if (a[i - 1] === b[j - 1]) {
+        dp[i][j] = dp[i - 1][j - 1] + 1;
+      } else {
+        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
+      }
+    }
+  }
+  
+  const result: string[] = [];
+  let i = m;
+  let j = n;
+  
+  while (i > 0 && j > 0) {
+    if (a[i - 1] === b[j - 1]) {
+      result.unshift(a[i - 1]);
+      i--;
+      j--;
+    } else if (dp[i - 1][j] > dp[i][j - 1]) {
+      i--;
+    } else {
+      j--;
     }
   }
   
@@ -81,28 +187,6 @@ export function generateUnifiedDiff(
 }
 
 export class ShadowCommitManager {
-  private supabase: any = null;
-  private useSupabase: boolean;
-
-  constructor() {
-    this.useSupabase = !!(
-      process.env.SUPABASE_URL && 
-      process.env.SUPABASE_SERVICE_ROLE_KEY
-    );
-    
-    if (this.useSupabase) {
-      import('@supabase/supabase-js').then(({ createClient }) => {
-        this.supabase = createClient(
-          process.env.SUPABASE_URL!,
-          process.env.SUPABASE_SERVICE_ROLE_KEY!
-        );
-      }).catch((error) => {
-        console.warn('[ShadowCommit] Supabase initialization failed:', error);
-        this.useSupabase = false;
-      });
-    }
-  }
-
   async commit(
     vfs: Record<string, string>,
     transactions: TransactionEntry[],
@@ -115,116 +199,6 @@ export class ShadowCommitManager {
     const commitId = crypto.randomUUID();
     const timestamp = new Date().toISOString();
 
-    if (this.useSupabase && this.supabase) {
-      return this.commitToSupabase(vfs, transactions, options, commitId, timestamp);
-    }
-
-    return this.commitToFileSystem(vfs, transactions, options, commitId, timestamp);
-  }
-
-  private async commitToSupabase(
-    vfs: Record<string, string>,
-    transactions: TransactionEntry[],
-    options: ShadowCommitOptions,
-    commitId: string,
-    timestamp: string
-  ): Promise<CommitResult> {
-    const MAX_RETRIES = 3;
-    let lastError: Error | null = null;
-
-    // Retry logic for transient Supabase failures
-    for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
-      try {
-        const filesToCommit = transactions
-          .filter(t => t.type !== 'DELETE')
-          .map(log => ({
-            session_id: options.sessionId,
-            commit_id: commitId,
-            file_path: log.path,
-            content: vfs[log.path] || log.newContent,
-            operation: log.type,
-            commit_message: options.message,
-            author: options.author || 'agent',
-            created_at: timestamp,
-          }));
-
-        const { error } = await this.supabase
-          .from('virtual_file_commits')
-          .upsert(filesToCommit, {
-            onConflict: 'session_id,commit_id,file_path'
-          });
-
-        if (error) {
-          // Check if it's a transient error (network, timeout)
-          if (attempt < MAX_RETRIES && this.isTransientError(error)) {
-            console.warn(`[ShadowCommit] Transient error (attempt ${attempt}/${MAX_RETRIES}):`, error.message);
-            await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt - 1))); // Exponential backoff
-            continue;
-          }
-          return { success: false, error: error.message, committedFiles: 0 };
-        }
-
-        const diff = transactions
-          .map(t => generateUnifiedDiff(
-            t.originalContent,
-            vfs[t.path],
-            t.path
-          ))
-          .join('\n');
-
-        return {
-          success: true,
-          commitId,
-          committedFiles: filesToCommit.length,
-          diff,
-        };
-      } catch (error) {
-        lastError = error instanceof Error ? error : new Error(String(error));
-        
-        // Retry on transient errors
-        if (attempt < MAX_RETRIES && this.isTransientError(lastError)) {
-          console.warn(`[ShadowCommit] Transient error (attempt ${attempt}/${MAX_RETRIES}):`, lastError.message);
-          await new Promise(resolve => setTimeout(resolve, 1000 * Math.pow(2, attempt - 1)));
-          continue;
-        }
-        
-        return { success: false, error: lastError.message, committedFiles: 0 };
-      }
-    }
-
-    return { 
-      success: false, 
-      error: lastError?.message || 'Max retries exceeded', 
-      committedFiles: 0 
-    };
-  }
-
-  /**
-   * Check if an error is transient (network, timeout, rate limit)
-   */
-  private isTransientError(error: any): boolean {
-    const message = (error.message || '').toLowerCase();
-    return (
-      message.includes('timeout') ||
-      message.includes('network') ||
-      message.includes('econnrefused') ||
-      message.includes('econnreset') ||
-      message.includes('etimedout') ||
-      message.includes('socket hang up') ||
-      message.includes('rate limit') ||
-      message.includes('429') ||
-      message.includes('503') ||
-      message.includes('502')
-    );
-  }
-
-  private async commitToFileSystem(
-    vfs: Record<string, string>,
-    transactions: TransactionEntry[],
-    options: ShadowCommitOptions,
-    commitId: string,
-    timestamp: string
-  ): Promise<CommitResult> {
     const commitDir = path.join(process.cwd(), '.agent-commits', options.sessionId);
     const commitFile = path.join(commitDir, `${commitId}.json`);
     const actionLogFile = path.join(commitDir, 'actions.jsonl');
@@ -289,29 +263,6 @@ export class ShadowCommitManager {
   }
 
   async getCommitHistory(sessionId: string, limit = 10): Promise<CommitHistoryEntry[]> {
-    if (this.useSupabase && this.supabase) {
-      const { data, error } = await this.supabase
-        .from('virtual_file_commits')
-        .select('commit_id, commit_message, author, created_at')
-        .eq('session_id', sessionId)
-        .order('created_at', { ascending: false })
-        .limit(limit);
-
-      if (error) {
-        console.error('[ShadowCommit] Get history error:', error);
-        return [];
-      }
-      return data.map((d: any) => ({
-        commitId: d.commit_id,
-        sessionId,
-        message: d.commit_message,
-        author: d.author,
-        createdAt: d.created_at,
-        filesChanged: 0, // Would need to query files separately
-        workspaceVersion: d.workspace_version ?? null,
-      }));
-    }
-
     const commitDir = path.join(process.cwd(), '.agent-commits', sessionId);
 
     if (!fs.existsSync(commitDir)) {
@@ -339,34 +290,7 @@ export class ShadowCommitManager {
     });
   }
 
-  /**
-   * Get a specific commit by ID
-   * 
-   * ADDED: Retrieve full commit data for rollback
-   */
   async getCommit(sessionId: string, commitId: string): Promise<CommitHistoryEntry & { transactions?: TransactionEntry[] } | null> {
-    if (this.useSupabase && this.supabase) {
-      const { data, error } = await this.supabase
-        .from('virtual_file_commits')
-        .select('*')
-        .eq('session_id', sessionId)
-        .eq('commit_id', commitId)
-        .single();
-
-      if (error) {
-        return null;
-      }
-      return {
-        commitId: data.commit_id,
-        sessionId: data.session_id,
-        message: data.commit_message,
-        author: data.author,
-        createdAt: data.created_at,
-        filesChanged: 0,
-        transactions: [],
-      };
-    }
-
     const commitFile = path.join(process.cwd(), '.agent-commits', sessionId, `${commitId}.json`);
 
     if (!fs.existsSync(commitFile)) {
@@ -386,11 +310,6 @@ export class ShadowCommitManager {
     };
   }
 
-  /**
-   * Rollback to a specific commit
-   * 
-   * ENHANCED: Now returns detailed rollback result
-   */
   async rollback(sessionId: string, commitId: string): Promise<RollbackResult> {
     const commit = await this.getCommit(sessionId, commitId);
     
@@ -402,70 +321,20 @@ export class ShadowCommitManager {
       };
     }
 
-    if (this.useSupabase && this.supabase) {
-      // For Supabase, reconstruct VFS from commit
-      const vfs: Record<string, string> = {};
-      let restoredCount = 0;
-
-      for (const transaction of commit.transactions) {
-        if (transaction.type === 'DELETE') {
-          // Can't delete via Supabase upsert, would need separate delete
-          continue;
-        } else {
-          vfs[transaction.path] = transaction.newContent || '';
-          restoredCount++;
-        }
-      }
-
-      // Upsert restored files
-      const filesToRestore = Object.entries(vfs).map(([filePath, content]) => ({
-        session_id: sessionId,
-        commit_id: commitId,
-        file_path: filePath,
-        content,
-        operation: 'UPDATE',
-        commit_message: `Rollback to ${commitId}`,
-        author: 'rollback',
-        created_at: new Date().toISOString(),
-      }));
-
-      const { error } = await this.supabase
-        .from('virtual_file_commits')
-        .upsert(filesToRestore);
-
-      if (error) {
-        return { 
-          success: false, 
-          restoredFiles: 0,
-          error: error.message 
-        };
-      }
-
-      return { 
-        success: true, 
-        restoredFiles: restoredCount 
-      };
-    }
-
-    // Filesystem rollback
     const commitDir = path.join(process.cwd(), '.agent-commits', sessionId);
     const rollbackDir = path.join(commitDir, 'rollbacks');
     
-    // Create rollback directory
     if (!fs.existsSync(rollbackDir)) {
       fs.mkdirSync(rollbackDir, { recursive: true });
     }
 
-    // Save current state as rollback point
     const currentVfsFile = path.join(rollbackDir, `pre-${commitId}-${Date.now()}.json`);
     const currentVfs = this.loadCurrentVFS(sessionId);
     fs.writeFileSync(currentVfsFile, JSON.stringify(currentVfs, null, 2));
 
-    // Restore from commit
     let restoredCount = 0;
     for (const transaction of commit.transactions) {
       if (transaction.type === 'DELETE') {
-        // Mark as deleted in current VFS
         delete currentVfs[transaction.path];
       } else {
         currentVfs[transaction.path] = transaction.newContent || '';
@@ -473,7 +342,6 @@ export class ShadowCommitManager {
       }
     }
 
-    // Save restored VFS
     const restoredVfsFile = path.join(rollbackDir, `restored-${commitId}-${Date.now()}.json`);
     fs.writeFileSync(restoredVfsFile, JSON.stringify(currentVfs, null, 2));
 
@@ -483,9 +351,6 @@ export class ShadowCommitManager {
     };
   }
 
-  /**
-   * Load current VFS state for a session
-   */
   private loadCurrentVFS(sessionId: string): Record<string, string> {
     const vfsFile = path.join(process.cwd(), '.agent-vfs', sessionId, 'vfs.json');
     
@@ -495,11 +360,6 @@ export class ShadowCommitManager {
     return {};
   }
 
-  /**
-   * List available rollback points
-   * 
-   * ADDED: View rollback history
-   */
   async listRollbackPoints(sessionId: string): Promise<Array<{ 
     commitId: string;
     timestamp: string;
@@ -534,7 +394,6 @@ export const commitTool = tool({
     author: z.string().optional().describe('Author of the commit'),
   }),
   execute: async ({ session_id, message, author }: { session_id: string; message: string; author?: string }, context: any) => {
-    // Placeholder - actual commit happens via ShadowCommitManager in agent context
     return {
       success: true,
       message: 'Commit functionality available via ShadowCommitManager',
@@ -569,4 +428,3 @@ export const historyTool = tool({
     return { success: true, history };
   },
 } as any);
-

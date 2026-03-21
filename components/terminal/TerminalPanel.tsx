@@ -794,9 +794,9 @@ export default function TerminalPanel({
       isConnected: false,
     };
 
-    // Set default cwd to 'project' - VFS stores files relative to project root
+    // Set default cwd to 'project/sessions' - start one directory lower than project root
     // The session scope path is only for VFS lookups, not for terminal cwd
-    localShellCwdRef.current[id] = 'project';
+    localShellCwdRef.current[id] = 'project/sessions';
     reconnectCooldownUntilRef.current[id] = 0;
     commandQueueRef.current[id] = [];
     commandHistoryRef.current[id] = [];
@@ -1066,7 +1066,11 @@ export default function TerminalPanel({
   // listLocalDirectory migrated to TerminalLocalFSHandler
 
   const getPrompt = (mode: TerminalMode, cwd: string): string => {
-    const displayCwd = cwd.replace(/^(project|workspace)/, '~');
+    // Only replace 'project' or 'workspace' at root level with '~', not subdirectories
+    // e.g., 'project' -> '~' but 'project/sessions' stays as 'project/sessions'
+    const displayCwd = (cwd === 'project' || cwd === 'workspace') 
+      ? cwd.replace(/^(project|workspace)/, '~')
+      : cwd;
     switch (mode) {
       case 'local':
         return `\x1b[34m[local]\x1b[0m \x1b[1;32m${displayCwd}$\x1b[0m `;

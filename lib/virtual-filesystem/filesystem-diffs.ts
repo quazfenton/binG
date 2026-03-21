@@ -135,7 +135,7 @@ export class FilesystemDiffTracker {
     return diff;
   }
 
-  getDiffSummary(ownerId: string = 'default', maxDiffs = 10): string {
+  getDiffSummary(ownerId: string = 'default', maxDiffs = 10): { changedFiles: string[]; totalChanges: number; creates: number; updates: number; deletes: number } {
     const latestDiffs: FileDiff[] = [];
 
     for (const history of this.histories.values()) {
@@ -145,53 +145,22 @@ export class FilesystemDiffTracker {
     }
 
     if (latestDiffs.length === 0) {
-      return JSON.stringify({ changedFiles: [], totalChanges: 0, creates: 0, updates: 0, deletes: 0 });
+      return { changedFiles: [], totalChanges: 0, creates: 0, updates: 0, deletes: 0 };
     }
 
     latestDiffs.sort((a, b) => b.version - a.version);
-    const limitedDiffs = latestDiffs.slice(0, maxDiffs);
 
     const creates = latestDiffs.filter(d => d.changeType === 'create').length;
     const updates = latestDiffs.filter(d => d.changeType === 'update').length;
     const deletes = latestDiffs.filter(d => d.changeType === 'delete').length;
 
-    const summary: string[] = [
-      `## File Changes Summary (${latestDiffs.length} files modified)\n`,
-    ];
-
-    for (const diff of limitedDiffs) {
-      const action = diff.changeType === 'create' ? '📄 Created' 
-        : diff.changeType === 'delete' ? '🗑️ Deleted' 
-        : '✏️ Modified';
-      
-      summary.push(`### ${action}: ${diff.path}`);
-      summary.push(`Version: ${diff.version} | Timestamp: ${diff.timestamp}\n`);
-
-      if (diff.changeType === 'delete') {
-        summary.push('**File was deleted**\n');
-      } else if (diff.hunks && diff.hunks.length > 0) {
-        summary.push('**Changes:**\n```diff');
-        for (const hunk of diff.hunks) {
-          summary.push(...hunk.lines);
-        }
-        summary.push('```\n');
-      } else if (diff.changeType === 'create') {
-        const preview = (diff.newContent || '').slice(0, 200);
-        summary.push(`**New file content (preview):**\n\`\`\`\n${preview}${(diff.newContent || '').length > 200 ? '...' : ''}\n\`\`\`\n`);
-      }
-    }
-
-    // Also return structured data for test compatibility
-    const result = {
+    return {
       changedFiles: latestDiffs.map(d => d.path),
       totalChanges: latestDiffs.length,
       creates,
       updates,
       deletes,
-      summary: summary.join('\n'),
     };
-
-    return JSON.stringify(result);
   }
 
   getFilesAtVersion(ownerId: string = 'default', targetVersion: number): Map<string, string> {

@@ -150,23 +150,26 @@ export class OPFSAdapter {
       }
     }
 
-    // Mark that we're in the process of enabling
+    // Mark that we're in the process of enabling (prevents disable() from racing ahead)
     let finished = false;
     this.pendingEnableResolve = () => { finished = true; };
+    this.enableCount = 1;
 
     try {
       // If enabled for a different workspace, we need to reinitialize
       if (this.enabled && this.currentWorkspaceId !== wsId) {
         console.log('[OPFS] Switching workspace from', this.currentWorkspaceId, 'to', wsId);
         await this.core.close();
-        this.enableCount = 0;
       }
 
       await this.core.initialize(wsId);
       this.enabled = true;
       this.ownerId = ownerId;
       this.currentWorkspaceId = wsId;
-      this.enableCount = 1;
+    } catch (initError) {
+      this.enableCount = 0;
+      this.enabled = false;
+      throw initError;
     } finally {
       if (finished) this.pendingEnableResolve = null;
     }
@@ -269,6 +272,7 @@ export class OPFSAdapter {
         content: opfsFile.content,
         language: this.detectLanguage(path),
         lastModified: new Date(opfsFile.lastModified).toISOString(),
+        createdAt: new Date(opfsFile.lastModified).toISOString(), // Use lastModified as fallback
         version: versions?.opfs || 1,
         size: opfsFile.size,
       };
@@ -320,6 +324,7 @@ export class OPFSAdapter {
         content,
         language: language || this.detectLanguage(path),
         lastModified: new Date().toISOString(),
+        createdAt: new Date().toISOString(),
         version: 1,
         size: content.length,
       };
@@ -343,6 +348,7 @@ export class OPFSAdapter {
       content,
       language: language || this.detectLanguage(path),
       lastModified: new Date(opfsResult.lastModified).toISOString(),
+      createdAt: new Date(opfsResult.lastModified).toISOString(),
       version: versions.opfs,
       size: opfsResult.size,
     };

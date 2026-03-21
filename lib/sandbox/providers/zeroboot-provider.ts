@@ -23,12 +23,11 @@ import type {
   SandboxProvider,
   SandboxHandle,
   SandboxCreateConfig,
-  ToolResult,
-  PreviewInfo,
   PtyHandle,
   PtyOptions,
   PtyConnectOptions,
 } from './sandbox-provider'
+import type { ToolResult, PreviewInfo } from '../types'
 import { createLogger } from '@/lib/utils/logger'
 
 const logger = createLogger('Sandbox:Zeroboot')

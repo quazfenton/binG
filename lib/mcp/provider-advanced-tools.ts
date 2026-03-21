@@ -31,6 +31,49 @@ import { createLogger } from '../utils/logger';
 const logger = createLogger('MCP:ProviderTools');
 
 /**
+ * Sanitize git input to prevent command injection
+ * Only allows safe characters: alphanumeric, dots, hyphens, underscores, slashes, colons, at-sign
+ */
+function sanitizeGitInput(input: string): string | null {
+  if (!input || typeof input !== 'string') {
+    return null;
+  }
+  // Only allow safe characters for git URLs and branch names
+  const safePattern = /^[A-Za-z0-9_./:=@\-]+$/;
+  if (!safePattern.test(input)) {
+    return null;
+  }
+  // Prevent path traversal
+  if (input.includes('..')) {
+    return null;
+  }
+  return input;
+}
+
+/**
+ * Sanitize path to prevent command injection and path traversal
+ */
+function sanitizePath(input: string): string | null {
+  if (!input || typeof input !== 'string') {
+    return null;
+  }
+  // Only allow safe path characters
+  const safePattern = /^[A-Za-z0-9_./\-]+$/;
+  if (!safePattern.test(input)) {
+    return null;
+  }
+  // Prevent path traversal
+  if (input.includes('..')) {
+    return null;
+  }
+  // Absolute paths only for security
+  if (!input.startsWith('/')) {
+    return null;
+  }
+  return input;
+}
+
+/**
  * Tool definition format (AI SDK compatible)
  */
 export interface ProviderToolDefinition {
@@ -335,16 +378,27 @@ export async function executeE2BAmpAgentWithRepo(args: {
   model?: string;
 }): Promise<ProviderToolResult> {
   try {
+    // Validate inputs to prevent command injection
+    const sanitizedRepoUrl = sanitizeGitInput(args.repoUrl);
+    const sanitizedBranch = args.branch ? sanitizeGitInput(args.branch) : null;
+    const sanitizedWorkingDir = sanitizePath(args.workingDir || '/home/user/project');
+    
+    if (!sanitizedRepoUrl) {
+      return { success: false, output: '', error: 'Invalid repoUrl: contains disallowed characters' };
+    }
+    if (sanitizedBranch === null) {
+      return { success: false, output: '', error: 'Invalid branch: contains disallowed characters' };
+    }
+
     const { getSandboxProvider } = await import('../sandbox/providers');
     const provider = await getSandboxProvider('e2b');
     const handle = await provider.createSandbox({});
 
-    // Clone repository first
-    const clonePath = args.workingDir || '/home/user/project';
-    await handle.executeCommand(`git clone ${args.repoUrl} ${clonePath}`);
+    // Clone repository first - use validated inputs
+    await handle.executeCommand(`git clone ${sanitizedRepoUrl} ${sanitizedWorkingDir}`);
     
-    if (args.branch) {
-      await handle.executeCommand(`cd ${clonePath} && git checkout ${args.branch}`);
+    if (sanitizedBranch) {
+      await handle.executeCommand(`cd ${sanitizedWorkingDir} && git checkout ${sanitizedBranch}`);
     }
 
     const ampService = handle.getAmpService();
@@ -401,16 +455,27 @@ export async function executeE2BCodexAgentWithRepo(args: {
   outputSchemaPath?: string;
 }): Promise<ProviderToolResult> {
   try {
+    // Validate inputs to prevent command injection
+    const sanitizedRepoUrl = sanitizeGitInput(args.repoUrl);
+    const sanitizedBranch = args.branch ? sanitizeGitInput(args.branch) : null;
+    const sanitizedWorkingDir = sanitizePath(args.workingDir || '/home/user/project');
+    
+    if (!sanitizedRepoUrl) {
+      return { success: false, output: '', error: 'Invalid repoUrl: contains disallowed characters' };
+    }
+    if (sanitizedBranch === null) {
+      return { success: false, output: '', error: 'Invalid branch: contains disallowed characters' };
+    }
+
     const { getSandboxProvider } = await import('../sandbox/providers');
     const provider = await getSandboxProvider('e2b');
     const handle = await provider.createSandbox({});
 
-    // Clone repository first
-    const clonePath = args.workingDir || '/home/user/project';
-    await handle.executeCommand(`git clone ${args.repoUrl} ${clonePath}`);
+    // Clone repository first - use validated inputs
+    await handle.executeCommand(`git clone ${sanitizedRepoUrl} ${sanitizedWorkingDir}`);
     
-    if (args.branch) {
-      await handle.executeCommand(`cd ${clonePath} && git checkout ${args.branch}`);
+    if (sanitizedBranch) {
+      await handle.executeCommand(`cd ${sanitizedWorkingDir} && git checkout ${sanitizedBranch}`);
     }
 
     const codexService = handle.getCodexService();

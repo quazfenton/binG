@@ -486,8 +486,8 @@ export async function getAccessTokenForConnection(connection: string, userId?: n
   try {
     const result = await auth0.getAccessTokenForConnection({ connection });
     if (result?.token) {
-      // Cache the token (default 1 hour expiry, SDK handles refresh)
-      cacheToken(connection, result.token, 3600);
+      // Don't cache session-based tokens globally to prevent cross-user exposure
+      // The Auth0 SDK handles its own session-scoped caching
       return result.token;
     }
     return null;
