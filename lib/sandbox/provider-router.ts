@@ -371,7 +371,7 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
   },
   {
     type: 'zeroboot',
-    services: ['pty'],
+    services: [],
     bestFor: ['code-interpreter', 'ml-training'],
     costTier: 'low',
     latencyTier: 'low',

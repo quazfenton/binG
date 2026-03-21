@@ -107,10 +107,14 @@ class TamboComponentRegistry {
 
   /**
    * Clear all components (for testing)
+   * Also resets initialization flags to allow re-initialization
    */
   clear(): void {
     this.components.clear();
     this.interactableComponents.clear();
+    // Reset initialization flags to allow re-initialization after clear
+    hasInitialized = false;
+    initializationPromise = null;
   }
 
   /**

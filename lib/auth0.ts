@@ -17,7 +17,7 @@ import { Auth0Client } from "@auth0/nextjs-auth0/server";
 // Lazy-loaded database functions to avoid Edge Runtime issues
 // Node.js modules (crypto, fs, path) in connection.ts are not compatible with Edge
 function getDatabase() {
-  return require('./database/connection').getDatabase;
+  return require('./database/connection').getDatabase();
 }
 
 function encryptApiKey(apiKey: string) {

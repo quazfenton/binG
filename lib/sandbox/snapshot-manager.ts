@@ -16,6 +16,7 @@
 
 import { createLogger } from '../utils/logger';
 import { CheckpointSystem } from './checkpoint-system';
+import { secureRandomId } from '../utils/crypto-random';
 import type { SandboxHandle, CheckpointInfo } from './providers/sandbox-provider';
 
 const logger = createLogger('Sandbox:SnapshotManager');
@@ -97,7 +98,7 @@ export class SnapshotManager {
     // Delegate to checkpoint system for provider-level persistence
     const checkpoint = await CheckpointSystem.create(handle, name, options?.description);
 
-    const snapshotId = `snap-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+    const snapshotId = `snap-${Date.now()}-${secureRandomId()}`;
     const snapshot: SnapshotInfo = {
       id: snapshotId,
       name,

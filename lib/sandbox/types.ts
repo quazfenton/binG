@@ -591,7 +591,7 @@ export function assessRisk(input: string, context?: {
   }
 
   // Critical risks should be blocked
-  const shouldBlock = level === 'critical' && factors.some(f => f.severity >= 100);
+  const shouldBlock = (level === 'critical' || level === 'kvm') && factors.some(f => f.severity >= 100);
   const blockReason = shouldBlock
     ? `Blocked: ${factors.filter(f => f.severity >= 100).map(f => f.description).join(', ')}`
     : undefined;

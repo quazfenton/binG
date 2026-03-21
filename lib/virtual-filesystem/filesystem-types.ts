@@ -5,6 +5,7 @@ export interface VirtualFile {
   content: string;
   language: string;
   lastModified: string;
+  createdAt: string;
   version: number;
   size: number;
   isDirectoryMarker?: boolean; // True for .directory marker files
@@ -44,5 +45,6 @@ export interface VirtualWorkspaceSnapshot {
   root: string;
   version: number;
   updatedAt: string;
+  exportedAt?: string;
   files: VirtualFile[];
 }

@@ -63,15 +63,43 @@ export class CheckpointSystem {
    * (Advanced capability for Daytona/Sprites)
    */
   static async branch(
-    handle: SandboxHandle, 
-    checkpointId: string, 
+    handle: SandboxHandle,
+    checkpointId: string,
     newBranchName: string
   ): Promise<string> {
-    // This requires provider-specific branching logic
-    // Implementation varies by SDK
     console.log(`[CheckpointSystem] Branching '${newBranchName}' from '${checkpointId}'`);
-    
-    // Placeholder for real branching logic
-    return `branch_${newBranchName}_${Date.now()}`;
+
+    try {
+      // Try provider-specific branching if available
+      if (handle.createCheckpoint && handle.restoreCheckpoint) {
+        // Provider supports checkpoints - try branching
+        const checkpoints = await handle.listCheckpoints?.() || [];
+        const checkpoint = checkpoints.find(c => c.id === checkpointId);
+        
+        if (!checkpoint) {
+          throw new Error(`Checkpoint ${checkpointId} not found`);
+        }
+
+        // Create new sandbox and restore checkpoint
+        const { getSandboxProvider } = await import('./providers');
+        const provider = await getSandboxProvider('daytona' as any);
+        const newHandle = await provider.createSandbox({
+          name: newBranchName,
+        });
+
+        // Restore checkpoint if method exists
+        if (newHandle.restoreCheckpoint) {
+          await newHandle.restoreCheckpoint(checkpointId);
+        }
+
+        console.log(`[CheckpointSystem] Branch created: ${newHandle.id}`);
+        return newHandle.id;
+      }
+
+      // Fallback: Return error if branching not supported
+      throw new Error('Checkpoint branching not supported by this provider');
+    } catch (error: any) {
+      console.error(`[CheckpointSystem] Branching failed: ${error.message}`);
+      throw error;
+    }
   }
-}
