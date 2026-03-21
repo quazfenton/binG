@@ -1096,9 +1096,17 @@ export default function ConversationInterface() {
       sessionId?: string | null;
     } | null = null;
 
+    console.debug('[applyDiffsToFilesystem] Starting diff application', {
+      entryCount: entries.length,
+      entries: entries.map(e => ({ path: e.path, diffLength: e.diff.length, diffPreview: e.diff.slice(0, 200) })),
+      filesystemScopePath: scopePath,
+      filesystemSessionId,
+    });
+
     for (const entry of entries) {
       const resolvedPath = resolveScopedPath(entry.path, scopePath);
       let currentContent = "";
+      let readErrorMsg: string | null = null;
       try {
         const readResponse = await fetch("/api/filesystem/read", {
           method: "POST",
@@ -1110,9 +1118,11 @@ export default function ConversationInterface() {
           if (payload?.success && payload?.data?.content != null) {
             currentContent = payload.data.content;
           }
+        } else {
+          readErrorMsg = `Read failed with status ${readResponse.status}`;
         }
-      } catch (readError) {
-        // If read fails, try applying diff to empty content
+      } catch (readError: any) {
+        readErrorMsg = readError.message || 'Network error during read';
         currentContent = "";
       }
 
@@ -1121,6 +1131,23 @@ export default function ConversationInterface() {
       if (nextContent == null) {
         failed[entry.path] = failed[entry.path] || [];
         failed[entry.path].push(entry.diff);
+        console.warn('[applyDiffsToFilesystem] Diff application returned null', {
+          path: resolvedPath,
+          currentContentLength: currentContent.length,
+          currentContentPreview: currentContent.slice(0, 300),
+          diffPreview: entry.diff.slice(0, 500),
+          readError: readErrorMsg,
+          suggestion: 'This usually means the file content has changed since the diff was generated, or the diff targets text that no longer exists in the file.',
+        });
+        continue;
+      }
+
+      if (nextContent === currentContent) {
+        appliedCount += 1;
+        console.debug('[applyDiffsToFilesystem] Diff produced no change (already applied or no-op)', {
+          path: resolvedPath,
+          contentLength: currentContent.length,
+        });
         continue;
       }
 
@@ -1150,9 +1177,19 @@ export default function ConversationInterface() {
           sessionId: payload?.data?.sessionId,
         };
         appliedCount += 1;
+        console.debug('[applyDiffsToFilesystem] Diff applied successfully', {
+          path: resolvedPath,
+          previousContentLength: currentContent.length,
+          newContentLength: nextContent.length,
+        });
       } catch (writeError: any) {
         failed[entry.path] = failed[entry.path] || [];
         failed[entry.path].push(entry.diff);
+        console.warn('[applyDiffsToFilesystem] Write failed', {
+          path: resolvedPath,
+          error: writeError.message,
+          nextContentLength: nextContent.length,
+        });
       }
     }
 
@@ -1197,6 +1234,11 @@ export default function ConversationInterface() {
         failedFiles: failedPaths,
         failedDiffs: failed,
         reason: 'Search blocks not found or patches could not be applied',
+        totalEntriesAttempted: entries.length,
+        appliedCount,
+        failedCount: totalFailedDiffs,
+        sessionId: filesystemSessionId,
+        scopePath,
       });
     }
   }, [filesystemScopePath, filesystemSessionId]);

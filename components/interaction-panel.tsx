@@ -450,8 +450,8 @@ export default function InteractionPanel({
   }, []);
 
   const getPanelMinHeight = useCallback(() => {
-    if (typeof window === "undefined") return 240;
-    return window.innerWidth <= 768 ? 320 : 240;
+    if (typeof window === "undefined") return 80;
+    return window.innerWidth <= 768 ? 120 : 80; // Reduced from 320/240 to allow dragging down to match minimize button behavior
   }, []);
 
   const toggleMinimized = useCallback(() => {

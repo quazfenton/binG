@@ -258,7 +258,7 @@ export default function MultiModelComparison({
                   <Button
                     variant="outline"
                     onClick={() => setResponses([])}
-                    disabled={responses.length === 0}
+                    disabled={responses.length === 0 || isComparing}
                     className="border-white/10 text-white/60 hover:text-white hover:bg-white/5"
                   >
                     <RefreshCw className="h-3 w-3 mr-1" />

@@ -1016,6 +1016,7 @@ export default function CodePreviewPanel({
       const loadFiles = async (path: string, basePath: string = '') => {
         const dirNodes = await listFilesystemDirectory(path);
         for (const node of dirNodes) {
+          // Build relative path from the targetPath (session root)
           const relativePath = basePath ? `${basePath}/${node.name}` : node.name;
           if (node.type === 'directory') {
             await loadFiles(node.path, relativePath);
@@ -1023,6 +1024,7 @@ export default function CodePreviewPanel({
             try {
               const file = await readFilesystemFile(node.path);
               if (file.content) {
+                // Store with full relative path including all directories
                 files[relativePath] = file.content;
               }
             } catch (err) {
@@ -1031,7 +1033,7 @@ export default function CodePreviewPanel({
           }
         }
       };
-      
+
       await loadFiles(targetPath);
 
       if (Object.keys(files).length === 0) {
@@ -1054,14 +1056,32 @@ export default function CodePreviewPanel({
         if (parts.length === 0) continue;
         const fileName = parts[parts.length - 1];
         const dir = parts.slice(0, -1).join('/');
-        
+
         // Score directories based on presence of config/entry files
-        if (fileName === 'package.json') addRootScore(dir, 8);
-        if (fileName === 'index.html') addRootScore(dir, 6);
-        if (fileName === 'vite.config.ts' || fileName === 'vite.config.js' || fileName === 'webpack.config.js' || fileName === '.parcelrc') addRootScore(dir, 6);
+        if (fileName === 'package.json') {
+          // package.json at root level - project root is ''
+          if (dir === '') addRootScore('', 8);
+          // package.json in subdirectory - that dir is a potential root
+          else addRootScore(dir, 8);
+        }
+        if (fileName === 'index.html') {
+          if (dir === '') addRootScore('', 6);
+          else addRootScore(dir, 6);
+        }
+        if (fileName === 'vite.config.ts' || fileName === 'vite.config.js' || fileName === 'webpack.config.js' || fileName === '.parcelrc') {
+          if (dir === '') addRootScore('', 6);
+          else addRootScore(dir, 6);
+        }
         if (/^main\.(js|jsx|ts|tsx)$/.test(fileName)) {
-          if (dir.endsWith('/src')) addRootScore(dir.replace(/\/src$/, ''), 5);
+          // main.js in src/ means project root is parent of src (i.e., '')
+          if (dir === 'src') addRootScore('', 5);
+          // Also score the src directory itself
           addRootScore(dir, 2);
+        }
+        // Additional entry point patterns
+        if (/^index\.(js|jsx|ts|tsx)$/.test(fileName)) {
+          if (dir === 'src') addRootScore('', 3);
+          addRootScore(dir, 1);
         }
       }
 
@@ -1074,31 +1094,22 @@ export default function CodePreviewPanel({
           return aDepth - bDepth;
         })[0]?.[0] || '';
 
-      // Normalize files to be relative to the detected root
-      const previewFiles = Object.entries(files).reduce((acc, [filePath, content]) => {
-        const cleanPath = filePath.replace(/^\/+/, '');
-        const relativePath = selectedRoot && cleanPath.startsWith(`${selectedRoot}/`)
-          ? cleanPath.slice(selectedRoot.length + 1)
-          : cleanPath;
-        acc[relativePath] = content;
-        return acc;
-      }, {} as Record<string, string>);
-
-      log(`[handleManualPreview] detected root="${selectedRoot}", files normalized from ${Object.keys(files).length} to ${Object.keys(previewFiles).length}`);
+      log(`[handleManualPreview] detected root="${selectedRoot}", file count: ${Object.keys(files).length}`);
 
       // Auto-detect best preview mode AND execution mode using centralized logic
       let selectedMode: PreviewMode = mode as PreviewMode || 'sandpack';
       let detectedExecutionMode: 'local' | 'cloud' | 'hybrid' = 'local';
 
-      // Use centralized live preview offloading detection
+      // Use centralized live preview offloading detection for framework/bundler detection only
+      // IMPORTANT: Pass the ORIGINAL files (before root normalization) to preserve directory structure
       const detection = livePreviewOffloading.detectProject({
-        files: previewFiles,
+        files: files,  // Use original 'files' with full directory structure preserved
         scopePath: normalizeProjectPath(targetPath),
       });
       
       if (!mode) {
         selectedMode = detection.previewMode;
-        
+
         // Determine execution mode based on project requirements
         if (detection.hasHeavyComputation || detection.hasAPIKeys) {
           detectedExecutionMode = 'cloud';
@@ -1107,20 +1118,21 @@ export default function CodePreviewPanel({
         } else {
           detectedExecutionMode = 'local';
         }
-        
+
         log(`[handleManualPreview] Detected via live-preview-offloading: framework=${detection.framework}, bundler=${detection.bundler}, mode=${selectedMode}, root="${detection.selectedRoot}"`);
       }
 
       log(`[handleManualPreview] mode="${selectedMode}", execution="${detectedExecutionMode}", root="${detection.selectedRoot}"`);
 
-      // Store detection result for use in renderLivePreview
+      // Store detection result for use in renderLivePreview (for framework info only)
       setProjectDetection(detection);
 
       // Set execution mode
       setExecutionMode(detectedExecutionMode);
 
-      // Set manual preview files and activate (use normalized previewFiles, not raw files)
-      setManualPreviewFiles(previewFiles);
+      // CRITICAL FIX: Set manual preview files with FULL directory structure preserved
+      // Do NOT use previewFiles (which has root stripped) - use original 'files' instead
+      setManualPreviewFiles(files);
       setIsManualPreviewActive(true);
       setPreviewMode(selectedMode);
       if (!preserveTab) {
@@ -1137,7 +1149,7 @@ export default function CodePreviewPanel({
 
       if (!silent) {
         toast.success(`${modeIcon} Preview loaded (${selectedMode}) - ${execIcon} ${detectedExecutionMode} execution`, {
-          description: `${Object.keys(previewFiles).length} files (root: "${selectedRoot || 'project root'}")`
+          description: `${Object.keys(files).length} files (root: "${selectedRoot || 'project root'}")`
         });
       }
     } catch (error: any) {

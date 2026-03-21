@@ -33,6 +33,10 @@ export async function middleware(request: NextRequest) {
   // - Auth0 session cookies
   // - OAuth state parameters
   if (request.nextUrl.pathname.startsWith('/auth/')) {
+    // Apply minimal security headers to Auth0 response
+    auth0Response.headers.set('X-Content-Type-Options', 'nosniff');
+    auth0Response.headers.set('X-Frame-Options', 'DENY');
+    auth0Response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
     return auth0Response;
   }
 

@@ -299,19 +299,10 @@ export class GitBackedVFS {
 
       // If partial rollback requested, filter files from commit
       if (targetFiles && targetFiles.length > 0) {
-        // Parse commit transactions to get file contents
-        let allTransactions: any[] = [];
-        
-        if (targetCommit.diff) {
-          try {
-            const commitData = typeof targetCommit.diff === 'string' 
-              ? JSON.parse(targetCommit.diff) 
-              : targetCommit.diff;
-            allTransactions = commitData.transactions || [];
-          } catch {
-            // If parsing fails, fall back to full rollback
-          }
-        }
+        // Fetch full commit data to get transactions array
+        // Note: getCommitHistory() only returns diff text, not full transaction data
+        const fullCommit = await this.shadowCommitManager.getCommit(this.options.sessionId, targetCommit.commitId);
+        const allTransactions = fullCommit?.transactions || [];
 
         // Filter transactions to only include target files
         const filteredTransactions = allTransactions.filter(tx => 

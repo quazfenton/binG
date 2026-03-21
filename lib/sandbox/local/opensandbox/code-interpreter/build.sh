@@ -15,6 +15,9 @@
 
 set -ex
 
+# Resolve script directory to ensure correct context regardless of where script is run from
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+
 TAG=${TAG:-latest}
 
 docker buildx rm code-interpreter-builder || true
@@ -35,5 +38,6 @@ docker buildx build \
   -t opensandbox/code-interpreter:${TAG} \
   -t sandbox-registry.cn-zhangjiakou.cr.aliyuncs.com/opensandbox/code-interpreter:${TAG} \
   --platform linux/amd64,linux/arm64 \
+  -f "${SCRIPT_DIR}/Dockerfile" \
   --push \
-  .
+  "${SCRIPT_DIR}"
