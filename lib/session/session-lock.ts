@@ -12,7 +12,9 @@ const log = createLogger('Session:Lock');
 
 const LOCK_TTL_SECONDS = 30;
 const LOCK_PREFIX = 'session:lock:';
-const LOCK_ACQUIRE_TIMEOUT_MS = parseInt(process.env.SESSION_LOCK_REDIS_TIMEOUT || '10000');
+const lockAcquireTimeoutMs = Number(process.env.SESSION_LOCK_REDIS_TIMEOUT);
+const LOCK_ACQUIRE_TIMEOUT_MS =
+  Number.isFinite(lockAcquireTimeoutMs) && lockAcquireTimeoutMs > 0 ? lockAcquireTimeoutMs : 10000;
 const LOCK_BASE_DELAY_MS = 50;
 const LOCK_MAX_JITTER_MS = 50;
 

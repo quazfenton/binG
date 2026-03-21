@@ -233,8 +233,8 @@ export class OracleVMSandboxHandle implements SandboxHandle {
         }
 
         // SECURITY: Validate command against allowed patterns to prevent shell injection
-        // Only allow git subcommands followed by safe arguments
-        const gitCommandPattern = /^(git\s+(?:status|diff|commit|push|pull|branch|log|stash|init|add|clone)(?:\s+[\w\-./=@:+|^<>,]+)*)$/;
+        // Only allow git subcommands followed by safe arguments (no shell metacharacters)
+        const gitCommandPattern = /^(git\s+(?:status|diff|commit|push|pull|branch|log|stash|init|add|clone)(?:\s+[A-Za-z0-9_./=@:+-]+)*)$/;
         if (!gitCommandPattern.test(command.trim())) {
           resolve({
             success: false,

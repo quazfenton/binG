@@ -322,6 +322,138 @@ export async function executeE2BCodexAgent(args: {
   }
 }
 
+/**
+ * Execute E2B AMP agent with git repository
+ * Clones repo first, then runs AMP agent
+ */
+export async function executeE2BAmpAgentWithRepo(args: {
+  prompt: string;
+  repoUrl: string;
+  branch?: string;
+  workingDir?: string;
+  streamJson?: boolean;
+  model?: string;
+}): Promise<ProviderToolResult> {
+  try {
+    const { getSandboxProvider } = await import('../sandbox/providers');
+    const provider = await getSandboxProvider('e2b');
+    const handle = await provider.createSandbox({});
+
+    // Clone repository first
+    const clonePath = args.workingDir || '/home/user/project';
+    await handle.executeCommand(`git clone ${args.repoUrl} ${clonePath}`);
+    
+    if (args.branch) {
+      await handle.executeCommand(`cd ${clonePath} && git checkout ${args.branch}`);
+    }
+
+    const ampService = handle.getAmpService();
+    if (!ampService) {
+      await provider.destroySandbox(handle.id);
+      return {
+        success: false,
+        output: '',
+        error: 'AMP_API_KEY not configured',
+      };
+    }
+
+    const result = await ampService.run({
+      prompt: args.prompt,
+      workingDir: clonePath,
+      streamJson: args.streamJson ?? false,
+      model: args.model,
+    });
+
+    // Destroy sandbox after execution
+    await provider.destroySandbox(handle.id);
+
+    return {
+      success: true,
+      output: result.output || '',
+      metadata: {
+        sandboxId: handle.id,
+        cost: result.cost || 0,
+        tokens: result.tokens,
+        repoUrl: args.repoUrl,
+        branch: args.branch || 'default',
+      },
+    };
+  } catch (error: any) {
+    logger.error('E2B AMP with repo failed:', error);
+    return {
+      success: false,
+      output: '',
+      error: error?.message || 'AMP with repo failed',
+    };
+  }
+}
+
+/**
+ * Execute E2B Codex agent with git repository
+ * Clones repo first, then runs Codex agent
+ */
+export async function executeE2BCodexAgentWithRepo(args: {
+  prompt: string;
+  repoUrl: string;
+  branch?: string;
+  workingDir?: string;
+  fullAuto?: boolean;
+  outputSchemaPath?: string;
+}): Promise<ProviderToolResult> {
+  try {
+    const { getSandboxProvider } = await import('../sandbox/providers');
+    const provider = await getSandboxProvider('e2b');
+    const handle = await provider.createSandbox({});
+
+    // Clone repository first
+    const clonePath = args.workingDir || '/home/user/project';
+    await handle.executeCommand(`git clone ${args.repoUrl} ${clonePath}`);
+    
+    if (args.branch) {
+      await handle.executeCommand(`cd ${clonePath} && git checkout ${args.branch}`);
+    }
+
+    const codexService = handle.getCodexService();
+    if (!codexService) {
+      await provider.destroySandbox(handle.id);
+      return {
+        success: false,
+        output: '',
+        error: 'CODEX_API_KEY not configured',
+      };
+    }
+
+    const result = await codexService.run({
+      prompt: args.prompt,
+      workingDir: clonePath,
+      fullAuto: args.fullAuto ?? false,
+      outputSchemaPath: args.outputSchemaPath,
+    });
+
+    // Destroy sandbox after execution
+    await provider.destroySandbox(handle.id);
+
+    return {
+      success: true,
+      output: result.output || '',
+      metadata: {
+        sandboxId: handle.id,
+        cost: result.cost || 0,
+        tokens: result.tokens,
+        repoUrl: args.repoUrl,
+        branch: args.branch || 'default',
+      },
+    };
+  } catch (error: any) {
+    logger.error('E2B Codex with repo failed:', error);
+    return {
+      success: false,
+      output: '',
+      error: error?.message || 'Codex with repo failed',
+    };
+  }
+}
+
 // ==================== Daytona Computer Use Tools ====================
 
 /**
@@ -910,12 +1042,8 @@ export async function callProviderTool(
     return executeE2BAmpAgent(args as any);
   }
   if (toolName === 'e2b_runAmpAgentWithRepo') {
-    // FIX: Provide helpful error message with workaround instead of silent failure
-    return { 
-      success: false, 
-      output: '', 
-      error: 'e2b_runAmpAgentWithRepo is not yet implemented. Workaround: Use e2b_runAmpAgent with manual code upload.' 
-    };
+    // IMPLEMENTED: Clone repo first, then run AMP agent
+    return executeE2BAmpAgentWithRepo(args as any);
   }
 
   // E2B Codex tools
@@ -923,12 +1051,8 @@ export async function callProviderTool(
     return executeE2BCodexAgent(args as any);
   }
   if (toolName === 'e2b_runCodexAgentWithRepo') {
-    // FIX: Provide helpful error message with workaround instead of silent failure
-    return { 
-      success: false, 
-      output: '', 
-      error: 'e2b_runCodexAgentWithRepo is not yet implemented. Workaround: Use e2b_runCodexAgent with manual code upload.' 
-    };
+    // IMPLEMENTED: Clone repo first, then run Codex agent
+    return executeE2BCodexAgentWithRepo(args as any);
   }
 
   // Daytona Computer Use tools

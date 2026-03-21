@@ -68,9 +68,16 @@ function getSecretKey(): string {
   const env: any = typeof process !== 'undefined' ? process.env : {};
   const secretKey = env.JWT_SECRET;
 
-  // Skip validation during build
-  if (isBuildEnvironment()) {
-    console.warn('[JWT] Skipping JWT_SECRET validation during build');
+  // Skip validation during build/export phases
+  if (
+    !secretKey && (
+      env.NEXT_BUILD === 'true' ||
+      env.NEXT_BUILD === '1' ||
+      env.NEXT_PHASE === 'build' ||
+      env.NEXT_PHASE === 'export'
+    )
+  ) {
+    console.warn('[JWT] JWT_SECRET not set during build; using temporary build key');
     return 'dummy-key-for-build';
   }
 

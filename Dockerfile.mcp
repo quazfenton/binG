@@ -16,7 +16,7 @@ RUN corepack enable
 ENV CI=true
 
 # Set up pnpm global bin directory
-ENV SHELL=bash
+ENV SHELL=/bin/sh
 ENV PNPM_HOME=/root/.local/share/pnpm
 ENV PATH=$PNPM_HOME:$PATH
 RUN pnpm setup

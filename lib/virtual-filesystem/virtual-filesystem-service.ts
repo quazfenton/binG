@@ -199,6 +199,7 @@ export class VirtualFilesystemService {
       content: normalizedContent,
       language: language ?? this.getLanguageFromPath(normalizedPath),
       lastModified: now,
+      createdAt: previous?.createdAt || now,
       version: (previous?.version || 0) + 1,
       size: fileSize,
     };
@@ -325,7 +326,7 @@ export class VirtualFilesystemService {
     };
   }
 
-  async deletePath(ownerId: string, targetPath: string): Promise<{ deletedCount: number }> {
+  async deletePath(ownerId: string, targetPath: string): Promise<boolean> {
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(targetPath);
     const normalizedPrefix = `${normalizedPath}/`;
@@ -361,7 +362,7 @@ export class VirtualFilesystemService {
       await this.persistWorkspace(ownerId, workspace);
     }
 
-    return { deletedCount };
+    return deletedCount > 0;
   }
 
   async listDirectory(ownerId: string, directoryPath: string = this.workspaceRoot): Promise<VirtualFilesystemDirectoryListing> {
@@ -426,6 +427,7 @@ export class VirtualFilesystemService {
     return {
       path: normalizedDirectoryPath,
       nodes,
+      entries: nodes, // Alias for backwards compatibility
     };
   }
 
@@ -434,13 +436,15 @@ export class VirtualFilesystemService {
     query: string,
     options: {
       path?: string;
+      pathPattern?: string;
       limit?: number;
+      language?: string;
     } = {},
-  ): Promise<VirtualFilesystemSearchResult[]> {
+  ): Promise<{ files: VirtualFilesystemSearchResult[] }> {
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) {
-      return [];
+      return { files: [] };
     }
 
     const searchBasePath = this.normalizePath(options.path || this.workspaceRoot);
@@ -450,6 +454,20 @@ export class VirtualFilesystemService {
 
     for (const file of workspace.files.values()) {
       if (file.path !== searchBasePath && !file.path.startsWith(searchPrefix)) {
+        continue;
+      }
+
+      // Apply path pattern filter if provided
+      if (options.pathPattern) {
+        const pattern = options.pathPattern.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*');
+        const regex = new RegExp(pattern);
+        if (!regex.test(file.path)) {
+          continue;
+        }
+      }
+
+      // Apply language filter if provided
+      if (options.language && file.language !== options.language) {
         continue;
       }
 
@@ -480,9 +498,11 @@ export class VirtualFilesystemService {
       });
     }
 
-    return matches
-      .sort((a, b) => (b.score - a.score) || a.path.localeCompare(b.path))
-      .slice(0, limit);
+    return {
+      files: matches
+        .sort((a, b) => (b.score - a.score) || a.path.localeCompare(b.path))
+        .slice(0, limit)
+    };
   }
 
   async getWorkspaceVersion(ownerId: string): Promise<number> {
@@ -490,17 +510,32 @@ export class VirtualFilesystemService {
     return workspace.version;
   }
 
-  async exportWorkspace(ownerId: string): Promise<VirtualWorkspaceSnapshot> {
+  async exportWorkspace(ownerId: string): Promise<VirtualWorkspaceSnapshot & { structure?: Record<string, string[]> }> {
     const workspace = await this.ensureWorkspace(ownerId);
     const files = Array.from(workspace.files.values())
       .map((file) => ({ ...file }))
       .sort((a, b) => a.path.localeCompare(b.path));
 
+    // Build directory structure
+    const structure: Record<string, string[]> = {};
+    for (const file of files) {
+      const parts = file.path.split('/');
+      if (parts.length > 1) {
+        const dir = parts.slice(0, -1).join('/');
+        if (!structure[dir]) {
+          structure[dir] = [];
+        }
+        structure[dir].push(parts[parts.length - 1]);
+      }
+    }
+
     return {
       root: this.workspaceRoot,
       version: workspace.version,
       updatedAt: workspace.updatedAt,
+      exportedAt: new Date().toISOString(),
       files,
+      structure,
     };
   }
 
