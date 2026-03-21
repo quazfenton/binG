@@ -29,20 +29,20 @@ export class NangoConnectionManager {
    */
   private initialize(): void {
     if (this.initialized) return;
-    
+
     // Skip initialization during build
-    const env = typeof process !== 'undefined' ? process.env : {};
-    const isBuild = env.NEXT_BUILD === 'true' || 
-                    env.NEXT_BUILD === '1' || 
+    const env: any = typeof process !== 'undefined' ? process.env : {};
+    const isBuild = env.NEXT_BUILD === 'true' ||
+                    env.NEXT_BUILD === '1' ||
                     env.NEXT_PHASE === 'build' ||
                     env.SKIP_DB_INIT === 'true';
-    
+
     if (isBuild) {
       console.warn('[NangoConnectionManager] Skipping initialization during build');
       this.initialized = true;
       return;
     }
-    
+
     const secretKey = env.NANGO_SECRET_KEY;
     
     if (!secretKey) {

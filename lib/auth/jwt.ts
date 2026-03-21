@@ -3,12 +3,12 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Auth:JWT');
 
-// Check if we're in a build/Edge environment
+// Check if we're in a build/Edge environment - ONLY use build-specific signals
+// CRITICAL: SKIP_DB_INIT should NOT be used here as it may be set in runtime,
+// which would enable token forgery with the known fallback secret
 function shouldSkipValidation(): boolean {
-  const env = typeof process !== 'undefined' ? process.env : {};
-  return env.SKIP_DB_INIT === 'true' ||
-         env.SKIP_DB_INIT === '1' ||
-         env.NEXT_BUILD === 'true' ||
+  const env: any = typeof process !== 'undefined' ? process.env : {};
+  return env.NEXT_BUILD === 'true' ||
          env.NEXT_BUILD === '1' ||
          env.NEXT_PHASE === 'build' ||
          env.NEXT_PHASE === 'export';
@@ -35,13 +35,15 @@ function getJwtModule() {
 function getJwtSecret(): string {
   if (jwtSecret) return jwtSecret;
 
-  const env = typeof process !== 'undefined' ? process.env : {};
+  const env: any = typeof process !== 'undefined' ? process.env : {};
   const JWT_SECRET = env.JWT_SECRET;
 
-  // Skip validation during build
+  // Skip validation during build only - use random secret per process to prevent token forgery
+  // CRITICAL: Never use a fixed fallback secret - generate one per process
   if (shouldSkipValidation()) {
     logger.warn('[JWT] Skipping JWT_SECRET validation during build');
-    jwtSecret = 'dummy-key-for-build';
+    // Use random secret per process - cannot be predicted or forged
+    jwtSecret = require('crypto').randomBytes(32).toString('hex');
     return jwtSecret;
   }
 
@@ -151,8 +153,10 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
     const token = authHeader.substring(7);
 
     try {
+      const jwt = getJwtModule();
+      
       // Decode without verification first to get JTI
-      const decodedUnverified = (jwt as any).decode(token) as JwtPayload | null;
+      const decodedUnverified = jwt.decode(token) as JwtPayload | null;
       if (!decodedUnverified) {
         return { success: false, error: 'Invalid token format' };
       }
@@ -164,7 +168,7 @@ export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
       }
 
       // Add validation options for JWT verification
-      const decoded = (jwt as any).verify(token, getJwtSecret(), {
+      const decoded = jwt.verify(token, getJwtSecret(), {
         algorithms: ['HS256'], // Enforce specific algorithm
         issuer: 'bing-app', // Validate issuer
         audience: 'bing-users', // Validate audience

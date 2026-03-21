@@ -35,6 +35,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import Image from "next/image";
+import { isBackgroundUrlAllowed } from "@/lib/utils/url-validation";
 
 interface SettingsProps {
   onClose: () => void;
@@ -63,28 +64,9 @@ const applyCustomBackgroundMedia = async (value: string) => {
   }
 
   // SECURITY: Validate URL before applying (client-side check)
-  try {
-    const url = new URL(value);
-    if (url.protocol !== 'https:') {
-      console.warn('[Settings] Blocked non-HTTPS background URL:', value);
-      return;
-    }
-    
-    // Block obvious SSRF attempts
-    const hostname = url.hostname.toLowerCase();
-    const blockedPatterns = [
-      'localhost', '127.', '10.', '192.168.', '172.16.', '172.17.', '172.18.',
-      '172.19.', '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.',
-      '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.',
-      '169.254.', '0.0.0.0', '.local', '.internal', 'metadata'
-    ];
-    
-    if (blockedPatterns.some(pattern => hostname.includes(pattern))) {
-      console.warn('[Settings] Blocked unsafe background URL:', value);
-      return;
-    }
-  } catch (e) {
-    console.warn('[Settings] Invalid background URL:', value);
+  // Uses shared validation helper with anchored regexes to match server-side validation
+  if (!isBackgroundUrlAllowed(value)) {
+    console.warn('[Settings] Blocked unsafe background URL:', value);
     return;
   }
 
@@ -853,7 +835,7 @@ export default function Settings({
                             fill
                             className="object-cover"
                             sizes="64px"
-                            unoptimized={!proxiedUrl}
+                            unoptimized={Boolean(proxiedUrl)}
                             onError={(e) => {
                               // Fallback to direct URL if proxy fails
                               const target = e.target as HTMLImageElement;
@@ -895,7 +877,7 @@ export default function Settings({
                                 fill
                                 className="object-cover"
                                 sizes="32px"
-                                unoptimized={!proxiedUrl}
+                                unoptimized={Boolean(proxiedUrl)}
                                 onError={(e) => {
                                   // Fallback to direct URL if proxy fails
                                   const target = e.target as HTMLImageElement;

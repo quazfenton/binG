@@ -115,6 +115,7 @@ export interface LLMRequest {
   provider?: string
   apiKeys?: Record<string, string>
   requestId?: string
+  apiKey?: string
 }
 
 export interface LLMResponse {
@@ -174,6 +175,10 @@ export interface ProviderConfig {
     baseURL?: string
   }
   mistral?: {
+    apiKey?: string
+    baseURL?: string
+  }
+  openrouter?: {
     apiKey?: string
     baseURL?: string
   }
@@ -463,9 +468,9 @@ class LLMService {
   private async initializeProviders(): Promise<void> {
     // CRITICAL FIX: Re-read environment variables at initialization time
     // This ensures we get the latest values, not stale values from module load time
-    const currentEnv = typeof process !== 'undefined' ? process.env : {};
-    
-    const config = {
+    const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
+
+    const config: any = {
       ...this.config,
       // Override with current environment variable values
       openai: { ...this.config.openai, apiKey: currentEnv.OPENAI_API_KEY || this.config.openai?.apiKey },
@@ -479,7 +484,7 @@ class LLMService {
       chutes: { ...this.config.chutes, apiKey: currentEnv.CHUTES_API_KEY || this.config.chutes?.apiKey, baseURL: currentEnv.CHUTES_BASE_URL || this.config.chutes?.baseURL },
       openrouter: { ...this.config.openrouter, apiKey: currentEnv.OPENROUTER_API_KEY || this.config.openrouter?.apiKey, baseURL: currentEnv.OPENROUTER_BASE_URL || this.config.openrouter?.baseURL },
       github: { ...this.config.github, apiKey: currentEnv.GITHUB_MODELS_API_KEY || currentEnv.AZURE_OPENAI_API_KEY || this.config.github?.apiKey },
-      zen: { ...this.config.zen, apiKey: currentEnv.zen_API_KEY || this.config.zen?.apiKey },
+      zen: { ...this.config.zen, apiKey: currentEnv.ZEN_API_KEY || this.config.zen?.apiKey },
     };
     
     // Initialize OpenAI
@@ -860,9 +865,9 @@ class LLMService {
     if (apiKeyOverride) {
       return apiKeyOverride;
     }
-    
-    const currentEnv = typeof process !== 'undefined' ? process.env : {};
-    
+
+    const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
+
     switch (provider) {
       case 'openai':
         return currentEnv.OPENAI_API_KEY || this.config.openai?.apiKey || '';
@@ -905,14 +910,20 @@ class LLMService {
     if (!apiKey) {
       throw new Error('OpenAI API key not configured. Please set OPENAI_API_KEY in your environment variables.');
     }
-    
-    // Re-initialize client with current API key if needed
-    if (!this.openai || apiKey !== this.config.openai?.apiKey) {
+
+    // Create request-scoped client to avoid race conditions with concurrent requests
+    // Using override key or instance client - never mutate shared singleton
+    let openaiClient = this.openai;
+    if (apiKeyOverride && apiKey !== this.config.openai?.apiKey) {
       const OpenAIClass = await getOpenAI();
-      this.openai = new OpenAIClass({ apiKey, baseURL: this.config.openai?.baseURL });
+      openaiClient = new OpenAIClass({ apiKey, baseURL: this.config.openai?.baseURL });
+    } else if (!openaiClient) {
+      const OpenAIClass = await getOpenAI();
+      openaiClient = new OpenAIClass({ apiKey, baseURL: this.config.openai?.baseURL });
+      this.openai = openaiClient; // Only cache when using default key
     }
 
-    const response = await this.openai.chat.completions.create({
+    const response = await openaiClient.chat.completions.create({
       model,
       messages: messages as any,
       temperature,
@@ -942,11 +953,17 @@ class LLMService {
     if (!apiKey) {
       throw new Error('Anthropic API key not configured. Please set ANTHROPIC_API_KEY in your environment variables.');
     }
-    
-    // Re-initialize client with current API key if needed
-    if (!this.anthropic || apiKey !== this.config.anthropic?.apiKey) {
+
+    // Create request-scoped client to avoid race conditions with concurrent requests
+    // Using override key or instance client - never mutate shared singleton
+    let anthropicClient = this.anthropic;
+    if (apiKeyOverride && apiKey !== this.config.anthropic?.apiKey) {
       const AnthropicClass = await getAnthropic();
-      this.anthropic = new AnthropicClass({ apiKey, baseURL: this.config.anthropic?.baseURL });
+      anthropicClient = new AnthropicClass({ apiKey, baseURL: this.config.anthropic?.baseURL });
+    } else if (!anthropicClient) {
+      const AnthropicClass = await getAnthropic();
+      anthropicClient = new AnthropicClass({ apiKey, baseURL: this.config.anthropic?.baseURL });
+      this.anthropic = anthropicClient; // Only cache when using default key
     }
 
     // Convert messages to Anthropic format
@@ -987,7 +1004,9 @@ class LLMService {
     model: string,
     messages: LLMMessage[],
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    requestId?: string,
+    apiKey?: string
   ): Promise<LLMResponse> {
     if (!this.google) throw new Error('Google not initialized');
 
@@ -1028,7 +1047,9 @@ class LLMService {
     model: string,
     messages: LLMMessage[],
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    requestId?: string,
+    apiKey?: string
   ): Promise<LLMResponse> {
     if (!this.cohere) throw new Error('Cohere not initialized');
 
@@ -1068,7 +1089,9 @@ class LLMService {
     model: string,
     messages: LLMMessage[],
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    requestId?: string,
+    apiKey?: string
   ): Promise<LLMResponse> {
     if (!this.together) throw new Error('Together AI not initialized');
 
@@ -1094,7 +1117,9 @@ class LLMService {
     model: string,
     messages: LLMMessage[],
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    requestId?: string,
+    apiKey?: string
   ): Promise<LLMResponse> {
     if (!this.replicate) throw new Error('Replicate not initialized');
 
@@ -1180,7 +1205,9 @@ class LLMService {
     model: string,
     messages: LLMMessage[],
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    requestId?: string,
+    apiKey?: string
   ): Promise<LLMResponse> {
     // Chutes is OpenAI-compatible, lazy-load OpenAI client
     const OpenAIClass = await getOpenAI()
@@ -1211,7 +1238,9 @@ class LLMService {
     model: string,
     messages: LLMMessage[],
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    requestId?: string,
+    apiKey?: string
   ): Promise<LLMResponse> {
     if (!this.portkey) throw new Error('Portkey not initialized');
 
@@ -1237,7 +1266,9 @@ class LLMService {
     model: string,
     messages: LLMMessage[],
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    requestId?: string,
+    apiKey?: string
   ): Promise<LLMResponse> {
     if (!this.mistral) throw new Error('Mistral not initialized');
 
@@ -1269,7 +1300,9 @@ class LLMService {
     model: string,
     messages: LLMMessage[],
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    requestId?: string,
+    apiKey?: string
   ): Promise<LLMResponse> {
     // GitHub Models is OpenAI-compatible via Azure endpoint - lazy-load
     const OpenAIClass = await getOpenAI()
@@ -1300,7 +1333,9 @@ class LLMService {
     model: string,
     messages: LLMMessage[],
     temperature: number,
-    maxTokens: number
+    maxTokens: number,
+    requestId?: string,
+    apiKey?: string
   ): Promise<LLMResponse> {
     if (!this.zenClient) throw new Error('zen API not initialized');
 

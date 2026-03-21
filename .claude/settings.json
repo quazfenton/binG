@@ -1,0 +1,16 @@
+{
+  "enabledPlugins": {
+    "context7@claude-plugins-official": true,
+    "superpowers@claude-plugins-official": true,
+    "playwright@claude-plugins-official": true,
+    "serena@claude-plugins-official": true,
+    "typescript-lsp@claude-plugins-official": true,
+    "ralph-loop@claude-plugins-official": true,
+    "coderabbit@claude-plugins-official": true,
+    "chrome-devtools-mcp@claude-plugins-official": true,
+    "atomic-agents@claude-plugins-official": true,
+    "remember@claude-plugins-official": true,
+    "autofix-bot@claude-plugins-official": true,
+    "ai-firstify@claude-plugins-official": true
+  }
+}

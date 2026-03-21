@@ -65,7 +65,7 @@ function getDefaultConfig(): JWTConfig {
  * Throws error in production if not configured
  */
 function getSecretKey(): string {
-  const env = typeof process !== 'undefined' ? process.env : {};
+  const env: any = typeof process !== 'undefined' ? process.env : {};
   const secretKey = env.JWT_SECRET;
 
   // Skip validation during build

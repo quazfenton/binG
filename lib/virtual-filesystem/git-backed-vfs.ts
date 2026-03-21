@@ -268,17 +268,22 @@ export class GitBackedVFS {
 
   /**
    * Rollback to specific version
+   * 
+   * @param ownerId - Owner ID
+   * @param targetVersion - Version to rollback to
+   * @param targetFiles - Optional array of specific files to rollback (partial rollback)
    */
   async rollback(
     ownerId: string,
-    targetVersion: number
+    targetVersion: number,
+    targetFiles?: string[]
   ): Promise<GitVFSRollbackResult> {
     try {
       // Get shadow commit history
       const history = await this.shadowCommitManager.getCommitHistory(this.options.sessionId, 100);
 
       // Find commit at target version - match by workspaceVersion or fall back to commit message
-      const targetCommit = history.find(c => 
+      const targetCommit = history.find(c =>
         c.workspaceVersion === targetVersion ||
         (c.workspaceVersion === null && new RegExp(`\\bv${targetVersion}\\b`).test(c.message ?? ''))
       );
@@ -292,7 +297,71 @@ export class GitBackedVFS {
         };
       }
 
-      // Rollback to commit (ShadowCommitManager.rollback takes sessionId and commitId)
+      // If partial rollback requested, filter files from commit
+      if (targetFiles && targetFiles.length > 0) {
+        // Parse commit transactions to get file contents
+        let allTransactions: any[] = [];
+        
+        if (targetCommit.diff) {
+          try {
+            const commitData = typeof targetCommit.diff === 'string' 
+              ? JSON.parse(targetCommit.diff) 
+              : targetCommit.diff;
+            allTransactions = commitData.transactions || [];
+          } catch {
+            // If parsing fails, fall back to full rollback
+          }
+        }
+
+        // Filter transactions to only include target files
+        const filteredTransactions = allTransactions.filter(tx => 
+          targetFiles.includes(tx.path)
+        );
+
+        if (filteredTransactions.length === 0) {
+          return {
+            success: false,
+            filesRestored: 0,
+            version: targetVersion,
+            error: `None of the specified files were found in version ${targetVersion}. Files in version: ${allTransactions.map(t => t.path).join(', ')}`,
+          };
+        }
+
+        // Build VFS state with only filtered files
+        const vfs: Record<string, string> = {};
+        for (const tx of filteredTransactions) {
+          if (tx.type !== 'DELETE' && tx.newContent) {
+            vfs[tx.path] = tx.newContent;
+          }
+        }
+
+        // Restore filtered files directly
+        const vfsService = new VirtualFilesystemService();
+        let restoredCount = 0;
+
+        for (const [filePath, content] of Object.entries(vfs)) {
+          try {
+            await vfsService.writeFile(ownerId, filePath, content);
+            restoredCount++;
+          } catch (error: any) {
+            return {
+              success: false,
+              filesRestored: restoredCount,
+              version: targetVersion,
+              error: `Failed to restore ${filePath}: ${error.message}`,
+            };
+          }
+        }
+
+        logger.info(`[GitVFS] Partial rollback successful: ${restoredCount}/${targetFiles.length} files`);
+        return {
+          success: true,
+          filesRestored: restoredCount,
+          version: targetVersion,
+        };
+      }
+
+      // Full rollback - use standard ShadowCommitManager.rollback
       const result = await this.shadowCommitManager.rollback(this.options.sessionId, targetCommit.commitId);
       if (!result.success) {
         logger.error(`[GitVFS] Rollback to version ${targetVersion} failed: ${result.error}`);

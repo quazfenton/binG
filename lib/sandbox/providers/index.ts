@@ -44,6 +44,7 @@ export type SandboxProviderType =
   | 'mistral'
   | 'vercel-sandbox'
   | 'oracle-vm'
+  | 'zeroboot'
 
 // Provider registry
 interface ProviderEntry {
@@ -356,6 +357,24 @@ function initializeRegistry() {
     asyncFactory: async () => {
       const { OracleVMProvider } = await import('./oracle-vm-provider')
       return new OracleVMProvider()
+    },
+  })
+
+  // Zeroboot - Sub-millisecond VM sandboxes via KVM forking
+  // Best for: Untrusted code execution, security-critical workloads
+  // Note: No network inside sandboxes, pre-baked templates only
+  providerRegistry.set('zeroboot', {
+    provider: null as any as any,
+    priority: 10,
+    enabled: true,
+    available: !!process.env.ZERObOOT_BASE_URL,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { ZerobootProvider } = await import('./zeroboot-provider')
+      return new ZerobootProvider()
     },
   })
 }

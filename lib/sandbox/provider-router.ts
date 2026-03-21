@@ -69,9 +69,9 @@ class LatencyTracker {
     // Initialize metrics for all providers
     const providers: SandboxProviderType[] = [
       'daytona', 'e2b', 'sprites', 'codesandbox', 'microsandbox',
-      'blaxel', 'opensandbox', 'mistral', 'vercel-sandbox'
+      'blaxel', 'opensandbox', 'mistral', 'vercel-sandbox', 'zeroboot'
     ];
-    
+
     for (const provider of providers) {
       this.metrics.set(provider, {
         provider,
@@ -366,6 +366,15 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     bestFor: ['agent', 'persistent-service', 'general'],
     costTier: 'low',
     latencyTier: 'medium',
+    persistenceSupport: false,
+    gpuSupport: false,
+  },
+  {
+    type: 'zeroboot',
+    services: ['pty'],
+    bestFor: ['code-interpreter', 'ml-training'],
+    costTier: 'low',
+    latencyTier: 'low',
     persistenceSupport: false,
     gpuSupport: false,
   },

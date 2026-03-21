@@ -1,13 +1,30 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
+import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
+import { getGitBackedVFSForOwner } from '@/lib/virtual-filesystem/git-backed-vfs';
+import { VirtualFilesystemService } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('API:GitRollback');
 
 /**
  * POST /api/gateway/git/[sessionId]/rollback
  * Rollback VFS to a specific version
- * 
+ *
  * Body:
- * - version: The version number to rollback to
+ * - version: The version number to rollback to (required)
+ * - mode: 'shadow' | 'vfs-snapshot' | 'git' (optional, default: 'shadow')
+ * - files: string[] (optional) - Specific files to rollback. If not provided, rolls back all files.
+ *
+ * Modes:
+ * - shadow: Rollback using shadow commit system (recommended, has full history)
+ * - vfs-snapshot: Rollback using VFS snapshot table
+ * - git: Rollback using git commit history
+ *
+ * Examples:
+ * - Full rollback: { "version": 5 }
+ * - Partial rollback: { "version": 5, "files": ["src/app.ts", "src/utils.ts"] }
  */
 export async function POST(
   request: NextRequest,
@@ -15,7 +32,8 @@ export async function POST(
 ) {
   try {
     const { sessionId } = await params;
-    
+
+    // Step 1: Enforce authentication
     const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
     if (!authResult.success || !authResult.userId) {
       return NextResponse.json(
@@ -31,58 +49,420 @@ export async function POST(
         { status: 400 }
       );
     }
-    const version = body?.version;
 
-    if (!Number.isInteger(version)) {
+    const { version, mode = 'shadow', files } = body;
+
+    if (!Number.isInteger(version) || version < 0) {
       return NextResponse.json(
-        { success: false, error: 'Invalid version number' },
+        { success: false, error: 'Invalid version number (must be non-negative integer)' },
         { status: 400 }
       );
     }
 
+    // Validate files array if provided
+    let targetFiles: string[] | undefined;
+    if (files !== undefined) {
+      if (!Array.isArray(files)) {
+        return NextResponse.json(
+          { success: false, error: 'files must be an array of file paths' },
+          { status: 400 }
+        );
+      }
+      if (files.length === 0) {
+        return NextResponse.json(
+          { success: false, error: 'files array cannot be empty' },
+          { status: 400 }
+        );
+      }
+      // Validate each file path
+      targetFiles = files.filter(f => typeof f === 'string' && f.length > 0);
+      if (targetFiles.length === 0) {
+        return NextResponse.json(
+          { success: false, error: 'files array must contain valid file paths' },
+          { status: 400 }
+        );
+      }
+    }
+
     const db = getDatabase();
 
-    // Verify session exists and belongs to the authenticated user
+    // Step 2: Verify session exists AND ownership check
     const session = db.prepare(`
-      SELECT user_id FROM user_sessions WHERE id = ? AND user_id = ? AND is_active = TRUE
-    `).get(sessionId, authResult.userId) as { user_id: number } | undefined;
+      SELECT user_id, workspace_id FROM user_sessions 
+      WHERE id = ? AND user_id = ? AND is_active = TRUE
+    `).get(sessionId, authResult.userId) as { user_id: number; workspace_id?: string } | undefined;
 
     if (!session) {
+      logger.warn('[Git Rollback] Unauthorized access attempt', {
+        sessionId,
+        userId: authResult.userId,
+        version,
+      });
       return NextResponse.json(
         { success: false, error: 'Session not found or access denied' },
         { status: 404 }
       );
     }
 
+    logger.info('[Git Rollback] Rollback requested', {
+      sessionId,
+      userId: authResult.userId,
+      version,
+      mode,
+      files: targetFiles?.length || 'all',
+    });
+
+    // Step 3: Execute rollback based on mode
+    let rollbackResult: {
+      success: boolean;
+      filesRestored: number;
+      error?: string;
+      details?: any;
+    };
+
+    switch (mode) {
+      case 'shadow':
+        rollbackResult = await executeShadowRollback(sessionId, version, targetFiles);
+        break;
+
+      case 'vfs-snapshot':
+        rollbackResult = await executeVFSSnapshotRollback(db, sessionId, version, Number(authResult.userId), targetFiles);
+        break;
+
+      case 'git':
+        rollbackResult = await executeGitRollback(sessionId, version, Number(authResult.userId), targetFiles);
+        break;
+
+      default:
+        return NextResponse.json(
+          { success: false, error: `Invalid rollback mode: ${mode}. Use 'shadow', 'vfs-snapshot', or 'git'` },
+          { status: 400 }
+        );
+    }
+
+    if (!rollbackResult.success) {
+      logger.error('[Git Rollback] Rollback failed', {
+        sessionId,
+        version,
+        mode,
+        error: rollbackResult.error,
+      });
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: rollbackResult.error || 'Rollback failed',
+          details: rollbackResult.details,
+        },
+        { status: 400 }
+      );
+    }
+
+    logger.info('[Git Rollback] Rollback successful', {
+      sessionId,
+      version,
+      mode,
+      filesRestored: rollbackResult.filesRestored,
+    });
+
+    return NextResponse.json({
+      success: true,
+      message: `Successfully rolled back to version ${version}`,
+      filesRestored: rollbackResult.filesRestored,
+      mode,
+    });
+  } catch (error) {
+    logger.error('[Git Rollback] Unexpected error:', error);
+    return NextResponse.json(
+      { success: false, error: 'Failed to rollback', details: error instanceof Error ? error.message : String(error) },
+      { status: 500 }
+    );
+  }
+}
+
+/**
+ * Execute rollback using shadow commit system
+ * 
+ * Shadow commits track all file changes with full history and diffs.
+ * This is the recommended rollback mode.
+ * 
+ * @param sessionId - Session ID
+ * @param version - Version to rollback to
+ * @param targetFiles - Optional array of specific files to rollback (partial rollback)
+ */
+async function executeShadowRollback(sessionId: string, version: number, targetFiles?: string[]) {
+  try {
+    const shadowCommitManager = new ShadowCommitManager();
+
+    // Get commit history to find the target version
+    const history = await shadowCommitManager.getCommitHistory(sessionId, 100);
+
+    // Find commit at target version
+    const targetCommit = history.find(c => c.workspaceVersion === version);
+
+    if (!targetCommit) {
+      return {
+        success: false,
+        filesRestored: 0,
+        error: `Version ${version} not found in shadow commit history. Available versions: ${history.map(h => h.workspaceVersion).join(', ')}`,
+      };
+    }
+
+    // Parse commit transactions to get file contents
+    let filesToRestore: Record<string, string> = {};
+    let allTransactions: any[] = [];
+
+    if (targetCommit.diff) {
+      // Parse transactions from commit data
+      try {
+        const commitData = typeof targetCommit.diff === 'string' 
+          ? JSON.parse(targetCommit.diff) 
+          : targetCommit.diff;
+        allTransactions = commitData.transactions || [];
+      } catch {
+        // If parsing fails, we'll use the rollback method directly
+      }
+    }
+
+    // If targetFiles specified, filter to only those files (partial rollback)
+    if (targetFiles && targetFiles.length > 0) {
+      // Filter transactions to only include target files
+      const filteredTransactions = allTransactions.filter(tx => 
+        targetFiles.includes(tx.path)
+      );
+
+      if (filteredTransactions.length === 0) {
+        return {
+          success: false,
+          filesRestored: 0,
+          error: `None of the specified files were found in version ${version}. Files in version: ${allTransactions.map(t => t.path).join(', ')}`,
+        };
+      }
+
+      // Build VFS state with only filtered files
+      for (const tx of filteredTransactions) {
+        if (tx.type !== 'DELETE' && tx.newContent) {
+          filesToRestore[tx.path] = tx.newContent;
+        }
+      }
+
+      // Restore filtered files directly
+      const vfs = new VirtualFilesystemService();
+      const ownerId = sessionId; // Use sessionId as ownerId for shadow commits
+      let restoredCount = 0;
+
+      for (const [filePath, content] of Object.entries(filesToRestore)) {
+        try {
+          await vfs.writeFile(ownerId, filePath, content);
+          restoredCount++;
+        } catch (error: any) {
+          return {
+            success: false,
+            filesRestored: restoredCount,
+            error: `Failed to restore ${filePath}: ${error.message}`,
+          };
+        }
+      }
+
+      return {
+        success: true,
+        filesRestored: restoredCount,
+        details: {
+          commitId: targetCommit.commitId,
+          commitMessage: targetCommit.message,
+          commitDate: targetCommit.createdAt,
+          partialRollback: true,
+          requestedFiles: targetFiles,
+          restoredFiles: Object.keys(filesToRestore),
+        },
+      };
+    }
+
+    // Full rollback - use standard rollback method
+    const result = await shadowCommitManager.rollback(sessionId, targetCommit.commitId);
+
+    return {
+      success: result.success,
+      filesRestored: result.restoredFiles || 0,
+      error: result.error,
+      details: {
+        commitId: targetCommit.commitId,
+        commitMessage: targetCommit.message,
+        commitDate: targetCommit.createdAt,
+        partialRollback: false,
+      },
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      filesRestored: 0,
+      error: `Shadow rollback failed: ${error.message}`,
+    };
+  }
+}
+
+/**
+ * Execute rollback using VFS snapshot table
+ *
+ * Reads snapshot from database and restores VFS state.
+ * 
+ * @param db - Database instance
+ * @param sessionId - Session ID
+ * @param version - Version to rollback to
+ * @param userId - User ID for ownership verification
+ * @param targetFiles - Optional array of specific files to rollback (partial rollback)
+ */
+async function executeVFSSnapshotRollback(
+  db: any,
+  sessionId: string,
+  version: number,
+  userId: number,
+  targetFiles?: string[]
+) {
+  try {
     // Get the snapshot for the target version
     const snapshot = db.prepare(`
-      SELECT * FROM vfs_snapshots 
+      SELECT * FROM vfs_snapshots
       WHERE session_id = ? AND id = ?
     `).get(sessionId, version) as any;
 
     if (!snapshot) {
-      return NextResponse.json(
-        { success: false, error: 'Version not found' },
-        { status: 404 }
-      );
+      return {
+        success: false,
+        filesRestored: 0,
+        error: `Snapshot version ${version} not found for session ${sessionId}`,
+      };
     }
 
-    // TODO: Implement actual rollback logic
-    // 1. Read the snapshot's file contents from vfs_snapshots table
-    // 2. Write them back to the current VFS state
-    // 3. Update the current version reference
+    // Parse snapshot data (stored as JSON)
+    const vfsState: Record<string, string> = typeof snapshot.vfs_state === 'string'
+      ? JSON.parse(snapshot.vfs_state)
+      : snapshot.vfs_state;
 
-    console.log(`[Git Rollback] Not implemented: session ${sessionId} version ${version}`);
+    if (!vfsState || Object.keys(vfsState).length === 0) {
+      return {
+        success: false,
+        filesRestored: 0,
+        error: 'Snapshot contains no files',
+      };
+    }
 
-    return NextResponse.json(
-      { success: false, error: 'Rollback not yet implemented' },
-      { status: 501 }
-    );
-  } catch (error) {
-    console.error('[Git Rollback] Error:', error);
-    return NextResponse.json(
-      { success: false, error: 'Failed to rollback' },
-      { status: 500 }
-    );
+    // If targetFiles specified, filter to only those files (partial rollback)
+    let filesToRestore = vfsState;
+    if (targetFiles && targetFiles.length > 0) {
+      filesToRestore = {};
+      const notFound: string[] = [];
+
+      for (const filePath of targetFiles) {
+        if (filePath in vfsState) {
+          filesToRestore[filePath] = vfsState[filePath];
+        } else {
+          notFound.push(filePath);
+        }
+      }
+
+      if (Object.keys(filesToRestore).length === 0) {
+        return {
+          success: false,
+          filesRestored: 0,
+          error: `None of the specified files were found in version ${version}. Available files: ${Object.keys(vfsState).join(', ')}`,
+          details: { notFound },
+        };
+      }
+
+      if (notFound.length > 0) {
+        logger.warn('[VFS Snapshot Rollback] Some files not found in snapshot', {
+          notFound,
+          version,
+        });
+      }
+    }
+
+    // Restore VFS state
+    const vfs = new VirtualFilesystemService();
+    const ownerId = userId.toString();
+    let restoredCount = 0;
+    const errors: string[] = [];
+
+    for (const [filePath, content] of Object.entries(filesToRestore)) {
+      try {
+        await vfs.writeFile(ownerId, filePath, content);
+        restoredCount++;
+      } catch (error: any) {
+        errors.push(`Failed to restore ${filePath}: ${error.message}`);
+      }
+    }
+
+    // Update current version reference
+    db.prepare(`
+      UPDATE user_sessions
+      SET current_version = ?
+      WHERE id = ? AND user_id = ?
+    `).run(version, sessionId, userId);
+
+    return {
+      success: errors.length === 0,
+      filesRestored: restoredCount,
+      error: errors.length > 0 ? errors.join('; ') : undefined,
+      details: {
+        totalFiles: Object.keys(filesToRestore).length,
+        restoredCount,
+        failedCount: errors.length,
+        partialRollback: targetFiles !== undefined,
+        requestedFiles: targetFiles,
+        restoredFiles: Object.keys(filesToRestore),
+      },
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      filesRestored: 0,
+      error: `VFS snapshot rollback failed: ${error.message}`,
+    };
+  }
+}
+
+/**
+ * Execute rollback using git commit history
+ *
+ * Uses git-backed VFS to restore from git commit.
+ * 
+ * @param sessionId - Session ID
+ * @param version - Version to rollback to
+ * @param userId - User ID for ownership verification
+ * @param targetFiles - Optional array of specific files to rollback (partial rollback)
+ */
+async function executeGitRollback(
+  sessionId: string,
+  version: number,
+  userId: number,
+  targetFiles?: string[]
+) {
+  try {
+    // Get GitBackedVFS instance
+    const vfs = new VirtualFilesystemService();
+    const gitBackedVFS = getGitBackedVFSForOwner(userId.toString(), vfs, {
+      sessionId,
+      autoCommit: false,
+    });
+
+    // Execute rollback (GitBackedVFS.rollback already supports partial rollback via internal filtering)
+    const result = await gitBackedVFS.rollback(userId.toString(), version, targetFiles);
+
+    return {
+      success: result.success,
+      filesRestored: result.filesRestored,
+      error: result.error,
+      details: {
+        version: result.version,
+        partialRollback: targetFiles !== undefined,
+        requestedFiles: targetFiles,
+      },
+    };
+  } catch (error: any) {
+    return {
+      success: false,
+      filesRestored: 0,
+      error: `Git rollback failed: ${error.message}`,
+    };
   }
 }

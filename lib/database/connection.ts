@@ -83,8 +83,8 @@ function getEncryptionKey(): Buffer {
 /**
  * Create a mock database object for use during build or while migrations are pending
  */
-function getMockDatabase(): Database.Database {
-  const mockDb: Partial<Database.Database> = {
+function getMockDatabase() {
+  const mockDb: any = {
     prepare: () => {
       return {
         run: () => ({ lastInsertRowid: 1, changes: 1 }),
@@ -95,27 +95,27 @@ function getMockDatabase(): Database.Database {
         finalize: () => {},
         iterate: () => [],
         raw: () => []
-      } as any;
+      };
     },
-    exec: () => mockDb as Database.Database,
+    exec: function() { return this; },
     pragma: () => {},
     transaction: (fn: any) => fn,
-    close: function() { return this as Database.Database; },
+    close: function() { return this; },
     backup: () => Promise.resolve({ totalPages: 0, remainingPages: 0 }),
-    defaultSafeIntegers: () => mockDb as Database.Database,
-    loadExtension: () => mockDb as Database.Database,
+    defaultSafeIntegers: function() { return this; },
+    loadExtension: function() { return this; },
     serialize: () => Buffer.alloc(0),
     table: () => null,
-    function: () => mockDb as Database.Database,
-    aggregate: () => mockDb as Database.Database,
-    unsafeMode: () => mockDb as Database.Database,
+    function: function() { return this; },
+    aggregate: function() { return this; },
+    unsafeMode: function() { return this; },
   };
 
-  return mockDb as Database.Database;
+  return mockDb;
 }
 
 // Initialize database
-let db: Database.Database | null = null;
+let db: any = null;
 
 let dbInitialized = false;
 
@@ -219,14 +219,14 @@ export function getDatabase(): any {
   return db;
 }
 
-export async function initializeDatabaseAsync(): Promise<Database.Database> {
+export async function initializeDatabaseAsync(): Promise<any> {
   const database = getDatabase();
-  
+
   if (!dbInitialized) {
     await initializeSchema();
     dbInitialized = true;
   }
-  
+
   return database;
 }
 
@@ -357,12 +357,13 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
         // If IV is 32 chars but doesn't work with new format, it's legacy
         try {
           const iv = Buffer.from(ivHex, 'hex');
-          crypto.createDecipheriv('aes-256-cbc', key, iv);
+          const encKey = getEncryptionKey();
+          (crypto as any).createDecipheriv('aes-256-cbc', Buffer.from(encKey, 'hex'), iv);
           // If this succeeds, it's new format - skip
           continue;
-        } catch {
+        } catch (e) {
           // New format failed, this is legacy - migrate it
-          const decipher = crypto.createDecipher('aes-256-cbc', getEncryptionKey());
+          const decipher = (crypto as any).createDecipher('aes-256-cbc', getEncryptionKey());
           let decrypted = decipher.update(encrypted, 'hex', 'utf8');
           decrypted += decipher.final('utf8');
 
@@ -392,8 +393,8 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
 
 // Database operations
 export class DatabaseOperations {
-  private db: Database.Database;
-  
+  private db: any;
+
   constructor() {
     this.db = getDatabase();
   }

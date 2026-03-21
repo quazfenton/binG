@@ -5,6 +5,16 @@
  * Provides containerized agentic capabilities with per-user isolation.
  */
 
+// Task Classifier - Multi-Factor Complexity Detection
+export {
+  createTaskClassifier,
+  classifyTask,
+  TaskClassifier,
+  type TaskClassification,
+  type ClassificationContext,
+  type TaskClassifierConfig,
+} from './task-classifier';
+
 // Session Management
 export {
   agentSessionManager,
