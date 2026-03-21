@@ -70,6 +70,9 @@ function sanitizeMessageContent(content: string): string {
   sanitized = sanitized.replace(/^\s*<<<\s*$/gm, '');
   sanitized = sanitized.replace(/^\s*>>>\s*$/gm, '');
 
+  // Pattern 7: Remove bare heredoc blocks (<<<...>>>) without command prefix
+  sanitized = sanitized.replace(/(?:^|\n)\s*<<<[\s\S]*?>>>\s*(?=\n|$)/gim, '\n');
+
   // Normalize spacing
   sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
   

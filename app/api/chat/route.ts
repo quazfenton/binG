@@ -1210,6 +1210,10 @@ function sanitizeAssistantDisplayContent(content: string): string {
   next = next.replace(/^\s*<<<\s*$/gm, '');
   next = next.replace(/^\s*>>>\s*$/gm, '');
 
+  // Pattern 7: Remove bare heredoc blocks (<<<...>>>) without command prefix
+  // These are malformed LLM outputs that should not appear in the display
+  next = next.replace(/(?:^|\n)\s*<<<[\s\S]*?>>>\s*(?=\n|$)/gim, '\n');
+
   // Normalize leftover spacing
   next = next.replace(/\n{3,}/g, '\n\n').trim();
   
@@ -2095,6 +2099,21 @@ function extractApplyDiffOperations(content: string): Array<{ path: string; sear
     diffs.push({ path, search, replace, thought });
   }
 
+  // Extract top-level APPLY_DIFF commands (outside containers)
+  // Matches: APPLY_DIFF path\n<<<\nsearch\n===\nreplace\n>>>
+  const topLevelDiffRegex = /^\s*APPLY_DIFF\s+([^\s<]+)\s*(?:\n\s*)?<<<\s*\n?([\s\S]*?)\n?\s*===\s*\n?([\s\S]*?)\n?\s*>>>/gim;
+  let topLevelMatch: RegExpExecArray | null;
+  while ((topLevelMatch = topLevelDiffRegex.exec(content)) !== null) {
+    const path = topLevelMatch[1]?.trim();
+    const search = topLevelMatch[2] ?? '';
+    const replace = topLevelMatch[3] ?? '';
+    if (!path || !search) continue;
+    // Deduplicate against already-found diffs
+    if (!diffs.some(d => d.path === path && d.search === search && d.replace === replace)) {
+      diffs.push({ path, search, replace });
+    }
+  }
+
   return diffs;
 }
 
@@ -2133,6 +2152,22 @@ function extractFilenameHintCodeBlocks(content: string): Array<{ path: string; c
   }
 
   return writes;
+}
+
+/**
+ * Validate an extracted file path to prevent garbage paths from being written.
+ * Rejects paths containing heredoc markers, control chars, or command names.
+ */
+function validateExtractedPath(raw: string): string | null {
+  const path = (raw || '').trim().replace(/^['"`]|['"`]$/g, '');
+  if (!path) return null;
+  if (path.length > 300) return null;
+  if (/[\r\n\t\0]/.test(path)) return null;
+  if (/(<<<|>>>|===)/.test(path)) return null;
+  if (/[<>"'`]/.test(path)) return null;
+  if (/^\W/.test(path)) return null;
+  if (/\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i.test(path)) return null;
+  return path;
 }
 
 /**
@@ -2374,18 +2409,49 @@ async function applyFilesystemEditsFromResponse(input: {
     ...edit,
     // Universal sanitization: strip any leaked heredoc markers from all extractors
     content: stripHeredocMarkers(edit.content),
-  }));
+  })).filter(edit => {
+    const validPath = validateExtractedPath(edit.path);
+    if (!validPath) {
+      console.warn('[applyFilesystemEdits] Rejected invalid write path:', edit.path.substring(0, 80));
+      return false;
+    }
+    edit.path = validPath;
+    return true;
+  });
   const combinedDiffOperations = [
     ...extractFencedDiffEdits(input.responseContent || ''),
     ...extractFsActionPatches(input.responseContent || ''),
     ...extractTopLevelPatches(input.responseContent || ''),
     ...(input.commands?.write_diffs || []),
-  ];
-  const applyDiffOperations = extractApplyDiffOperations(input.responseContent || '');
+  ].filter(op => {
+    const validPath = validateExtractedPath(op.path);
+    if (!validPath) {
+      console.warn('[applyFilesystemEdits] Rejected invalid diff path:', op.path.substring(0, 80));
+      return false;
+    }
+    op.path = validPath;
+    return true;
+  });
+  const applyDiffOperations = extractApplyDiffOperations(input.responseContent || '').filter(op => {
+    const validPath = validateExtractedPath(op.path);
+    if (!validPath) {
+      console.warn('[applyFilesystemEdits] Rejected invalid apply_diff path:', op.path.substring(0, 80));
+      return false;
+    }
+    op.path = validPath;
+    return true;
+  });
   const deleteTargets = [
     ...extractFsActionDeletes(input.responseContent || ''),
     ...extractTopLevelDeletes(input.responseContent || ''),
-  ];
+  ].filter(p => {
+    const validPath = validateExtractedPath(p);
+    if (!validPath) {
+      console.warn('[applyFilesystemEdits] Rejected invalid delete path:', p.substring(0, 80));
+      return false;
+    }
+    return true;
+  });
   const folderCreateTargets = fileWriteFolderCreateOps.folders; // Separate folder creation targets
   const requestFiles = input.commands?.request_files || [];
 

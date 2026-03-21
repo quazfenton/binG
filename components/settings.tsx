@@ -311,7 +311,8 @@ export default function Settings({
       const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(preset.url)}`;
       
       // Preload image to warm the server-side cache
-      const img = new Image();
+      // Use document.createElement to avoid conflict with Next.js Image import
+      const img = document.createElement('img');
       img.src = proxiedUrl;
       img.loading = 'lazy'; // Don't block page load
       console.log(`[Settings] Preloading background: ${preset.name}`);
@@ -340,7 +341,8 @@ export default function Settings({
       backgrounds.forEach((bg) => {
         if (bg.url && bg.url.trim()) {
           const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(bg.url)}`;
-          const img = new Image();
+          // Use document.createElement to avoid conflict with Next.js Image import
+          const img = document.createElement('img');
           img.src = proxiedUrl;
           img.loading = 'lazy';
           console.log(`[Settings] Preloading saved background: ${bg.name}`);
@@ -570,7 +572,8 @@ export default function Settings({
         
         // Warm cache for the new custom background
         const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(trimmed)}`;
-        const img = new Image();
+        // Use document.createElement to avoid conflict with Next.js Image import
+        const img = document.createElement('img');
         img.src = proxiedUrl;
         console.log('[Settings] Preloading custom background:', trimmed);
       }
