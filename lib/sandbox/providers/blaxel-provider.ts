@@ -42,8 +42,8 @@ const INSTANCE_TTL_MS = 2 * 60 * 60 * 1000 // 2 hours
 
 // Check if we're in a build environment
 function isBuildEnvironment(): boolean {
-  const env = typeof process !== 'undefined' ? process.env : {};
-  return env.SKIP_DB_INIT === 'true' || 
+  const env: any = typeof process !== 'undefined' ? process.env : {};
+  return env.SKIP_DB_INIT === 'true' ||
          env.SKIP_DB_INIT === '1' ||
          env.NEXT_BUILD === 'true' ||
          env.NEXT_BUILD === '1' ||
@@ -55,8 +55,8 @@ let encryptionKeyEnv: string | null = null;
 
 function getEncryptionKeyEnv(): string | null {
   if (encryptionKeyEnv !== null) return encryptionKeyEnv;
-  
-  const env = typeof process !== 'undefined' ? process.env : {};
+
+  const env: any = typeof process !== 'undefined' ? process.env : {};
   encryptionKeyEnv = env.BLAXEL_SECRET_ENCRYPTION_KEY || null;
   
   // Skip validation during build
@@ -958,7 +958,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
 
   /**
    * Load callback secret from database WITH DECRYPTION
-   * 
+   *
    * SECURITY: Decrypts secret on retrieval
    * Validates encryption format before decryption
    */
@@ -967,13 +967,14 @@ export class BlaxelSandboxHandle implements SandboxHandle {
       const db = getDatabase();
       const stmt = db.prepare('SELECT secret_encrypted FROM blaxel_callback_secrets WHERE sandbox_id = ? AND agent = ?');
       const row = stmt.get(this.id, key) as { secret_encrypted: string } | undefined;
-      
+
       if (!row?.secret_encrypted) {
         return null;
       }
-      
+
       const encryptedSecret = row.secret_encrypted;
-      
+      const encKey = getEncryptionKeyEnv();
+
       // Check if it's in encrypted format
       // If not, it's from old unencrypted storage (migration path)
       if (!encryptedSecret.includes(':')) {
@@ -986,7 +987,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
         }
         return encryptedSecret;
       }
-      
+
       // Decrypt the secret
       if (encKey) {
         try {

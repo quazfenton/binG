@@ -110,8 +110,8 @@ export class EnhancedLLMService {
       },
       {
         provider: 'zen',
-        baseUrl: process.env.zen_BASE_URL || 'https://api.zen.ai/v1',
-        apiKey: process.env.zen_API_KEY || '',
+        baseUrl: process.env.ZEN_BASE_URL || 'https://api.zen.ai/v1',
+        apiKey: process.env.ZEN_API_KEY || '',
         models: PROVIDERS.zen.models,
         priority: 8
       }
@@ -414,7 +414,6 @@ export class EnhancedLLMService {
       temperature: request.temperature,
       maxTokens: request.maxTokens,
       apiKeySet: !!config.apiKey,
-      apiKeyPrefix: config.apiKey?.substring(0, 4) + '...',
       requestHasKey: !!providerRequest.apiKey,
     });
 

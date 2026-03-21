@@ -48,12 +48,12 @@ let defaultAuthConfig: AuthConfig | null = null;
 
 function getDefaultAuthConfig(): AuthConfig {
   if (defaultAuthConfig) return defaultAuthConfig;
-  
-  const env = typeof process !== 'undefined' ? process.env : {};
-  
+
+  const env: any = typeof process !== 'undefined' ? process.env : {};
+
   // Skip validation during build - use dummy values
-  const isBuild = env.SKIP_DB_INIT === 'true' || 
-                  env.NEXT_BUILD === 'true' || 
+  const isBuild = env.SKIP_DB_INIT === 'true' ||
+                  env.NEXT_BUILD === 'true' ||
                   env.NEXT_PHASE === 'build';
   
   if (isBuild) {

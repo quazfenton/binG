@@ -12,6 +12,15 @@ RUN apk add --no-cache \
 # Enable corepack for pnpm
 RUN corepack enable
 
+# Set CI=true to avoid interactive prompts in pnpm
+ENV CI=true
+
+# Set up pnpm global bin directory
+ENV SHELL=bash
+ENV PNPM_HOME=/root/.local/share/pnpm
+ENV PATH=$PNPM_HOME:$PATH
+RUN pnpm setup
+
 # Set working directory
 WORKDIR /app
 

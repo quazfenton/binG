@@ -428,6 +428,8 @@ export class SandboxOrchestrator {
       case 'sandbox-heavy':
       case 'cloud-sandbox':
         return { type: 'fullstack-app', requiresBackend: true, needsServices: ['pty', 'preview'], performancePriority: 'throughput' };
+      case 'isolated-code-exec':
+        return { type: 'code-interpreter', needsServices: ['pty'], performancePriority: 'latency' };
       default:
         if (taskType === 'browsing' || taskType === 'automation') {
           return { type: 'general', needsServices: ['pty'], performancePriority: 'latency' };
