@@ -102,20 +102,63 @@ export function extractMultiLineFileEdits(content: string): FileEdit[] {
 export function extractWsActionEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
 
-  // Find all JSON objects in the content that have ws_action field
-  const jsonBlockRegex = /\{[\s\S]*?"ws_action"\s*:\s*"CREATE"[\s\S]*?\}/gi;
+  // Find JSON-like blocks by looking for ws_action pattern
+  // Use a more careful regex that accounts for nested braces in strings
+  // Match from ws_action backward to find the opening brace, then parse carefully
+  const wsActionPattern = /"ws_action"\s*:\s*"CREATE"/gi;
   let match: RegExpExecArray | null;
 
-  while ((match = jsonBlockRegex.exec(content)) !== null) {
-    const jsonStr = match[0];
+  while ((match = wsActionPattern.exec(content)) !== null) {
+    // Find the opening brace before this match
+    const startIndex = content.lastIndexOf('{', match.index);
+    if (startIndex === -1) continue;
+
+    // Find the matching closing brace by counting braces (accounting for strings)
+    let braceCount = 0;
+    let inString = false;
+    let escape = false;
+    let endIndex = -1;
+
+    for (let i = startIndex; i < content.length; i++) {
+      const char = content[i];
+      
+      if (escape) {
+        escape = false;
+        continue;
+      }
+      
+      if (char === '\\' && inString) {
+        escape = true;
+        continue;
+      }
+      
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+      
+      if (!inString) {
+        if (char === '{') braceCount++;
+        if (char === '}') braceCount--;
+        
+        if (braceCount === 0) {
+          endIndex = i + 1;
+          break;
+        }
+      }
+    }
+
+    if (endIndex === -1) continue;
+
+    const jsonStr = content.substring(startIndex, endIndex);
 
     try {
       const obj = JSON.parse(jsonStr) as { ws_action?: string; path?: string; content?: string };
 
-      // Only process CREATE actions with valid path and content
-      if (obj.ws_action !== 'CREATE' || !obj.path) continue;
+      // Only process CREATE actions with valid path (must be string) and content
+      if (obj.ws_action !== 'CREATE' || typeof obj.path !== 'string' || !obj.path.trim()) continue;
 
-      edits.push({ path: obj.path, content: obj.content ?? '' });
+      edits.push({ path: obj.path.trim(), content: obj.content ?? '' });
     } catch {
       // Skip malformed JSON blocks
       continue;

@@ -139,6 +139,7 @@ export default function MessageBubble({
   const [fileEditDecision, setFileEditDecision] = useState<"auto_applied" | "accepted" | "denied" | "reverted_with_conflicts" | null>(null)
   const [expandedArtifacts, setExpandedArtifacts] = useState<Set<string>>(new Set())
   const [applyingArtifact, setApplyingArtifact] = useState<string | null>(null)
+  const [showAllFiles, setShowAllFiles] = useState(false)
 
   const isUser = message.role === "user"
 
@@ -959,13 +960,18 @@ export default function MessageBubble({
             </div>
             {fileEditInfo.applied.length > 0 && (
               <div className="mt-1 text-white/55">
-                {fileEditInfo.applied.slice(0, 4).map((edit: any) => (
+                {(showAllFiles ? fileEditInfo.applied : fileEditInfo.applied.slice(0, 4)).map((edit: any) => (
                   <div key={`${edit.path}-${edit.version}`} className="truncate">
                     {edit.path}
                   </div>
                 ))}
                 {fileEditInfo.applied.length > 4 && (
-                  <div>+{fileEditInfo.applied.length - 4} more</div>
+                  <button
+                    onClick={() => setShowAllFiles(!showAllFiles)}
+                    className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors mt-0.5"
+                  >
+                    {showAllFiles ? `Show less` : `+${fileEditInfo.applied.length - 4} more`}
+                  </button>
                 )}
               </div>
             )}
@@ -1002,12 +1008,24 @@ export default function MessageBubble({
             {/* Enhanced Diff Viewer */}
             {fileEditInfo.applied.length > 0 && (
               <div className="mt-3 pt-3 border-t border-white/10">
-                <div className="flex items-center gap-2 mb-2">
-                  <FileCode className="w-4 h-4 text-white/60" />
-                  <span className="text-xs text-white/80 font-medium">Change Details</span>
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <FileCode className="w-4 h-4 text-white/60" />
+                    <span className="text-xs text-white/80 font-medium">Change Details</span>
+                    <span className="text-[10px] text-white/50">({fileEditInfo.applied.length} files)</span>
+                  </div>
+                  {fileEditInfo.applied.length > 3 && (
+                    <button
+                      onClick={() => setShowAllFiles(!showAllFiles)}
+                      className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors flex items-center gap-1"
+                    >
+                      {showAllFiles ? 'Show less' : `Show all ${fileEditInfo.applied.length} files`}
+                      <ChevronDown className={`w-3 h-3 transition-transform ${showAllFiles ? 'rotate-180' : ''}`} />
+                    </button>
+                  )}
                 </div>
-                <div className="space-y-2 max-h-64 overflow-y-auto">
-                  {fileEditInfo.applied.slice(0, 3).map((edit: any) => (
+                <div className="space-y-2 max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-white/5 scrollbar-track-transparent hover:scrollbar-thumb-white/20">
+                  {(showAllFiles ? fileEditInfo.applied : fileEditInfo.applied.slice(0, 3)).map((edit: any) => (
                     <EnhancedDiffViewer
                       key={`${edit.path}-${edit.version}`}
                       path={edit.path}
@@ -1017,11 +1035,6 @@ export default function MessageBubble({
                       showUnsynced={false}
                     />
                   ))}
-                  {fileEditInfo.applied.length > 3 && (
-                    <div className="text-xs text-white/50 text-center py-2">
-                      +{fileEditInfo.applied.length - 3} more changes
-                    </div>
-                  )}
                 </div>
               </div>
             )}

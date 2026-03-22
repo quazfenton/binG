@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"; // Import useCallback, useMemo, and useRef
+import { usePanel } from "@/contexts/panel-context";
 import { useEnhancedChat } from "@/hooks/use-enhanced-chat"; // Import enhanced chat hook
 import { useDiffsPoller } from "@/hooks/use-diffs-poller";
 import type { ChatHistory } from "@/types";
@@ -115,7 +116,24 @@ import { applyDiffToContent } from '@/lib/chat/file-diff-utils';
 
 export default function ConversationInterface() {
   const { user } = useAuth();
+  const { isOpen: isWorkspaceOpen } = usePanel();
   const [embedMode, setEmbedMode] = useState(false);
+
+  // Chat panel horizontal resizing state
+  const [chatPanelWidth, setChatPanelWidth] = useState(450); // Default width
+  const [isDesktop, setIsDesktop] = useState(false); // Track if we're on desktop
+  const [isChatResizing, setIsChatResizing] = useState(false);
+  const chatResizeStartX = useRef(0);
+  const chatResizeStartWidth = useRef(450);
+  const chatSnapThreshold = useRef(false); // Use ref to avoid effect re-runs during drag
+
+  // Detect desktop viewport
+  useEffect(() => {
+    const checkDesktop = () => setIsDesktop(window.innerWidth >= 768);
+    checkDesktop();
+    window.addEventListener('resize', checkDesktop);
+    return () => window.removeEventListener('resize', checkDesktop);
+  }, []);
 
   useEffect(() => {
     try {
@@ -1502,6 +1520,53 @@ export default function ConversationInterface() {
     handleToggleCodePreview();
   }, [handleToggleCodePreview]);
 
+  // Chat panel resize handlers
+  const handleChatResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsChatResizing(true);
+    chatResizeStartX.current = e.clientX;
+    chatResizeStartWidth.current = chatPanelWidth;
+    chatSnapThreshold.current = false;
+  }, [chatPanelWidth]);
+
+  useEffect(() => {
+    if (!isChatResizing) return;
+    
+    const handleChatResizeMove = (e: MouseEvent) => {
+      const delta = e.clientX - chatResizeStartX.current;
+      let newWidth = chatResizeStartWidth.current + delta;
+      
+      // Min/max constraints
+      newWidth = Math.max(300, Math.min(1200, newWidth));
+      
+      // Check snap threshold to workspace panel (within 20px of edge when workspace is open)
+      if (isWorkspaceOpen) {
+        const snapPoint = 400; // Approximate workspace panel width
+        const distanceToSnap = Math.abs(newWidth - snapPoint);
+        chatSnapThreshold.current = distanceToSnap < 20;
+      }
+      
+      setChatPanelWidth(newWidth);
+    };
+    
+    const handleChatResizeEnd = () => {
+      setIsChatResizing(false);
+      
+      // Optional snap to workspace panel edge (user must intentionally drag to snap point)
+      if (isWorkspaceOpen && chatSnapThreshold.current) {
+        setChatPanelWidth(400); // Snap to workspace panel edge
+      }
+    };
+    
+    document.addEventListener('mousemove', handleChatResizeMove);
+    document.addEventListener('mouseup', handleChatResizeEnd);
+    
+    return () => {
+      document.removeEventListener('mousemove', handleChatResizeMove);
+      document.removeEventListener('mouseup', handleChatResizeEnd);
+    };
+  }, [isChatResizing, isWorkspaceOpen]);
+
   return (
     <div className="relative w-full h-screen overflow-hidden touch-pan-y z-[1]">
       {/* Subtle animated background */}
@@ -1536,8 +1601,27 @@ export default function ConversationInterface() {
           </div>
         </div>
 
-        {/* Chat Panel - full width on mobile */}
-        <div className="flex-1 md:flex-initial md:border-l md:border-white/10 relative z-10 flex flex-col min-h-0">
+        {/* Chat Panel - full width on mobile, resizable on desktop */}
+        <div 
+          className="relative z-10 flex flex-col min-h-0 w-full md:border-l md:border-white/10"
+          style={{ 
+            width: isDesktop ? chatPanelWidth : '100%',
+            minWidth: '300px',
+            maxWidth: '1200px',
+          } as React.CSSProperties}
+        >
+          {/* Resize handle - thin invisible line on left edge */}
+          <div
+            className={`absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize z-20 transition-colors ${
+              isChatResizing 
+                ? 'bg-blue-400/50' 
+                : chatSnapThreshold.current 
+                  ? 'bg-cyan-400/70'  // Show snap indicator
+                  : 'hover:bg-white/30 bg-transparent'
+            }`}
+            onMouseDown={handleChatResizeStart}
+            title="Drag to resize chat panel"
+          />
           {/* Header showing current provider/model */}
           {!embedMode && (
             <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-black/30">

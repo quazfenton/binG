@@ -53,12 +53,17 @@ export async function resolveFilesystemOwner(req: NextRequest): Promise<Filesyst
 
   // SECURITY: Only trust the HttpOnly cookie for anonymous identity.
   // Never trust client-controlled headers - they can be forged to impersonate other users.
+  const sanitizeSessionId = (id: string): string => {
+    return id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+  };
+  
   // PRIORITY 1: Use existing anonymous session ID from HttpOnly cookie
   const rawSessionId = req.cookies.get('anon-session-id')?.value;
 
   if (rawSessionId) {
     // Strip 'anon_' prefix if present (from generateSecureId format)
-    const sessionId = rawSessionId.startsWith('anon_') ? rawSessionId.slice(5) : rawSessionId;
+    const rawId = rawSessionId.startsWith('anon_') ? rawSessionId.slice(5) : rawSessionId;
+    const sessionId = sanitizeSessionId(rawId);
     return {
       ownerId: `anon:${sessionId}`,
       source: 'anonymous',

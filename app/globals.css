@@ -165,6 +165,35 @@
     background: rgba(255, 255, 255, 0.3);
 }
 
+/* Tab bar scrollbar - black, thin, hover-only */
+.tab-scrollbar::-webkit-scrollbar {
+    height: 6px;
+}
+
+.tab-scrollbar::-webkit-scrollbar-track {
+    background: transparent;
+}
+
+.tab-scrollbar::-webkit-scrollbar-thumb {
+    background: transparent;
+    border-radius: 3px;
+    transition: background 0.2s;
+}
+
+.tab-scrollbar::-webkit-scrollbar-thumb:hover {
+    background: #000;
+}
+
+/* Firefox */
+.tab-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+}
+
+.tab-scrollbar:hover {
+    scrollbar-color: #000 transparent;
+}
+
 /* Mobile keyboard adjustments */
 @media (max-width: 768px) {
     .keyboard-visible {

@@ -379,6 +379,47 @@ export class AuthService {
   }
 
   /**
+   * Create a session for an existing user (used for OAuth/SSO logins)
+   */
+  async createSessionForUser(userId: number, sessionInfo?: { ipAddress: string; userAgent: string }): Promise<{
+    success: boolean;
+    sessionId?: string;
+    error?: string;
+  }> {
+    try {
+      const db = this.dbOps.getDb();
+      const dbUser = db.prepare('SELECT * FROM users WHERE id = ? AND is_active = TRUE').get(userId) as any;
+
+      if (!dbUser) {
+        return { success: false, error: 'User not found' };
+      }
+
+      // Create session
+      const sessionId = uuidv4();
+      const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
+
+      this.dbOps.createSession(
+        sessionId,
+        userId,
+        expiresAt,
+        sessionInfo?.ipAddress,
+        sessionInfo?.userAgent
+      );
+
+      // Update last login
+      db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(userId);
+
+      return {
+        success: true,
+        sessionId,
+      };
+    } catch (error) {
+      console.error('Create session error:', error);
+      return { success: false, error: 'Failed to create session' };
+    }
+  }
+
+  /**
    * Logout user
    * 
    * Invalidates session and blacklists JWT token if provided

@@ -2,6 +2,23 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getLocalUserIdFromAuth0, mapAuth0UserId } from '@/lib/oauth/connections';
 import { saveConnectedAccount } from '@/lib/auth0';
 
+const CONNECTION_TO_PROVIDER: Record<string, string> = {
+  'github': 'github',
+  'google-oauth2': 'google',
+  'windowslive': 'microsoft',
+  'twitter': 'twitter',
+  'linkedin': 'linkedin',
+  'facebook': 'facebook',
+  'apple': 'apple',
+  'instagram': 'instagram',
+  'bitbucket': 'bitbucket',
+  'slack': 'slack',
+};
+
+function normalizeProvider(connection: string): string {
+  return CONNECTION_TO_PROVIDER[connection] || connection;
+}
+
 /**
  * POST /api/auth0/post-callback
  *
@@ -56,11 +73,12 @@ export async function POST(request: NextRequest) {
     if (connectedAccount && auth0UserId) {
       const localUserId = await getLocalUserIdFromAuth0(auth0UserId);
       if (localUserId) {
+        const provider = normalizeProvider(connectedAccount.connection || connectedAccount.provider);
         await saveConnectedAccount(
           localUserId,
-          connectedAccount.connection || connectedAccount.provider,
+          provider,
           connectedAccount.id || 'unknown',
-          connectedAccount.connection || connectedAccount.provider,
+          provider,
           accessToken,
           refreshToken,
           tokenExpiresAt ? new Date(tokenExpiresAt) : undefined,
@@ -70,7 +88,7 @@ export async function POST(request: NextRequest) {
               ? scopes.split(/[,\s]+/).filter(Boolean)
               : undefined
         );
-        console.log('[Auth0 Post-Callback] Saved connected account:', connectedAccount.connection || connectedAccount.provider);
+        console.log('[Auth0 Post-Callback] Saved connected account:', provider);
       }
     }
 

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
+import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 
 /**
  * GET /api/gateway/git/[sessionId]/versions
@@ -8,6 +9,7 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
  * 
  * Query params:
  * - limit: Maximum number of versions to return (default: 20)
+ * - by: 'session' | 'user' - Get versions for session or entire user account (default: session)
  */
 export async function GET(
   request: NextRequest,
@@ -22,6 +24,9 @@ export async function GET(
       return NextResponse.json({ error: 'limit must be an integer between 1 and 100' }, { status: 400 });
     }
     const limit = limitValue;
+    
+    // New: Support getting commits by user account
+    const byUser = searchParams.get('by') === 'user';
 
     const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
     if (!authResult.success || !authResult.userId) {
@@ -44,6 +49,29 @@ export async function GET(
       return NextResponse.json({ error: 'Access denied' }, { status: 403 });
     }
 
+    // If by=user, return commits from shadow_commits table for the entire user account
+    if (byUser) {
+      const shadowCommitManager = new ShadowCommitManager();
+      const userOwnerId = `user:${authResult.userId}`;
+      const history = await shadowCommitManager.getCommitHistoryByUser(userOwnerId, limit);
+      
+      const versions = history.map(h => ({
+        version: h.workspaceVersion || 0,
+        commitId: h.commitId,
+        message: h.message,
+        filesChanged: h.filesChanged || 0,
+        createdAt: new Date(h.createdAt).getTime(),
+        sessionId: h.sessionId,
+      }));
+      
+      return NextResponse.json({ 
+        versions,
+        by: 'user',
+        ownerId: userOwnerId,
+      });
+    }
+
+    // Default: Return VFS snapshots for this session
     const snapshots = db.prepare(`
       SELECT 
         id as version,
@@ -71,7 +99,7 @@ export async function GET(
       createdAt: new Date(s.createdAt).getTime(),
     }));
 
-    return NextResponse.json({ versions });
+    return NextResponse.json({ versions, by: 'session' });
   } catch (error) {
     console.error('[Git Versions] Error:', error);
     return NextResponse.json(

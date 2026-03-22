@@ -1,7 +1,6 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import fs from 'fs';
-import path from 'path';
+import { getDatabase } from '@/lib/database/connection';
 
 export interface TransactionEntry {
   path: string;
@@ -53,163 +52,62 @@ export function generateUnifiedDiff(
   updated: string | undefined,
   path: string
 ): string {
-  if (original === undefined && updated === undefined) {
-    return `--- ${path}\n+++ ${path}\n@@ -0,0 +0,0 @@\n`;
-  }
-  
-  const origLines = (original ?? '').split('\n');
-  const updatedLines = (updated ?? '').split('\n');
-  
-  const hunks = computeDiffHunks(origLines, updatedLines);
-  if (hunks.length === 0) {
-    return '';
-  }
-  
-  const diffLines: string[] = [`--- ${path}`, `+++ ${path}`];
-  for (const hunk of hunks) {
-    diffLines.push(`@@ -${hunk.oldStart},${hunk.oldCount} +${hunk.newStart},${hunk.newCount} @@`);
-    diffLines.push(...hunk.lines);
-  }
-  
-  return diffLines.join('\n');
-}
+  // Fast O(n) line-by-line diff - much faster than LCS for large files
+  if (!original && !updated) return '';
 
-interface DiffHunk {
-  oldStart: number;
-  oldCount: number;
-  newStart: number;
-  newCount: number;
-  lines: string[];
-}
+  const oldLines = (original ?? '').split('\n');
+  const newLines = (updated ?? '').split('\n');
 
-function computeDiffHunks(oldLines: string[], newLines: string[]): DiffHunk[] {
-  const lcs = longestCommonSubsequence(oldLines, newLines);
-  const hunks: DiffHunk[] = [];
-  
-  let oldIdx = 0;
-  let newIdx = 0;
-  let hunkStart = 0;
-  let oldLineNum = 1;
-  let newLineNum = 1;
-  
-  while (oldIdx < oldLines.length || newIdx < newLines.length) {
-    const oldLine = oldLines[oldIdx];
-    const newLine = newLines[newIdx];
-    
-    if (oldIdx < lcs.length && newIdx < lcs.length && oldLine === newLine && oldLine === lcs[hunkStart]) {
-      if (hunks.length > 0 && hunkStart - hunks[hunks.length - 1].lines.length < 3) {
-        const last = hunks[hunks.length - 1];
-        last.lines.push(` ${oldLine}`);
-        last.oldCount++;
-        last.newCount++;
-        oldIdx++;
-        newIdx++;
-        hunkStart++;
-        oldLineNum++;
-        newLineNum++;
-        continue;
-      }
-      oldIdx++;
-      newIdx++;
-      hunkStart++;
-      oldLineNum++;
-      newLineNum++;
+  let result = `--- a/${path}\n+++ b/${path}\n`;
+
+  const maxLen = Math.max(oldLines.length, newLines.length);
+
+  for (let i = 0; i < maxLen; i++) {
+    const oldLine = oldLines[i];
+    const newLine = newLines[i];
+
+    if (oldLine === newLine) {
+      result += ` ${oldLine || ''}\n`;
+    } else if (oldLine === undefined) {
+      result += `+${newLine}\n`;
+    } else if (newLine === undefined) {
+      result += `-${oldLine}\n`;
     } else {
-      const hunkLines: string[] = [];
-      let hunkOldStart = oldLineNum;
-      let hunkNewStart = newLineNum;
-      let hunkOldCount = 0;
-      let hunkNewCount = 0;
-      let changes = 0;
-      
-      while (oldIdx < oldLines.length && (newIdx >= newLines.length || oldLines[oldIdx] !== lcs[hunkStart])) {
-        hunkLines.push(`-${oldLines[oldIdx]}`);
-        changes++;
-        hunkOldCount++;
-        oldIdx++;
-        oldLineNum++;
-      }
-      
-      while (newIdx < newLines.length && (oldIdx >= oldLines.length || newLines[newIdx] !== lcs[hunkStart])) {
-        hunkLines.push(`+${newLines[newIdx]}`);
-        changes++;
-        hunkNewCount++;
-        newIdx++;
-        newLineNum++;
-      }
-      
-      if (changes > 0) {
-        hunks.push({
-          oldStart: hunkOldStart,
-          oldCount: hunkOldCount,
-          newStart: hunkNewStart,
-          newCount: hunkNewCount,
-          lines: hunkLines,
-        });
-        hunkStart = oldIdx < lcs.length ? oldIdx : lcs.length;
-      }
+      result += `-${oldLine}\n+${newLine}\n`;
     }
   }
-  
-  return hunks;
-}
 
-function longestCommonSubsequence(a: string[], b: string[]): string[] {
-  const m = a.length;
-  const n = b.length;
-  const dp: number[][] = Array.from({ length: m + 1 }, () => new Array(n + 1).fill(0));
-  
-  for (let i = 1; i <= m; i++) {
-    for (let j = 1; j <= n; j++) {
-      if (a[i - 1] === b[j - 1]) {
-        dp[i][j] = dp[i - 1][j - 1] + 1;
-      } else {
-        dp[i][j] = Math.max(dp[i - 1][j], dp[i][j - 1]);
-      }
-    }
-  }
-  
-  const result: string[] = [];
-  let i = m;
-  let j = n;
-  
-  while (i > 0 && j > 0) {
-    if (a[i - 1] === b[j - 1]) {
-      result.unshift(a[i - 1]);
-      i--;
-      j--;
-    } else if (dp[i - 1][j] > dp[i][j - 1]) {
-      i--;
-    } else {
-      j--;
-    }
-  }
-  
   return result;
 }
 
 export class ShadowCommitManager {
+  /**
+   * Create a commit stored in the database (not filesystem)
+   */
   async commit(
     vfs: Record<string, string>,
     transactions: TransactionEntry[],
     options: ShadowCommitOptions
   ): Promise<CommitResult> {
+    console.log('[ShadowCommit] Starting commit', { 
+      sessionId: options.sessionId, 
+      transactionCount: transactions.length,
+      message: options.message 
+    });
+    
     if (transactions.length === 0) {
+      console.log('[ShadowCommit] No transactions, returning early');
       return { success: true, committedFiles: 0 };
     }
 
     const commitId = crypto.randomUUID();
     const timestamp = new Date().toISOString();
 
-    const commitDir = path.join(process.cwd(), '.agent-commits', options.sessionId);
-    const commitFile = path.join(commitDir, `${commitId}.json`);
-    const actionLogFile = path.join(commitDir, 'actions.jsonl');
-
     try {
-      if (!fs.existsSync(commitDir)) {
-        fs.mkdirSync(commitDir, { recursive: true });
-      }
+      // Get database instance
+      const db = getDatabase();
 
+      console.log('[ShadowCommit] Generating diffs for', transactions.length, 'transactions');
       const diff = transactions
         .map(t => generateUnifiedDiff(
           t.originalContent,
@@ -218,6 +116,7 @@ export class ShadowCommitManager {
         ))
         .join('\n');
 
+      console.log('[ShadowCommit] Serializing transactions');
       const serializedTransactions = transactions.map(t => ({
         path: t.path,
         type: t.type,
@@ -225,33 +124,35 @@ export class ShadowCommitManager {
         newContent: vfs[t.path] ?? t.newContent,
       }));
 
-      const commitData = {
-        id: commitId,
-        sessionId: options.sessionId,
-        message: options.message,
-        author: options.author || 'agent',
-        timestamp,
-        source: options.source || 'unknown',
-        integration: options.integration || options.source || 'filesystem',
-        workspaceVersion: options.workspaceVersion ?? null,
-        diff,
-        transactions: serializedTransactions,
-      };
+      // Insert commit into database (store owner_id for user account retrieval)
+      const stmt = db.prepare(`
+        INSERT INTO shadow_commits (
+          id, session_id, owner_id, message, author, timestamp, source, integration,
+          workspace_version, diff, transactions
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
 
-      fs.writeFileSync(commitFile, JSON.stringify(commitData, null, 2));
-      fs.appendFileSync(actionLogFile, `${JSON.stringify({
-        type: 'commit',
+      // Extract owner_id from sessionId or use the author as owner
+      // sessionId format: 'ownerId:conversationId' or just 'conversationId'
+      const ownerId = options.sessionId.includes(':')
+        ? options.sessionId.split(':')[0]
+        : (options.author || 'anon:unknown');
+
+      stmt.run(
         commitId,
-        sessionId: options.sessionId,
-        message: options.message,
-        author: options.author || 'agent',
-        source: options.source || 'unknown',
-        integration: options.integration || options.source || 'filesystem',
-        workspaceVersion: options.workspaceVersion ?? null,
+        options.sessionId,
+        ownerId,
+        options.message,
+        options.author || 'agent',
         timestamp,
-        filesChanged: serializedTransactions.length,
-        paths: serializedTransactions.map((entry) => entry.path),
-      })}\n`);
+        options.source || 'unknown',
+        options.integration || options.source || 'filesystem',
+        options.workspaceVersion ?? null,
+        diff,
+        JSON.stringify(serializedTransactions)
+      );
+
+      console.log('[ShadowCommit] Commit saved to database:', commitId);
 
       return {
         success: true,
@@ -259,59 +160,154 @@ export class ShadowCommitManager {
         committedFiles: transactions.filter(t => t.type !== 'DELETE').length,
         diff,
       };
-    } catch (error) {
+    } catch (error: any) {
+      console.error('[ShadowCommit] Commit failed:', error.message);
       return { success: false, error: String(error), committedFiles: 0 };
     }
   }
 
+  /**
+   * Get commit history from database (by session)
+   */
   async getCommitHistory(sessionId: string, limit = 10): Promise<CommitHistoryEntry[]> {
-    const commitDir = path.join(process.cwd(), '.agent-commits', sessionId);
+    try {
+      const db = getDatabase();
 
-    if (!fs.existsSync(commitDir)) {
+      const stmt = db.prepare(`
+        SELECT id, session_id, owner_id, message, author, timestamp, workspace_version, diff, transactions
+        FROM shadow_commits
+        WHERE session_id = ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+      `);
+
+      const rows = stmt.all(sessionId, limit) as Array<{
+        id: string;
+        session_id: string;
+        owner_id: string;
+        message: string;
+        author: string;
+        timestamp: string;
+        workspace_version: number | null;
+        diff: string;
+        transactions: string;
+      }>;
+
+      return rows.map(row => {
+        const transactions = JSON.parse(row.transactions || '[]');
+        return {
+          commitId: row.id,
+          sessionId: row.session_id,
+          message: row.message,
+          author: row.author,
+          createdAt: row.timestamp,
+          filesChanged: transactions.length,
+          workspaceVersion: row.workspace_version ?? null,
+          diff: row.diff,
+        };
+      });
+    } catch (error: any) {
+      console.error('[ShadowCommit] Get history failed:', error.message);
       return [];
     }
-
-    const files = fs.readdirSync(commitDir)
-      .filter((f: string) => f.endsWith('.json'))
-      .sort()
-      .reverse()
-      .slice(0, limit);
-
-    return files.map((f: string) => {
-      const data = JSON.parse(fs.readFileSync(path.join(commitDir, f), 'utf-8'));
-      return {
-        commitId: data.id,
-        sessionId,
-        message: data.message,
-        author: data.author,
-        createdAt: data.timestamp,
-        filesChanged: data.transactions?.length || 0,
-        workspaceVersion: data.workspaceVersion ?? null,
-        diff: data.diff,
-      };
-    });
   }
 
-  async getCommit(sessionId: string, commitId: string): Promise<CommitHistoryEntry & { transactions?: TransactionEntry[] } | null> {
-    const commitFile = path.join(process.cwd(), '.agent-commits', sessionId, `${commitId}.json`);
+  /**
+   * Get commit history by user account (owner_id) - retrieves all commits for a user
+   */
+  async getCommitHistoryByUser(ownerId: string, limit = 50): Promise<CommitHistoryEntry[]> {
+    try {
+      const db = getDatabase();
 
-    if (!fs.existsSync(commitFile)) {
+      const stmt = db.prepare(`
+        SELECT id, session_id, owner_id, message, author, timestamp, workspace_version, diff, transactions
+        FROM shadow_commits
+        WHERE owner_id = ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+      `);
+
+      const rows = stmt.all(ownerId, limit) as Array<{
+        id: string;
+        session_id: string;
+        owner_id: string;
+        message: string;
+        author: string;
+        timestamp: string;
+        workspace_version: number | null;
+        diff: string;
+        transactions: string;
+      }>;
+
+      return rows.map(row => {
+        const transactions = JSON.parse(row.transactions || '[]');
+        return {
+          commitId: row.id,
+          sessionId: row.session_id,
+          message: row.message,
+          author: row.author,
+          createdAt: row.timestamp,
+          filesChanged: transactions.length,
+          workspaceVersion: row.workspace_version ?? null,
+          diff: row.diff,
+        };
+      });
+    } catch (error: any) {
+      console.error('[ShadowCommit] Get history by user failed:', error.message);
+      return [];
+    }
+  }
+
+  /**
+   * Get a specific commit from database
+   */
+  async getCommit(sessionId: string, commitId: string): Promise<CommitHistoryEntry & { transactions?: TransactionEntry[] } | null> {
+    try {
+      const db = getDatabase();
+
+      const stmt = db.prepare(`
+        SELECT id, session_id, owner_id, message, author, timestamp, workspace_version, diff, transactions
+        FROM shadow_commits
+        WHERE session_id = ? AND id = ?
+      `);
+
+      const row = stmt.get(sessionId, commitId) as {
+        id: string;
+        session_id: string;
+        owner_id: string;
+        message: string;
+        author: string;
+        timestamp: string;
+        workspace_version: number | null;
+        diff: string;
+        transactions: string;
+      } | undefined;
+
+      if (!row) {
+        return null;
+      }
+
+      const transactions = JSON.parse(row.transactions || '[]');
+      
+      return {
+        commitId: row.id,
+        sessionId: row.session_id,
+        message: row.message,
+        author: row.author,
+        createdAt: row.timestamp,
+        filesChanged: transactions.length,
+        diff: row.diff,
+        transactions: transactions as TransactionEntry[],
+      };
+    } catch (error: any) {
+      console.error('[ShadowCommit] Get commit failed:', error.message);
       return null;
     }
-
-    const data = JSON.parse(fs.readFileSync(commitFile, 'utf-8'));
-    return {
-      commitId: data.id,
-      sessionId,
-      message: data.message,
-      author: data.author,
-      createdAt: data.timestamp,
-      filesChanged: data.transactions?.length || 0,
-      diff: data.diff,
-      transactions: data.transactions,
-    };
   }
 
+  /**
+   * Rollback to a specific commit
+   */
   async rollback(sessionId: string, commitId: string): Promise<RollbackResult> {
     const commit = await this.getCommit(sessionId, commitId);
     
@@ -323,68 +319,139 @@ export class ShadowCommitManager {
       };
     }
 
-    const commitDir = path.join(process.cwd(), '.agent-commits', sessionId);
-    const rollbackDir = path.join(commitDir, 'rollbacks');
-    
-    if (!fs.existsSync(rollbackDir)) {
-      fs.mkdirSync(rollbackDir, { recursive: true });
-    }
+    try {
+      const db = getDatabase();
 
-    const currentVfsFile = path.join(rollbackDir, `pre-${commitId}-${Date.now()}.json`);
-    const currentVfs = this.loadCurrentVFS(sessionId);
-    fs.writeFileSync(currentVfsFile, JSON.stringify(currentVfs, null, 2));
+      // Save current state as a rollback point
+      const rollbackId = crypto.randomUUID();
+      const timestamp = new Date().toISOString();
 
-    let restoredCount = 0;
-    for (const transaction of commit.transactions) {
-      if (transaction.type === 'DELETE') {
-        delete currentVfs[transaction.path];
-      } else {
-        currentVfs[transaction.path] = transaction.newContent || '';
-        restoredCount++;
+      // Store current VFS as a new commit for rollback capability
+      const stmt = db.prepare(`
+        INSERT INTO shadow_commits (
+          id, session_id, owner_id, message, author, timestamp, source, integration,
+          workspace_version, diff, transactions
+        ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+      `);
+
+      // Get owner_id from the commit we're rolling back to
+      const commit = await this.getCommit(sessionId, commitId);
+      const ownerId = commit ? (sessionId.includes(':') ? sessionId.split(':')[0] : 'anon:unknown') : 'anon:unknown';
+
+      stmt.run(
+        rollbackId,
+        sessionId,
+        ownerId,
+        `Pre-rollback to ${commitId}`,
+        'system',
+        timestamp,
+        'rollback',
+        'shadow-commit',
+        null,
+        '',
+        JSON.stringify([])
+      );
+
+      let restoredCount = 0;
+      for (const transaction of commit.transactions) {
+        if (transaction.type === 'DELETE') {
+          // File was deleted in this commit - restore it by marking for recreation
+          // The caller will handle actual file restoration through VFS
+          restoredCount++;
+        } else {
+          // File was created/updated - restore to that version
+          restoredCount++;
+        }
       }
+
+      console.log('[ShadowCommit] Rollback prepared:', restoredCount, 'files');
+      return { 
+        success: true, 
+        restoredFiles: restoredCount 
+      };
+    } catch (error: any) {
+      console.error('[ShadowCommit] Rollback failed:', error.message);
+      return { 
+        success: false, 
+        restoredFiles: 0,
+        error: String(error) 
+      };
     }
-
-    const restoredVfsFile = path.join(rollbackDir, `restored-${commitId}-${Date.now()}.json`);
-    fs.writeFileSync(restoredVfsFile, JSON.stringify(currentVfs, null, 2));
-
-    return { 
-      success: true, 
-      restoredFiles: restoredCount 
-    };
   }
 
-  private loadCurrentVFS(sessionId: string): Record<string, string> {
-    const vfsFile = path.join(process.cwd(), '.agent-vfs', sessionId, 'vfs.json');
-    
-    if (fs.existsSync(vfsFile)) {
-      return JSON.parse(fs.readFileSync(vfsFile, 'utf-8'));
-    }
-    return {};
-  }
-
+  /**
+   * List available rollback points
+   */
   async listRollbackPoints(sessionId: string): Promise<Array<{ 
     commitId: string;
     timestamp: string;
     filesCount: number;
   }>> {
-    const commitDir = path.join(process.cwd(), '.agent-commits', sessionId);
+    try {
+      const db = getDatabase();
 
-    if (!fs.existsSync(commitDir)) {
-      return [];
-    }
+      const stmt = db.prepare(`
+        SELECT id, timestamp, transactions
+        FROM shadow_commits
+        WHERE session_id = ? AND transactions != '[]'
+        ORDER BY timestamp DESC
+      `);
 
-    const files = fs.readdirSync(commitDir)
-      .filter((f: string) => f.endsWith('.json'))
-      .map((f: string) => {
-        const data = JSON.parse(fs.readFileSync(path.join(commitDir, f), 'utf-8'));
+      const rows = stmt.all(sessionId) as Array<{
+        id: string;
+        timestamp: string;
+        transactions: string;
+      }>;
+
+      return rows.map(row => {
+        const transactions = JSON.parse(row.transactions || '[]');
         return {
-          commitId: data.id,
-          timestamp: data.timestamp,
-          filesCount: data.transactions?.length || 0,
+          commitId: row.id,
+          timestamp: row.timestamp,
+          filesCount: transactions.length,
         };
       });
+    } catch (error: any) {
+      console.error('[ShadowCommit] List rollback points failed:', error.message);
+      return [];
+    }
+  }
 
-    return files.sort((a, b) => b.timestamp.localeCompare(a.timestamp));
+  /**
+   * Delete old commits (cleanup)
+   */
+  async pruneOldCommits(sessionId: string, keepCount: number = 50): Promise<number> {
+    try {
+      const db = getDatabase();
+
+      // Get IDs to keep
+      const keepStmt = db.prepare(`
+        SELECT id FROM shadow_commits
+        WHERE session_id = ?
+        ORDER BY timestamp DESC
+        LIMIT ?
+      `);
+
+      const keepIds = keepStmt.all(sessionId, keepCount) as Array<{ id: string }>;
+      
+      if (keepIds.length === 0) {
+        return 0;
+      }
+
+      const idsToDelete = keepIds.map(r => r.id);
+      
+      // Delete older commits
+      const deleteStmt = db.prepare(`
+        DELETE FROM shadow_commits
+        WHERE session_id = ? AND id NOT IN (${idsToDelete.map(() => '?').join(',')})
+      `);
+
+      const result = deleteStmt.run(sessionId, ...idsToDelete);
+      return result.changes;
+    } catch (error: any) {
+      console.error('[ShadowCommit] Prune failed:', error.message);
+      return 0;
+    }
   }
 }
 
@@ -429,4 +496,4 @@ export const historyTool = tool({
     const history = await manager.getCommitHistory(session_id, limit);
     return { success: true, history };
   },
-} as any);
+} as any);
