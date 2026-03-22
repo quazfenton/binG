@@ -19,9 +19,9 @@ export interface CircuitBreakerConfig {
 }
 
 const DEFAULT_CONFIG: CircuitBreakerConfig = {
-  failureThreshold: 5,
+  failureThreshold: 10,
   successThreshold: 2,
-  timeoutMs: 30000, // 30 seconds
+  timeoutMs: 20000, // 20 seconds — recover faster
   halfOpenMaxRequests: 3,
 };
 

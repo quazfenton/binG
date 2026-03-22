@@ -412,16 +412,16 @@ export class DatabaseOperations {
     return stmt.run(email, finalUsername, passwordHash);
   }
 
-  createUserWithVerification(email: string, username: string, passwordHash: string, verificationToken: string, verificationExpires: Date) {
+  createUserWithVerification(email: string, username: string, passwordHash: string, verificationToken: string, verificationExpires: Date, emailVerified: boolean = false) {
     // Handle empty username - set to NULL to avoid unique constraint conflicts
     const finalUsername = username.trim() || null;
-    
+
     const stmt = this.db.prepare(`
       INSERT INTO users (email, username, password_hash, email_verification_token, email_verification_expires, email_verified)
-      VALUES (?, ?, ?, ?, ?, FALSE)
+      VALUES (?, ?, ?, ?, ?, ?)
     `);
 
-    return stmt.run(email, finalUsername, passwordHash, verificationToken, verificationExpires.toISOString());
+    return stmt.run(email, finalUsername, passwordHash, verificationToken, verificationExpires.toISOString(), emailVerified);
   }
   
   getUserByEmail(email: string) {

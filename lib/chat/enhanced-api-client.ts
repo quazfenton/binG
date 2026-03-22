@@ -180,9 +180,9 @@ export class EnhancedAPIClient {
   };
 
   private defaultCircuitBreakerConfig: CircuitBreakerConfig = {
-    failureThreshold: 5,
-    recoveryTimeout: 30000,
-    monitoringWindow: 60000
+    failureThreshold: 10,
+    recoveryTimeout: 15000,
+    monitoringWindow: 90000
   };
 
   constructor(circuitBreakerConfig?: Partial<CircuitBreakerConfig>) {

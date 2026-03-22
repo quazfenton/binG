@@ -43,7 +43,7 @@ export interface EnhancedDiffViewerProps {
   localContent?: string;
   /** Git commit content (optional) */
   gitContent?: string;
-  /** Maximum lines to show initially (expandable) */
+  /** Maximum lines to show initially (expandable) - increased default */
   maxLines?: number;
   /** Enable local comparison */
   compareWithLocal?: boolean;
@@ -59,6 +59,12 @@ export interface EnhancedDiffViewerProps {
   isFullContent?: boolean;
   /** Language for syntax highlighting (auto-detected from path if not provided) */
   language?: string;
+  /** Enable drag-to-scroll for better UX */
+  enableDragScroll?: boolean;
+  /** Initial height in pixels (default: auto-expand) */
+  initialHeight?: number;
+  /** Maximum height before requiring expand (default: much larger) */
+  maxHeight?: number;
 }
 
 /**
@@ -224,13 +230,15 @@ function isDiffFormat(content: string): boolean {
 
 /**
  * Enhanced Diff Viewer Component - Sleek Futuristic Design
+ * 
+ * IMPROVED: Larger default size, drag-to-scroll, better UX
  */
 export function EnhancedDiffViewer({
   path,
   serverContent,
   localContent,
   gitContent,
-  maxLines = 500,
+  maxLines = 2000, // Increased from 500 to 2000
   compareWithLocal = true,
   compareWithGit = false,
   showUnsynced = true,
@@ -238,9 +246,15 @@ export function EnhancedDiffViewer({
   onAcceptServer,
   isFullContent: forceFullContent = false,
   language: explicitLanguage,
+  enableDragScroll = true,
+  maxHeight = 800, // Increased from 384px (max-h-96) to 800px
 }: EnhancedDiffViewerProps) {
   const [activeTab, setActiveTab] = useState<'server-local' | 'server-git' | 'local-git'>('server-local');
   const [isExpanded, setIsExpanded] = useState(false);
+  const [isDragging, setIsDragging] = useState(false);
+  const [dragStartY, setDragStartY] = useState(0);
+  const [scrollStart, setScrollStart] = useState(0);
+  const contentRef = React.useRef<HTMLDivElement>(null);
 
   const {
     readFile: readOPFSFile,
@@ -367,6 +381,40 @@ export function EnhancedDiffViewer({
   // Get displayed lines based on expanded state
   const displayedLines = isExpanded ? Infinity : maxLines;
 
+  // Drag-to-scroll handlers
+  const handleDragStart = useCallback((e: React.MouseEvent) => {
+    if (!enableDragScroll || !contentRef.current) return;
+    setIsDragging(true);
+    setDragStartY(e.clientY);
+    setScrollStart(contentRef.current.scrollTop);
+    contentRef.current.style.cursor = 'grabbing';
+    e.preventDefault();
+  }, [enableDragScroll]);
+
+  const handleDragEnd = useCallback(() => {
+    if (!contentRef.current) return;
+    setIsDragging(false);
+    contentRef.current.style.cursor = 'grab';
+  }, []);
+
+  const handleDragMove = useCallback((e: MouseEvent) => {
+    if (!isDragging || !contentRef.current) return;
+    const deltaY = dragStartY - e.clientY;
+    contentRef.current.scrollTop = scrollStart + deltaY;
+  }, [isDragging, dragStartY, scrollStart]);
+
+  // Add global mouse move/up listeners when dragging
+  React.useEffect(() => {
+    if (isDragging) {
+      window.addEventListener('mousemove', handleDragMove);
+      window.addEventListener('mouseup', handleDragEnd);
+      return () => {
+        window.removeEventListener('mousemove', handleDragMove);
+        window.removeEventListener('mouseup', handleDragEnd);
+      };
+    }
+  }, [isDragging, handleDragMove, handleDragEnd]);
+
   return (
     <div className="bg-black/40 backdrop-blur-xl rounded-xl border border-white/10 overflow-hidden shadow-2xl">
       {/* Header */}
@@ -479,21 +527,32 @@ export function EnhancedDiffViewer({
         )}
       </div>
 
-      {/* Diff content */}
-      <div className="max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
+      {/* Diff content - Removed internal scroll, content flows naturally */}
+      <div 
+        ref={contentRef}
+        className={`
+          scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent
+          ${enableDragScroll ? 'cursor-grab active:cursor-grabbing' : ''}
+        `}
+        style={{ 
+          maxHeight: isExpanded ? 'none' : `${maxHeight}px`,
+          overflowY: 'auto',
+        }}
+        onMouseDown={enableDragScroll ? handleDragStart : undefined}
+      >
         {activeDiff ? (
           <div className="divide-y divide-white/5">
             {activeDiff.hunks.slice(0, displayedLines).map((hunk, idx) => (
               <DiffHunk key={idx} hunk={hunk} language={detectedLanguage} />
             ))}
             {isTruncated && (
-              <div className="p-4 text-center">
+              <div className="p-4 text-center sticky bottom-0 bg-black/80 backdrop-blur-sm border-t border-white/10">
                 <button
                   onClick={() => setIsExpanded(true)}
-                  className="px-4 py-2 bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/30 rounded-lg transition-all duration-200 flex items-center gap-2 mx-auto"
+                  className="px-6 py-3 bg-gradient-to-r from-cyan-500/20 to-blue-500/20 border border-cyan-500/30 text-cyan-300 hover:from-cyan-500/30 hover:to-blue-500/30 rounded-lg transition-all duration-200 flex items-center gap-2 mx-auto shadow-lg shadow-cyan-500/10"
                 >
-                  <ChevronDown className="w-4 h-4" />
-                  <span>Show {activeDiff.hunks.flat().length - maxLines} more lines</span>
+                  <ChevronDown className="w-5 h-5" />
+                  <span className="font-medium">Show all {activeDiff.hunks.flat().length} lines</span>
                 </button>
               </div>
             )}
@@ -520,6 +579,16 @@ export function EnhancedDiffViewer({
           </div>
         )}
       </div>
+
+      {/* Drag-to-scroll hint */}
+      {enableDragScroll && !isExpanded && activeDiff && (
+        <div className="px-4 py-2 bg-gradient-to-r from-transparent via-white/5 to-transparent border-t border-white/10 text-center">
+          <p className="text-xs text-gray-500 flex items-center justify-center gap-2">
+            <span>💡</span>
+            <span>Drag to scroll • Click "Show all" to expand</span>
+          </p>
+        </div>
+      )}
 
       {/* Action buttons */}
       {hasUnsyncedChanges && (onAcceptLocal || onAcceptServer) && (

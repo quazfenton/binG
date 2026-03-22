@@ -37,13 +37,25 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
+    console.log('[Auth0 Post-Callback] Processing callback:', {
+      auth0UserId,
+      email,
+      hasAccessToken: !!accessToken,
+      hasRefreshToken: !!refreshToken,
+      scopes: scopes || 'none',
+    });
+
     // Map Auth0 user ID to local user on successful login
     if (auth0UserId && email) {
       // Use authenticated session email as the trusted source instead of client-controlled body email
       const { auth0 } = await import('@/lib/auth0');
       const session = await auth0.getSession(request);
       const trustedEmail = session?.user?.email;
-      if (!trustedEmail) {
+      const trustedAuth0UserId = session?.user?.sub;
+      
+      // Validate that the Auth0 user ID matches the authenticated session
+      // This prevents attackers from mapping arbitrary Auth0 IDs to local users
+      if (!trustedEmail || !trustedAuth0UserId || trustedAuth0UserId !== auth0UserId) {
         return NextResponse.json({ error: 'Authenticated session required' }, { status: 401 });
       }
 
@@ -69,11 +81,13 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Save connected account if provided
+    // Save connected account with scopes if provided
     if (connectedAccount && auth0UserId) {
       const localUserId = await getLocalUserIdFromAuth0(auth0UserId);
       if (localUserId) {
         const provider = normalizeProvider(connectedAccount.connection || connectedAccount.provider);
+        
+        // Save the connection with scopes
         await saveConnectedAccount(
           localUserId,
           provider,
@@ -88,11 +102,62 @@ export async function POST(request: NextRequest) {
               ? scopes.split(/[,\s]+/).filter(Boolean)
               : undefined
         );
-        console.log('[Auth0 Post-Callback] Saved connected account:', provider);
+        console.log('[Auth0 Post-Callback] Saved connected account:', provider, {
+          hasScopes: !!scopes,
+          scopeCount: Array.isArray(scopes) ? scopes.length : 0,
+        });
+
+        // Auto-grant basic permissions based on scopes
+        if (scopes && Array.isArray(scopes)) {
+          const { grantServicePermission } = await import('@/lib/oauth/permission-tracker');
+          
+          // Get the connection ID we just saved
+          const { getDatabase } = await import('@/lib/database/connection');
+          const db = getDatabase();
+          if (db) {
+            const connRow = db.prepare(`
+              SELECT id FROM external_connections
+              WHERE user_id = ? AND provider = ? AND provider_account_id = ?
+            `).get(localUserId, provider, connectedAccount.id || 'unknown') as { id: number } | undefined;
+
+            if (connRow) {
+              // Analyze scopes and grant appropriate permissions
+              const scopeList = scopes as string[];
+              
+              // Gmail scopes
+              if (scopeList.some(s => s.includes('gmail') || s.includes('mail'))) {
+                await grantServicePermission(localUserId, connRow.id, 'gmail', 'read');
+                console.log('[Auth0 Post-Callback] Auto-granted Gmail permission');
+              }
+              
+              // Drive scopes
+              if (scopeList.some(s => s.includes('drive'))) {
+                await grantServicePermission(localUserId, connRow.id, 'drive', 'read');
+                console.log('[Auth0 Post-Callback] Auto-granted Drive permission');
+              }
+              
+              // Calendar scopes
+              if (scopeList.some(s => s.includes('calendar'))) {
+                await grantServicePermission(localUserId, connRow.id, 'calendar', 'read');
+                console.log('[Auth0 Post-Callback] Auto-granted Calendar permission');
+              }
+              
+              // Contacts scopes
+              if (scopeList.some(s => s.includes('contacts') || s.includes('directory'))) {
+                await grantServicePermission(localUserId, connRow.id, 'contacts', 'read');
+                console.log('[Auth0 Post-Callback] Auto-granted Contacts permission');
+              }
+            }
+          }
+        }
       }
     }
 
-    return NextResponse.json({ success: true });
+    return NextResponse.json({ 
+      success: true,
+      hasScopes: !!scopes,
+      scopeCount: Array.isArray(scopes) ? scopes.length : 0,
+    });
   } catch (error: any) {
     console.error('[Auth0 Post-Callback] Error:', error);
     return NextResponse.json({ error: error.message || 'Internal error' }, { status: 500 });

@@ -576,9 +576,8 @@ export function ExperimentalWorkspacePanel() {
         }
       } catch (error) {
         console.error('Failed to load LLM providers from API:', error);
-        // Fallback to static providers
-        const providers = Object.values(PROVIDERS);
-        setAvailableProviders(providers);
+        // Don't fallback - let the UI show empty to indicate API issue
+        setAvailableProviders([]);
       }
     };
     fetchProviders();
@@ -1943,73 +1942,112 @@ export function ExperimentalWorkspacePanel() {
                 )}
               </AnimatePresence>
 
-              {/* Tabs */}
+              {/* Tabs - sleek horizontal pill design with grab scroll */}
               <Tabs value={activeTab} onValueChange={(v) => setTab(v as PanelTab)} className="flex-1 flex flex-col">
-                <TabsList className="flex overflow-x-auto gap-1 mx-4 mt-4 bg-white/5 border border-white/10 p-1 tab-scrollbar">
-                  <TabsTrigger
-                    value="explorer"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
+                <div 
+                  className="flex gap-1 mx-4 mt-4 overflow-x-auto no-scrollbar cursor-grab active:cursor-grabbing select-none"
+                  style={{ scrollBehavior: 'smooth' }}
+                >
+                  <button
+                    onClick={() => setTab('explorer')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'explorer' 
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
                   >
-                    <FolderOpen className="h-3 w-3 mr-1" />
+                    <FolderOpen className="h-3 w-3" />
                     Files
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="chat"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
+                  </button>
+                  <button
+                    onClick={() => setTab('chat')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'chat' 
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
                   >
-                    <Cpu className="h-3 w-3 mr-1" />
+                    <Cpu className="h-3 w-3" />
                     Agent
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="thinking"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
+                  </button>
+                  <button
+                    onClick={() => setTab('thinking')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'thinking' 
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
                   >
-                    <Brain className="h-3 w-3 mr-1" />
+                    <Brain className="h-3 w-3" />
                     Think
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="music"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
+                  </button>
+                  <button
+                    onClick={() => setTab('music')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'music' 
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
                   >
-                    <Music className="h-3 w-3 mr-1" />
+                    <Music className="h-3 w-3" />
                     Music
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="automations"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
+                  </button>
+                  <button
+                    onClick={() => setTab('automations')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'automations' 
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
                   >
-                    <Workflow className="h-3 w-3 mr-1" />
+                    <Workflow className="h-3 w-3" />
                     Automate
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="youtube"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
+                  </button>
+                  <button
+                    onClick={() => setTab('youtube')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'youtube' 
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
                   >
-                    <Youtube className="h-3 w-3 mr-1" />
+                    <Youtube className="h-3 w-3" />
                     Videos
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="forum"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
+                  </button>
+                  <button
+                    onClick={() => setTab('forum')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'forum' 
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
                   >
-                    <Users className="h-3 w-3 mr-1" />
+                    <Users className="h-3 w-3" />
                     Forum
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="compare"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
+                  </button>
+                  <button
+                    onClick={() => setTab('compare')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'compare' 
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
                   >
-                    <Zap className="h-3 w-3 mr-1" />
+                    <Zap className="h-3 w-3" />
                     Compare
-                  </TabsTrigger>
-                  <TabsTrigger
-                    value="integrations"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
+                  </button>
+                  <button
+                    onClick={() => setTab('integrations')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'integrations' 
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
                   >
-                    <Database className="h-3 w-3 mr-1" />
+                    <Database className="h-3 w-3" />
                     Integrations
-                  </TabsTrigger>
-                </TabsList>
+                  </button>
+                </div>
 
                 {/* Explorer Tab */}
                 <TabsContent value="explorer" className="flex-1 mt-0 overflow-hidden">
@@ -3222,8 +3260,6 @@ export function ExperimentalWorkspacePanel() {
                         isOpen={true}
                         onClose={() => setTab("explorer")}
                         availableProviders={availableProviders}
-                        currentProvider=""
-                        currentModel=""
                       />
                     </div>
                   </ScrollArea>

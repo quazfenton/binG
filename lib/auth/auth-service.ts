@@ -194,6 +194,7 @@ export interface RegisterCredentials {
   email: string;
   password: string;
   username?: string;
+  emailVerified?: boolean; // For OAuth users - email already verified by provider
 }
 
 export interface SessionInfo {
@@ -252,12 +253,14 @@ export class AuthService {
       const verificationExpires = new Date(Date.now() + 24 * 60 * 60 * 1000); // 24 hours
 
       // Create user with verification token
+      // OAuth users pass emailVerified: true since their email is already verified by the provider
       const result = this.dbOps.createUserWithVerification(
         credentials.email,
         credentials.username || '',
         passwordHash,
         verificationToken,
-        verificationExpires
+        verificationExpires,
+        credentials.emailVerified || false
       );
 
       if (!result.lastInsertRowid) {
@@ -272,26 +275,31 @@ export class AuthService {
         return { success: false, error: 'Failed to retrieve created user' };
       }
 
-      // Send verification email
-      try {
-        const { emailService } = await import('@/lib/email/email-service');
-        const verificationUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/verify-email?token=${verificationToken}`;
-        await emailService.sendVerificationEmail(credentials.email, { 
-          token: verificationToken, 
-          expiresAt: verificationExpires, 
-          verificationUrl 
-        });
-      } catch (emailError) {
-        console.error('Failed to send verification email:', emailError);
-        // Don't fail registration if email fails - user can request resend later
+      // Send verification email ONLY for non-OAuth users
+      // OAuth users already have verified emails from their provider
+      if (!credentials.emailVerified) {
+        try {
+          const { emailService } = await import('@/lib/email/email-service');
+          const verificationUrl = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/verify-email?token=${verificationToken}`;
+          await emailService.sendVerificationEmail(credentials.email, {
+            token: verificationToken,
+            expiresAt: verificationExpires,
+            verificationUrl
+          });
+        } catch (emailError) {
+          console.error('Failed to send verification email:', emailError);
+          // Don't fail registration if email fails - user can request resend later
+        }
       }
 
-      // Return success without auto-login - user must verify email first
+      // Return success - OAuth users are auto-verified, regular users need to verify
       return {
         success: true,
         user: this.mapDbUserToUser(user),
-        requiresVerification: true,
-        message: 'Registration successful! Please check your email to verify your account.'
+        requiresVerification: !credentials.emailVerified,
+        message: credentials.emailVerified
+          ? 'Registration successful! You are now logged in.'
+          : 'Registration successful! Please check your email to verify your account.'
       };
 
     } catch (error) {

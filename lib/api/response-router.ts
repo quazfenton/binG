@@ -828,8 +828,8 @@ export class ResponseRouter {
       data: {
         content: finalContent,
         usage: this.calculateUsage(response),
-        model: response.metadata?.actualModel || (response.data as any)?.model || (response as any).model,
-        provider: response.metadata?.actualProvider || (response.data as any)?.provider || (response as any).provider,
+        model: (response.metadata as any)?.actualModel || (response.data as any)?.model || (response as any)?.model,
+        provider: (response.metadata as any)?.actualProvider || (response.data as any)?.provider || (response as any)?.provider,
         toolCalls: (response.data as any)?.toolCalls,
         toolInvocations,
         files: (response.data as any)?.files,

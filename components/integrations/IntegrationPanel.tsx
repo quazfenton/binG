@@ -275,8 +275,10 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
 
   useEffect(() => {
     if (userId) {
+      console.log('[IntegrationPanel] User ID changed, fetching integrations for:', userId);
       fetchConnectedIntegrations();
     }
+    // Don't reset integrations when logged out - keep showing last known state
   }, [userId]);
 
   useEffect(() => {
@@ -286,14 +288,24 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
       if (event.origin !== window.location.origin) return;
 
       if (event.data?.type === 'oauth_success') {
+        console.log('[IntegrationPanel] OAuth success message received');
         setPopupWindow(null);
         setLoading(null);
         fetchConnectedIntegrations();
         toast.success('Integration connected successfully');
       } else if (event.data?.type === 'oauth_cancel') {
+        console.log('[IntegrationPanel] OAuth cancel message received');
         setPopupWindow(null);
         setLoading(null);
         toast.info('Connection cancelled');
+        fetchConnectedIntegrations();
+      } else if (event.data?.type === 'auth0_success') {
+        // Auth0 specific success message
+        console.log('[IntegrationPanel] Auth0 success message received');
+        setPopupWindow(null);
+        setLoading(null);
+        fetchConnectedIntegrations();
+        toast.success(`${event.data.provider || 'Integration'} connected successfully`);
       }
     };
 
@@ -304,9 +316,10 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
     if (popupWindow) {
       interval = setInterval(() => {
         if (popupWindow.closed) {
+          console.log('[IntegrationPanel] Popup closed');
           setPopupWindow(null);
           setLoading(null);
-          // Popup closed without sending message - treat as cancel
+          // Refresh integrations to show updated connection status
           fetchConnectedIntegrations();
         }
       }, 500);
@@ -327,30 +340,33 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
       const token = (() => {
         try { return localStorage.getItem('token'); } catch { return null; }
       })();
-      
+
       // Fetch connection status and source from API
       const response = await fetch(`/api/user/integrations/status?userId=${userId}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });
-      
+
       if (response.ok) {
         const data = await response.json();
         const connections = data.connections || [];
-        
+
         // Create a map of provider -> connection source
         const connectionMap = new Map<string, 'auth0' | 'arcade' | 'nango' | 'oauth'>();
         connections.forEach((conn: { provider: string; source: string }) => {
           connectionMap.set(conn.provider, conn.source as 'auth0' | 'arcade' | 'nango' | 'oauth');
         });
-        
+
         setIntegrations(prev => prev.map(integration => ({
           ...integration,
           connected: connectionMap.has(integration.provider),
           connectionSource: connectionMap.get(integration.provider) || null
         })));
+        console.log('[IntegrationPanel] Updated integrations:', connectionMap.size, 'connected');
+      } else {
+        console.error('[IntegrationPanel] Failed to fetch integrations:', response.status);
       }
     } catch (error) {
-      console.error('Failed to fetch connected integrations:', error);
+      console.error('[IntegrationPanel] Failed to fetch connected integrations:', error);
     }
   };
 
@@ -369,8 +385,9 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
       // Handle Auth0 Connected Accounts (for GitHub, Google when Auth0 is configured)
       if (authConfig?.method === 'auth0' && authConfig.connection) {
         try {
-          const authUrl = `/auth/connect?connection=${authConfig.connection}&returnTo=${encodeURIComponent(window.location.href)}`;
-          
+          // Use /auth/login with connection parameter for Auth0 social login
+          const authUrl = `/auth/login?connection=${authConfig.connection}&returnTo=${encodeURIComponent(window.location.href)}`;
+
           const width = 600;
           const height = 700;
           const left = window.screenX + (window.outerWidth - width) / 2;
@@ -386,10 +403,15 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
             setPopupWindow(popup);
             toast.info(`Connecting to ${integration.name} via Auth0...`);
             return;
+          } else {
+            toast.error('Popup blocked. Please allow popups for this site.');
+            setLoading(null);
           }
         } catch (auth0Error) {
           console.warn('Auth0 connection failed, falling back to:', auth0Error);
-          // Fall through to fallback methods
+          toast.error(`Failed to connect to ${integration.name} via Auth0`);
+          setLoading(null);
+          return;
         }
       }
 
@@ -463,28 +485,44 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
   };
 
   const handleDisconnect = async (integration: Integration) => {
-    if (!userId) return;
+    if (!userId) {
+      toast.error('Please sign in to disconnect integrations');
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to disconnect from ${integration.name}?`)) {
+      return;
+    }
 
     setLoading(integration.id);
 
     try {
+      const token = (() => {
+        try { return localStorage.getItem('token'); } catch { return null; }
+      })();
+
       // Call API to revoke connection
       const response = await fetch(`/api/user/integrations/${integration.provider}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ userId })
       });
 
       if (response.ok) {
-        setIntegrations(prev => prev.map(i => 
-          i.id === integration.id ? { ...i, connected: false } : i
+        setIntegrations(prev => prev.map(i =>
+          i.id === integration.id ? { ...i, connected: false, connectionSource: null } : i
         ));
         toast.success(`Disconnected from ${integration.name}`);
       } else {
-        throw new Error('Failed to disconnect');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to disconnect');
       }
-    } catch (error) {
-      toast.error(`Failed to disconnect from ${integration.name}`);
+    } catch (error: any) {
+      console.error('Disconnect error:', error);
+      toast.error(error.message || `Failed to disconnect from ${integration.name}`);
     } finally {
       setLoading(null);
     }

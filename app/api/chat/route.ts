@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from "next/server";
 import { z } from 'zod';
-import { llmService, PROVIDERS } from "@/lib/chat/llm-providers";
+import { PROVIDERS } from "@/lib/chat/llm-providers";
 import { errorHandler } from "@/lib/chat/error-handler";
 import { responseRouter } from "@/lib/api/response-router";
 import { resolveRequestAuth } from "@/lib/auth/request-auth";
@@ -647,7 +647,7 @@ export async function POST(request: NextRequest) {
           
           if (supportsStreaming && stream) {
             // Use streaming execution for real-time tool invocations and reasoning
-            chatLogger.info('Using ToolLoopAgent streaming execution', { requestId });
+            chatLogger.info('Using ToolLoopAgent streaming execution', { requestId, provider: actualProvider, model: actualModel });
             
             // Store streaming result for later processing in stream handler
             agentToolStreamingResult = {
@@ -784,7 +784,7 @@ export async function POST(request: NextRequest) {
               if (request.signal) {
                 request.signal.addEventListener('abort', () => {
                   cleanup();
-                  chatLogger.warn('Stream cancelled by client', { requestId: streamRequestId });
+                  chatLogger.warn('Stream cancelled by client', { requestId: streamRequestId, provider: actualProvider, model: actualModel });
                 });
               }
 
@@ -871,7 +871,7 @@ export async function POST(request: NextRequest) {
                 controller.close();
               } catch (error) {
                 const streamDuration = Date.now() - streamStartTime;
-                chatLogger.error('ToolLoopAgent streaming error', { requestId: streamRequestId }, {
+                chatLogger.error('ToolLoopAgent streaming error', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
                   error: error instanceof Error ? error.message : String(error),
                   chunkCount,
                   latencyMs: streamDuration,
@@ -945,9 +945,9 @@ export async function POST(request: NextRequest) {
 
         // Bug #9 Fix: hasFilesystemEdits should be true only when there are actual filesystem write events
         // Not just when the function ran (enableFilesystemEdits was true)
-        const hasActualFilesystemEdits = filesystemEdits && 
+        const hasActualFilesystemEdits = filesystemEdits &&
           (filesystemEdits.applied.length > 0 || filesystemEdits.requestedFiles.length > 0);
-        chatLogger.info('Starting streaming response', { requestId: streamRequestId, provider, model }, {
+        chatLogger.info('Starting streaming response', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
           eventsCount: events.length,
           hasFilesystemEdits: hasActualFilesystemEdits,
           appliedEditsCount: filesystemEdits?.applied?.length || 0,
@@ -977,35 +977,79 @@ export async function POST(request: NextRequest) {
             }
 
             try {
-              // Send events with appropriate delays
-              for (let i = 0; i < events.length; i++) {
-                // Check if client disconnected
+              // Separate metadata events from content tokens for better streaming UX
+              const metadataEvents = events.filter(e => 
+                e.includes('event: init') || 
+                e.includes('event: reasoning') || 
+                e.includes('event: tool_invocation') || 
+                e.includes('event: step') ||
+                e.includes('event: filesystem') ||
+                e.includes('event: diffs')
+              );
+              const tokenEvents = events.filter(e => e.includes('event: token') && e.includes('"type":"token"'));
+              const doneEvent = events.find(e => e.includes('event: done'));
+
+              // Send metadata events first (quick succession)
+              for (const event of metadataEvents) {
+                if (request.signal?.aborted) {
+                  cleanup();
+                  return;
+                }
+                controller.enqueue(encoderRef.encode(event));
+                chunkCount++;
+                await new Promise(resolve => setTimeout(resolve, 5)); // Minimal delay for metadata
+              }
+
+              // Stream content tokens with progressive delay for natural feel
+              const totalTokens = tokenEvents.length;
+              for (let i = 0; i < totalTokens; i++) {
                 if (request.signal?.aborted) {
                   cleanup();
                   return;
                 }
 
-                const event = events[i];
+                const event = tokenEvents[i];
                 controller.enqueue(encoderRef.encode(event));
                 chunkCount++;
 
-                // Minimal delay between events for faster streaming (reduced from 50ms)
-                if (i < events.length - 1) {
-                  await new Promise(resolve => setTimeout(resolve, 8));
+                // Progressive delay: faster start, slower middle, fast end
+                // Creates natural "thinking and typing" rhythm
+                let delay: number;
+                if (i < 3) {
+                  delay = 15; // Quick start to show response is beginning
+                } else if (i < 10) {
+                  delay = 25 + (i * 2); // Gradual slowdown
+                } else if (i < totalTokens * 0.7) {
+                  delay = 35 + Math.sin(i / 5) * 10; // Natural variation in middle
+                } else {
+                  delay = 20; // Speed up at end for snappy finish
                 }
+
+                // Add more delay for longer responses (prevents burst)
+                if (totalTokens > 50) {
+                  delay = Math.min(delay * 1.3, 60); // Cap at 60ms for very long responses
+                }
+
+                await new Promise(resolve => setTimeout(resolve, delay));
+              }
+
+              // Send done event
+              if (doneEvent) {
+                controller.enqueue(encoderRef.encode(doneEvent));
               }
 
               const streamDuration = Date.now() - streamStartTime;
-              chatLogger.info('Stream completed successfully', { requestId: streamRequestId, provider, model }, {
+              chatLogger.info('Stream completed successfully', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
                 chunkCount,
                 latencyMs: streamDuration,
                 eventsCount: events.length,
+                tokenCount: tokenEvents.length,
               });
 
               controller.close();
             } catch (error) {
               const streamDuration = Date.now() - streamStartTime;
-              chatLogger.error('Streaming error', { requestId: streamRequestId, provider, model }, {
+              chatLogger.error('Streaming error', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
                 error: error instanceof Error ? error.message : String(error),
                 chunkCount,
                 latencyMs: streamDuration,
@@ -2937,43 +2981,10 @@ async function applyFilesystemEditsFromResponse(input: {
   return result;
 }
 
-export async function GET() {
-  try {
-    // Get list of configured provider IDs (checks if API keys are set)
-    const configuredProviderIds = llmService.getAvailableProviders().map(p => p.id);
-
-    // Return all providers with availability status (based on API key configuration)
-    const allProviders = Object.values(PROVIDERS).map((provider: any) => ({
-      ...provider,
-      isAvailable: configuredProviderIds.includes(provider.id)
-    }));
-
-    return NextResponse.json({
-      success: true,
-      data: {
-        providers: allProviders,
-        defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "mistral",
-        defaultModel:
-          process.env.DEFAULT_MODEL || "mistral-large-latest",
-        defaultTemperature: parseFloat(
-          process.env.DEFAULT_TEMPERATURE || "0.7",
-        ),
-        defaultMaxTokens: Number.parseInt(process.env.DEFAULT_MAX_TOKENS || "100000"),
-        features: {
-          voiceEnabled: process.env.ENABLE_VOICE_FEATURES === "true",
-          imageGeneration: process.env.ENABLE_IMAGE_GENERATION === "true",
-          chatHistory: process.env.ENABLE_CHAT_HISTORY === "true",
-          codeExecution: process.env.ENABLE_CODE_EXECUTION === "true",
-        },
-      },
-    });
-  } catch (error) {
-    console.error("Error fetching providers:", error);
-    return NextResponse.json(
-      { error: "Failed to fetch available providers" },
-      { status: 500 }
-    );
-  }
+export async function GET(request: NextRequest) {
+  // Redirect to dedicated /api/providers endpoint
+  // This avoids duplicating provider listing logic
+  return NextResponse.redirect(new URL('/api/providers', request.url));
 }
 
 /**

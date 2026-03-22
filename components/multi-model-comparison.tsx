@@ -31,80 +31,55 @@ interface MultiModelComparisonProps {
   isOpen: boolean;
   onClose: () => void;
   availableProviders: LLMProvider[];
-  currentProvider: string;
-  currentModel: string;
 }
 
 export default function MultiModelComparison({
   isOpen,
   onClose,
   availableProviders,
-  currentProvider,
-  currentModel
 }: MultiModelComparisonProps) {
   const [prompt, setPrompt] = useState('');
   const [selectedModels, setSelectedModels] = useState<Array<{provider: string, model: string}>>([]);
   const [responses, setResponses] = useState<ModelResponse[]>([]);
   const [isComparing, setIsComparing] = useState(false);
 
-  useEffect(() => {
-    if (availableProviders.length > 0 && selectedModels.length === 0) {
-      const models: Array<{provider: string, model: string}> = [];
+  // Get only available providers (filtered by API key configuration)
+  const availableOnly = availableProviders.filter(p => p.isAvailable !== false);
 
-      const currentProviderValid = availableProviders.find(p => p.id === currentProvider);
-      if (currentProviderValid && currentProviderValid.models.includes(currentModel)) {
-        models.push({ provider: currentProvider, model: currentModel });
-      } else if (availableProviders[0]) {
-        models.push({ provider: availableProviders[0].id, model: availableProviders[0].models[0] });
-      }
-
-      for (const provider of availableProviders) {
-        if (models.length >= 3) break;
-        for (const model of provider.models) {
-          if (models.length >= 3) break;
-          const exists = models.some(m => m.provider === provider.id && m.model === model);
-          if (!exists) {
-            models.push({ provider: provider.id, model });
-          }
-        }
-      }
-
-      if (models.length > 0) {
-        setSelectedModels(models);
-      }
-    }
-  }, [availableProviders, currentProvider, currentModel, selectedModels.length]);
+  // Get failed slots that can be retried
+  const failedSlots = responses.filter(r => r.status === 'error');
 
   const handleModelToggle = (provider: string, model: string) => {
-    const exists = selectedModels.some(m => m.provider === provider && m.model === model);
+    const existsInResponses = responses.some(r => r.provider === provider && r.model === model);
     
-    if (exists) {
+    if (existsInResponses) {
+      setResponses(prev => prev.filter(r => !(r.provider === provider && r.model === model)));
       setSelectedModels(prev => prev.filter(m => !(m.provider === provider && m.model === model)));
-    } else if (selectedModels.length < 3) {
-      setSelectedModels(prev => [...prev, { provider, model }]);
+    } else {
+      if (responses.length < 3) {
+        setResponses(prev => [...prev, {
+          provider,
+          model,
+          response: '',
+          status: 'pending',
+          startTime: Date.now()
+        }]);
+        setSelectedModels(prev => [...prev, { provider, model }]);
+      }
     }
   };
 
-  const handleCompare = async () => {
-    if (!prompt.trim() || selectedModels.length === 0) return;
+  const handleRetryFailed = async () => {
+    const toRetry = responses.filter(r => r.status === 'error' || r.status === 'pending');
+    if (toRetry.length === 0 || !prompt.trim()) return;
     
     setIsComparing(true);
-    const startTime = Date.now();
     
-    const initialResponses: ModelResponse[] = selectedModels.map(({ provider, model }) => ({
-      provider,
-      model,
-      response: '',
-      status: 'pending',
-      startTime
-    }));
-    
-    setResponses(initialResponses);
-    
-    const promises = selectedModels.map(async ({ provider, model }, index) => {
+    const promises = toRetry.map(async (slot, idx) => {
+      const actualIndex = responses.findIndex(r => r.provider === slot.provider && r.model === slot.model);
       try {
         setResponses(prev => prev.map((r, i) => 
-          i === index ? { ...r, status: 'streaming' } : r
+          i === actualIndex ? { ...r, status: 'streaming' } : r
         ));
         
         const token = localStorage.getItem('token');
@@ -116,11 +91,12 @@ export default function MultiModelComparison({
           },
           body: JSON.stringify({
             messages: [{ role: 'user', content: prompt }],
-            provider,
-            model,
+            provider: slot.provider,
+            model: slot.model,
             temperature: 0.7,
             maxTokens: 4096,
-            stream: false
+            stream: false,
+            agentMode: 'v1'
           }),
         });
 
@@ -132,7 +108,7 @@ export default function MultiModelComparison({
           : (data.error?.message || JSON.stringify(data));
         
         setResponses(prev => prev.map((r, i) =>
-          i === index ? {
+          i === actualIndex ? {
             ...r,
             response: content,
             status: data.success ? 'complete' : 'error',
@@ -143,7 +119,71 @@ export default function MultiModelComparison({
       } catch (error) {
         const endTime = Date.now();
         setResponses(prev => prev.map((r, i) => 
-          i === index ? { 
+          i === actualIndex ? { 
+            ...r, 
+            status: 'error',
+            error: error instanceof Error ? error.message : 'Unknown error',
+            endTime
+          } : r
+        ));
+      }
+    });
+    
+    await Promise.all(promises);
+    setIsComparing(false);
+  };
+
+  const handleCompare = async () => {
+    const toRun = responses.filter(r => r.status !== 'complete');
+    if (toRun.length === 0 || !prompt.trim()) return;
+    
+    setIsComparing(true);
+    
+    const promises = toRun.map(async (slot) => {
+      const actualIndex = responses.findIndex(r => r.provider === slot.provider && r.model === slot.model);
+      try {
+        setResponses(prev => prev.map((r, i) => 
+          i === actualIndex ? { ...r, status: 'streaming' } : r
+        ));
+        
+        const token = localStorage.getItem('token');
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            ...(token ? { 'Authorization': `Bearer ${token}` } : {}),
+          },
+          body: JSON.stringify({
+            messages: [{ role: 'user', content: prompt }],
+            provider: slot.provider,
+            model: slot.model,
+            temperature: 0.7,
+            maxTokens: 4096,
+            stream: false,
+            agentMode: 'v1'
+          }),
+        });
+
+        const data = await response.json();
+        const endTime = Date.now();
+        
+        const content = data.success 
+          ? (data.data?.content || data.content || data.response || data.message || JSON.stringify(data, null, 2))
+          : (data.error?.message || JSON.stringify(data));
+        
+        setResponses(prev => prev.map((r, i) =>
+          i === actualIndex ? {
+            ...r,
+            response: content,
+            status: data.success ? 'complete' : 'error',
+            endTime
+          } : r
+        ));
+        
+      } catch (error) {
+        const endTime = Date.now();
+        setResponses(prev => prev.map((r, i) => 
+          i === actualIndex ? { 
             ...r, 
             status: 'error',
             error: error instanceof Error ? error.message : 'Unknown error',
@@ -167,6 +207,9 @@ export default function MultiModelComparison({
     }
     return '...';
   };
+
+  const hasPendingOrError = responses.some(r => r.status === 'pending' || r.status === 'error');
+  const hasComplete = responses.some(r => r.status === 'complete');
 
   if (!isOpen) return null;
 
@@ -201,7 +244,7 @@ export default function MultiModelComparison({
                 Model Comparison
               </h2>
               <p className="text-xs" style={{ color: 'rgba(255,255,255,0.5)' }}>
-                Compare responses from {selectedModels.length} models
+                {responses.length} panel{responses.length !== 1 ? 's' : ''} · {responses.filter(r => r.status === 'complete').length} succeeded · {responses.filter(r => r.status === 'error').length} failed
               </p>
             </div>
           </div>
@@ -210,7 +253,7 @@ export default function MultiModelComparison({
               variant="outline" 
               style={{ background: 'rgba(139,92,246,0.1)', color: '#a78bfa', borderColor: 'rgba(139,92,246,0.3)' }}
             >
-              {selectedModels.length} model{selectedModels.length !== 1 ? 's' : ''}
+              {responses.length} / 3
             </Badge>
             <Button
               size="sm"
@@ -232,7 +275,7 @@ export default function MultiModelComparison({
               onKeyDown={(e) => {
                 if ((e.ctrlKey || e.metaKey) && e.key === 'Enter') {
                   e.preventDefault();
-                  if (prompt.trim() && selectedModels.length > 0 && !isComparing) {
+                  if (prompt.trim() && responses.length > 0 && !isComparing) {
                     handleCompare();
                   }
                 }
@@ -244,7 +287,7 @@ export default function MultiModelComparison({
             <div className="flex flex-col gap-2">
               <Button
                 onClick={handleCompare}
-                disabled={!prompt.trim() || selectedModels.length === 0 || isComparing}
+                disabled={!prompt.trim() || responses.length === 0 || isComparing}
                 style={{ 
                   background: 'linear-gradient(135deg, #7c3aed 0%, #ec4899 100%)',
                   border: 'none'
@@ -259,15 +302,32 @@ export default function MultiModelComparison({
                 ) : (
                   <>
                     <Zap className="h-4 w-4" />
-                    Compare
+                    Run
                   </>
                 )}
               </Button>
+              {failedSlots.length > 0 && (
+                <Button
+                  variant="outline"
+                  onClick={handleRetryFailed}
+                  disabled={!prompt.trim() || isComparing}
+                  style={{ 
+                    borderColor: 'rgba(239,68,68,0.5)',
+                    color: '#f87171',
+                    background: 'rgba(239,68,68,0.1)'
+                  }}
+                  className="gap-2 hover:bg-red-500/20"
+                >
+                  <RefreshCw className="h-3 w-3" />
+                  Retry Failed ({failedSlots.length})
+                </Button>
+              )}
               <Button
                 variant="outline"
                 onClick={() => {
                   setResponses([]);
                   setPrompt('');
+                  setSelectedModels([]);
                 }}
                 disabled={responses.length === 0 || isComparing}
                 className="border-white/10 text-white/60 hover:text-white hover:bg-white/5"
@@ -278,13 +338,13 @@ export default function MultiModelComparison({
             </div>
           </div>
 
-          {/* Model Selection */}
+          {/* Model Selection - Only show available providers */}
           <div className="mt-3 flex flex-wrap gap-2">
-            {availableProviders.map(provider => (
+            {availableOnly.map(provider => (
               <div key={provider.id} className="flex flex-wrap gap-1">
                 {provider.models.slice(0, 5).map(model => {
-                  const isSelected = selectedModels.some(m => m.provider === provider.id && m.model === model);
-                  const isDisabled = !isSelected && selectedModels.length >= 3;
+                  const isSelected = responses.some(r => r.provider === provider.id && r.model === model);
+                  const isDisabled = !isSelected && responses.length >= 3;
                   return (
                     <button
                       key={`${provider.id}-${model}`}

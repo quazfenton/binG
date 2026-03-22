@@ -26,8 +26,8 @@ export interface CircuitBreakerOptions {
 }
 
 const DEFAULT_OPTIONS: CircuitBreakerOptions = {
-  failureThreshold: 5,
-  recoveryTimeout: 30000, // 30 seconds
+  failureThreshold: 8,
+  recoveryTimeout: 20000, // 20 seconds
   successThreshold: 2,
   name: 'default',
 };
@@ -243,10 +243,12 @@ class ProviderCircuitBreakerRegistry extends EventEmitter {
     let entry = this.registry.get(provider);
 
     if (!entry) {
+      // Use higher thresholds — the old value of 3 was far too aggressive
+      // and would block providers after just a few transient failures
       const breaker = new CircuitBreaker({
         name: `provider:${provider}`,
-        failureThreshold: 3,
-        recoveryTimeout: 30000, // 30 seconds
+        failureThreshold: 10,
+        recoveryTimeout: 20000, // 20 seconds — recover faster
         successThreshold: 2,
       });
 
@@ -268,6 +270,12 @@ class ProviderCircuitBreakerRegistry extends EventEmitter {
           newState,
           timestamp: Date.now(),
         });
+
+        // SAFETY: if this transition leaves zero available providers,
+        // force the least-failed one back to CLOSED
+        if (newState === 'OPEN') {
+          this.enforceLastProviderSafety();
+        }
       });
     }
 
@@ -319,6 +327,41 @@ class ProviderCircuitBreakerRegistry extends EventEmitter {
    */
   remove(provider: SandboxProviderType): void {
     this.registry.delete(provider);
+  }
+
+  /**
+   * SAFETY: If every registered provider has its circuit OPEN, force
+   * the one with the lowest failure count back to CLOSED so that at
+   * least one route is always available. Never fully block all providers.
+   */
+  private enforceLastProviderSafety(): void {
+    if (this.registry.size === 0) return;
+
+    const available = Array.from(this.registry.values()).filter(
+      (e) => e.breaker.canExecute(),
+    );
+
+    if (available.length > 0) return; // at least one is still open
+
+    // All are OPEN — find the one with the fewest failures and reset it
+    let bestEntry: ProviderCircuitBreaker | null = null;
+    let bestFailures = Infinity;
+
+    for (const entry of this.registry.values()) {
+      const stats = entry.breaker.getStats();
+      if (stats.failureCount < bestFailures) {
+        bestFailures = stats.failureCount;
+        bestEntry = entry;
+      }
+    }
+
+    if (bestEntry) {
+      bestEntry.breaker.reset();
+      console.warn(
+        `[ProviderCircuitBreakers] SAFETY: All providers OPEN — forced ` +
+          `${bestEntry.provider} back to CLOSED to maintain availability`,
+      );
+    }
   }
 }
 

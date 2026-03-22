@@ -292,7 +292,7 @@ export class EnhancedLLMService {
           return await postProcessToolCalls(fallbackResponse);
         } catch (fallbackError) {
           const fallbackLatency = Date.now() - fallbackStartTime;
-          chatLogger.warn('Fallback provider failed', { requestId, provider: fallbackProvider, model: actualModel }, {
+          chatLogger.warn('Fallback provider failed', { requestId, provider: fallbackProvider, model: supportedModel }, {
             latencyMs: fallbackLatency,
             attempt: attemptIndex + 1,
             error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
