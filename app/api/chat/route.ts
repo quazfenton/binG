@@ -26,7 +26,7 @@ import { workforceManager } from '@/lib/agent/workforce-manager';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
-import { sanitizeFileEditTags, extractFileEdits, extractFencedDiffEdits as extractFencedDiffEditsShared } from '@/lib/chat/file-edit-parser';
+import { sanitizeFileEditTags, extractFileEdits, extractFileWriteEdits, extractFencedDiffEdits as extractFencedDiffEditsShared } from '@/lib/chat/file-edit-parser';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -2149,7 +2149,10 @@ function validateExtractedPath(raw: string): string | null {
   if (/[\r\n\t\0]/.test(path)) return null;
   if (/(<<<|>>>|===)/.test(path)) return null;
   if (/[<>"'`]/.test(path)) return null;
-  if (/^\W/.test(path)) return null;
+  // Reject paths starting with problematic chars but allow dots (for dotfiles) and relative paths
+  // Allow: .gitignore, ./src/file.ts, ../parent/file.ts
+  // Reject: @#$file, <<<path, etc.
+  if (/^[^\w./]/.test(path) || /^\.{3,}/.test(path)) return null;
   if (/\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i.test(path)) return null;
   return path;
 }
@@ -2173,19 +2176,17 @@ function extractFileWriteFolderCreateTags(content: string): {
   writes: Array<{ path: string; content: string }>;
   folders: string[];
 } {
-  const writes: Array<{ path: string; content: string }> = []
+  // Use shared parser for file_write tags
+  const fileWrites = extractFileWriteEdits(content);
+  const writes: Array<{ path: string; content: string }> = fileWrites.map(w => ({
+    path: w.path,
+    content: w.content
+  }));
+
   const folders: string[] = []
 
-  const fileWriteRegex = /<file_write\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_write>/gi
-  let fileWriteMatch: RegExpExecArray | null
-  while ((fileWriteMatch = fileWriteRegex.exec(content)) !== null) {
-    const path = fileWriteMatch[1]?.trim()
-    const fileContent = fileWriteMatch[2] ?? ''
-    if (!path) continue
-    writes.push({ path, content: fileContent })
-  }
-
-  const folderCreateRegex = /<folder_create\s+path=["']([^"']+)["']\s*\/?>/gi
+  // Extract folder_create tags
+  const folderCreateRegex = /<folder_create\s+path\s*=\s*["']([^"']+)["']\s*\/?>/gi
   let folderCreateMatch: RegExpExecArray | null
   while ((folderCreateMatch = folderCreateRegex.exec(content)) !== null) {
     const path = folderCreateMatch[1]?.trim()

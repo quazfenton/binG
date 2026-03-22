@@ -274,26 +274,41 @@ function emitToMonitoringSystem(successRate: number, totalAttempts: number): voi
       // Create UDP socket for StatsD
       const dgram = require('dgram');
       const socket = dgram.createSocket('udp4');
+
+      socket.on('error', (err: Error) => {
+        log.warn('StatsD socket error', { error: err });
+      });
+
       const statsdHost = process.env.STATSD_HOST.split(':')[0];
       const statsdPort = parseInt(process.env.STATSD_HOST.split(':')[1] || '8125');
-      
+      const metrics = getLockMetrics();
+      const strategyEntries = Object.entries(metrics.byStrategy);
+      let pendingSends = 2 + strategyEntries.length;
+
+      const onSend = (err: Error | null) => {
+        if (err) {
+          log.warn('Failed to send StatsD metric', { error: err });
+        }
+        pendingSends--;
+        if (pendingSends === 0) {
+          socket.close();
+          log.debug('Emitted metrics to StatsD', { successRate, totalAttempts });
+        }
+      };
+
       // Send success rate metric
       const successRateMsg = `session_lock.success_rate:${successRate * 100}|g`;
-      socket.send(Buffer.from(successRateMsg), 0, successRateMsg.length, statsdPort, statsdHost);
-      
+      socket.send(Buffer.from(successRateMsg), 0, successRateMsg.length, statsdPort, statsdHost, onSend);
+
       // Send total attempts metric
       const attemptsMsg = `session_lock.attempts:${totalAttempts}|c`;
-      socket.send(Buffer.from(attemptsMsg), 0, attemptsMsg.length, statsdPort, statsdHost);
-      
+      socket.send(Buffer.from(attemptsMsg), 0, attemptsMsg.length, statsdPort, statsdHost, onSend);
+
       // Send by-strategy metrics
-      const metrics = getLockMetrics();
-      for (const [strategy, data] of Object.entries(metrics.byStrategy)) {
+      for (const [strategy, data] of strategyEntries) {
         const strategyMsg = `session_lock.${strategy}.success_rate:${data.successRate * 100}|g`;
-        socket.send(Buffer.from(strategyMsg), 0, strategyMsg.length, statsdPort, statsdHost);
+        socket.send(Buffer.from(strategyMsg), 0, strategyMsg.length, statsdPort, statsdHost, onSend);
       }
-      
-      socket.close();
-      log.debug('Emitted metrics to StatsD', { successRate, totalAttempts });
     } catch (error) {
       log.warn('Failed to emit to StatsD', { error });
     }

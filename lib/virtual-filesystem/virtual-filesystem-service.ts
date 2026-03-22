@@ -781,7 +781,8 @@ export class VirtualFilesystemService {
    * Returns a human-readable summary of all file changes
    */
   getDiffSummary(ownerId: string, maxDiffs = 10): string {
-    return diffTracker.getDiffSummary(ownerId, maxDiffs);
+    const result = diffTracker.getDiffSummary(ownerId, maxDiffs);
+    return JSON.stringify(result);
   }
 
   /**

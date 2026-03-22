@@ -275,15 +275,18 @@ export class BootstrappedAgency {
           execute: async (capabilityName: string, config: any, context: any) => {
             switch (capabilityName) {
               case 'file-operations':
+              case 'file.read':
+              case 'file.write':
                 return { result: 'File operations completed' };
               case 'code-execution':
+              case 'sandbox.shell':
                 return { result: 'Code execution completed' };
               case 'git-operations':
                 return { result: 'Git operations completed' };
               case 'web-research':
                 return { result: 'Web research completed' };
               default:
-                return { result: `Capability ${capabilityName} executed` };
+                return { error: `Unknown capability: ${capabilityName}` };
             }
           },
         };
@@ -305,8 +308,11 @@ export class BootstrappedAgency {
         // Execute capability based on name
         switch (capability) {
           case 'file-operations':
+          case 'file.read':
+          case 'file.write':
             return { success: true, data: { result: 'File operations completed' } };
           case 'code-execution':
+          case 'sandbox.shell':
             return { success: true, data: { result: 'Code execution completed' } };
           case 'git-operations':
             return { success: true, data: { result: 'Git operations completed' } };

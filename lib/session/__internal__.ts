@@ -11,20 +11,13 @@
  * @private
  */
 
-// Memory Lock Test Helpers
-export {
-  __clearAllLocks__,
-} from './memory-lock';
+import { __clearAllLocks__ } from './memory-lock';
+import { __clearAllQueues__ } from './queue-lock';
+import { __clearAllMetrics__ } from './lock-metrics';
 
-// Queue Lock Test Helpers
-export {
-  __clearAllQueues__,
-} from './queue-lock';
-
-// Metrics Test Helpers
-export {
-  __clearAllMetrics__,
-} from './lock-metrics';
+export { __clearAllLocks__ };
+export { __clearAllQueues__ };
+export { __clearAllMetrics__ };
 
 /**
  * Clear all session lock state (for testing)
@@ -34,11 +27,7 @@ export {
  *
  * @internal
  */
-export async function __clearAllSessionState__(): Promise<void> {
-  const { __clearAllLocks__ } = await import('./memory-lock');
-  const { __clearAllQueues__ } = await import('./queue-lock');
-  const { __clearAllMetrics__ } = await import('./lock-metrics');
-
+export function __clearAllSessionState__(): void {
   __clearAllLocks__();
   __clearAllQueues__();
   __clearAllMetrics__();
