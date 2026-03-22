@@ -15,23 +15,27 @@ export async function POST(request: NextRequest) {
       if (auth0Session?.user) {
         const localUserId = await getLocalUserIdFromAuth0(auth0Session.user.sub);
         
-        // Only require local user if there's actually a mapping - if no mapping exists,
-        // fall through to try other auth methods (e.g., legacy session or JWT)
-        if (localUserId) {
-          const user = await authService.getUserById(localUserId);
-
-          if (!user) {
-            return NextResponse.json(
-              { valid: false, error: 'User not found' },
-              { status: 401 }
-            );
-          }
-
-          return NextResponse.json({
-            valid: true,
-            user,
-          });
+        // If Auth0 session exists but not linked to local user, reject auth
+        // Do NOT fall back to legacy/JWT which could authenticate a different account
+        if (!localUserId) {
+          return NextResponse.json(
+            { valid: false, error: 'Auth0 account not linked to local user' },
+            { status: 401 }
+          );
         }
+        
+        const user = await authService.getUserById(localUserId);
+        if (!user) {
+          return NextResponse.json(
+            { valid: false, error: 'User not found' },
+            { status: 401 }
+          );
+        }
+
+        return NextResponse.json({
+          valid: true,
+          user,
+        });
       }
     } catch (auth0Error) {
       // Auth0 not configured or session unavailable — fall through

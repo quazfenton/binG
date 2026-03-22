@@ -1517,7 +1517,7 @@ export default function Settings({
                 <Button
                   variant="outline"
                   size="sm"
-                  onClick={() => window.location.href = '/auth/login?connection=google'}
+                  onClick={() => window.location.href = '/auth/login?connection=google-oauth2'}
                   className="flex items-center gap-2 bg-white text-gray-800 hover:bg-gray-100 border-0"
                 >
                   <svg className="w-4 h-4" viewBox="0 0 24 24">

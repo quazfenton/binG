@@ -14,5 +14,9 @@ RUN npm install -g serve vite create-vite http-server \
 
 WORKDIR /workspace
 
+RUN groupadd -r sandbox && useradd -r -g sandbox -d /workspace -s /usr/sbin/nologin sandbox \
+  && chown -R sandbox:sandbox /workspace
+USER sandbox
+
 # Keep container alive for exec-based usage
 CMD ["sleep", "infinity"]

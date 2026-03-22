@@ -15,6 +15,19 @@ import { NextResponse } from 'next/server';
 import { auth0, AUTH0_CONNECTIONS, getConnectedAccountsByUser } from '@/lib/auth0';
 import { getLocalUserIdFromAuth0 } from '@/lib/oauth/connections';
 
+const AUTH0_TO_CANONICAL: Record<string, string> = {
+  'github': 'github',
+  'google-oauth2': 'google',
+  'windowslive': 'microsoft',
+  'facebook': 'facebook',
+  'twitter': 'twitter',
+  'linkedin': 'linkedin',
+  'apple': 'apple',
+  'instagram': 'instagram',
+  'bitbucket': 'bitbucket',
+  'slack': 'slack',
+};
+
 export async function GET() {
   try {
     const session = await auth0.getSession();
@@ -32,11 +45,14 @@ export async function GET() {
     const connectedProviders = new Set(
       localUserId ? getConnectedAccountsByUser(localUserId).map((account) => account.provider) : []
     );
-    const connections = Object.entries(AUTH0_CONNECTIONS).map(([name, connection]) => ({
-      provider: name.toLowerCase(),
-      connection,
-      connected: connectedProviders.has(connection),
-    }));
+    const connections = Object.entries(AUTH0_CONNECTIONS).map(([name, connection]) => {
+      const normalizedConnection = AUTH0_TO_CANONICAL[connection] || connection;
+      return {
+        provider: name.toLowerCase(),
+        connection,
+        connected: connectedProviders.has(normalizedConnection),
+      };
+    });
 
     return NextResponse.json({
       authenticated: true,

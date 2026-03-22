@@ -78,6 +78,20 @@ export async function POST(request: NextRequest) {
   const requestStartTime = Date.now();
   const requestId = generateSecureId('chat');
 
+  // Will be set when resolveFilesystemOwner creates a new anonymous session
+  let anonSessionIdToSet: string | undefined;
+
+  // Helper to add anon session cookie to responses (for new anonymous sessions)
+  const addAnonSessionCookie = <T extends NextResponse>(response: T): T => {
+    if (anonSessionIdToSet) {
+      response.headers.set(
+        'set-cookie',
+        `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`
+      );
+    }
+    return response;
+  };
+
   // Extract user authentication (JWT or session cookie).
   // Anonymous chat is allowed, but tools/sandbox require authenticated userId.
   const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
@@ -251,12 +265,11 @@ export async function POST(request: NextRequest) {
         ? filesystemContext.scopePath.trim()
         : defaultScopePath;
     // SECURITY: Use persistent anonymous session ID from cookie if available
-    const anonSessionCookie = request.cookies.get('anon-session-id')?.value;
-    const filesystemOwnerId = authResult.success && authResult.userId 
-      ? authResult.userId 
-      : anonSessionCookie 
-        ? `anon:${anonSessionCookie.startsWith('anon_') ? anonSessionCookie.slice(5) : anonSessionCookie}`
-        : `anon:${generateSecureId('anon').slice(5)}`;
+    // Sanitize to prevent path traversal attacks (e.g., ".." or "/" in cookie value)
+    // Use resolveFilesystemOwner for consistent anonymous session handling
+    const ownerResolution = await resolveFilesystemOwner(request);
+    const filesystemOwnerId = ownerResolution.ownerId;
+    anonSessionIdToSet = ownerResolution.anonSessionId; // Set cookie if new anon session
     const denialContext = await filesystemEditSessionService.getRecentDenials(
       `${filesystemOwnerId}:${resolvedConversationId}`,
       4,
@@ -1051,7 +1064,7 @@ export async function POST(request: NextRequest) {
       } catch {}
 
       const responseStatus = clientResponse.success ? 200 : 500;
-      return NextResponse.json(
+      return addAnonSessionCookie(NextResponse.json(
         {
           success: clientResponse.success,
           data: clientResponse.data,
@@ -1061,7 +1074,7 @@ export async function POST(request: NextRequest) {
           timestamp: clientResponse.metadata?.timestamp
         },
         { status: responseStatus }
-      );
+      ));
     } catch (routerError) {
       const routerErrorObj = routerError as Error;
       const routerLatency = Date.now() - requestStartTime;
@@ -1079,7 +1092,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Emergency fallback - return friendly error with proper status
-      return NextResponse.json({
+      return addAnonSessionCookie(NextResponse.json({
         success: false, // Indicate failure so UI can show error state
         error: {
           type: 'router_error',
@@ -1093,7 +1106,7 @@ export async function POST(request: NextRequest) {
           isFallback: true
         },
         timestamp: new Date().toISOString()
-      }, { status: 503 }); // Service Unavailable - indicates temporary issue
+      }, { status: 503 })); // Service Unavailable - indicates temporary issue
     }
   }
   catch (error) {
@@ -1138,7 +1151,7 @@ export async function POST(request: NextRequest) {
     );
 
     // Return friendly response with proper error status
-    return NextResponse.json(
+    return addAnonSessionCookie(NextResponse.json(
       {
         success: false, // Indicate failure for proper error handling
         error: {
@@ -1157,7 +1170,7 @@ export async function POST(request: NextRequest) {
         timestamp: new Date().toISOString()
       },
       { status: 500 }, // Internal Server Error - indicates server-side issue
-    );
+    ));
   }
 }
 
@@ -2196,9 +2209,16 @@ function extractFileWriteFolderCreateTags(content: string): {
   const folderCreateRegex = /<folder_create\s+path\s*=\s*["']([^"']+)["']\s*\/?>/gi
   let folderCreateMatch: RegExpExecArray | null
   while ((folderCreateMatch = folderCreateRegex.exec(content)) !== null) {
-    const path = folderCreateMatch[1]?.trim()
-    if (!path) continue
-    folders.push(path)
+    const rawPath = folderCreateMatch[1]?.trim()
+    if (!rawPath) continue
+    
+    // Validate folder path the same way we validate file paths
+    const validPath = validateExtractedPath(rawPath)
+    if (!validPath) {
+      console.warn('[applyFilesystemEdits] Rejected invalid folder_create path:', rawPath.substring(0, 80))
+      continue
+    }
+    folders.push(validPath)
   }
 
   return { writes, folders }

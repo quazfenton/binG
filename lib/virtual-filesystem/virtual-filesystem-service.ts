@@ -118,6 +118,7 @@ export class VirtualFilesystemService {
   }
 
   async readFile(ownerId: string, filePath: string): Promise<VirtualFile> {
+    console.log('[VFS] readFile called', { ownerId, filePath });
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
     const file = workspace.files.get(normalizedPath);
@@ -136,6 +137,7 @@ export class VirtualFilesystemService {
     language?: string,
     options?: { failIfExists?: boolean },
   ): Promise<VirtualFile> {
+    console.log('[VFS] writeFile called', { ownerId, filePath, contentLength: content?.length });
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
     const previous = workspace.files.get(normalizedPath);
@@ -506,6 +508,7 @@ export class VirtualFilesystemService {
   }
 
   async getWorkspaceVersion(ownerId: string): Promise<number> {
+    console.log('[VFS] getWorkspaceVersion called', { ownerId });
     const workspace = await this.ensureWorkspace(ownerId);
     return workspace.version;
   }
@@ -671,10 +674,12 @@ export class VirtualFilesystemService {
   }
 
   private async ensureWorkspace(ownerId: string): Promise<WorkspaceState> {
+    console.log('[VFS] ensureWorkspace called', { ownerId });
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
     let workspace = this.workspaces.get(normalizedOwnerId);
 
     if (!workspace) {
+      console.log('[VFS] Creating new workspace', { ownerId: normalizedOwnerId });
       workspace = {
         files: new Map<string, VirtualFile>(),
         version: 0,
@@ -685,6 +690,7 @@ export class VirtualFilesystemService {
     }
 
     if (!workspace.loaded) {
+      console.log('[VFS] Loading workspace from storage', { ownerId: normalizedOwnerId });
       const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
       try {
         const raw = await fs.readFile(storageFilePath, 'utf8');
