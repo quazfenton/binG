@@ -259,31 +259,36 @@ export function disconnectProvider(userId: number, provider: string): boolean {
 
 /**
  * Get decrypted access token for a connected account
+ * Returns token with its expiration time to enable proper cache TTL management
  */
-export function getStoredAccessToken(userId: number, provider: string): string | null {
+export function getStoredAccessToken(
+  userId: number,
+  provider: string
+): { token: string; expiresAt?: Date } | null {
   try {
     const db = getDatabase();
     const stmt = db.prepare(`
-      SELECT access_token_encrypted, token_expires_at 
-      FROM external_connections 
+      SELECT access_token_encrypted, token_expires_at
+      FROM external_connections
       WHERE user_id = ? AND provider = ? AND is_active = TRUE
       LIMIT 1
     `);
-    
+
     const result = stmt.get(userId, provider) as { access_token_encrypted: string; token_expires_at?: string } | undefined;
-    
+
     if (result?.access_token_encrypted) {
+      const token = decryptApiKey(result.access_token_encrypted);
+      const expiresAt = result.token_expires_at ? new Date(result.token_expires_at) : undefined;
+
       // Check if token is expired
-      if (result.token_expires_at) {
-        const expiresAt = new Date(result.token_expires_at);
-        if (expiresAt < new Date()) {
-          console.log(`[Auth0] Token expired for ${provider}, need to refresh`);
-          return null;
-        }
+      if (expiresAt && expiresAt < new Date()) {
+        console.log(`[Auth0] Token expired for ${provider}, need to refresh`);
+        return null;
       }
-      return decryptApiKey(result.access_token_encrypted);
+
+      return { token, expiresAt };
     }
-    
+
     return null;
   } catch (error) {
     console.error('[Auth0] Failed to get stored access token:', error);
@@ -304,9 +309,11 @@ export const auth0 = new Auth0Client({
   },
   async onCallback(error, context, session) {
     try {
-      const baseUrl = (typeof process.env.AUTH0_BASE_URL === 'string' && process.env.AUTH0_BASE_URL)
-        ? process.env.AUTH0_BASE_URL
-        : 'http://localhost:3000';
+      // Resolve base URL from context (provided by SDK), then app config env vars
+      const baseUrl = context?.appBaseUrl
+        || process.env.APP_BASE_URL
+        || process.env.NEXT_PUBLIC_APP_URL
+        || 'http://localhost:3000';
       console.log('[Auth0] onCallback invoked', {
         error: error ? {
           message: error.message,
@@ -326,8 +333,13 @@ export const auth0 = new Auth0Client({
         return NextResponse.redirect(errorUrl.toString());
       }
       // Successful auth: redirect to the returnTo from context, or root.
+      // Only allow same-origin redirects to prevent open redirect attacks
       const returnTo = context?.returnTo || '/';
-      const redirectUrl = returnTo.startsWith('http') ? returnTo : new URL(returnTo, baseUrl).toString();
+      const parsedReturnTo = new URL(returnTo, baseUrl);
+      const appOrigin = new URL(baseUrl).origin;
+      const redirectUrl = parsedReturnTo.origin === appOrigin
+        ? parsedReturnTo.toString()
+        : new URL('/', baseUrl).toString();
       return NextResponse.redirect(redirectUrl);
     } catch (e: any) {
       // Last-resort safeguard: never let onCallback throw
@@ -438,13 +450,22 @@ export async function getAccessTokenForConnection(connection: string, userId?: n
   if (cachedToken) {
     return cachedToken;
   }
-  
+
   // If userId provided, check database for stored token and ONLY use that
   if (userId) {
     const storedToken = getStoredAccessToken(userId, connection);
     if (storedToken) {
-      cacheToken(connection, storedToken, 3600, userId);
-      return storedToken;
+      // Calculate remaining TTL based on actual token expiration
+      const expiresIn = storedToken.expiresAt
+        ? Math.max(0, Math.floor((storedToken.expiresAt.getTime() - Date.now()) / 1000))
+        : 3600;
+
+      // Only cache if token has remaining validity
+      if (expiresIn > 0) {
+        cacheToken(connection, storedToken.token, expiresIn, userId);
+      }
+
+      return storedToken.token;
     }
     // User-specific token not found, don't fall back to session token
     return null;

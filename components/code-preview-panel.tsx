@@ -1142,7 +1142,7 @@ export default function CodePreviewPanel({
       const modeIcon = {
         sandpack: '▶', iframe: '📄', raw: '📝', parcel: '⚡',
         devbox: '🔵', pyodide: '🐍', vite: '⚡', webpack: '📦', 
-        webcontainer: '📀', nextjs: '▲', codesandbox: '🏖️', node: '🟢', local: '💻', cloud: '☁️'
+        webcontainer: '📀', nextjs: '▲', codesandbox: '🏖️', opensandbox: '📦', node: '🟢', local: '💻', cloud: '☁️'
       }[selectedMode] || '▶';
 
       const execIcon = { local: '💻', cloud: '☁️', hybrid: '🔄' }[detectedExecutionMode];
@@ -3335,6 +3335,151 @@ root.render(<App />);` };
                         <Play className="w-4 h-4 mr-2" />
                         Start DevBox
                       </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // OpenSandbox container preview (full-stack, isolated)
+        if (isManualPreviewActive && previewMode === 'opensandbox') {
+          const deployToOpenSandbox = async () => {
+            if (!useStructure?.files || isOpensandboxDeploying) return;
+
+            setIsOpensandboxDeploying(true);
+            setOpensandboxLogs(['Deploying to OpenSandbox container...']);
+            setOpensandboxUrl(null);
+
+            try {
+              const resp = await fetch('/api/preview/sandbox', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  files: useStructure.files,
+                  framework: effectiveFramework,
+                  sandboxId: opensandboxId || undefined,
+                }),
+              });
+
+              const result = await resp.json();
+
+              if (result.success && result.previewUrl) {
+                setOpensandboxUrl(result.previewUrl);
+                setOpensandboxId(result.sandboxId);
+                setOpensandboxLogs(result.logs || ['Deployed successfully']);
+              } else {
+                setOpensandboxLogs(prev => [
+                  ...prev,
+                  ...(result.logs || []),
+                  `Error: ${result.error || 'Deployment failed'}`,
+                ]);
+              }
+            } catch (err: any) {
+              setOpensandboxLogs(prev => [...prev, `Network error: ${err.message}`]);
+            } finally {
+              setIsOpensandboxDeploying(false);
+            }
+          };
+
+          // If we already have a URL, show iframe; otherwise show deploy UI
+          if (opensandboxUrl) {
+            return (
+              <div className="h-full flex flex-col bg-gray-950 rounded-lg overflow-hidden">
+                <div className="px-4 py-2 bg-emerald-900 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-white text-sm font-medium">📦 OpenSandbox Preview</span>
+                    <span className="text-emerald-300 text-xs">{effectiveFramework}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={deployToOpenSandbox}
+                      disabled={isOpensandboxDeploying}
+                      className="text-emerald-200 hover:text-white h-6 px-2 text-xs"
+                    >
+                      <RefreshCw className={`w-3 h-3 mr-1 ${isOpensandboxDeploying ? 'animate-spin' : ''}`} />
+                      {isOpensandboxDeploying ? 'Syncing...' : 'Sync Files'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setPreviewMode('sandpack')}
+                      className="text-emerald-200 hover:text-white h-6 px-2 text-xs"
+                    >
+                      Use Sandpack
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        if (opensandboxId) {
+                          fetch(`/api/preview/sandbox?sandboxId=${opensandboxId}`, { method: 'DELETE' }).catch(() => {});
+                        }
+                        setOpensandboxUrl(null);
+                        setOpensandboxId(null);
+                        setOpensandboxLogs([]);
+                      }}
+                      className="text-red-300 hover:text-red-100 h-6 px-2 text-xs"
+                    >
+                      <X className="w-3 h-3" />
+                    </Button>
+                  </div>
+                </div>
+                <iframe
+                  ref={iframeRef}
+                  src={opensandboxUrl}
+                  className="flex-1 w-full border-0"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                  allow="cross-origin-isolated"
+                  title="OpenSandbox Preview"
+                />
+              </div>
+            );
+          }
+
+          // Deploy UI (no URL yet)
+          return (
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
+              <div className="flex-1 flex items-center justify-center p-8">
+                <div className="text-center max-w-md">
+                  <div className="w-20 h-20 mx-auto mb-6 bg-emerald-500/20 rounded-full flex items-center justify-center">
+                    <Package className="w-10 h-10 text-emerald-400" />
+                  </div>
+                  <h3 className="text-white text-xl font-medium mb-2">OpenSandbox Preview</h3>
+                  <p className="text-gray-400 text-sm mb-2">
+                    Full-stack isolated container for {effectiveFramework} applications
+                  </p>
+                  <p className="text-gray-500 text-xs mb-6">
+                    Deploys your {Object.keys(useStructure?.files || {}).length} files into a Docker container with dependencies
+                  </p>
+                  <div className="flex gap-3 justify-center">
+                    <Button
+                      onClick={deployToOpenSandbox}
+                      disabled={isOpensandboxDeploying}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-6"
+                    >
+                      {isOpensandboxDeploying ? (
+                        <><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Deploying...</>
+                      ) : (
+                        <>▶ Deploy to Sandbox</>
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => setPreviewMode('sandpack')}
+                      className="border-gray-600 text-gray-300 hover:bg-gray-800"
+                    >
+                      Use Sandpack
+                    </Button>
+                  </div>
+                  {opensandboxLogs.length > 0 && (
+                    <div className="mt-6 text-left bg-gray-900 rounded-lg p-3 max-h-40 overflow-y-auto">
+                      {opensandboxLogs.map((line, i) => (
+                        <div key={i} className="text-xs text-gray-400 font-mono">{line}</div>
+                      ))}
                     </div>
                   )}
                 </div>

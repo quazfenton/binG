@@ -214,7 +214,7 @@ export function useVirtualFilesystem(
     if (options?.sessionId) return options.sessionId;
     const derived = deriveSessionIdFromPath(initialPath);
     if (derived) return derived;
-    return getSessionId();
+    return getOrCreateAnonymousSessionId();
   }, [options?.sessionId, initialPath]);
 
   const [currentPath, setCurrentPath] = useState(initialPath);
