@@ -170,9 +170,10 @@ export function getDatabase(): any {
       if (!dbInitialized) {
         initializeSchemaSync();
 
-        // SECURITY: Run migrations SYNCHRONOUSLY to prevent race conditions
+        // SECURITY: Run migrations SYNCHRONOUSLY first time to prevent race conditions
         // Without this, requests can execute before migrations complete, causing
         // "no such column" errors for migration-added columns like email_verification_token
+        // Run migrations in async IIFE to avoid blocking database initialization
         (async () => {
           try {
             // Respect AUTO_RUN_MIGRATIONS environment variable
@@ -183,14 +184,29 @@ export function getDatabase(): any {
                 // Use synchronous migration runner
                 migrationRunner.runMigrationsSync();
                 console.log('[database] Migrations completed successfully');
+
+                // Also run performance index migration
+                try {
+                  const { addPerformanceIndexesSync } = await import('./performance-indexes');
+                  addPerformanceIndexesSync(db);
+                  console.log('[database] Performance indexes added successfully');
+                } catch (indexError) {
+                  // Performance indexes may already exist from base schema - this is OK
+                  if (!indexError.message?.includes('already exists')) {
+                    console.warn('[database] Performance index migration failed (indexes may already exist):', indexError);
+                  }
+                }
               } else {
-                console.warn('[database] Migration runner not ready during initial database setup; migrations will be handled by the migration runner module.');
+                console.log('[database] Migration runner not ready; migrations handled by run-migrations.js script.');
               }
             } else {
               console.log('[database] Auto-run migrations disabled via environment variable');
             }
-          } catch (error) {
-            console.warn('[database] Migrations failed (continuing with base schema):', error);
+          } catch (error: any) {
+            // Only log if it's a real error, not module loading issues after successful migrations
+            if (!error.message?.includes('Cannot find module')) {
+              console.warn('[database] Migrations failed (continuing with base schema):', error);
+            }
           }
         })();
 
@@ -394,77 +410,161 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
 // Database operations
 export class DatabaseOperations {
   private db: any;
+  
+  // PREPARED STATEMENTS CACHE - create once, reuse infinitely
+  // This avoids recreating prepared statements on every call
+  private preparedStatements: Map<string, any> = new Map();
+  private preparedStatementsInitialized = false;
+  
+  private getPrepared(name: string, sql: string): any {
+    // Check if statement exists and database is still valid
+    if (!this.preparedStatementsInitialized || !this.db) {
+      this.initializePreparedStatements();
+    }
+    
+    if (!this.preparedStatements.has(name)) {
+      this.preparedStatements.set(name, this.db.prepare(sql));
+    }
+    return this.preparedStatements.get(name);
+  }
 
   constructor() {
     this.db = getDatabase();
+    // Pre-initialize frequently used prepared statements
+    this.initializePreparedStatements();
+  }
+  
+  private initializePreparedStatements(): void {
+    if (this.preparedStatementsInitialized) {
+      return; // Already initialized
+    }
+    
+    // Clear existing statements in case of reconnection
+    this.preparedStatements.clear();
+    
+    // User operations
+    this.preparedStatements.set('createUser', this.db.prepare(`
+      INSERT INTO users (email, username, password_hash)
+      VALUES (?, ?, ?)
+    `));
+    this.preparedStatements.set('getUserByEmail', this.db.prepare(`
+      SELECT * FROM users WHERE email = ? AND is_active = TRUE
+    `));
+    this.preparedStatements.set('getUserById', this.db.prepare(`
+      SELECT * FROM users WHERE id = ? AND is_active = TRUE
+    `));
+    
+    // API credentials
+    this.preparedStatements.set('saveApiCredential', this.db.prepare(`
+      INSERT OR REPLACE INTO api_credentials
+      (user_id, provider, api_key_encrypted, api_key_hash, updated_at)
+      VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
+    `));
+    this.preparedStatements.set('getApiCredential', this.db.prepare(`
+      SELECT api_key_encrypted FROM api_credentials
+      WHERE user_id = ? AND provider = ? AND is_active = TRUE
+    `));
+    
+    // Sessions
+    this.preparedStatements.set('createSession', this.db.prepare(`
+      INSERT INTO user_sessions
+      (session_id, user_id, expires_at, ip_address, user_agent)
+      VALUES (?, ?, ?, ?, ?)
+    `));
+    this.preparedStatements.set('getSession', this.db.prepare(`
+      SELECT * FROM user_sessions
+      WHERE session_id = ? AND expires_at > CURRENT_TIMESTAMP
+    `));
+    
+    // External connections
+    this.preparedStatements.set('getExternalConnection', this.db.prepare(`
+      SELECT access_token_encrypted, token_expires_at 
+      FROM external_connections 
+      WHERE user_id = ? AND provider = ? AND is_active = TRUE
+      LIMIT 1
+    `));
+    
+    this.preparedStatementsInitialized = true;
+  }
+  
+  /**
+   * Reinitialize prepared statements after database reconnection
+   * Call this if the database connection is lost and re-established
+   */
+  reinitializeAfterReconnection(): void {
+    this.preparedStatementsInitialized = false;
+    this.preparedStatements.clear();
+    this.db = getDatabase();
+    this.initializePreparedStatements();
+  }
+
+  /**
+   * Get the underlying database instance (for advanced operations)
+   */
+  getDb(): any {
+    return this.db;
   }
   
   // User operations
   createUser(email: string, username: string, passwordHash: string) {
     // Handle empty username - set to NULL to avoid unique constraint conflicts
     const finalUsername = username.trim() || null;
-    
-    const stmt = this.db.prepare(`
+    const stmt = this.getPrepared('createUser', `
       INSERT INTO users (email, username, password_hash)
       VALUES (?, ?, ?)
     `);
-
     return stmt.run(email, finalUsername, passwordHash);
   }
 
   createUserWithVerification(email: string, username: string, passwordHash: string, verificationToken: string, verificationExpires: Date, emailVerified: boolean = false) {
     // Handle empty username - set to NULL to avoid unique constraint conflicts
     const finalUsername = username.trim() || null;
-
     const stmt = this.db.prepare(`
       INSERT INTO users (email, username, password_hash, email_verification_token, email_verification_expires, email_verified)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
-
     return stmt.run(email, finalUsername, passwordHash, verificationToken, verificationExpires.toISOString(), emailVerified);
   }
-  
+
   getUserByEmail(email: string) {
-    const stmt = this.db.prepare(`
+    const stmt = this.getPrepared('getUserByEmail', `
       SELECT * FROM users WHERE email = ? AND is_active = TRUE
     `);
-    
     return stmt.get(email);
   }
-  
+
   getUserById(id: number) {
-    const stmt = this.db.prepare(`
+    const stmt = this.getPrepared('getUserById', `
       SELECT * FROM users WHERE id = ? AND is_active = TRUE
     `);
-    
     return stmt.get(id);
   }
   
   // API credentials operations
   saveApiCredential(userId: number, provider: string, apiKey: string) {
     const { encrypted, hash } = encryptApiKey(apiKey);
-    
-    const stmt = this.db.prepare(`
-      INSERT OR REPLACE INTO api_credentials 
+
+    const stmt = this.getPrepared('saveApiCredential', `
+      INSERT OR REPLACE INTO api_credentials
       (user_id, provider, api_key_encrypted, api_key_hash, updated_at)
       VALUES (?, ?, ?, ?, CURRENT_TIMESTAMP)
     `);
-    
+
     return stmt.run(userId, provider, encrypted, hash);
   }
-  
+
   getApiCredential(userId: number, provider: string): string | null {
-    const stmt = this.db.prepare(`
-      SELECT api_key_encrypted FROM api_credentials 
+    const stmt = this.getPrepared('getApiCredential', `
+      SELECT api_key_encrypted FROM api_credentials
       WHERE user_id = ? AND provider = ? AND is_active = TRUE
     `);
-    
+
     const result = stmt.get(userId, provider) as { api_key_encrypted: string } | undefined;
-    
+
     if (result) {
       return decryptApiKey(result.api_key_encrypted);
     }
-    
+
     return null;
   }
   
@@ -546,39 +646,39 @@ export class DatabaseOperations {
   
   // Session management
   createSession(sessionId: string, userId: number, expiresAt: Date, ipAddress?: string, userAgent?: string) {
-    const stmt = this.db.prepare(`
-      INSERT INTO user_sessions (id, user_id, expires_at, ip_address, user_agent)
+    const stmt = this.getPrepared('createSession', `
+      INSERT INTO user_sessions (session_id, user_id, expires_at, ip_address, user_agent)
       VALUES (?, ?, ?, ?, ?)
     `);
-    
+
     return stmt.run(sessionId, userId, expiresAt.toISOString(), ipAddress, userAgent);
   }
-  
+
   getSession(sessionId: string) {
-    const stmt = this.db.prepare(`
+    const stmt = this.getPrepared('getSession', `
       SELECT s.*, u.email, u.username, u.subscription_tier
       FROM user_sessions s
       JOIN users u ON s.user_id = u.id
-      WHERE s.id = ? AND s.expires_at > CURRENT_TIMESTAMP AND u.is_active = TRUE
+      WHERE s.session_id = ? AND s.expires_at > CURRENT_TIMESTAMP AND u.is_active = TRUE
     `);
-    
+
     return stmt.get(sessionId);
   }
-  
+
   deleteSession(sessionId: string) {
     const stmt = this.db.prepare(`
-      DELETE FROM user_sessions WHERE id = ?
+      DELETE FROM user_sessions WHERE session_id = ?
     `);
-    
+
     return stmt.run(sessionId);
   }
-  
+
   // Cleanup expired sessions
   cleanupExpiredSessions() {
     const stmt = this.db.prepare(`
       DELETE FROM user_sessions WHERE expires_at <= CURRENT_TIMESTAMP
     `);
-    
+
     return stmt.run();
   }
   

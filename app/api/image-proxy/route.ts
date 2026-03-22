@@ -41,10 +41,17 @@ interface CachedImage {
   size: number;
 }
 
+// LRU Cache implementation with automatic eviction
 const IMAGE_CACHE = new Map<string, CachedImage>();
 const CACHE_MAX_SIZE = 100; // Max number of images to cache
 const CACHE_MAX_BYTES = 100 * 1024 * 1024; // 100MB total in-memory cap
 const CACHE_TTL = 3600000; // 1 hour TTL in-memory cache
+
+// Track cache metrics for monitoring
+let cacheTotalBytes = 0;
+let cacheHits = 0;
+let cacheMisses = 0;
+let cacheEvictions = 0;
 
 const CACHE_CONTROL_IMMUTABLE = 'public, max-age=31536000, immutable';
 const CACHE_CONTROL_REVALIDATE = 'public, max-age=86400, stale-while-revalidate=3600';
@@ -90,61 +97,132 @@ function getCacheKey(url: string): string {
 }
 
 /**
- * Clean up expired cache entries
+ * Get cache statistics for monitoring
+ */
+export function getCacheStats(): {
+  size: number;
+  totalBytes: number;
+  maxBytes: number;
+  hitRate: number;
+  evictions: number;
+} {
+  const totalRequests = cacheHits + cacheMisses;
+  return {
+    size: IMAGE_CACHE.size,
+    totalBytes: cacheTotalBytes,
+    maxBytes: CACHE_MAX_BYTES,
+    hitRate: totalRequests > 0 ? cacheHits / totalRequests : 0,
+    evictions: cacheEvictions,
+  };
+}
+
+/**
+ * Evict oldest entries until we have enough space
+ * Uses LRU (Least Recently Used) eviction strategy
+ */
+function evictOldestUntilSpaceAvailable(neededBytes: number): void {
+  const entries = Array.from(IMAGE_CACHE.entries())
+    .sort((a, b) => a[1].timestamp - b[1].timestamp);
+  
+  let freed = 0;
+  for (const [key, value] of entries) {
+    if (cacheTotalBytes - freed + neededBytes <= CACHE_MAX_BYTES) break;
+    IMAGE_CACHE.delete(key);
+    freed += value.size;
+    cacheEvictions++;
+  }
+  cacheTotalBytes -= freed;
+}
+
+/**
+ * Clean up expired cache entries with LRU eviction
+ * Called periodically and when cache exceeds limits
  */
 function cleanupCache(): void {
   const now = Date.now();
+  let freed = 0;
+  
+  // Remove expired entries
   for (const [key, value] of IMAGE_CACHE.entries()) {
     if (now - value.timestamp > CACHE_TTL) {
+      freed += value.size;
       IMAGE_CACHE.delete(key);
+      cacheEvictions++;
     }
   }
-  // Also enforce max size by removing oldest entries
+  cacheTotalBytes -= freed;
+  
+  // Enforce max size using LRU (remove oldest first)
   if (IMAGE_CACHE.size > CACHE_MAX_SIZE) {
     const entries = Array.from(IMAGE_CACHE.entries())
       .sort((a, b) => a[1].timestamp - b[1].timestamp);
     const toDelete = entries.slice(0, entries.length - CACHE_MAX_SIZE);
-    for (const [key] of toDelete) {
+    for (const [key, value] of toDelete) {
+      cacheTotalBytes -= value.size;
       IMAGE_CACHE.delete(key);
+      cacheEvictions++;
     }
   }
 }
 
 /**
- * Get image from cache
+ * Get image from cache with LRU tracking
  */
 function getCachedImage(cacheKey: string): CachedImage | null {
   const cached = IMAGE_CACHE.get(cacheKey);
-  if (!cached) return null;
-  
-  // Check if expired
-  if (Date.now() - cached.timestamp > CACHE_TTL) {
-    IMAGE_CACHE.delete(cacheKey);
+  if (!cached) {
+    cacheMisses++;
     return null;
   }
-  
+
+  // Check if expired
+  if (Date.now() - cached.timestamp > CACHE_TTL) {
+    cacheTotalBytes -= cached.size;
+    IMAGE_CACHE.delete(cacheKey);
+    cacheEvictions++;
+    cacheMisses++;
+    return null;
+  }
+
+  // Update timestamp for LRU (move to end of logical queue)
+  cached.timestamp = Date.now();
+  IMAGE_CACHE.set(cacheKey, cached);
+  cacheHits++;
   return cached;
 }
 
 /**
- * Store image in cache
+ * Store image in cache with LRU eviction and incremental size tracking
  */
 function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string, etag: string, imageUrl: string): void {
   const imageSize = data.byteLength;
 
-  // Cleanup expired entries FIRST so currentSize reflects actual reclaimable space
-  cleanupCache();
+  // Check if already cached (update case)
+  const existing = IMAGE_CACHE.get(cacheKey);
+  if (existing) {
+    cacheTotalBytes -= existing.size;
+  }
 
-  // Check if adding this image would exceed byte limit
-  const currentSize = Array.from(IMAGE_CACHE.values()).reduce((total, img) => total + img.size, 0);
-  if (currentSize + imageSize > CACHE_MAX_BYTES) {
-    console.log('[Image Proxy] Skipping cache: would exceed memory limit', {
-      url: safeLogUrl(imageUrl),
-      currentSize,
-      imageSize,
-      limit: CACHE_MAX_BYTES,
-    });
-    return;
+  // Periodic cleanup instead of on every write (every 10 writes)
+  if (IMAGE_CACHE.size % 10 === 0) {
+    cleanupCache();
+  }
+
+  // Check byte limit using tracked total
+  if (cacheTotalBytes + imageSize > CACHE_MAX_BYTES) {
+    // Evict oldest entries until we have space
+    evictOldestUntilSpaceAvailable(imageSize);
+    
+    // If still not enough space after eviction, skip caching
+    if (cacheTotalBytes + imageSize > CACHE_MAX_BYTES) {
+      console.log('[Image Proxy] Skipping cache: would exceed memory limit even after eviction', {
+        url: safeLogUrl(imageUrl),
+        cacheTotalBytes,
+        imageSize,
+        limit: CACHE_MAX_BYTES,
+      });
+      return;
+    }
   }
 
   IMAGE_CACHE.set(cacheKey, {
@@ -154,6 +232,14 @@ function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string
     timestamp: Date.now(),
     size: imageSize,
   });
+  cacheTotalBytes += imageSize;
+}
+
+// Periodic cache cleanup interval (every 5 minutes)
+if (typeof global !== 'undefined' && !(global as any).__imageProxyCacheInterval) {
+  (global as any).__imageProxyCacheInterval = setInterval(() => {
+    cleanupCache();
+  }, 5 * 60 * 1000);
 }
 
 /**

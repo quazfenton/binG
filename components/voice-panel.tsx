@@ -19,9 +19,6 @@ import {
   Bot,
   User,
   Loader2,
-  Signal,
-  SignalOff,
-  Headphones,
   Wifi,
   WifiOff,
   Play,
@@ -31,6 +28,7 @@ import {
   ChevronDown,
   RefreshCw,
   Sparkles,
+  AlertCircle,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -105,10 +103,54 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationRef = useRef<number | null>(null);
+  const abortControllerRef = useRef<AbortController | null>(null);
+
+  // AI processing state
+  const [isProcessingAI, setIsProcessingAI] = useState(false);
 
   // Check TTS availability on mount
   useEffect(() => {
     checkTTSAvailability();
+  }, []);
+
+  // Cleanup on unmount - prevent memory leaks
+  useEffect(() => {
+    return () => {
+      // Stop any ongoing speech
+      speechSynthesis.cancel();
+      
+      // Stop microphone if active
+      if (mediaStreamRef.current) {
+        mediaStreamRef.current.getTracks().forEach(track => track.stop());
+        mediaStreamRef.current = null;
+      }
+      
+      // Stop speech recognition
+      if (recognitionRef.current) {
+        try {
+          recognitionRef.current.stop();
+        } catch (e) { /* ignore */ }
+        recognitionRef.current = null;
+      }
+      
+      // Close audio context
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+      
+      // Cancel animation frames
+      if (animationRef.current) {
+        cancelAnimationFrame(animationRef.current);
+        animationRef.current = null;
+      }
+
+      // Cancel any in-flight AI request
+      if (abortControllerRef.current) {
+        abortControllerRef.current.abort();
+        abortControllerRef.current = null;
+      }
+    };
   }, []);
 
   // Initialize speech recognition
@@ -264,7 +306,14 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
   }, []);
 
   const handleUserSpeech = async (text: string) => {
-    if (!text.trim()) return;
+    if (!text.trim() || isProcessingAI) return;
+
+    // Cancel any existing request
+    if (abortControllerRef.current) {
+      abortControllerRef.current.abort();
+    }
+    abortControllerRef.current = new AbortController();
+    setIsProcessingAI(true);
 
     // Add user message
     const userMessage: VoiceMessage = {
@@ -275,19 +324,106 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
     };
     setVoiceMessages(prev => [...prev, userMessage]);
 
-    // If auto-speak is on, we'll get AI response and speak it
-    if (settings.autoSpeak) {
-      // For now, just echo back - in full integration this would call the AI
-      const assistantMessage: VoiceMessage = {
-        id: `msg-${Date.now()}-a`,
-        role: "assistant",
-        content: `You said: "${text}". This is a voice response demo.`,
-        timestamp: Date.now(),
-      };
-      setVoiceMessages(prev => [...prev, assistantMessage]);
+    // Add loading indicator for AI response
+    const loadingId = `msg-${Date.now()}-loading`;
+    const loadingMessage: VoiceMessage = {
+      id: loadingId,
+      role: "assistant",
+      content: "Thinking...",
+      timestamp: Date.now(),
+    };
+    setVoiceMessages(prev => [...prev, loadingMessage]);
 
-      // Speak the response
-      await speakText(assistantMessage.content);
+    try {
+      // Call the chat API with the user's speech
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          messages: [
+            { role: 'user', content: text }
+          ],
+          provider: 'openrouter',
+          model: settings.model || 'nvidia/nemotron-3-30b-a3b:free',
+          stream: true,
+          conversationId: `voice-chat-${Date.now()}`,
+        }),
+        signal: abortControllerRef.current.signal,
+      });
+
+      if (!response.ok) {
+        throw new Error(`Chat API error: ${response.status}`);
+      }
+
+      // Handle streaming response
+      const reader = response.body?.getReader();
+      const decoder = new TextDecoder();
+      let aiResponse = '';
+
+      if (reader) {
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+
+          for (const line of lines) {
+            if (line.startsWith('data: ')) {
+              const data = line.slice(6);
+              if (data === '[DONE]') continue;
+
+              try {
+                const parsed = JSON.parse(data);
+                const content = parsed?.choices?.[0]?.delta?.content;
+                if (content) {
+                  aiResponse += content;
+                  // Update loading message in real-time
+                  setVoiceMessages(prev => prev.map(msg => 
+                    msg.id === loadingId ? { ...msg, content: aiResponse } : msg
+                  ));
+                }
+              } catch {
+                // Not valid JSON, skip
+              }
+            }
+          }
+        }
+      }
+
+      // Clean up the response (remove any command artifacts)
+      const cleanedResponse = aiResponse
+        .replace(/===[\s\S]*?===/g, '')
+        .replace(/```[\s\S]*?```/g, '')
+        .replace(/<[^>]+>/g, '')
+        .trim() || "I didn't get a response. Please try again.";
+
+      // Update the final message
+      setVoiceMessages(prev => prev.map(msg => 
+        msg.id === loadingId ? { ...msg, content: cleanedResponse } : msg
+      ));
+
+      // If auto-speak is on, speak the response
+      if (settings.autoSpeak && cleanedResponse) {
+        await speakText(cleanedResponse);
+      }
+
+    } catch (error: any) {
+      if (error.name === 'AbortError') {
+        console.log('[VoicePanel] Request cancelled');
+        return;
+      }
+      console.error('[VoicePanel] Chat API error:', error);
+      // Update loading message with error
+      setVoiceMessages(prev => prev.map(msg => 
+        msg.id === loadingId ? { ...msg, content: `Error: ${error.message || 'Failed to get response'}` } : msg
+      ));
+      toast.error('Failed to get AI response');
+    } finally {
+      setIsProcessingAI(false);
+      abortControllerRef.current = null;
     }
   };
 
@@ -524,7 +660,7 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
               {ttsAvailable ? (
                 <><Sparkles className="h-2 w-2 mr-1 text-yellow-400" /> KittenTTS Ready</>
               ) : (
-                <><SignalOff className="h-2 w-2 mr-1" /> KittenTTS Unavailable</>
+                <><AlertCircle className="h-2 w-2 mr-1 text-red-400" /> KittenTTS Unavailable</>
               )}
             </Badge>
           </div>

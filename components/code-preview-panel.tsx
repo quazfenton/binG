@@ -2475,8 +2475,8 @@ Generated on: ${new Date().toLocaleString()}
       }
 
       // PRIORITY 2: Fallback to regex-based detection from code content
-      const deps = useStructure?.dependencies?.reduce(
-        (acc, dep) => {
+      const deps = (useStructure as any)?.dependencies?.reduce(
+        (acc: Record<string, string>, dep: string) => {
           if (dep && typeof dep === 'string') {
             acc[dep] = "latest";
           }
@@ -3167,15 +3167,8 @@ root.render(<App />);` };
                 </div>
                 <div className="flex-1 overflow-hidden">
                   <Sandpack
-                    template={template}
+                    template={template as any}
                     theme="dark"
-                    onConsoleMessage={(msg) => {
-                      // Capture console messages for potential display
-                      const consoleType = msg.type === 'log' ? '📝' : 
-                                         msg.type === 'error' ? '❌' : 
-                                         msg.type === 'warn' ? '⚠️' : '💬';
-                      console.log(`[Sandpack Console] ${consoleType}:`, msg.content);
-                    }}
                     options={{
                       showTabs: true,
                       showLineNumbers: false,
@@ -3188,8 +3181,8 @@ root.render(<App />);` };
                     }}
                     files={sandpackFiles}
                     customSetup={{
-                      dependencies: projectDetection?.dependencies?.reduce(
-                        (acc, dep) => { acc[dep] = "latest"; return acc; },
+                      dependencies: (projectDetection as any)?.dependencies?.reduce(
+                        (acc: Record<string, string>, dep: string) => { acc[dep] = "latest"; return acc; },
                         {} as Record<string, string>
                       ) || {},
                     }}

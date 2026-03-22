@@ -220,7 +220,19 @@ export class EnhancedLLMService {
         tokensUsed: response.tokensUsed,
         finishReason: response.finishReason,
       });
-      return await postProcessToolCalls(response);
+      
+      // Add metadata about actual provider/model used
+      const enhancedResponse = {
+        ...response,
+        metadata: {
+          ...response.metadata,
+          actualProvider,
+          actualModel,
+          fallbackChain: [],
+        },
+      };
+      
+      return await postProcessToolCalls(enhancedResponse);
     } catch (primaryError) {
       const primaryLatency = Date.now() - requestStartTime;
       chatLogger.warn('Primary provider failed', { requestId, provider: actualProvider, model: actualModel }, {
@@ -233,6 +245,10 @@ export class EnhancedLLMService {
         this.endpointConfigs.has(fallbackProvider) &&
         this.isProviderHealthy(fallbackProvider)
       );
+
+      // Track the fallback chain with detailed error information
+      const fallbackChainLog: string[] = [];
+      fallbackChainLog.push(`${actualProvider}/${actualModel} failed: ${primaryError instanceof Error ? primaryError.message : String(primaryError)}`);
 
       if (availableFallbacks.length === 0) {
         chatLogger.error('No healthy fallback providers available', { requestId, provider: actualProvider }, {
@@ -260,10 +276,12 @@ export class EnhancedLLMService {
           const supportedModel = this.findCompatibleModel(actualModel, fallbackConfig.models);
 
           if (!supportedModel) {
+            const modelError = `Model '${actualModel}' not supported by ${fallbackProvider}`;
             chatLogger.warn('Model not supported by fallback provider', { requestId, provider: fallbackProvider, model: actualModel });
+            fallbackChainLog.push(`${fallbackProvider}/${actualModel} skipped: ${modelError}`);
             continue;
           }
-          
+
           fallbackModelUsed = supportedModel;
 
           const fallbackRequest = {
@@ -287,19 +305,26 @@ export class EnhancedLLMService {
             tokensUsed: response.tokensUsed,
           });
 
+          // Build successful fallback response with full metadata
           const fallbackResponse = {
             ...response,
-            provider: `${actualProvider} -> ${fallbackProvider}`,
-            model: supportedModel  // Include the actual fallback model used
+            metadata: {
+              ...response.metadata,
+              actualProvider: fallbackProvider,
+              actualModel: supportedModel,
+              fallbackChain: fallbackChainLog,
+            },
           };
           return await postProcessToolCalls(fallbackResponse);
         } catch (fallbackError) {
           const fallbackLatency = Date.now() - fallbackStartTime;
+          const errorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
           chatLogger.warn('Fallback provider failed', { requestId, provider: fallbackProvider, model: fallbackModelUsed }, {
             latencyMs: fallbackLatency,
             attempt: attemptIndex + 1,
-            error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+            error: errorMsg,
           });
+          fallbackChainLog.push(`${fallbackProvider}/${fallbackModelUsed} failed: ${errorMsg}`);
           continue;
         }
       }

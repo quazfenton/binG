@@ -73,12 +73,7 @@ export type {
 
 export {
   RequestDeduplicator,
-  codeRequestDeduplicator,
-} from './request-deduplicator';
-export type {
-  RequestFingerprint,
-  InFlightRequest,
-  DeduplicationConfig,
+  getRequestDeduplicator,
 } from './request-deduplicator';
 
 // Image loader with SSRF protection

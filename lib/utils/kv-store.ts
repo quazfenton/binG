@@ -315,6 +315,83 @@ class RedisKVStore implements KVStore {
     return result > 0;
   }
 
+  /**
+   * Batch get multiple keys efficiently using MGET
+   */
+  async batchGet(keys: string[], options?: { namespace?: string }): Promise<Map<string, any>> {
+    const namespace = options?.namespace || this.namespace || 'kv';
+    const fullKeys = keys.map(k => this.getKey(k, namespace));
+    
+    if (fullKeys.length === 0) {
+      return new Map();
+    }
+
+    // Use MGET for efficient batch retrieval
+    const results = await this.redis.mget(fullKeys);
+    const map = new Map<string, any>();
+
+    results.forEach((data: any, i: number) => {
+      if (data !== null && data !== undefined) {
+        try {
+          map.set(keys[i], JSON.parse(data));
+        } catch {
+          map.set(keys[i], data);
+        }
+      }
+    });
+
+    return map;
+  }
+
+  /**
+   * Batch set multiple keys efficiently using pipeline
+   */
+  async batchSet(
+    entries: Array<{ key: string; value: any; ttl?: number }>,
+    options?: { namespace?: string }
+  ): Promise<void> {
+    const namespace = options?.namespace || this.namespace || 'kv';
+    
+    if (entries.length === 0) {
+      return;
+    }
+
+    // Use pipeline for efficient batch write
+    const pipeline = this.redis.pipeline();
+    
+    for (const { key, value, ttl } of entries) {
+      const fullKey = this.getKey(key, namespace);
+      pipeline.set(fullKey, JSON.stringify(value));
+      
+      if (ttl || this.defaultTTL) {
+        pipeline.expire(fullKey, ttl || this.defaultTTL!);
+      }
+    }
+    
+    await pipeline.exec();
+  }
+
+  /**
+   * Batch delete multiple keys efficiently using pipeline
+   */
+  async batchDelete(keys: string[], options?: { namespace?: string }): Promise<number> {
+    const namespace = options?.namespace || this.namespace || 'kv';
+    const fullKeys = keys.map(k => this.getKey(k, namespace));
+    
+    if (fullKeys.length === 0) {
+      return 0;
+    }
+
+    // Use pipeline for efficient batch delete
+    const pipeline = this.redis.pipeline();
+    for (const fullKey of fullKeys) {
+      pipeline.del(fullKey);
+    }
+    
+    const results = await pipeline.exec();
+    return results.reduce((sum: number, result: any) => sum + (result || 0), 0);
+  }
+
   async search(query: string, options?: { namespace?: string; limit?: number }): Promise<KVStoreSearchResult[]> {
     // Redis doesn't support full-text search without RedisSearch
     // Fall back to pattern matching

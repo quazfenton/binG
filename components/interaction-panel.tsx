@@ -4,7 +4,7 @@ import React from "react";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 
 // Tabs that need taller height when opened
-const TALL_TABS = ['images', 'extras', 'shell', 'vnc'];
+const TALL_TABS = ['images', 'extras', 'shell'];
 const DEFAULT_TAB_HEIGHT = 'min-h-[200px]';
 const TALL_TAB_HEIGHT = 'min-h-[400px]';
 const EXPAND_TRANSITION = 'transition-all duration-300 ease-out';
@@ -128,6 +128,7 @@ import UrlUtilitiesPlugin from "./plugins/url-utilities-plugin";
 import WikiKnowledgeBasePlugin from "./plugins/wiki-knowledge-base-plugin";
 import ImageGenerationTab from "./image-generation-tab";
 import SquareSplitHorizontal from "lucide-react/dist/esm/icons/square-split-horizontal";
+import Bell from "lucide-react/dist/esm/icons/bell";
 
 // Pop-out plugin windows for Plugins tab
 const popOutPlugins: Plugin[] = [
@@ -415,6 +416,13 @@ export default function InteractionPanel({
   const [isMinimized, setIsMinimized] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
 
+  // First-visit notification for workspace panel
+  const [showWorkspaceNotification, setShowWorkspaceNotification] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const hasSeenNotification = localStorage.getItem("bing_workspace_panel_notification");
+    return !hasSeenNotification;
+  });
+
   // Refs for touch event handlers (needed for proper cleanup)
   const touchMoveHandler = useRef<((e: TouchEvent) => void) | null>(null);
   const touchEndHandler = useRef<(() => void) | null>(null);
@@ -602,6 +610,17 @@ export default function InteractionPanel({
       console.warn('Plugin tab structure validation failed');
     }
   }, []);
+
+  // Auto-dismiss workspace notification after 8 seconds and save to localStorage
+  useEffect(() => {
+    if (showWorkspaceNotification) {
+      const timer = setTimeout(() => {
+        setShowWorkspaceNotification(false);
+        localStorage.setItem("bing_workspace_panel_notification", "seen");
+      }, 8000);
+      return () => clearTimeout(timer);
+    }
+  }, [showWorkspaceNotification]);
 
   // Plugin System
   const availablePlugins: Plugin[] = [
@@ -1563,15 +1582,55 @@ export default function InteractionPanel({
             variant="ghost"
             size="sm"
             onClick={togglePanel}
-            className={`absolute top-2 left-2 w-8 h-8 p-0 z-[70] transition-all duration-300 sm:w-6 sm:h-6 ${
+            className={`absolute top-2 left-2 w-9 h-9 p-0 z-[70] transition-all duration-300 ${
               isPanelOpen
                 ? "text-yellow-400 hover:bg-yellow-500/20 hover:text-yellow-300"
                 : "text-gray-400 hover:text-white hover:bg-white/10"
             }`}
             title="Toggle experimental workspace panel"
           >
-            <SquareSplitHorizontal className="w-4 h-4 sm:w-3 sm:h-3" />
+            <SquareSplitHorizontal className="w-5 h-5" />
           </Button>
+
+          {/* First-Visit Notification for Workspace Panel */}
+          {showWorkspaceNotification && (
+            <div
+              className="absolute top-14 left-2 z-[71] animate-in fade-in slide-in-from-top-2 duration-500"
+              style={{ animation: 'fadeInSlide 0.5s ease-out, fadeOutSlide 0.5s ease-in 7.5s forwards' }}
+            >
+              <div className="bg-gradient-to-r from-yellow-500/90 to-amber-500/90 backdrop-blur-md rounded-lg p-3 shadow-lg shadow-yellow-500/20 border border-yellow-400/30 max-w-[280px]">
+                <div className="flex items-start gap-2">
+                  <Bell className="w-4 h-4 text-white mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-white text-xs font-semibold">Workspace Panel</p>
+                    <p className="text-yellow-100 text-[11px] mt-0.5 leading-relaxed">
+                      Click the <SquareSplitHorizontal className="w-3 h-3 inline -mt-0.5 mx-0.5" /> icon to open the experimental workspace panel with file explorer, agent status, and more!
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowWorkspaceNotification(false);
+                      localStorage.setItem("bing_workspace_panel_notification", "seen");
+                    }}
+                    className="text-yellow-200 hover:text-white transition-colors flex-shrink-0"
+                    title="Dismiss"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                {/* Progress bar showing time remaining */}
+                <div className="mt-2 h-0.5 bg-yellow-400/30 rounded-full overflow-hidden">
+                  <div 
+                    className="h-full bg-yellow-300 rounded-full"
+                    style={{ 
+                      animation: 'shrinkWidth 8s linear',
+                      width: '100%'
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Minimize Button */}
           <Button
@@ -1605,7 +1664,7 @@ export default function InteractionPanel({
           </Button>
 
           {/* Header - Compact layout */}
-          <div className="flex justify-between items-center mb-1 mt-3 sm:mt-5 px-1" onDoubleClick={toggleMinimized}>
+          <div className="flex justify-between items-center mb-1 mt-3 sm:mt-5 px-1 ml-10" onDoubleClick={toggleMinimized}>
             <div className="flex items-center gap-2">
               <div className="">
                 <Sparkles className="h-3 w-3 text-white" />
@@ -1703,10 +1762,6 @@ export default function InteractionPanel({
                     <TabsTrigger value="shell" className="text-xs sm:text-sm">
                       <Terminal className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                       <span className="hidden sm:inline">Shell</span>
-                    </TabsTrigger>
-                    <TabsTrigger value="vnc" className="text-xs sm:text-sm">
-                      <Monitor className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                      <span className="hidden sm:inline">Remote</span>
                     </TabsTrigger>
                   </TabsList>
                 </div>
@@ -2205,18 +2260,6 @@ export default function InteractionPanel({
                         <p className="text-white/40 text-xs mt-2">Type commands to execute in an isolated environment</p>
                       </div>
                     </div>
-                  </CardContent>
-                </Card>
-              </TabsContent>
-
-              {/* VNC/Remote Tab Content - Taller height for remote desktop */}
-              <TabsContent
-                value="vnc"
-                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'vnc' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
-              >
-                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
-                  <CardContent className="pt-0 h-full flex flex-col min-h-0 overflow-hidden">
-                    <VNCConnectionTab />
                   </CardContent>
                 </Card>
               </TabsContent>

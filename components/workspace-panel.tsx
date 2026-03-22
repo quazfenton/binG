@@ -81,8 +81,8 @@ import {
   ChevronUp,
   ChevronDown as ChevronDownIcon,
   Square,
-  GitCommit,
   Github,
+  Monitor,
 } from "lucide-react";
 import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";
@@ -97,8 +97,9 @@ import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { buildApiHeaders } from "@/lib/utils";
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer";
 import IntegrationPanel from "@/components/integrations/IntegrationPanel";
-import GitSourceControl from "@/components/git-source-control";
+import GitSourceControl from "@/components/git-source-control-tabs";
 import { VoicePanel } from "@/components/voice-panel";
+import VNCConnectionTab from "@/components/vnc-connection-tab";
 import { PROVIDERS } from "@/lib/chat/providers";
 
 // Helper to normalize paths to relative format (project/...) for API compatibility
@@ -589,9 +590,12 @@ export function ExperimentalWorkspacePanel() {
   // Available LLM providers for comparison
   const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>([]);
 
-  // Load available LLM providers from API
+  // Load available LLM providers from API and pre-warm chat
   useEffect(() => {
-    const fetchProviders = async () => {
+    const initialize = async () => {
+      // Pre-warm chat API in background
+      fetch('/api/chat/prewarm').catch(() => {});
+      
       try {
         const response = await fetch('/api/providers');
         if (response.ok) {
@@ -610,11 +614,10 @@ export function ExperimentalWorkspacePanel() {
         }
       } catch (error) {
         console.error('Failed to load LLM providers from API:', error);
-        // Don't fallback - let the UI show empty to indicate API issue
         setAvailableProviders([]);
       }
     };
-    fetchProviders();
+    initialize();
   }, []);
 
   // Fetch VFS snapshot on mount
@@ -2130,6 +2133,17 @@ export function ExperimentalWorkspacePanel() {
                     <Mic className="h-3 w-3" />
                     Voice
                   </button>
+                  <button
+                    onClick={() => setTab('remote')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'remote'
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
+                  >
+                    <Monitor className="h-3 w-3" />
+                    Remote
+                  </button>
                 </div>
 
                 {/* Explorer Tab */}
@@ -2326,7 +2340,7 @@ export function ExperimentalWorkspacePanel() {
                           className="text-xs bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50"
                           title="Select provider"
                         >
-                          {availableProviders.filter(p => p.isAvailable !== false).map(provider => (
+                          {availableProviders.filter((p: any) => (p as any).isAvailable !== false).map(provider => (
                             <option key={provider.id} value={provider.id} className="bg-gray-900">
                               {provider.name}
                             </option>
@@ -3284,26 +3298,47 @@ export function ExperimentalWorkspacePanel() {
                       />
 
                       {/* Fullscreen exit button - Always visible */}
-                      <Button
-                        variant="ghost"
-                        size="sm"
-                        onClick={() => {
-                          const newId = prompt("Enter YouTube Video ID or URL:", youtubeVideoId);
-                          if (newId) {
-                            const extractedId = extractYouTubeId(newId);
-                            if (extractedId) {
-                              setYoutubeVideoId(extractedId);
-                              toast.success("Video changed");
-                            } else {
-                              toast.error("Invalid YouTube URL or ID");
+                      <div className="absolute top-4 right-4 z-20 flex items-center gap-2">
+                        <Input
+                          placeholder="Paste YouTube URL..."
+                          onKeyDown={(e) => {
+                            if (e.key === 'Enter') {
+                              const input = (e.target as HTMLInputElement).value;
+                              if (input) {
+                                const extractedId = extractYouTubeId(input);
+                                if (extractedId) {
+                                  setYoutubeVideoId(extractedId);
+                                  toast.success("Video changed");
+                                  (e.target as HTMLInputElement).value = '';
+                                } else {
+                                  toast.error("Invalid YouTube URL or ID");
+                                }
+                              }
                             }
-                          }
-                        }}
-                        className="absolute top-4 right-4 h-8 w-8 bg-black/70 hover:bg-black/90 text-white z-20 border border-white/20"
-                        title="Change video"
-                      >
-                        <RotateCcw className="h-4 w-4" />
-                      </Button>
+                          }}
+                          className="w-48 h-8 bg-black/70 border-white/20 text-white text-xs placeholder:text-white/50"
+                        />
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => {
+                            const newId = prompt("Enter YouTube Video ID or URL:", youtubeVideoId);
+                            if (newId) {
+                              const extractedId = extractYouTubeId(newId);
+                              if (extractedId) {
+                                setYoutubeVideoId(extractedId);
+                                toast.success("Video changed");
+                              } else {
+                                toast.error("Invalid YouTube URL or ID");
+                              }
+                            }
+                          }}
+                          className="h-8 w-8 bg-black/70 hover:bg-black/90 text-white border border-white/20"
+                          title="Change video"
+                        >
+                          <RotateCcw className="h-4 w-4" />
+                        </Button>
+                      </div>
                       
                       {/* Minimize button */}
                       <Button
@@ -3533,12 +3568,19 @@ export function ExperimentalWorkspacePanel() {
 
                 {/* Git Tab - Source Control */}
                 <TabsContent value="git" className="flex-1 mt-0 overflow-hidden">
-                  <GitSourceControl scopePath={filesystemScopePath || 'project'} />
+                  <GitSourceControl scopePath={'project'} />
                 </TabsContent>
 
                 {/* Voice Tab - Full Voice Chat */}
                 <TabsContent value="voice" className="flex-1 mt-0 overflow-hidden">
                   <VoicePanel />
+                </TabsContent>
+
+                {/* Remote/VNC Tab - Full height for remote desktop */}
+                <TabsContent value="remote" className="flex-1 mt-0 min-h-0 flex flex-col overflow-hidden">
+                  <div className="flex-1 overflow-hidden">
+                    <VNCConnectionTab />
+                  </div>
                 </TabsContent>
               </Tabs>
             </div>
