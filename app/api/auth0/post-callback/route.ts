@@ -22,6 +22,14 @@ export async function POST(request: NextRequest) {
 
     // Map Auth0 user ID to local user on successful login
     if (auth0UserId && email) {
+      // Use authenticated session email as the trusted source instead of client-controlled body email
+      const { auth0 } = await import('@/lib/auth0');
+      const session = await auth0.getSession(request);
+      const trustedEmail = session?.user?.email;
+      if (!trustedEmail) {
+        return NextResponse.json({ error: 'Authenticated session required' }, { status: 401 });
+      }
+
       const localUserId = await getLocalUserIdFromAuth0(auth0UserId);
 
       if (localUserId) {
@@ -29,16 +37,16 @@ export async function POST(request: NextRequest) {
         await mapAuth0UserId(localUserId, auth0UserId);
         console.log('[Auth0 Post-Callback] Refreshed Auth0→local user mapping for:', localUserId);
       } else {
-        // Try to find local user by email and map it
+        // Try to find local user by trusted email and map it
         const { getDatabase } = await import('@/lib/database/connection');
         const db = getDatabase();
         if (db) {
-          const userRow = db.prepare('SELECT id FROM users WHERE email = ? AND is_active = TRUE').get(email) as { id: number } | undefined;
+          const userRow = db.prepare('SELECT id FROM users WHERE email = ? AND is_active = TRUE').get(trustedEmail) as { id: number } | undefined;
           if (userRow) {
             await mapAuth0UserId(userRow.id, auth0UserId);
             console.log('[Auth0 Post-Callback] Mapped Auth0 user to local user:', userRow.id);
           } else {
-            console.log('[Auth0 Post-Callback] No local user found for email:', email);
+            console.log('[Auth0 Post-Callback] No local user found for email:', trustedEmail);
           }
         }
       }
@@ -56,7 +64,11 @@ export async function POST(request: NextRequest) {
           accessToken,
           refreshToken,
           tokenExpiresAt ? new Date(tokenExpiresAt) : undefined,
-          scopes
+          Array.isArray(scopes)
+            ? scopes
+            : typeof scopes === 'string'
+              ? scopes.split(/[,\s]+/).filter(Boolean)
+              : undefined
         );
         console.log('[Auth0 Post-Callback] Saved connected account:', connectedAccount.connection || connectedAccount.provider);
       }

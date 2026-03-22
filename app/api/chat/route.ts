@@ -303,9 +303,9 @@ export async function POST(request: NextRequest) {
       ));
 
     if (wantsV2) {
-      // For unauthenticated users, use "guest" as the userId
-      // Don't include conversationId in userId as it causes duplicate paths in workspace
-      const effectiveUserId = authenticatedUserId || 'guest';
+      // Use the persistent filesystem owner ID (from auth or anonymous session cookie)
+      // This ensures each anonymous user gets their own workspace, not a shared "guest" workspace
+      const effectiveUserId = authenticatedUserId || filesystemOwnerId;
 
       const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content;
       const task = typeof lastUserMessage === 'string'
@@ -2090,7 +2090,9 @@ function extractApplyDiffOperations(content: string): Array<{ path: string; sear
 
   // Extract top-level APPLY_DIFF commands (outside containers)
   // Matches: APPLY_DIFF path\n<<<\nsearch\n===\nreplace\n>>>
-  const topLevelDiffRegex = /^\s*APPLY_DIFF\s+([^\s<]+)\s*(?:\n\s*)?<<<\s*\n?([\s\S]*?)\n?\s*===\s*\n?([\s\S]*?)\n?\s*>>>/gim;
+  // Note: Uses literal === and >>> on their own lines to delimit the search/replace sections,
+  // not when they appear inside the content.
+  const topLevelDiffRegex = /^\s*APPLY_DIFF\s+([^\s<]+)\s*(?:\n\s*)?<<<\s*\n([\s\S]*?)\n===\s*\n([\s\S]*?)\n>>>/gim;
   let topLevelMatch: RegExpExecArray | null;
   while ((topLevelMatch = topLevelDiffRegex.exec(content)) !== null) {
     const path = topLevelMatch[1]?.trim();
@@ -2434,14 +2436,14 @@ async function applyFilesystemEditsFromResponse(input: {
   const deleteTargets = [
     ...extractFsActionDeletes(input.responseContent || ''),
     ...extractTopLevelDeletes(input.responseContent || ''),
-  ].filter(p => {
+  ].map((p) => {
     const validPath = validateExtractedPath(p);
     if (!validPath) {
       console.warn('[applyFilesystemEdits] Rejected invalid delete path:', p.substring(0, 80));
-      return false;
+      return null;
     }
-    return true;
-  });
+    return validPath;
+  }).filter((p): p is string => !!p);
   const folderCreateTargets = fileWriteFolderCreateOps.folders; // Separate folder creation targets
   const requestFiles = input.commands?.request_files || [];
 
@@ -2518,14 +2520,13 @@ async function applyFilesystemEditsFromResponse(input: {
           existedBefore,
         });
 
-        // Emit filesystem-updated event for existing files to notify UI panels
-        if (existedBefore) {
-          emitFilesystemUpdated({
-            path: file.path,
-            type: 'update',
-            sessionId: input.conversationId,
-          });
-        }
+        // Emit filesystem-updated event to notify UI panels
+        // Emits 'create' for new files, 'update' for existing files
+        emitFilesystemUpdated({
+          path: file.path,
+          type: existedBefore ? 'update' : 'create',
+          sessionId: input.conversationId,
+        });
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : 'unknown error';
         const err = `Failed to write ${targetPath}: ${message}`;

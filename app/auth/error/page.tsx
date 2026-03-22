@@ -1,5 +1,3 @@
-import { Suspense } from "react";
-
 function ErrorCard({ error, error_description }: { error?: string; error_description?: string }) {
   return (
     <div className="min-h-screen flex items-center justify-center bg-black/50 p-4">
@@ -33,14 +31,13 @@ function ErrorCard({ error, error_description }: { error?: string; error_descrip
   );
 }
 
-export default function AuthErrorPage() {
+export default async function AuthErrorPage({
+  searchParams,
+}: {
+  searchParams: Promise<{ error?: string; error_description?: string }>;
+}) {
+  const params = await searchParams;
   return (
-    <Suspense fallback={
-      <div className="min-h-screen flex items-center justify-center bg-black/50">
-        <div className="animate-pulse text-white/50">Loading...</div>
-      </div>
-    }>
-      <ErrorCard />
-    </Suspense>
+    <ErrorCard error={params.error} error_description={params.error_description} />
   );
 }

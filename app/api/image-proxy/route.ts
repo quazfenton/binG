@@ -54,9 +54,15 @@ const CACHE_CONTROL_REVALIDATE = 'public, max-age=86400, stale-while-revalidate=
  * Versioned URLs contain a content hash, version number, or build hash in the path
  * and are safe to cache as immutable. All other URLs may change in place and should
  * revalidate to avoid serving stale bytes for up to a year.
+ *
+ * Matches:
+ * - Query params: ?v=123, ?ver=abc123, ?version=xyz
+ * - Path versions: /v123/, /v123-file.png
+ * - Hash prefixes: -abc123def.png, -abc123def/
+ * - Full hashes: /[32-40 hex chars]/, /[32-40 hex chars].ext
  */
 function isVersionedUrl(url: string): boolean {
-  return /\/(v?\d+|[a-f0-9]{7,}\/|-[a-f0-9]{7,}\.|-[a-f0-9]{8,}[./?#]|[a-f0-9]{32}|[a-f0-9]{40})/.test(url);
+  return /(?:[?&](?:v|ver|version)=\d+\b|\/v\d+(?:\/|[.-])|-[a-f0-9]{8,}(?:\.[a-z]+)?(?:[/?#]|$)|\/[a-f0-9]{32,40}(?:\/|$))/i.test(url);
 }
 
 function getCacheControlHeader(url: string): string {
@@ -225,20 +231,8 @@ export async function GET(request: NextRequest) {
 
   // Check in-memory cache first
   const cached = getCachedImage(cacheKey);
-  if (cached) {
-    console.log('[Image Proxy] Cache hit:', safeLogUrl(imageUrl));
-    return new NextResponse(cached.data, {
-      headers: {
-        'Content-Type': cached.contentType,
-        'Cache-Control': getCacheControlHeader(imageUrl),
-        'ETag': cached.etag,
-        'X-Cache': 'HIT',
-        'Access-Control-Allow-Origin': '*',
-      },
-    });
-  }
 
-  // Check client cache with If-None-Match header
+  // Check client cache with If-None-Match header (conditional request)
   const ifNoneMatch = request.headers.get('if-none-match');
   if (ifNoneMatch && cached) {
     // Clean up quotes from ETag
@@ -255,6 +249,20 @@ export async function GET(request: NextRequest) {
         },
       });
     }
+  }
+
+  // Return cached response if available
+  if (cached) {
+    console.log('[Image Proxy] Cache hit:', safeLogUrl(imageUrl));
+    return new NextResponse(cached.data, {
+      headers: {
+        'Content-Type': cached.contentType,
+        'Cache-Control': getCacheControlHeader(imageUrl),
+        'ETag': cached.etag,
+        'X-Cache': 'HIT',
+        'Access-Control-Allow-Origin': '*',
+      },
+    });
   }
 
   console.log('[Image Proxy] Cache miss, fetching:', safeLogUrl(imageUrl));

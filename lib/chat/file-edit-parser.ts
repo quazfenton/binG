@@ -101,25 +101,25 @@ export function extractMultiLineFileEdits(content: string): FileEdit[] {
  */
 export function extractWsActionEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
-  
+
   // Find all JSON objects in the content that have ws_action field
-  const jsonBlockRegex = /\{[\s\S]*?"ws_action"\s*:\s*"CREATE"[\s\S]*?"path"\s*:\s*"([^"]+)"[\s\S]*?"content"\s*:\s*"([\s\S]*?)"\s*\}/gi;
+  const jsonBlockRegex = /\{[\s\S]*?"ws_action"\s*:\s*"CREATE"[\s\S]*?\}/gi;
   let match: RegExpExecArray | null;
-  
+
   while ((match = jsonBlockRegex.exec(content)) !== null) {
-    const filePath = match[1]?.trim();
-    let fileContent = match[2] ?? '';
-    
-    // Unescape JSON string escapes
-    fileContent = fileContent
-      .replace(/\\n/g, '\n')
-      .replace(/\\r/g, '\r')
-      .replace(/\\t/g, '\t')
-      .replace(/\\"/g, '"')
-      .replace(/\\\\/g, '\\');
-    
-    if (!filePath) continue;
-    edits.push({ path: filePath, content: fileContent });
+    const jsonStr = match[0];
+
+    try {
+      const obj = JSON.parse(jsonStr) as { ws_action?: string; path?: string; content?: string };
+
+      // Only process CREATE actions with valid path and content
+      if (obj.ws_action !== 'CREATE' || !obj.path) continue;
+
+      edits.push({ path: obj.path, content: obj.content ?? '' });
+    } catch {
+      // Skip malformed JSON blocks
+      continue;
+    }
   }
 
   return edits;
@@ -162,21 +162,22 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
  */
 export function sanitizeFileEditTags(content: string): string {
   let sanitized = content;
-  
+
   // Remove compact format
   sanitized = sanitized.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
-  
+
   // Remove multi-line format
   sanitized = sanitized.replace(/<file_edit>\s*<path>\s*[^\s<]+\s*<\/path>\s*[\s\S]*?\s*<\/file_edit>/gi, '');
-  
+
   // Remove file_write format
   sanitized = sanitized.replace(/<file_write\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_write>/gi, '');
-  
-  // Remove ws_action JSON format
-  sanitized = sanitized.replace(/\{[\s\S]*?"ws_action"\s*:\s*"CREATE"[\s\S]*?"path"\s*:\s*"[^"]+"[\s\S]*?"content"\s*:\s*"[\s\S]*?"\s*\}/gi, '');
-  
+
+  // Remove ws_action JSON format (with proper escaped string handling)
+  // Uses (?:\\.|[^"\\])* to match strings with escaped characters like \"
+  sanitized = sanitized.replace(/\{[\s\S]*?"ws_action"\s*:\s*"CREATE"[\s\S]*?"path"\s*:\s*"(?:\\.|[^"\\])+"[\s\S]*?"content"\s*:\s*"(?:\\.|[^"\\])*"\s*\}/gi, '');
+
   // Also handle folder_create tags
   sanitized = sanitized.replace(/<folder_create\s+path=["'][^"']+["']\s*\/>/gi, '');
-  
+
   return sanitized;
 }
