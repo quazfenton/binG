@@ -584,7 +584,7 @@ export async function POST(request: NextRequest) {
       enableComposio: routerRequest.enableComposio,
     });
 
-    // Route through priority chain and format response using consolidated router
+      // Route through priority chain and format response using consolidated router
     try {
       const unifiedResponse = await responseRouter.routeAndFormat(routerRequest);
 
@@ -596,6 +596,8 @@ export async function POST(request: NextRequest) {
         priority: unifiedResponse.priority,
         fallbackChain: unifiedResponse.metadata?.fallbackChain,
       });
+
+      chatLogger.debug('Starting filesystem edits processing', { requestId });
 
       // Check for auth_required in response
       if (unifiedResponse.data?.requiresAuth && unifiedResponse.data?.authUrl) {
@@ -697,6 +699,8 @@ export async function POST(request: NextRequest) {
               responseContent: rawResponseContent,
               commands: unifiedResponse.commands,
             });
+      chatLogger.debug('Filesystem edits processed', { requestId, appliedCount: filesystemEdits?.applied?.length || 0 });
+      
       let sanitizedResponseContent = sanitizeAssistantDisplayContent(rawResponseContent);
       if (
         !sanitizedResponseContent.trim() &&
@@ -742,6 +746,7 @@ export async function POST(request: NextRequest) {
       }
 
       // Handle streaming response
+      chatLogger.debug('Checking streaming conditions', { requestId, stream, supportsStreaming: selectedProvider.supportsStreaming });
       if (stream && selectedProvider.supportsStreaming) {
         const streamRequestId = requestId || generateSecureId('stream');
         const streamStartTime = Date.now();
@@ -2152,7 +2157,7 @@ function validateExtractedPath(raw: string): string | null {
   // Reject paths starting with problematic chars but allow dots (for dotfiles) and relative paths
   // Allow: .gitignore, ./src/file.ts, ../parent/file.ts
   // Reject: @#$file, <<<path, etc.
-  if (/^[^\w./]/.test(path) || /^\.{3,}/.test(path)) return null;
+  if (/^[^\w./]/.test(path) || /^\.{3,}/.test(path) || /(?:^|\/)\.\.(?:\/|$)/.test(path)) return null;
   if (/\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i.test(path)) return null;
   return path;
 }

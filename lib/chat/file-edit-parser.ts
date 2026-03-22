@@ -96,14 +96,45 @@ export function extractMultiLineFileEdits(content: string): FileEdit[] {
 }
 
 /**
+ * Extract JSON format: { "ws_action": "CREATE", "path": "...", "content": "..." }
+ * This is an alternative format used by some LLMs
+ */
+export function extractWsActionEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  
+  // Find all JSON objects in the content that have ws_action field
+  const jsonBlockRegex = /\{[\s\S]*?"ws_action"\s*:\s*"CREATE"[\s\S]*?"path"\s*:\s*"([^"]+)"[\s\S]*?"content"\s*:\s*"([\s\S]*?)"\s*\}/gi;
+  let match: RegExpExecArray | null;
+  
+  while ((match = jsonBlockRegex.exec(content)) !== null) {
+    const filePath = match[1]?.trim();
+    let fileContent = match[2] ?? '';
+    
+    // Unescape JSON string escapes
+    fileContent = fileContent
+      .replace(/\\n/g, '\n')
+      .replace(/\\r/g, '\r')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"')
+      .replace(/\\\\/g, '\\');
+    
+    if (!filePath) continue;
+    edits.push({ path: filePath, content: fileContent });
+  }
+
+  return edits;
+}
+
+/**
  * Extract both compact and multi-line file_edit formats
- * Also extracts file_write format
+ * Also extracts file_write and ws_action formats
  */
 export function extractFileEdits(content: string): FileEdit[] {
   return [
     ...extractCompactFileEdits(content),
     ...extractMultiLineFileEdits(content),
     ...extractFileWriteEdits(content),
+    ...extractWsActionEdits(content),
   ];
 }
 
@@ -140,6 +171,9 @@ export function sanitizeFileEditTags(content: string): string {
   
   // Remove file_write format
   sanitized = sanitized.replace(/<file_write\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_write>/gi, '');
+  
+  // Remove ws_action JSON format
+  sanitized = sanitized.replace(/\{[\s\S]*?"ws_action"\s*:\s*"CREATE"[\s\S]*?"path"\s*:\s*"[^"]+"[\s\S]*?"content"\s*:\s*"[\s\S]*?"\s*\}/gi, '');
   
   // Also handle folder_create tags
   sanitized = sanitized.replace(/<folder_create\s+path=["'][^"']+["']\s*\/>/gi, '');

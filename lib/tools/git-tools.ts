@@ -196,10 +196,20 @@ export function createGitTools(handle: SandboxHandle) {
                     timestamp: Date.now(),
                     newContent: result.content,
                   });
+                } else if (result.success === false) {
+                  // File no longer exists at HEAD — this is a deletion
+                  // Sandbox providers return success: false for missing files (not throw)
+                  log.debug(`Committed file ${filePath} no longer readable (success=false), recording as DELETE`);
+                  delete vfsState[filePath];
+                  transactions.push({
+                    path: filePath,
+                    type: 'DELETE',
+                    timestamp: Date.now(),
+                  });
                 }
               } catch (error: any) {
-                // File no longer exists at HEAD — this is a deletion
-                log.debug(`Committed file ${filePath} no longer readable, recording as DELETE`);
+                // Fallback for unexpected errors (should not happen with well-behaved providers)
+                log.debug(`Committed file ${filePath} threw error, recording as DELETE: ${error.message}`);
                 delete vfsState[filePath];
                 transactions.push({
                   path: filePath,

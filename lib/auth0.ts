@@ -12,6 +12,7 @@
  * - Direct user account connections
  */
 
+import { NextResponse } from 'next/server';
 import { Auth0Client } from "@auth0/nextjs-auth0/server";
 
 // Lazy-loaded database functions to avoid Edge Runtime issues
@@ -290,82 +291,49 @@ export function getStoredAccessToken(userId: number, provider: string): string |
   }
 }
 
-// onCallback hook to handle post-connection logic
 export const auth0 = new Auth0Client({
-  // Enable Connected Accounts endpoint at /auth/connect
+  // onCallback hook for post-auth redirects
+  // NOTE: Database operations are NOT performed here — auth0.middleware() runs in
+  // Edge Runtime which is incompatible with Node.js-only modules (better-sqlite3 via
+  // CommonJS require). The hook must return a valid NextResponse to avoid a crash
+  // in the SDK at handleCallbackError: response.cookies. Use /api/auth0/post-callback
+  // (server runtime) for post-auth database operations.
   enableConnectAccountEndpoint: true,
   routes: {
     connectAccount: "/auth/connect",
   },
-  // onCallback hook for post-connection handling
   async onCallback(error, context, session) {
-    // Handle connected account callback (user links new social account)
-    if (context?.connectedAccount) {
-      console.log('[Auth0] Connected account linked:', context.connectedAccount);
-      
-      // Map Auth0 user ID to local user ID and save connected account
-      if (session?.user?.sub) {
-        try {
-          const auth0UserId = session.user.sub;
-          const localUserId = await getLocalUserIdFromAuth0(auth0UserId);
-          
-          if (localUserId && context.connectedAccount.connection) {
-            // Save connected account to database for persistence
-            await saveConnectedAccount(
-              localUserId,
-              context.connectedAccount.connection,
-              context.connectedAccount.id || 'unknown',
-              context.connectedAccount.connection // Use connection name as display name
-            );
-            console.log('[Auth0] Saved connected account to database for user', localUserId);
-          }
-          
-          // Clear any cached tokens for this connection to force refresh
-          clearCachedToken(context.connectedAccount.connection);
-        } catch (mappingError) {
-          console.error('[Auth0] Failed to map/save connected account:', mappingError);
-        }
+    try {
+      const baseUrl = (typeof process.env.AUTH0_BASE_URL === 'string' && process.env.AUTH0_BASE_URL)
+        ? process.env.AUTH0_BASE_URL
+        : 'http://localhost:3000';
+      console.log('[Auth0] onCallback invoked', {
+        error: error ? {
+          message: error.message,
+          code: error.code,
+          name: error.name,
+          cause: error.cause,
+        } : null,
+        hasContext: !!context,
+        hasSession: !!session,
+        returnTo: context?.returnTo,
+        sessionUser: session?.user ? { sub: (session.user as any).sub, email: (session.user as any).email } : null,
+      });
+      if (error) {
+        const errorUrl = new URL('/auth/error', baseUrl);
+        errorUrl.searchParams.set('error', 'callback_error');
+        errorUrl.searchParams.set('error_description', error.message);
+        return NextResponse.redirect(errorUrl.toString());
       }
+      // Successful auth: redirect to the returnTo from context, or root.
+      const returnTo = context?.returnTo || '/';
+      const redirectUrl = returnTo.startsWith('http') ? returnTo : new URL(returnTo, baseUrl).toString();
+      return NextResponse.redirect(redirectUrl);
+    } catch (e: any) {
+      // Last-resort safeguard: never let onCallback throw
+      console.error('[Auth0] onCallback threw:', e?.message, e?.stack);
+      return NextResponse.redirect('http://localhost:3000/');
     }
-    
-    // Handle regular auth callback (user logs in via Auth0)
-    if (error) {
-      console.error('[Auth0] Callback error:', error.message);
-      return null;
-    }
-    
-    // Map Auth0 user ID to local user on successful login
-    if (session?.user?.sub && session?.user?.email) {
-      try {
-        const auth0UserId = session.user.sub;
-        const email = session.user.email;
-        
-        // Find or create local user based on email
-        const db = getDatabase();
-        let localUser = db.prepare('SELECT id FROM users WHERE email = ? AND is_active = TRUE').get(email) as { id: number } | undefined;
-        
-        let localUserId: number | null = null;
-        
-        if (localUser) {
-          localUserId = localUser.id;
-        } else {
-          // Create new local user for Auth0 login (or use existing flow)
-          // For now, we just map to existing users; new user creation would need additional logic
-          console.log('[Auth0] No local user found for email:', email);
-        }
-        
-        // If we have a local user, map the Auth0 ID
-        if (localUserId) {
-          await mapAuth0UserId(localUserId, auth0UserId);
-          console.log('[Auth0] Mapped Auth0 user ID to local user:', localUserId);
-        }
-      } catch (mappingError) {
-        console.error('[Auth0] Failed to map Auth0 user ID:', mappingError);
-      }
-    }
-    
-    // Return null to let SDK handle the redirect internally
-    return null;
   },
 });
 

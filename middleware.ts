@@ -43,7 +43,14 @@ export async function middleware(request: NextRequest) {
         return auth0Response;
       }
     } catch (error: any) {
-      console.error('[Middleware] Auth0 middleware error:', error.message);
+      console.error('[Middleware] Auth0 middleware error:', {
+        message: error.message,
+        code: error.code,
+        name: error.name,
+        cause: error.cause,
+        stack: error.stack,
+        url: request.url,
+      });
       
       // For login errors, redirect to error page with message
       if (request.nextUrl.pathname === '/auth/login') {
@@ -55,7 +62,7 @@ export async function middleware(request: NextRequest) {
       
       // For other auth routes, return error response
       return NextResponse.json(
-        { error: 'auth0_middleware_error', message: error.message || 'Failed to initialize login request' },
+        { error: 'auth0_middleware_error', message: error.message || 'Failed to initialize login request', url: request.url },
         { status: 500 }
       );
     }

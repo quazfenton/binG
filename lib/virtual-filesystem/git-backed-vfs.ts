@@ -344,7 +344,13 @@ export class GitBackedVFS {
         }
 
         // Handle DELETE transactions for target files
+        // Deduplicate by path - only process the last transaction for each file
+        const lastTransactionByPath = new Map<string, TransactionEntry>();
         for (const tx of filteredTransactions) {
+          lastTransactionByPath.set(tx.path, tx);
+        }
+        
+        for (const tx of lastTransactionByPath.values()) {
           if (tx.type === 'DELETE') {
             try {
               await this.vfs.deletePath(ownerId, tx.path);

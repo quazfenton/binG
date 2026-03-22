@@ -286,7 +286,8 @@ export class BootstrappedAgency {
               case 'web-research':
                 return { result: 'Web research completed' };
               default:
-                return { error: `Unknown capability: ${capabilityName}` };
+                // Throw error to fail the chain step - returning { error: ... } doesn't fail the chain
+                throw new Error(`Unknown capability: ${capabilityName}`);
             }
           },
         };
