@@ -100,6 +100,8 @@ function computeDiffHunks(oldLines: string[], newLines: string[]): DiffHunk[] {
       if (hunks.length > 0 && hunkStart - hunks[hunks.length - 1].lines.length < 3) {
         const last = hunks[hunks.length - 1];
         last.lines.push(` ${oldLine}`);
+        last.oldCount++;
+        last.newCount++;
         oldIdx++;
         newIdx++;
         hunkStart++;

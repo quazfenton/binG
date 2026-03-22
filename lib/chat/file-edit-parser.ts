@@ -55,6 +55,28 @@ export function extractCompactFileEdits(content: string): FileEdit[] {
 }
 
 /**
+ * Extract <file_write path="...">content</file_write> format
+ * This is an alternative format used by some LLMs
+ */
+export function extractFileWriteEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  // Handle: <file_write path="...">content</file_write>
+  const regex = /<file_write\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_write>/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const filePath = match[1]?.trim();
+    let fileContent = match[2] ?? '';
+    // Clean up leading/trailing whitespace
+    fileContent = fileContent.replace(/^\n+/, '').replace(/\n+$/, '');
+    if (!filePath) continue;
+    edits.push({ path: filePath, content: fileContent });
+  }
+
+  return edits;
+}
+
+/**
  * Extract multi-line <file_edit>\n<path>...</path>\ncontent\n</file_edit> format
  */
 export function extractMultiLineFileEdits(content: string): FileEdit[] {
@@ -75,11 +97,13 @@ export function extractMultiLineFileEdits(content: string): FileEdit[] {
 
 /**
  * Extract both compact and multi-line file_edit formats
+ * Also extracts file_write format
  */
 export function extractFileEdits(content: string): FileEdit[] {
   return [
     ...extractCompactFileEdits(content),
     ...extractMultiLineFileEdits(content),
+    ...extractFileWriteEdits(content),
   ];
 }
 
@@ -113,6 +137,12 @@ export function sanitizeFileEditTags(content: string): string {
   
   // Remove multi-line format
   sanitized = sanitized.replace(/<file_edit>\s*<path>\s*[^\s<]+\s*<\/path>\s*[\s\S]*?\s*<\/file_edit>/gi, '');
+  
+  // Remove file_write format
+  sanitized = sanitized.replace(/<file_write\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_write>/gi, '');
+  
+  // Also handle folder_create tags
+  sanitized = sanitized.replace(/<folder_create\s+path=["'][^"']+["']\s*\/>/gi, '');
   
   return sanitized;
 }

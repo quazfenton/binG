@@ -23,21 +23,42 @@ export async function middleware(request: NextRequest) {
 
   // Auth0 middleware - handles /auth/* routes (login, logout, callback, profile)
   // Runs alongside existing auth system - NOT a replacement
-  const auth0Response = await auth0.middleware(request);
-
-  // If this is an Auth0 auth route (/auth/*), return Auth0's response directly
-  // Auth0 handles login, logout, callback, profile, etc.
-  // CRITICAL: Must return auth0Response directly to preserve:
-  // - Redirect status codes (302/307)
-  // - Location header for redirects
-  // - Auth0 session cookies
-  // - OAuth state parameters
+  // Only run Auth0 middleware for /auth/* routes to avoid unnecessary OIDC discovery calls
   if (request.nextUrl.pathname.startsWith('/auth/')) {
-    // Apply minimal security headers to Auth0 response
-    auth0Response.headers.set('X-Content-Type-Options', 'nosniff');
-    auth0Response.headers.set('X-Frame-Options', 'DENY');
-    auth0Response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
-    return auth0Response;
+    try {
+      const auth0Response = await auth0.middleware(request);
+
+      // If this is an Auth0 auth route (/auth/*), return Auth0's response directly
+      // Auth0 handles login, logout, callback, profile, etc.
+      // CRITICAL: Must return auth0Response directly to preserve:
+      // - Redirect status codes (302/307)
+      // - Location header for redirects
+      // - Auth0 session cookies
+      // - OAuth state parameters
+      if (auth0Response) {
+        // Apply minimal security headers to Auth0 response
+        auth0Response.headers.set('X-Content-Type-Options', 'nosniff');
+        auth0Response.headers.set('X-Frame-Options', 'DENY');
+        auth0Response.headers.set('Referrer-Policy', 'strict-origin-when-cross-origin');
+        return auth0Response;
+      }
+    } catch (error: any) {
+      console.error('[Middleware] Auth0 middleware error:', error.message);
+      
+      // For login errors, redirect to error page with message
+      if (request.nextUrl.pathname === '/auth/login') {
+        const errorUrl = new URL('/auth/error', request.url);
+        errorUrl.searchParams.set('error', 'auth0_middleware_error');
+        errorUrl.searchParams.set('error_description', error.message || 'Failed to initialize login request');
+        return NextResponse.redirect(errorUrl);
+      }
+      
+      // For other auth routes, return error response
+      return NextResponse.json(
+        { error: 'auth0_middleware_error', message: error.message || 'Failed to initialize login request' },
+        { status: 500 }
+      );
+    }
   }
 
   // Generate unique nonces for this request

@@ -105,11 +105,9 @@ describe('Retry Utility', () => {
     let breaker: CircuitBreaker;
 
     beforeEach(() => {
-      breaker = new CircuitBreaker('test-provider', { 
+      breaker = new CircuitBreaker({
         failureThreshold: 3,
-        timeout: 1000,
-        successThreshold: 2,
-        halfOpenMaxRequests: 2
+        resetTimeoutMs: 1000,
       });
     });
 
