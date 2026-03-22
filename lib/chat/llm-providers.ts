@@ -99,6 +99,7 @@ export interface LLMProvider {
   supportsStreaming: boolean
   maxTokens: number
   description: string
+  isAvailable?: boolean
 }
 
 export interface LLMMessage {
@@ -648,13 +649,6 @@ class LLMService {
     const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId, apiKey } = request
     const requestStartTime = Date.now();
 
-    chatLogger.debug('LLM generateResponse called', { requestId, provider, model }, {
-      messageCount: messages.length,
-      temperature,
-      maxTokens,
-      apiKeyProvided: !!apiKey,
-    });
-
     try {
       const responseStartTime = Date.now();
       let response: LLMResponse;
@@ -712,6 +706,14 @@ class LLMService {
       const responseLatency = Date.now() - responseStartTime;
       response.provider = provider;
       response.timestamp = new Date();
+      
+      // Set metadata with actual provider/model that generated the response
+      // This is critical for fallback scenarios to log correct provider/model
+      response.metadata = {
+        ...response.metadata,
+        actualProvider: provider,
+        actualModel: model,
+      };
 
       chatLogger.info('LLM provider response generated', { requestId, provider, model }, {
         latencyMs: responseLatency,
@@ -1153,17 +1155,6 @@ class LLMService {
 
     // CRITICAL FIX: Use API key from override if provided, otherwise fall back to env var
     const apiKey = apiKeyOverride || process.env.OPENROUTER_API_KEY || '';
-    
-    chatLogger.error('OpenRouter API Key Debug', { 
-      requestId, 
-      apiKeyOverride: !!apiKeyOverride, 
-      apiKeyOverrideLength: apiKeyOverride?.length,
-      apiKeyOverridePrefix: apiKeyOverride ? apiKeyOverride.substring(0, 6) + '...' : 'N/A',
-      envVarSet: !!process.env.OPENROUTER_API_KEY,
-      envVarLength: process.env.OPENROUTER_API_KEY?.length,
-      finalApiKeySet: !!apiKey,
-      finalApiKeyLength: apiKey?.length
-    });
 
     if (!apiKey) {
       throw new Error('OpenRouter API key not configured. Please set OPENROUTER_API_KEY in your environment variables.');
@@ -1175,12 +1166,6 @@ class LLMService {
       apiKey: apiKey,  // Explicitly pass the API key
       baseURL: 'https://openrouter.ai/api/v1',
       dangerouslyAllowBrowser: true, // Allow in browser if needed
-    });
-
-    chatLogger.error('OpenRouter Client Created', {
-      requestId,
-      clientHasApiKey: !!openrouter.apiKey,
-      baseURL: openrouter.baseURL,
     });
 
     const response = await openrouter.chat.completions.create({

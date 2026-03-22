@@ -92,19 +92,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Call endpoint that checks for Auth0 session and creates local session
       const response = await fetch('/api/auth/check-auth0-session', {
         method: 'POST',
-        credentials: 'include',
+        credentials: 'include', // Important: include cookies for session creation
       });
 
       if (response.ok) {
         const data = await response.json();
         if (data.user) {
           console.log('[AuthContext] Auth0 session found, created local session for:', data.user.email);
+          // Store token if provided
+          if (data.token) {
+            setStoredToken(data.token);
+          }
           return {
             ...data.user,
             createdAt: new Date(data.user.createdAt),
             lastLogin: data.user.lastLogin ? new Date(data.user.lastLogin) : undefined,
           };
         }
+      } else {
+        const errorData = await response.json().catch(() => ({}));
+        console.error('[AuthContext] checkAuth0Session failed:', response.status, errorData.error);
       }
       return null;
     } catch (error) {
@@ -129,18 +136,25 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         return;
       }
 
+      console.log('[AuthContext] Initializing auth...');
+      
       // Try session-based validation first
       let validatedUser = await validateSession();
-      
+      console.log('[AuthContext] validateSession result:', validatedUser ? 'found user' : 'no session');
+
       // If no local session, check for Auth0 session
       if (!validatedUser) {
+        console.log('[AuthContext] Checking Auth0 session...');
         validatedUser = await checkAuth0Session();
+        console.log('[AuthContext] checkAuth0Session result:', validatedUser ? `found user: ${validatedUser.email}` : 'no Auth0 session');
       }
-      
+
       if (validatedUser) {
+        console.log('[AuthContext] Setting user:', validatedUser.email, 'verified:', validatedUser.emailVerified);
         setUser(validatedUser);
       } else {
         // Session is invalid, clean up any stored tokens AND clear user state
+        console.log('[AuthContext] No valid session, clearing user');
         removeStoredToken();
         setUser(null); // CRITICAL: Clear user state when validation fails
       }

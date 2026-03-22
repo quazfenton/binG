@@ -1156,17 +1156,34 @@ export default function CodePreviewPanel({
         setSelectedTab('preview');  // Always switch to preview tab
       }
 
-      const modeIcon = {
-        sandpack: '▶', iframe: '📄', raw: '📝', parcel: '⚡',
-        devbox: '🔵', pyodide: '🐍', vite: '⚡', webpack: '📦', 
-        webcontainer: '📀', nextjs: '▲', codesandbox: '🏖️', opensandbox: '📦', node: '🟢', local: '💻', cloud: '☁️'
-      }[selectedMode] || '▶';
+      const modeLabel = {
+        sandpack: 'Live Preview',
+        iframe: 'HTML Preview',
+        raw: 'Source View',
+        parcel: 'Parcel Build',
+        devbox: 'Cloud DevBox',
+        pyodide: 'Python Runtime',
+        vite: 'Vite Build',
+        webpack: 'Webpack Build',
+        webcontainer: 'WebContainer',
+        nextjs: 'Next.js Preview',
+        codesandbox: 'CodeSandbox',
+        opensandbox: 'OpenSandbox',
+        node: 'Node.js Runtime',
+        local: 'Local Execution',
+        cloud: 'Cloud Execution',
+      }[selectedMode] || 'Preview';
 
-      const execIcon = { local: '💻', cloud: '☁️', hybrid: '🔄' }[detectedExecutionMode];
+      const execLabel = { 
+        local: 'Local', 
+        cloud: 'Cloud', 
+        hybrid: 'Hybrid' 
+      }[detectedExecutionMode] || 'Local';
 
       if (!silent) {
-        toast.success(`${modeIcon} Preview loaded (${selectedMode}) - ${execIcon} ${detectedExecutionMode} execution`, {
-          description: `${Object.keys(files).length} files (root: "${selectedRoot || 'project root'}")`
+        toast.success(`Preview ready`, {
+          description: `${modeLabel} • ${execLabel} • ${Object.keys(files).length} files`,
+          duration: 2000,
         });
       }
     } catch (error: any) {
@@ -2335,6 +2352,19 @@ Generated on: ${new Date().toLocaleString()}
     return undefined;
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
+  // ============================================================================
+  // Auto-redirect for Vite/Webpack modes to Sandpack
+  // ============================================================================
+  useEffect(() => {
+    if (previewMode === 'vite' || previewMode === 'webpack') {
+      const timer = setTimeout(() => {
+        setPreviewMode('sandpack');
+        toast.info(`Redirected to Sandpack for instant ${previewMode === 'vite' ? 'Vite-compatible' : 'bundling'} preview`);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [previewMode]);
+
   // Function to detect popular dependencies from code content (only used when package.json is missing)
   const getPopularDependencies = (
     codeContent: string,
@@ -2379,6 +2409,7 @@ Generated on: ${new Date().toLocaleString()}
           name: 'Manual Preview',
           files: projectDetection.normalizedFiles,
           framework: projectDetection.framework as const,
+          dependencies: projectDetection.dependencies,
         }
       : (isManualPreviewActive && manualPreviewFiles
         ? {
@@ -2401,34 +2432,78 @@ Generated on: ${new Date().toLocaleString()}
       return config.template;
     };
 
-    // Detect if project has Vue Router configured
-    const hasVueRouter = useStructure?.files && Object.keys(useStructure.files).some(path => {
-      const lowerPath = path.toLowerCase();
-      return lowerPath.includes('router/') || 
-             lowerPath.includes('router.') ||
-             lowerPath.endsWith('router.js') ||
-             lowerPath.endsWith('router.ts') ||
-             lowerPath.endsWith('router/index.js') ||
-             lowerPath.endsWith('router/index.ts');
-    });
-
-    // Get dependencies, adding vue-router if needed
+    // ============================================================================
+    // Improved Dependency Detection - Parse package.json properly
+    // ============================================================================
     const getDependencies = (): Record<string, string> => {
+      // PRIORITY 1: Parse package.json if available
+      const packageJsonPath = useStructure?.files && Object.keys(useStructure.files).find(
+        path => path.endsWith('package.json')
+      );
+
+      if (packageJsonPath && useStructure?.files) {
+        try {
+          const pkgContent = useStructure.files[packageJsonPath];
+          if (typeof pkgContent === 'string' && pkgContent.trim()) {
+            const pkg = JSON.parse(pkgContent);
+            const deps: Record<string, string> = {};
+
+            // Add all dependencies with 'latest' version
+            if (pkg.dependencies && typeof pkg.dependencies === 'object') {
+              Object.keys(pkg.dependencies).forEach(dep => {
+                if (dep && typeof dep === 'string') {
+                  deps[dep] = 'latest';
+                }
+              });
+            }
+            if (pkg.devDependencies && typeof pkg.devDependencies === 'object') {
+              Object.keys(pkg.devDependencies).forEach(dep => {
+                if (dep && typeof dep === 'string' && !deps[dep]) {
+                  deps[dep] = 'latest';
+                }
+              });
+            }
+
+            // Return parsed dependencies if we found any
+            if (Object.keys(deps).length > 0) {
+              return deps;
+            }
+          }
+        } catch (parseError) {
+          console.warn('[CodePreview] Failed to parse package.json:', parseError);
+          // Fall through to regex detection
+        }
+      }
+
+      // PRIORITY 2: Fallback to regex-based detection from code content
       const deps = useStructure?.dependencies?.reduce(
         (acc, dep) => {
-          acc[dep] = "latest";
+          if (dep && typeof dep === 'string') {
+            acc[dep] = "latest";
+          }
           return acc;
         },
         {} as Record<string, string>,
       ) || getPopularDependencies(
-        Object.values(useStructure?.files || {}).join("\n"),
+        Object.values(useStructure?.files || {}).filter(Boolean).join("\n"),
         useStructure?.framework || 'vanilla',
       );
 
       // Add vue-router if project has router files but doesn't include it
+      const hasVueRouter = useStructure?.files && Object.keys(useStructure.files).some(path => {
+        const lowerPath = path.toLowerCase();
+        return lowerPath.includes('router/') ||
+               lowerPath.includes('router.') ||
+               lowerPath.endsWith('router.js') ||
+               lowerPath.endsWith('router.ts') ||
+               lowerPath.endsWith('router/index.js') ||
+               lowerPath.endsWith('router/index.ts');
+      });
+
       if (hasVueRouter && !deps['vue-router']) {
         deps['vue-router'] = 'latest';
       }
+
       return deps;
     };
     
@@ -3035,6 +3110,97 @@ root.render(<App />);` };
 
         const template = getSandpackTemplate(effectiveFramework);
 
+        // Manual preview - Sandpack mode (primary framework preview)
+        if (isManualPreviewActive && previewMode === 'sandpack') {
+          const sandpackFiles: Record<string, { code: string }> = {};
+
+          // Add all files to Sandpack - useStructure.files is already normalized
+          // (paths are relative to project root, e.g., /src/App.tsx)
+          Object.entries(useStructure.files).forEach(([path, content]) => {
+            if (typeof content === "string" && content.trim()) {
+              // Ensure path starts with / (normalization should already do this)
+              const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+              sandpackFiles[normalizedPath] = { code: content };
+            }
+          });
+
+          // Get template from project detection (uses FRAMEWORK_TO_TEMPLATE mapping)
+          const template = projectDetection?.framework
+            ? getSandpackTemplate(projectDetection.framework)
+            : 'react'; // Default to react for unknown frameworks
+
+          return (
+            <Suspense fallback={
+              <div className="h-full flex items-center justify-center bg-gray-900 rounded-lg">
+                <div className="text-center text-gray-400">
+                  <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin" />
+                  <p>Loading {effectiveFramework} preview...</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Template: {template} • {Object.keys(sandpackFiles).length} files
+                  </p>
+                </div>
+              </div>
+            }>
+              <div className="h-full bg-gray-900 rounded-lg overflow-hidden flex flex-col">
+                <div className="bg-purple-900 px-4 py-2 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-white text-sm font-medium">⚛️ {effectiveFramework.toUpperCase()} Preview</span>
+                    <span className="text-purple-300 text-xs">{Object.keys(sandpackFiles).length} files • {template}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setPreviewMode('raw')}
+                      className="text-xs bg-purple-800 hover:bg-purple-700 text-white"
+                    >
+                      View Raw
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setPreviewMode('iframe')}
+                      className="text-xs bg-purple-800 hover:bg-purple-700 text-white"
+                    >
+                      Iframe
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <Sandpack
+                    template={template}
+                    theme="dark"
+                    onConsoleMessage={(msg) => {
+                      // Capture console messages for potential display
+                      const consoleType = msg.type === 'log' ? '📝' : 
+                                         msg.type === 'error' ? '❌' : 
+                                         msg.type === 'warn' ? '⚠️' : '💬';
+                      console.log(`[Sandpack Console] ${consoleType}:`, msg.content);
+                    }}
+                    options={{
+                      showTabs: true,
+                      showLineNumbers: false,
+                      showNavigator: true,
+                      showConsole: true,
+                      showRefreshButton: true,
+                      autorun: true,
+                      recompileMode: "delayed",
+                      recompileDelay: 500,
+                    }}
+                    files={sandpackFiles}
+                    customSetup={{
+                      dependencies: projectDetection?.dependencies?.reduce(
+                        (acc, dep) => { acc[dep] = "latest"; return acc; },
+                        {} as Record<string, string>
+                      ) || {},
+                    }}
+                  />
+                </div>
+              </div>
+            </Suspense>
+          );
+        }
+
         // Manual preview with HTML files - use Sandpack for proper bundling
         if (isManualPreviewActive && previewMode === 'iframe') {
           const htmlFileEntry = Object.entries(useStructure.files).find(
@@ -3062,29 +3228,27 @@ root.render(<App />);` };
                   </div>
                 </div>
               }>
-                <div className="h-full bg-gray-900 rounded-lg overflow-hidden flex flex-col">
-                  <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-white text-sm font-medium">📄 HTML Preview (Sandpack)</span>
-                      <span className="text-blue-300 text-xs">Bundled with CSS/JS</span>
+                <div className="h-full bg-black/40 backdrop-blur-xl rounded-xl overflow-hidden flex flex-col border border-white/10">
+                  <div className="bg-gradient-to-r from-black/80 via-black/60 to-black/80 backdrop-blur-sm px-4 py-2.5 flex items-center justify-between border-b border-white/10">
+                    <div className="flex items-center gap-3">
+                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="text-white/90 text-sm font-medium tracking-wide">HTML Preview</span>
+                      <span className="text-white/40 text-xs">•</span>
+                      <span className="text-white/50 text-xs">Bundled</span>
                     </div>
                     <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
+                      <button
                         onClick={() => setPreviewMode('raw')}
-                        className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                        className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all duration-200 backdrop-blur-sm"
                       >
-                        View Raw
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
+                        View Source
+                      </button>
+                      <button
                         onClick={() => setPreviewMode('sandpack')}
-                        className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                        className="px-3 py-1.5 text-xs font-medium text-white bg-gradient-to-r from-emerald-500/80 to-teal-500/80 hover:from-emerald-400 hover:to-teal-400 rounded-lg transition-all duration-200 shadow-lg shadow-emerald-500/20 border border-emerald-500/30"
                       >
-                        Full Sandpack
-                      </Button>
+                        Live Preview
+                      </button>
                     </div>
                   </div>
                   <div className="flex-1 overflow-hidden">
@@ -3300,64 +3464,64 @@ root.render(<App />);` };
           };
 
           return (
-            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
-              <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-white text-sm font-medium">🏗️ DevBox</span>
-                  <span className="text-blue-300 text-xs">Cloud Dev Environment</span>
+            <div className="h-full bg-black/40 backdrop-blur-xl rounded-xl overflow-hidden flex flex-col border border-white/10">
+              <div className="bg-gradient-to-r from-black/80 via-black/60 to-black/80 backdrop-blur-sm px-4 py-2.5 flex items-center justify-between border-b border-white/10">
+                <div className="flex items-center gap-3">
+                  <div className={`w-2 h-2 rounded-full ${isCodesandboxLoading ? 'bg-amber-500 animate-pulse' : 'bg-cyan-500'}`} />
+                  <span className="text-white/90 text-sm font-medium tracking-wide">Cloud DevBox</span>
+                  <span className="text-white/40 text-xs">•</span>
+                  <span className="text-white/50 text-xs">{runtime || 'Auto'}</span>
                 </div>
                 <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
+                  <button
                     onClick={startDevBox}
-                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
                     disabled={isCodesandboxLoading}
+                    className="px-4 py-1.5 text-xs font-medium text-white bg-gradient-to-r from-cyan-500/80 to-blue-500/80 hover:from-cyan-400 hover:to-blue-400 disabled:from-gray-600 disabled:to-gray-700 rounded-lg transition-all duration-200 shadow-lg shadow-cyan-500/20 border border-cyan-500/30 disabled:cursor-not-allowed"
                   >
-                    {isCodesandboxLoading ? '⏳ Creating...' : '▶ Start DevBox'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
+                    {isCodesandboxLoading ? 'Starting...' : 'Start DevBox'}
+                  </button>
+                  <button
                     onClick={() => setPreviewMode('sandpack')}
-                    className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                    className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all duration-200 backdrop-blur-sm"
                   >
-                    Use Sandpack
-                  </Button>
+                    Local Preview
+                  </button>
                 </div>
               </div>
 
               <div className="flex-1 flex flex-col">
-                <div className="p-2 bg-gray-900 border-b border-gray-800">
-                  <div className="grid grid-cols-3 gap-2 text-xs">
-                    <div>
-                      <p className="text-gray-400">📦 Runtime:</p>
-                      <p className="text-blue-300">{runtime}</p>
+                <div className="p-3 bg-black/60 border-b border-white/10">
+                  <div className="grid grid-cols-3 gap-4 text-xs">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Runtime</span>
+                      <span className="text-white/80 font-medium">{runtime || 'Auto-detect'}</span>
                     </div>
-                    <div>
-                      <p className="text-gray-400">📁 Files:</p>
-                      <p className="text-blue-300">{Object.keys(useStructure.files).length} files</p>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Files</span>
+                      <span className="text-white/80 font-medium">{Object.keys(useStructure.files).length}</span>
                     </div>
-                    <div>
-                      <p className="text-gray-400">🐍 Python files:</p>
-                      <p className="text-blue-300">{pythonFiles.length} files</p>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Python</span>
+                      <span className="text-white/80 font-medium">{pythonFiles.length} files</span>
                     </div>
                   </div>
                 </div>
 
                 <div className="flex-1 flex items-center justify-center p-8">
                   {isCodesandboxLoading ? (
-                    <div className="text-center space-y-4">
-                      <div className="w-16 h-16 mx-auto bg-blue-500/20 rounded-full flex items-center justify-center">
-                        <RefreshCw className="w-8 h-8 text-blue-400 animate-spin" />
+                    <div className="text-center space-y-6">
+                      <div className="w-20 h-20 mx-auto bg-gradient-to-br from-cyan-500/20 to-blue-500/20 rounded-2xl flex items-center justify-center backdrop-blur-sm border border-cyan-500/30">
+                        <RefreshCw className="w-10 h-10 text-cyan-400 animate-spin" />
                       </div>
-                      <h3 className="text-white text-lg font-medium">Creating DevBox Environment</h3>
-                      <p className="text-gray-400 text-sm max-w-md">
-                        Setting up a cloud development container with your {runtime} project...
-                      </p>
-                      <p className="text-gray-500 text-xs">
-                        This may take 30-60 seconds for complex projects
-                      </p>
+                      <div className="space-y-2">
+                        <h3 className="text-white text-lg font-medium">Starting DevBox</h3>
+                        <p className="text-white/60 text-sm max-w-md">
+                          Setting up cloud development environment...
+                        </p>
+                        <p className="text-white/40 text-xs">
+                          This may take 30-60 seconds
+                        </p>
+                      </div>
                     </div>
                   ) : codesandboxUrl ? (
                     codesandboxUrl.startsWith('http') ? (
@@ -3772,42 +3936,46 @@ root.render(<App />);` };
           );
         }
 
-        // Vite build preview mode - removed fake build simulation, use Sandpack instead
+        // Vite build preview mode - Auto-redirect to Sandpack after brief delay
         if (isManualPreviewActive && previewMode === 'vite') {
           return (
             <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex items-center justify-center p-8">
               <div className="text-center max-w-md">
-                <Zap className="w-16 h-16 mx-auto mb-4 text-cyan-500" />
+                <div className="w-16 h-16 mx-auto mb-4 bg-cyan-500/20 rounded-full flex items-center justify-center">
+                  <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin" />
+                </div>
                 <h3 className="text-white text-lg font-medium mb-2">Vite Preview</h3>
                 <p className="text-gray-400 text-sm mb-4">
-                  Use Sandpack for instant Vite-compatible preview
+                  Redirecting to Sandpack for instant Vite-compatible preview...
                 </p>
                 <Button
                   onClick={() => setPreviewMode('sandpack')}
                   className="bg-cyan-600 hover:bg-cyan-700 text-white"
                 >
-                  Open Sandpack
+                  Go Now
                 </Button>
               </div>
             </div>
           );
         }
 
-        // Webpack build preview mode - removed fake build simulation, use Sandpack instead
+        // Webpack build preview mode - Auto-redirect to Sandpack after brief delay
         if (isManualPreviewActive && previewMode === 'webpack') {
           return (
             <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex items-center justify-center p-8">
               <div className="text-center max-w-md">
-                <Package className="w-16 h-16 mx-auto mb-4 text-indigo-500" />
+                <div className="w-16 h-16 mx-auto mb-4 bg-indigo-500/20 rounded-full flex items-center justify-center">
+                  <RefreshCw className="w-8 h-8 text-indigo-400 animate-spin" />
+                </div>
                 <h3 className="text-white text-lg font-medium mb-2">Webpack Preview</h3>
                 <p className="text-gray-400 text-sm mb-4">
-                  Use Sandpack for instant bundling preview
+                  Redirecting to Sandpack for instant bundling preview...
                 </p>
                 <Button
                   onClick={() => setPreviewMode('sandpack')}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white"
                 >
-                  Open Sandpack
+                  Go Now
                 </Button>
               </div>
             </div>
@@ -4388,60 +4556,62 @@ root.render(<App />);` };
           };
 
           return (
-            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
-              <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-white text-sm font-medium">🏖️ CodeSandbox</span>
-                  <span className="text-blue-300 text-xs">Cloud Dev Environment</span>
+            <div className="h-full bg-black/40 backdrop-blur-xl rounded-xl overflow-hidden flex flex-col border border-white/10">
+              <div className="bg-gradient-to-r from-black/80 via-black/60 to-black/80 backdrop-blur-sm px-4 py-2.5 flex items-center justify-between border-b border-white/10">
+                <div className="flex items-center gap-3">
+                  <div className={`w-2 h-2 rounded-full ${isCodesandboxLoading ? 'bg-amber-500 animate-pulse' : 'bg-violet-500'}`} />
+                  <span className="text-white/90 text-sm font-medium tracking-wide">CodeSandbox</span>
+                  <span className="text-white/40 text-xs">•</span>
+                  <span className="text-white/50 text-xs">Cloud IDE</span>
                 </div>
                 <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
+                  <button
                     onClick={() => {
                       void bootCodeSandbox();
                     }}
-                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
                     disabled={isCodesandboxLoading}
+                    className="px-4 py-1.5 text-xs font-medium text-white bg-gradient-to-r from-violet-500/80 to-purple-500/80 hover:from-violet-400 hover:to-purple-400 disabled:from-gray-600 disabled:to-gray-700 rounded-lg transition-all duration-200 shadow-lg shadow-violet-500/20 border border-violet-500/30 disabled:cursor-not-allowed"
                   >
-                    {isCodesandboxLoading ? '⏳ Creating...' : '🚀 Launch'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
+                    {isCodesandboxLoading ? 'Starting...' : 'Launch Cloud IDE'}
+                  </button>
+                  <button
                     onClick={() => setPreviewMode('webcontainer')}
-                    className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                    className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all duration-200 backdrop-blur-sm"
                   >
                     WebContainer
-                  </Button>
+                  </button>
                 </div>
               </div>
 
               <div className="flex-1 flex flex-col">
-                <div className="p-2 bg-gray-900 border-b border-gray-800">
-                  <div className="grid grid-cols-3 gap-2 text-xs">
-                    <div>
-                      <p className="text-gray-400">📦 package.json:</p>
-                      <p className="text-blue-300">{packageJson ? '✓ Found' : '⚠ Not found'}</p>
+                <div className="p-3 bg-black/60 border-b border-white/10">
+                  <div className="grid grid-cols-3 gap-4 text-xs">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Package</span>
+                      <span className={`${packageJson ? 'text-emerald-400' : 'text-amber-400'} font-medium`}>
+                        {packageJson ? 'Found' : 'Not found'}
+                      </span>
                     </div>
-                    <div>
-                      <p className="text-gray-400">🐳 Docker:</p>
-                      <p className="text-blue-300">{hasDocker ? '✓ Detected' : 'Standard'}</p>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Docker</span>
+                      <span className={`${hasDocker ? 'text-cyan-400' : 'text-white/60'} font-medium`}>
+                        {hasDocker ? 'Detected' : 'Standard'}
+                      </span>
                     </div>
-                    <div>
-                      <p className="text-gray-400">📁 Server files:</p>
-                      <p className="text-blue-300">{serverFiles.length} files</p>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Server Files</span>
+                      <span className="text-white/80 font-medium">{serverFiles.length}</span>
                     </div>
                   </div>
                 </div>
 
                 <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
                   {isCodesandboxLoading ? (
-                    <div className="flex items-center gap-2 text-blue-300">
-                      <div className="w-4 h-4 border-2 border-blue-300 border-t-transparent rounded-full animate-spin" />
+                    <div className="flex items-center gap-3 text-violet-300">
+                      <div className="w-5 h-5 border-2 border-violet-300 border-t-transparent rounded-full animate-spin" />
                       <div className="space-y-1">
-                        <p>Creating cloud development environment...</p>
-                        <p className="text-xs text-blue-400">This may take 30-60 seconds for complex projects</p>
+                        <p className="text-white/80">Starting cloud environment...</p>
+                        <p className="text-xs text-white/50">This may take 30-60 seconds</p>
                       </div>
                     </div>
                   ) : codesandboxUrl ? (
@@ -4479,6 +4649,132 @@ root.render(<App />);` };
                     </div>
                   )}
                 </div>
+              </div>
+            </div>
+          );
+        }
+
+        // Node.js preview mode - CLI output in browser via WebContainer
+        if (isManualPreviewActive && previewMode === 'node') {
+          const packageJson = Object.entries(useStructure.files).find(
+            ([path]) => path === 'package.json'
+          );
+          const jsFiles = Object.entries(useStructure.files).filter(
+            ([path]) => path.endsWith('.js') || path.endsWith('.ts')
+          );
+          const entryFile = jsFiles.find(([path]) =>
+            path === 'index.js' || path === 'index.ts' || path === 'main.js' || path === 'main.ts' ||
+            path === 'app.js' || path === 'app.ts' || path === 'server.js' || path === 'server.ts'
+          ) || jsFiles[0];
+
+          const runNodeScript = async () => {
+            if (!entryFile) {
+              setNodeOutput('❌ No entry file found. Expected index.js, main.js, app.js, or server.js\n');
+              return;
+            }
+
+            setIsNodeRunning(true);
+            setNodeOutput('> Starting Node.js runtime...\n');
+
+            try {
+              const { WebContainer } = await import('@webcontainer/api');
+              const webcontainer = await WebContainer.boot();
+
+              // Write files
+              setNodeOutput(prev => prev + '📁 Writing files...\n');
+              for (const [path, content] of Object.entries(useStructure.files)) {
+                if (typeof content === 'string' && content.trim()) {
+                  const dir = path.substring(0, path.lastIndexOf('/'));
+                  if (dir) {
+                    await webcontainer.fs.mkdir(dir, { recursive: true });
+                  }
+                  await webcontainer.fs.writeFile(path, content);
+                }
+              }
+
+              // Install dependencies
+              if (packageJson) {
+                setNodeOutput(prev => prev + '\n📦 Installing dependencies...\n');
+                const install = await webcontainer.spawn('npm', ['install']);
+                install.output.pipeTo(new WritableStream({
+                  write(data) {
+                    setNodeOutput(prev => prev + data);
+                  }
+                }));
+                const exitCode = await install.exit;
+                if (exitCode !== 0) {
+                  setNodeOutput(prev => prev + `\n⚠️ npm install exited with code ${exitCode}\n`);
+                }
+              }
+
+              // Run the entry file
+              setNodeOutput(prev => prev + `\n▶ Running ${entryFile[0]}...\n\n`);
+              const process = await webcontainer.spawn('node', [entryFile[0]]);
+
+              process.output.pipeTo(new WritableStream({
+                write(data) {
+                  setNodeOutput(prev => prev + data);
+                }
+              }));
+
+              const exitCode = await process.exit;
+              if (exitCode === 0) {
+                setNodeOutput(prev => prev + '\n✅ Process completed successfully\n');
+              } else {
+                setNodeOutput(prev => prev + `\n❌ Process exited with code ${exitCode}\n`);
+              }
+
+            } catch (err: any) {
+              setNodeOutput(prev => prev + `\n❌ Error: ${err.message || 'Failed to run Node.js'}\n`);
+            } finally {
+              setIsNodeRunning(false);
+            }
+          };
+
+          return (
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
+              <div className="bg-green-900 px-4 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-white text-sm font-medium">🟢 Node.js Runtime</span>
+                  <span className="text-green-300 text-xs">CLI Output</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={runNodeScript}
+                    className="text-xs bg-green-600 hover:bg-green-700 text-white"
+                    disabled={isNodeRunning}
+                  >
+                    {isNodeRunning ? '⏳ Running...' : '▶ Run'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewMode('webcontainer')}
+                    className="text-xs bg-green-800 hover:bg-green-700 text-white"
+                  >
+                    Full WebContainer
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
+                {isNodeRunning ? (
+                  <div className="flex items-center gap-2 text-green-400">
+                    <div className="w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
+                    <span>Running Node.js...</span>
+                  </div>
+                ) : nodeOutput ? (
+                  <pre className="text-green-400 whitespace-pre-wrap">{nodeOutput}</pre>
+                ) : (
+                  <div className="text-gray-500 space-y-2">
+                    <p># Node.js CLI Runtime</p>
+                    <p>{entryFile ? `Entry: ${entryFile[0]}` : 'No entry file found'}</p>
+                    <p className="text-gray-600">Click "▶ Run" to execute</p>
+                  </div>
+                )}
+                <p className="text-blue-400 animate-pulse">▊</p>
               </div>
             </div>
           );
@@ -5362,6 +5658,7 @@ root.render(<App />);` };
                     </div>
                   )}
                   <PreviewErrorBoundary
+                    previewMode={previewMode}
                     onReset={() => {
                       log('[PreviewErrorBoundary] Reset triggered, clearing preview state');
                       handleClearManualPreview();
@@ -5981,8 +6278,12 @@ root.render(<App />);` };
                           </div>
                         </div>
                       ) : (
-                        <div className="h-full flex items-center justify-center text-sm text-gray-500">
-                          Select a file or code snippet to preview.
+                        <div className="h-full flex flex-col items-center justify-center text-sm">
+                          <div className="w-16 h-16 mb-4 rounded-2xl bg-gradient-to-br from-white/5 to-white/10 border border-white/10 flex items-center justify-center backdrop-blur-sm">
+                            <Eye className="w-8 h-8 text-white/30" />
+                          </div>
+                          <p className="text-white/50 font-medium">No preview selected</p>
+                          <p className="text-white/30 text-xs mt-1">Select a file to preview</p>
                         </div>
                       )}
                     </div>

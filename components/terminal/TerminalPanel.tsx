@@ -1259,7 +1259,23 @@ export default function TerminalPanel({
       containerEl.addEventListener('click', () => terminal.focus());
 
       requestAnimationFrame(() => {
-        try { fitAddon.fit(); } catch {}
+        try {
+          // Guard against uninitialized dimensions - check container has size
+          const dims = fitAddon.proposeDimensions()
+          if (dims && dims.rows > 0 && dims.cols > 0) {
+            fitAddon.fit()
+          } else {
+            // Defer fit to next frame if dimensions not ready
+            setTimeout(() => {
+              try {
+                const delayedDims = fitAddon.proposeDimensions()
+                if (delayedDims && delayedDims.rows > 0 && delayedDims.cols > 0) {
+                  fitAddon.fit()
+                }
+              } catch {}
+            }, 100)
+          }
+        } catch {}
         terminal.focus();
       });
 
@@ -1270,7 +1286,7 @@ export default function TerminalPanel({
       terminal.writeln('\x1b[90m  Type "connect" to connect to sandbox.\x1b[0m');
       terminal.writeln('');
 
-      const cwd = localShellCwdRef.current[terminalId] || 'project';
+      const cwd = localShellCwdRef.current[terminalId] || 'project/sessions';
       terminal.write(getPrompt('local', cwd));
 
       updateTerminalState(terminalId, { terminal, fitAddon, mode: 'local' });

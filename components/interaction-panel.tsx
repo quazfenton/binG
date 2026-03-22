@@ -1578,7 +1578,7 @@ export default function InteractionPanel({
             variant="ghost"
             size="sm"
             onClick={toggleMinimized}
-            className="absolute top-1 right-8 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
+            className="absolute top-1 right-1 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
             title={isMinimized ? "Reopen panel" : "Hide panel"}
           >
             {isMinimized ? (
@@ -1588,12 +1588,12 @@ export default function InteractionPanel({
             )}
           </Button>
 
-          {/* Expand/Minimize Button - Far Top Right Corner */}
+          {/* Expand/Collapse Button - Bottom Right */}
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setIsExpanded(!isExpanded)}
-            className="absolute top-1 right-1 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
+            className="absolute bottom-1 right-1 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
             title={isExpanded ? "Collapse height" : "Expand height"}
             disabled={isMinimized}
           >
