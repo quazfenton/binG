@@ -1534,7 +1534,8 @@ export default function ConversationInterface() {
     
     const handleChatResizeMove = (e: MouseEvent) => {
       const delta = e.clientX - chatResizeStartX.current;
-      let newWidth = chatResizeStartWidth.current + delta;
+      // Reverse: dragging left makes panel wider, dragging right makes it narrower
+      let newWidth = chatResizeStartWidth.current - delta;
       
       // Min/max constraints
       newWidth = Math.max(300, Math.min(1200, newWidth));

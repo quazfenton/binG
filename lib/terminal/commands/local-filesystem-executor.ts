@@ -526,31 +526,39 @@ export class LocalCommandExecutor {
       return ''
     }
     const dirs = args[1].includes(' ') ? args[1].split(' ') : [args[1]]
+    const fs = this.getFileSystem()
     
     for (const d of dirs) {
       const dirPath = this.resolvePath(this.cwd[this.terminalId], d)
       
       this.ensureProjectRootExists()
 
-      if (this.fileSystem[dirPath]) {
+      // Use external filesystem for existence check
+      if (fs[dirPath]) {
         writeError(`mkdir: cannot create directory '${d}': File exists`)
         continue
       }
 
       const parent = this.getParentPath(dirPath)
-      if (!this.fileSystem[parent]) {
+      if (!fs[parent]) {
         writeError(`mkdir: cannot create directory '${d}': No such file or directory`)
         continue
       }
 
-      this.fileSystem[dirPath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() }
+      // Write to external filesystem
+      fs[dirPath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() }
       
       // Sync to VFS
       if (this.syncToVFS) {
         this.syncToVFS(`${dirPath}/.keep`, '')
       }
     }
-    this.saveToExternal()
+    // Sync changes to external filesystem
+    if (this.setExtFileSystem) {
+      this.setExtFileSystem(fs)
+    } else {
+      this.fileSystem = fs
+    }
     return ''
   }
 
@@ -559,27 +567,33 @@ export class LocalCommandExecutor {
       writeError('touch: missing file operand')
       return ''
     }
+    const fs = this.getFileSystem()
     const files = args[1].includes(' ') ? args[1].split(' ') : [args[1]]
     
     for (const f of files) {
       const filePath = this.resolvePath(this.cwd[this.terminalId], f)
       const parent = this.getParentPath(filePath)
 
-      if (!this.fileSystem[parent]) {
+      if (!fs[parent]) {
         writeError(`touch: cannot touch '${f}': No such file or directory`)
         continue
       }
 
-      if (this.fileSystem[filePath]) {
-        this.fileSystem[filePath].modifiedAt = Date.now()
+      if (fs[filePath]) {
+        fs[filePath].modifiedAt = Date.now()
       } else {
-        this.fileSystem[filePath] = { type: 'file', content: '', createdAt: Date.now(), modifiedAt: Date.now() }
+        fs[filePath] = { type: 'file', content: '', createdAt: Date.now(), modifiedAt: Date.now() }
         if (this.syncToVFS) {
           this.syncToVFS(filePath, '')
         }
       }
     }
-    this.saveToExternal()
+    // Sync changes to external filesystem
+    if (this.setExtFileSystem) {
+      this.setExtFileSystem(fs)
+    } else {
+      this.fileSystem = fs
+    }
     return ''
   }
 
@@ -588,27 +602,33 @@ export class LocalCommandExecutor {
       writeError('rm: missing operand')
       return ''
     }
+    const fs = this.getFileSystem()
     const isRecursive = args[1] === '-rf' || args[1] === '-fr' || args[1] === '-r'
     const target = isRecursive ? args[2] : args[1]
     const targetPath = this.resolvePath(this.cwd[this.terminalId], target)
 
-    if (!this.fileSystem[targetPath]) {
+    if (!fs[targetPath]) {
       writeError(`rm: cannot remove '${target}': No such file or directory`)
       return ''
     }
 
-    if (this.fileSystem[targetPath].type === 'directory' && !isRecursive) {
+    if (fs[targetPath].type === 'directory' && !isRecursive) {
       writeError(`rm: cannot remove '${target}': Is a directory`)
       return ''
     }
 
     // Remove target and all children
-    for (const path of Object.keys(this.fileSystem)) {
+    for (const path of Object.keys(fs)) {
       if (path === targetPath || path.startsWith(`${targetPath}/`)) {
-        delete this.fileSystem[path]
+        delete fs[path]
       }
     }
-    this.saveToExternal()
+    // Sync changes to external filesystem
+    if (this.setExtFileSystem) {
+      this.setExtFileSystem(fs)
+    } else {
+      this.fileSystem = fs
+    }
     return ''
   }
 
@@ -617,26 +637,32 @@ export class LocalCommandExecutor {
       writeError('rmdir: missing operand')
       return ''
     }
+    const fs = this.getFileSystem()
     const dirPath = this.resolvePath(this.cwd[this.terminalId], args[1])
 
-    if (!this.fileSystem[dirPath]) {
+    if (!fs[dirPath]) {
       writeError(`rmdir: failed to remove '${args[1]}': No such file or directory`)
       return ''
     }
 
-    if (this.fileSystem[dirPath].type !== 'directory') {
+    if (fs[dirPath].type !== 'directory') {
       writeError(`rmdir: failed to remove '${args[1]}': Not a directory`)
       return ''
     }
 
-    const entries = this.listDirectory(dirPath)
+    const entries = this.listDirectory(dirPath, fs)
     if (entries.length > 0) {
       writeError(`rmdir: failed to remove '${args[1]}': Directory not empty`)
       return ''
     }
 
-    delete this.fileSystem[dirPath]
-    this.saveToExternal()
+    delete fs[dirPath]
+    // Sync changes to external filesystem
+    if (this.setExtFileSystem) {
+      this.setExtFileSystem(fs)
+    } else {
+      this.fileSystem = fs
+    }
     return ''
   }
 
@@ -664,13 +690,19 @@ export class LocalCommandExecutor {
       return ''
     }
 
-    this.fileSystem[dstPath] = {
+    const fs = this.getFileSystem()
+    fs[dstPath] = {
       type: 'file',
       content: this.fileSystem[srcPath].content,
       createdAt: Date.now(),
       modifiedAt: Date.now()
     }
-    this.saveToExternal()
+    // Sync changes to external filesystem
+    if (this.setExtFileSystem) {
+      this.setExtFileSystem(fs)
+    } else {
+      this.fileSystem = fs
+    }
     return ''
   }
 
@@ -679,23 +711,37 @@ export class LocalCommandExecutor {
       writeError('mv: missing file operand')
       return ''
     }
+    const fs = this.getFileSystem()
     const srcPath = this.resolvePath(this.cwd[this.terminalId], args[1])
     const dstPath = this.resolvePath(this.cwd[this.terminalId], args[2])
 
-    if (!this.fileSystem[srcPath]) {
+    // Use external filesystem for existence check
+    if (!fs[srcPath]) {
       writeError(`mv: cannot stat '${args[1]}': No such file or directory`)
       return ''
     }
 
     const dstParent = this.getParentPath(dstPath)
-    if (!this.fileSystem[dstParent]) {
+    if (!fs[dstParent]) {
       writeError(`mv: cannot move '${args[1]}': No such file or directory`)
       return ''
     }
 
-    this.fileSystem[dstPath] = { ...this.fileSystem[srcPath], modifiedAt: Date.now() }
-    delete this.fileSystem[srcPath]
-    this.saveToExternal()
+    // Move within external filesystem
+    fs[dstPath] = { ...fs[srcPath], modifiedAt: Date.now() }
+    delete fs[srcPath]
+    
+    // Update cwd if we moved the current directory
+    if (this.cwd[this.terminalId] === srcPath) {
+      this.cwd[this.terminalId] = dstPath
+    }
+    
+    // Sync changes to external filesystem
+    if (this.setExtFileSystem) {
+      this.setExtFileSystem(fs)
+    } else {
+      this.fileSystem = fs
+    }
     return ''
   }
 
@@ -736,7 +782,10 @@ export class LocalCommandExecutor {
       if (this.syncToVFS) {
         this.syncToVFS(filePath, echoText.trim() + '\n')
       }
-      this.saveToExternal()
+      // Sync changes to external filesystem
+      if (this.setExtFileSystem) {
+        this.setExtFileSystem(this.fileSystem)
+      }
       return ''
     }
 
