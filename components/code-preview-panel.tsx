@@ -310,6 +310,7 @@ export default function CodePreviewPanel({
   const pyodideRef = useRef<any>(null);
   const manualPreviewPathRef = useRef<string | null>(null);
   const manualPreviewActiveRef = useRef(false);
+  const opensandboxScopeRef = useRef<string | null>(null);
 
   // WebContainer refs (top-level to satisfy Rules of Hooks)
   const webcontainerInstanceRef = useRef<any>(null);
@@ -1130,9 +1131,25 @@ export default function CodePreviewPanel({
       // Set execution mode
       setExecutionMode(detectedExecutionMode);
 
-      // CRITICAL FIX: Set manual preview files with FULL directory structure preserved
-      // Do NOT use previewFiles (which has root stripped) - use original 'files' instead
-      setManualPreviewFiles(files);
+      // Strip the detected project root from file paths for Sandpack
+      // Sandpack runners expect files relative to project root (e.g., src/App.tsx not my-app/src/App.tsx)
+      const previewRoot = detection.selectedRoot || selectedRoot;
+      const previewFiles = previewRoot
+        ? Object.fromEntries(
+            Object.entries(files)
+              .filter(([path]) => path.startsWith(`${previewRoot}/`) || path === previewRoot)
+              .map(([path, content]) => {
+                // Strip the root prefix: my-app/src/App.tsx -> src/App.tsx
+                const relativePath = path === previewRoot ? path : path.slice(previewRoot.length + 1);
+                return [relativePath, content];
+              }),
+          )
+        : files;
+
+      log(`[handleManualPreview] Storing ${Object.keys(previewFiles).length} files (root: "${previewRoot || 'project root'}")`);
+
+      // Store files with root-relative paths for Sandpack runners
+      setManualPreviewFiles(previewFiles);
       setIsManualPreviewActive(true);
       setPreviewMode(selectedMode);
       if (!preserveTab) {
@@ -2355,13 +2372,21 @@ Generated on: ${new Date().toLocaleString()}
 
   const renderLivePreview = () => {
     // Use manual preview files if active, otherwise use auto-detected structure (must be defined FIRST)
-    const useStructure = isManualPreviewActive && manualPreviewFiles
+    // CRITICAL: For manual preview, use projectDetection.normalizedFiles which are already properly normalized
+    // Do NOT use manualPreviewFiles directly - those are pre-normalization and will be double-normalized
+    const useStructure = isManualPreviewActive && projectDetection?.normalizedFiles
       ? {
           name: 'Manual Preview',
-          files: manualPreviewFiles,
-          framework: 'react' as const,
+          files: projectDetection.normalizedFiles,
+          framework: projectDetection.framework as const,
         }
-      : (projectStructureWithScopedFiles || projectStructure);
+      : (isManualPreviewActive && manualPreviewFiles
+        ? {
+            name: 'Manual Preview',
+            files: manualPreviewFiles,
+            framework: 'react' as const,
+          }
+        : (projectStructureWithScopedFiles || projectStructure));
 
     // Use centralized framework detection from live-preview-offloading
     // If projectDetection exists (from handleManualPreview), use it; otherwise compute from structure
@@ -2786,13 +2811,44 @@ export default app;`,
           log(`[Sandpack] Detected entry file: ${detectedEntryFile}`);
         }
 
+        // Build sandpackFiles based on whether this is manual preview or auto-detected
+        let baseSandpackFiles: Record<string, { code: string }>;
+
+        if (isManualPreviewActive && projectDetection?.normalizedFiles) {
+          // For manual preview, use pre-normalized files from detectProject
+          // These are already properly formatted for Sandpack - no need to re-process
+          baseSandpackFiles = {};
+          for (const [path, content] of Object.entries(projectDetection.normalizedFiles)) {
+            if (typeof content === 'string' && content.trim()) {
+              // Ensure path starts with / for Sandpack
+              const sandpackPath = path.startsWith('/') ? path : `/${path}`;
+              baseSandpackFiles[sandpackPath] = { code: content };
+            }
+          }
+          log(`[Sandpack] Using pre-normalized files from detectProject:`, Object.keys(baseSandpackFiles).slice(0, 10));
+        } else if (isManualPreviewActive && manualPreviewFiles) {
+          // For manual preview without normalizedFiles, use manualPreviewFiles (already root-relative)
+          baseSandpackFiles = {};
+          for (const [path, content] of Object.entries(manualPreviewFiles)) {
+            if (typeof content === 'string' && content.trim()) {
+              // Ensure path starts with / for Sandpack
+              const sandpackPath = path.startsWith('/') ? path : `/${path}`;
+              baseSandpackFiles[sandpackPath] = { code: content };
+            }
+          }
+          log(`[Sandpack] Using manual preview files (root-relative):`, Object.keys(baseSandpackFiles).slice(0, 10));
+        } else {
+          // For auto-detected projects, use the normalized sandpackFiles from earlier
+          baseSandpackFiles = normalizedSandpackFiles;
+        }
+
         // CRITICAL FIX: Normalize file paths to be relative to project root for Sandpack
         // The VFS paths are like "/project/sessions/draft-chat_xxx/src/main.js" but Sandpack needs "/src/main.js"
         // We need to strip the filesystem scope prefix from all file paths
         const finalSandpackFiles = (() => {
-          // Create a copy of sandpackFiles to work with
-          const filesCopy = { ...sandpackFiles };
-          
+          // Create a copy of baseSandpackFiles to work with
+          const filesCopy = { ...baseSandpackFiles };
+
           // Add entry file stub if missing (using same logic as addEntryFileIfMissing but as pure function)
           const existingEntryFile = Object.keys(filesCopy).some(path => {
             const fileName = path.split('/').pop() || '';
@@ -2801,7 +2857,7 @@ export default app;`,
                    /^App\.(js|jsx|ts|tsx|vue)$/.test(fileName) ||
                    /^page\.(js|jsx|ts|tsx)$/.test(fileName);
           });
-          
+
           if (!existingEntryFile) {
             // Add framework-specific stub files
             const framework = effectiveFramework;
@@ -2878,89 +2934,103 @@ root.render(<App />);` };
                 break;
             }
           }
-          
-          // Step 1: Normalize (filter build outputs, cache files, etc.)
-          const normalized = normalizeFilesForSandpack(filesCopy);
 
-          // Step 2: Strip any leading project folder to get paths relative to project root
-          // Files at this point are like: "/my-vue-app/src/main.js" or "/src/main.js" or "/index.html"
-          // We need them to be: "/src/main.js" or "/index.html" (relative to project root for Sandpack)
-          const stripped: Record<string, { code: string }> = {};
+          // For auto-detected projects (not manual preview), strip scope prefix and project subfolders
+          // Manual preview files are already normalized, so skip this step
+          if (!isManualPreviewActive) {
+            // Step 1: Normalize (filter build outputs, cache files, etc.)
+            const normalized = normalizeFilesForSandpack(filesCopy);
 
-          // Common project subfolder names that indicate the preceding folder is a project root
-          const projectSubfolderPatterns = [
-            /^\/([^/]+)\/src\//,      // /my-app/src/...
-            /^\/([^/]+)\/pages\//,    // /my-app/pages/...
-            /^\/([^/]+)\/app\//,      // /my-app/app/...
-            /^\/([^/]+)\/public\//,   // /my-app/public/...
-            /^\/([^/]+)\/lib\//,      // /my-app/lib/...
-            /^\/([^/]+)\/components\//, // /my-app/components/...
-            /^\/([^/]+)\/styles\//,   // /my-app/styles/...
-            /^\/([^/]+)\/assets\//,   // /my-app/assets/...
-          ];
+            // Step 2: Strip any leading project folder to get paths relative to project root
+            // Files at this point are like: "/my-vue-app/src/main.js" or "/src/main.js" or "/index.html"
+            // We need them to be: "/src/main.js" or "/index.html" (relative to project root for Sandpack)
+            const stripped: Record<string, { code: string }> = {};
 
-          // Also strip VFS scope prefix (e.g. /project/sessions/draft-chat_xxx/)
-          const scopePrefix = normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath);
-
-          for (const [path, fileObj] of Object.entries(normalized)) {
-            let relativePath = path;
-
-            // First, ensure path has leading slash for consistent handling
-            if (!relativePath.startsWith('/')) {
-              relativePath = '/' + relativePath;
-            }
-
-            // Strip VFS scope prefix first (e.g. /project/sessions/draft-chat_xxx/my-vue-app/src/main.js -> /my-vue-app/src/main.js)
-            // Try both with and without leading slash variants
-            const prefixVariants = [
-              `/${scopePrefix}/`,
-              `${scopePrefix}/`,
-              `/project/sessions/`,
+            // Common project subfolder names that indicate the preceding folder is a project root
+            const projectSubfolderPatterns = [
+              /^\/([^/]+)\/src\//,      // /my-app/src/...
+              /^\/([^/]+)\/pages\//,    // /my-app/pages/...
+              /^\/([^/]+)\/app\//,      // /my-app/app/...
+              /^\/([^/]+)\/public\//,   // /my-app/public/...
+              /^\/([^/]+)\/lib\//,      // /my-app/lib/...
+              /^\/([^/]+)\/components\//, // /my-app/components/...
+              /^\/([^/]+)\/styles\//,   // /my-app/styles/...
+              /^\/([^/]+)\/assets\//,   // /my-app/assets/...
             ];
-            for (const prefix of prefixVariants) {
-              if (relativePath.startsWith(prefix)) {
-                relativePath = relativePath.slice(prefix.length);
-                // If we stripped a sessions prefix, also strip the session ID folder
-                if (prefix === '/project/sessions/' || prefix === 'project/sessions/') {
-                  const slashIdx = relativePath.indexOf('/');
-                  if (slashIdx > 0) {
-                    relativePath = relativePath.slice(slashIdx);
-                  }
-                }
-                break;
-              }
-            }
 
-            // Try to strip leading project folder if path contains a known subfolder pattern
-            // e.g., /my-vue-app/src/main.js -> /src/main.js
-            for (const pattern of projectSubfolderPatterns) {
-              const match = relativePath.match(pattern);
-              if (match) {
-                const projectFolder = match[1];
-                // Don't strip if the "project folder" is actually a standard folder name
-                if (!['src', 'pages', 'app', 'public', 'lib', 'components', 'styles', 'assets'].includes(projectFolder)) {
-                  relativePath = relativePath.replace(`/${projectFolder}/`, '/');
+            // Strip VFS scope prefix (e.g. /project/sessions/draft-chat_xxx/)
+            const scopePrefix = normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath);
+
+            for (const [path, fileObj] of Object.entries(normalized)) {
+              let relativePath = path;
+
+              // First, ensure path has leading slash for consistent handling
+              if (!relativePath.startsWith('/')) {
+                relativePath = '/' + relativePath;
+              }
+
+              // Strip VFS scope prefix first (e.g. /project/sessions/draft-chat_xxx/my-vue-app/src/main.js -> /my-vue-app/src/main.js)
+              // Try both with and without leading slash variants
+              const prefixVariants = [
+                `/${scopePrefix}/`,
+                `${scopePrefix}/`,
+                `/project/sessions/`,
+              ];
+              for (const prefix of prefixVariants) {
+                if (relativePath.startsWith(prefix)) {
+                  relativePath = relativePath.slice(prefix.length);
+                  // If we stripped a sessions prefix, also strip the session ID folder
+                  if (prefix === '/project/sessions/' || prefix === 'project/sessions/') {
+                    const slashIdx = relativePath.indexOf('/');
+                    if (slashIdx > 0) {
+                      relativePath = relativePath.slice(slashIdx);
+                    }
+                  }
                   break;
                 }
               }
+
+              // Try to strip leading project folder if path contains a known subfolder pattern
+              // e.g., /my-vue-app/src/main.js -> /src/main.js
+              for (const pattern of projectSubfolderPatterns) {
+                const match = relativePath.match(pattern);
+                if (match) {
+                  const projectFolder = match[1];
+                  // Don't strip if the "project folder" is actually a standard folder name
+                  if (!['src', 'pages', 'app', 'public', 'lib', 'components', 'styles', 'assets'].includes(projectFolder)) {
+                    relativePath = relativePath.replace(`/${projectFolder}/`, '/');
+                    break;
+                  }
+                }
+              }
+
+              // Ensure path starts with /
+              if (!relativePath.startsWith('/')) {
+                relativePath = '/' + relativePath;
+              }
+
+              stripped[relativePath] = fileObj;
             }
 
-            // Ensure path starts with /
-            if (!relativePath.startsWith('/')) {
-              relativePath = '/' + relativePath;
+            // Log normalization results
+            const resultKey = `${Object.keys(stripped).length}-${Object.keys(stripped).sort().join('|').slice(0, 50)}`;
+            if (resultKey !== lastNormalizationRef.current) {
+              log(`[Sandpack] Normalized ${Object.keys(filesCopy).length} -> ${Object.keys(normalized).length} (filtered) -> ${Object.keys(stripped).length} (scope strip)`);
+              lastNormalizationRef.current = resultKey;
             }
 
-            stripped[relativePath] = fileObj;
+            return stripped;
           }
 
-          const result = stripped;
-          // Only log once when files actually change (not on every render)
-          const resultKey = `${Object.keys(result).length}-${Object.keys(result).sort().join('|').slice(0, 50)}`;
+          // For manual preview, files are already root-relative (stripped in handleManualPreview)
+          // Just apply normalizeFilesForSandpack filtering (removes build outputs, cache files, etc.)
+          const normalized = normalizeFilesForSandpack(filesCopy);
+          const resultKey = `${Object.keys(normalized).length}-${Object.keys(normalized).sort().join('|').slice(0, 50)}`;
           if (resultKey !== lastNormalizationRef.current) {
-            log(`[Sandpack] Normalized ${Object.keys(filesCopy).length} -> ${Object.keys(normalized).length} (filtered) -> ${Object.keys(result).length} (scope strip)`);
+            log(`[Sandpack] Manual preview: ${Object.keys(normalized).length} files (root-relative, no scope stripping)`);
             lastNormalizationRef.current = resultKey;
           }
-          return result;
+          return normalized;
         })();
 
         const template = getSandpackTemplate(effectiveFramework);
@@ -3353,13 +3423,18 @@ root.render(<App />);` };
             setOpensandboxUrl(null);
 
             try {
+              const reusableSandboxId =
+                opensandboxId && opensandboxScopeRef.current === manualPreviewPathRef.current
+                  ? opensandboxId
+                  : undefined;
+
               const resp = await fetch('/api/preview/sandbox', {
-                method: 'POST',
+                method: reusableSandboxId ? 'PUT' : 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
                   files: useStructure.files,
                   framework: effectiveFramework,
-                  sandboxId: opensandboxId || undefined,
+                  sandboxId: reusableSandboxId,
                 }),
               });
 
@@ -3368,6 +3443,7 @@ root.render(<App />);` };
               if (result.success && result.previewUrl) {
                 setOpensandboxUrl(result.previewUrl);
                 setOpensandboxId(result.sandboxId);
+                opensandboxScopeRef.current = manualPreviewPathRef.current;
                 setOpensandboxLogs(result.logs || ['Deployed successfully']);
               } else {
                 setOpensandboxLogs(prev => [
@@ -3421,6 +3497,7 @@ root.render(<App />);` };
                         setOpensandboxUrl(null);
                         setOpensandboxId(null);
                         setOpensandboxLogs([]);
+                        opensandboxScopeRef.current = null;
                       }}
                       className="text-red-300 hover:text-red-100 h-6 px-2 text-xs"
                     >

@@ -96,6 +96,26 @@ CREATE INDEX IF NOT EXISTS idx_usage_logs_created_at ON usage_logs(created_at);
 CREATE INDEX IF NOT EXISTS idx_api_credentials_user_id ON api_credentials(user_id);
 CREATE INDEX IF NOT EXISTS idx_user_sessions_expires_at ON user_sessions(expires_at);
 
+-- Shadow commits table (replaces .agent-commits filesystem storage)
+CREATE TABLE IF NOT EXISTS shadow_commits (
+    id TEXT PRIMARY KEY,
+    session_id TEXT NOT NULL,
+    owner_id TEXT NOT NULL,  -- user ID (e.g., 'user:123' or 'anon:sessionId')
+    message TEXT NOT NULL,
+    author TEXT,
+    timestamp DATETIME DEFAULT CURRENT_TIMESTAMP,
+    source TEXT,
+    integration TEXT,
+    workspace_version INTEGER,
+    diff TEXT,
+    transactions TEXT NOT NULL, -- JSON array of transaction entries
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP
+);
+
+CREATE INDEX IF NOT EXISTS idx_shadow_commits_session_id ON shadow_commits(session_id);
+CREATE INDEX IF NOT EXISTS idx_shadow_commits_owner_id ON shadow_commits(owner_id);  -- For user account retrieval
+CREATE INDEX IF NOT EXISTS idx_shadow_commits_timestamp ON shadow_commits(timestamp);
+
 -- Views for common queries
 CREATE VIEW IF NOT EXISTS user_stats AS
 SELECT 

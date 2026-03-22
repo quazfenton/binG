@@ -563,15 +563,25 @@ export function ExperimentalWorkspacePanel() {
   // Available LLM providers for comparison
   const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>([]);
 
-  // Load available LLM providers
+  // Load available LLM providers from API
   useEffect(() => {
-    try {
-      // Convert PROVIDERS object to array
-      const providers = Object.values(PROVIDERS);
-      setAvailableProviders(providers);
-    } catch (error) {
-      console.error('Failed to load LLM providers:', error);
-    }
+    const fetchProviders = async () => {
+      try {
+        const response = await fetch('/api/providers');
+        if (response.ok) {
+          const data = await response.json();
+          if (data.success && data.data?.providers) {
+            setAvailableProviders(data.data.providers);
+          }
+        }
+      } catch (error) {
+        console.error('Failed to load LLM providers from API:', error);
+        // Fallback to static providers
+        const providers = Object.values(PROVIDERS);
+        setAvailableProviders(providers);
+      }
+    };
+    fetchProviders();
   }, []);
 
   // Fetch VFS snapshot on mount
@@ -1935,66 +1945,66 @@ export function ExperimentalWorkspacePanel() {
 
               {/* Tabs */}
               <Tabs value={activeTab} onValueChange={(v) => setTab(v as PanelTab)} className="flex-1 flex flex-col">
-                <TabsList className="grid grid-cols-10 gap-1 mx-4 mt-4 bg-white/5 border border-white/10 p-1">
+                <TabsList className="flex overflow-x-auto gap-1 mx-4 mt-4 bg-white/5 border border-white/10 p-1 tab-scrollbar">
                   <TabsTrigger
                     value="explorer"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
                   >
                     <FolderOpen className="h-3 w-3 mr-1" />
                     Files
                   </TabsTrigger>
                   <TabsTrigger
                     value="chat"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
                   >
                     <Cpu className="h-3 w-3 mr-1" />
                     Agent
                   </TabsTrigger>
                   <TabsTrigger
                     value="thinking"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
                   >
                     <Brain className="h-3 w-3 mr-1" />
                     Think
                   </TabsTrigger>
                   <TabsTrigger
                     value="music"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
                   >
                     <Music className="h-3 w-3 mr-1" />
                     Music
                   </TabsTrigger>
                   <TabsTrigger
                     value="automations"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
                   >
                     <Workflow className="h-3 w-3 mr-1" />
                     Automate
                   </TabsTrigger>
                   <TabsTrigger
                     value="youtube"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
                   >
                     <Youtube className="h-3 w-3 mr-1" />
                     Videos
                   </TabsTrigger>
                   <TabsTrigger
                     value="forum"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
                   >
                     <Users className="h-3 w-3 mr-1" />
                     Forum
                   </TabsTrigger>
                   <TabsTrigger
                     value="compare"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
                   >
                     <Zap className="h-3 w-3 mr-1" />
                     Compare
                   </TabsTrigger>
                   <TabsTrigger
                     value="integrations"
-                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1"
+                    className="data-[state=active]:bg-white/20 data-[state=active]:text-white text-white/60 text-xs py-1 px-2 whitespace-nowrap flex-shrink-0"
                   >
                     <Database className="h-3 w-3 mr-1" />
                     Integrations

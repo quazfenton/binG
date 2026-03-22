@@ -222,11 +222,6 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
       return `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
     }
 
-    // For HTTP URLs (less common), also use proxy for security
-    if (imageUrl.startsWith('http://')) {
-      return `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
-    }
-
     return imageUrl;
   }, []);
 
@@ -414,14 +409,17 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
       else if (imageUrl.startsWith('http://') || imageUrl.startsWith('https://')) {
         // Use the centralized image proxy for reliable downloads
         const proxyUrl = `/api/image-proxy?url=${encodeURIComponent(imageUrl)}`;
+        let fetchSucceeded = false;
         try {
           const response = await fetch(proxyUrl);
           if (response.ok) {
             blob = await response.blob();
+            fetchSucceeded = true;
           }
         } catch (fetchError) {
-          console.warn('Proxy fetch failed, trying direct:', fetchError);
-          // Fallback to direct fetch
+          console.warn('Proxy fetch failed:', fetchError);
+        }
+        if (!fetchSucceeded) {
           try {
             const response = await fetch(imageUrl);
             if (response.ok) {

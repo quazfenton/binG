@@ -15,6 +15,13 @@
 import { NextResponse } from 'next/server';
 import { Auth0Client } from "@auth0/nextjs-auth0/server";
 
+console.log('[Auth0] Initializing Auth0Client', {
+  domain: process.env.AUTH0_DOMAIN,
+  clientId: process.env.AUTH0_CLIENT_ID,
+  hasSecret: !!process.env.AUTH0_SECRET,
+  baseUrl: process.env.AUTH0_BASE_URL || process.env.NEXT_PUBLIC_APP_URL,
+});
+
 // Lazy-loaded database functions to avoid Edge Runtime issues
 // Node.js modules (crypto, fs, path) in connection.ts are not compatible with Edge
 function getDatabase() {
@@ -332,6 +339,7 @@ export const auth0 = new Auth0Client({
         errorUrl.searchParams.set('error_description', error.message);
         return NextResponse.redirect(errorUrl.toString());
       }
+      
       // Successful auth: redirect to the returnTo from context, or root.
       // Only allow same-origin redirects to prevent open redirect attacks
       const returnTo = context?.returnTo || '/';
@@ -340,6 +348,7 @@ export const auth0 = new Auth0Client({
       const redirectUrl = parsedReturnTo.origin === appOrigin
         ? parsedReturnTo.toString()
         : new URL('/', baseUrl).toString();
+      console.log('[Auth0] onCallback successful, redirecting to:', redirectUrl);
       return NextResponse.redirect(redirectUrl);
     } catch (e: any) {
       // Last-resort safeguard: never let onCallback throw

@@ -25,7 +25,15 @@ export async function middleware(request: NextRequest) {
   // Runs alongside existing auth system - NOT a replacement
   // Only run Auth0 middleware for /auth/* routes to avoid unnecessary OIDC discovery calls
   if (request.nextUrl.pathname.startsWith('/auth/')) {
+    console.log('[Middleware] Auth0 route requested:', request.nextUrl.pathname, {
+      hasDomain: !!process.env.AUTH0_DOMAIN,
+      hasClientId: !!process.env.AUTH0_CLIENT_ID,
+      hasSecret: !!process.env.AUTH0_SECRET,
+      connection: request.nextUrl.searchParams.get('connection'),
+    });
     try {
+      // Let Auth0 SDK middleware handle all /auth/* routes
+      // Query parameters (like ?connection=google) are automatically forwarded
       const auth0Response = await auth0.middleware(request);
 
       // If this is an Auth0 auth route (/auth/*), return Auth0's response directly
@@ -51,7 +59,7 @@ export async function middleware(request: NextRequest) {
         stack: error.stack,
         url: request.url,
       });
-      
+
       // For login errors, redirect to error page with message
       if (request.nextUrl.pathname === '/auth/login') {
         const errorUrl = new URL('/auth/error', request.url);
@@ -59,7 +67,7 @@ export async function middleware(request: NextRequest) {
         errorUrl.searchParams.set('error_description', error.message || 'Failed to initialize login request');
         return NextResponse.redirect(errorUrl);
       }
-      
+
       // For other auth routes, return error response
       return NextResponse.json(
         { error: 'auth0_middleware_error', message: error.message || 'Failed to initialize login request', url: request.url },

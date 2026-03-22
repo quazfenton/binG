@@ -62,7 +62,7 @@ const CACHE_CONTROL_REVALIDATE = 'public, max-age=86400, stale-while-revalidate=
  * - Full hashes: /[32-40 hex chars]/, /[32-40 hex chars].ext
  */
 function isVersionedUrl(url: string): boolean {
-  return /(?:[?&](?:v|ver|version)=\d+\b|\/v\d+(?:\/|[.-])|-[a-f0-9]{8,}(?:\.[a-z]+)?(?:[/?#]|$)|\/[a-f0-9]{32,40}(?:\/|$))/i.test(url);
+  return /(?:[?&](?:v|ver|version)=[a-z0-9._-]+\b|\/v\d+(?:\/|[.-])|-[a-f0-9]{8,}(?:\.[a-z]+)?(?:[/?#]|$)|\/[a-f0-9]{32,40}(?:\.[a-z0-9]+)?(?:[/?#]|$))/i.test(url);
 }
 
 function getCacheControlHeader(url: string): string {
@@ -258,7 +258,7 @@ export async function GET(request: NextRequest) {
       headers: {
         'Content-Type': cached.contentType,
         'Cache-Control': getCacheControlHeader(imageUrl),
-        'ETag': cached.etag,
+        'ETag': `"${cached.etag}"`,
         'X-Cache': 'HIT',
         'Access-Control-Allow-Origin': '*',
       },

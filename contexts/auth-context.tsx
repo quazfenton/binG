@@ -86,6 +86,33 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
+  // Check for Auth0 session and create local session if exists
+  const checkAuth0Session = async (): Promise<User | null> => {
+    try {
+      // Call endpoint that checks for Auth0 session and creates local session
+      const response = await fetch('/api/auth/check-auth0-session', {
+        method: 'POST',
+        credentials: 'include',
+      });
+
+      if (response.ok) {
+        const data = await response.json();
+        if (data.user) {
+          console.log('[AuthContext] Auth0 session found, created local session for:', data.user.email);
+          return {
+            ...data.user,
+            createdAt: new Date(data.user.createdAt),
+            lastLogin: data.user.lastLogin ? new Date(data.user.lastLogin) : undefined,
+          };
+        }
+      }
+      return null;
+    } catch (error) {
+      console.error('Auth0 session check failed:', error);
+      return null;
+    }
+  };
+
   useEffect(() => {
     const initializeAuth = async () => {
       if (skipAuth) {
@@ -103,7 +130,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       }
 
       // Try session-based validation first
-      const validatedUser = await validateSession();
+      let validatedUser = await validateSession();
+      
+      // If no local session, check for Auth0 session
+      if (!validatedUser) {
+        validatedUser = await checkAuth0Session();
+      }
+      
       if (validatedUser) {
         setUser(validatedUser);
       } else {

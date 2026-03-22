@@ -18,7 +18,9 @@
 
 import React, { useMemo, useState, useCallback } from 'react';
 import { useOPFS } from '@/hooks/use-opfs';
-import { Plus, Minus, FileDiff, AlertCircle, Cloud, HardDrive, GitBranch } from 'lucide-react';
+import { Plus, Minus, FileDiff, AlertCircle, Cloud, HardDrive, GitBranch, ChevronDown } from 'lucide-react';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
 
 export interface DiffSection {
   type: 'context' | 'add' | 'remove';
@@ -41,7 +43,7 @@ export interface EnhancedDiffViewerProps {
   localContent?: string;
   /** Git commit content (optional) */
   gitContent?: string;
-  /** Maximum lines to display */
+  /** Maximum lines to show initially (expandable) */
   maxLines?: number;
   /** Enable local comparison */
   compareWithLocal?: boolean;
@@ -55,6 +57,8 @@ export interface EnhancedDiffViewerProps {
   onAcceptServer?: () => void;
   /** Treat serverContent as full file content (not diff) */
   isFullContent?: boolean;
+  /** Language for syntax highlighting (auto-detected from path if not provided) */
+  language?: string;
 }
 
 /**
@@ -131,9 +135,9 @@ function generateDiff(original: string, updated: string, path: string): string {
 }
 
 /**
- * Diff Section Component - Sleek Futuristic Design
+ * Diff Section Component - Sleek Futuristic Design with Syntax Highlighting
  */
-function DiffHunk({ hunk, showLineNumbers = true }: { hunk: DiffSection[]; showLineNumbers?: boolean }) {
+function DiffHunk({ hunk, showLineNumbers = true, language }: { hunk: DiffSection[]; showLineNumbers?: boolean; language?: string }) {
   return (
     <div className="diff-hunk">
       {hunk.map((section, idx) => (
@@ -141,14 +145,14 @@ function DiffHunk({ hunk, showLineNumbers = true }: { hunk: DiffSection[]; showL
           key={idx}
           className={`
             flex px-4 py-0.5 font-mono text-sm transition-all duration-200
-            ${section.type === 'add' 
-              ? 'bg-emerald-500/10 border-l-2 border-emerald-500/50 hover:bg-emerald-500/15' 
+            ${section.type === 'add'
+              ? 'bg-emerald-500/10 border-l-2 border-emerald-500/50 hover:bg-emerald-500/15'
               : ''}
-            ${section.type === 'remove' 
-              ? 'bg-rose-500/10 border-l-2 border-rose-500/50 hover:bg-rose-500/15' 
+            ${section.type === 'remove'
+              ? 'bg-rose-500/10 border-l-2 border-rose-500/50 hover:bg-rose-500/15'
               : ''}
-            ${section.type === 'context' 
-              ? 'bg-transparent hover:bg-white/5 border-l-2 border-transparent' 
+            ${section.type === 'context'
+              ? 'bg-transparent hover:bg-white/5 border-l-2 border-transparent'
               : ''}
           `}
         >
@@ -157,13 +161,33 @@ function DiffHunk({ hunk, showLineNumbers = true }: { hunk: DiffSection[]; showL
               {section.lineNumber || ''}
             </span>
           )}
-          <span className="w-6 select-none">
+          <span className="w-6 select-none flex-shrink-0">
             {section.type === 'add' && <Plus className="w-4 h-4 text-emerald-400" />}
             {section.type === 'remove' && <Minus className="w-4 h-4 text-rose-400" />}
             {section.type === 'context' && ' '}
           </span>
-          <span className="flex-1 whitespace-pre-wrap break-all text-gray-300">
-            {section.content}
+          <span className="flex-1 min-w-0">
+            {language && section.type !== 'remove' ? (
+              <SyntaxHighlighter
+                language={language}
+                style={oneDark}
+                customStyle={{
+                  background: 'transparent',
+                  padding: '0',
+                  margin: '0',
+                  fontSize: '0.875rem',
+                }}
+                showLineNumbers={false}
+                wrapLines={true}
+                wrapLongLines={true}
+              >
+                {section.content}
+              </SyntaxHighlighter>
+            ) : (
+              <span className="whitespace-pre-wrap break-all text-gray-300">
+                {section.content}
+              </span>
+            )}
           </span>
         </div>
       ))}
@@ -213,14 +237,74 @@ export function EnhancedDiffViewer({
   onAcceptLocal,
   onAcceptServer,
   isFullContent: forceFullContent = false,
+  language: explicitLanguage,
 }: EnhancedDiffViewerProps) {
   const [activeTab, setActiveTab] = useState<'server-local' | 'server-git' | 'local-git'>('server-local');
+  const [isExpanded, setIsExpanded] = useState(false);
 
   const {
     readFile: readOPFSFile,
     isEnabled: isOPFSEnabled,
     syncStatus
   } = useOPFS('current-user', { autoEnable: true });
+
+  // Auto-detect language from file path
+  const detectedLanguage = useMemo(() => {
+    if (explicitLanguage) return explicitLanguage;
+    const ext = path.split('.').pop()?.toLowerCase();
+    const languageMap: Record<string, string> = {
+      ts: 'typescript',
+      tsx: 'tsx',
+      js: 'javascript',
+      jsx: 'javascript',
+      py: 'python',
+      rb: 'ruby',
+      go: 'go',
+      rs: 'rust',
+      java: 'java',
+      c: 'c',
+      cpp: 'cpp',
+      h: 'c',
+      hpp: 'cpp',
+      cs: 'csharp',
+      php: 'php',
+      swift: 'swift',
+      kt: 'kotlin',
+      scala: 'scala',
+      sh: 'bash',
+      bash: 'bash',
+      zsh: 'bash',
+      fish: 'bash',
+      sql: 'sql',
+      graphql: 'graphql',
+      json: 'json',
+      yaml: 'yaml',
+      yml: 'yaml',
+      toml: 'toml',
+      xml: 'xml',
+      html: 'html',
+      css: 'css',
+      scss: 'scss',
+      sass: 'sass',
+      less: 'less',
+      md: 'markdown',
+      mdx: 'mdx',
+      vue: 'vue',
+      svelte: 'svelte',
+      ex: 'elixir',
+      exs: 'elixir',
+      erl: 'erlang',
+      hs: 'haskell',
+      clj: 'clojure',
+      r: 'r',
+      R: 'r',
+      ml: 'ocaml',
+      lua: 'lua',
+      pl: 'perl',
+      pm: 'perl',
+    };
+    return ext ? languageMap[ext] : undefined;
+  }, [path, explicitLanguage]);
 
   // Auto-detect if content is diff format
   const contentIsDiff = useMemo(() => !forceFullContent && isDiffFormat(serverContent), [serverContent, forceFullContent]);
@@ -277,8 +361,11 @@ export function EnhancedDiffViewer({
   const isTruncated = useMemo(() => {
     if (!activeDiff) return false;
     const totalLines = activeDiff.hunks.flat().length;
-    return totalLines > maxLines;
-  }, [activeDiff, maxLines]);
+    return !isExpanded && totalLines > maxLines;
+  }, [activeDiff, maxLines, isExpanded]);
+
+  // Get displayed lines based on expanded state
+  const displayedLines = isExpanded ? Infinity : maxLines;
 
   return (
     <div className="bg-black/40 backdrop-blur-xl rounded-xl border border-white/10 overflow-hidden shadow-2xl">
@@ -371,9 +458,22 @@ export function EnhancedDiffViewer({
               <span className="font-medium">{stats.deletions}</span> deletions
             </span>
             {isTruncated && (
-              <span className="text-gray-500 ml-auto">
-                (showing first {maxLines} lines)
-              </span>
+              <button
+                onClick={() => setIsExpanded(true)}
+                className="ml-auto px-2 py-1 bg-white/10 border border-white/20 text-white/80 hover:bg-white/20 hover:text-white rounded-full transition-all duration-200 flex items-center gap-1"
+              >
+                <span>Show all {activeDiff.hunks.flat().length} lines</span>
+                <ChevronDown className="w-3.5 h-3.5" />
+              </button>
+            )}
+            {isExpanded && (
+              <button
+                onClick={() => setIsExpanded(false)}
+                className="ml-auto px-2 py-1 bg-white/10 border border-white/20 text-white/80 hover:bg-white/20 hover:text-white rounded-full transition-all duration-200 flex items-center gap-1"
+              >
+                <span>Collapse</span>
+                <ChevronDown className="w-3.5 h-3.5 rotate-180" />
+              </button>
             )}
           </div>
         )}
@@ -383,9 +483,20 @@ export function EnhancedDiffViewer({
       <div className="max-h-96 overflow-y-auto scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent">
         {activeDiff ? (
           <div className="divide-y divide-white/5">
-            {activeDiff.hunks.slice(0, maxLines).map((hunk, idx) => (
-              <DiffHunk key={idx} hunk={hunk} />
+            {activeDiff.hunks.slice(0, displayedLines).map((hunk, idx) => (
+              <DiffHunk key={idx} hunk={hunk} language={detectedLanguage} />
             ))}
+            {isTruncated && (
+              <div className="p-4 text-center">
+                <button
+                  onClick={() => setIsExpanded(true)}
+                  className="px-4 py-2 bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 hover:bg-cyan-500/30 rounded-lg transition-all duration-200 flex items-center gap-2 mx-auto"
+                >
+                  <ChevronDown className="w-4 h-4" />
+                  <span>Show {activeDiff.hunks.flat().length - maxLines} more lines</span>
+                </button>
+              </div>
+            )}
           </div>
         ) : contentIsDiff ? (
           <div className="p-8 text-center text-gray-500">
