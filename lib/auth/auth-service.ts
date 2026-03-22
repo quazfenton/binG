@@ -414,7 +414,7 @@ export class AuthService {
       );
 
       // Update last login
-      db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(userId);
+      this.dbOps.getDb().prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(userId);
 
       return {
         success: true,
@@ -652,7 +652,7 @@ export class AuthService {
   async revokeSession(sessionId: string, userId: number): Promise<{ success: boolean; error?: string }> {
     try {
       // Use raw sessionId to match how sessions are stored
-      const stmt = this.db.prepare('DELETE FROM user_sessions WHERE id = ? AND user_id = ?');
+      const stmt = this.db.prepare('DELETE FROM user_sessions WHERE session_id = ? AND user_id = ?');
       const result = stmt.run(sessionId, userId);
 
       if (result.changes === 0) {
@@ -705,12 +705,12 @@ export class AuthService {
       const newExpiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000); // 7 days
 
       // Invalidate old refresh token and create new one
-      this.db.prepare('DELETE FROM user_sessions WHERE id = ?').run(refreshToken);
-      
+      this.db.prepare('DELETE FROM user_sessions WHERE session_id = ?').run(refreshToken);
+
       this.db.prepare(`
-        INSERT INTO user_sessions (id, user_id, expires_at, ip_address, user_agent)
+        INSERT INTO user_sessions (session_id, user_id, expires_at, ip_address, user_agent)
         VALUES (?, ?, ?, ?, ?)
-      `).run(newRefreshToken, session.user_id, newExpiresAt.toISOString(), 
+      `).run(newRefreshToken, session.user_id, newExpiresAt.toISOString(),
              sessionInfo?.ipAddress, sessionInfo?.userAgent);
 
       logger.info('Token refreshed successfully', {

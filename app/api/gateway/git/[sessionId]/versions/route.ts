@@ -36,7 +36,7 @@ export async function GET(
     const db = getDatabase();
 
     const session = db.prepare(`
-      SELECT user_id FROM user_sessions WHERE id = ? AND is_active = TRUE
+      SELECT user_id FROM user_sessions WHERE session_id = ? AND is_active = TRUE
     `).get(sessionId) as { user_id: number } | undefined;
 
     if (!session) {

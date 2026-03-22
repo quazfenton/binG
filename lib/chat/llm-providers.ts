@@ -323,19 +323,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     maxTokens: 32000,
     description: 'Portkey AI Gateway with free models'
   },
-  composio: {
-    id: 'composio',
-    name: 'Composio (800+ Tools)',
-    models: [
-      'openai/gpt-oss-120b:free',
-      'google/gemini-2.5-flash',
-      'gpt-4o-mini',
-      'claude-3-haiku-20240307'
-    ],
-    supportsStreaming: true,
-    maxTokens: 128000,
-    description: 'Composio with 800+ toolkits and tool execution'
-  },
   mistral: {
     id: 'mistral',
     name: 'Mistral AI',

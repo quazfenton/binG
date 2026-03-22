@@ -27,51 +27,14 @@ import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer"
 
 /**
  * Client-side sanitization for message content
- * Removes heredoc command blocks (WRITE/PATCH/APPLY_DIFF) that may have leaked through
+ * Uses centralized file-edit-parser for all formats
  * This is a safety net in case the backend sanitization missed any edge cases
  */
 function sanitizeMessageContent(content: string): string {
   if (!content || typeof content !== 'string') return '';
-  let sanitized = content;
-
-  // Use shared parser for file_edit tags
-  sanitized = sanitizeFileEditTags(sanitized);
-
-  // Remove explicit command envelopes
-  sanitized = sanitized.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
-  sanitized = sanitized.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
-
-  // Remove <fs-actions> XML tag blocks
-  sanitized = sanitized.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
-
-  // Remove heredoc command blocks - line start patterns with /m flag
-  // Pattern 1: Standard format with optional newlines between path and <<<
-  sanitized = sanitized.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){0,3}<<<[\s\S]*?>>>(?=\n|$)/gim, '\n');
   
-  // Pattern 2: Handle cases where <<< is on same line as path
-  sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+<<<[\s\S]*?>>>/gim, '');
-  
-  // Pattern 3: Remove DELETE commands
-  sanitized = sanitized.replace(/^\s*DELETE\s+[^\n]+(?=\n|$)/gim, '\n');
-  
-  // Pattern 4: Remove any leaked <apply_diff> command block (consolidated - matches all formats)
-  sanitized = sanitized.replace(/<apply_diff\b[\s\S]*?<\/apply_diff>/gi, '');
-  
-  // Pattern 5: Handle remaining fs-actions style commands
-  sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]*\n?\s*<<<[\s\S]*?>>>/gim, '');
-  
-  // Pattern 6: Clean up leftover <<< and >>> markers
-  sanitized = sanitized.replace(/^\s*<<<\s*$/gm, '');
-  sanitized = sanitized.replace(/^\s*>>>\s*$/gm, '');
-
-  // Pattern 7: Remove bare heredoc blocks (<<<...>>>) without command prefix
-  // IMPORTANT: Exclude git merge conflict markers (<<<<<<, >>>>>>) by using negative lookahead/lookbehind
-  sanitized = sanitized.replace(/(?:^|\n)\s*<<<(?!<)[\s\S]*?>>>(?!>)\s*(?=\n|$)/gm, '\n');
-
-  // Normalize spacing
-  sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
-  
-  return sanitized;
+  // Use centralized parser for all file edit formats
+  return sanitizeFileEditTags(content);
 }
 
 interface MessageBubbleProps {

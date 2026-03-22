@@ -36,6 +36,35 @@ export interface DiffEdit {
   diff: string;
 }
 
+export interface DeleteEdit {
+  path: string;
+}
+
+export interface PatchEdit {
+  path: string;
+  diff: string;
+}
+
+/**
+ * Extract HTML comment format: <!-- path -->content
+ * Example: <!-- src/components/Card.vue --> ...content...
+ */
+export function extractHtmlCommentFileEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  // Match: <!-- path -->content or <!-- path -->
+  const regex = /<!--\s*([^\s\-]+(?:-[^\s]+)*)\s*-->\s*([\s\S]*?)(?=<!--\s*[^/]|$)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const filePath = match[1]?.trim();
+    const fileContent = match[2]?.trim() || '';
+    if (!filePath || filePath.includes('-->')) continue;
+    edits.push({ path: filePath, content: fileContent });
+  }
+
+  return edits;
+}
+
 /**
  * Extract <file_edit path="...">content</file_edit> compact format
  */
@@ -171,14 +200,27 @@ export function extractWsActionEdits(content: string): FileEdit[] {
 /**
  * Extract both compact and multi-line file_edit formats
  * Also extracts file_write and ws_action formats
+ * Uses conditional parsing - only runs regex if signature is detected
  */
 export function extractFileEdits(content: string): FileEdit[] {
-  return [
-    ...extractCompactFileEdits(content),
-    ...extractMultiLineFileEdits(content),
-    ...extractFileWriteEdits(content),
-    ...extractWsActionEdits(content),
-  ];
+  const edits: FileEdit[] = [];
+  
+  // Only run parsers if their signature is detected (O(1) string check)
+  if (content.includes('<file_edit')) {
+    edits.push(...extractCompactFileEdits(content));
+    edits.push(...extractMultiLineFileEdits(content));
+  }
+  if (content.includes('<file_write')) {
+    edits.push(...extractFileWriteEdits(content));
+  }
+  if (content.includes('ws_action')) {
+    edits.push(...extractWsActionEdits(content));
+  }
+  if (content.includes('<!--')) {
+    edits.push(...extractHtmlCommentFileEdits(content));
+  }
+  
+  return edits;
 }
 
 /**
@@ -200,27 +242,235 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
 }
 
 /**
+ * Extract WRITE commands from fs-actions blocks and top-level
+ * Format: WRITE path <<<content>>> or ```fs-actions WRITE path <<<content>>>
+ */
+export function extractFsActionWrites(content: string): FileEdit[] {
+  const writes: FileEdit[] = [];
+  
+  if (!content.includes('WRITE') && !content.includes('fs-actions')) return writes;
+
+  // Extract from ```fs-actions ... ``` code blocks
+  const blockRegex = /```fs-actions\s*([\s\S]*?)```/gi;
+  let blockMatch: RegExpExecArray | null;
+
+  while ((blockMatch = blockRegex.exec(content)) !== null) {
+    const blockContent = blockMatch[1] || '';
+    const writeRegex = /WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    let writeMatch: RegExpExecArray | null;
+    while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
+      const path = writeMatch[1]?.trim();
+      const fileContent = writeMatch[2] ?? '';
+      if (!path) continue;
+      writes.push({ path, content: fileContent });
+    }
+  }
+
+  // Extract from <fs-actions>...</fs-actions> XML tags
+  const xmlBlockRegex = /<fs-actions>([\s\S]*?)<\/fs-actions>/gi;
+  let xmlBlockMatch: RegExpExecArray | null;
+
+  while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
+    const blockContent = xmlBlockMatch[1] || '';
+    const writeRegex = /WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    let writeMatch: RegExpExecArray | null;
+    while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
+      const path = writeMatch[1]?.trim();
+      const fileContent = writeMatch[2] ?? '';
+      if (!path) continue;
+      writes.push({ path, content: fileContent });
+    }
+  }
+
+  // Extract top-level WRITE commands (```language ... ``` with WRITE prefix)
+  const regularBlockRegex = /```[a-zA-Z]*\s*([\s\S]*?)```/gi;
+  let regularBlockMatch: RegExpExecArray | null;
+
+  while ((regularBlockMatch = regularBlockRegex.exec(content)) !== null) {
+    const blockContent = regularBlockMatch[1] || '';
+    const writeRegex = /^WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
+    let writeMatch: RegExpExecArray | null;
+    while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
+      const path = writeMatch[1]?.trim();
+      const fileContent = writeMatch[2] ?? '';
+      if (!path) continue;
+      writes.push({ path, content: fileContent });
+    }
+  }
+
+  return writes;
+}
+
+/**
+ * Extract top-level WRITE commands outside code blocks
+ * Format: WRITE path <<<content>>>
+ */
+export function extractTopLevelWrites(content: string): FileEdit[] {
+  const writes: FileEdit[] = [];
+  
+  if (!content.includes('WRITE')) return writes;
+
+  const topLevelWriteRegex = /^WRITE\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
+  let match: RegExpExecArray | null;
+  while ((match = topLevelWriteRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    const fileContent = match[2] ?? '';
+    if (!path) continue;
+    writes.push({ path, content: fileContent });
+  }
+
+  const altWriteRegex = /^WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)>>>/gim;
+  while ((match = altWriteRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    const fileContent = match[2] ?? '';
+    if (!path) continue;
+    if (!writes.some(w => w.path === path && w.content === fileContent)) {
+      writes.push({ path, content: fileContent });
+    }
+  }
+
+  return writes;
+}
+
+/**
+ * Extract DELETE commands from content
+ * Format: DELETE path
+ */
+export function extractDeleteEdits(content: string): DeleteEdit[] {
+  const deletes: DeleteEdit[] = [];
+  
+  if (!content.includes('DELETE')) return deletes;
+
+  const deleteRegex = /^DELETE\s+([^\n]+)/gim;
+  let match: RegExpExecArray | null;
+  while ((match = deleteRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (path) deletes.push({ path });
+  }
+
+  return deletes;
+}
+
+/**
+ * Extract PATCH commands from content
+ * Format: PATCH path <<<diff>>>
+ */
+export function extractPatchEdits(content: string): PatchEdit[] {
+  const patches: PatchEdit[] = [];
+  
+  if (!content.includes('PATCH')) return patches;
+
+  const patchRegex = /^PATCH\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
+  let match: RegExpExecArray | null;
+  while ((match = patchRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    const diff = match[2] ?? '';
+    if (!path) continue;
+    patches.push({ path, diff });
+  }
+
+  return patches;
+}
+
+/**
+ * Extract apply_diff blocks
+ * Format: <apply_diff>...</apply_diff>
+ */
+export function extractApplyDiffEdits(content: string): PatchEdit[] {
+  const patches: PatchEdit[] = [];
+  
+  if (!content.includes('apply_diff')) return patches;
+
+  const regex = /<apply_diff\b[\s\S]*?<\/apply_diff>/gi;
+  let match: RegExpExecArray | null;
+  
+  while ((match = regex.exec(content)) !== null) {
+    const blockContent = match[0];
+    // Try to extract path and diff from within the block
+    const pathMatch = /path=["']([^"']+)["']/i.exec(blockContent);
+    const diffMatch = /<diff>([\s\S]*?)<\/diff>/i.exec(blockContent);
+    
+    if (pathMatch) {
+      patches.push({ 
+        path: pathMatch[1], 
+        diff: diffMatch ? diffMatch[1] : blockContent 
+      });
+    }
+  }
+
+  return patches;
+}
+
+/**
  * Sanitize message content by removing file edit tags for display
  * Used in client-side MessageBubble and server-side response cleaning
  */
 export function sanitizeFileEditTags(content: string): string {
   let sanitized = content;
 
-  // Remove compact format
-  sanitized = sanitized.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
+  // Only run sanitizers if their signature is detected (O(1) string check)
+  if (sanitized.includes('<file_edit')) {
+    // Remove compact format
+    sanitized = sanitized.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
+    // Remove multi-line format
+    sanitized = sanitized.replace(/<file_edit>\s*<path>\s*[^\s<]+\s*<\/path>\s*[\s\S]*?\s*<\/file_edit>/gi, '');
+  }
 
-  // Remove multi-line format
-  sanitized = sanitized.replace(/<file_edit>\s*<path>\s*[^\s<]+\s*<\/path>\s*[\s\S]*?\s*<\/file_edit>/gi, '');
+  if (sanitized.includes('<file_write')) {
+    // Remove file_write format
+    sanitized = sanitized.replace(/<file_write\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_write>/gi, '');
+  }
 
-  // Remove file_write format
-  sanitized = sanitized.replace(/<file_write\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_write>/gi, '');
+  if (sanitized.includes('ws_action')) {
+    // Remove ws_action JSON format (with proper escaped string handling)
+    sanitized = sanitized.replace(/\{[\s\S]*?"ws_action"\s*:\s*"CREATE"[\s\S]*?"path"\s*:\s*"(?:\\.|[^"\\])+"[\s\S]*?"content"\s*:\s*"(?:\\.|[^"\\])*"\s*\}/gi, '');
+  }
 
-  // Remove ws_action JSON format (with proper escaped string handling)
-  // Uses (?:\\.|[^"\\])* to match strings with escaped characters like \"
-  sanitized = sanitized.replace(/\{[\s\S]*?"ws_action"\s*:\s*"CREATE"[\s\S]*?"path"\s*:\s*"(?:\\.|[^"\\])+"[\s\S]*?"content"\s*:\s*"(?:\\.|[^"\\])*"\s*\}/gi, '');
+  if (sanitized.includes('<folder_create')) {
+    // Also handle folder_create tags
+    sanitized = sanitized.replace(/<folder_create\s+path=["'][^"']+["']\s*\/>/gi, '');
+  }
 
-  // Also handle folder_create tags
-  sanitized = sanitized.replace(/<folder_create\s+path=["'][^"']+["']\s*\/>/gi, '');
+  if (sanitized.includes('<!--')) {
+    // Remove HTML comment file paths: <!-- path -->content
+    sanitized = sanitized.replace(/<!--\s*[^\s\-]+(?:-[^\s]+)*\s*-->\s*/gi, '');
+  }
+
+  // Additional formats from api/chat/route.ts
+  if (sanitized.includes('fs-actions')) {
+    // Remove ```fs-actions ... ``` blocks
+    sanitized = sanitized.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
+    // Remove <fs-actions>...</fs-actions> XML blocks
+    sanitized = sanitized.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
+  }
+
+  if (sanitized.includes('WRITE') || sanitized.includes('PATCH') || sanitized.includes('DELETE')) {
+    // Remove heredoc command blocks - standard format with optional newlines
+    sanitized = sanitized.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){0,3}<<<[\s\S]*?>>>(?=\n|$)/gim, '\n');
+    // Handle cases where <<< is on same line as path
+    sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+<<<[\s\S]*?>>>/gim, '');
+    // Remove DELETE commands
+    sanitized = sanitized.replace(/^\s*DELETE\s+[^\n]+(?=\n|$)/gim, '\n');
+  }
+
+  if (sanitized.includes('apply_diff')) {
+    // Remove apply_diff command blocks
+    sanitized = sanitized.replace(/<apply_diff\b[\s\S]*?<\/apply_diff>/gi, '');
+  }
+
+  // Clean up leftover <<< and >>> markers
+  sanitized = sanitized.replace(/^\s*<<<\s*$/gm, '');
+  sanitized = sanitized.replace(/^\s*>>>\s*$/gm, '');
+
+  // Remove bare heredoc blocks (<<<...>>>) without command prefix
+  // Exclude git merge conflict markers (<<<<<<, >>>>>>)
+  sanitized = sanitized.replace(/(?:^|\n)\s*<<<(?!<)[\s\S]*?>>>(?!>)\s*(?=\n|$)/gm, '\n');
+
+  // Remove command envelope markers
+  sanitized = sanitized.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
+
+  // Normalize spacing
+  sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
 
   return sanitized;
 }

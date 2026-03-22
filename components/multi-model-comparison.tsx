@@ -1,19 +1,24 @@
 "use client";
 
 import React, { useState, useEffect } from 'react';
+import ReactMarkdown from 'react-markdown';
+import remarkGfm from 'remark-gfm';
+import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
+import { vscDarkPlus } from 'react-syntax-highlighter/dist/esm/styles/prism';
 import { Button } from './ui/button';
 import { Badge } from './ui/badge';
 import { Textarea } from './ui/textarea';
-import { 
-  X, 
-  Copy, 
-  RefreshCw, 
+import {
+  X,
+  Copy,
+  RefreshCw,
   Zap,
   Clock,
   CheckCircle,
   AlertCircle,
   Loader2,
-  Sparkles
+  Sparkles,
+  Trash2
 } from 'lucide-react';
 import type { LLMProvider } from '../lib/chat/llm-providers';
 
@@ -42,6 +47,7 @@ export default function MultiModelComparison({
   const [selectedModels, setSelectedModels] = useState<Array<{provider: string, model: string}>>([]);
   const [responses, setResponses] = useState<ModelResponse[]>([]);
   const [isComparing, setIsComparing] = useState(false);
+  const [modelToRemove, setModelToRemove] = useState<{provider: string, model: string} | null>(null);
 
   // Get only available providers (filtered by API key configuration)
   const availableOnly = availableProviders.filter(p => p.isAvailable !== false);
@@ -51,8 +57,16 @@ export default function MultiModelComparison({
 
   const handleModelToggle = (provider: string, model: string) => {
     const existsInResponses = responses.some(r => r.provider === provider && r.model === model);
-    
+
     if (existsInResponses) {
+      // Show confirmation before removing a model with a complete response
+      const response = responses.find(r => r.provider === provider && r.model === model);
+      if (response?.status === 'complete' && response.response.trim().length > 0) {
+        setModelToRemove({ provider, model });
+        return;
+      }
+      
+      // Remove without confirmation if response is empty or not complete
       setResponses(prev => prev.filter(r => !(r.provider === provider && r.model === model)));
       setSelectedModels(prev => prev.filter(m => !(m.provider === provider && m.model === model)));
     } else {
@@ -67,6 +81,18 @@ export default function MultiModelComparison({
         setSelectedModels(prev => [...prev, { provider, model }]);
       }
     }
+  };
+
+  const handleConfirmRemove = () => {
+    if (modelToRemove) {
+      setResponses(prev => prev.filter(r => !(r.provider === modelToRemove.provider && r.model === modelToRemove.model)));
+      setSelectedModels(prev => prev.filter(m => !(m.provider === modelToRemove.provider && m.model === modelToRemove.model)));
+      setModelToRemove(null);
+    }
+  };
+
+  const handleCancelRemove = () => {
+    setModelToRemove(null);
   };
 
   const handleRetryFailed = async () => {
@@ -214,10 +240,60 @@ export default function MultiModelComparison({
   if (!isOpen) return null;
 
   return (
-    <div 
+    <div
       className="fixed inset-0 z-50 flex items-center justify-center"
       style={{ background: 'rgba(0,0,0,0.85)' }}
     >
+      {/* Confirmation Dialog */}
+      {modelToRemove && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center">
+          <div
+            className="absolute inset-0 bg-black/80"
+            onClick={handleCancelRemove}
+          />
+          <div
+            className="relative z-10 w-full max-w-md rounded-xl p-6"
+            style={{
+              background: 'linear-gradient(135deg, #1a1a1a 0%, #0a0a0a 100%)',
+              border: '1px solid rgba(239,68,68,0.5)'
+            }}
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div
+                className="p-2 rounded-lg"
+                style={{ background: 'rgba(239,68,68,0.2)', border: '1px solid rgba(239,68,68,0.3)' }}
+              >
+                <Trash2 className="h-5 w-5 text-red-400" />
+              </div>
+              <h3 className="text-lg font-bold text-white">Remove Model Response?</h3>
+            </div>
+            
+            <p className="text-sm text-white/70 mb-6">
+              This will permanently delete the response from{' '}
+              <span className="font-semibold text-white">{modelToRemove.provider}</span> ({modelToRemove.model}).
+              This action cannot be undone.
+            </p>
+            
+            <div className="flex gap-3 justify-end">
+              <Button
+                variant="outline"
+                onClick={handleCancelRemove}
+                className="border-white/20 text-white/70 hover:text-white hover:bg-white/5"
+              >
+                Cancel
+              </Button>
+              <Button
+                onClick={handleConfirmRemove}
+                className="bg-red-600 hover:bg-red-700 text-white"
+              >
+                <Trash2 className="h-4 w-4 mr-2" />
+                Remove
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
+
       {/* Main Container */}
       <div 
         className="relative w-[95vw] h-[90vh] flex flex-col rounded-2xl overflow-hidden"
@@ -339,10 +415,10 @@ export default function MultiModelComparison({
           </div>
 
           {/* Model Selection - Only show available providers */}
-          <div className="mt-3 flex flex-wrap gap-2">
+          <div className="mt-3 flex flex-wrap gap-2 max-h-48 overflow-y-auto">
             {availableOnly.map(provider => (
               <div key={provider.id} className="flex flex-wrap gap-1">
-                {provider.models.slice(0, 5).map(model => {
+                {provider.models.map(model => {
                   const isSelected = responses.some(r => r.provider === provider.id && r.model === model);
                   const isDisabled = !isSelected && responses.length >= 3;
                   return (
@@ -446,8 +522,8 @@ export default function MultiModelComparison({
                     </div>
 
                     {/* Response Content */}
-                    <div 
-                      className="flex-1 p-4 overflow-auto"
+                    <div
+                      className="flex-1 p-4 overflow-auto prose prose-invert max-w-none"
                       style={{ color: 'rgba(255,255,255,0.8)' }}
                     >
                       {response.status === 'error' ? (
@@ -466,9 +542,121 @@ export default function MultiModelComparison({
                           Generating...
                         </div>
                       ) : (
-                        <pre className="whitespace-pre-wrap text-sm font-sans" style={{ color: 'rgba(255,255,255,0.85)' }}>
+                        <ReactMarkdown
+                          remarkPlugins={[remarkGfm]}
+                          className="text-sm font-sans"
+                          components={{
+                            code: ({ className, children, ...props }) => {
+                              const match = /language-(\w+)/.exec(className || "");
+                              const isInline = Boolean((props as any).inline);
+                              return !isInline && match ? (
+                                <SyntaxHighlighter
+                                  style={vscDarkPlus as any}
+                                  language={match[1]}
+                                  PreTag="div"
+                                  customStyle={{
+                                    fontSize: '11px',
+                                    padding: '8px',
+                                    borderRadius: '4px',
+                                    margin: '8px 0',
+                                    background: 'rgba(0,0,0,0.4)',
+                                    border: '1px solid rgba(255,255,255,0.1)'
+                                  }}
+                                >
+                                  {String(children).replace(/\n$/, "")}
+                                </SyntaxHighlighter>
+                              ) : (
+                                <code className={`${className} bg-white/10 px-1.5 py-0.5 rounded text-xs font-mono`} {...props}>
+                                  {children}
+                                </code>
+                              );
+                            },
+                            p: ({ children }) => (
+                              <p className="mb-2 text-white/85 leading-relaxed">
+                                {children}
+                              </p>
+                            ),
+                            h1: ({ children }) => (
+                              <h1 className="text-lg font-bold mb-3 pb-2 border-b border-white/20 text-white">
+                                {children}
+                              </h1>
+                            ),
+                            h2: ({ children }) => (
+                              <h2 className="text-base font-semibold mb-2 text-white/90">
+                                {children}
+                              </h2>
+                            ),
+                            h3: ({ children }) => (
+                              <h3 className="text-sm font-semibold mb-1 text-white/85">
+                                {children}
+                              </h3>
+                            ),
+                            ul: ({ children }) => (
+                              <ul className="list-disc list-inside mb-2 space-y-1 text-white/85">
+                                {children}
+                              </ul>
+                            ),
+                            ol: ({ children }) => (
+                              <ol className="list-decimal list-inside mb-2 space-y-1 text-white/85">
+                                {children}
+                              </ol>
+                            ),
+                            li: ({ children }) => (
+                              <li className="text-white/85 pl-1">
+                                {children}
+                              </li>
+                            ),
+                            table: ({ children }) => (
+                              <div className="overflow-x-auto my-3">
+                                <table className="w-full border-collapse text-sm">
+                                  {children}
+                                </table>
+                              </div>
+                            ),
+                            thead: ({ children }) => (
+                              <thead>
+                                {children}
+                              </thead>
+                            ),
+                            tbody: ({ children }) => (
+                              <tbody>
+                                {children}
+                              </tbody>
+                            ),
+                            tr: ({ children }) => (
+                              <tr>
+                                {children}
+                              </tr>
+                            ),
+                            th: ({ children }) => (
+                              <th className="text-left font-semibold py-2 px-3 border-b border-white/20 text-white/90 bg-white/5">
+                                {children}
+                              </th>
+                            ),
+                            td: ({ children }) => (
+                              <td className="py-2 px-3 border-b border-white/10 text-white/85">
+                                {children}
+                              </td>
+                            ),
+                            blockquote: ({ children }) => (
+                              <blockquote className="border-l-4 border-white/30 pl-4 my-2 italic text-sm">
+                                {children}
+                              </blockquote>
+                            ),
+                            strong: ({ children }) => (
+                              <strong className="font-bold text-white/90">
+                                {children}
+                              </strong>
+                            ),
+                            em: ({ children }) => (
+                              <em className="italic text-white/80">
+                                {children}
+                              </em>
+                            ),
+                          }}
+                        >
                           {response.response}
-                        </pre>
+                        </ReactMarkdown>
                       )}
                     </div>
                   </div>

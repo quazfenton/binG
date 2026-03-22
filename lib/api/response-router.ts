@@ -751,7 +751,8 @@ export class ResponseRouter {
         recordCircuitBreakerState(endpoint.name, cbStats.state)
 
         errors.push({ endpoint: endpoint.name, error })
-        fallbackChain.push(`${endpoint.name} (error: ${error.message.substring(0, 50)})`)
+        // Don't truncate error messages - they contain important provider/model info
+        fallbackChain.push(`${endpoint.name} (error: ${error.message})`)
       }
     }
 
@@ -1195,16 +1196,25 @@ export class ResponseRouter {
    * Normalize original system response
    */
   private normalizeOriginalResponse(response: any): RouterResponse {
+    // Preserve actual LLM provider/model from response metadata if available
+    // This prevents showing 'original-system' as the provider when a real LLM provider was used
+    const actualProvider = response.metadata?.actualProvider || response.provider || 'original-system';
+    const actualModel = response.metadata?.actualModel || response.model;
+    
     return {
       success: true,
       content: response.content || response.choices?.[0]?.message?.content,
       data: {
         usage: response.usage,
-        model: response.model,
-        provider: 'original-system',
+        model: actualModel,
+        provider: actualProvider,
       },
       source: 'original-system',
       priority: 1,
+      metadata: {
+        actualProvider,
+        actualModel,
+      },
     }
   }
 

@@ -88,10 +88,15 @@ export {
 } from './blaxel-preview';
 
 // Provider selection helper
+// Import the actual preview objects from each provider
+import { codeSandboxPreview as csPreview, getDefaultPort as csPort, getCodeSandboxTemplate as csTemplate } from './codesandbox-preview';
+import { daytonaPreview as daytonaPrev, getDefaultPort as daytonaPort } from './daytona-preview';
+import { blaxelPreview as blaxelPrev, getDefaultPort as blaxelPort } from './blaxel-preview';
+
 export const previewProviders = {
-  codeSandbox: codeSandboxPreview,
-  daytona: daytonaPreview,
-  blaxel: blaxelPreview,
+  codeSandbox: csPreview,
+  daytona: daytonaPrev,
+  blaxel: blaxelPrev,
 };
 
 /**
@@ -101,11 +106,11 @@ export function getDefaultPort(framework: string, provider?: string): number {
   if (provider) {
     switch (provider) {
       case 'codesandbox':
-        return getCodeSandboxDefaultPort(framework);
+        return csPort(framework);
       case 'daytona':
-        return getDaytonaDefaultPort(framework);
+        return daytonaPort(framework);
       case 'blaxel':
-        return getBlaxelDefaultPort(framework);
+        return blaxelPort(framework);
     }
   }
 
@@ -133,7 +138,7 @@ export function getProviderTemplate(
 ): string | null {
   switch (provider) {
     case 'codesandbox':
-      return getCodeSandboxTemplate(framework);
+      return csTemplate(framework);
     case 'daytona':
     case 'blaxel':
       // These providers use generic node/python images

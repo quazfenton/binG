@@ -26,6 +26,14 @@ const DEFAULT_MODEL = 'KittenML/kitten-tts-mini-0.8';
 const DEFAULT_VOICE = 'Bruno';
 const SAMPLE_RATE = 24000;
 
+// Input validation limits
+const MAX_TEXT_LENGTH = 2000;
+const MIN_TEXT_LENGTH = 1;
+
+// Model caching - singleton pattern for performance
+let cachedModel: any = null;
+let cachedModelName: string | null = null;
+
 export interface TTSRequest {
   text: string;
   voice?: string;
@@ -63,12 +71,27 @@ export const KITTEN_MODELS = [
 export async function generateSpeech(request: TTSRequest): Promise<TTSResponse> {
   const { text, voice = DEFAULT_VOICE, model = DEFAULT_MODEL } = request;
   
+  // Input validation
   if (!text || text.trim().length === 0) {
     return { success: false, error: 'Text is required' };
   }
   
+  if (text.length > MAX_TEXT_LENGTH) {
+    return { success: false, error: `Text too long. Maximum ${MAX_TEXT_LENGTH} characters allowed.` };
+  }
+  
+  if (text.length < MIN_TEXT_LENGTH) {
+    return { success: false, error: 'Text too short.' };
+  }
+  
   if (!KITTEN_VOICES.includes(voice as KittenVoice)) {
     return { success: false, error: `Invalid voice. Choose from: ${KITTEN_VOICES.join(', ')}` };
+  }
+
+  // Validate model
+  const validModels = KITTEN_MODELS.map(m => m.id) as string[];
+  if (!validModels.includes(model)) {
+    return { success: false, error: `Invalid model. Choose from: ${validModels.join(', ')}` };
   }
 
   // Create a unique temp file for this request
