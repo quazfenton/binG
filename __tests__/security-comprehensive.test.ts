@@ -310,16 +310,29 @@ describe('Command Injection Protection', () => {
 describe('MCP Token Security', () => {
   it('should use headers instead of query params for MCP tokens', async () => {
     // This tests that MCP tokens are sent in headers, not query params
-    // Check that the module exports relevant functions/classes
+    // Import the actual desktop provider module from the correct path
     try {
-      const module = await import('@/lib/sandbox/providers/e2b-desktop-provider-enhanced')
-      // If module exists, check if it has relevant exports
-      const exports = Object.keys(module)
-      expect(exports.length).toBeGreaterThan(0)
-    } catch (e) {
-      // Module may not be fully available in test env - that's okay
-      // as long as we verify the security pattern exists conceptually
-      expect(true).toBe(true)
+      const module = await import('@/lib/computer/e2b-desktop-provider-enhanced')
+      const { DesktopSandboxHandle } = module as any
+      
+      // Mock the sandbox commands to capture MCP setup
+      const run = vi.fn()
+        .mockResolvedValueOnce({ stdout: 'mcp-token' })
+        .mockResolvedValue({ stdout: '' })
+      
+      const handle = new DesktopSandboxHandle({ id: 'sandbox-1', commands: { run } } as any)
+      await handle.setupMCP({ github: {} })
+      
+      // Find the claude mcp add command
+      const addCommand = run.mock.calls.find(([cmd]: [string]) => cmd.includes('claude mcp add'))?.[0] as string
+      
+      // Verify token is passed via header, not query param
+      expect(addCommand).toContain('--header "Authorization: Bearer mcp-token"')
+      expect(addCommand).not.toContain('?token=')
+    } catch (error: any) {
+      // Re-throw to make test failures visible
+      // This ensures regressions in MCP token handling are caught
+      throw new Error(`MCP token security test failed: ${error.message}`)
     }
   })
 })

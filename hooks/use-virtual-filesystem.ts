@@ -76,8 +76,8 @@ const SNAPSHOT_CACHE_MAX_ENTRIES = 100;
 
 // Debounce map to prevent duplicate API calls within short time windows
 const lastApiCallTime = new Map<string, number>();
-const API_CALL_DEBOUNCE_MS = 500; // Reduced for faster response - mainly for GET requests
-const REQUEST_COOLDOWN_MS = 500;  // Reduced from 2000ms to 500ms for rapid edits
+const API_CALL_DEBOUNCE_MS = 100; // Reduced for faster response - mainly for GET requests
+const REQUEST_COOLDOWN_MS = 50;  // Minimal cooldown for faster response
 let lastGlobalVfsCall = 0;
 
 function getCacheKey(path: string, ownerId: string): string {
@@ -234,7 +234,7 @@ export function useVirtualFilesystem(
       opfsAdapter.enable(sessionId).then(() => {
         log('OPFS enabled successfully for session:', sessionId);
       }).catch(err => {
-        logWarn('OPFS initialization failed, falling back to server-only:', err);
+        logWarn('OPFS initialization failed, falling back to server-only:', err?.message || err);
       });
     }
 
@@ -363,6 +363,7 @@ export function useVirtualFilesystem(
     
     log(`request: ${method} ${url}`);
 
+    const fetchStartTime = Date.now();
     const response = await fetch(url, {
       ...rest,
       headers: {
@@ -372,7 +373,7 @@ export function useVirtualFilesystem(
       credentials: 'include',
     });
 
-    log(`request: response status=${response.status}`);
+    log(`request: response status=${response.status} (${Date.now() - fetchStartTime}ms)`);
 
     let payload: ApiResponse<TData> | null = null;
     try {
@@ -679,14 +680,26 @@ export function useVirtualFilesystem(
 
   // Load directory on first mount and when initialPath changes
   const hasMountedRef = useRef(false);
+  const isLoadingRef = useRef(false); // Track if a load is in progress
   useEffect(() => {
     if (!autoLoad) return;
+    // Skip if already loading to prevent race conditions
+    if (isLoadingRef.current) {
+      log('listDirectory: skipping auto-load, already in progress');
+      return;
+    }
     if (!hasMountedRef.current) {
       hasMountedRef.current = true;
-      void listDirectory(initialPath);
+      isLoadingRef.current = true;
+      void listDirectory(initialPath).finally(() => {
+        isLoadingRef.current = false;
+      });
     } else if (initialPathRef.current !== initialPath) {
       initialPathRef.current = initialPath;
-      void listDirectory(initialPath);
+      isLoadingRef.current = true;
+      void listDirectory(initialPath).finally(() => {
+        isLoadingRef.current = false;
+      });
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPath, autoLoad]);

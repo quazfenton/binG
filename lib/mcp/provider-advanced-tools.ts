@@ -386,7 +386,8 @@ export async function executeE2BAmpAgentWithRepo(args: {
     if (!sanitizedRepoUrl) {
       return { success: false, output: '', error: 'Invalid repoUrl: contains disallowed characters' };
     }
-    if (sanitizedBranch === null) {
+    // Only validate branch if provided - null means use default branch
+    if (args.branch && sanitizedBranch === null) {
       return { success: false, output: '', error: 'Invalid branch: contains disallowed characters' };
     }
 
@@ -396,7 +397,7 @@ export async function executeE2BAmpAgentWithRepo(args: {
 
     // Clone repository first - use validated inputs
     await handle.executeCommand(`git clone ${sanitizedRepoUrl} ${sanitizedWorkingDir}`);
-    
+
     if (sanitizedBranch) {
       await handle.executeCommand(`cd ${sanitizedWorkingDir} && git checkout ${sanitizedBranch}`);
     }
@@ -413,7 +414,7 @@ export async function executeE2BAmpAgentWithRepo(args: {
 
     const result = await ampService.run({
       prompt: args.prompt,
-      workingDir: clonePath,
+      workingDir: sanitizedWorkingDir,
       streamJson: args.streamJson ?? false,
       model: args.model,
     });
@@ -463,7 +464,8 @@ export async function executeE2BCodexAgentWithRepo(args: {
     if (!sanitizedRepoUrl) {
       return { success: false, output: '', error: 'Invalid repoUrl: contains disallowed characters' };
     }
-    if (sanitizedBranch === null) {
+    // Only validate branch if provided - null means use default branch
+    if (args.branch && sanitizedBranch === null) {
       return { success: false, output: '', error: 'Invalid branch: contains disallowed characters' };
     }
 
@@ -473,7 +475,7 @@ export async function executeE2BCodexAgentWithRepo(args: {
 
     // Clone repository first - use validated inputs
     await handle.executeCommand(`git clone ${sanitizedRepoUrl} ${sanitizedWorkingDir}`);
-    
+
     if (sanitizedBranch) {
       await handle.executeCommand(`cd ${sanitizedWorkingDir} && git checkout ${sanitizedBranch}`);
     }
@@ -490,7 +492,7 @@ export async function executeE2BCodexAgentWithRepo(args: {
 
     const result = await codexService.run({
       prompt: args.prompt,
-      workingDir: clonePath,
+      workingDir: sanitizedWorkingDir,
       fullAuto: args.fullAuto ?? false,
       outputSchemaPath: args.outputSchemaPath,
     });

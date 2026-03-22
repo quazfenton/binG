@@ -440,23 +440,30 @@ declare global {
 }
 
 // Custom matcher for date validation
-if (typeof globalThis.expect !== 'undefined') {
-  globalThis.expect.extend({
-    toBeValidDate(received: any) {
-      const date = new Date(received);
-      const pass = !isNaN(date.getTime());
-      return {
-        pass,
-        message: () => `expected ${received} ${pass ? 'not ' : ''}to be a valid date`,
-      };
-    },
-    toBeWithinRange(received: number, a: number, b: number) {
-      const pass = received >= a && received <= b;
-      return {
-        pass,
-        message: () => `expected ${received} ${pass ? 'not ' : ''}to be within range [${a}, ${b}]`,
-      };
-    },
-  });
+// Note: Vitest handles global matchers differently - these are for compatibility
+try {
+  // Only extend if expect is available (skip in environments where it's not set up)
+  if (typeof expect !== 'undefined' && expect.extend) {
+    expect.extend({
+      toBeValidDate(received: any) {
+        const date = new Date(received);
+        const pass = !isNaN(date.getTime());
+        return {
+          pass,
+          message: () => `expected ${received} ${pass ? 'not ' : ''}to be a valid date`,
+        };
+      },
+      toBeWithinRange(received: number, a: number, b: number) {
+        const pass = received >= a && received <= b;
+        return {
+          pass,
+          message: () => `expected ${received} ${pass ? 'not ' : ''}to be within range [${a}, ${b}]`,
+        };
+      },
+    });
+  }
+} catch (error) {
+  // Silently fail - custom matchers are optional
+  console.debug('[Test Setup] Custom matchers not available:', error);
 }
 

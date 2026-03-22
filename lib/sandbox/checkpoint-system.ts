@@ -85,8 +85,11 @@ export class CheckpointSystem {
 
         // Create new sandbox and restore checkpoint
         // Get provider info from the source handle to maintain consistency
-        const providerInfo = (handle as any).getProviderInfo?.();
-        const providerName = providerInfo?.provider || 'daytona';
+        const providerInfo = await (handle as any).getProviderInfo?.();
+        if (!providerInfo?.provider) {
+          throw new Error('Cannot determine source provider for checkpoint branching');
+        }
+        const providerName = providerInfo.provider;
         const { getSandboxProvider } = await import('./providers');
         const provider = await getSandboxProvider(providerName as any);
         

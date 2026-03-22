@@ -343,6 +343,27 @@ export class GitBackedVFS {
           }
         }
 
+        // Handle DELETE transactions for target files
+        for (const tx of filteredTransactions) {
+          if (tx.type === 'DELETE') {
+            try {
+              await this.vfs.deletePath(ownerId, tx.path);
+              restoredCount++;
+            } catch (error: any) {
+              // Ignore errors for already-deleted files
+              if (!error.message?.includes('not found') && !error.message?.includes('ENOENT')) {
+                return {
+                  success: false,
+                  filesRestored: restoredCount,
+                  version: targetVersion,
+                  error: `Failed to delete ${tx.path}: ${error.message}`,
+                };
+              }
+              restoredCount++;
+            }
+          }
+        }
+
         logger.info(`[GitVFS] Partial rollback successful: ${restoredCount}/${targetFiles.length} files`);
         return {
           success: true,

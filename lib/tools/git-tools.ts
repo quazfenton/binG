@@ -198,7 +198,14 @@ export function createGitTools(handle: SandboxHandle) {
                   });
                 }
               } catch (error: any) {
-                log.warn(`Failed to read committed file ${filePath}: ${error.message}`);
+                // File no longer exists at HEAD — this is a deletion
+                log.debug(`Committed file ${filePath} no longer readable, recording as DELETE`);
+                delete vfsState[filePath];
+                transactions.push({
+                  path: filePath,
+                  type: 'DELETE',
+                  timestamp: Date.now(),
+                });
               }
             }
 

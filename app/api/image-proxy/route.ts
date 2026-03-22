@@ -43,7 +43,37 @@ interface CachedImage {
 const IMAGE_CACHE = new Map<string, CachedImage>();
 const CACHE_MAX_SIZE = 100; // Max number of images to cache
 const CACHE_MAX_BYTES = 100 * 1024 * 1024; // 100MB total in-memory cap
-const CACHE_TTL = 3600000; // 1 hour TTL for in-memory cache
+const CACHE_TTL = 3600000; // 1 hour TTL in-memory cache
+
+const CACHE_CONTROL_IMMUTABLE = 'public, max-age=31536000, immutable';
+const CACHE_CONTROL_REVALIDATE = 'public, max-age=86400, stale-while-revalidate=3600';
+
+/**
+ * Detect whether a URL points to a versioned/immutable resource.
+ * Versioned URLs contain a content hash, version number, or build hash in the path
+ * and are safe to cache as immutable. All other URLs may change in place and should
+ * revalidate to avoid serving stale bytes for up to a year.
+ */
+function isVersionedUrl(url: string): boolean {
+  return /\/(v?\d+|[a-f0-9]{7,}\/|-[a-f0-9]{7,}\.|-[a-f0-9]{8,}[./?#]|[a-f0-9]{32}|[a-f0-9]{40})/.test(url);
+}
+
+function getCacheControlHeader(url: string): string {
+  return isVersionedUrl(url) ? CACHE_CONTROL_IMMUTABLE : CACHE_CONTROL_REVALIDATE;
+}
+
+/**
+ * Return a log-safe representation of a URL — hostname + cache key fragment.
+ * Avoids leaking signed tokens, presigned URLs, or personal identifiers.
+ */
+function safeLogUrl(url: string): string {
+  try {
+    const u = new URL(url);
+    return `${u.hostname}${u.pathname.slice(0, 40)}`;
+  } catch {
+    return url.slice(0, 60);
+  }
+}
 
 /**
  * Generate cache key from URL
@@ -92,22 +122,23 @@ function getCachedImage(cacheKey: string): CachedImage | null {
 /**
  * Store image in cache
  */
-function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string, etag: string): void {
+function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string, etag: string, imageUrl: string): void {
   const imageSize = data.byteLength;
-  
+
+  // Cleanup expired entries FIRST so currentSize reflects actual reclaimable space
+  cleanupCache();
+
   // Check if adding this image would exceed byte limit
   const currentSize = Array.from(IMAGE_CACHE.values()).reduce((total, img) => total + img.size, 0);
   if (currentSize + imageSize > CACHE_MAX_BYTES) {
     console.log('[Image Proxy] Skipping cache: would exceed memory limit', {
+      url: safeLogUrl(imageUrl),
       currentSize,
       imageSize,
       limit: CACHE_MAX_BYTES,
     });
-    return; // Don't cache - would exceed memory limit
+    return;
   }
-
-  // Cleanup before adding new entry
-  cleanupCache();
 
   IMAGE_CACHE.set(cacheKey, {
     data,
@@ -194,11 +225,11 @@ export async function GET(request: NextRequest) {
   // Check in-memory cache first
   const cached = getCachedImage(cacheKey);
   if (cached) {
-    console.log('[Image Proxy] Cache hit:', imageUrl);
+    console.log('[Image Proxy] Cache hit:', safeLogUrl(imageUrl));
     return new NextResponse(cached.data, {
       headers: {
         'Content-Type': cached.contentType,
-        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Cache-Control': getCacheControlHeader(imageUrl),
         'ETag': cached.etag,
         'X-Cache': 'HIT',
         'Access-Control-Allow-Origin': '*',
@@ -212,11 +243,11 @@ export async function GET(request: NextRequest) {
     // Clean up quotes from ETag
     const cleanEtag = ifNoneMatch.replace(/"/g, '');
     if (cleanEtag === cached.etag) {
-      console.log('[Image Proxy] Cache hit (conditional):', imageUrl);
+      console.log('[Image Proxy] Cache hit (conditional):', safeLogUrl(imageUrl));
       return new NextResponse(null, {
         status: 304, // Not Modified
         headers: {
-          'Cache-Control': 'public, max-age=31536000, immutable',
+          'Cache-Control': getCacheControlHeader(imageUrl),
           'ETag': cached.etag,
           'X-Cache': 'HIT',
           'Access-Control-Allow-Origin': '*',
@@ -225,7 +256,7 @@ export async function GET(request: NextRequest) {
     }
   }
 
-  console.log('[Image Proxy] Cache miss, fetching:', imageUrl);
+  console.log('[Image Proxy] Cache miss, fetching:', safeLogUrl(imageUrl));
 
   try {
     // Additional SSRF Protection: Resolve and check IP address
@@ -250,16 +281,85 @@ export async function GET(request: NextRequest) {
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), FETCH_TIMEOUT);
 
-    // Fetch the image from the external URL
+    // Fetch with manual redirect handling so we can validate each hop
     const response = await fetch(imageUrl, {
       headers: {
-        // Some servers require a user-agent
         'User-Agent': 'Mozilla/5.0 (compatible; BinG Image Proxy)',
       },
       signal: controller.signal,
+      redirect: 'manual',
     });
 
     clearTimeout(timeoutId);
+
+    // Handle redirects — validate every Location header before following
+    if (response.status === 301 || response.status === 302 || response.status === 303 || response.status === 307 || response.status === 308) {
+      const location = response.headers.get('location');
+      if (!location) {
+        return NextResponse.json({ error: 'Redirect without Location header' }, { status: 502 });
+      }
+      // Resolve relative redirects
+      const redirectUrl = location.startsWith('http') ? location : new URL(location, imageUrl).toString();
+      // Re-validate the redirect target the same way as the original URL
+      const redirectValidation = validateImageUrl(redirectUrl);
+      if (!redirectValidation.valid) {
+        return NextResponse.json({ error: `Redirect target failed SSRF check: ${redirectValidation.error}` }, { status: 403 });
+      }
+      let redirectIp: string | null = null;
+      try {
+        const dns = await import('dns').catch(() => null);
+        if (dns?.promises) {
+          const redirectParsed = new URL(redirectUrl);
+          const addresses = await dns.promises.resolve(redirectParsed.hostname);
+          if (addresses.some(ip => isPrivateIP(ip))) {
+            return NextResponse.json({ error: 'Redirect target resolves to internal IP' }, { status: 403 });
+          }
+          redirectIp = addresses[0];
+        }
+      } catch {
+        // DNS failure on redirect target — reject it
+        return NextResponse.json({ error: 'Redirect target DNS resolution failed' }, { status: 502 });
+      }
+      console.log('[Image Proxy] Following redirect:', safeLogUrl(redirectUrl));
+      // Fetch the redirect target with the same manual redirect policy
+      const redirectController = new AbortController();
+      const redirectTimeoutId = setTimeout(() => redirectController.abort(), FETCH_TIMEOUT);
+      const redirectResponse = await fetch(redirectUrl, {
+        headers: { 'User-Agent': 'Mozilla/5.0 (compatible; BinG Image Proxy)' },
+        signal: redirectController.signal,
+        redirect: 'manual',
+      });
+      clearTimeout(redirectTimeoutId);
+      // Re-check redirect chain recursively (one level is sufficient for most cases)
+      if (redirectResponse.status === 301 || redirectResponse.status === 302 || redirectResponse.status === 303 || redirectResponse.status === 307 || redirectResponse.status === 308) {
+        return NextResponse.json({ error: 'Too many redirects' }, { status: 502 });
+      }
+      if (!redirectResponse.ok) {
+        return NextResponse.json(
+          { error: `Failed to fetch image: ${redirectResponse.status} ${redirectResponse.statusText}` },
+          { status: redirectResponse.status }
+        );
+      }
+      const contentType = redirectResponse.headers.get('content-type') || 'image/jpeg';
+      if (!ALLOWED_CONTENT_TYPES.includes(contentType)) {
+        return NextResponse.json({ error: 'Content type not allowed' }, { status: 400 });
+      }
+      const arrayBuffer = await redirectResponse.arrayBuffer();
+      if (arrayBuffer.byteLength > MAX_IMAGE_SIZE) {
+        return NextResponse.json({ error: `Image too large (max ${MAX_IMAGE_SIZE / 1024 / 1024}MB)` }, { status: 400 });
+      }
+      const etag = createHash('sha256').update(new Uint8Array(arrayBuffer)).digest('hex').substring(0, 16);
+      setCachedImage(cacheKey, arrayBuffer, contentType, etag, imageUrl);
+      return new NextResponse(arrayBuffer, {
+        headers: {
+          'Content-Type': contentType,
+          'Cache-Control': getCacheControlHeader(redirectUrl),
+          'ETag': `"${etag}"`,
+          'X-Cache': 'MISS',
+          'Access-Control-Allow-Origin': '*',
+        },
+      });
+    }
 
     if (!response.ok) {
       return NextResponse.json(
@@ -294,16 +394,15 @@ export async function GET(request: NextRequest) {
     const etag = createHash('sha256').update(new Uint8Array(arrayBuffer)).digest('hex').substring(0, 16);
 
     // Store in cache for future requests
-    setCachedImage(cacheKey, arrayBuffer, contentType, etag);
+    setCachedImage(cacheKey, arrayBuffer, contentType, etag, imageUrl);
 
     // Return the image with appropriate headers
     return new NextResponse(arrayBuffer, {
       headers: {
         'Content-Type': contentType,
-        'Cache-Control': 'public, max-age=31536000, immutable',
+        'Cache-Control': getCacheControlHeader(imageUrl),
         'ETag': `"${etag}"`,
         'X-Cache': 'MISS',
-        // Allow CORS for CSS background usage
         'Access-Control-Allow-Origin': '*',
       },
     });
@@ -314,7 +413,7 @@ export async function GET(request: NextRequest) {
         { status: 408 }
       );
     }
-    console.error('[Image Proxy] Error fetching image:', error);
+    console.error('[Image Proxy] Error fetching image:', safeLogUrl(imageUrl), error);
     return NextResponse.json(
       { error: 'Failed to proxy image' },
       { status: 500 }
