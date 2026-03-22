@@ -25,6 +25,7 @@ export interface UseVirtualFilesystemOptions {
   autoLoad?: boolean;
   useOPFS?: boolean;       // Enable OPFS caching for instant reads/writes
   offlineMode?: boolean;   // Force offline operation
+  sessionId?: string;      // Optional session ID for session isolation
 }
 
 export interface SyncStatus {
@@ -200,6 +201,21 @@ export function useVirtualFilesystem(
   const autoLoad = options?.autoLoad !== false; // default true
   const useOPFS = options?.useOPFS ?? false;
   const offlineMode = options?.offlineMode ?? false;
+  
+  // Derive session ID from initialPath if it's a scoped path (e.g., "project/sessions/OneGB")
+  // This ensures the VFS uses the same session ID as the path
+  const deriveSessionIdFromPath = (path: string): string | null => {
+    const match = path.match(/^project\/sessions\/([^/]+)/);
+    return match ? match[1] : null;
+  };
+  
+  // Allow passing sessionId from parent, or derive from path, or fall back to anonymous
+  const getSessionId = useCallback(() => {
+    if (options?.sessionId) return options.sessionId;
+    const derived = deriveSessionIdFromPath(initialPath);
+    if (derived) return derived;
+    return getSessionId();
+  }, [options?.sessionId, initialPath]);
 
   const [currentPath, setCurrentPath] = useState(initialPath);
   const currentPathRef = useRef(currentPath);
@@ -223,7 +239,7 @@ export function useVirtualFilesystem(
   // Initialize OPFS on mount if enabled
   useEffect(() => {
     if (useOPFS && typeof window !== 'undefined') {
-      const sessionId = getOrCreateAnonymousSessionId();
+      const sessionId = getSessionId();
       
       // Check if OPFS is supported
       if (!OPFSAdapter.isSupported()) {
@@ -243,7 +259,7 @@ export function useVirtualFilesystem(
         opfsAdapter.disable().catch(console.error);
       }
     };
-  }, [useOPFS, logWarn]);
+  }, [useOPFS, logWarn, getSessionId]);
 
   // Track online status
   useEffect(() => {
@@ -292,7 +308,7 @@ export function useVirtualFilesystem(
       const detail = event.detail;
       
       // Get current session ID when event fires (not at effect creation time)
-      const ownerId = getOrCreateAnonymousSessionId();
+      const ownerId = getSessionId();
       
       // Invalidate cache when files are updated from anywhere in the app
       // This fixes Bug #4: Stale snapshot cache never invalidated during edit flow
@@ -401,7 +417,7 @@ export function useVirtualFilesystem(
 
   const listDirectory = useCallback(async (pathToLoad?: string) => {
     const targetPath = pathToLoad || currentPathRef.current;
-    const ownerId = getOrCreateAnonymousSessionId();
+      const ownerId = getSessionId();
     
     // Check list cache first
     const cachedList = getCachedList(targetPath, ownerId);
@@ -464,7 +480,7 @@ export function useVirtualFilesystem(
     log(`writeFile: writing "${filePath}" (contentLength=${content.length})`);
     
     // Invalidate snapshot cache on write
-    invalidateSnapshotCache(filePath, getOrCreateAnonymousSessionId());
+    invalidateSnapshotCache(filePath, getSessionId());
     
     // OPFS write-through strategy: write to OPFS for instant local reads,
     // then also write to server so listDirectory (server-backed) stays in sync
@@ -551,7 +567,7 @@ export function useVirtualFilesystem(
 
   const getSnapshot = useCallback(async (pathForSnapshot?: string) => {
     const targetPath = pathForSnapshot || currentPathRef.current;
-    const ownerId = getOrCreateAnonymousSessionId();
+      const ownerId = getSessionId();
     const cacheKey = `${ownerId}:${targetPath}`;
 
     // Check shared cache first
@@ -613,7 +629,7 @@ export function useVirtualFilesystem(
     setSyncStatus(prev => ({ ...prev, isSyncing: true }));
 
     try {
-      const ownerId = getOrCreateAnonymousSessionId();
+      const ownerId = getSessionId();
       const result = await opfsAdapter.syncToServer(ownerId);
       
       setSyncStatus(prev => ({
@@ -681,25 +697,37 @@ export function useVirtualFilesystem(
   // Load directory on first mount and when initialPath changes
   const hasMountedRef = useRef(false);
   const isLoadingRef = useRef(false); // Track if a load is in progress
+  const pendingPathRef = useRef<string | null>(null); // Queue pending path changes
   useEffect(() => {
     if (!autoLoad) return;
-    // Skip if already loading to prevent race conditions
+    
+    const loadPath = (path: string) => {
+      isLoadingRef.current = true;
+      void listDirectory(path).finally(() => {
+        isLoadingRef.current = false;
+        // Check if there's a pending path to load
+        if (pendingPathRef.current !== null) {
+          const nextPath = pendingPathRef.current;
+          pendingPathRef.current = null;
+          initialPathRef.current = nextPath;
+          loadPath(nextPath);
+        }
+      });
+    };
+    
+    // If already loading, queue this path for later instead of skipping
     if (isLoadingRef.current) {
-      log('listDirectory: skipping auto-load, already in progress');
+      log('listDirectory: queuing path change for after current load completes:', initialPath);
+      pendingPathRef.current = initialPath;
       return;
     }
+    
     if (!hasMountedRef.current) {
       hasMountedRef.current = true;
-      isLoadingRef.current = true;
-      void listDirectory(initialPath).finally(() => {
-        isLoadingRef.current = false;
-      });
+      loadPath(initialPath);
     } else if (initialPathRef.current !== initialPath) {
       initialPathRef.current = initialPath;
-      isLoadingRef.current = true;
-      void listDirectory(initialPath).finally(() => {
-        isLoadingRef.current = false;
-      });
+      loadPath(initialPath);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPath, autoLoad]);

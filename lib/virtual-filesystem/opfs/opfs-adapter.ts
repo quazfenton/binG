@@ -206,7 +206,7 @@ export class OPFSAdapter {
     if (this.enableCount <= 0) {
       // Don't warn in production or if already disabled - this is expected in React strict mode
       if (this.enabled) {
-        console.log('[OPFS] disable() called but already disabled, ignoring');
+        console.log('[OPFS] disable() called with non-positive ref count while still enabled, ignoring');
       }
       return;
     }

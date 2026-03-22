@@ -327,8 +327,10 @@ describe('MCP Token Security', () => {
       const addCommand = run.mock.calls.find(([cmd]: [string]) => cmd.includes('claude mcp add'))?.[0] as string
       
       // Verify token is passed via header, not query param
+      // Check both ?token= and &token= to catch leaks in URLs with existing params
       expect(addCommand).toContain('--header "Authorization: Bearer mcp-token"')
       expect(addCommand).not.toContain('?token=')
+      expect(addCommand).not.toContain('&token=')
     } catch (error: any) {
       // Re-throw to make test failures visible
       // This ensures regressions in MCP token handling are caught

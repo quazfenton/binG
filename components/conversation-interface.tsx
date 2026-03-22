@@ -531,6 +531,11 @@ export default function ConversationInterface() {
         const lastContinueMessageId = lastMessage.id;
         const lastContinueContent = lastMessage.content;
 
+        // Check if message actually contains CONTINUE_REQUESTED token
+        if (!lastContinueContent.includes('[CONTINUE_REQUESTED]')) {
+          return; // Skip - AI didn't request continuation
+        }
+
         // Check if we already processed this CONTINUE_REQUESTED message
         const alreadyProcessed = continueProcessedRef.current === lastContinueMessageId;
         if (alreadyProcessed) {
