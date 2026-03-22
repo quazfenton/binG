@@ -296,18 +296,31 @@ function emitToMonitoringSystem(successRate: number, totalAttempts: number): voi
         }
       };
 
+      // Helper to send metrics with proper error handling
+      // socket.send can throw synchronously (e.g., invalid port/host), which would
+      // prevent onSend from being called and leave the socket open
+      const sendMetric = (message: string) => {
+        const payload = Buffer.from(message);
+        try {
+          socket.send(payload, 0, payload.length, statsdPort, statsdHost, onSend);
+        } catch (error) {
+          log.warn('Failed to send StatsD metric (sync error)', { error, message });
+          onSend(error as Error);
+        }
+      };
+
       // Send success rate metric
       const successRateMsg = `session_lock.success_rate:${successRate * 100}|g`;
-      socket.send(Buffer.from(successRateMsg), 0, successRateMsg.length, statsdPort, statsdHost, onSend);
+      sendMetric(successRateMsg);
 
       // Send total attempts metric
       const attemptsMsg = `session_lock.attempts:${totalAttempts}|c`;
-      socket.send(Buffer.from(attemptsMsg), 0, attemptsMsg.length, statsdPort, statsdHost, onSend);
+      sendMetric(attemptsMsg);
 
       // Send by-strategy metrics
       for (const [strategy, data] of strategyEntries) {
         const strategyMsg = `session_lock.${strategy}.success_rate:${data.successRate * 100}|g`;
-        socket.send(Buffer.from(strategyMsg), 0, strategyMsg.length, statsdPort, statsdHost, onSend);
+        sendMetric(strategyMsg);
       }
     } catch (error) {
       log.warn('Failed to emit to StatsD', { error });

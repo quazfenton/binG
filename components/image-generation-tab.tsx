@@ -199,9 +199,16 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
 
   // ✅ FIX: Helper to get image URL with CORS proxy fallback for external URLs
   // Uses centralized /api/image-proxy for SSRF validation and CORS bypass
+  // SVGs are fetched directly (not proxied) to avoid XSS risks from same-origin serving
   const getImageUrl = useCallback((imageUrl: string): string => {
     // Skip relative paths and data URLs
     if (imageUrl.startsWith('/') || imageUrl.startsWith('./') || imageUrl.startsWith('data:')) {
+      return imageUrl;
+    }
+
+    // Detect SVG URLs - fetch directly without proxy to avoid XSS risks
+    // SVG is active content (can execute scripts) and should not be served from same origin
+    if (imageUrl.toLowerCase().endsWith('.svg') || imageUrl.toLowerCase().includes('.svg?')) {
       return imageUrl;
     }
 

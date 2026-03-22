@@ -280,6 +280,7 @@ export class BootstrappedAgency {
                 return { result: 'File operations completed' };
               case 'code-execution':
               case 'sandbox.shell':
+              case 'sandbox.execute':
                 return { result: 'Code execution completed' };
               case 'git-operations':
                 return { result: 'Git operations completed' };
@@ -293,19 +294,24 @@ export class BootstrappedAgency {
         };
 
         const chainResult = await chain.execute(executor);
-        
+
+        const serializedResults = Object.fromEntries(chainResult.results.entries());
         return {
           success: chainResult.success,
+          error: chainResult.success
+            ? undefined
+            : chainResult.errors.map(e => `${e.step}: ${e.error}`).join('; '),
           data: {
-            result: chainResult.results,
+            results: serializedResults,
             steps: chainResult.steps,
             duration: chainResult.duration,
+            errors: chainResult.errors,
           },
         };
       } else if (capabilities.length === 1) {
         // Execute single capability
         const capability = capabilities[0];
-        
+
         // Execute capability based on name
         switch (capability) {
           case 'file-operations':
@@ -314,6 +320,7 @@ export class BootstrappedAgency {
             return { success: true, data: { result: 'File operations completed' } };
           case 'code-execution':
           case 'sandbox.shell':
+          case 'sandbox.execute':
             return { success: true, data: { result: 'Code execution completed' } };
           case 'git-operations':
             return { success: true, data: { result: 'Git operations completed' } };
