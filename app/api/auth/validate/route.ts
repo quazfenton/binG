@@ -7,7 +7,30 @@ export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
   try {
-    // Try session-based validation first
+    // Try Auth0 session first (uses encrypted auth0_session cookie)
+    try {
+      const { auth0 } = await import('@/lib/auth0');
+      const auth0Session = await auth0.getSession(request);
+      if (auth0Session?.user) {
+        return NextResponse.json({
+          valid: true,
+          user: {
+            id: auth0Session.user.sub,
+            email: (auth0Session.user as any).email || '',
+            username: (auth0Session.user as any).name || '',
+            createdAt: new Date(),
+            isActive: true,
+            subscriptionTier: 'default',
+            emailVerified: (auth0Session.user as any).email_verified ?? false,
+          },
+        });
+      }
+    } catch (auth0Error) {
+      // Auth0 not configured or session unavailable — fall through
+      console.debug('[validate] Auth0 session check failed:', auth0Error);
+    }
+
+    // Try legacy session_id cookie
     const sessionId = request.cookies.get('session_id')?.value;
     
     if (sessionId) {

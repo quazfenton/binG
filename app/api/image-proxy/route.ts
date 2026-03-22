@@ -22,12 +22,13 @@ const MAX_IMAGE_SIZE = 25 * 1024 * 1024; // 25MB max image size (increased for h
 const FETCH_TIMEOUT = 15000; // 15 second timeout (increased for larger images)
 
 // Allowed image content types
+// NOTE: SVG is intentionally excluded - it's active content (can execute scripts)
+// and poses XSS risks when served from same origin. See security audit notes.
 const ALLOWED_CONTENT_TYPES = [
   'image/jpeg',
   'image/png',
   'image/gif',
   'image/webp',
-  'image/svg+xml',
   'image/avif',
 ];
 
@@ -341,9 +342,22 @@ export async function GET(request: NextRequest) {
         );
       }
       const contentType = redirectResponse.headers.get('content-type') || 'image/jpeg';
-      if (!ALLOWED_CONTENT_TYPES.includes(contentType)) {
+      // Normalize content type by removing charset/parameters and converting to lowercase
+      const normalizedContentType = contentType.split(';')[0].trim().toLowerCase();
+      if (!ALLOWED_CONTENT_TYPES.includes(normalizedContentType)) {
         return NextResponse.json({ error: 'Content type not allowed' }, { status: 400 });
       }
+      
+      // Check Content-Length header before buffering to avoid memory exhaustion
+      const contentLength = redirectResponse.headers.get('content-length');
+      if (contentLength && parseInt(contentLength, 10) > MAX_IMAGE_SIZE) {
+        console.log('[Image Proxy] Rejecting: Content-Length exceeds limit', {
+          contentLength,
+          limit: MAX_IMAGE_SIZE,
+        });
+        return NextResponse.json({ error: `Image too large (max ${MAX_IMAGE_SIZE / 1024 / 1024}MB)` }, { status: 400 });
+      }
+      
       const arrayBuffer = await redirectResponse.arrayBuffer();
       if (arrayBuffer.byteLength > MAX_IMAGE_SIZE) {
         return NextResponse.json({ error: `Image too large (max ${MAX_IMAGE_SIZE / 1024 / 1024}MB)` }, { status: 400 });
@@ -353,7 +367,7 @@ export async function GET(request: NextRequest) {
       return new NextResponse(arrayBuffer, {
         headers: {
           'Content-Type': contentType,
-          'Cache-Control': getCacheControlHeader(redirectUrl),
+          'Cache-Control': getCacheControlHeader(imageUrl),
           'ETag': `"${etag}"`,
           'X-Cache': 'MISS',
           'Access-Control-Allow-Origin': '*',
@@ -371,12 +385,25 @@ export async function GET(request: NextRequest) {
     // Get the content type
     const contentType = response.headers.get('content-type') || 'image/jpeg';
 
+    // Normalize content type by removing charset/parameters and converting to lowercase
+    const normalizedContentType = contentType.split(';')[0].trim().toLowerCase();
+    
     // Validate content type is an image
-    if (!ALLOWED_CONTENT_TYPES.includes(contentType)) {
+    if (!ALLOWED_CONTENT_TYPES.includes(normalizedContentType)) {
       return NextResponse.json(
         { error: 'Content type not allowed' },
         { status: 400 }
       );
+    }
+
+    // Check Content-Length header before buffering to avoid memory exhaustion
+    const contentLength = response.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > MAX_IMAGE_SIZE) {
+      console.log('[Image Proxy] Rejecting: Content-Length exceeds limit', {
+        contentLength,
+        limit: MAX_IMAGE_SIZE,
+      });
+      return NextResponse.json({ error: `Image too large (max ${MAX_IMAGE_SIZE / 1024 / 1024}MB)` }, { status: 400 });
     }
 
     // Get the image data as array buffer
