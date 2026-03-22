@@ -109,9 +109,12 @@ export function AuthProvider({ children }: { children: ReactNode }) {
             lastLogin: data.user.lastLogin ? new Date(data.user.lastLogin) : undefined,
           };
         }
+      } else if (response.status === 401) {
+        // No Auth0 session - this is expected, not an error
+        console.log('[AuthContext] No Auth0 session found');
       } else {
         const errorData = await response.json().catch(() => ({}));
-        console.error('[AuthContext] checkAuth0Session failed:', response.status, errorData.error);
+        console.warn('[AuthContext] checkAuth0Session returned:', response.status, errorData.error || '');
       }
       return null;
     } catch (error) {

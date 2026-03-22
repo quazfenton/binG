@@ -5,15 +5,20 @@ import { PROVIDERS, llmService, type LLMProvider } from "@/lib/chat/llm-provider
 // Since provider availability is based on env vars which don't change during runtime
 let cachedProviders: any = null;
 let cacheTimestamp = 0;
-const CACHE_TTL_MS = 60000; // Cache for 1 minute
+const CACHE_TTL_MS = 300000; // Cache for 5 minutes
 
 export async function GET(request: NextRequest) {
   try {
     const now = Date.now();
 
     // Return cached result if available and not expired
-    if (cachedProviders && (now - cacheTimestamp) < CACHE_TTL_MS) {
-      return NextResponse.json(cachedProviders);
+    const isStale = cachedProviders && (now - cacheTimestamp) >= CACHE_TTL_MS;
+    if (cachedProviders) {
+      return NextResponse.json(cachedProviders, {
+        headers: {
+          'Cache-Control': isStale ? 'public, max-age=60, stale-while-revalidate=300' : 'public, max-age=300, stale-while-revalidate=600',
+        },
+      });
     }
 
     // Use canonical llmService.getAvailableProviders() for availability checks

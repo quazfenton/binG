@@ -999,9 +999,25 @@ class PriorityRequestRouter {
    * Normalize original system response
    */
   private normalizeOriginalResponse(response: any): any {
+    // Preserve actual LLM provider/model from response metadata if available
+    // This prevents showing 'original-system' as the provider when a real LLM provider was used
+    const actualProvider = response.metadata?.actualProvider || response.provider || 'original-system';
+    const actualModel = response.metadata?.actualModel || response.model;
+    
     return {
       content: response.content || '',
-      data: response
+      data: {
+        ...response,
+        provider: actualProvider,
+        model: actualModel,
+        actualProvider,
+        actualModel,
+      },
+      metadata: {
+        actualProvider,
+        actualModel,
+        fallbackChain: response.metadata?.fallbackChain,
+      },
     };
   }
 
