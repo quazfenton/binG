@@ -2408,14 +2408,13 @@ Generated on: ${new Date().toLocaleString()}
       ? {
           name: 'Manual Preview',
           files: projectDetection.normalizedFiles,
-          framework: projectDetection.framework as const,
-          dependencies: projectDetection.dependencies,
+          framework: projectDetection.framework as AppFramework,
         }
       : (isManualPreviewActive && manualPreviewFiles
         ? {
             name: 'Manual Preview',
             files: manualPreviewFiles,
-            framework: 'react' as const,
+            framework: 'react' as AppFramework,
           }
         : (projectStructureWithScopedFiles || projectStructure));
 
@@ -3108,7 +3107,7 @@ root.render(<App />);` };
           return normalized;
         })();
 
-        const template = getSandpackTemplate(effectiveFramework);
+        const template = getSandpackTemplate(effectiveFramework) as any;
 
         // Manual preview - Sandpack mode (primary framework preview)
         if (isManualPreviewActive && previewMode === 'sandpack') {
@@ -5037,8 +5036,8 @@ root.render(<App />);` };
                 files={finalSandpackFiles}
                 customSetup={{
                   dependencies: getDependencies(),
-                  devDependencies: useStructure.devDependencies?.reduce(
-                    (acc, dep) => {
+                  devDependencies: (useStructure as any).devDependencies?.reduce(
+                    (acc: Record<string, string>, dep: string) => {
                       acc[dep] = "latest";
                       return acc;
                     },

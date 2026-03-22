@@ -395,8 +395,7 @@ export class AuthService {
     error?: string;
   }> {
     try {
-      const db = this.dbOps.getDb();
-      const dbUser = db.prepare('SELECT * FROM users WHERE id = ? AND is_active = TRUE').get(userId) as any;
+      const dbUser = this.dbOps.getUserById(userId) as any;
 
       if (!dbUser) {
         return { success: false, error: 'User not found' };

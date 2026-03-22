@@ -14,6 +14,7 @@ export interface LLMProvider {
   supportsStreaming: boolean
   maxTokens: number
   description: string
+  isAvailable?: boolean
 }
 
 export const PROVIDERS: Record<string, LLMProvider> = {

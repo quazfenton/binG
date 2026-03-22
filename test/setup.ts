@@ -443,8 +443,10 @@ declare global {
 // Note: Vitest handles global matchers differently - these are for compatibility
 try {
   // Only extend if expect is available (skip in environments where it's not set up)
-  if (typeof expect !== 'undefined' && expect.extend) {
-    expect.extend({
+  // eslint-disable-next-line no-var
+  if (typeof (globalThis as any).expect !== 'undefined' && (globalThis as any).expect.extend) {
+    // eslint-disable-next-line no-var
+    (globalThis as any).expect.extend({
       toBeValidDate(received: any) {
         const date = new Date(received);
         const pass = !isNaN(date.getTime());

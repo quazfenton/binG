@@ -248,7 +248,8 @@ export class EnhancedLLMService {
       for (let attemptIndex = 0; attemptIndex < availableFallbacks.length; attemptIndex++) {
         const fallbackProvider = availableFallbacks[attemptIndex];
         const fallbackStartTime = Date.now();
-        
+        let fallbackModelUsed = actualModel;
+
         try {
           chatLogger.info('Trying fallback provider', { requestId, provider: fallbackProvider, model: actualModel }, {
             attempt: attemptIndex + 1,
@@ -262,6 +263,8 @@ export class EnhancedLLMService {
             chatLogger.warn('Model not supported by fallback provider', { requestId, provider: fallbackProvider, model: actualModel });
             continue;
           }
+          
+          fallbackModelUsed = supportedModel;
 
           const fallbackRequest = {
             ...llmRequest,
@@ -292,7 +295,7 @@ export class EnhancedLLMService {
           return await postProcessToolCalls(fallbackResponse);
         } catch (fallbackError) {
           const fallbackLatency = Date.now() - fallbackStartTime;
-          chatLogger.warn('Fallback provider failed', { requestId, provider: fallbackProvider, model: supportedModel }, {
+          chatLogger.warn('Fallback provider failed', { requestId, provider: fallbackProvider, model: fallbackModelUsed }, {
             latencyMs: fallbackLatency,
             attempt: attemptIndex + 1,
             error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),

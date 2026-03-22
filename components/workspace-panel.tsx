@@ -80,10 +80,14 @@ import {
   AlertCircle,
   ChevronUp,
   ChevronDown as ChevronDownIcon,
+  Square,
+  GitCommit,
+  Github,
 } from "lucide-react";
 import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";
 import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
+import { useVoiceInput } from "@/hooks/use-voice-input";
 import { getOrCreateAnonymousSessionId } from "@/lib/utils";
 import type { Message } from "@/types";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
@@ -93,6 +97,8 @@ import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { buildApiHeaders } from "@/lib/utils";
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer";
 import IntegrationPanel from "@/components/integrations/IntegrationPanel";
+import GitSourceControl from "@/components/git-source-control";
+import { VoicePanel } from "@/components/voice-panel";
 import { PROVIDERS } from "@/lib/chat/providers";
 
 // Helper to normalize paths to relative format (project/...) for API compatibility
@@ -170,6 +176,26 @@ export function ExperimentalWorkspacePanel() {
   const [isChatLoading, setIsChatLoading] = useState(false);
   const [attachedFiles, setAttachedFiles] = useState<Array<{ path: string; content: string }>>([]);
   const [showFilePicker, setShowFilePicker] = useState(false);
+  
+  // Chat provider/model selection
+  const [chatProvider, setChatProvider] = useState('openrouter');
+  const [chatModel, setChatModel] = useState('nvidia/nemotron-3-30b-a3b:free');
+  
+  // Abort controller for stopping chat
+  const chatAbortControllerRef = useRef<AbortController | null>(null);
+  
+  // Code preview panel
+  const [showCodePreview, setShowCodePreview] = useState(false);
+  
+  // Voice input
+  const { isListening, startListening, stopListening, transcript } = useVoiceInput();
+  
+  // Update chat input when transcript changes
+  useEffect(() => {
+    if (transcript) {
+      setChatInput(prev => prev + transcript);
+    }
+  }, [transcript]);
   
   // Get active thread and its messages
   const activeThread = useMemo(() => 
@@ -572,6 +598,14 @@ export function ExperimentalWorkspacePanel() {
           const data = await response.json();
           if (data.success && data.data?.providers) {
             setAvailableProviders(data.data.providers);
+            // Set default provider/model to first available
+            const available = data.data.providers.filter((p: LLMProvider) => p.isAvailable !== false);
+            if (available.length > 0 && !chatProvider) {
+              setChatProvider(available[0].id);
+              if (available[0].models?.[0]) {
+                setChatModel(available[0].models[0]);
+              }
+            }
           }
         }
       } catch (error) {
@@ -757,6 +791,10 @@ export function ExperimentalWorkspacePanel() {
         }
       ];
 
+      // Create abort controller for stopping
+      const abortController = new AbortController();
+      chatAbortControllerRef.current = abortController;
+
       const response = await fetch('/api/chat', {
         method: 'POST',
         headers: {
@@ -764,9 +802,9 @@ export function ExperimentalWorkspacePanel() {
         },
         body: JSON.stringify({
           messages: messagesPayload,
-          provider: 'openrouter',
-          model: 'nvidia/nemotron-3-nano-30b-a3b:free',
-          stream: true, // Enable SSE streaming
+          provider: chatProvider,
+          model: chatModel,
+          stream: true,
           conversationId: `exp-workspace-thread-${activeThreadId}`,
           agentMode: 'auto',
           filesystemContext: {
@@ -778,6 +816,7 @@ export function ExperimentalWorkspacePanel() {
             applyFileEdits: true,
           },
         }),
+        signal: abortController.signal,
       });
 
       if (!response.ok) {
@@ -797,6 +836,11 @@ export function ExperimentalWorkspacePanel() {
         const { done, value } = await reader.read();
         
         if (done) break;
+        
+        // Check if request was aborted
+        if (abortController.signal.aborted) {
+          break;
+        }
         
         buffer += decoder.decode(value, { stream: true });
         
@@ -943,16 +987,33 @@ export function ExperimentalWorkspacePanel() {
           : msg
       ));
 
-    } catch (error) {
-      console.error('[ExperimentalWorkspace] Chat error:', error);
-      toast.error('Chat failed. Check console for details.');
-
-      // Remove placeholder message on error
-      setThreadMessages(chatMessages.filter((msg) => msg.id !== assistantMessageId));
+    } catch (error: any) {
+      // Check if aborted
+      if (error?.name === 'AbortError') {
+        console.log('[ExperimentalWorkspace] Chat aborted by user');
+        setThreadMessages(chatMessages.map((msg) =>
+          msg.id === assistantMessageId
+            ? { ...msg, content: streamedContent || "Response stopped by user" }
+            : msg
+        ));
+      } else {
+        console.error('[ExperimentalWorkspace] Chat error:', error);
+        toast.error('Chat failed. Check console for details.');
+        setThreadMessages(chatMessages.filter((msg) => msg.id !== assistantMessageId));
+      }
     } finally {
       setIsChatLoading(false);
+      chatAbortControllerRef.current = null;
     }
-  }, [chatInput, isChatLoading, chatMessages, filesystem, vfs, attachedFiles, activeThreadId, setThreadMessages, createNewThread]);
+  }, [chatInput, isChatLoading, chatMessages, filesystem, vfs, attachedFiles, activeThreadId, setThreadMessages, createNewThread, chatProvider, chatModel, availableProviders]);
+
+  // Stop chat handler
+  const handleStopChat = useCallback(() => {
+    if (chatAbortControllerRef.current) {
+      chatAbortControllerRef.current.abort();
+      chatAbortControllerRef.current = null;
+    }
+  }, []);
 
   // YouTube helper functions
   const getYouTubeEmbedUrl = useCallback((urlOrId: string): string => {
@@ -2039,13 +2100,35 @@ export function ExperimentalWorkspacePanel() {
                   <button
                     onClick={() => setTab('integrations')}
                     className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'integrations' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
+                      activeTab === 'integrations'
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
                         : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
                     }`}
                   >
                     <Database className="h-3 w-3" />
                     Integrations
+                  </button>
+                  <button
+                    onClick={() => setTab('git')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'git'
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
+                  >
+                    <GitCommit className="h-3 w-3" />
+                    Git
+                  </button>
+                  <button
+                    onClick={() => setTab('voice')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'voice'
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
+                  >
+                    <Mic className="h-3 w-3" />
+                    Voice
                   </button>
                 </div>
 
@@ -2227,6 +2310,43 @@ export function ExperimentalWorkspacePanel() {
                         {chatMessages.length} messages
                       </Badge>
                       
+                      {/* Provider/Model Selector */}
+                      {availableProviders.filter((p: any) => (p as any).isAvailable !== false).length > 0 && (
+                      <div className="flex items-center gap-1 ml-2">
+                        <select
+                          value={chatProvider}
+                          onChange={(e) => {
+                            setChatProvider(e.target.value);
+                            // Reset to first model of new provider
+                            const provider = availableProviders.find(p => p.id === e.target.value);
+                            if (provider?.models?.[0]) {
+                              setChatModel(provider.models[0]);
+                            }
+                          }}
+                          className="text-xs bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50"
+                          title="Select provider"
+                        >
+                          {availableProviders.filter(p => p.isAvailable !== false).map(provider => (
+                            <option key={provider.id} value={provider.id} className="bg-gray-900">
+                              {provider.name}
+                            </option>
+                          ))}
+                        </select>
+                        <select
+                          value={chatModel}
+                          onChange={(e) => setChatModel(e.target.value)}
+                          className="text-xs bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50 max-w-[140px]"
+                          title="Select model"
+                        >
+                          {(availableProviders.find(p => p.id === chatProvider)?.models || []).slice(0, 8).map(model => (
+                            <option key={model} value={model} className="bg-gray-900">
+                              {model.split(':')[0]}
+                            </option>
+                          ))}
+                        </select>
+                      </div>
+                      )}
+                      
                       {/* Thread Selector */}
                       <div className="flex items-center gap-1 ml-4">
                         <select
@@ -2265,16 +2385,40 @@ export function ExperimentalWorkspacePanel() {
                       </div>
                     </div>
                     <div className="flex gap-1">
+                      {/* Stop Button - show when loading */}
+                      {isChatLoading ? (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={handleStopChat}
+                          className="h-6 text-[10px] bg-red-500/10 hover:bg-red-500/20 text-red-400 border border-red-500/20"
+                          title="Stop generation"
+                        >
+                          <Square className="h-3 w-3 mr-1" />
+                          Stop
+                        </Button>
+                      ) : (
+                        <Button
+                          variant="ghost"
+                          size="sm"
+                          onClick={() => handleSendChat("Please continue the work. If there are more files to edit or improvements to make, proceed with them.")}
+                          disabled={chatMessages.length === 0 || isChatLoading}
+                          className="h-6 text-[10px] bg-green-500/10 hover:bg-green-500/20 text-green-400 border border-green-500/20"
+                          title="Request AI to continue its previous task"
+                        >
+                          <RotateCcw className="h-3 w-3 mr-1" />
+                          Continue
+                        </Button>
+                      )}
+                      {/* Code Preview Toggle */}
                       <Button
                         variant="ghost"
                         size="sm"
-                        onClick={() => handleSendChat("Please continue the work. If there are more files to edit or improvements to make, proceed with them.")}
-                        disabled={chatMessages.length === 0 || isChatLoading}
-                        className="h-6 text-[10px] bg-green-500/10 hover:bg-green-500/20 text-green-400 border border-green-500/20"
-                        title="Request AI to continue its previous task"
+                        onClick={() => setShowCodePreview(!showCodePreview)}
+                        className={`h-6 text-xs border ${showCodePreview ? 'bg-purple-500/20 border-purple-500/30 text-purple-400' : 'hover:bg-purple-500/20 border-transparent'}`}
+                        title="Toggle code preview panel"
                       >
-                        <RotateCcw className="h-3 w-3 mr-1" />
-                        Continue
+                        <Code className="h-3 w-3" />
                       </Button>
                       <Button
                         variant="ghost"
@@ -2299,7 +2443,8 @@ export function ExperimentalWorkspacePanel() {
                     </div>
                   </div>
                    
-                  <div className="flex-1 overflow-y-auto p-4 space-y-4">
+                  <div className={`flex-1 flex overflow-hidden ${showCodePreview ? 'gap-2' : ''}`}>
+                    <div className={`flex-1 overflow-y-auto p-4 space-y-4 ${showCodePreview ? 'pr-0' : ''}`}>
                     {/* Agent Status Banner */}
                     {agentActivity.status !== 'idle' && (
                       <div className={`p-3 rounded-lg border ${
@@ -2456,12 +2601,35 @@ export function ExperimentalWorkspacePanel() {
                     )}
                     {isChatLoading && (
                       <div className="flex justify-start">
-                        <div className="bg-white/10 border border-white/20 rounded-lg p-3">
-                          <Loader2 className="h-4 w-4 animate-spin text-white/60" />
+                        <div className="bg-white/10 border border-white/20 rounded-lg px-4 py-3 flex items-center gap-3">
+                          <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
+                          <div>
+                            <p className="text-sm text-white/80">Generating response...</p>
+                            <p className="text-[10px] text-white/50">Using {chatProvider}/{chatModel.split(':')[0]}</p>
+                          </div>
                         </div>
                       </div>
                     )}
                     <div ref={chatEndRef} />
+                  </div>
+                    
+                    {/* Code Preview Panel */}
+                    {showCodePreview && (
+                      <div className="w-1/2 border-l border-white/10 overflow-hidden flex flex-col">
+                        <div className="p-2 border-b border-white/10 bg-black/40">
+                          <span className="text-xs font-medium text-white/80">Code Preview</span>
+                        </div>
+                        <div className="flex-1 overflow-auto p-2">
+                          {chatMessages.length > 0 ? (
+                            <pre className="text-xs text-white/70 whitespace-pre-wrap font-mono">
+                              {chatMessages[chatMessages.length - 1]?.content?.slice(0, 5000) || 'No response yet'}
+                            </pre>
+                          ) : (
+                            <p className="text-xs text-white/40">No messages yet</p>
+                          )}
+                        </div>
+                      </div>
+                    )}
                   </div>
 
                   <div className="p-4 border-t border-white/10">
@@ -2486,6 +2654,16 @@ export function ExperimentalWorkspacePanel() {
                         title="Attach files from VFS"
                       >
                         <Paperclip className="h-4 w-4" />
+                      </Button>
+                      {/* Voice Input Button */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => isListening ? stopListening() : startListening()}
+                        className={`h-[60px] w-10 hover:bg-white/10 ${isListening ? 'text-red-400 animate-pulse' : 'text-white/60'}`}
+                        title={isListening ? 'Stop recording' : 'Voice input'}
+                      >
+                        {isListening ? <Mic className="h-4 w-4" /> : <Mic className="h-4 w-4" />}
                       </Button>
                       <Button
                         onClick={() => void handleSendChat()}
@@ -2645,23 +2823,99 @@ export function ExperimentalWorkspacePanel() {
                         )}
                       </div>
 
-                      {/* State Components */}
+                      {/* Agent Reasoning Stream */}
+                      <Separator className="my-4 bg-white/10" />
+                      <div className="space-y-2">
+                        <div className="flex items-center justify-between mb-2">
+                          <div className="flex items-center gap-2">
+                            <Brain className="h-3 w-3 text-purple-400" />
+                            <span className="text-xs font-medium text-white/90">Agent Reasoning</span>
+                            <Badge variant="secondary" className="text-[10px] bg-purple-500/20">
+                              {agentActivity.reasoningChunks.length}
+                            </Badge>
+                          </div>
+                          {agentActivity.reasoningChunks.length > 0 && (
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setAgentActivity(prev => ({ ...prev, reasoningChunks: [] }))}
+                              className="h-5 text-[10px] hover:bg-purple-500/20"
+                            >
+                              Clear
+                            </Button>
+                          )}
+                        </div>
+                        <div className="space-y-1 max-h-[200px] overflow-y-auto">
+                          {agentActivity.reasoningChunks.length === 0 ? (
+                            <p className="text-white/40 text-xs">No reasoning yet - start a chat to see agent thoughts</p>
+                          ) : (
+                            agentActivity.reasoningChunks.slice(-5).map((chunk, idx) => (
+                              <div key={idx} className="p-2 bg-purple-500/10 border border-purple-500/20 rounded text-xs">
+                                <p className="text-white/80">{chunk.content?.slice(0, 200)}</p>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                      {/* Processing Steps */}
                       <Separator className="my-4 bg-white/10" />
                       <div className="space-y-2">
                         <div className="flex items-center gap-2 mb-2">
                           <Zap className="h-3 w-3 text-yellow-400" />
-                          <span className="text-xs font-medium text-white/90">Agent State</span>
+                          <span className="text-xs font-medium text-white/90">Processing Steps</span>
+                          <Badge variant="secondary" className="text-[10px] bg-yellow-500/20">
+                            {agentActivity.processingSteps.length}
+                          </Badge>
+                        </div>
+                        <div className="space-y-1">
+                          {agentActivity.processingSteps.length === 0 ? (
+                            <p className="text-white/40 text-xs">No steps yet</p>
+                          ) : (
+                            agentActivity.processingSteps.slice(-5).map((step, idx) => (
+                              <div key={idx} className="flex items-center gap-2 text-xs">
+                                {step.status === 'completed' && <CheckCircle className="h-3 w-3 text-green-400" />}
+                                {step.status === 'started' && <Loader2 className="h-3 w-3 text-blue-400 animate-spin" />}
+                                {step.status === 'failed' && <AlertCircle className="h-3 w-3 text-red-400" />}
+                                {step.status === 'pending' && <div className="h-3 w-3 rounded-full border border-white/30" />}
+                                <span className={step.status === 'completed' ? 'text-white/50' : 'text-white/80'}>
+                                  {step.step?.slice(0, 50)}
+                                </span>
+                              </div>
+                            ))
+                          )}
+                        </div>
+                      </div>
+
+                      {/* State Components */}
+                      <Separator className="my-4 bg-white/10" />
+                      <div className="space-y-2">
+                        <div className="flex items-center gap-2 mb-2">
+                          <Activity className="h-3 w-3 text-cyan-400" />
+                          <span className="text-xs font-medium text-white/90">Agent Status</span>
                         </div>
                         <div className="grid grid-cols-2 gap-2">
                           <div className="p-2 bg-white/5 rounded border border-white/10">
                             <p className="text-[10px] text-white/50">Status</p>
-                            <p className="text-xs text-white/80">Active</p>
+                            <p className={`text-xs ${
+                              agentActivity.status === 'thinking' ? 'text-purple-400' :
+                              agentActivity.status === 'executing' ? 'text-blue-400' :
+                              agentActivity.status === 'completed' ? 'text-green-400' : 'text-white/50'
+                            }`}>
+                              {agentActivity.status || 'idle'}
+                            </p>
                           </div>
                           <div className="p-2 bg-white/5 rounded border border-white/10">
                             <p className="text-[10px] text-white/50">Session</p>
                             <p className="text-xs text-white/80">#{filesystem?.sessionId?.slice(0, 8) || "N/A"}</p>
                           </div>
                         </div>
+                        {agentActivity.currentAction && (
+                          <div className="p-2 bg-white/5 rounded border border-white/10">
+                            <p className="text-[10px] text-white/50">Current Action</p>
+                            <p className="text-xs text-white/80 truncate">{agentActivity.currentAction}</p>
+                          </div>
+                        )}
                       </div>
                     </div>
                   </ScrollArea>
@@ -3269,12 +3523,22 @@ export function ExperimentalWorkspacePanel() {
                 <TabsContent value="integrations" className="flex-1 mt-0 overflow-hidden">
                   <ScrollArea className="h-full">
                     <div className="p-4">
-                      <IntegrationPanel 
+                      <IntegrationPanel
                         userId={getOrCreateAnonymousSessionId()}
                         onClose={() => setTab("explorer")}
                       />
                     </div>
                   </ScrollArea>
+                </TabsContent>
+
+                {/* Git Tab - Source Control */}
+                <TabsContent value="git" className="flex-1 mt-0 overflow-hidden">
+                  <GitSourceControl scopePath={filesystemScopePath || 'project'} />
+                </TabsContent>
+
+                {/* Voice Tab - Full Voice Chat */}
+                <TabsContent value="voice" className="flex-1 mt-0 overflow-hidden">
+                  <VoicePanel />
                 </TabsContent>
               </Tabs>
             </div>
