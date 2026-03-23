@@ -54,15 +54,19 @@ export async function POST(request: NextRequest) {
     }
     
     // Check if branch exists
-    const branchResponse = await githubApi<any>(
-      `/repos/${targetOwner}/${targetRepo}/branches/${branch}`,
-      token
-    );
-    
-    if (!branchResponse) {
-      return NextResponse.json({ error: `Branch '${branch}' not found` }, { status: 404 });
+    let branchResponse;
+    try {
+      branchResponse = await githubApi<any>(
+        `/repos/${targetOwner}/${targetRepo}/branches/${branch}`,
+        token
+      );
+    } catch (apiError: any) {
+      if (apiError.message?.includes('404')) {
+        return NextResponse.json({ error: `Branch '${branch}' not found` }, { status: 404 });
+      }
+      throw apiError; // Re-throw other errors
     }
-    
+
     return NextResponse.json({
       success: true,
       branch: {

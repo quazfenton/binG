@@ -794,9 +794,9 @@ export default function TerminalPanel({
       isConnected: false,
     };
 
-    // Set default cwd to 'project/sessions' - start one directory lower than project root
-    // The session scope path is only for VFS lookups, not for terminal cwd
-    localShellCwdRef.current[id] = 'project/sessions';
+    // Set default cwd to the current filesystem scope path
+    // This ensures the terminal starts within the active workspace scope
+    localShellCwdRef.current[id] = normalizeScopePath(filesystemScopePathRef.current);
     reconnectCooldownUntilRef.current[id] = 0;
     commandQueueRef.current[id] = [];
     commandHistoryRef.current[id] = [];
@@ -822,7 +822,7 @@ export default function TerminalPanel({
         term?.terminal?.write(text + '\r\n');
       },
       getPrompt: getPrompt,
-      getCwd: (terminalId) => localShellCwdRef.current[terminalId] || 'project',
+      getCwd: (terminalId) => localShellCwdRef.current[terminalId] || normalizeScopePath(filesystemScopePathRef.current),
       setCwd: (terminalId, cwd) => { localShellCwdRef.current[terminalId] = cwd },
       updateTerminalState: updateTerminalState,
       sendInput: sendInput,
@@ -1259,23 +1259,23 @@ export default function TerminalPanel({
       containerEl.addEventListener('click', () => terminal.focus());
 
       requestAnimationFrame(() => {
-        try {
-          // Guard against uninitialized dimensions - check container has size
-          const dims = fitAddon.proposeDimensions()
-          if (dims && dims.rows > 0 && dims.cols > 0) {
-            fitAddon.fit()
-          } else {
-            // Defer fit to next frame if dimensions not ready
-            setTimeout(() => {
-              try {
-                const delayedDims = fitAddon.proposeDimensions()
-                if (delayedDims && delayedDims.rows > 0 && delayedDims.cols > 0) {
-                  fitAddon.fit()
-                }
-              } catch {}
-            }, 100)
+        const safeFit = (phase: 'initial' | 'deferred') => {
+          try {
+            const dims = fitAddon.proposeDimensions();
+            if (!dims || dims.rows <= 0 || dims.cols <= 0) return false;
+            fitAddon.fit();
+            return true;
+          } catch (error) {
+            logger.debug(`${phase} terminal fit failed`, error);
+            return false;
           }
-        } catch {}
+        };
+
+        if (!safeFit('initial')) {
+          setTimeout(() => {
+            void safeFit('deferred');
+          }, 100);
+        }
         terminal.focus();
       });
 
@@ -1286,7 +1286,7 @@ export default function TerminalPanel({
       terminal.writeln('\x1b[90m  Type "connect" to connect to sandbox.\x1b[0m');
       terminal.writeln('');
 
-      const cwd = localShellCwdRef.current[terminalId] || 'project/sessions';
+      const cwd = localShellCwdRef.current[terminalId] || normalizeScopePath(filesystemScopePathRef.current);
       terminal.write(getPrompt('local', cwd));
 
       updateTerminalState(terminalId, { terminal, fitAddon, mode: 'local' });

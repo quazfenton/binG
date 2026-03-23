@@ -31,6 +31,8 @@ import {
   extractFileEdits, 
   extractFileWriteEdits, 
   extractFencedDiffEdits as extractFencedDiffEditsShared,
+  createIncrementalParser,
+  extractIncrementalFileEdits,
 } from '@/lib/chat/file-edit-parser';
 
 // Force Node.js runtime for Daytona SDK compatibility
@@ -72,6 +74,7 @@ const chatRequestSchema = z.object({
   requestId: z.string().optional(),
   conversationId: z.string().optional(),
   agentMode: z.enum(['v1', 'v2', 'auto']).optional().default('auto'),
+  mode: z.enum(['normal', 'enhanced', 'max']).optional().default('max'),
   filesystemContext: z.object({
     attachedFiles: z.any().optional(),
     applyFileEdits: z.boolean().optional(),
@@ -522,10 +525,29 @@ export async function POST(request: NextRequest) {
               emit(SSE_EVENT_TYPES.STEP, payload);
             };
 
+            // Progressive file edit parsing - buffer for incremental parsing
+            let streamingContentBuffer = '';
+            const fileEditParserState = createIncrementalParser();
+
             try {
               sendStep('Start agentic pipeline', 'started');
               config.onStreamChunk = (chunk: string) => {
+                // Emit token as before
                 emit(SSE_EVENT_TYPES.TOKEN, { content: chunk, timestamp: Date.now() });
+                
+                // Progressive file edit detection
+                streamingContentBuffer += chunk;
+                const newFileEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
+                
+                // Emit file_edit events for newly detected edits
+                for (const edit of newFileEdits) {
+                  emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                    path: edit.path,
+                    status: 'detected',
+                    timestamp: Date.now(),
+                  });
+                  chatLogger.debug('Progressive file edit detected', { path: edit.path }, {});
+                }
               };
               config.onToolExecution = (toolName: string, args: any, result: any) => {
                 const toolCallId = `${toolName}-${Date.now()}`;
@@ -556,8 +578,16 @@ export async function POST(request: NextRequest) {
                 },
                 data: result,
               });
+              
+              // Cleanup: Clear streaming buffer to free memory
+              streamingContentBuffer = '';
+              fileEditParserState.emittedPaths.clear();
             } catch (error: any) {
               emit(SSE_EVENT_TYPES.ERROR, { message: error.message || 'Agentic execution failed' });
+              
+              // Cleanup on error too
+              streamingContentBuffer = '';
+              fileEditParserState.emittedPaths.clear();
             } finally {
               controller.close();
             }
@@ -603,6 +633,7 @@ export async function POST(request: NextRequest) {
       enableTools: requestType === 'tool' ? !!authenticatedUserId : undefined,
       enableSandbox: requestType === 'sandbox' ? !!authenticatedUserId : undefined,
       enableComposio: requestType === 'tool' ? !!authenticatedUserId : undefined,
+      mode: body.mode || 'enhanced', // Add mode from request
     };
 
     chatLogger.debug('Routing request through priority chain', { requestId, provider, model }, {
@@ -610,14 +641,25 @@ export async function POST(request: NextRequest) {
       enableTools: routerRequest.enableTools,
       enableSandbox: routerRequest.enableSandbox,
       enableComposio: routerRequest.enableComposio,
+      mode: routerRequest.mode,
     });
 
-      // Route through priority chain and format response using consolidated router
+    // Route through priority chain with spec amplification (V1 mode only)
     try {
-      const unifiedResponse = await responseRouter.routeAndFormat(routerRequest);
+      let unifiedResponse
 
-      const actualProvider = unifiedResponse.metadata?.actualProvider || unifiedResponse.source;
-      const actualModel = unifiedResponse.metadata?.actualModel || routerRequest.model;
+      // Spec amplification only works with V1 mode (regular LLM calls)
+      // V2 agent mode has its own planning system
+      if (agentMode === 'v2') {
+        chatLogger.debug('V2 agent mode, using standard routing without spec amplification', { requestId })
+        unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
+      } else {
+        // V1 mode or auto - use spec amplification if enabled
+        unifiedResponse = await responseRouter.routeWithSpecAmplification(routerRequest)
+      }
+
+      const actualProvider = unifiedResponse.metadata?.actualProvider || unifiedResponse.source
+      const actualModel = unifiedResponse.metadata?.actualModel || routerRequest.model
 
       chatLogger.info('Request handled by response router', { requestId, provider: actualProvider, model: actualModel }, {
         source: unifiedResponse.source,
@@ -764,11 +806,23 @@ export async function POST(request: NextRequest) {
               previousVersion: edit.previousVersion,
             };
           });
-        
+
         if (codeArtifacts.length > 0) {
           clientResponse.metadata = {
             ...clientResponse.metadata,
             codeArtifacts,
+            // Add filesystem metadata for frontend message-bubble.tsx
+            filesystem: {
+              transactionId: filesystemEdits.transactionId,
+              status: filesystemEdits.status,
+              applied: filesystemEdits.applied,
+              errors: filesystemEdits.errors,
+              requestedFiles: filesystemEdits.requestedFiles,
+              scopePath: filesystemEdits.scopePath,
+              workspaceVersion: filesystemEdits.workspaceVersion,
+              commitId: filesystemEdits.commitId,
+              sessionId: filesystemEdits.sessionId,
+            },
           };
         }
       }
@@ -937,6 +991,21 @@ export async function POST(request: NextRequest) {
         if (supplementalAgenticEvents.length > 0) {
           events.splice(Math.max(0, events.length - 1), 0, ...supplementalAgenticEvents);
         }
+        
+        // Add progressive FILE_EDIT events for VFS sync (terminal, file explorer, etc.)
+        const fileEditEvents: string[] = [];
+        if (filesystemEdits && filesystemEdits.applied.length > 0) {
+          for (const edit of filesystemEdits.applied) {
+            fileEditEvents.push(`event: file_edit\ndata: ${JSON.stringify({
+              requestId: streamRequestId,
+              path: edit.path,
+              status: 'detected',
+              operation: edit.operation,
+              timestamp: Date.now(),
+            })}\n\n`);
+          }
+        }
+        
         if (
           filesystemEdits &&
           (filesystemEdits.applied.length > 0 ||
@@ -984,7 +1053,7 @@ export async function POST(request: NextRequest) {
               request.signal.addEventListener('abort', () => {
                 cleanup();
                 const streamDuration = Date.now() - streamStartTime;
-                chatLogger.warn('Stream cancelled by client', { requestId: streamRequestId, provider, model }, {
+                chatLogger.warn('Stream cancelled by client', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
                   chunkCount,
                   latencyMs: streamDuration,
                 });
@@ -993,13 +1062,15 @@ export async function POST(request: NextRequest) {
 
             try {
               // Separate metadata events from content tokens for better streaming UX
-              const metadataEvents = events.filter(e => 
-                e.includes('event: init') || 
-                e.includes('event: reasoning') || 
-                e.includes('event: tool_invocation') || 
+              // Include sandbox_output for stdout/stderr from code execution
+              const metadataEvents = events.filter(e =>
+                e.includes('event: init') ||
+                e.includes('event: reasoning') ||
+                e.includes('event: tool_invocation') ||
                 e.includes('event: step') ||
                 e.includes('event: filesystem') ||
-                e.includes('event: diffs')
+                e.includes('event: diffs') ||
+                e.includes('event: sandbox_output')  // Include sandbox stdout/stderr
               );
               const tokenEvents = events.filter(e => e.includes('event: token') && e.includes('"type":"token"'));
               const doneEvent = events.find(e => e.includes('event: done'));
@@ -1015,8 +1086,24 @@ export async function POST(request: NextRequest) {
                 await new Promise(resolve => setTimeout(resolve, 5)); // Minimal delay for metadata
               }
 
+              // Send FILE_EDIT events for VFS sync (before content tokens)
+              for (const fileEditEvent of fileEditEvents) {
+                if (request.signal?.aborted) {
+                  cleanup();
+                  return;
+                }
+                controller.enqueue(encoderRef.encode(fileEditEvent));
+                chunkCount++;
+                await new Promise(resolve => setTimeout(resolve, 10)); // Small delay between file edits
+              }
+
               // Stream content tokens with progressive delay for natural feel
               const totalTokens = tokenEvents.length;
+              
+              // Calculate optimal delay based on token count for consistent streaming duration
+              // Target: 10-30 seconds of streaming depending on response length
+              const baseDelay = totalTokens > 200 ? 25 : totalTokens > 100 ? 35 : 50;
+              
               for (let i = 0; i < totalTokens; i++) {
                 if (request.signal?.aborted) {
                   cleanup();
@@ -1030,20 +1117,18 @@ export async function POST(request: NextRequest) {
                 // Progressive delay: faster start, slower middle, fast end
                 // Creates natural "thinking and typing" rhythm
                 let delay: number;
-                if (i < 3) {
-                  delay = 15; // Quick start to show response is beginning
-                } else if (i < 10) {
-                  delay = 25 + (i * 2); // Gradual slowdown
-                } else if (i < totalTokens * 0.7) {
-                  delay = 35 + Math.sin(i / 5) * 10; // Natural variation in middle
+                if (i < 5) {
+                  delay = baseDelay * 0.6; // Quick start to show response is beginning
+                } else if (i < 20) {
+                  delay = baseDelay; // Steady pace
+                } else if (i < totalTokens * 0.8) {
+                  delay = baseDelay * 1.2 + Math.sin(i / 10) * 15; // Natural variation in middle
                 } else {
-                  delay = 20; // Speed up at end for snappy finish
+                  delay = baseDelay * 0.7; // Speed up at end for snappy finish
                 }
 
-                // Add more delay for longer responses (prevents burst)
-                if (totalTokens > 50) {
-                  delay = Math.min(delay * 1.3, 60); // Cap at 60ms for very long responses
-                }
+                // Cap delays to prevent excessive waiting
+                delay = Math.max(15, Math.min(delay, 80));
 
                 await new Promise(resolve => setTimeout(resolve, delay));
               }
@@ -1086,7 +1171,7 @@ export async function POST(request: NextRequest) {
           },
           cancel() {
             const streamDuration = Date.now() - streamStartTime;
-            chatLogger.warn('Stream cancelled (cancel callback)', { requestId: streamRequestId, provider, model }, {
+            chatLogger.warn('Stream cancelled (cancel callback)', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
               chunkCount,
               latencyMs: streamDuration,
             });

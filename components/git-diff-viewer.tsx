@@ -140,47 +140,54 @@ export default function GitDiffViewer({ diffs, onViewed, onApply }: GitDiffViewe
                   </div>
                   
                   {/* Hunk Lines */}
-                  {hunk.lines.map((line, lineIdx) => {
-                    const lineType = line.startsWith('+') && !line.startsWith('+++') ? 'add' :
-                                    line.startsWith('-') && !line.startsWith('---') ? 'remove' : 'context';
-                    
-                    return (
-                      <div
-                        key={lineIdx}
-                        className={`flex px-4 py-0.5 ${
-                          lineType === 'add' ? 'bg-green-500/10' :
-                          lineType === 'remove' ? 'bg-red-500/10' :
-                          'bg-transparent'
-                        }`}
-                      >
-                        <span className="w-12 text-right pr-4 text-gray-600 select-none text-xs">
-                          {lineType === 'add' ? hunk.newStart + lineIdx :
-                           lineType === 'remove' ? hunk.oldStart + lineIdx : ''}
-                        </span>
-                        <span className={`w-4 select-none ${
-                          lineType === 'add' ? 'text-green-400' :
-                          lineType === 'remove' ? 'text-red-400' :
-                          'text-gray-600'
-                        }`}>
-                          {lineType === 'add' ? '+' : lineType === 'remove' ? '-' : ' '}
-                        </span>
-                        <SyntaxHighlighter
-                          language="typescript"
-                          style={oneDark}
-                          customStyle={{
-                            background: 'transparent',
-                            padding: '0',
-                            margin: '0',
-                            fontSize: '0.8125rem',
-                          }}
-                          showLineNumbers={false}
-                          wrapLines={true}
+                  {(() => {
+                    let oldLineNum = hunk.oldStart;
+                    let newLineNum = hunk.newStart;
+                    return hunk.lines.map((line, lineIdx) => {
+                      const lineType = line.startsWith('+') && !line.startsWith('+++') ? 'add' :
+                                      line.startsWith('-') && !line.startsWith('---') ? 'remove' : 'context';
+                      
+                      const displayOldLine = lineType === 'remove' ? oldLineNum++ : (lineType === 'context' ? oldLineNum++ : '');
+                      const displayNewLine = lineType === 'add' ? newLineNum++ : (lineType === 'context' ? newLineNum++ : '');
+                      
+                      return (
+                        <div
+                          key={lineIdx}
+                          className={`flex px-4 py-0.5 ${
+                            lineType === 'add' ? 'bg-green-500/10' :
+                            lineType === 'remove' ? 'bg-red-500/10' :
+                            'bg-transparent'
+                          }`}
                         >
-                          {line.slice(1)}
-                        </SyntaxHighlighter>
-                      </div>
-                    );
-                  })}
+                          <span className="w-12 text-right pr-4 text-gray-600 select-none text-xs">
+                            {lineType === 'add' ? displayNewLine :
+                             lineType === 'remove' ? displayOldLine : ''}
+                          </span>
+                          <span className={`w-4 select-none ${
+                            lineType === 'add' ? 'text-green-400' :
+                            lineType === 'remove' ? 'text-red-400' :
+                            'text-gray-600'
+                          }`}>
+                            {lineType === 'add' ? '+' : lineType === 'remove' ? '-' : ' '}
+                          </span>
+                          <SyntaxHighlighter
+                            language="typescript"
+                            style={oneDark}
+                            customStyle={{
+                              background: 'transparent',
+                              padding: '0',
+                              margin: '0',
+                              fontSize: '0.8125rem',
+                            }}
+                            showLineNumbers={false}
+                            wrapLines={true}
+                          >
+                            {line.slice(1)}
+                          </SyntaxHighlighter>
+                        </div>
+                      );
+                    });
+                  })()}
                 </div>
               ))}
             </div>
@@ -206,6 +213,11 @@ export function parseUnifiedDiff(diff: string): FileDiff[] {
     
     // File header
     if (line.startsWith('diff --git')) {
+      // Flush any active hunk before starting new file
+      if (currentHunk && currentFile) {
+        currentFile.hunks.push(currentHunk);
+        currentHunk = null;
+      }
       if (currentFile) {
         files.push(currentFile);
       }
@@ -220,6 +232,7 @@ export function parseUnifiedDiff(diff: string): FileDiff[] {
           additions: 0,
           deletions: 0,
         };
+        currentHunk = null;
       }
     }
     

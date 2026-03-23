@@ -88,6 +88,23 @@ import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";
 import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
 import { useVoiceInput } from "@/hooks/use-voice-input";
+import { useMultiRotatingStatements } from "@/hooks/use-rotating-statements";
+
+function ChatLoadingIndicator({ provider, model }: { provider: string; model: string }) {
+  const statement = useMultiRotatingStatements(['interesting', 'funny', 'task'], 2500);
+  return (
+    <div className="flex justify-start">
+      <div className="bg-white/10 border border-white/20 rounded-lg px-4 py-3 flex items-center gap-3">
+        <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
+        <div>
+          <p className="text-sm text-white/80">{statement}</p>
+          <p className="text-[10px] text-white/50">Using {provider}/{model}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 import { getOrCreateAnonymousSessionId } from "@/lib/utils";
 import type { Message } from "@/types";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
@@ -2614,15 +2631,10 @@ export function ExperimentalWorkspacePanel() {
                       ))
                     )}
                     {isChatLoading && (
-                      <div className="flex justify-start">
-                        <div className="bg-white/10 border border-white/20 rounded-lg px-4 py-3 flex items-center gap-3">
-                          <Loader2 className="h-4 w-4 animate-spin text-blue-400" />
-                          <div>
-                            <p className="text-sm text-white/80">Generating response...</p>
-                            <p className="text-[10px] text-white/50">Using {chatProvider}/{chatModel.split(':')[0]}</p>
-                          </div>
-                        </div>
-                      </div>
+                      <ChatLoadingIndicator 
+                        provider={chatProvider} 
+                        model={chatModel.split(':')[0]} 
+                      />
                     )}
                     <div ref={chatEndRef} />
                   </div>

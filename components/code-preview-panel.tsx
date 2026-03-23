@@ -1024,10 +1024,8 @@ export default function CodePreviewPanel({
           } else {
             try {
               const file = await readFilesystemFile(node.path);
-              if (file.content) {
-                // Store with full relative path including all directories
-                files[relativePath] = file.content;
-              }
+              // Store file even if empty (zero-byte files are valid modules/assets)
+              files[relativePath] = file.content ?? '';
             } catch (err) {
               console.warn('Failed to load file:', node.path, err);
             }

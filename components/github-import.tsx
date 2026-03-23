@@ -298,10 +298,12 @@ export default function GitHubImport({ onImportComplete }: GitHubImportProps) {
                 <span>{importProgress.current} / {importProgress.total}</span>
               </div>
               <div className="h-1.5 bg-gray-800 rounded-full overflow-hidden">
-                <div 
+                <div
                   className="h-full bg-gradient-to-r from-purple-500 to-blue-500 transition-all duration-300"
-                  style={{ 
-                    width: `${(importProgress.current / importProgress.total) * 100}%` 
+                  style={{
+                    width: importProgress.total > 0 
+                      ? `${(importProgress.current / importProgress.total) * 100}%`
+                      : '0%'
                   }}
                 />
               </div>
