@@ -147,7 +147,9 @@ export class EnhancedLLMService {
 
     // Use explicitly passed provider first, then task-specific provider, then default
     const actualProvider = provider || (task ? getProviderForTask(task) : getProviderForTask('chat'));
-    const actualModel = task ? getModelForTask(task, llmRequest.model) : llmRequest.model;
+    const actualModel = task 
+      ? getModelForTask(task, llmRequest.model) 
+      : llmRequest.model || 'default';  // Default model if none specified
 
     chatLogger.debug('Enhanced LLM service processing request', { requestId, provider: actualProvider, model: actualModel, userId }, {
       task,

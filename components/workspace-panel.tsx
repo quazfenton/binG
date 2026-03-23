@@ -774,7 +774,6 @@ export function ExperimentalWorkspacePanel() {
     // Streaming state
     let streamedContent = '';
     let assistantMessageId = `exp-chat-${Date.now()}`;
-    const vfsScope = filesystem?.sessionId || 'project/sessions/default';
 
     // Add placeholder assistant message for streaming updates
     const placeholderMessage: Message = {
@@ -811,6 +810,12 @@ export function ExperimentalWorkspacePanel() {
         }
       ];
 
+      // Ensure we have valid provider and model
+      const effectiveProvider = chatProvider || 'openrouter';
+      const effectiveModel = chatModel || 'nvidia/nemotron-3-30b-a3b:free';
+      const effectiveConversationId = activeThreadId ? `exp-workspace-thread-${activeThreadId}` : undefined;
+      const effectiveScopePath = filesystem?.sessionId || 'project';
+
       // Create abort controller for stopping
       const abortController = new AbortController();
       chatAbortControllerRef.current = abortController;
@@ -822,13 +827,13 @@ export function ExperimentalWorkspacePanel() {
         },
         body: JSON.stringify({
           messages: messagesPayload,
-          provider: chatProvider,
-          model: chatModel,
+          provider: effectiveProvider,
+          model: effectiveModel,
           stream: true,
-          conversationId: `exp-workspace-thread-${activeThreadId}`,
+          conversationId: effectiveConversationId,
           agentMode: 'auto',
           filesystemContext: {
-            scopePath: vfsScope,
+            scopePath: effectiveScopePath,
             attachedFiles: attachedFiles.map(f => ({
               path: f.path,
               content: f.content,
@@ -840,7 +845,9 @@ export function ExperimentalWorkspacePanel() {
       });
 
       if (!response.ok) {
-        throw new Error(`API request failed: ${response.status}`);
+        const errorText = await response.text().catch(() => '');
+        console.error('[ExperimentalWorkspace] Chat API error:', response.status, errorText);
+        throw new Error(`API request failed: ${response.status} - ${errorText.slice(0, 200)}`);
       }
 
       const reader = response.body?.getReader();
@@ -926,7 +933,7 @@ export function ExperimentalWorkspacePanel() {
                     const snapshot = await vfs.getSnapshot();
                     setVfsSnapshot(snapshot);
                     setFilesystem({
-                      sessionId: vfsScope,
+                      sessionId: filesystem?.sessionId || 'project',
                       version: snapshot?.version || 1,
                       files: snapshot?.files || [],
                     });
