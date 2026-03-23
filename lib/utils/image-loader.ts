@@ -159,28 +159,35 @@ function getHostname(url: string): string | null {
 
 /**
  * Validate image URL for SSRF safety
+ * Auto-prepends https:// if protocol is missing
  */
 export function validateImageUrl(url: string): { valid: boolean; error?: string } {
+  // Auto-prepend https:// if protocol is missing
+  let normalizedUrl = url;
+  if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    normalizedUrl = `https://${url}`;
+  }
+  
   // Must be HTTPS
-  if (!url.startsWith('https://')) {
+  if (!normalizedUrl.startsWith('https://')) {
     return { valid: false, error: 'Only HTTPS URLs are allowed' };
   }
-  
+
   // Check for dangerous URL patterns
-  if (hasDangerousPatterns(url)) {
+  if (hasDangerousPatterns(normalizedUrl)) {
     return { valid: false, error: 'URL contains dangerous patterns' };
   }
-  
-  const hostname = getHostname(url);
+
+  const hostname = getHostname(normalizedUrl);
   if (!hostname) {
     return { valid: false, error: 'Invalid URL format' };
   }
-  
+
   if (!isHostnameSafe(hostname)) {
     return { valid: false, error: `Hostname not allowed: ${hostname}` };
   }
-  
-  return { valid: true };
+
+  return { valid: true, error: undefined };
 }
 
 /**

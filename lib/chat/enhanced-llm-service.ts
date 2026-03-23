@@ -569,13 +569,13 @@ export class EnhancedLLMService {
     ];
 
     for (const pattern of patterns) {
-      const match = model.match(pattern);
+      const match = model?.match(pattern);
       if (match) {
         return match[1].toLowerCase();
       }
     }
 
-    return model.split('-')[0].toLowerCase();
+    return model?.split('-')[0].toLowerCase() || 'unknown';
   }
 
   private isProviderHealthy(provider: string): boolean {
