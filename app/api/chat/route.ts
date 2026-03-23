@@ -645,6 +645,10 @@ export async function POST(request: NextRequest) {
     });
 
     // Route through priority chain with spec amplification (V1 mode only)
+    // Track actual provider/model for telemetry (may differ from requested due to fallbacks)
+    let actualProvider = provider;
+    let actualModel = normalizedModel;
+    
     try {
       let unifiedResponse
 
@@ -658,8 +662,9 @@ export async function POST(request: NextRequest) {
         unifiedResponse = await responseRouter.routeWithSpecAmplification(routerRequest)
       }
 
-      const actualProvider = unifiedResponse.metadata?.actualProvider || unifiedResponse.source
-      const actualModel = unifiedResponse.metadata?.actualModel || routerRequest.model
+      // Extract actual provider/model from response metadata (after fallbacks)
+      actualProvider = unifiedResponse.metadata?.actualProvider || unifiedResponse.source;
+      actualModel = unifiedResponse.metadata?.actualModel || routerRequest.model;
 
       chatLogger.info('Request handled by response router', { requestId, provider: actualProvider, model: actualModel }, {
         source: unifiedResponse.source,
@@ -1146,6 +1151,11 @@ export async function POST(request: NextRequest) {
                 tokenCount: tokenEvents.length,
               });
 
+              // Record latency for provider router (use actual provider after fallbacks)
+              try {
+                llmProviderRouter.recordRequest(actualProvider as LLMProviderType, streamDuration, true);
+              } catch {}
+
               controller.close();
             } catch (error) {
               const streamDuration = Date.now() - streamStartTime;
@@ -1154,6 +1164,11 @@ export async function POST(request: NextRequest) {
                 chunkCount,
                 latencyMs: streamDuration,
               });
+
+              // Record error latency for provider router
+              try {
+                llmProviderRouter.recordRequest(actualProvider as LLMProviderType, streamDuration, false);
+              } catch {}
 
               // Only send error event if client hasn't disconnected
               if (!request.signal?.aborted) {
@@ -1196,15 +1211,15 @@ export async function POST(request: NextRequest) {
 
       // Handle non-streaming response
       const responseLatency = Date.now() - requestStartTime;
-      chatLogger.info('Non-streaming response completed', { requestId, provider, model }, {
+      chatLogger.info('Non-streaming response completed', { requestId, provider: actualProvider, model: actualModel }, {
         latencyMs: responseLatency,
         contentLength: clientResponse.content?.length || 0,
         success: clientResponse.success,
       });
-      
-      // Record successful latency for provider router
+
+      // Record latency for provider router (use actual provider after fallbacks)
       try {
-        llmProviderRouter.recordRequest(provider as LLMProviderType, responseLatency, clientResponse.success !== false);
+        llmProviderRouter.recordRequest(actualProvider as LLMProviderType, responseLatency, clientResponse.success !== false);
       } catch {}
 
       const responseStatus = clientResponse.success ? 200 : 500;
@@ -1259,25 +1274,25 @@ export async function POST(request: NextRequest) {
     const isNotConfiguredError = errorMessage.includes('not configured');
 
     if (!isNotConfiguredError) {
-      chatLogger.error('Critical chat API error', { requestId, provider, model }, {
+      chatLogger.error('Critical chat API error', { requestId, provider: actualProvider, model: actualModel }, {
         error: errorMessage,
         latencyMs: errorLatency,
         stack: error instanceof Error ? error.stack : undefined,
       });
-      
-      // Record error latency for provider router
+
+      // Record error latency for provider router (use actual provider)
       try {
-        llmProviderRouter.recordRequest(provider as LLMProviderType, errorLatency, false);
+        llmProviderRouter.recordRequest(actualProvider as LLMProviderType, errorLatency, false);
       } catch {}
     } else {
-      chatLogger.warn('Provider not available', { requestId, provider, model }, {
+      chatLogger.warn('Provider not available', { requestId, provider: actualProvider, model: actualModel }, {
         error: errorMessage,
         latencyMs: errorLatency,
       });
-      
-      // Record error latency for provider router
+
+      // Record error latency for provider router (use actual provider)
       try {
-        llmProviderRouter.recordRequest(provider as LLMProviderType, errorLatency, false);
+        llmProviderRouter.recordRequest(actualProvider as LLMProviderType, errorLatency, false);
       } catch {}
     }
 

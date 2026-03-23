@@ -90,11 +90,13 @@ export class TerminalEditorHandler {
   }
 
   /**
-   * Open editor for a file
+   * Open editor for a file (using existing session filePath)
    */
   open(editorType: 'nano' | 'vim' | 'vi' = 'nano'): void {
     const fs = this.getFileSystem()
-    const content = fs[this.session?.filePath || '']?.content || ''
+    const filePath = this.session?.filePath || ''
+    // Use smart file lookup for existing session path
+    const { content, resolvedPath } = this.findFileContent(fs, filePath)
     const lines = content.split('\n')
 
     this.session = {
@@ -115,17 +117,51 @@ export class TerminalEditorHandler {
   }
 
   /**
+   * Find file content by resolving path against filesystem keys
+   * Handles cases where VFS stores files with full scoped paths like project/sessions/onex8/file.txt
+   * but user provides relative paths like file.txt or project/sessions/file.txt
+   */
+  private findFileContent(fs: Record<string, any>, filePath: string): { content: string; resolvedPath: string } {
+    // First try exact match
+    if (fs[filePath]?.content !== undefined) {
+      return { content: fs[filePath].content, resolvedPath: filePath }
+    }
+    
+    // Try case-insensitive match
+    const lowerPath = filePath.toLowerCase()
+    for (const key of Object.keys(fs)) {
+      if (key.toLowerCase() === lowerPath && fs[key]?.content !== undefined) {
+        return { content: fs[key].content, resolvedPath: key }
+      }
+    }
+    
+    // Try basename match - find file by filename in any directory
+    const fileName = filePath.split('/').pop() || filePath
+    for (const key of Object.keys(fs)) {
+      const keyName = key.split('/').pop() || ''
+      if (keyName.toLowerCase() === fileName.toLowerCase() && fs[key]?.content !== undefined) {
+        return { content: fs[key].content, resolvedPath: key }
+      }
+    }
+    
+    // File not found - return empty
+    return { content: '', resolvedPath: filePath }
+  }
+
+  /**
    * Open editor for specific file
    */
   openFile(filePath: string, editorType: 'nano' | 'vim' | 'vi' = 'nano'): void {
     const fs = this.getFileSystem()
-    const content = fs[filePath]?.content || ''
+    // Use smart file lookup to handle path mismatches between VFS and user input
+    const { content, resolvedPath } = this.findFileContent(fs, filePath)
     const lines = content.split('\n')
 
+    // Use resolved path for saves - ensures VFS sync writes to correct location
+    const finalPath = resolvedPath || filePath
     this.session = {
       type: editorType,
-      filePath,
-      content,
+      filePath: finalPath,
       cursor: 0,
       lines: lines.length > 0 ? lines : [''],
       cursorLine: 0,
