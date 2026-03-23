@@ -71,8 +71,8 @@ interface SnapshotCacheEntry {
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
 const listCache = new Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }>();
 const inFlightRequests = new Map<string, Promise<any>>();
-const SNAPSHOT_CACHE_TTL_MS = 60000; // 60 seconds for snapshots
-const LIST_CACHE_TTL_MS = 30000;     // 30 seconds for directory listings
+const SNAPSHOT_CACHE_TTL_MS = 5000;  // 5 seconds for snapshots - reduced for fresher data
+const LIST_CACHE_TTL_MS = 3000;      // 3 seconds for directory listings - reduced for responsiveness
 const SNAPSHOT_CACHE_MAX_ENTRIES = 100;
 
 // Debounce map to prevent duplicate API calls within short time windows
@@ -302,38 +302,80 @@ export function useVirtualFilesystem(
   }, [useOPFS]);
 
   // Listen for filesystem-updated events from other panels (code-preview-panel, conversation-interface, etc.)
-  // and invalidate the snapshot cache to ensure fresh data
+  // and invalidate the snapshot cache AND trigger immediate re-fetch to ensure fresh data
+  // Note: We define a local fetch function here since 'request' is defined after this useEffect
   useEffect(() => {
     const unsubscribe = onFilesystemUpdated((event) => {
       const detail = event.detail;
       
       // Get current session ID when event fires (not at effect creation time)
       const ownerId = getSessionId();
+      const currentPath = currentPathRef.current;
       
-      // Invalidate cache when files are updated from anywhere in the app
-      // This fixes Bug #4: Stale snapshot cache never invalidated during edit flow
-      if (detail.path || detail.paths || detail.scopePath) {
-        // Invalidate all provided paths
-        if (detail.scopePath) {
-          invalidateSnapshotCache(detail.scopePath, ownerId);
-        }
-        if (detail.path) {
-          invalidateSnapshotCache(detail.path, ownerId);
-        }
-        if (detail.paths && detail.paths.length > 0) {
-          for (const path of detail.paths) {
-            invalidateSnapshotCache(path, ownerId);
-          }
-        }
-      } else {
+      // Determine which paths need refresh (deduplicate)
+      const pathsToRefreshSet = new Set<string>();
+      
+      if (detail.scopePath) {
+        pathsToRefreshSet.add(detail.scopePath);
+      }
+      if (detail.path) {
+        pathsToRefreshSet.add(detail.path);
+      }
+      if (detail.paths && detail.paths.length > 0) {
+        detail.paths.forEach(p => pathsToRefreshSet.add(p));
+      }
+      
+      // Convert to array for iteration
+      const pathsToRefresh = Array.from(pathsToRefreshSet);
+      
+      // Invalidate cache for all affected paths
+      for (const path of pathsToRefresh) {
+        invalidateSnapshotCache(path, ownerId);
+      }
+      
+      if (pathsToRefresh.length === 0) {
         // No path info - invalidate all caches to be safe
         log(`[filesystem-updated] Invalidating all snapshot caches (no path info)`);
         invalidateSnapshotCache(undefined, ownerId);
+        // Also trigger refresh of current path
+        pathsToRefreshSet.add(currentPath);
+      }
+      
+      // CRITICAL FIX: Trigger immediate re-fetch for affected directories
+      // This ensures the UI gets fresh data after file operations
+      log(`[filesystem-updated] Triggering immediate re-fetch for ${pathsToRefreshSet.size} paths`);
+      
+      // Use fetch directly to avoid the 'request' reference issue
+      for (const path of pathsToRefreshSet) {
+        // Invalidate and fetch fresh data immediately (bypass debounce for filesystem updates)
+        invalidateSnapshotCache(path, ownerId);
+        
+        // Fetch fresh data using native fetch (bypassing the 'request' callback which is defined later)
+        fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
+          method: 'GET',
+          headers: buildApiHeaders({ json: false }),
+          credentials: 'include',
+        })
+        .then(res => res.json())
+        .then((payload: any) => {
+          if (payload?.success && payload?.data) {
+            const data = payload.data;
+            log(`[filesystem-updated] Refreshed directory: "${data.path}", ${data.nodes.length} entries`);
+            setCachedList(path, ownerId, data.nodes);
+            // Update UI state if this is the current path
+            if (path === currentPath) {
+              setNodes(data.nodes);
+            }
+          }
+        })
+        .catch(err => {
+          logWarn(`[filesystem-updated] Failed to refresh "${path}":`, err);
+        });
       }
     });
 
     return unsubscribe;
-  }, [log]);
+  }, [log, logWarn, getSessionId]);
 
   const request = useCallback(async <TData>(
     url: string,

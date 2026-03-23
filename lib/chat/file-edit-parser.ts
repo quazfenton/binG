@@ -151,26 +151,26 @@ export function extractWsActionEdits(content: string): FileEdit[] {
 
     for (let i = startIndex; i < content.length; i++) {
       const char = content[i];
-      
+
       if (escape) {
         escape = false;
         continue;
       }
-      
+
       if (char === '\\' && inString) {
         escape = true;
         continue;
       }
-      
+
       if (char === '"') {
         inString = !inString;
         continue;
       }
-      
+
       if (!inString) {
         if (char === '{') braceCount++;
         if (char === '}') braceCount--;
-        
+
         if (braceCount === 0) {
           endIndex = i + 1;
           break;
@@ -189,6 +189,77 @@ export function extractWsActionEdits(content: string): FileEdit[] {
       if (obj.ws_action !== 'CREATE' || typeof obj.path !== 'string' || !obj.path.trim()) continue;
 
       edits.push({ path: obj.path.trim(), content: obj.content ?? '' });
+    } catch {
+      // Skip malformed JSON blocks
+      continue;
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Extract simple JSON format: { "file_edit": "path/to/file", "content": "..." }
+ * This is a simplified format for quick file edits
+ */
+export function extractSimpleJsonFileEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+
+  // Look for "file_edit" key in JSON objects
+  const fileEditPattern = /"file_edit"\s*:\s*"[^"]+"/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = fileEditPattern.exec(content)) !== null) {
+    // Find the opening brace before this match
+    const startIndex = content.lastIndexOf('{', match.index);
+    if (startIndex === -1) continue;
+
+    // Find the matching closing brace by counting braces (accounting for strings)
+    let braceCount = 0;
+    let inString = false;
+    let escape = false;
+    let endIndex = -1;
+
+    for (let i = startIndex; i < content.length; i++) {
+      const char = content[i];
+
+      if (escape) {
+        escape = false;
+        continue;
+      }
+
+      if (char === '\\' && inString) {
+        escape = true;
+        continue;
+      }
+
+      if (char === '"') {
+        inString = !inString;
+        continue;
+      }
+
+      if (!inString) {
+        if (char === '{') braceCount++;
+        if (char === '}') braceCount--;
+
+        if (braceCount === 0) {
+          endIndex = i + 1;
+          break;
+        }
+      }
+    }
+
+    if (endIndex === -1) continue;
+
+    const jsonStr = content.substring(startIndex, endIndex);
+
+    try {
+      const obj = JSON.parse(jsonStr) as { file_edit?: string; content?: string };
+
+      // Process if file_edit path exists and is a string
+      if (typeof obj.file_edit !== 'string' || !obj.file_edit.trim()) continue;
+
+      edits.push({ path: obj.file_edit.trim(), content: obj.content ?? '' });
     } catch {
       // Skip malformed JSON blocks
       continue;
@@ -269,12 +340,12 @@ export function extractMarkdownCodeBlockFiles(content: string): FileEdit[] {
 
 /**
  * Extract both compact and multi-line file_edit formats
- * Also extracts file_write and ws_action formats
+ * Also extracts file_write, ws_action, and simple JSON formats
  * Uses conditional parsing - only runs regex if signature is detected
  */
 export function extractFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
-  
+
   // Only run parsers if their signature is detected (O(1) string check)
   if (content.includes('<file_edit')) {
     edits.push(...extractCompactFileEdits(content));
@@ -286,10 +357,13 @@ export function extractFileEdits(content: string): FileEdit[] {
   if (content.includes('ws_action')) {
     edits.push(...extractWsActionEdits(content));
   }
+  if (content.includes('"file_edit"')) {
+    edits.push(...extractSimpleJsonFileEdits(content));
+  }
   if (content.includes('<!--')) {
     edits.push(...extractHtmlCommentFileEdits(content));
   }
-  
+
   return edits;
 }
 
@@ -494,6 +568,11 @@ export function sanitizeFileEditTags(content: string): string {
   if (sanitized.includes('ws_action')) {
     // Remove ws_action JSON format (with proper escaped string handling)
     sanitized = sanitized.replace(/\{[\s\S]*?"ws_action"\s*:\s*"CREATE"[\s\S]*?"path"\s*:\s*"(?:\\.|[^"\\])+"[\s\S]*?"content"\s*:\s*"(?:\\.|[^"\\])*"\s*\}/gi, '');
+  }
+
+  if (sanitized.includes('"file_edit"')) {
+    // Remove simple JSON format: { "file_edit": "path", "content": "..." }
+    sanitized = sanitized.replace(/\{[\s\S]*?"file_edit"\s*:\s*"(?:\\.|[^"\\])+"[\s\S]*?"content"\s*:\s*"(?:\\.|[^"\\])*"\s*\}/gi, '');
   }
 
   if (sanitized.includes('<folder_create')) {
