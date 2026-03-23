@@ -1899,17 +1899,29 @@ export class ResponseRouter {
       // Get fastest model from telemetry
       const { getModelStatsFromTelemetry, getSpecGenerationModel } = await import('@/lib/models/model-ranker')
       const modelStats = await getModelStatsFromTelemetry()
-      const fastModel = await getSpecGenerationModel()
+      let fastModel = getSpecGenerationModel()
 
+      // Fallback: If no telemetry data available, use Mistral Small (fast & cheap)
       if (!fastModel) {
-        logger.warn('No fast model available, falling back to normal routing')
-        return await this.routeAndFormat(request)
+        logger.info('No telemetry data available, using Mistral Small as fallback for spec generation')
+        fastModel = {
+          provider: 'mistral',
+          model: 'mistral-small-latest',
+          avgLatency: 500,
+          failureRate: 0.01,
+          lastUpdated: Date.now(),
+          totalCalls: 0,
+          successRate: 0.99,
+          score: 0.5,
+          rank: 1
+        }
       }
 
       logger.info('Spec amplification enabled', {
         fastModel: fastModel.model,
         mode: request.mode,
-        provider: fastModel.provider
+        provider: fastModel.provider,
+        fromTelemetry: !!getSpecGenerationModel()  // true if from telemetry, false if fallback
       })
 
       // PARALLEL EXECUTION
@@ -1917,6 +1929,9 @@ export class ResponseRouter {
 
       const { buildSpecPrompt } = await import('@/lib/prompts/spec-generator')
       const { enhancedLLMService } = await import('@/lib/chat/enhanced-llm-service')
+      
+      // Generate unique request ID for spec generation to avoid duplicate key error
+      const specRequestId = `spec-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
       const specPromise = enhancedLLMService.generateResponse({
         provider: fastModel.provider,
@@ -1925,7 +1940,8 @@ export class ResponseRouter {
           request.messages[0].content as string
         ),
         maxTokens: 2000,
-        stream: false
+        stream: false,
+        requestId: specRequestId
       })
 
       const [primaryResponse, specResponse] = await Promise.all([

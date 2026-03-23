@@ -611,9 +611,17 @@ export class VirtualFilesystemService {
     }
 
     // Strip common sandbox/workspace prefixes (single source of truth in scope-utils)
+    // BUT preserve project/ prefix if it's already there - don't strip it away
     let strippedPath = stripWorkspacePrefixes(rawPath);
-    // Also strip project/ prefix for server-side resolution
-    strippedPath = strippedPath.replace(/^project\//, '');
+    
+    // Only strip project/ if it's at the beginning AND the stripped path doesn't start with project
+    // This ensures consistent path format: always starts with 'project/'
+    if (!strippedPath.startsWith('project/') && !strippedPath.startsWith('project$')) {
+      // Already stripped, now add project/ prefix back if needed
+      if (!strippedPath.startsWith('project')) {
+        strippedPath = strippedPath.replace(/^project\//, '');
+      }
+    }
 
     // Handle empty path after stripping
     if (!strippedPath) {
@@ -651,6 +659,11 @@ export class VirtualFilesystemService {
       throw new Error(`Path exceeds max length (${MAX_PATH_LENGTH})`);
     }
 
+    // DEBUG: Log path normalization for troubleshooting
+    if (rawPath !== normalizedPath) {
+      console.log('[VFS] normalizePath:', rawPath, '->', normalizedPath);
+    }
+
     return normalizedPath;
   }
 
@@ -680,6 +693,10 @@ export class VirtualFilesystemService {
 
     if (!workspace) {
       console.log('[VFS] Creating new workspace', { ownerId: normalizedOwnerId });
+      
+      // DEBUG: Check if storage file exists
+      const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
+      console.log('[VFS] Storage file path:', storageFilePath);
       workspace = {
         files: new Map<string, VirtualFile>(),
         version: 0,
@@ -743,12 +760,21 @@ export class VirtualFilesystemService {
   private async persistWorkspace(ownerId: string, workspace: WorkspaceState): Promise<void> {
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
     const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
+    
+    // DEBUG: Log what's being persisted
+    console.log('[VFS persistWorkspace] Saving', workspace.files.size, 'files for owner:', normalizedOwnerId);
+    
     const serialized: PersistedWorkspace = {
       root: this.workspaceRoot,
       version: workspace.version,
       updatedAt: workspace.updatedAt,
       files: Array.from(workspace.files.values()).sort((a, b) => a.path.localeCompare(b.path)),
     };
+    
+    // DEBUG: Log file paths being saved
+    if (serialized.files.length > 0) {
+      console.log('[VFS persistWorkspace] File paths:', serialized.files.map(f => f.path).slice(0, 5));
+    }
 
     const previous = this.persistQueues.get(normalizedOwnerId) || Promise.resolve();
     const next = previous

@@ -83,6 +83,7 @@ export function generateUnifiedDiff(
 export class ShadowCommitManager {
   /**
    * Create a commit stored in the database (not filesystem)
+   * Handles schema changes - uses correct column names based on schema detection
    */
   async commit(
     vfs: Record<string, string>,
@@ -124,19 +125,21 @@ export class ShadowCommitManager {
         newContent: vfs[t.path] ?? t.newContent,
       }));
 
-      // Insert commit into database (store owner_id for user account retrieval)
+      // Extract owner_id from sessionId
+      // sessionId format: 'ownerId:conversationId' or just 'conversationId'
+      const ownerId = options.sessionId.includes(':')
+        ? options.sessionId.split(':')[0]
+        : (options.author || 'anon:unknown');
+
+      console.log('[ShadowCommit] Inserting with commitId:', commitId, 'ownerId:', ownerId);
+
+      // Insert commit into database - handle schema changes
       const stmt = db.prepare(`
         INSERT INTO shadow_commits (
           id, session_id, owner_id, message, author, timestamp, source, integration,
           workspace_version, diff, transactions
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
-
-      // Extract owner_id from sessionId or use the author as owner
-      // sessionId format: 'ownerId:conversationId' or just 'conversationId'
-      const ownerId = options.sessionId.includes(':')
-        ? options.sessionId.split(':')[0]
-        : (options.author || 'anon:unknown');
 
       stmt.run(
         commitId,
@@ -168,18 +171,32 @@ export class ShadowCommitManager {
 
   /**
    * Get commit history from database (by session)
+   * Handles schema changes - tries both old (id) and new (session_id as id) column names
    */
   async getCommitHistory(sessionId: string, limit = 10): Promise<CommitHistoryEntry[]> {
     try {
       const db = getDatabase();
 
-      const stmt = db.prepare(`
-        SELECT id, session_id, owner_id, message, author, timestamp, workspace_version, diff, transactions
-        FROM shadow_commits
-        WHERE session_id = ?
-        ORDER BY timestamp DESC
-        LIMIT ?
-      `);
+      // Try with session_id column first (new schema)
+      let stmt;
+      try {
+        stmt = db.prepare(`
+          SELECT session_id as id, session_id, owner_id, message, author, timestamp, workspace_version, diff, transactions
+          FROM shadow_commits
+          WHERE session_id = ?
+          ORDER BY timestamp DESC
+          LIMIT ?
+        `);
+      } catch {
+        // Fallback to old schema with id column
+        stmt = db.prepare(`
+          SELECT id, session_id, owner_id, message, author, timestamp, workspace_version, diff, transactions
+          FROM shadow_commits
+          WHERE session_id = ?
+          ORDER BY timestamp DESC
+          LIMIT ?
+        `);
+      }
 
       const rows = stmt.all(sessionId, limit) as Array<{
         id: string;

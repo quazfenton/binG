@@ -133,7 +133,7 @@ class ChatRequestLogger {
     requestId: string,
     userId: string,
     provider: string,
-    model: string,
+    model: string | undefined,  // Make model optional
     messages: any[],
     streaming: boolean,
     metadata?: Record<string, any>
@@ -142,8 +142,9 @@ class ChatRequestLogger {
     if (!this.db) return;
 
     try {
+      // Use INSERT OR REPLACE to handle duplicate requestIds gracefully
       const stmt = this.db.prepare(`
-        INSERT INTO chat_request_logs
+        INSERT OR REPLACE INTO chat_request_logs
         (id, user_id, provider, model, message_count, request_size, streaming, created_at, metadata)
         VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
       `);
@@ -154,14 +155,17 @@ class ChatRequestLogger {
         requestId,
         userId,
         provider,
-        model,
+        model || 'unknown',  // Default to 'unknown' if model is undefined
         messages.length,
         requestSize,
         streaming ? 1 : 0,
         metadata ? JSON.stringify(metadata) : null
       );
-    } catch (error) {
-      console.error('[ChatRequestLogger] Failed to log request start:', error);
+    } catch (error: any) {
+      // Silently ignore UNIQUE constraint errors (already logged with INSERT OR REPLACE)
+      if (error?.code !== 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+        console.error('[ChatRequestLogger] Failed to log request start:', error);
+      }
     }
   }
 
