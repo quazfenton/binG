@@ -290,13 +290,18 @@ function isPrivateIP(ip: string): boolean {
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
-  const imageUrl = searchParams.get('url');
+  let imageUrl = searchParams.get('url');
 
   if (!imageUrl) {
     return NextResponse.json(
       { error: 'Missing url parameter' },
       { status: 400 }
     );
+  }
+
+  // Auto-prepend https:// if protocol is missing
+  if (!imageUrl.startsWith('http://') && !imageUrl.startsWith('https://')) {
+    imageUrl = `https://${imageUrl}`;
   }
 
   // SECURITY: Use centralized URL validation for SSRF protection

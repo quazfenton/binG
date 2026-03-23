@@ -611,9 +611,9 @@ export class AuthService {
       username: dbUser.username,
       createdAt: new Date(dbUser.created_at),
       lastLogin: dbUser.last_login ? new Date(dbUser.last_login) : undefined,
-      isActive: dbUser.is_active,
+      isActive: !!dbUser.is_active,
       subscriptionTier: dbUser.subscription_tier || 'free',
-      emailVerified: dbUser.email_verified || false
+      emailVerified: !!dbUser.email_verified  // Convert SQLite 0/1 to boolean
     };
   }
 

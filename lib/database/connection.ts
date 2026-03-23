@@ -523,7 +523,8 @@ export class DatabaseOperations {
       INSERT INTO users (email, username, password_hash, email_verification_token, email_verification_expires, email_verified)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
-    return stmt.run(email, finalUsername, passwordHash, verificationToken, verificationExpires.toISOString(), emailVerified);
+    // Convert boolean to number for SQLite (0 or 1)
+    return stmt.run(email, finalUsername, passwordHash, verificationToken, verificationExpires.toISOString(), emailVerified ? 1 : 0);
   }
 
   getUserByEmail(email: string) {

@@ -86,11 +86,12 @@ export function extractCompactFileEdits(content: string): FileEdit[] {
 /**
  * Extract <file_write path="...">content</file_write> format
  * This is an alternative format used by some LLMs
+ * Handles both with and without space: <file_write path="..."> and <file_writepath="...">
  */
 export function extractFileWriteEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
-  // Handle: <file_write path="...">content</file_write>
-  const regex = /<file_write\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_write>/gi;
+  // Handle: <file_write path="...">content</file_write> OR <file_writepath="...">content</file_write>
+  const regex = /<file_write\s*path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_write>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
@@ -194,6 +195,75 @@ export function extractWsActionEdits(content: string): FileEdit[] {
     }
   }
 
+  return edits;
+}
+
+/**
+ * Extract files from markdown code blocks with filename hints
+ * This handles LLMs that output code blocks with filename comments like:
+ * ```typescript
+ * // src/app.tsx
+ * export default function App() {...}
+ * ```
+ * Or:
+ * ```
+ * File: src/app.tsx
+ * export default function App() {...}
+ * ```
+ */
+export function extractMarkdownCodeBlockFiles(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  
+  // Match code blocks with potential filename hints
+  const codeBlockRegex = /```(\w+)?\s*\n([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+  
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    const language = match[1] || '';
+    const codeContent = match[2] || '';
+    
+    // Try to extract filename from first few lines
+    const lines = codeContent.split('\n');
+    let filePath: string | null = null;
+    let contentStartLine = 0;
+    
+    for (let i = 0; i < Math.min(5, lines.length); i++) {
+      const line = lines[i].trim();
+      
+      // Pattern 1: // path/to/file.ts or # path/to/file.py
+      const commentPathMatch = line.match(/^(?:\/\/|#)\s*([a-zA-Z0-9_./\-\\]+\.[a-zA-Z0-9]+)$/);
+      if (commentPathMatch) {
+        filePath = commentPathMatch[1].replace(/\\/g, '/');
+        contentStartLine = i + 1;
+        break;
+      }
+      
+      // Pattern 2: File: path/to/file.ts or FILE: path/to/file.ts
+      const filePrefixMatch = line.match(/^(?:File|FILE):\s*([a-zA-Z0-9_./\-\\]+\.[a-zA-Z0-9]+)$/i);
+      if (filePrefixMatch) {
+        filePath = filePrefixMatch[1].replace(/\\/g, '/');
+        contentStartLine = i + 1;
+        break;
+      }
+      
+      // Pattern 3: // src/app.tsx style (just a path in comment)
+      const simplePathMatch = line.match(/^(?:\/\/|#)\s*([a-zA-Z0-9_./\-\\]+\.[a-zA-Z0-9]+)\s*$/);
+      if (simplePathMatch && !line.includes(' ')) {
+        filePath = simplePathMatch[1].replace(/\\/g, '/');
+        contentStartLine = i + 1;
+        break;
+      }
+    }
+    
+    // If we found a file path, extract the content
+    if (filePath) {
+      const fileContent = lines.slice(contentStartLine).join('\n').trim();
+      if (fileContent) {
+        edits.push({ path: filePath, content: fileContent });
+      }
+    }
+  }
+  
   return edits;
 }
 

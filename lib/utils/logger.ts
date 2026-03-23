@@ -461,17 +461,23 @@ if (typeof process !== 'undefined' && typeof window === 'undefined') {
     process.exit(0);
   });
 
-  process.on('uncaughtException', async (err) => {
-    console.error('Uncaught Exception:', err);
-    await flushLogs();
-    process.exit(1);
-  });
+  // Only add process event listeners once to prevent memory leaks
+  // Check if listeners already exist before adding
+  if (process.listenerCount('uncaughtException') === 0) {
+    process.on('uncaughtException', async (err) => {
+      console.error('Uncaught Exception:', err);
+      await flushLogs();
+      process.exit(1);
+    });
+  }
 
-  process.on('unhandledRejection', async (reason, promise) => {
-    console.error('Unhandled Rejection at:', promise, 'reason:', reason);
-    await flushLogs();
-    process.exit(1);
-  });
+  if (process.listenerCount('unhandledRejection') === 0) {
+    process.on('unhandledRejection', async (reason, promise) => {
+      console.error('Unhandled Rejection at:', promise, 'reason:', reason);
+      await flushLogs();
+      process.exit(1);
+    });
+  }
 }
 
 // ============================================================================
