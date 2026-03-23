@@ -27,7 +27,8 @@
     "backup": "node scripts/backup-database.js",
     "backup:local": "BACKUP_PROVIDER=local node scripts/backup-database.js",
     "backup:s3": "BACKUP_PROVIDER=s3 node scripts/backup-database.js",
-    "backend:init": "node scripts/init-backend.js"
+    "backend:init": "node scripts/init-backend.js",
+    "export-telemetry": "tsx scripts/export-model-telemetry.ts"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.48",

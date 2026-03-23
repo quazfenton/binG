@@ -169,6 +169,16 @@ export interface UnifiedResponse {
     actualModel?: string
     messageMetadata?: Record<string, any>
     timestamp: string
+    specAmplification?: {
+      enabled: boolean
+      mode: 'normal' | 'enhanced' | 'max'
+      fastModel: string
+      sectionsGenerated: number
+      refinementIterations: number
+      duration: number
+      timedOut: boolean
+      specScore: number
+    }
   }
 }
 
@@ -202,11 +212,21 @@ interface CircuitBreakerState {
 }
 
 const DEFAULT_CIRCUIT_BREAKER_CONFIG: CircuitBreakerConfig = {
-  failureThreshold: 5,
-  recoveryTimeoutMs: 30000,
-  failureWindowMs: 60000,
+  failureThreshold: 12,
+  recoveryTimeoutMs: 15000,  // 15s — recover quickly
+  failureWindowMs: 120000,   // 2 min window — old failures expire
 }
 
+/**
+ * Smart per-endpoint circuit breaker.
+ *
+ * Key differences from naive implementation:
+ * - Failures decay over time (failureWindowMs) so transient bursts don't accumulate
+ * - Rate-limit errors (429) count less than hard failures (weighted scoring)
+ * - NEVER blocks the 'original-system' endpoint — it's the last-resort fallback
+ * - If ALL endpoints would be blocked, forces the least-failed one back to closed
+ * - Higher thresholds (12 vs old 5) because different providers share the router
+ */
 class CircuitBreaker {
   private states = new Map<string, CircuitBreakerState>()
   private readonly config: CircuitBreakerConfig
@@ -230,6 +250,11 @@ class CircuitBreaker {
   }
 
   shouldSkip(endpoint: string): boolean {
+    // SAFETY: Never skip original-system — it's the last-resort LLM route
+    if (endpoint === 'original-system') {
+      return false
+    }
+
     const state = this.getState(endpoint)
     const now = Date.now()
 
@@ -240,15 +265,15 @@ class CircuitBreaker {
     if (state.state === 'open') {
       if (now - state.lastFailureTime >= this.config.recoveryTimeoutMs) {
         state.state = 'half-open'
-        return false  // Allow one test request
+        console.log(`[CircuitBreaker] ${endpoint}: half-open — allowing probe request`)
+        return false
       }
-      return true  // Circuit is open, skip
+      return true
     }
 
-    // CRITICAL: If already half-open, a probe is running; skip additional requests
-    // This prevents race condition where multiple concurrent requests all get through during half-open
+    // half-open: allow one test request then block additional concurrent ones
     if (state.state === 'half-open') {
-      return true  // Skip - probe already in progress
+      return true
     }
 
     return false
@@ -256,31 +281,83 @@ class CircuitBreaker {
 
   recordSuccess(endpoint: string): void {
     const state = this.getState(endpoint)
-    const now = Date.now()
-
     state.successes++
-    state.lastSuccessTime = now
+    state.lastSuccessTime = Date.now()
+    // A success clears all failure history — the provider is working
     state.failures = 0
     state.failureTimestamps = []
 
-    if (state.state === 'half-open') {
+    if (state.state === 'half-open' || state.state === 'open') {
       state.state = 'closed'
+      console.log(`[CircuitBreaker] ${endpoint}: closed (recovered)`)
     }
   }
 
-  recordFailure(endpoint: string): void {
+  recordFailure(endpoint: string, error?: any): void {
     const state = this.getState(endpoint)
     const now = Date.now()
 
+    // Classify the error — rate-limits are less severe
+    const isRateLimit = error?.status === 429 ||
+      (error?.message || '').toLowerCase().includes('rate limit') ||
+      (error?.message || '').toLowerCase().includes('quota')
+    const isTransient = [502, 503, 504].includes(error?.status) ||
+      (error?.message || '').toLowerCase().includes('overloaded')
+
+    // Rate-limits and transient errors add fewer "virtual" failure timestamps
+    // A single rate-limit adds 0 extra timestamps (just 1 real one)
+    // A hard failure adds 2 timestamps (counts triple towards threshold)
+    const weight = isRateLimit ? 1 : isTransient ? 1 : 2
+
     state.failures++
     state.lastFailureTime = now
-    state.failureTimestamps.push(now)
+
+    for (let i = 0; i < weight; i++) {
+      state.failureTimestamps.push(now)
+    }
+
+    // Prune timestamps outside the window
     state.failureTimestamps = state.failureTimestamps.filter(
-      t => t > now - this.config.failureWindowMs
+      t => t > now - this.config.failureWindowMs,
     )
 
     if (state.failureTimestamps.length >= this.config.failureThreshold) {
       state.state = 'open'
+      console.log(
+        `[CircuitBreaker] ${endpoint}: OPEN (${state.failureTimestamps.length}/${this.config.failureThreshold} weighted failures in window)`,
+      )
+
+      // SAFETY: check if this leaves zero available endpoints
+      this.enforceLastRouteSafety()
+    }
+  }
+
+  /**
+   * If ALL endpoints are open, force the one with the fewest recent failures
+   * back to closed. We NEVER fully block all LLM routes.
+   */
+  private enforceLastRouteSafety(): void {
+    if (this.states.size === 0) return
+
+    const allOpen = Array.from(this.states.values()).every(s => s.state === 'open')
+    if (!allOpen) return
+
+    // Find endpoint with fewest recent failures
+    let bestEndpoint: string | null = null
+    let bestFailures = Infinity
+
+    for (const [ep, s] of this.states) {
+      if (s.failureTimestamps.length < bestFailures) {
+        bestFailures = s.failureTimestamps.length
+        bestEndpoint = ep
+      }
+    }
+
+    if (bestEndpoint) {
+      this.reset(bestEndpoint)
+      console.warn(
+        `[CircuitBreaker] SAFETY: All endpoints OPEN — forced ${bestEndpoint} back to CLOSED`,
+      )
     }
   }
 
@@ -289,15 +366,21 @@ class CircuitBreaker {
     failures: number
     successes: number
     failureRate: number
+    recentFailures: number
   } {
     const state = this.getState(endpoint)
     const total = state.failures + state.successes
+    const now = Date.now()
+    const recentFailures = state.failureTimestamps.filter(
+      t => t > now - this.config.failureWindowMs,
+    ).length
 
     return {
       state: state.state,
       failures: state.failures,
       successes: state.successes,
       failureRate: total > 0 ? state.failures / total : 0,
+      recentFailures,
     }
   }
 
@@ -742,7 +825,7 @@ export class ResponseRouter {
         endpointSpan?.end()
 
         // Record failure
-        this.circuitBreaker.recordFailure(endpoint.name)
+        this.circuitBreaker.recordFailure(endpoint.name, error)
         this.updateStats(endpoint.name, false)
         recordEndpointUsage(endpoint.name, Date.now() - endpointStartTime, false)
 
@@ -1777,6 +1860,164 @@ export class ResponseRouter {
   }
 
   /**
+   * Dual-path inference with spec amplification
+   * 
+   * V1 MODE ONLY - Regular LLM calls with spec amplification
+   * Does NOT work with V2 agent mode
+   * 
+   * Runs parallel execution:
+   * 1. Primary: Normal LLM response
+   * 2. Secondary: Fast model generates improvement spec
+   * 
+   * Then refines primary response based on spec
+   * 
+   * @param request - Router request with mode
+   * @returns Unified response with refinements
+   */
+  async routeWithSpecAmplification(
+    request: RouterRequest & {
+      mode?: 'normal' | 'enhanced' | 'max'
+      agentMode?: 'v1' | 'v2' | 'auto'
+    }
+  ): Promise<UnifiedResponse> {
+    const startTime = Date.now()
+    const span = startSpan('response-router.spec-amplification')
+    
+    try {
+      // V2 AGENT MODE: Skip spec amplification entirely
+      // V2 has its own planning/execution system
+      if (request.agentMode === 'v2') {
+        logger.debug('V2 agent mode detected, skipping spec amplification')
+        return await this.routeAndFormat(request)
+      }
+      
+      // Normal mode = skip spec amplification
+      if (request.mode === 'normal' || !request.mode) {
+        return await this.routeAndFormat(request)
+      }
+      
+      // Get fastest model from telemetry
+      const { getModelStatsFromTelemetry, getSpecGenerationModel } = await import('@/lib/models/model-ranker')
+      const modelStats = await getModelStatsFromTelemetry()
+      const fastModel = await getSpecGenerationModel()
+
+      if (!fastModel) {
+        logger.warn('No fast model available, falling back to normal routing')
+        return await this.routeAndFormat(request)
+      }
+
+      logger.info('Spec amplification enabled', {
+        fastModel: fastModel.model,
+        mode: request.mode,
+        provider: fastModel.provider
+      })
+
+      // PARALLEL EXECUTION
+      const primaryPromise = this.routeAndFormat(request)
+
+      const { buildSpecPrompt } = await import('@/lib/prompts/spec-generator')
+      const { enhancedLLMService } = await import('@/lib/chat/enhanced-llm-service')
+
+      const specPromise = enhancedLLMService.generateResponse({
+        provider: fastModel.provider,
+        model: fastModel.model,
+        messages: buildSpecPrompt(
+          request.messages[0].content as string
+        ),
+        maxTokens: 2000,
+        stream: false
+      })
+
+      const [primaryResponse, specResponse] = await Promise.all([
+        primaryPromise,
+        specPromise
+      ])
+
+      // Extract spec content from response
+      const rawSpec = specResponse.content || ''
+
+      // Parse spec
+      const { safeParseSpec, chunkSpec, explodeChunks } = await import('@/lib/chat/spec-parser')
+      const parsed = safeParseSpec(rawSpec)
+
+      if (!parsed) {
+        logger.warn('Spec parsing failed, returning primary response only')
+        return primaryResponse
+      }
+
+      // Validate spec quality
+      const { validateSpec, scoreSpec } = await import('@/lib/prompts/spec-generator')
+      if (!validateSpec(parsed)) {
+        logger.warn('Spec validation failed, returning primary response only')
+        return primaryResponse
+      }
+
+      const specScore = scoreSpec(parsed)
+      if (specScore < 4) {
+        logger.warn('Spec quality too low, skipping refinement', { score: specScore })
+        return primaryResponse
+      }
+
+      // Chunk spec
+      let chunks = chunkSpec(parsed)
+
+      if (request.mode === 'max') {
+        chunks = explodeChunks(chunks)
+      }
+
+      // Refine response with DAG parallelization (non-streaming)
+      const { executeRefinementWithDAG } = await import('@/lib/chat/dag-refinement-engine')
+      const refinedOutput = await executeRefinementWithDAG({
+        model: request.model,
+        baseResponse: primaryResponse.content || '',
+        chunks,
+        mode: request.mode,
+        userId: request.userId,
+        conversationId: request.conversationId,
+        maxConcurrency: request.mode === 'max' ? 5 : 2,
+        timeBudgetMs: request.mode === 'max' ? 15000 : 10000
+      })
+
+      // Record telemetry for spec generation
+      const specDuration = Date.now() - startTime
+      recordEndpointUsage('spec-generation', specDuration, true)
+
+      logger.info('Spec amplification complete', {
+        duration: specDuration,
+        sectionsProcessed: chunks.length,
+        specScore
+      })
+
+      return {
+        ...primaryResponse,
+        content: refinedOutput,
+        metadata: {
+          ...primaryResponse.metadata,
+          specAmplification: {
+            enabled: true,
+            mode: request.mode,
+            fastModel: fastModel.model,
+            sectionsGenerated: parsed.sections.length,
+            refinementIterations: chunks.length,
+            duration: specDuration,
+            timedOut: false,
+            specScore
+          }
+        }
+      }
+      
+    } catch (error) {
+      logger.error('Spec amplification failed', error)
+      recordEndpointUsage('spec-generation', Date.now() - startTime, false)
+      
+      // Fallback to normal routing
+      return await this.routeAndFormat(request)
+    } finally {
+      span.end()
+    }
+  }
+
+  /**
    * Create streaming events from unified response
    */
   createStreamingEvents(response: UnifiedResponse, requestId: string): string[] {
@@ -1837,6 +2078,15 @@ export const responseRouter = new ResponseRouter()
  */
 export async function routeAndFormatRequest(request: RouterRequest): Promise<UnifiedResponse> {
   return responseRouter.routeAndFormat(request)
+}
+
+/**
+ * @deprecated Use responseRouter.routeWithSpecAmplification()
+ */
+export async function routeWithSpecAmplification(
+  request: RouterRequest & { mode?: 'normal' | 'enhanced' | 'max' }
+): Promise<UnifiedResponse> {
+  return responseRouter.routeWithSpecAmplification(request)
 }
 
 /**

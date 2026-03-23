@@ -58,16 +58,17 @@ export async function POST(request: NextRequest) {
     );
     
     const latestSha = refResponse.object.sha;
-    
+
     // Get commit details
+    // Note: /repos/{owner}/{repo}/commits/{sha} returns tree nested under commit.tree
     const commitResponse = await githubApi<any>(
       `/repos/${targetOwner}/${targetRepo}/commits/${latestSha}`,
       token
     );
-    
-    // Get tree contents
+
+    // Get tree contents - use commit.tree.sha (not tree.sha)
     const treeResponse = await githubApi<any>(
-      `/repos/${targetOwner}/${targetRepo}/git/trees/${commitResponse.tree.sha}?recursive=1`,
+      `/repos/${targetOwner}/${targetRepo}/git/trees/${commitResponse.commit.tree.sha}?recursive=1`,
       token
     );
     
@@ -101,7 +102,7 @@ export async function POST(request: NextRequest) {
       branch: targetBranch,
       repo: `${targetOwner}/${targetRepo}`,
       filesCount: Object.keys(files).length,
-      // Note: Files would be written to VFS by the client
+      files, // Return files for client to write to VFS
     });
   } catch (error: any) {
     console.error('[GitHub Pull] Error:', error);

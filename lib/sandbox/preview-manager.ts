@@ -242,20 +242,23 @@ export class PreviewManager {
     } = config;
 
     const sandboxId = handle.id;
-    const port = await this.portManager.getAvailablePort(sandboxId, preferredPort || 3000);
+
+    // Check cache FIRST using preferred port to avoid duplicate servers
+    const portToCheck = preferredPort || 3000;
+    const cachedUrl = this.cache.get(sandboxId, portToCheck);
+    if (cachedUrl) {
+      logger.info(`Returning cached preview URL for ${sandboxId}:${portToCheck}`);
+      return {
+        url: cachedUrl,
+        port: portToCheck,
+        createdAt: Date.now(),
+      };
+    }
+
+    // Cache miss - allocate a new port and start the preview
+    const port = await this.portManager.getAvailablePort(sandboxId, portToCheck);
 
     try {
-      // Check cache first
-      const cachedUrl = this.cache.get(sandboxId, port);
-      if (cachedUrl) {
-        logger.info(`Returning cached preview URL for ${sandboxId}:${port}`);
-        return {
-          url: cachedUrl,
-          port,
-          createdAt: Date.now(),
-        };
-      }
-
       // Try provider-specific preview methods
       let previewUrl: string | null = null;
 
@@ -366,6 +369,10 @@ export class PreviewManager {
 
     if (handle.getPublicUrl) {
       try {
+        // Apply provider URL auth mode when supported
+        if (handle.updateUrlAuth) {
+          await handle.updateUrlAuth(isPublic ? 'public' : 'default');
+        }
         return await handle.getPublicUrl();
       } catch (error) {
         logger.debug(`getPublicUrl failed: ${error}`);
@@ -405,14 +412,16 @@ export class PreviewManager {
       try {
         // Try to connect to the port
         const result = await handle.executeCommand(
-          `curl -s -o /dev/null -w "%{http_code}" http://localhost:${port} || echo "000"`,
+          `sh -c 'curl -s -o /dev/null -w "%{http_code}" http://localhost:${port} || echo 000'`,
           cwd,
           5000
         );
 
-        const statusCode = result.output?.trim() || '000';
+        // Parse the last line as the HTTP code (ignores any error text)
+        const statusCode = result.output?.trim().split('\n').pop() || '000';
 
-        if (statusCode !== '000') {
+        // Only consider ready if command succeeded AND returned valid HTTP status
+        if (result.success && /^\d{3}$/.test(statusCode) && statusCode !== '000') {
           logger.info(`Server ready on port ${port} (status: ${statusCode}) after ${attempt} attempts`);
           return;
         }

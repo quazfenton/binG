@@ -53,7 +53,7 @@ export async function POST(request: NextRequest) {
     }
     
     const targetBranch = branch || 'main';
-    
+
     // Check if branch exists
     try {
       await githubApi(
@@ -62,33 +62,44 @@ export async function POST(request: NextRequest) {
       );
     } catch (error: any) {
       if (error.message?.includes('404')) {
-        return NextResponse.json({ 
+        return NextResponse.json({
           error: `Branch '${targetBranch}' not found in repository`,
         }, { status: 404 });
       }
     }
-    
+
     // Get latest commit SHA
     const refResponse = await githubApi<any>(
       `/repos/${targetOwner}/${targetRepo}/git/refs/heads/${targetBranch}`,
       token
     );
-    
+
     const latestSha = refResponse.object.sha;
-    
+
     // Get commit details
     const commitResponse = await githubApi<any>(
       `/repos/${targetOwner}/${targetRepo}/commits/${latestSha}`,
       token
     );
-    
+
+    // TODO: Implement actual push functionality
+    // This would require:
+    // 1. Get local changes from VFS
+    // 2. Create blobs for changed files
+    // 3. Create new tree with changes
+    // 4. Create new commit based on latestSha
+    // 5. Update branch ref to new commit
+    //
+    // For now, this endpoint verifies connection and returns current state
+
     return NextResponse.json({
       success: true,
-      message: 'Pushed successfully',
+      message: 'Push endpoint ready (implementation in progress)',
       sha: latestSha,
       url: commitResponse.html_url,
       branch: targetBranch,
       repo: `${targetOwner}/${targetRepo}`,
+      note: 'To implement full push: create blobs → tree → commit → update ref',
     });
   } catch (error: any) {
     console.error('[GitHub Push] Error:', error);

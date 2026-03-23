@@ -1,11 +1,12 @@
 /**
  * GitHub OAuth Integration
- * 
+ *
  * Handles GitHub OAuth authentication for Git operations.
  * Similar to Google OAuth but for GitHub API access.
  */
 
 import { getDatabase, encryptApiKey, decryptApiKey } from '@/lib/database/connection';
+import { randomBytes } from 'crypto';
 
 export const GITHUB_CONNECTION = 'github';
 
@@ -206,30 +207,38 @@ export interface GitHubBranch {
 
 /**
  * Get GitHub OAuth URL for authentication
+ * Returns both the URL and the generated state for CSRF protection
  */
-export function getGitHubOAuthUrl(scopes: string[] = ['repo', 'user', 'workflow']): string {
+export function getGitHubOAuthUrl(scopes: string[] = ['repo', 'user', 'workflow']): { url: string; state: string } {
   const clientId = process.env.GITHUB_CLIENT_ID;
-  const redirectUri = process.env.GITHUB_REDIRECT_URI || `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/github/callback`;
-  
+  const redirectUri = process.env.GITHUB_REDIRECT_URI || `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/integrations/github/oauth/callback`;
+
   if (!clientId) {
     throw new Error('GITHUB_CLIENT_ID not configured');
   }
+
+  const state = generateState();
 
   const params = new URLSearchParams({
     client_id: clientId,
     redirect_uri: redirectUri,
     scope: scopes.join(' '),
-    state: generateState(),
+    state,
   });
 
-  return `https://github.com/login/oauth/authorize?${params.toString()}`;
+  return {
+    url: `https://github.com/login/oauth/authorize?${params.toString()}`,
+    state,
+  };
 }
 
 /**
- * Generate state parameter for OAuth security
+ * Generate cryptographically secure state parameter for OAuth security
+ * Uses crypto.randomBytes() instead of Math.random() to prevent CSRF attacks
  */
 function generateState(): string {
-  return Math.random().toString(36).substring(2, 15) + Math.random().toString(36).substring(2, 15);
+  // Generate 32 bytes (256 bits) of random data and convert to hex
+  return randomBytes(32).toString('hex');
 }
 
 /**

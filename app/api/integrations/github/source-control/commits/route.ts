@@ -57,11 +57,18 @@ export async function GET(request: NextRequest) {
         },
       }
     );
-    
+
     if (!response.ok) {
-      throw new Error('Failed to fetch commits');
+      // Return upstream error details instead of generic error
+      const errorData = await response.json().catch(() => ({}));
+      console.error('[GitHub Commits] Upstream error:', response.status, errorData);
+      
+      return NextResponse.json({
+        error: errorData.message || `GitHub API error: ${response.status}`,
+        status: response.status,
+      }, { status: response.status });
     }
-    
+
     const commits = await response.json();
     
     // Format commits for UI

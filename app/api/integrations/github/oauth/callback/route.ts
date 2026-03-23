@@ -1,7 +1,8 @@
 /**
  * GitHub OAuth Callback
- * 
+ *
  * Handles OAuth callback from GitHub after user authorization.
+ * Verifies state parameter against HttpOnly cookie for CSRF protection.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
@@ -31,7 +32,20 @@ export async function GET(request: NextRequest) {
       return NextResponse.json({ error: 'Missing code or state' }, { status: 400 });
     }
 
-    console.log('[GitHub Callback] Exchanging code for token...');
+    // Verify state parameter against cookie (CSRF protection)
+    const cookieState = request.cookies.get('github_oauth_state')?.value;
+
+    if (!cookieState) {
+      console.error('[GitHub Callback] State cookie not found');
+      return NextResponse.json({ error: 'OAuth state not found. Please try again.' }, { status: 400 });
+    }
+
+    if (state !== cookieState) {
+      console.error('[GitHub Callback] State mismatch - possible CSRF attack');
+      return NextResponse.json({ error: 'Invalid OAuth state. Please try again.' }, { status: 400 });
+    }
+
+    console.log('[GitHub Callback] State verified, exchanging code for token...');
 
     // Exchange code for token
     const token = await exchangeCodeForToken(code, state);
@@ -79,12 +93,15 @@ export async function GET(request: NextRequest) {
 
     console.log('[GitHub Callback] GitHub connected for user:', localUserId);
 
-    // Redirect back to settings with success
+    // Clear the state cookie after successful validation and redirect with success params
     const redirectUrl = new URL('/settings', url.origin);
     redirectUrl.searchParams.set('github_connected', 'true');
     redirectUrl.searchParams.set('github_login', user.login);
 
-    return NextResponse.redirect(redirectUrl);
+    const response = NextResponse.redirect(redirectUrl);
+    response.cookies.delete('github_oauth_state');
+
+    return response;
   } catch (error: any) {
     console.error('[GitHub Callback] Error:', error);
 

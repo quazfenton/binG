@@ -21,6 +21,7 @@ import {
   Trash2
 } from 'lucide-react';
 import type { LLMProvider } from '../lib/chat/llm-providers';
+import { useMultiRotatingStatements } from '@/hooks/use-rotating-statements';
 
 interface ModelResponse {
   provider: string;
@@ -38,6 +39,21 @@ interface MultiModelComparisonProps {
   availableProviders: LLMProvider[];
 }
 
+function RunningButton() {
+  const statement = useMultiRotatingStatements(['interesting', 'task', 'funny'], 2000);
+  return <>{statement}</>;
+}
+
+function StreamingIndicator() {
+  const statement = useMultiRotatingStatements(['task', 'interesting'], 1500);
+  return (
+    <div className="flex items-center gap-2 text-purple-400 text-sm">
+      <Loader2 className="h-4 w-4 thinking-spinner" />
+      {statement}
+    </div>
+  );
+}
+
 export default function MultiModelComparison({
   isOpen,
   onClose,
@@ -48,6 +64,13 @@ export default function MultiModelComparison({
   const [responses, setResponses] = useState<ModelResponse[]>([]);
   const [isComparing, setIsComparing] = useState(false);
   const [modelToRemove, setModelToRemove] = useState<{provider: string, model: string} | null>(null);
+
+  // Clear modelToRemove when modal closes to prevent stale state
+  useEffect(() => {
+    if (!isOpen) {
+      setModelToRemove(null);
+    }
+  }, [isOpen]);
 
   // Get only available providers (filtered by API key configuration)
   const availableOnly = availableProviders.filter(p => p.isAvailable !== false);
@@ -100,8 +123,8 @@ export default function MultiModelComparison({
     if (toRetry.length === 0 || !prompt.trim()) return;
     
     setIsComparing(true);
-    
-    const promises = toRetry.map(async (slot, idx) => {
+
+    const promises = toRetry.map(async (slot) => {
       const actualIndex = responses.findIndex(r => r.provider === slot.provider && r.model === slot.model);
       try {
         setResponses(prev => prev.map((r, i) => 
@@ -121,26 +144,74 @@ export default function MultiModelComparison({
             model: slot.model,
             temperature: 0.7,
             maxTokens: 4096,
-            stream: false,
+            stream: true,
             agentMode: 'v1'
           }),
         });
 
-        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        if (!response.body) {
+          throw new Error('No response body');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulatedContent = '';
+        let currentEventType = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+          
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              currentEventType = line.slice(7).trim();
+              continue;
+            }
+            
+            if (line.startsWith('data: ')) {
+              const dataStr = line.slice(6).trim();
+              if (!dataStr) continue;
+              
+              try {
+                const data = JSON.parse(dataStr);
+                if (currentEventType === 'token' || currentEventType === '') {
+                  if (data.content) {
+                    accumulatedContent += data.content;
+                    setResponses(prev => prev.map((r, i) => 
+                      i === actualIndex ? { ...r, response: accumulatedContent } : r
+                    ));
+                  }
+                } else if (currentEventType === 'done') {
+                  const endTime = Date.now();
+                  setResponses(prev => prev.map((r, i) =>
+                    i === actualIndex ? {
+                      ...r,
+                      response: accumulatedContent || r.response,
+                      status: data.success !== false ? 'complete' : 'error',
+                      endTime
+                    } : r
+                  ));
+                }
+              } catch (e) {
+                // Skip parse errors for non-JSON lines
+              }
+            }
+          }
+        }
+
         const endTime = Date.now();
-        
-        const content = data.success 
-          ? (data.data?.content || data.content || data.response || data.message || JSON.stringify(data, null, 2))
-          : (data.error?.message || JSON.stringify(data));
-        
-        setResponses(prev => prev.map((r, i) =>
-          i === actualIndex ? {
-            ...r,
-            response: content,
-            status: data.success ? 'complete' : 'error',
-            endTime
-          } : r
-        ));
+        if (accumulatedContent) {
+          setResponses(prev => prev.map((r, i) =>
+            i === actualIndex ? { ...r, status: 'complete', endTime } : r
+          ));
+        }
         
       } catch (error) {
         const endTime = Date.now();
@@ -161,11 +232,18 @@ export default function MultiModelComparison({
 
   const handleCompare = async () => {
     const toRun = responses.filter(r => r.status !== 'complete');
-    if (toRun.length === 0 || !prompt.trim()) return;
     
+    if (toRun.length === 0 && prompt.trim()) {
+      setResponses(prev => prev.map(r => ({ ...r, status: 'pending', response: '', error: undefined })));
+    }
+    
+    if ((toRun.length === 0 && responses.length === 0) || !prompt.trim()) return;
+
     setIsComparing(true);
-    
-    const promises = toRun.map(async (slot) => {
+
+    const slotsToRun = toRun.length > 0 ? toRun : responses;
+
+    const promises = slotsToRun.map(async (slot) => {
       const actualIndex = responses.findIndex(r => r.provider === slot.provider && r.model === slot.model);
       try {
         setResponses(prev => prev.map((r, i) => 
@@ -185,26 +263,74 @@ export default function MultiModelComparison({
             model: slot.model,
             temperature: 0.7,
             maxTokens: 4096,
-            stream: false,
+            stream: true,
             agentMode: 'v1'
           }),
         });
 
-        const data = await response.json();
+        if (!response.ok) {
+          throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+        }
+
+        if (!response.body) {
+          throw new Error('No response body');
+        }
+
+        const reader = response.body.getReader();
+        const decoder = new TextDecoder();
+        let accumulatedContent = '';
+        let currentEventType = '';
+
+        while (true) {
+          const { done, value } = await reader.read();
+          if (done) break;
+          
+          const chunk = decoder.decode(value, { stream: true });
+          const lines = chunk.split('\n');
+          
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              currentEventType = line.slice(7).trim();
+              continue;
+            }
+            
+            if (line.startsWith('data: ')) {
+              const dataStr = line.slice(6).trim();
+              if (!dataStr) continue;
+              
+              try {
+                const data = JSON.parse(dataStr);
+                if (currentEventType === 'token' || currentEventType === '') {
+                  if (data.content) {
+                    accumulatedContent += data.content;
+                    setResponses(prev => prev.map((r, i) => 
+                      i === actualIndex ? { ...r, response: accumulatedContent } : r
+                    ));
+                  }
+                } else if (currentEventType === 'done') {
+                  const endTime = Date.now();
+                  setResponses(prev => prev.map((r, i) =>
+                    i === actualIndex ? {
+                      ...r,
+                      response: accumulatedContent || r.response,
+                      status: data.success !== false ? 'complete' : 'error',
+                      endTime
+                    } : r
+                  ));
+                }
+              } catch (e) {
+                // Skip parse errors for non-JSON lines
+              }
+            }
+          }
+        }
+
         const endTime = Date.now();
-        
-        const content = data.success 
-          ? (data.data?.content || data.content || data.response || data.message || JSON.stringify(data, null, 2))
-          : (data.error?.message || JSON.stringify(data));
-        
-        setResponses(prev => prev.map((r, i) =>
-          i === actualIndex ? {
-            ...r,
-            response: content,
-            status: data.success ? 'complete' : 'error',
-            endTime
-          } : r
-        ));
+        if (accumulatedContent) {
+          setResponses(prev => prev.map((r, i) =>
+            i === actualIndex ? { ...r, status: 'complete', endTime } : r
+          ));
+        }
         
       } catch (error) {
         const endTime = Date.now();
@@ -372,8 +498,8 @@ export default function MultiModelComparison({
               >
                 {isComparing ? (
                   <>
-                    <Loader2 className="h-4 w-4 animate-spin" />
-                    Running
+                    <Loader2 className="h-4 w-4 thinking-spinner" />
+                    <RunningButton />
                   </>
                 ) : (
                   <>
@@ -537,15 +663,34 @@ export default function MultiModelComparison({
                           Waiting...
                         </div>
                       ) : response.status === 'streaming' ? (
-                        <div className="flex items-center gap-2 text-purple-400 text-sm">
-                          <Loader2 className="h-4 w-4 animate-spin" />
-                          Generating...
-                        </div>
+                        <StreamingIndicator />
                       ) : (
                         <ReactMarkdown
                           remarkPlugins={[remarkGfm]}
                           className="text-sm font-sans"
                           components={{
+                            // SSRF protection: Proxy all images through /api/image-proxy
+                            img: ({ src, alt, title }) => {
+                              if (!src || typeof src !== 'string') return null;
+
+                              // Allow only http/https URLs
+                              if (!/^https?:\/\//i.test(src)) {
+                                return null;
+                              }
+
+                              // Proxy through image proxy for SSRF protection
+                              const proxiedSrc = `/api/image-proxy?url=${encodeURIComponent(src)}`;
+
+                              return (
+                                <img
+                                  src={proxiedSrc}
+                                  alt={typeof alt === 'string' ? alt : ''}
+                                  title={typeof title === 'string' ? title : undefined}
+                                  className="max-w-full h-auto my-2 rounded border border-white/10"
+                                  loading="lazy"
+                                />
+                              );
+                            },
                             code: ({ className, children, ...props }) => {
                               const match = /language-(\w+)/.exec(className || "");
                               const isInline = Boolean((props as any).inline);
@@ -639,7 +784,7 @@ export default function MultiModelComparison({
                               </td>
                             ),
                             blockquote: ({ children }) => (
-                              <blockquote className="border-l-4 border-white/30 pl-4 my-2 italic text-sm">
+                              <blockquote className="border-l-4 border-white/30 bg-white/5 pl-4 my-2 py-1 text-sm italic rounded-r">
                                 {children}
                               </blockquote>
                             ),
