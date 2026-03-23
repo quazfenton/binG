@@ -49,6 +49,8 @@ import Brain from "lucide-react/dist/esm/icons/brain";
 import FileText from "lucide-react/dist/esm/icons/file-text";
 import Calculator from "lucide-react/dist/esm/icons/calculator";
 import Globe from "lucide-react/dist/esm/icons/globe";
+import Upload from "lucide-react/dist/esm/icons/upload";
+import FolderSync from "lucide-react/dist/esm/icons/folder-sync";
 import Palette from "lucide-react/dist/esm/icons/palette";
 import Music from "lucide-react/dist/esm/icons/music";
 import Zap from "lucide-react/dist/esm/icons/zap";
@@ -129,6 +131,7 @@ import WikiKnowledgeBasePlugin from "./plugins/wiki-knowledge-base-plugin";
 import ImageGenerationTab from "./image-generation-tab";
 import SquareSplitHorizontal from "lucide-react/dist/esm/icons/square-split-horizontal";
 import Bell from "lucide-react/dist/esm/icons/bell";
+import { ImportDialog } from "./file-import/import-dialog";
 
 // Pop-out plugin windows for Plugins tab
 const popOutPlugins: Plugin[] = [
@@ -434,6 +437,9 @@ export default function InteractionPanel({
   const [isExpanding, setIsExpanding] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prevPanelHeightRef = useRef<number | null>(null);
+
+  // Import dialog state
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
 
   // Memoize select value to prevent infinite loop
   const selectValue = useMemo(() => {
@@ -1963,7 +1969,7 @@ export default function InteractionPanel({
                         </div>
 
                         {/* Quick Upload Section */}
-                        <div className="mb-3 pb-3 border-b border-white/10">
+                        <div className="mb-3 pb-3 border-b border-white/10 space-y-2">
                           <button
                             type="button"
                             className="w-full px-3 py-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-400/30 rounded text-xs text-blue-300 flex items-center justify-center gap-2 transition-colors"
@@ -1971,6 +1977,14 @@ export default function InteractionPanel({
                           >
                             <Plus className="w-3 h-3" />
                             Upload from Computer
+                          </button>
+                          <button
+                            type="button"
+                            className="w-full px-3 py-2 bg-purple-600/20 hover:bg-purple-600/30 border border-purple-400/30 rounded text-xs text-purple-300 flex items-center justify-center gap-2 transition-colors"
+                            onClick={() => setIsImportDialogOpen(true)}
+                          >
+                            <Upload className="w-3 h-3" />
+                            Import Files/Folders
                           </button>
                         </div>
 
@@ -2266,6 +2280,17 @@ export default function InteractionPanel({
             </Tabs>
           )}
         </div>
+
+        {/* Import Files Dialog */}
+        <ImportDialog
+          open={isImportDialogOpen}
+          onOpenChange={setIsImportDialogOpen}
+          sessionId={filesystemScopePath?.split('/').pop()}
+          scopePath={filesystemScopePath}
+          onImportComplete={(result) => {
+            console.log('Import completed:', result);
+          }}
+        />
       </div>
     </>
   );

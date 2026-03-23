@@ -144,6 +144,8 @@ export async function POST(request: NextRequest) {
 
   let provider = '';
   let model = '';
+  let actualProvider = '';
+  let actualModel = '';
 
   try {
     const rawBody = await request.json();
@@ -646,9 +648,9 @@ export async function POST(request: NextRequest) {
 
     // Route through priority chain with spec amplification (V1 mode only)
     // Track actual provider/model for telemetry (may differ from requested due to fallbacks)
-    let actualProvider = provider;
-    let actualModel = normalizedModel;
-    
+    actualProvider = provider;
+    actualModel = normalizedModel;
+
     try {
       let unifiedResponse
 
