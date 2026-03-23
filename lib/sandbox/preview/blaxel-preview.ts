@@ -384,16 +384,21 @@ async function waitForService(
       const serviceInfo = await getServiceInfo(boxId, serviceId, apiKey, baseUrl);
 
       if (serviceInfo?.url) {
-        // Try to access the URL
+        // Try to access the URL with timeout
+        const controller = new AbortController();
+        const timeoutId = setTimeout(() => controller.abort(), Math.min(pollIntervalMs, 5000));
         try {
-          const response = await fetch(serviceInfo.url, { method: 'HEAD' });
+          const response = await fetch(serviceInfo.url, {
+            method: 'HEAD',
+            signal: controller.signal,
+          });
           if (response.ok || response.status === 404) {
             // 404 is OK - means server is running but route doesn't exist
             logger.info(`Service ${serviceId} is ready`);
             return;
           }
-        } catch {
-          // URL not ready yet, continue polling
+        } finally {
+          clearTimeout(timeoutId);
         }
       }
     } catch (error) {
@@ -419,6 +424,10 @@ export async function listBlaxelServices(
   }
 ): Promise<Array<{ id: string; name: string; port: number; url?: string; status: string }>> {
   const { boxId, apiKey, baseUrl = DEFAULT_BASE_URL } = config;
+
+  if (!apiKey) {
+    throw new Error('Blaxel API key is required');
+  }
 
   try {
     const response = await fetch(
@@ -460,6 +469,10 @@ export async function stopBlaxelService(
   }
 ): Promise<void> {
   const { boxId, serviceId, apiKey, baseUrl = DEFAULT_BASE_URL } = config;
+
+  if (!apiKey) {
+    throw new Error('Blaxel API key is required');
+  }
 
   try {
     logger.info(`Stopping Blaxel service: ${serviceId}`);

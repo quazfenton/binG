@@ -98,7 +98,10 @@ export async function generateSpeech(request: TTSRequest): Promise<TTSResponse> 
   const tempDir = os.tmpdir();
   const tempOutputPath = path.join(tempDir, `kittentts-${Date.now()}.wav`);
   
-  // Create Python script for generation
+  // Escape text for Python string literal - use single quotes with proper escaping
+  const escapedText = text.replace(/'/g, "'\\''").replace(/\n/g, '\\n');
+  
+  // Create Python script that uses sys.argv for safe parameter passing
   const pythonScript = `
 import sys
 import os
@@ -110,21 +113,33 @@ try:
     from kittentts import KittenTTS
     import soundfile as sf
     
+    # Get parameters from command line arguments (safer than string interpolation)
+    model = sys.argv[1] if len(sys.argv) > 1 else 'KittenML/kitten-tts-mini-0.8'
+    voice = sys.argv[2] if len(sys.argv) > 2 else 'Bruno'
+    text = sys.argv[3] if len(sys.argv) > 3 else ''
+    output_path = sys.argv[4] if len(sys.argv) > 4 else '/tmp/output.wav'
+    
     # Generate audio
-    m = KittenTTS("${model}")
-    audio = m.generate(text="""${text.replace(/"/g, '\\"')}""", voice="${voice}")
+    m = KittenTTS(model)
+    audio = m.generate(text=text, voice=voice)
     
     # Save to temp file
-    sf.write('${tempOutputPath.replace(/\\/g, '\\\\')}', audio, ${SAMPLE_RATE})
+    sf.write(output_path, audio, 24000)
     
     print("SUCCESS")
 except Exception as e:
     print(f"ERROR: {str(e)}", file=sys.stderr)
     sys.exit(1)
-`;
+`.replace(/\n/g, '; ');  // Single line for argument passing
 
   return new Promise((resolve) => {
-    const pythonProcess = spawn('python3', ['-c', pythonScript], {
+    const pythonProcess = spawn('python3', [
+      '-c', pythonScript,
+      model,           // sys.argv[1]
+      voice,           // sys.argv[2]
+      escapedText,     // sys.argv[3]
+      tempOutputPath   // sys.argv[4]
+    ], {
       cwd: process.cwd(),
       env: {
         ...process.env,

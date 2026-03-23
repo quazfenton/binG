@@ -1,6 +1,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateSpeech, checkKittenTTSAvailability, KITTEN_VOICES, KITTEN_MODELS } from '@/lib/voice/kitten-tts-server';
 
+const VALID_MODEL_IDS = KITTEN_MODELS.map(m => m.id);
+
 export async function POST(req: NextRequest) {
   try {
     const body = await req.json();
@@ -13,10 +15,20 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // Validate model against allowed IDs to prevent injection
+    const selectedModel = model && VALID_MODEL_IDS.includes(model) 
+      ? model 
+      : 'KittenML/kitten-tts-mini-0.8';
+
+    // Validate voice against allowed IDs
+    const selectedVoice = voice && KITTEN_VOICES.includes(voice as any)
+      ? voice
+      : 'Bruno';
+
     const result = await generateSpeech({
       text,
-      voice: voice || 'Bruno',
-      model: model || 'KittenML/kitten-tts-mini-0.8'
+      voice: selectedVoice,
+      model: selectedModel
     });
 
     if (!result.success) {
@@ -29,8 +41,8 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({
       success: true,
       audioData: result.audioData,
-      voice: voice || 'Bruno',
-      model: model || 'KittenML/kitten-tts-mini-0.8'
+      voice: selectedVoice,
+      model: selectedModel
     });
   } catch (error: any) {
     console.error('[TTS API] Error:', error);

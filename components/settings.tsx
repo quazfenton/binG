@@ -28,6 +28,12 @@ import {
   Trophy,
   Check,
   Server,
+  Key,
+  ChevronLeft,
+  MoreHorizontal,
+  Save,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import ModalLoginForm from "@/components/auth/modal-login-form";
 import ModalSignupForm from "@/components/auth/modal-signup-form";
@@ -130,6 +136,45 @@ export default function Settings({
   const [assistantBubbleBg, setAssistantBubbleBg] = useState("#000000");
   const [assistantBubbleText, setAssistantBubbleText] = useState("#ffffff");
   const [assistantBubbleBorder, setAssistantBubbleBorder] = useState("#ffffff");
+
+  // More page state
+  const [showMorePage, setShowMorePage] = useState(false);
+  const [userApiKeys, setUserApiKeys] = useState<Record<string, string>>({});
+  const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
+  const [hasApiKeyChanges, setHasApiKeyChanges] = useState(false);
+
+  // Load user API keys from localStorage on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = localStorage.getItem('user_api_keys');
+    if (saved) {
+      try {
+        setUserApiKeys(JSON.parse(saved));
+      } catch (e) {
+        console.error('Failed to load user API keys:', e);
+      }
+    }
+  }, []);
+
+  // Save user API keys to localStorage
+  const handleSaveApiKeys = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('user_api_keys', JSON.stringify(userApiKeys));
+      setHasApiKeyChanges(false);
+      toast.success('API keys saved (stored locally in browser)');
+    }
+  };
+
+  // Handle API key change
+  const handleApiKeyChange = (provider: string, value: string) => {
+    setUserApiKeys(prev => ({ ...prev, [provider]: value }));
+    setHasApiKeyChanges(true);
+  };
+
+  // Toggle API key visibility
+  const toggleApiKeyVisibility = (provider: string) => {
+    setShowApiKeys(prev => ({ ...prev, [provider]: !prev[provider] }));
+  };
 
   // Environment variable toggles state (user-specific overrides)
   const [envVars, setEnvVars] = useState<Record<string, boolean>>({
@@ -685,7 +730,11 @@ export default function Settings({
           {isAuthenticated ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <div className="flex-1 min-w-0">
+                <div 
+                  className="flex-1 min-w-0 cursor-pointer hover:bg-white/5 rounded p-2 -ml-2 transition-colors"
+                  onClick={() => setShowMorePage(true)}
+                  title="Click to manage API keys and more"
+                >
                   <p className="text-sm font-medium truncate" title={user?.email}>
                     {user?.email || 'N/A'}
                   </p>
@@ -710,6 +759,15 @@ export default function Settings({
                     <a href="/settings">
                       <SettingsIcon className="h-3 w-3" />
                     </a>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setShowMorePage(true)}
+                    className="text-xs px-2"
+                    title="More Options"
+                  >
+                    <MoreHorizontal className="h-3 w-3" />
                   </Button>
                   <Button
                     size="sm"
@@ -1546,6 +1604,200 @@ export default function Settings({
             </div>
           </div>
         </div>
+      )}
+
+      {/* More Page - API Key Management */}
+      {showMorePage && (
+        <>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95">
+            <div className="w-full max-w-4xl h-[90vh] flex flex-col rounded-xl bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 border border-white/10 overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center gap-3 px-6 py-4 border-b border-white/10">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setShowMorePage(false)}
+                  className="text-white/60 hover:text-white"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <div className="flex items-center gap-2">
+                  <Key className="h-5 w-5 text-purple-400" />
+                  <h2 className="text-lg font-semibold text-white">API Keys & Credentials</h2>
+                </div>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {/* Info Banner */}
+                <div className="p-4 rounded-lg bg-purple-950/30 border border-purple-900">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2 rounded-lg bg-purple-900/30 border border-purple-800">
+                      <Key className="h-4 w-4 text-purple-400" />
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-sm font-medium text-purple-200 mb-1">
+                        Bring Your Own Keys (BYOK)
+                      </h3>
+                      <ul className="text-xs text-purple-300 space-y-1">
+                        <li>• Keys are stored locally in your browser (never sent to servers)</li>
+                        <li>• User keys override server .env keys automatically</li>
+                        <li>• Models from providers with user keys will appear in the selector</li>
+                        <li>• Clear browser data to remove all saved keys</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+
+                {/* LLM Providers */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-medium text-white/80 flex items-center gap-2">
+                    <Server className="h-4 w-4" />
+                    LLM Provider API Keys
+                  </h3>
+
+                  {[
+                    { id: 'openai', name: 'OpenAI', placeholder: 'sk-...', env: 'OPENAI_API_KEY' },
+                    { id: 'anthropic', name: 'Anthropic', placeholder: 'sk-ant-...', env: 'ANTHROPIC_API_KEY' },
+                    { id: 'google', name: 'Google', placeholder: 'AIza...', env: 'GOOGLE_API_KEY' },
+                    { id: 'mistral', name: 'Mistral', placeholder: '...', env: 'MISTRAL_API_KEY' },
+                    { id: 'openrouter', name: 'OpenRouter', placeholder: 'sk-or-...', env: 'OPENROUTER_API_KEY' },
+                    { id: 'together', name: 'Together AI', placeholder: '...', env: 'TOGETHER_API_KEY' },
+                    { id: 'replicate', name: 'Replicate', placeholder: 'r8_...', env: 'REPLICATE_API_TOKEN' },
+                    { id: 'chutes', name: 'Chutes', placeholder: '...', env: 'CHUTES_API_KEY' },
+                    { id: 'cohere', name: 'Cohere', placeholder: '...', env: 'COHERE_API_KEY' },
+                    { id: 'groq', name: 'Groq', placeholder: 'gsk_...', env: 'GROQ_API_KEY' },
+                    { id: 'perplexity', name: 'Perplexity', placeholder: 'pplx-...', env: 'PERPLEXITY_API_KEY' },
+                    { id: 'anyscale', name: 'Anyscale', placeholder: '...', env: 'ANYSCALE_API_KEY' },
+                    { id: 'deepinfra', name: 'DeepInfra', placeholder: '...', env: 'DEEPINFRA_API_KEY' },
+                  ].map((provider) => {
+                    const value = userApiKeys[provider.id] || '';
+                    const isSet = !!value;
+                    const isVisible = showApiKeys[provider.id];
+
+                    return (
+                      <div key={provider.id} className="p-4 rounded-lg bg-black/30 border border-white/10">
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <h4 className="text-sm font-medium text-white">{provider.name}</h4>
+                            <p className="text-xs text-gray-500">Env: {provider.env}</p>
+                          </div>
+                          {isSet && (
+                            <div className="flex items-center gap-1">
+                              <Check className="h-3 w-3 text-green-400" />
+                              <span className="text-xs text-green-400">Configured</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex gap-2">
+                          <div className="flex-1 relative">
+                            <Input
+                              type={isVisible ? 'text' : 'password'}
+                              value={value}
+                              onChange={(e) => handleApiKeyChange(provider.id, e.target.value)}
+                              placeholder={provider.placeholder}
+                              className="bg-black/50 border-white/20 text-white placeholder:text-gray-600 pr-10"
+                            />
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => toggleApiKeyVisibility(provider.id)}
+                              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0 text-gray-400 hover:text-white"
+                            >
+                              {isVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Tool Providers */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-medium text-white/80 flex items-center gap-2">
+                    <Server className="h-4 w-4" />
+                    Tool Provider API Keys
+                  </h3>
+
+                  {[
+                    { id: 'composio', name: 'Composio', placeholder: '...', env: 'COMPOSIO_API_KEY' },
+                    { id: 'nango', name: 'Nango', placeholder: '...', env: 'NANGO_API_KEY' },
+                    { id: 'arcade', name: 'Arcade', placeholder: '...', env: 'ARCADE_API_KEY' },
+                    { id: 'serper', name: 'Serper (Search)', placeholder: '...', env: 'SERPER_API_KEY' },
+                    { id: 'exa', name: 'Exa (Search)', placeholder: '...', env: 'EXA_API_KEY' },
+                  ].map((provider) => {
+                    const value = userApiKeys[provider.id] || '';
+                    const isSet = !!value;
+                    const isVisible = showApiKeys[provider.id];
+
+                    return (
+                      <div key={provider.id} className="p-4 rounded-lg bg-black/30 border border-white/10">
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <h4 className="text-sm font-medium text-white">{provider.name}</h4>
+                            <p className="text-xs text-gray-500">Env: {provider.env}</p>
+                          </div>
+                          {isSet && (
+                            <div className="flex items-center gap-1">
+                              <Check className="h-3 w-3 text-green-400" />
+                              <span className="text-xs text-green-400">Configured</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex gap-2">
+                          <div className="flex-1 relative">
+                            <Input
+                              type={isVisible ? 'text' : 'password'}
+                              value={value}
+                              onChange={(e) => handleApiKeyChange(provider.id, e.target.value)}
+                              placeholder={provider.placeholder}
+                              className="bg-black/50 border-white/20 text-white placeholder:text-gray-600 pr-10"
+                            />
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => toggleApiKeyVisibility(provider.id)}
+                              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0 text-gray-400 hover:text-white"
+                            >
+                              {isVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between px-6 py-4 border-t border-white/10">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setUserApiKeys({});
+                    setHasApiKeyChanges(true);
+                    toast.success('All keys cleared locally');
+                  }}
+                  className="border-red-900 text-red-400 hover:bg-red-950"
+                >
+                  <Key className="h-4 w-4 mr-2" />
+                  Clear All Keys
+                </Button>
+                <Button
+                  onClick={handleSaveApiKeys}
+                  disabled={!hasApiKeyChanges}
+                  className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
+                >
+                  <Save className="h-4 w-4 mr-2" />
+                  Save Changes
+                </Button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

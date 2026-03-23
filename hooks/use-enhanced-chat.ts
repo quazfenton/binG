@@ -65,6 +65,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     processingSteps: [],
     gitCommits: [],
     diffs: [],
+    fileEdits: [],
+    specAmplification: undefined,
+    refinementProgress: undefined,
+    dagProgress: undefined,
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -586,6 +590,91 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       }],
                     }));
                   }
+                  break;
+
+                case 'file_edit':
+                  // Progressive file edit detected during streaming
+                  // eventData contains: { path, status, operation, timestamp }
+                  if (eventData.path) {
+                    // Update agent activity with progressive file edit
+                    setAgentActivity(prev => ({
+                      ...prev,
+                      status: 'executing',
+                      currentAction: `Editing ${eventData.path}...`,
+                      fileEdits: [...(prev.fileEdits || []), {
+                        path: eventData.path,
+                        status: eventData.status || 'detected',
+                        operation: eventData.operation,
+                        timestamp: eventData.timestamp || Date.now(),
+                      }],
+                    }));
+
+                    if (process.env.NODE_ENV === 'development') {
+                      console.log('[Chat] Progressive file edit detected:', eventData.path);
+                    }
+                  }
+                  break;
+
+                case 'spec_amplification':
+                  // Spec amplification lifecycle event
+                  // eventData contains: { stage, fastModel, specScore, sectionsGenerated, currentIteration, totalIterations, currentSection, error, timestamp }
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: eventData.stage === 'complete' || eventData.stage === 'error' ? 'idle' : 'processing',
+                    currentAction: eventData.stage === 'started'
+                      ? 'Generating improvement spec...'
+                      : eventData.stage === 'spec_generated'
+                      ? 'Spec generated, starting refinement...'
+                      : eventData.stage === 'refining'
+                      ? `Refining section ${eventData.currentIteration || 0}/${eventData.totalIterations || 0}...`
+                      : eventData.stage === 'complete'
+                      ? 'Refinement complete'
+                      : eventData.error || 'Processing...',
+                    specAmplification: {
+                      stage: eventData.stage,
+                      fastModel: eventData.fastModel,
+                      specScore: eventData.specScore,
+                      sectionsGenerated: eventData.sectionsGenerated,
+                      currentIteration: eventData.currentIteration,
+                      totalIterations: eventData.totalIterations,
+                      currentSection: eventData.currentSection,
+                      error: eventData.error,
+                      timestamp: eventData.timestamp || Date.now(),
+                    },
+                  }));
+                  break;
+
+                case 'spec_refinement':
+                  // Spec section refinement progress
+                  // eventData contains: { section, tasks, progress, content, timestamp }
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: 'processing',
+                    currentAction: `Refining: ${eventData.section}`,
+                    refinementProgress: {
+                      section: eventData.section,
+                      tasks: eventData.tasks,
+                      progress: eventData.progress,
+                      content: eventData.content,
+                      timestamp: eventData.timestamp || Date.now(),
+                    },
+                  }));
+                  break;
+
+                case 'dag_task_status':
+                  // DAG task execution status
+                  // eventData contains: { tasks, overallProgress, activeTasks, timestamp }
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: 'processing',
+                    currentAction: `Executing ${eventData.activeTasks.length} task(s) in parallel...`,
+                    dagProgress: {
+                      tasks: eventData.tasks,
+                      overallProgress: eventData.overallProgress,
+                      activeTasks: eventData.activeTasks,
+                      timestamp: eventData.timestamp || Date.now(),
+                    },
+                  }));
                   break;
 
                 case 'tool_invocation':

@@ -89,18 +89,25 @@ export default function OAuthPermissionsManager({ userId }: OAuthPermissionsMana
   const [connections, setConnections] = useState<ConnectionWithPermissions[]>([]);
   const [isLoading, setIsLoading] = useState(true);
   const [isRefreshing, setIsRefreshing] = useState(false);
+  const [loadError, setLoadError] = useState<string | null>(null);
 
   const loadPermissions = async () => {
     try {
       setIsLoading(true);
+      setLoadError(null);
       const response = await fetch('/api/oauth/permissions');
-      
-      if (response.ok) {
-        const data = await response.json();
-        setConnections(data.connections || []);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || `Failed to load permissions (${response.status})`);
       }
+
+      const data = await response.json();
+      setConnections(data.connections || []);
     } catch (error) {
       console.error('Failed to load permissions:', error);
+      setLoadError(error instanceof Error ? error.message : 'Failed to load permissions');
+      toast.error('Failed to load permissions. Please try again.');
     } finally {
       setIsLoading(false);
     }
@@ -114,9 +121,11 @@ export default function OAuthPermissionsManager({ userId }: OAuthPermissionsMana
     try {
       setIsRefreshing(true);
       await loadPermissions();
-      toast.success('Permissions refreshed');
+      if (!loadError) {
+        toast.success('Permissions refreshed');
+      }
     } catch (error) {
-      toast.error('Failed to refresh permissions');
+      // Error already shown by loadPermissions
     } finally {
       setIsRefreshing(false);
     }
@@ -177,9 +186,17 @@ export default function OAuthPermissionsManager({ userId }: OAuthPermissionsMana
     }
 
     try {
-      // Call disconnect endpoint
-      toast.success(`${provider} disconnected`);
-      await loadPermissions();
+      const response = await fetch(`/api/user/integrations/${provider}`, {
+        method: 'DELETE',
+      });
+
+      if (response.ok) {
+        toast.success(`${provider} disconnected`);
+        await loadPermissions();
+      } else {
+        const error = await response.json();
+        toast.error(error.error || 'Failed to disconnect');
+      }
     } catch (error) {
       toast.error('Failed to disconnect');
     }
@@ -191,6 +208,33 @@ export default function OAuthPermissionsManager({ userId }: OAuthPermissionsMana
         <RefreshCw className="w-6 h-6 animate-spin text-gray-400" />
         <span className="ml-2 text-gray-500">Loading permissions...</span>
       </div>
+    );
+  }
+
+  if (loadError) {
+    return (
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Shield className="w-5 h-5" />
+            Connected Accounts & Permissions
+          </CardTitle>
+          <CardDescription>
+            Manage OAuth connections and service permissions for automation tools
+          </CardDescription>
+        </CardHeader>
+        <CardContent>
+          <div className="text-center py-8">
+            <XCircle className="w-12 h-12 mx-auto mb-2 text-red-500" />
+            <p className="text-red-600 font-medium mb-2">Failed to Load Permissions</p>
+            <p className="text-sm text-gray-500 mb-4">{loadError}</p>
+            <Button onClick={loadPermissions} variant="outline" size="sm">
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Try Again
+            </Button>
+          </div>
+        </CardContent>
+      </Card>
     );
   }
 

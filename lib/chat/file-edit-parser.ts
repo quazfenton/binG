@@ -474,3 +474,71 @@ export function sanitizeFileEditTags(content: string): string {
 
   return sanitized;
 }
+
+// ---------------------------------------------------------------------------
+// Incremental Parser - for progressive streaming
+// ---------------------------------------------------------------------------
+
+interface IncrementalParseState {
+  /** Emitted file paths to avoid duplicates */
+  emittedPaths: Set<string>;
+  /** Last processed position in buffer */
+  lastPosition: number;
+}
+
+/**
+ * Create a new incremental parser state
+ */
+export function createIncrementalParser(): IncrementalParseState {
+  return {
+    emittedPaths: new Set<string>(),
+    lastPosition: 0,
+  };
+}
+
+/**
+ * Extract new file edits from a streaming buffer since last check
+ * This enables progressive UI updates as file edits are detected
+ * 
+ * @param buffer - Accumulated response text so far
+ * @param state - Parser state tracking what's been emitted
+ * @returns New file edits detected since last call
+ */
+export function extractIncrementalFileEdits(
+  buffer: string, 
+  state: IncrementalParseState
+): FileEdit[] {
+  const newEdits: FileEdit[] = [];
+  
+  // Use the existing extractFileEdits to find all edits in the buffer
+  const allEdits = extractFileEdits(buffer);
+  
+  // Filter to only new edits we haven't emitted yet
+  for (const edit of allEdits) {
+    if (!state.emittedPaths.has(edit.path)) {
+      state.emittedPaths.add(edit.path);
+      newEdits.push(edit);
+    }
+  }
+  
+  // Update position to end of buffer
+  state.lastPosition = buffer.length;
+  
+  return newEdits;
+}
+
+/**
+ * Extract new file edits from streaming buffer with additional metadata
+ * Returns edits with status information for UI display
+ */
+export function extractIncrementalFileEditsWithStatus(
+  buffer: string,
+  state: IncrementalParseState
+): Array<{ path: string; content: string; status: 'detected' }> {
+  const newEdits = extractIncrementalFileEdits(buffer, state);
+  return newEdits.map(edit => ({
+    path: edit.path,
+    content: edit.content,
+    status: 'detected' as const,
+  }));
+}

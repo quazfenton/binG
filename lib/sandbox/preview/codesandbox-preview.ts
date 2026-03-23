@@ -188,20 +188,21 @@ export async function checkPreviewAccessibility(
   url: string,
   timeoutMs: number = 5000
 ): Promise<boolean> {
-  try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), timeoutMs);
 
+  try {
     const response = await fetch(url, {
       method: 'HEAD',
       signal: controller.signal,
     });
 
-    clearTimeout(timeoutId);
     return response.ok;
   } catch (error) {
     logger.debug(`Preview accessibility check failed: ${error}`);
     return false;
+  } finally {
+    clearTimeout(timeoutId);
   }
 }
 

@@ -613,12 +613,14 @@ Create a comprehensive, high-quality solution.`,
 
     // Judge solutions
     this.updateProgress('reviewer', 70, 'Judging solutions');
-    
+
     const judge = this.activeAgents.get('reviewer') || this.activeAgents.get('manager');
+    let judgingResponse = '';
+
     if (judge) {
       const judging = await (judge as any).prompt({
         message: `Judge these solutions:
-        
+
 Task: ${task.task}
 ${task.successCriteria ? 'Success Criteria:\n' + task.successCriteria.join('\n') : ''}
 
@@ -629,6 +631,7 @@ Score each solution from 0-100 and explain which is best.`,
         timeout: 60000,
       });
 
+      judgingResponse = judging.response;
       contributions.push({
         role: 'reviewer',
         type: 'amp',
@@ -638,9 +641,48 @@ Score each solution from 0-100 and explain which is best.`,
     }
 
     this.updateProgress('manager', 100, 'Competition complete');
-    
-    // Return best solution (simplified - in production would parse scores)
-    return solutions[0]?.solution || '';
+
+    // Parse judge's scores to find best solution
+    // Judge response should contain scores like "Solution 1: 85/100" or "Solution 2: 92/100"
+    let bestIndex = 0;
+    let bestScore = 0;
+
+    // Multiple patterns to match different score formats
+    const scorePatterns = [
+      /Solution\s*(\d+)\s*[:\-]?\s*(\d+)\s*\/?\s*100/gi,  // "Solution 1: 85/100"
+      /Solution\s*(\d+)\s*[:\-]?\s*(\d+)\s*points/gi,      // "Solution 1: 85 points"
+      /Solution\s*(\d+)\s*[:\-]?\s*(\d+\.?\d*)\s*\/\s*\d+/gi, // "Solution 1: 85/100"
+    ];
+
+    for (const pattern of scorePatterns) {
+      let match;
+      while ((match = pattern.exec(judgingResponse)) !== null) {
+        const solutionIndex = parseInt(match[1]) - 1;
+        const score = parseFloat(match[2]);
+
+        if (solutionIndex >= 0 && solutionIndex < solutions.length && score > bestScore) {
+          bestScore = score;
+          bestIndex = solutionIndex;
+        }
+      }
+
+      // If we found scores, stop trying other patterns
+      if (bestScore > 0) break;
+    }
+
+    // If no scores found in judging, fall back to first solution
+    if (bestScore === 0 && solutions.length > 0) {
+      logger.warn('No scores found in judging response, using first solution. Judge response:', judgingResponse.substring(0, 200));
+    }
+
+    contributions.push({
+      role: 'manager',
+      type: 'claude-code',
+      content: `Best solution: #${bestIndex + 1} (score: ${bestScore}/100)`,
+      timestamp: Date.now(),
+    });
+
+    return solutions[bestIndex]?.solution || '';
   }
 
   /**
@@ -754,13 +796,19 @@ Respond with only the number of the best solution (1-${solutions.length}).`,
 
     this.destroyed = true;
 
-    // Release all agents back to pools
+    // Release all agents back to their ORIGINAL pools
+    // IMPORTANT: Must release to correct pool type to prevent leaks
     const releasePromises: Promise<void>[] = [];
 
     for (const [role, agent] of Array.from(this.activeAgents.entries())) {
-      const pool = this.pools.get('claude-code') || this.pools.get('amp') || this.pools.get('opencode');
+      // Get the agent's type to find correct pool
+      const agentType = (agent as any).type || 'claude-code';
+      const pool = this.pools.get(agentType);
+      
       if (pool) {
         releasePromises.push(pool.release(agent));
+      } else {
+        logger.warn(`[AgentTeam] No pool found for agent type: ${agentType}, skipping release`);
       }
     }
 

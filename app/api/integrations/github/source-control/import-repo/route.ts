@@ -81,36 +81,70 @@ export async function POST(request: NextRequest) {
     }
     
     const tree = await treeResponse.json();
-    
+
+    // Validate tree response structure
+    if (!tree || !Array.isArray(tree.tree)) {
+      console.error('[GitHub Import] Malformed tree response:', tree);
+      return NextResponse.json({ 
+        error: 'Failed to fetch repository structure',
+        details: 'Repository tree response is malformed'
+      }, { status: 500 });
+    }
+
     // Filter to files only (not directories)
     const files = tree.tree.filter((item: any) => item.type === 'blob');
     
-    // Fetch file contents (limit to first 100 files for performance)
+    // Fetch file contents in parallel with concurrency limit (batch of 10)
+    // This improves performance while avoiding GitHub API rate limits
+    const CONCURRENCY_LIMIT = 10;
     const fileContents: Record<string, string> = {};
     const errors: string[] = [];
     
-    for (const file of files.slice(0, 100)) {
-      try {
-        const contentResponse = await fetch(
-          `https://api.github.com/repos/${owner}/${repo}/contents/${file.path}?ref=${branch || repoInfo.default_branch}`,
-          token ? {
-            headers: {
-              'Authorization': `Bearer ${token}`,
-              'Accept': 'application/vnd.github.v3+json',
-            },
-          } : undefined
-        );
-        
-        if (contentResponse.ok) {
-          const contentData = await contentResponse.json();
-          if (contentData.content && contentData.encoding === 'base64') {
-            fileContents[file.path] = Buffer.from(contentData.content, 'base64').toString('utf-8');
+    // Process files in batches
+    for (let i = 0; i < Math.min(files.length, 100); i += CONCURRENCY_LIMIT) {
+      const batch = files.slice(i, i + CONCURRENCY_LIMIT);
+      
+      const batchPromises = batch.map(async (file) => {
+        try {
+          const contentResponse = await fetch(
+            `https://api.github.com/repos/${owner}/${repo}/contents/${file.path}?ref=${branch || repoInfo.default_branch}`,
+            token ? {
+              headers: {
+                'Authorization': `Bearer ${token}`,
+                'Accept': 'application/vnd.github.v3+json',
+              },
+            } : undefined
+          );
+          
+          if (contentResponse.ok) {
+            const contentData = await contentResponse.json();
+            if (contentData.content && contentData.encoding === 'base64') {
+              // Skip binary files - check by extension
+              const binaryExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.pdf', '.zip', '.tar', '.gz', '.exe', '.dll', '.so', '.dylib', '.bin', '.dat', '.db', '.sqlite', '.class', '.jar', '.war', '.ear'];
+              const fileExt = file.path.toLowerCase().substring(file.path.lastIndexOf('.'));
+              
+              if (binaryExtensions.includes(fileExt)) {
+                // Store binary files as base64 with marker
+                fileContents[file.path] = `data:${contentData.download_url || 'application/octet-stream'};base64,${contentData.content}`;
+              } else {
+                // Decode text files
+                try {
+                  fileContents[file.path] = Buffer.from(contentData.content, 'base64').toString('utf-8');
+                } catch (decodeError) {
+                  console.warn(`Failed to decode ${file.path} as UTF-8, storing as base64:`, decodeError);
+                  fileContents[file.path] = `data:application/octet-stream;base64,${contentData.content}`;
+                }
+              }
+            }
           }
+        } catch (error) {
+          console.warn(`Failed to fetch ${file.path}:`, error);
+          errors.push(file.path);
         }
-      } catch (error) {
-        console.warn(`Failed to fetch ${file.path}:`, error);
-        errors.push(file.path);
-      }
+      });
+      
+      // Wait for batch to complete before processing next batch
+      await Promise.all(batchPromises);
     }
     
     return NextResponse.json({

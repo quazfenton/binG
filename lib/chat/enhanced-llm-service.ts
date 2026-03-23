@@ -20,6 +20,7 @@ import { getProviderForTask, getModelForTask } from '../config/task-providers';
 import { advancedToolCallDispatcher } from '../tools/tool-integration/parsers/dispatcher';
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
 import { chatLogger } from './chat-logger';
+import { chatRequestLogger } from './chat-request-logger';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -212,15 +213,26 @@ export class EnhancedLLMService {
 
     // Try primary provider first
     try {
-      const fullRequest = { ...llmRequest, provider: actualProvider, model: actualModel };
-      const response = await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker, requestId);
-      const latency = Date.now() - requestStartTime;
+      const fullRequest = { ...llmRequest, provider: actualProvider, model: actualModel }
+      
+      // Log request start for telemetry
+      await chatRequestLogger.logRequestStart(
+        requestId || `llm-${Date.now()}`,
+        userId || 'anonymous',
+        actualProvider,
+        actualModel,
+        fullRequest.messages,
+        fullRequest.stream || false
+      )
+      
+      const response = await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker, requestId)
+      const latency = Date.now() - requestStartTime
       chatLogger.info('Provider request completed', { requestId, provider: actualProvider, model: actualModel }, {
         latencyMs: latency,
         tokensUsed: response.tokensUsed,
         finishReason: response.finishReason,
-      });
-      
+      })
+
       // Add metadata about actual provider/model used
       const enhancedResponse = {
         ...response,
@@ -230,9 +242,23 @@ export class EnhancedLLMService {
           actualModel,
           fallbackChain: [],
         },
-      };
+      }
+
+      const result = await postProcessToolCalls(enhancedResponse)
       
-      return await postProcessToolCalls(enhancedResponse);
+      // Record telemetry for model ranking
+      await chatRequestLogger.logRequestComplete(
+        requestId || `llm-${Date.now()}`,
+        true,  // success
+        undefined,  // responseSize
+        typeof response.tokensUsed === 'number' 
+          ? { prompt: 0, completion: 0, total: response.tokensUsed }
+          : response.tokensUsed,
+        latency,
+        undefined  // error
+      )
+      
+      return result
     } catch (primaryError) {
       const primaryLatency = Date.now() - requestStartTime;
       chatLogger.warn('Primary provider failed', { requestId, provider: actualProvider, model: actualModel }, {

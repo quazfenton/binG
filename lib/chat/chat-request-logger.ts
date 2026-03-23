@@ -343,6 +343,60 @@ class ChatRequestLogger {
   }
 
   /**
+   * Get per-model performance metrics
+   * Used by model-ranker for telemetry-based model selection
+   */
+  async getModelPerformance(minutesBack: number = 10): Promise<Array<{
+    provider: string;
+    model: string;
+    avgLatency: number;
+    failureRate: number;
+    totalCalls: number;
+    lastUpdated: number;
+    successRate: number;
+  }>> {
+    await this.initialize();
+    if (!this.db) {
+      return [];
+    }
+
+    try {
+      const cutoffTime = new Date(Date.now() - minutesBack * 60 * 1000).toISOString();
+
+      const stmt = this.db.prepare(`
+        SELECT 
+          provider,
+          model,
+          COUNT(*) as totalCalls,
+          AVG(latency_ms) as avgLatency,
+          SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failures,
+          MAX(created_at) as lastUpdated,
+          AVG(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successRate
+        FROM chat_request_logs
+        WHERE created_at >= ?
+        GROUP BY provider, model
+        HAVING totalCalls >= 1
+        ORDER BY avgLatency ASC
+      `);
+
+      const results = stmt.all(cutoffTime) as any[];
+
+      return results.map(row => ({
+        provider: row.provider,
+        model: row.model,
+        avgLatency: Math.round(row.avgLatency || 0),
+        failureRate: row.totalCalls > 0 ? row.failures / row.totalCalls : 0,
+        lastUpdated: new Date(row.lastUpdated).getTime(),
+        totalCalls: row.totalCalls,
+        successRate: row.successRate || 1 - (row.failures / row.totalCalls),
+      }));
+    } catch (error) {
+      console.error('[ChatRequestLogger] Failed to get model performance:', error);
+      return [];
+    }
+  }
+
+  /**
    * Clean up old logs
    */
   async cleanupOldLogs(daysToKeep: number = 30): Promise<number> {

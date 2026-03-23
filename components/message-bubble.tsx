@@ -18,12 +18,24 @@ import { ReasoningDisplay, ReasoningSummary } from "@/components/reasoning-displ
 import { ToolInvocationsList } from "@/components/tool-invocation-card"
 import { VersionHistoryPanel, VersionIndicator } from "@/components/version-history-panel"
 import { AgentStatusDisplay, MultiAgentStatusDisplay } from "@/components/agent-status-display"
+import { SpecAmplificationProgress, DAGProgressDisplay } from "@/components/spec-amplification-progress"
 import { normalizeToolInvocations } from "@/lib/types/tool-invocation"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 import { toast } from "sonner"
 import { buildApiHeaders } from "@/lib/utils"
 import { sanitizeFileEditTags } from "@/lib/chat/file-edit-parser"
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer"
+import { useMultiRotatingStatements } from "@/hooks/use-rotating-statements"
+
+function LoadingIndicator() {
+  const statement = useMultiRotatingStatements(['interesting', 'funny', 'task'], 2500);
+  return (
+    <div className="flex items-center gap-2 text-white/60 mb-2">
+      <Loader2 className="w-4 h-4 thinking-spinner" />
+      <span className="text-sm thinking-pulse">{statement}</span>
+    </div>
+  );
+}
 
 /**
  * Client-side sanitization for message content
@@ -533,10 +545,7 @@ export default function MessageBubble({
       >
         {/* Thinking indicator - shown at start of streaming */}
         {isStreaming && streamingDisplay.showLoadingIndicator && (
-          <div className="flex items-center gap-2 text-white/60 mb-2">
-            <Loader2 className="w-4 h-4 thinking-spinner" />
-            <span className="text-sm thinking-pulse">Thinking...</span>
-          </div>
+          <LoadingIndicator />
         )}
 
         {/* Streaming cursor - shown while receiving content */}
@@ -650,9 +659,9 @@ export default function MessageBubble({
                   <hr className={`${useCompactLayout ? 'my-2' : 'my-4'} border-t border-white/20`} />
                 ),
                 blockquote: ({ children }) => (
-                  <blockquote className={`border-l-4 border-white/30 ${
+                  <blockquote className={`border-l-4 border-white/30 bg-white/5 ${
                     layout.isMobile ? 'pl-2' : 'pl-4'
-                  } italic ${useCompactLayout ? 'mb-2' : 'mb-4'}`}>
+                  } italic ${useCompactLayout ? 'mb-2' : 'mb-4'} py-1 rounded-r`}>
                     {children}
                   </blockquote>
                 ),
@@ -777,6 +786,35 @@ export default function MessageBubble({
               toolInvocations={toolInvocations}
               processingSteps={(message.metadata as any)?.processingSteps}
               isVisible={true}
+            />
+          </div>
+        )}
+
+        {/* Spec Amplification Progress */}
+        {!isUser && (message.metadata as any)?.specAmplification && (
+          <div className="mt-3">
+            <SpecAmplificationProgress
+              stage={(message.metadata as any).specAmplification.stage}
+              fastModel={(message.metadata as any).specAmplification.fastModel}
+              specScore={(message.metadata as any).specAmplification.specScore}
+              sectionsGenerated={(message.metadata as any).specAmplification.sectionsGenerated}
+              currentIteration={(message.metadata as any).specAmplification.currentIteration}
+              totalIterations={(message.metadata as any).specAmplification.totalIterations}
+              currentSection={(message.metadata as any).specAmplification.currentSection}
+              error={(message.metadata as any).specAmplification.error}
+              timestamp={(message.metadata as any).specAmplification.timestamp}
+            />
+          </div>
+        )}
+
+        {/* DAG Progress Display */}
+        {!isUser && (message.metadata as any)?.dagProgress && (
+          <div className="mt-3">
+            <DAGProgressDisplay
+              tasks={(message.metadata as any).dagProgress.tasks}
+              overallProgress={(message.metadata as any).dagProgress.overallProgress}
+              activeTasks={(message.metadata as any).dagProgress.activeTasks}
+              timestamp={(message.metadata as any).dagProgress.timestamp}
             />
           </div>
         )}
@@ -987,7 +1025,7 @@ export default function MessageBubble({
                     </button>
                   )}
                 </div>
-                <div className="space-y-2 max-h-64 overflow-y-auto scrollbar-thin scrollbar-thumb-white/5 scrollbar-track-transparent hover:scrollbar-thumb-white/20">
+                <div className="space-y-2 max-h-[600px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/5 scrollbar-track-transparent hover:scrollbar-thumb-white/20">
                   {(showAllFiles ? fileEditInfo.applied : fileEditInfo.applied.slice(0, 3)).map((edit: any) => (
                     <EnhancedDiffViewer
                       key={`${edit.path}-${edit.version}`}

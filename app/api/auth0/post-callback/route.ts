@@ -37,12 +37,18 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing required fields' }, { status: 400 });
     }
 
+    // Normalize scopes once - handle string or array formats
+    const normalizedScopes: string[] = Array.isArray(scopes)
+      ? scopes
+      : typeof scopes === 'string'
+        ? scopes.split(/[,\s]+/).filter(Boolean)
+        : [];
+
     console.log('[Auth0 Post-Callback] Processing callback:', {
       auth0UserId,
-      email,
       hasAccessToken: !!accessToken,
       hasRefreshToken: !!refreshToken,
-      scopes: scopes || 'none',
+      scopeCount: normalizedScopes.length,
     });
 
     // Map Auth0 user ID to local user on successful login
@@ -96,21 +102,16 @@ export async function POST(request: NextRequest) {
           accessToken,
           refreshToken,
           tokenExpiresAt ? new Date(tokenExpiresAt) : undefined,
-          Array.isArray(scopes)
-            ? scopes
-            : typeof scopes === 'string'
-              ? scopes.split(/[,\s]+/).filter(Boolean)
-              : undefined
+          normalizedScopes.length > 0 ? normalizedScopes : undefined
         );
         console.log('[Auth0 Post-Callback] Saved connected account:', provider, {
-          hasScopes: !!scopes,
-          scopeCount: Array.isArray(scopes) ? scopes.length : 0,
+          scopeCount: normalizedScopes.length,
         });
 
         // Auto-grant basic permissions based on scopes
-        if (scopes && Array.isArray(scopes)) {
+        if (normalizedScopes.length > 0) {
           const { grantServicePermission } = await import('@/lib/oauth/permission-tracker');
-          
+
           // Get the connection ID we just saved
           const { getDatabase } = await import('@/lib/database/connection');
           const db = getDatabase();
@@ -122,28 +123,32 @@ export async function POST(request: NextRequest) {
 
             if (connRow) {
               // Analyze scopes and grant appropriate permissions
-              const scopeList = scopes as string[];
-              
-              // Gmail scopes
-              if (scopeList.some(s => s.includes('gmail') || s.includes('mail'))) {
+              // Use explicit Gmail scope names, not generic 'mail' or 'email' (OIDC scope)
+              if (normalizedScopes.some(s => 
+                s.includes('gmail') || 
+                s.includes('mail.send') || 
+                s.includes('mail.read') ||
+                s === 'https://www.googleapis.com/auth/gmail.compose' ||
+                s === 'https://www.googleapis.com/auth/gmail.readonly'
+              )) {
                 await grantServicePermission(localUserId, connRow.id, 'gmail', 'read');
                 console.log('[Auth0 Post-Callback] Auto-granted Gmail permission');
               }
-              
+
               // Drive scopes
-              if (scopeList.some(s => s.includes('drive'))) {
+              if (normalizedScopes.some(s => s.includes('drive'))) {
                 await grantServicePermission(localUserId, connRow.id, 'drive', 'read');
                 console.log('[Auth0 Post-Callback] Auto-granted Drive permission');
               }
-              
+
               // Calendar scopes
-              if (scopeList.some(s => s.includes('calendar'))) {
+              if (normalizedScopes.some(s => s.includes('calendar'))) {
                 await grantServicePermission(localUserId, connRow.id, 'calendar', 'read');
                 console.log('[Auth0 Post-Callback] Auto-granted Calendar permission');
               }
-              
+
               // Contacts scopes
-              if (scopeList.some(s => s.includes('contacts') || s.includes('directory'))) {
+              if (normalizedScopes.some(s => s.includes('contacts') || s.includes('directory'))) {
                 await grantServicePermission(localUserId, connRow.id, 'contacts', 'read');
                 console.log('[Auth0 Post-Callback] Auto-granted Contacts permission');
               }
@@ -153,13 +158,12 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    return NextResponse.json({ 
+    return NextResponse.json({
       success: true,
-      hasScopes: !!scopes,
-      scopeCount: Array.isArray(scopes) ? scopes.length : 0,
+      scopeCount: normalizedScopes.length,
     });
   } catch (error: any) {
     console.error('[Auth0 Post-Callback] Error:', error);
-    return NextResponse.json({ error: error.message || 'Internal error' }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

@@ -219,16 +219,22 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'openrouter',
     name: 'OpenRouter',
     models: [
-      'deepseek/deepseek-r1-0528:free',
+      'qwen/qwen3-4b:free',
       'qwen/qwen3-coder:free',
       'openai/gpt-oss-120b:free',
       'z-ai/glm-4.5-air:free',
       'nvidia/nemotron-3-nano-30b-a3b:free',
+      'meta-llama/llama-3.3-70b-instruct:free',
       'nvidia/nemotron-nano-12b-v2-vl:free',
+      'minimax/minimax-m2.5:free', 
+      'nvidia/nemotron-3-super-120b-a12b:free', 
+      'stepfun/step-3.5-flash:free', 
+      'openai/gpt-oss-20b:free',  
+      'qwen/qwen3-next-80b-a3b-instruct:free', 
+      'arcee-ai/trinity-mini:free',
       'mistralai/mistral-small-3.1-24b-instruct:free',
       'liquid/lfm-2.5-1.2b-instruct:free',
-      'arcee-ai/trinity-large-preview:free',
-      'meta-llama/llama-3.3-70b-instruct:free'
+      'arcee-ai/trinity-large-preview:free'
     ],
     supportsStreaming: true,
     maxTokens: 128000, // OpenRouter models can vary, setting a common high limit
@@ -260,6 +266,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'google',
     name: 'Google',
     models: [
+      'gemini-3.1-flash-lite-preview',
       'gemini-3-flash-preview',
       'gemini-2.5-pro',
       'gemini-2.5-flash',
@@ -313,7 +320,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'portkey',
     name: 'Portkey AI Gateway',
     models: ['openrouter/auto',
-      'deepseek/deepseek-r1-0528:free',
+      'qwen/qwen3-4b:free',
       'chutes/gemini-1.5-flash:free',
       'chutes/openrouter-auto:free',
       'chutes/grok-beta:free',
@@ -398,6 +405,30 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     maxTokens: 128000,
     description: 'GitHub Models - Access to GPT-4, Llama, Mistral, Phi, and more via GitHub Azure'
   },
+  nvidia: {
+    id: 'nvidia',
+    name: 'NVIDIA NIM',
+    models: [
+      'deepseek-ai/deepseek-v3.2',
+      'deepseek-ai/deepseek-v3.1-terminus',
+      'deepseek-ai/deepseek-v3.1',
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'NVIDIA NIM - DeepSeek models optimized for NVIDIA GPUs'
+  },
+  zo: {
+    id: 'zo',
+    name: 'ZO AI',
+    models: [
+      'openai:gpt-5.4-mini-2026-03-17',
+      'vercel:minimax/minimax-m2.7',
+      'vercel:zai/glm-5',
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'ZO AI - Multi-provider gateway with GPT-5.4 Mini, MiniMax, and GLM-5'
+  },
   zen: {
     id: 'zen',
     name: 'zen API',
@@ -421,6 +452,50 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     supportsStreaming: true,
     maxTokens: 128000,
     description: 'Local OpenCode instance via SDK - Full agentic capabilities with tool calling'
+  },
+  cloudflare: {
+    id: 'cloudflare',
+    name: 'Cloudflare Workers AI',
+    models: [
+      // Meta Llama models
+      '@cf/meta/llama-3.2-1b-instruct',
+      '@cf/meta/llama-3.2-3b-instruct',
+      '@cf/meta/llama-3.1-8b-instruct-fp8-fast',
+      '@cf/meta/llama-3.2-11b-vision-instruct',
+      '@cf/meta/llama-3.1-70b-instruct-fp8-fast',
+      '@cf/meta/llama-3.3-70b-instruct-fp8-fast',
+      '@cf/meta/llama-3.1-8b-instruct',
+      '@cf/meta/llama-3.1-8b-instruct-fp8',
+      '@cf/meta/llama-3.1-8b-instruct-awq',
+      '@cf/meta/llama-3-8b-instruct',
+      '@cf/meta/llama-3-8b-instruct-awq',
+      '@cf/meta/llama-2-7b-chat-fp16',
+      '@cf/meta/llama-guard-3-8b',
+      '@cf/meta/llama-4-scout-17b-16e-instruct',
+      // DeepSeek models
+      '@cf/deepseek-ai/deepseek-r1-distill-qwen-32b',
+      // Mistral models
+      '@cf/mistral/mistral-7b-instruct-v0.1',
+      '@cf/mistralai/mistral-small-3.1-24b-instruct',
+      // Google Gemma models
+      '@cf/google/gemma-3-12b-it',
+      // Qwen models
+      '@cf/qwen/qwq-32b',
+      '@cf/qwen/qwen2.5-coder-32b-instruct',
+      '@cf/qwen/qwen3-30b-a3b-fp8',
+      // OpenAI models (via Cloudflare)
+      '@cf/openai/gpt-oss-120b',
+      '@cf/openai/gpt-oss-20b',
+      // Other models
+      '@cf/aisingapore/gemma-sea-lion-v4-27b-it',
+      '@cf/ibm-granite/granite-4.0-h-micro',
+      '@cf/zai-org/glm-4.7-flash',
+      '@cf/nvidia/nemotron-3-120b-a12b',
+      '@cf/moonshotai/kimi-k2.5',
+    ],
+    supportsStreaming: true,
+    maxTokens: 128000,
+    description: 'Cloudflare Workers AI - Serverless AI inference at the edge with 10,000 neurons/day free tier'
   }
 }
 
@@ -881,7 +956,7 @@ class LLMService {
       case 'github':
         return currentEnv.GITHUB_MODELS_API_KEY || currentEnv.AZURE_OPENAI_API_KEY || this.config.github?.apiKey || '';
       case 'zen':
-        return currentEnv.zen_API_KEY || this.config.zen?.apiKey || '';
+        return currentEnv.ZEN_API_KEY || this.config.zen?.apiKey || '';
       default:
         return '';
     }
@@ -1668,7 +1743,7 @@ class LLMService {
         case 'mistral':
           return !!process.env.MISTRAL_API_KEY;
         case 'zen':
-          return !!process.env.zen_API_KEY;
+          return !!process.env.ZEN_API_KEY;
         case 'openrouter':
           return !!process.env.OPENROUTER_API_KEY;
         case 'chutes':
@@ -1677,6 +1752,12 @@ class LLMService {
           return !!process.env.GITHUB_MODELS_API_KEY || !!process.env.AZURE_OPENAI_API_KEY;
         case 'composio':
           return !!process.env.COMPOSIO_API_KEY;
+        case 'cloudflare':
+          return !!process.env.CLOUDFLARE_API_KEY || !!process.env.CLOUDFLARE_ACCOUNT_ID;
+        case 'nvidia':
+          return !!process.env.NVIDIA_API_KEY || !!process.env.NVIDIA_NIM_API_KEY;
+        case 'zo':
+          return !!process.env.ZO_API_KEY;
         case 'opencode':
           // OpenCode SDK - check if binary is available or server is running
           return true; // Always available as it's local
@@ -1684,6 +1765,14 @@ class LLMService {
           return false;
       }
     })
+  }
+
+  /**
+   * Pre-warm lazy-loaded provider SDKs
+   * Triggers initialization of OpenAI, Anthropic, Google, etc. clients to avoid cold starts
+   */
+  async warmupProviders(): Promise<void> {
+    await this.initializeProviders();
   }
 
   isProviderAvailable(providerId: string): boolean {
@@ -1733,8 +1822,8 @@ export const llmService = new LLMService({
     baseURL: process.env.GITHUB_MODELS_BASE_URL
   },
   zen: {
-    apiKey: process.env.zen_API_KEY,
-    baseURL: process.env.zen_BASE_URL
+    apiKey: process.env.ZEN_API_KEY,
+    baseURL: process.env.ZEN_BASE_URL
   },
   opencode: {
     hostname: process.env.OPENCODE_HOSTNAME || '127.0.0.1',

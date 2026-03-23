@@ -19,6 +19,7 @@ interface PendingRequest {
   promise: Promise<any>;
   timestamp: number;
   count: number; // Number of duplicate requests merged
+  abortController?: AbortController; // Track abort controller for cleanup
 }
 
 interface RequestDeduplicatorConfig {
@@ -51,7 +52,7 @@ export class RequestDeduplicator {
 
   /**
    * Execute a request, deduplicating with any in-flight request
-   * 
+   *
    * @param endpoint - API endpoint URL
    * @param method - HTTP method
    * @param body - Request body (will be JSON stringified)
@@ -65,7 +66,7 @@ export class RequestDeduplicator {
     headers?: Record<string, string>
   ): Promise<any> {
     const key = this.getKey(endpoint, method, body);
-    
+
     // Check if there's already a pending request
     const pending = this.pendingRequests.get(key);
     if (pending) {
@@ -73,14 +74,18 @@ export class RequestDeduplicator {
       return pending.promise;
     }
 
-    // Create new request
-    const promise = this.makeRequest(endpoint, method, body, headers);
+    // Create abort controller for this request
+    const abortController = new AbortController();
     
-    // Store pending request
+    // Create new request
+    const promise = this.makeRequest(endpoint, method, body, headers, abortController);
+
+    // Store pending request with abort controller
     this.pendingRequests.set(key, {
       promise,
       timestamp: Date.now(),
       count: 1,
+      abortController,
     });
 
     // Cleanup if too many pending requests
@@ -103,7 +108,8 @@ export class RequestDeduplicator {
     endpoint: string,
     method: string,
     body?: any,
-    headers?: Record<string, string>
+    headers?: Record<string, string>,
+    abortController?: AbortController
   ): Promise<any> {
     const fetchOptions: RequestInit = {
       method,
@@ -111,6 +117,7 @@ export class RequestDeduplicator {
         'Content-Type': 'application/json',
         ...headers,
       },
+      signal: abortController?.signal, // Attach abort signal
     };
 
     if (body && method !== 'GET') {
@@ -178,6 +185,10 @@ export class RequestDeduplicator {
 
     for (const [key, pending] of this.pendingRequests.entries()) {
       if (pending.timestamp < cutoff) {
+        // Abort the request if it's still running
+        if (pending.abortController && !pending.abortController.signal.aborted) {
+          pending.abortController.abort(new Error('Request timeout - cleaned up by deduplicator'));
+        }
         this.pendingRequests.delete(key);
       }
     }
@@ -189,11 +200,16 @@ export class RequestDeduplicator {
   private cleanupOldest(): void {
     const entries = Array.from(this.pendingRequests.entries())
       .sort((a, b) => a[1].timestamp - b[1].timestamp);
-    
+
     // Remove oldest 20%
     const toRemove = Math.max(1, Math.floor(entries.length * 0.2));
     for (let i = 0; i < toRemove; i++) {
-      this.pendingRequests.delete(entries[i][0]);
+      const [key, pending] = entries[i];
+      // Abort the request if it's still running
+      if (pending.abortController && !pending.abortController.signal.aborted) {
+        pending.abortController.abort(new Error('Request deduplicated - oldest request aborted'));
+      }
+      this.pendingRequests.delete(key);
     }
   }
 
@@ -204,6 +220,13 @@ export class RequestDeduplicator {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
       this.cleanupInterval = undefined;
+    }
+    
+    // Abort all pending requests
+    for (const [, pending] of this.pendingRequests.entries()) {
+      if (pending.abortController && !pending.abortController.signal.aborted) {
+        pending.abortController.abort(new Error('Deduplicator destroyed - all requests aborted'));
+      }
     }
     this.pendingRequests.clear();
   }

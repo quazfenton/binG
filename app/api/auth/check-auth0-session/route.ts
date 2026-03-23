@@ -29,7 +29,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid Auth0 session' }, { status: 400 });
     }
 
-    console.log('[Auth0 Session Check] Found Auth0 session for:', email);
+    console.log('[Auth0 Session Check] Found Auth0 session for user');
 
     // Get or create local user mapping
     let localUserId: number | null = null;
@@ -154,10 +154,10 @@ export async function POST(request: NextRequest) {
       return response;
     } catch (sessionError: any) {
       console.error('[Auth0 Session Check] Session creation error:', sessionError.message);
-      return NextResponse.json({ error: 'Failed to create session: ' + sessionError.message }, { status: 500 });
+      return NextResponse.json({ error: 'Failed to create session' }, { status: 500 });
     }
   } catch (error: any) {
     console.error('[Auth0 Session Check] Error:', error);
-    return NextResponse.json({ error: error.message || 'Internal error' }, { status: 500 });
+    return NextResponse.json({ error: 'Internal server error' }, { status: 500 });
   }
 }

@@ -158,7 +158,7 @@ export default function GitSourceControl({ scopePath }: GitSourceControlProps) {
         setGitHub(status);
         setIsConnected(true);
         if (status.repos?.[0]) {
-          loadBranches(status.repos[0]);
+          loadBranches(status);  // ✅ Pass full connection object, not single repo
         }
         loadHistory();
       } else {
@@ -327,7 +327,12 @@ export default function GitSourceControl({ scopePath }: GitSourceControlProps) {
         loadChanges();
         loadHistory();
       } else {
-        const error = await response.json();
+        let error;
+        try {
+          error = await response.json();
+        } catch (e) {
+          error = { error: 'Unknown error' };
+        }
         toast.error(error.error || 'Failed to commit');
       }
     } catch (error) {
@@ -365,8 +370,12 @@ export default function GitSourceControl({ scopePath }: GitSourceControlProps) {
         toast.success('Changes pushed to GitHub');
         setLastSync(new Date());
       } else {
-        const error = await response.json();
-        
+        let error;
+        try {
+          error = await response.json();
+        } catch (e) {
+          error = { error: 'Unknown error' };
+        }
         if (error.requiresAuth) {
           toast.error('GitHub authentication required', {
             description: 'Please connect your GitHub account to push changes',
@@ -406,13 +415,29 @@ export default function GitSourceControl({ scopePath }: GitSourceControlProps) {
         }),
       });
 
-      if (response.ok) {
-        toast.success('Changes pulled from GitHub');
+      const pullResult = await response.json();
+
+      if (response.ok && pullResult.files) {
+        // Write pulled files to VFS
+        let writtenCount = 0;
+        for (const [path, fileData] of Object.entries(pullResult.files as Record<string, any>)) {
+          try {
+            await vfs.writeFile(path, fileData.content as string);
+            writtenCount++;
+          } catch (err) {
+            console.error(`Failed to write ${path}:`, err);
+          }
+        }
+
+        toast.success(`Pulled ${writtenCount} files from GitHub`);
         setLastSync(new Date());
-        loadChanges();
+        await loadChanges();
+      } else if (response.ok) {
+        toast.success('Repository is up to date');
+        setLastSync(new Date());
+        await loadChanges();
       } else {
-        const error = await response.json();
-        toast.error(error.error || 'Failed to pull');
+        toast.error(pullResult.error || 'Failed to pull');
       }
     } catch (error) {
       toast.error('Failed to pull changes');
@@ -443,8 +468,15 @@ export default function GitSourceControl({ scopePath }: GitSourceControlProps) {
         setCurrentBranch(branch || null);
         toast.success(`Switched to ${branchName}`);
         loadChanges();
+        loadHistory();
+        loadBranches(gitHub);
       } else {
-        const error = await response.json();
+        let error;
+        try {
+          error = await response.json();
+        } catch (e) {
+          error = { error: 'Unknown error' };
+        }
         toast.error(error.error || 'Failed to switch branch');
       }
     } catch (error) {

@@ -33,20 +33,43 @@ const logger = createLogger('API:Agents');
 
 const startAgentSchema = z.object({
   type: z.enum(['claude-code', 'amp', 'opencode']),
-  workspaceDir: z.string().min(1),
+  workspaceDir: z.string().min(1, 'Workspace directory is required'),
   apiKey: z.string().optional(),
-  port: z.number().optional(),
+  port: z.number()
+    .min(1, 'Port must be positive')
+    .max(65535, 'Port must be <= 65535')
+    .optional(),
   agentId: z.string().optional(),
   env: z.record(z.string()).optional(),
   resources: z.object({
-    cpu: z.number().optional(),
+    cpu: z.number()
+      .min(0.1, 'CPU must be at least 0.1')
+      .max(128, 'CPU must be <= 128')
+      .optional(),
     memory: z.string().optional(),
   }).optional(),
   poolConfig: z.object({
-    minSize: z.number().optional(),
-    maxSize: z.number().optional(),
-    idleTimeout: z.number().optional(),
-  }).optional(),
+    minSize: z.number()
+      .min(0, 'minSize cannot be negative')
+      .max(100, 'minSize must be <= 100')
+      .optional(),
+    maxSize: z.number()
+      .min(1, 'maxSize must be at least 1')
+      .max(100, 'maxSize must be <= 100')
+      .optional(),
+    idleTimeout: z.number()
+      .min(1000, 'idleTimeout must be at least 1000ms')
+      .max(3600000, 'idleTimeout must be <= 1 hour')
+      .optional(),
+  })
+  .refine(
+    (data) => !data.minSize || !data.maxSize || data.minSize <= data.maxSize,
+    {
+      message: 'minSize must be <= maxSize',
+      path: ['poolConfig'],
+    }
+  )
+  .optional(),
 });
 
 const promptSchema = z.object({
@@ -68,7 +91,7 @@ export async function GET(request: NextRequest) {
     const action = searchParams.get('action');
 
     if (action === 'pool-stats') {
-      const { getAllPoolStats } = await import('@/lib/agents');
+      const { getAllPoolStats } = await import('@/lib/spawn');
       const stats = getAllPoolStats();
       
       return NextResponse.json({
@@ -106,27 +129,38 @@ export async function POST(request: NextRequest) {
 
     // Check if pool config provided (use pool instead of single agent)
     if (parsed.poolConfig) {
-      const pool = getAgentPool(parsed.type, {
-        agentConfig: {
-          workspaceDir: parsed.workspaceDir,
-          apiKey: parsed.apiKey,
-          port: parsed.port,
-          env: parsed.env,
-        },
-        ...parsed.poolConfig,
-      });
+      try {
+        const pool = getAgentPool(parsed.type, {
+          agentConfig: {
+            workspaceDir: parsed.workspaceDir,
+            apiKey: parsed.apiKey,
+            port: parsed.port,
+            env: parsed.env,
+          },
+          ...parsed.poolConfig,
+        });
 
-      const stats = pool.getStats();
+        const stats = pool.getStats();
 
-      return NextResponse.json({
-        success: true,
-        data: {
-          pool: true,
-          type: parsed.type,
-          stats,
-          message: `Agent pool created with ${stats.total} pre-warmed agents`,
-        },
-      });
+        return NextResponse.json({
+          success: true,
+          data: {
+            pool: true,
+            type: parsed.type,
+            stats,
+            message: `Agent pool created with ${stats.total} pre-warmed agents`,
+          },
+        });
+      } catch (poolError: any) {
+        logger.error('Failed to create agent pool', { error: poolError.message });
+        return NextResponse.json(
+          { 
+            error: 'Failed to create agent pool', 
+            details: poolError.message,
+          },
+          { status: 500 }
+        );
+      }
     }
 
     // Start single agent
@@ -244,36 +278,3 @@ export async function POSTPrompt(
     );
   }
 }
-
-// ============================================================================
-// DELETE /api/agents/:id - Stop/destroy agent
-// ============================================================================
-
-export async function DELETE(
-  request: NextRequest,
-  { params }: { params: Promise<{ id: string }> }
-) {
-  try {
-    const { id } = await params;
-    const manager = getAgentServiceManager();
-    await manager.stopAgent(id);
-
-    return NextResponse.json({
-      success: true,
-      message: `Agent ${id} stopped`,
-    });
-  } catch (error: any) {
-    logger.error('Failed to stop agent', { error: error.message });
-    return NextResponse.json(
-      { error: error.message },
-      { status: 500 }
-    );
-  }
-}
-
-// ============================================================================
-// Route handler
-// ============================================================================
-
-// Note: GET, POST, and DELETE are already exported above as route handlers
-// No additional exports needed

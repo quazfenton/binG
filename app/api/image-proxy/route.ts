@@ -197,34 +197,38 @@ function getCachedImage(cacheKey: string): CachedImage | null {
 function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string, etag: string, imageUrl: string): void {
   const imageSize = data.byteLength;
 
-  // Check if already cached (update case)
-  const existing = IMAGE_CACHE.get(cacheKey);
-  if (existing) {
-    cacheTotalBytes -= existing.size;
-  }
-
   // Periodic cleanup instead of on every write (every 10 writes)
   if (IMAGE_CACHE.size % 10 === 0) {
     cleanupCache();
   }
 
-  // Check byte limit using tracked total
-  if (cacheTotalBytes + imageSize > CACHE_MAX_BYTES) {
+  // Check if already cached (update case) - adjust byte counter AFTER eviction
+  const existing = IMAGE_CACHE.get(cacheKey);
+  let existingSize = 0;
+  if (existing) {
+    existingSize = existing.size;
+  }
+
+  // Check byte limit using tracked total (account for update case)
+  const effectiveTotal = cacheTotalBytes - existingSize;
+  if (effectiveTotal + imageSize > CACHE_MAX_BYTES) {
     // Evict oldest entries until we have space
-    evictOldestUntilSpaceAvailable(imageSize);
-    
+    evictOldestUntilSpaceAvailable(imageSize - existingSize);
+
     // If still not enough space after eviction, skip caching
-    if (cacheTotalBytes + imageSize > CACHE_MAX_BYTES) {
+    if (effectiveTotal + imageSize > CACHE_MAX_BYTES) {
       console.log('[Image Proxy] Skipping cache: would exceed memory limit even after eviction', {
         url: safeLogUrl(imageUrl),
-        cacheTotalBytes,
+        effectiveTotal,
         imageSize,
+        existingSize,
         limit: CACHE_MAX_BYTES,
       });
       return;
     }
   }
 
+  // Update cache - adjust byte counter atomically with map update
   IMAGE_CACHE.set(cacheKey, {
     data,
     contentType,
@@ -232,7 +236,9 @@ function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string
     timestamp: Date.now(),
     size: imageSize,
   });
-  cacheTotalBytes += imageSize;
+  
+  // Adjust byte counter: subtract old size (if update) and add new size
+  cacheTotalBytes = cacheTotalBytes - existingSize + imageSize;
 }
 
 // Periodic cache cleanup interval (every 5 minutes)

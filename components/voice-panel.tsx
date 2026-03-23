@@ -104,6 +104,12 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
   const analyserRef = useRef<AnalyserNode | null>(null);
   const animationRef = useRef<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
+  const isListeningRef = useRef(isListening);
+
+  // Keep ref in sync with state
+  useEffect(() => {
+    isListeningRef.current = isListening;
+  }, [isListening]);
 
   // AI processing state
   const [isProcessingAI, setIsProcessingAI] = useState(false);
@@ -194,7 +200,7 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
         };
 
         recognition.onend = () => {
-          if (isListening) {
+          if (isListeningRef.current) {
             // Restart if still supposed to be listening
             try {
               recognition.start();
@@ -207,7 +213,8 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
         recognitionRef.current = recognition;
       }
     }
-  }, [isListening]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // Audio level monitoring
   useEffect(() => {
@@ -295,11 +302,27 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
       mediaStreamRef.current.getTracks().forEach(track => track.stop());
       mediaStreamRef.current = null;
     }
-    
+
     if (recognitionRef.current) {
-      recognitionRef.current.stop();
+      try {
+        recognitionRef.current.stop();
+      } catch (e) {
+        // Ignore if already stopped
+      }
     }
-    
+
+    // Close audio context to prevent resource leaks
+    if (audioContextRef.current) {
+      audioContextRef.current.close();
+      audioContextRef.current = null;
+    }
+
+    // Cancel animation frames
+    if (animationRef.current) {
+      cancelAnimationFrame(animationRef.current);
+      animationRef.current = null;
+    }
+
     setIsListening(false);
     setAudioLevel(0);
     toast.info("Microphone deactivated");
@@ -346,7 +369,7 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
             { role: 'user', content: text }
           ],
           provider: 'openrouter',
-          model: settings.model || 'nvidia/nemotron-3-30b-a3b:free',
+          model: 'nvidia/nemotron-3-30b-a3b:free', // Fixed LLM model for voice chat
           stream: true,
           conversationId: `voice-chat-${Date.now()}`,
         }),

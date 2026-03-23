@@ -126,6 +126,16 @@ export async function DELETE(
   try {
     const { id } = await params;
     const manager = getAgentServiceManager();
+    
+    // Check if agent exists before attempting to stop
+    const agent = manager.getAgent(id);
+    if (!agent) {
+      return NextResponse.json(
+        { error: 'Agent not found' },
+        { status: 404 }
+      );
+    }
+    
     await manager.stopAgent(id);
 
     return NextResponse.json({
@@ -134,70 +144,6 @@ export async function DELETE(
     });
   } catch (error: any) {
     logger.error('Failed to stop agent', { error: error.message });
-    return NextResponse.json(
-      { error: error.message },
-      { status: 500 }
-    );
-  }
-}
-
-// ============================================================================
-// GET /api/agents/[id]/events - Subscribe to events (SSE)
-// ============================================================================
-
-export async function GETEvents(
-  request: NextRequest,
-  { params }: { params: { id: string } }
-) {
-  try {
-    const manager = getAgentServiceManager();
-    const agent = manager.getAgent(params.id);
-
-    if (!agent) {
-      return NextResponse.json(
-        { error: 'Agent not found' },
-        { status: 404 }
-      );
-    }
-
-    // Create SSE stream
-    const encoder = new TextEncoder();
-    let streamCancelled = false;
-
-    const stream = new ReadableStream({
-      async start(controller) {
-        try {
-          const events = await manager.subscribe(params.id);
-
-          for await (const event of events) {
-            if (streamCancelled) {
-              break;
-            }
-
-            const data = `data: ${JSON.stringify(event)}\n\n`;
-            controller.enqueue(encoder.encode(data));
-          }
-
-          controller.close();
-        } catch (error: any) {
-          controller.error(error);
-        }
-      },
-      cancel() {
-        streamCancelled = true;
-      },
-    });
-
-    return new Response(stream, {
-      headers: {
-        'Content-Type': 'text/event-stream',
-        'Cache-Control': 'no-cache, no-store, must-revalidate',
-        'Connection': 'keep-alive',
-        'X-Accel-Buffering': 'no',
-      },
-    });
-  } catch (error: any) {
-    logger.error('Failed to subscribe to events', { error: error.message });
     return NextResponse.json(
       { error: error.message },
       { status: 500 }
