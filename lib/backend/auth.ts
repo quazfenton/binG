@@ -54,6 +54,7 @@ function getDefaultAuthConfig(): AuthConfig {
   // Skip validation during build - use dummy values
   const isBuild = env.SKIP_DB_INIT === 'true' ||
                   env.NEXT_BUILD === 'true' ||
+                  env.NEXT_PHASE === 'phase-production-build' ||
                   env.NEXT_PHASE === 'build';
   
   if (isBuild) {

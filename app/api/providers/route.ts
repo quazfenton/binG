@@ -20,15 +20,8 @@ export async function GET(request: NextRequest) {
         },
       });
     }
-    
-    // If stale, return cached with stale headers while refreshing in background
-    if (cachedProviders && isStale) {
-      return NextResponse.json(cachedProviders, {
-        headers: {
-          'Cache-Control': 'public, max-age=60, stale-while-revalidate=300',
-        },
-      });
-    }
+
+    // Cache is stale or empty - recompute below
 
     // Use canonical llmService.getAvailableProviders() for availability checks
     const availableProviderIds = new Set(llmService.getAvailableProviders().map(p => p.id));

@@ -349,7 +349,7 @@ export function useVirtualFilesystem(
       for (const path of pathsToRefreshSet) {
         // Invalidate and fetch fresh data immediately (bypass debounce for filesystem updates)
         invalidateSnapshotCache(path, ownerId);
-        
+
         // Fetch fresh data using native fetch (bypassing the 'request' callback which is defined later)
         fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
           method: 'GET',
@@ -362,8 +362,8 @@ export function useVirtualFilesystem(
             const data = payload.data;
             log(`[filesystem-updated] Refreshed directory: "${data.path}", ${data.nodes.length} entries`);
             setCachedList(path, ownerId, data.nodes);
-            // Update UI state if this is the current path
-            if (path === currentPath) {
+            // Update UI state if this is the current path (use ref to avoid stale closure)
+            if (path === currentPathRef.current) {
               setNodes(data.nodes);
             }
           }

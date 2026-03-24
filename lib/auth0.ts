@@ -12,28 +12,29 @@
  * - Direct user account connections
  */
 
-import { NextResponse } from 'next/server';
-import { Auth0Client } from "@auth0/nextjs-auth0/server";
+// Re-export Edge-safe Auth0 client and constants from auth0-edge.ts
+// This module adds database-dependent helpers on top.
+export { auth0, AUTH0_CONNECTIONS, PROVIDER_CONNECTION_MAP } from './auth0-edge';
 
-console.log('[Auth0] Initializing Auth0Client', {
-  domain: process.env.AUTH0_DOMAIN,
-  clientId: process.env.AUTH0_CLIENT_ID,
-  hasSecret: !!process.env.AUTH0_SECRET,
-  baseUrl: process.env.AUTH0_BASE_URL || process.env.NEXT_PUBLIC_APP_URL,
-});
+// Import auth0 for internal use
+import { auth0 as auth0Client, AUTH0_CONNECTIONS } from './auth0-edge';
 
 // Lazy-loaded database functions to avoid Edge Runtime issues
 // Node.js modules (crypto, fs, path) in connection.ts are not compatible with Edge
-function getDatabase() {
-  return require('./database/connection').getDatabase();
+// Dynamic import to avoid bundling in Edge Runtime
+async function getDatabase() {
+  const dbModule = await import('./database/connection');
+  return dbModule.getDatabase();
 }
 
-function encryptApiKey(apiKey: string) {
-  return require('./database/connection').encryptApiKey(apiKey);
+async function encryptApiKey(apiKey: string) {
+  const dbModule = await import('./database/connection');
+  return dbModule.encryptApiKey(apiKey);
 }
 
-function decryptApiKey(encryptedData: string) {
-  return require('./database/connection').decryptApiKey(encryptedData);
+async function decryptApiKey(encryptedData: string) {
+  const dbModule = await import('./database/connection');
+  return dbModule.decryptApiKey(encryptedData);
 }
 
 // Lazy-loaded mapping functions to avoid circular dependency
@@ -157,16 +158,16 @@ export async function saveConnectedAccount(
   scopes?: string[]
 ): Promise<boolean> {
   try {
-    const db = getDatabase();
-    
-    const { encrypted: accessTokenEncrypted } = accessToken 
-      ? encryptApiKey(accessToken) 
+    const db = await getDatabase();
+
+    const { encrypted: accessTokenEncrypted } = accessToken
+      ? await encryptApiKey(accessToken)
       : { encrypted: null };
-    
-    const { encrypted: refreshTokenEncrypted } = refreshToken 
-      ? encryptApiKey(refreshToken) 
+
+    const { encrypted: refreshTokenEncrypted } = refreshToken
+      ? await encryptApiKey(refreshToken)
       : { encrypted: null };
-    
+
     const stmt = db.prepare(`
       INSERT INTO external_connections 
       (user_id, provider, provider_account_id, provider_display_name, 
@@ -207,9 +208,9 @@ export async function saveConnectedAccount(
 /**
  * Get all connected accounts for a user
  */
-export function getConnectedAccountsByUser(userId: number): ConnectedAccountRecord[] {
+export async function getConnectedAccountsByUser(userId: number): Promise<ConnectedAccountRecord[]> {
   try {
-    const db = getDatabase();
+    const db = await getDatabase();
     const stmt = db.prepare(`
       SELECT * FROM external_connections 
       WHERE user_id = ? AND is_active = TRUE
@@ -225,9 +226,9 @@ export function getConnectedAccountsByUser(userId: number): ConnectedAccountReco
 /**
  * Check if a provider is connected for a user
  */
-export function isProviderConnected(userId: number, provider: string): boolean {
+export async function isProviderConnected(userId: number, provider: string): Promise<boolean> {
   try {
-    const db = getDatabase();
+    const db = await getDatabase();
     const stmt = db.prepare(`
       SELECT 1 FROM external_connections 
       WHERE user_id = ? AND provider = ? AND is_active = TRUE
@@ -243,9 +244,9 @@ export function isProviderConnected(userId: number, provider: string): boolean {
 /**
  * Disconnect a provider for a user
  */
-export function disconnectProvider(userId: number, provider: string): boolean {
+export async function disconnectProvider(userId: number, provider: string): Promise<boolean> {
   try {
-    const db = getDatabase();
+    const db = await getDatabase();
     const stmt = db.prepare(`
       UPDATE external_connections 
       SET is_active = FALSE, updated_at = CURRENT_TIMESTAMP
@@ -268,12 +269,9 @@ export function disconnectProvider(userId: number, provider: string): boolean {
  * Get decrypted access token for a connected account
  * Returns token with its expiration time to enable proper cache TTL management
  */
-export function getStoredAccessToken(
-  userId: number,
-  provider: string
-): { token: string; expiresAt?: Date } | null {
+export async function getStoredAccessToken(userId: number, provider: string): Promise<{ token: string; expiresAt?: Date } | null> {
   try {
-    const db = getDatabase();
+    const db = await getDatabase();
     const stmt = db.prepare(`
       SELECT access_token_encrypted, token_expires_at
       FROM external_connections
@@ -284,7 +282,7 @@ export function getStoredAccessToken(
     const result = stmt.get(userId, provider) as { access_token_encrypted: string; token_expires_at?: string } | undefined;
 
     if (result?.access_token_encrypted) {
-      const token = decryptApiKey(result.access_token_encrypted);
+      const token = await decryptApiKey(result.access_token_encrypted);
       const expiresAt = result.token_expires_at ? new Date(result.token_expires_at) : undefined;
 
       // Check if token is expired
@@ -303,119 +301,13 @@ export function getStoredAccessToken(
   }
 }
 
-export const auth0 = new Auth0Client({
-  // onCallback hook for post-auth redirects
-  // NOTE: Database operations are NOT performed here — auth0.middleware() runs in
-  // Edge Runtime which is incompatible with Node.js-only modules (better-sqlite3 via
-  // CommonJS require). The hook must return a valid NextResponse to avoid a crash
-  // in the SDK at handleCallbackError: response.cookies. Use /api/auth0/post-callback
-  // (server runtime) for post-auth database operations.
-  enableConnectAccountEndpoint: true,
-  routes: {
-    connectAccount: "/auth/connect",
-  },
-  async onCallback(error, context, session) {
-    try {
-      // Resolve base URL from context (provided by SDK), then app config env vars
-      const baseUrl = context?.appBaseUrl
-        || process.env.APP_BASE_URL
-        || process.env.NEXT_PUBLIC_APP_URL
-        || 'http://localhost:3000';
-      console.log('[Auth0] onCallback invoked', {
-        error: error ? {
-          message: error.message,
-          code: error.code,
-          name: error.name,
-          cause: error.cause,
-        } : null,
-        hasContext: !!context,
-        hasSession: !!session,
-        returnTo: context?.returnTo,
-        sessionUser: session?.user ? { sub: (session.user as any).sub, email: (session.user as any).email } : null,
-      });
-      if (error) {
-        const errorUrl = new URL('/auth/error', baseUrl);
-        errorUrl.searchParams.set('error', 'callback_error');
-        errorUrl.searchParams.set('error_description', error.message);
-        return NextResponse.redirect(errorUrl.toString());
-      }
-      
-      // Successful auth: redirect to the returnTo from context, or root.
-      // Only allow same-origin redirects to prevent open redirect attacks
-      const returnTo = context?.returnTo || '/';
-      const parsedReturnTo = new URL(returnTo, baseUrl);
-      const appOrigin = new URL(baseUrl).origin;
-      const redirectUrl = parsedReturnTo.origin === appOrigin
-        ? parsedReturnTo.toString()
-        : new URL('/', baseUrl).toString();
-      console.log('[Auth0] onCallback successful, redirecting to:', redirectUrl);
-      return NextResponse.redirect(redirectUrl);
-    } catch (e: any) {
-      // Last-resort safeguard: never let onCallback throw
-      console.error('[Auth0] onCallback threw:', e?.message, e?.stack);
-      return NextResponse.redirect('http://localhost:3000/');
-    }
-  },
-});
-
-/**
- * Extended connection names for Auth0 social logins and enterprise connections
- * Includes all major providers supported by Auth0 Connected Accounts
- */
-// NOTE: Microsoft connection uses 'windowslive' (Legacy Microsoft Accounts)
-// For Azure AD / Microsoft Entra ID, a different Auth0 enterprise connection would be needed
-export const AUTH0_CONNECTIONS = {
-  // Social connections
-  GITHUB: 'github',
-  GOOGLE: 'google-oauth2',
-  FACEBOOK: 'facebook',
-  TWITTER: 'twitter',
-  LINKEDIN: 'linkedin',
-  // Microsoft / Azure AD
-  // NOTE: If TOOL_PROVIDER_MAP resolves Outlook tools to 'microsoft' provider,
-  // ensure getAuth0ConnectionForProvider() includes 'microsoft' in its mapping
-  MICROSOFT: 'windowslive',
-  // Apple
-  APPLE: 'apple',
-  // Amazon
-  AMAZON: 'amazon',
-  // Instagram
-  INSTAGRAM: 'instagram',
-  // Bitbucket
-  BITBUCKET: 'bitbucket',
-  // Yahoo
-  YAHOO: 'yahoo',
-  // Box
-  BOX: 'box',
-  // Salesforce
-  SALESFORCE: 'salesforce',
-  // Slack (also available via Nango)
-  SLACK: 'slack',
-} as const;
-
-/**
- * Mapping of provider IDs to connection names for the IntegrationPanel
- */
-export const PROVIDER_CONNECTION_MAP: Record<string, string> = {
-  'github': 'github',
-  'google': 'google-oauth2',
-  'facebook': 'facebook',
-  'twitter': 'twitter',
-  'linkedin': 'linkedin',
-  'microsoft': 'windowslive',
-  'apple': 'apple',
-  'instagram': 'instagram',
-  'bitbucket': 'bitbucket',
-  'slack': 'slack',
-};
-
 /**
  * Get Auth0 session if available
  * Returns null if user is not authenticated via Auth0
  */
 export async function getAuth0Session() {
   try {
-    return await auth0.getSession();
+    return await auth0Client.getSession();
   } catch {
     return null;
   }
@@ -435,7 +327,7 @@ export async function isAuth0Authenticated() {
  */
 export async function getAuth0AccessToken() {
   try {
-    return await auth0.getAccessToken();
+    return await auth0Client.getAccessToken();
   } catch {
     return null;
   }

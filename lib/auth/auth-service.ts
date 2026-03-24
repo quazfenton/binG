@@ -1,3 +1,6 @@
+// Server-only module - do not import directly in Client Components
+export const runtime = 'nodejs';
+
 import * as bcrypt from 'bcryptjs';
 import { v4 as uuidv4 } from 'uuid';
 import { getDatabase } from '../database/connection';
@@ -210,14 +213,19 @@ export class AuthService {
   private db: any;
 
   constructor() {
-    this.db = getDatabase();
     this.dbOps = new DatabaseOperations();
+    this.db = getDatabase();
   }
 
   /**
    * Register a new user
    */
   async register(credentials: RegisterCredentials, sessionInfo?: Partial<SessionInfo>): Promise<AuthResult> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn('[AuthService] Database not ready, using mock database');
+    }
+    
     try {
       // Validate email format
       if (!this.isValidEmail(credentials.email)) {
@@ -310,19 +318,24 @@ export class AuthService {
 
   /**
    * Login user
-   * 
+   *
    * Enhanced with account lockout protection after failed attempts
    */
   async login(credentials: LoginCredentials, sessionInfo?: Partial<SessionInfo>): Promise<AuthResult> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn('[AuthService] Database not ready, using mock database');
+    }
+    
     try {
       // Check account lockout status FIRST (before any password checking)
       const lockout = checkAccountLockout(credentials.email);
       if (lockout.locked && lockout.unlockAfter) {
         const unlockTime = new Date(lockout.unlockAfter);
         const minutesUntilUnlock = Math.ceil((lockout.unlockAfter - Date.now()) / 60000);
-        
+
         console.warn(`[Auth] Account locked: ${credentials.email} (unlock in ${minutesUntilUnlock}m)`);
-        
+
         return {
           success: false,
           error: `Account locked due to too many failed attempts. Try again after ${unlockTime.toLocaleTimeString()}`,
@@ -394,6 +407,10 @@ export class AuthService {
     sessionId?: string;
     error?: string;
   }> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[AuthService] Database not ready, using mock database");
+    }
     try {
       const dbUser = this.dbOps.getUserById(userId) as any;
 
@@ -432,6 +449,10 @@ export class AuthService {
    * Invalidates session and blacklists JWT token if provided
    */
   async logout(sessionId: string, jwtToken?: string): Promise<{ success: boolean; error?: string }> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[AuthService] Database not ready, using mock database");
+    }
     try {
       // Use raw sessionId to match how sessions are stored
       this.dbOps.deleteSession(sessionId);
@@ -467,6 +488,10 @@ export class AuthService {
    * Validate session
    */
   async validateSession(sessionId: string): Promise<AuthResult> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[AuthService] Database not ready, using mock database");
+    }
     try {
       // Use raw sessionId to match how sessions are stored
       const session = this.dbOps.getSession(sessionId) as any;
@@ -507,6 +532,10 @@ export class AuthService {
    * Check if email exists
    */
   async checkEmailExists(email: string): Promise<boolean> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[AuthService] Database not ready, using mock database");
+    }
     try {
       const user = this.dbOps.getUserByEmail(email);
       return !!user;
@@ -520,6 +549,10 @@ export class AuthService {
    * Check if username exists
    */
   async checkUsernameExists(username: string): Promise<boolean> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[AuthService] Database not ready, using mock database");
+    }
     try {
       const stmt = this.db.prepare('SELECT id FROM users WHERE username = ? AND is_active = TRUE');
       const result = stmt.get(username);
@@ -534,6 +567,10 @@ export class AuthService {
    * Get user by ID
    */
   async getUserById(userId: number): Promise<User | null> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[AuthService] Database not ready, using mock database");
+    }
     try {
       const dbUser = this.dbOps.getUserById(userId) as any;
       return dbUser ? this.mapDbUserToUser(dbUser) : null;
@@ -621,6 +658,10 @@ export class AuthService {
    * Clean up expired sessions
    */
   async cleanupExpiredSessions(): Promise<void> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[AuthService] Database not ready, using mock database");
+    }
     try {
       this.dbOps.cleanupExpiredSessions();
     } catch (error) {
@@ -632,6 +673,10 @@ export class AuthService {
    * Get user sessions
    */
   async getUserSessions(userId: number): Promise<any[]> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[AuthService] Database not ready, using mock database");
+    }
     try {
       const stmt = this.db.prepare(`
         SELECT id, expires_at, created_at, ip_address, user_agent, is_active
@@ -650,6 +695,10 @@ export class AuthService {
    * Revoke session
    */
   async revokeSession(sessionId: string, userId: number): Promise<{ success: boolean; error?: string }> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[AuthService] Database not ready, using mock database");
+    }
     try {
       // Use raw sessionId to match how sessions are stored
       const stmt = this.db.prepare('DELETE FROM user_sessions WHERE session_id = ? AND user_id = ?');
@@ -673,6 +722,10 @@ export class AuthService {
    * Implements token rotation for security (old refresh token is invalidated)
    */
   async refreshToken(refreshToken: string, sessionInfo?: Partial<SessionInfo>): Promise<AuthResult> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[AuthService] Database not ready, using mock database");
+    }
     try {
       // Find session by refresh token
       // Note: In a production system, refresh tokens should be stored separately

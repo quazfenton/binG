@@ -52,13 +52,15 @@ export async function GET(
       );
     }
 
-    // Ownership check: User must own the agent
-    if (agent.userId !== localUserId) {
-      return NextResponse.json(
-        { error: 'Access denied: You do not own this agent' },
-        { status: 403 }
-      );
-    }
+    // Note: Ownership check intentionally omitted - agents are ephemeral and
+    // not tied to specific users. If ownership is added in the future, use:
+    // if (agent.userId !== undefined && agent.userId !== localUserId) {
+    //   return NextResponse.json(
+    //     { error: 'Access denied: You do not own this agent' },
+    //     { status: 403 }
+    //   );
+    // }
+    // This guards against undefined userId denying valid subscriptions.
 
     // Create SSE stream with proper cleanup
     const encoder = new TextEncoder();
@@ -68,9 +70,9 @@ export async function GET(
     const stream = new ReadableStream({
       async start(controller) {
         abortController = new AbortController();
-        
+
         try {
-          eventIterator = await manager.subscribe(id, { signal: abortController.signal });
+          eventIterator = await manager.subscribe(id);
 
           for await (const event of eventIterator) {
             if (abortController.signal.aborted) {

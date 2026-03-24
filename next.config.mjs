@@ -6,32 +6,26 @@ const projectRoot = resolve(__dirname);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Turbopack configuration - use webpack for bundling (more mature handling of externals)
+  // Note: Using webpack for build as Turbopack has issues with Node.js module externals
   turbopack: {
     root: projectRoot,
-    // Map node: protocol imports to unprefixed equivalents so Turbopack
-    // resolves them as native builtins instead of creating [externals]_node:*
-    // chunk files (filenames with ":" are invalid on Windows NTFS).
-    resolveAlias: {
-      'node:crypto': 'crypto',
-      'node:fs': 'fs',
-      'node:fs/promises': 'fs/promises',
-      'node:path': 'path',
-      'node:os': 'os',
-      'node:url': 'url',
-      'node:buffer': 'buffer',
-      'node:stream': 'stream',
-      'node:util': 'util',
-      'node:events': 'events',
-      'node:http': 'http',
-      'node:https': 'https',
-      'node:net': 'net',
-      'node:tls': 'tls',
-      'node:zlib': 'zlib',
-      'node:assert': 'assert',
-      'node:module': 'module',
-      'node:child_process': 'child_process',
-    },
   },
+  // Use webpack for production builds (more mature handling of Node.js externals)
+  webpack: (config, { isServer }) => {
+    // Server-only packages should be externalized
+    if (!isServer) {
+      config.externals = [
+        ...(config.externals || []),
+        'fs', 'fs/promises', 'child_process', 'crypto', 'stream',
+        'net', 'tls', 'http', 'https', 'url', 'zlib', 'os', 'path',
+        'assert', 'buffer', 'util', 'events', 'module', 'vm',
+      ];
+    }
+    return config;
+  },
+  // Override the previous webpack config by merging
+  // (This replaces the existing webpack config below)
   typescript: {
     ignoreBuildErrors: true,
   },

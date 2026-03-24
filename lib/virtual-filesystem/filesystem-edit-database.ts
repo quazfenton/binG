@@ -1,9 +1,12 @@
+// Server-only module - do not import directly in Client Components
+export const runtime = 'nodejs';
+
 /**
  * Filesystem Edit Session Database Service
- * 
+ *
  * Persists filesystem edit transactions to SQLite database
  * Provides durability across server restarts
- * 
+ *
  * Features:
  * - Transaction persistence to database
  * - Denial history tracking
@@ -12,10 +15,10 @@
  */
 
 import { getDatabase } from '../database/connection';
-import type { 
-  FilesystemEditTransaction, 
+import type {
+  FilesystemEditTransaction,
   FilesystemEditOperationRecord,
-  FilesystemEditDenialRecord 
+  FilesystemEditDenialRecord
 } from './filesystem-edit-session-service';
 
 export interface PersistedTransaction {
@@ -87,9 +90,16 @@ class FilesystemEditDatabaseService {
    */
   private ensureDatabase(): void {
     if (this.db) return;
-    
+
     try {
       this.db = getDatabase();
+      
+      // Handle case where database is not yet initialized
+      if (!this.db) {
+        console.warn('[FilesystemEditDB] Database not ready, using in-memory only');
+        return;
+      }
+      
       this.ensureSchema();
       this.initialized = true;
     } catch (error: any) {

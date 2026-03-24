@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem';
+import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 // ANSI color codes for terminal output

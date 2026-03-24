@@ -29,7 +29,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem';
+import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { FileImportService } from '@/lib/virtual-filesystem/import-service';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { resolveFilesystemOwnerWithFallback } from '../utils';

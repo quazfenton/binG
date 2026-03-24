@@ -1,3 +1,6 @@
+// Server-only module - do not import directly in Client Components
+export const runtime = 'nodejs';
+
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';

@@ -263,9 +263,9 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
     path,
     diffLength: diffBody.length,
     contentLength: currentContent.length,
-    hasAnyDiffMarkers,
+    hasRealDiffMarkers,
   });
-  
+
   return null;
 }
 

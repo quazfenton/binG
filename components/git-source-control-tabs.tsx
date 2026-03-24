@@ -204,39 +204,20 @@ export default function GitSourceControl({ scopePath }: GitSourceControlProps) {
 
   const loadChanges = async () => {
     try {
-      // Fetch actual git status from API
-      const statusResponse = await fetch('/api/integrations/github/source-control/status');
-      
-      if (statusResponse.ok) {
-        const statusData = await statusResponse.json();
-        
-        if (statusData.files && Array.isArray(statusData.files)) {
-          const fileChanges: GitFileChange[] = statusData.files.map((f: any) => ({
-            path: f.path || f.filename,
-            status: (f.status || 'modified') as 'added' | 'modified' | 'deleted' | 'renamed',
-            staged: f.staged || false,
-            additions: f.additions || 0,
-            deletions: f.deletions || 0,
-          }));
-          
-          setChanges(fileChanges.filter(f => !f.staged));
-          setStagedChanges(fileChanges.filter(f => f.staged));
-          return;
-        }
-      }
-      
-      // Fallback: Use VFS snapshot for local changes (no git repo)
+      // Use VFS snapshot for local file changes
+      // Note: Local git status is not implemented - we track changes via VFS
       const snapshot = await vfs.getSnapshot();
-      
+
       const fileChanges: GitFileChange[] = snapshot.files.map((f: any) => ({
         path: f.path,
-        status: 'added' as const,
+        status: 'modified' as const,
         staged: false,
         additions: 0,
         deletions: 0,
       }));
 
       setChanges(fileChanges);
+      setStagedChanges([]);
     } catch (error) {
       console.error('[Git] Failed to load changes:', error);
       // Don't show error to user - just show empty state
@@ -343,14 +324,19 @@ export default function GitSourceControl({ scopePath }: GitSourceControlProps) {
           // For added files, content should already be in VFS
           // For modified/deleted files, fetch from VFS or use current content
           try {
-            // Read file content from VFS (virtual filesystem)
+            // Read file content from VFS via API (cannot import server modules in client components)
             const vfsPath = change.path.startsWith('project/') ? change.path : `project/${change.path}`;
-            const { virtualFilesystem } = await import('@/lib/virtual-filesystem');
-            const fileContent = await virtualFilesystem.readFile(vfsPath);
+            const readRes = await fetch('/api/filesystem/read', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ path: vfsPath }),
+            });
+            const readData = await readRes.json();
+            const fileContent = readData.success ? (readData.data?.content ?? readData.content ?? '') : '';
             
             return {
               ...change,
-              content: fileContent || '',
+              content: fileContent,
             };
           } catch (error) {
             console.warn(`Failed to read content for ${change.path}:`, error);

@@ -3,60 +3,73 @@
  *
  * Provides virtual filesystem capabilities for agent workspaces.
  * Git-backed by default for automatic commits, version tracking, and rollbacks.
+ * 
+ * CLIENT-SAFE EXPORTS: This file only exports types and utilities that work in both
+ * server and browser environments. Server-only exports are in ./index.server.ts
  */
 
-export { virtualFilesystem, VirtualFilesystemService } from './virtual-filesystem-service';
-export type { 
-  FilesystemChangeEvent,
-  ConflictEvent,
-} from './virtual-filesystem-service';
-
-// Core filesystem types
-export type { 
-  VirtualFile, 
+// Core filesystem types - safe for client
+export type {
+  VirtualFile,
   VirtualFilesystemNode,
   VirtualFilesystemDirectoryListing,
   VirtualFilesystemSearchResult,
   VirtualWorkspaceSnapshot,
 } from './filesystem-types';
 
-export { diffTracker, FilesystemDiffTracker } from './filesystem-diffs';
+// Batch operations type exports - safe for client
+export type {
+  BatchFileOperation,
+  BatchOperationResult,
+  SearchReplaceConfig,
+  SearchReplaceResult,
+} from './vfs-batch-operations';
+
+// File watcher type exports - safe for client
+export type {
+  FileEvent,
+  FileEventType,
+  WatchConfig,
+  FileWatcherHandle,
+} from './vfs-file-watcher';
+
+// Diff tracker types - safe for client
 export type { FileDiff, DiffHunk, FileDiffHistory } from './filesystem-diffs';
 
-export { filesystemEditSessionService } from './filesystem-edit-session-service';
-export type { 
+// Git VFS types - safe for client
+export type { GitVFSOptions, GitVFSChange, GitVFSRollbackResult, GitVFSState } from './git-backed-vfs';
+
+// Edit session types - safe for client
+export type {
   FilesystemEditTransaction as FilesystemEditSession,
   FilesystemEditDenialRecord as EditSessionResult,
 } from './filesystem-edit-session-service';
 
-export { resolveFilesystemOwner, withAnonSessionCookie } from './resolve-filesystem-owner';
+// Change/Conflict event types - safe for client
+export type {
+  FilesystemChangeEvent,
+  ConflictEvent,
+} from './virtual-filesystem-service';
 
-// Git-backed VFS (auto-enabled by default)
-export {
-  createGitBackedVFS,
-  getGitBackedVFSForOwner,
-  GitBackedVFS,
-} from './git-backed-vfs';
-export type { GitVFSOptions, GitVFSChange, GitVFSRollbackResult, GitVFSState } from './git-backed-vfs';
-
-// Batch operations
-export {
-  VFSBatchOperations,
-  createVFSBatchOperations,
-  quickBatchWrite,
-  type BatchFileOperation,
-  type BatchOperationResult,
-  type SearchReplaceConfig,
-  type SearchReplaceResult,
-} from './vfs-batch-operations';
-
-// File watcher
-export {
-  VFSFileWatcher,
-  createFileWatcher,
-  watchFiles,
-  type FileEvent,
-  type FileEventType,
-  type WatchConfig,
-  type FileWatcherHandle,
-} from './vfs-file-watcher';
+/**
+ * Server-only VFS exports - use dynamic import to access these
+ * Example: const { virtualFilesystem } = await import('@/lib/virtual-filesystem/index.server');
+ */
+export const __VFS_SERVER_EXPORTS = [
+  'virtualFilesystem',
+  'VirtualFilesystemService', 
+  'filesystemEditSessionService',
+  'diffTracker',
+  'FilesystemDiffTracker',
+  'resolveFilesystemOwner',
+  'withAnonSessionCookie',
+  'createGitBackedVFS',
+  'getGitBackedVFSForOwner',
+  'GitBackedVFS',
+  'VFSBatchOperations',
+  'createVFSBatchOperations',
+  'quickBatchWrite',
+  'VFSFileWatcher',
+  'createFileWatcher',
+  'watchFiles',
+];
