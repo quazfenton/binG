@@ -106,8 +106,12 @@ export async function POST(request: NextRequest) {
       
       const batchPromises = batch.map(async (file) => {
         try {
+          // URL-encode file path and branch/ref to handle special characters
+          const encodedPath = encodeURIComponent(file.path);
+          const encodedRef = encodeURIComponent(branch || repoInfo.default_branch);
+          
           const contentResponse = await fetch(
-            `https://api.github.com/repos/${owner}/${repo}/contents/${file.path}?ref=${branch || repoInfo.default_branch}`,
+            `https://api.github.com/repos/${owner}/${repo}/contents/${encodedPath}?ref=${encodedRef}`,
             token ? {
               headers: {
                 'Authorization': `Bearer ${token}`,
@@ -122,10 +126,10 @@ export async function POST(request: NextRequest) {
               // Skip binary files - check by extension
               const binaryExtensions = ['.png', '.jpg', '.jpeg', '.gif', '.ico', '.svg', '.pdf', '.zip', '.tar', '.gz', '.exe', '.dll', '.so', '.dylib', '.bin', '.dat', '.db', '.sqlite', '.class', '.jar', '.war', '.ear'];
               const fileExt = file.path.toLowerCase().substring(file.path.lastIndexOf('.'));
-              
+
               if (binaryExtensions.includes(fileExt)) {
-                // Store binary files as base64 with marker
-                fileContents[file.path] = `data:${contentData.download_url || 'application/octet-stream'};base64,${contentData.content}`;
+                // Store binary files as base64 with proper MIME type
+                fileContents[file.path] = `data:application/octet-stream;base64,${contentData.content}`;
               } else {
                 // Decode text files
                 try {
@@ -136,6 +140,10 @@ export async function POST(request: NextRequest) {
                 }
               }
             }
+          } else {
+            // Handle non-OK responses (rate limit, not found, etc.)
+            console.warn(`Failed to fetch ${file.path}: HTTP ${contentResponse.status}`);
+            errors.push(file.path);
           }
         } catch (error) {
           console.warn(`Failed to fetch ${file.path}:`, error);

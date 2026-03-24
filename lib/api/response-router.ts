@@ -1937,17 +1937,38 @@ export class ResponseRouter {
         provider: fastModel.provider,
         model: fastModel.model,
         messages: buildSpecPrompt(
-          request.messages[0].content as string
+          // Use last user message content, handling non-string content
+          (() => {
+            const lastUser = [...request.messages].reverse().find(m => m.role === 'user');
+            return typeof lastUser?.content === 'string'
+              ? lastUser.content
+              : JSON.stringify(lastUser?.content || '');
+          })()
         ),
         maxTokens: 2000,
         stream: false,
         requestId: specRequestId
       })
 
-      const [primaryResponse, specResponse] = await Promise.all([
-        primaryPromise,
-        specPromise
+      // Use Promise.allSettled to avoid duplicate routing when spec fails
+      const [primaryResult, specResult] = await Promise.all([
+        primaryPromise.then(res => ({ success: true, data: res })).catch(err => ({ success: false, error: err })),
+        specPromise.then(res => ({ success: true, data: res })).catch(err => ({ success: false, error: err }))
       ])
+
+      // Always return primary response if it succeeded
+      if (!primaryResult.success) {
+        logger.error('Primary routing failed', { error: primaryResult.error })
+        throw primaryResult.error
+      }
+
+      // Skip spec-based refinement if spec generation failed
+      if (!specResult.success) {
+        logger.warn('Spec generation failed, returning primary response only', { error: specResult.error })
+        return primaryResult.data
+      }
+
+      const specResponse = specResult.data
 
       // Extract spec content from response
       const rawSpec = specResponse.content || ''

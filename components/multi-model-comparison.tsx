@@ -161,30 +161,63 @@ export default function MultiModelComparison({
         const decoder = new TextDecoder();
         let accumulatedContent = '';
         let currentEventType = '';
+        let buffer = ''; // Buffer for incomplete lines across chunks
 
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
-          
+          if (done) {
+            // Process any remaining buffered content
+            if (buffer.trim()) {
+              const trimmedLine = buffer.trim();
+              if (trimmedLine.startsWith('event: ')) {
+                currentEventType = trimmedLine.slice(7).trim();
+              } else if (trimmedLine.startsWith('data: ')) {
+                const dataStr = trimmedLine.slice(6).trim();
+                if (dataStr) {
+                  try {
+                    const data = JSON.parse(dataStr);
+                    if (currentEventType === 'token' || currentEventType === '') {
+                      if (data.content) accumulatedContent += data.content;
+                    } else if (currentEventType === 'done') {
+                      const endTime = Date.now();
+                      setResponses(prev => prev.map((r, i) =>
+                        i === actualIndex ? { ...r, response: accumulatedContent || r.response, status: data.success !== false ? 'complete' : 'error', endTime } : r
+                      ));
+                    }
+                  } catch (e) { /* Skip parse errors */ }
+                }
+              }
+            }
+            break;
+          }
+
           const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
+          // Prepend buffer and split by lines
+          const content = buffer + chunk;
+          const lines = content.split('\n');
           
+          // Keep last incomplete line in buffer
+          buffer = lines.pop() || '';
+
           for (const line of lines) {
-            if (line.startsWith('event: ')) {
-              currentEventType = line.slice(7).trim();
+            const trimmedLine = line.trim();
+            if (!trimmedLine) continue;
+            
+            if (trimmedLine.startsWith('event: ')) {
+              currentEventType = trimmedLine.slice(7).trim();
               continue;
             }
-            
-            if (line.startsWith('data: ')) {
-              const dataStr = line.slice(6).trim();
+
+            if (trimmedLine.startsWith('data: ')) {
+              const dataStr = trimmedLine.slice(6).trim();
               if (!dataStr) continue;
-              
+
               try {
                 const data = JSON.parse(dataStr);
                 if (currentEventType === 'token' || currentEventType === '') {
                   if (data.content) {
                     accumulatedContent += data.content;
-                    setResponses(prev => prev.map((r, i) => 
+                    setResponses(prev => prev.map((r, i) =>
                       i === actualIndex ? { ...r, response: accumulatedContent } : r
                     ));
                   }
@@ -280,30 +313,63 @@ export default function MultiModelComparison({
         const decoder = new TextDecoder();
         let accumulatedContent = '';
         let currentEventType = '';
+        let buffer = ''; // Buffer for incomplete lines across chunks
 
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
-          
+          if (done) {
+            // Process any remaining buffered content
+            if (buffer.trim()) {
+              const trimmedLine = buffer.trim();
+              if (trimmedLine.startsWith('event: ')) {
+                currentEventType = trimmedLine.slice(7).trim();
+              } else if (trimmedLine.startsWith('data: ')) {
+                const dataStr = trimmedLine.slice(6).trim();
+                if (dataStr) {
+                  try {
+                    const data = JSON.parse(dataStr);
+                    if (currentEventType === 'token' || currentEventType === '') {
+                      if (data.content) accumulatedContent += data.content;
+                    } else if (currentEventType === 'done') {
+                      const endTime = Date.now();
+                      setResponses(prev => prev.map((r, i) =>
+                        i === actualIndex ? { ...r, response: accumulatedContent || r.response, status: data.success !== false ? 'complete' : 'error', endTime } : r
+                      ));
+                    }
+                  } catch (e) { /* Skip parse errors */ }
+                }
+              }
+            }
+            break;
+          }
+
           const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
+          // Prepend buffer and split by lines
+          const content = buffer + chunk;
+          const lines = content.split('\n');
           
+          // Keep last incomplete line in buffer
+          buffer = lines.pop() || '';
+
           for (const line of lines) {
-            if (line.startsWith('event: ')) {
-              currentEventType = line.slice(7).trim();
+            const trimmedLine = line.trim();
+            if (!trimmedLine) continue;
+            
+            if (trimmedLine.startsWith('event: ')) {
+              currentEventType = trimmedLine.slice(7).trim();
               continue;
             }
-            
-            if (line.startsWith('data: ')) {
-              const dataStr = line.slice(6).trim();
+
+            if (trimmedLine.startsWith('data: ')) {
+              const dataStr = trimmedLine.slice(6).trim();
               if (!dataStr) continue;
-              
+
               try {
                 const data = JSON.parse(dataStr);
                 if (currentEventType === 'token' || currentEventType === '') {
                   if (data.content) {
                     accumulatedContent += data.content;
-                    setResponses(prev => prev.map((r, i) => 
+                    setResponses(prev => prev.map((r, i) =>
                       i === actualIndex ? { ...r, response: accumulatedContent } : r
                     ));
                   }

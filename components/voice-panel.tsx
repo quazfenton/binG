@@ -298,6 +298,9 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
   };
 
   const stopListening = useCallback(() => {
+    // Set listening state to false FIRST to prevent auto-restart race
+    setIsListening(false);
+    
     if (mediaStreamRef.current) {
       mediaStreamRef.current.getTracks().forEach(track => track.stop());
       mediaStreamRef.current = null;
@@ -323,7 +326,6 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
       animationRef.current = null;
     }
 
-    setIsListening(false);
     setAudioLevel(0);
     toast.info("Microphone deactivated");
   }, []);
@@ -384,18 +386,43 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
       const reader = response.body?.getReader();
       const decoder = new TextDecoder();
       let aiResponse = '';
+      let buffer = ''; // Buffer for incomplete lines across chunks
 
       if (reader) {
         while (true) {
           const { done, value } = await reader.read();
-          if (done) break;
+          if (done) {
+            // Process any remaining buffered content
+            if (buffer.trim()) {
+              const trimmedLine = buffer.trim();
+              if (trimmedLine.startsWith('data: ')) {
+                const data = trimmedLine.slice(6);
+                if (data !== '[DONE]') {
+                  try {
+                    const parsed = JSON.parse(data);
+                    const content = parsed?.choices?.[0]?.delta?.content;
+                    if (content) aiResponse += content;
+                  } catch { /* Skip parse errors */ }
+                }
+              }
+            }
+            break;
+          }
 
           const chunk = decoder.decode(value, { stream: true });
-          const lines = chunk.split('\n');
+          // Prepend buffer and split by lines
+          const content = buffer + chunk;
+          const lines = content.split('\n');
+          
+          // Keep last incomplete line in buffer
+          buffer = lines.pop() || '';
 
           for (const line of lines) {
-            if (line.startsWith('data: ')) {
-              const data = line.slice(6);
+            const trimmedLine = line.trim();
+            if (!trimmedLine) continue;
+            
+            if (trimmedLine.startsWith('data: ')) {
+              const data = trimmedLine.slice(6);
               if (data === '[DONE]') continue;
 
               try {
@@ -404,7 +431,7 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
                 if (content) {
                   aiResponse += content;
                   // Update loading message in real-time
-                  setVoiceMessages(prev => prev.map(msg => 
+                  setVoiceMessages(prev => prev.map(msg =>
                     msg.id === loadingId ? { ...msg, content: aiResponse } : msg
                   ));
                 }

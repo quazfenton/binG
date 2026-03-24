@@ -166,9 +166,9 @@ try {
   // V2 execution
   const v2Result = await executeV2Task({...})
 } catch (v2Error) {
-  // Fallback to V1 with spec amplification
+  // Fallback to V1 with routeAndFormat (no spec amplification for V2 failures)
   chatLogger.info('Using v1 fallback path after V2 failure')
-  const unifiedResponse = await responseRouter.routeWithSpecAmplification(routerRequest)
+  const unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
 }
 ```
 

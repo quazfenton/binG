@@ -119,8 +119,8 @@ export default function GitHubImport({ onImportComplete }: GitHubImportProps) {
         }
       }
 
-      // Refresh VFS snapshot
-      const snapshot = await vfs.getSnapshot();
+      // Refresh VFS snapshot (best-effort, don't fail import on snapshot error)
+      await vfs.getSnapshot().catch(() => undefined);
       
       toast.success('Repository imported!', {
         description: `${importedCount} files from ${selectedRepo.full_name}`,

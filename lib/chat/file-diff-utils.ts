@@ -206,11 +206,18 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
 
   // SAFETY CHECK 1: Reject if diffBody looks like it might be full file content
   // (has no diff markers at all - could accidentally overwrite file)
-  const hasAnyDiffMarkers = diffBody.split('\n').some(line => 
-    line.startsWith('+') || line.startsWith('-') || line.startsWith(' ')
+  // Only count lines starting with + or - as valid diff markers (not space-prefixed lines)
+  const lines = diffBody.split('\n');
+  const hasRealDiffMarkers = lines.some(line => 
+    line.startsWith('+') || line.startsWith('-')
   );
   
-  if (!hasAnyDiffMarkers && diffBody.length > 100) {
+  // Also check for unified diff header format
+  const hasUnifiedDiffHeader = lines.some(line => 
+    line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('@@ ')
+  );
+
+  if (!hasRealDiffMarkers && !hasUnifiedDiffHeader && diffBody.length > 100) {
     // Long content with no diff markers - likely full file, not a diff
     // DO NOT apply as diff - this could corrupt the file
     console.warn('[applyDiffToContent] Content appears to be full file (no diff markers), rejecting for safety');

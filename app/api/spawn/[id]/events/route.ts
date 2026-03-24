@@ -8,6 +8,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { createLogger } from '@/lib/utils/logger';
 import { getAgentServiceManager } from '@/lib/spawn';
+import { auth0 } from '@/lib/auth0';
+import { getLocalUserIdFromAuth0 } from '@/lib/oauth/connections';
 
 const logger = createLogger('API:Agents:Events');
 
@@ -20,6 +22,25 @@ export async function GET(
   { params }: { params: Promise<{ id: string }> }
 ) {
   try {
+    // Auth check: Require authenticated user
+    const session = await auth0.getSession(request);
+    if (!session?.user) {
+      return NextResponse.json(
+        { error: 'Authentication required' },
+        { status: 401 }
+      );
+    }
+
+    // Get local user ID for ownership check
+    const auth0UserId = session.user.sub;
+    const localUserId = await getLocalUserIdFromAuth0(auth0UserId);
+    if (!localUserId) {
+      return NextResponse.json(
+        { error: 'User not found' },
+        { status: 404 }
+      );
+    }
+
     const { id } = await params;
     const manager = getAgentServiceManager();
     const agent = manager.getAgent(id);
@@ -31,27 +52,51 @@ export async function GET(
       );
     }
 
+    // Ownership check: User must own the agent
+    if (agent.userId !== localUserId) {
+      return NextResponse.json(
+        { error: 'Access denied: You do not own this agent' },
+        { status: 403 }
+      );
+    }
+
     // Create SSE stream with proper cleanup
     const encoder = new TextEncoder();
     let eventIterator: AsyncIterableIterator<any> | null = null;
+    let abortController: AbortController | null = null;
 
     const stream = new ReadableStream({
       async start(controller) {
+        abortController = new AbortController();
+        
         try {
-          eventIterator = await manager.subscribe(id);
+          eventIterator = await manager.subscribe(id, { signal: abortController.signal });
 
           for await (const event of eventIterator) {
+            if (abortController.signal.aborted) {
+              break;
+            }
             const data = `data: ${JSON.stringify(event)}\n\n`;
             controller.enqueue(encoder.encode(data));
           }
 
           controller.close();
         } catch (error: any) {
-          controller.error(error);
+          if (!abortController.signal.aborted) {
+            controller.error(error);
+          }
+        } finally {
+          // Clean up event iterator on stream end
+          if (eventIterator && (eventIterator as any).return) {
+            (eventIterator as any).return();
+          }
         }
       },
       cancel() {
-        // Cancel the event iterator to release resources
+        // Client disconnected - abort the subscription to release resources
+        if (abortController) {
+          abortController.abort();
+        }
         if (eventIterator && (eventIterator as any).return) {
           (eventIterator as any).return();
         }

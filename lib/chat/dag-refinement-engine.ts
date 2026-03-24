@@ -313,14 +313,27 @@ Return ONLY the improved output, no explanations.`
     
     // Merge all results
     const finalOutput = this.mergeResults()
-    
-    emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
-      stage: 'complete',
-      currentIteration: this.tasks.size - 1,
-      totalIterations: this.tasks.size - 1,
-      timestamp: Date.now()
-    })
-    
+
+    // Only emit complete event if no tasks timed out
+    const hasTimeouts = Array.from(this.tasks.values()).some(t => t.status === 'timeout');
+    if (!hasTimeouts) {
+      emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
+        stage: 'complete',
+        currentIteration: this.tasks.size - 1,
+        totalIterations: this.tasks.size - 1,
+        timestamp: Date.now()
+      })
+    } else {
+      // Emit partial completion with timeout info
+      emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
+        stage: 'complete_with_timeouts',
+        currentIteration: this.tasks.size - 1,
+        totalIterations: this.tasks.size - 1,
+        timedOutTasks: Array.from(this.tasks.values()).filter(t => t.status === 'timeout').map(t => t.id),
+        timestamp: Date.now()
+      })
+    }
+
     return finalOutput
   }
   

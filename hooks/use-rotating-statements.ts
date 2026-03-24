@@ -395,7 +395,9 @@ export function useRotatingStatements(options: UseRotatingStatementsOptions = {}
     return () => clearInterval(interval);
   }, [statements.length, intervalMs]);
 
-  return statements[currentIndex];
+  // Clamp currentIndex to valid range when statements length changes
+  const safeIndex = statements.length > 0 ? currentIndex % statements.length : 0;
+  return statements[safeIndex];
 }
 
 export function useMultiRotatingStatements(types: StatementType[] = ['interesting', 'funny', 'task'], intervalMs = 3000) {

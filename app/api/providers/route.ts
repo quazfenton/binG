@@ -13,10 +13,19 @@ export async function GET(request: NextRequest) {
 
     // Return cached result if available and not expired
     const isStale = cachedProviders && (now - cacheTimestamp) >= CACHE_TTL_MS;
-    if (cachedProviders) {
+    if (cachedProviders && !isStale) {
       return NextResponse.json(cachedProviders, {
         headers: {
-          'Cache-Control': isStale ? 'public, max-age=60, stale-while-revalidate=300' : 'public, max-age=300, stale-while-revalidate=600',
+          'Cache-Control': 'public, max-age=300, stale-while-revalidate=600',
+        },
+      });
+    }
+    
+    // If stale, return cached with stale headers while refreshing in background
+    if (cachedProviders && isStale) {
+      return NextResponse.json(cachedProviders, {
+        headers: {
+          'Cache-Control': 'public, max-age=60, stale-while-revalidate=300',
         },
       });
     }
