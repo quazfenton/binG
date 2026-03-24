@@ -155,7 +155,13 @@ export default function GitSourceControl({ scopePath }: GitSourceControlProps) {
       const status = await statusResponse.json();
 
       if (status.connected) {
-        setGitHub(status);
+        // Map API response to GitHubConnection interface
+        setGitHub({
+          isConnected: true,
+          login: status.login,
+          avatarUrl: status.avatarUrl,
+          repos: status.repos,
+        });
         setIsConnected(true);
         if (status.repos?.[0]) {
           loadBranches(status);  // ✅ Pass full connection object, not single repo
@@ -198,19 +204,44 @@ export default function GitSourceControl({ scopePath }: GitSourceControlProps) {
 
   const loadChanges = async () => {
     try {
+      // Fetch actual git status from API
+      const statusResponse = await fetch('/api/integrations/github/source-control/status');
+      
+      if (statusResponse.ok) {
+        const statusData = await statusResponse.json();
+        
+        if (statusData.files && Array.isArray(statusData.files)) {
+          const fileChanges: GitFileChange[] = statusData.files.map((f: any) => ({
+            path: f.path || f.filename,
+            status: (f.status || 'modified') as 'added' | 'modified' | 'deleted' | 'renamed',
+            staged: f.staged || false,
+            additions: f.additions || 0,
+            deletions: f.deletions || 0,
+          }));
+          
+          setChanges(fileChanges.filter(f => !f.staged));
+          setStagedChanges(fileChanges.filter(f => f.staged));
+          return;
+        }
+      }
+      
+      // Fallback: Use VFS snapshot for local changes (no git repo)
       const snapshot = await vfs.getSnapshot();
       
       const fileChanges: GitFileChange[] = snapshot.files.map((f: any) => ({
         path: f.path,
-        status: 'modified' as const,
+        status: 'added' as const,
         staged: false,
-        additions: Math.floor(Math.random() * 50),
-        deletions: Math.floor(Math.random() * 20),
+        additions: 0,
+        deletions: 0,
       }));
 
       setChanges(fileChanges);
     } catch (error) {
       console.error('[Git] Failed to load changes:', error);
+      // Don't show error to user - just show empty state
+      setChanges([]);
+      setStagedChanges([]);
     }
   };
 
@@ -298,7 +329,7 @@ export default function GitSourceControl({ scopePath }: GitSourceControlProps) {
 
       const statusResponse = await fetch('/api/integrations/github/oauth/status');
       const status = await statusResponse.json();
-      
+
       if (!status.repos?.[0]) {
         toast.error('No repository selected');
         return;
@@ -306,13 +337,39 @@ export default function GitSourceControl({ scopePath }: GitSourceControlProps) {
 
       const [owner, repo] = status.repos[0].full_name.split('/');
 
+      // Fetch file content for each staged change before committing
+      const changesWithContent = await Promise.all(
+        stagedChanges.map(async (change) => {
+          // For added files, content should already be in VFS
+          // For modified/deleted files, fetch from VFS or use current content
+          try {
+            // Read file content from VFS (virtual filesystem)
+            const vfsPath = change.path.startsWith('project/') ? change.path : `project/${change.path}`;
+            const { virtualFilesystem } = await import('@/lib/virtual-filesystem');
+            const fileContent = await virtualFilesystem.readFile(vfsPath);
+            
+            return {
+              ...change,
+              content: fileContent || '',
+            };
+          } catch (error) {
+            console.warn(`Failed to read content for ${change.path}:`, error);
+            // For deleted files or unreadable files, include path but no content
+            return {
+              ...change,
+              content: '',
+            };
+          }
+        })
+      );
+
       const response = await fetch('/api/integrations/github/source-control/commit', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           message: commitMessage,
           description: commitDescription,
-          changes: stagedChanges,
+          changes: changesWithContent,
           branch: currentBranch?.name,
           owner,
           repo,

@@ -15,8 +15,8 @@ export async function GET(request: NextRequest) {
 
   try {
     // Get requested scopes from query params
-    const requestedScopes = url.searchParams.get('scopes')?.split(',').filter(Boolean) || ['repo', 'user', 'workflow'];
-    
+    const requestedScopes = url.searchParams.get('scopes')?.split(',').map(s => s.trim()).filter(Boolean) || ['repo', 'user', 'workflow'];
+
     // Validate scopes against whitelist to prevent unauthorized access
     const allowedScopes = ['repo', 'user', 'workflow', 'read:user', 'user:email', 'admin:repo_hook', 'write:repo_hook'];
     const validScopes = requestedScopes.filter(scope => allowedScopes.includes(scope));

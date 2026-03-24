@@ -142,9 +142,9 @@ class ChatRequestLogger {
     if (!this.db) return;
 
     try {
-      // Use INSERT OR REPLACE to handle duplicate requestIds gracefully
+      // Use INSERT OR IGNORE to avoid duplicate requestIds (first write wins)
       const stmt = this.db.prepare(`
-        INSERT OR REPLACE INTO chat_request_logs
+        INSERT OR IGNORE INTO chat_request_logs
         (id, user_id, provider, model, message_count, request_size, streaming, created_at, metadata)
         VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
       `);
@@ -365,7 +365,8 @@ class ChatRequestLogger {
     }
 
     try {
-      const cutoffTime = new Date(Date.now() - minutesBack * 60 * 1000).toISOString();
+      // Match SQLite datetime format (YYYY-MM-DD HH:MM:SS)
+      const cutoffTime = new Date(Date.now() - minutesBack * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
 
       const stmt = this.db.prepare(`
         SELECT 

@@ -1753,11 +1753,10 @@ class LLMService {
         case 'composio':
           return !!process.env.COMPOSIO_API_KEY;
         case 'cloudflare':
-          return !!process.env.CLOUDFLARE_API_KEY || !!process.env.CLOUDFLARE_ACCOUNT_ID;
         case 'nvidia':
-          return !!process.env.NVIDIA_API_KEY || !!process.env.NVIDIA_NIM_API_KEY;
         case 'zo':
-          return !!process.env.ZO_API_KEY;
+          // Providers with env vars configured but no request/stream handlers yet
+          return false;
         case 'opencode':
           // OpenCode SDK - check if binary is available or server is running
           return true; // Always available as it's local
