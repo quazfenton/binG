@@ -561,8 +561,9 @@ export function sanitizeFileEditTags(content: string): string {
   }
 
   if (sanitized.includes('<file_write')) {
-    // Remove file_write format
-    sanitized = sanitized.replace(/<file_write\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_write>/gi, '');
+    // Remove file_write format (handle both <file_write path="..."> and <file_writepath="...">)
+    sanitized = sanitized.replace(/<file_write\s*path=["'][^"']+["']\s*>[\s\S]*?<\/file_write>/gi, '');
+    sanitized = sanitized.replace(/<file_writepath=["'][^"']+["']\s*>[\s\S]*?<\/file_writepath>/gi, '');
   }
 
   if (sanitized.includes('ws_action')) {
@@ -581,8 +582,9 @@ export function sanitizeFileEditTags(content: string): string {
   }
 
   if (sanitized.includes('<!--')) {
-    // Remove HTML comment file paths: <!-- path -->content
-    sanitized = sanitized.replace(/<!--\s*[^\s\-]+(?:-[^\s]+)*\s*-->\s*/gi, '');
+    // Remove HTML comment file paths AND their associated content blocks
+    // Match: <!-- path -->content (until next <!-- or end of string)
+    sanitized = sanitized.replace(/<!--\s*[^\s<]+\s*-->\s*[\s\S]*?(?=<!--|$)/gi, '');
   }
 
   // Additional formats from api/chat/route.ts

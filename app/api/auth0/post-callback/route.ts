@@ -102,7 +102,7 @@ export async function POST(request: NextRequest) {
           accessToken,
           refreshToken,
           tokenExpiresAt ? new Date(tokenExpiresAt) : undefined,
-          normalizedScopes.length > 0 ? normalizedScopes : undefined
+          scopes == null ? undefined : normalizedScopes
         );
         console.log('[Auth0 Post-Callback] Saved connected account:', provider, {
           scopeCount: normalizedScopes.length,

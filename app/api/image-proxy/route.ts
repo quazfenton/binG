@@ -215,11 +215,14 @@ function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string
     // Evict oldest entries until we have space
     evictOldestUntilSpaceAvailable(imageSize - existingSize);
 
+    // Re-calculate total after eviction
+    const postEvictionTotal = cacheTotalBytes - existingSize;
+    
     // If still not enough space after eviction, skip caching
-    if (effectiveTotal + imageSize > CACHE_MAX_BYTES) {
+    if (postEvictionTotal + imageSize > CACHE_MAX_BYTES) {
       console.log('[Image Proxy] Skipping cache: would exceed memory limit even after eviction', {
         url: safeLogUrl(imageUrl),
-        effectiveTotal,
+        postEvictionTotal,
         imageSize,
         existingSize,
         limit: CACHE_MAX_BYTES,

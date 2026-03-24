@@ -811,9 +811,9 @@ export default function MessageBubble({
         {!isUser && (message.metadata as any)?.dagProgress && (
           <div className="mt-3">
             <DAGProgressDisplay
-              tasks={(message.metadata as any).dagProgress.tasks}
-              overallProgress={(message.metadata as any).dagProgress.overallProgress}
-              activeTasks={(message.metadata as any).dagProgress.activeTasks}
+              tasks={(message.metadata as any).dagProgress.tasks ?? []}
+              overallProgress={(message.metadata as any).dagProgress.overallProgress ?? 0}
+              activeTasks={(message.metadata as any).dagProgress.activeTasks ?? []}
               timestamp={(message.metadata as any).dagProgress.timestamp}
             />
           </div>

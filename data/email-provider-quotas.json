@@ -36,13 +36,6 @@
       "resetDate": "2026-04-01",
       "isDisabled": false,
       "priority": 4
-    },
-    "e2b": {
-      "monthlyLimit": 1000,
-      "currentUsage": 0,
-      "resetDate": "2026-04-01",
-      "isDisabled": false,
-      "priority": 5
     }
   }
 }

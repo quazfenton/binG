@@ -67,7 +67,7 @@ export default function CreatePullRequest({
         description: `#${data.pr.number}: ${data.pr.title}`,
         action: {
           label: 'Open on GitHub',
-          onClick: () => window.open(data.pr.html_url, '_blank'),
+          onClick: () => window.open(data.pr.html_url, '_blank', 'noopener,noreferrer'),
         },
       });
 

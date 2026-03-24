@@ -2028,7 +2028,8 @@ function extractFencedDiffEdits(content: string): Array<{ path: string; diff: st
 function extractFsActionWrites(content: string): Array<{ path: string; content: string }> {
   const writes: Array<{ path: string; content: string }> = [];
 
-  if (!content.includes('WRITE') && !content.includes('fs-actions')) return writes;
+  // Case-insensitive check for WRITE or fs-actions
+  if (!/write/i.test(content) && !/fs-actions/i.test(content)) return writes;
 
   // Extract from ```fs-actions ... ``` code blocks
   const blockRegex = /```fs-actions\s*([\s\S]*?)```/gi;
