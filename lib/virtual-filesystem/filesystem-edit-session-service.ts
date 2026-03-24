@@ -1,6 +1,9 @@
+// Server-only module - do not import directly in Client Components
+export const runtime = 'nodejs';
+
 import { virtualFilesystem } from './virtual-filesystem-service';
-import { filesystemEditDatabase } from './filesystem-edit-database';
 import { getDatabase } from '@/lib/database/connection';
+import { filesystemEditDatabase } from './filesystem-edit-database';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('FilesystemEditSession');
@@ -58,9 +61,17 @@ class FilesystemEditSessionService {
    */
   private ensureInitialized(): void {
     if (this.initialized) return;
-    
+
     try {
       this.db = getDatabase();
+      
+      // Handle case where database is not yet initialized
+      if (!this.db) {
+        console.warn('[FilesystemEditSession] Database not ready, using in-memory only');
+        this.initialized = true;
+        return;
+      }
+      
       // Create table for persisting transactions
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS fs_edit_transactions (

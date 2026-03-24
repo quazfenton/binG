@@ -33,6 +33,7 @@ import { createLogger } from '@/lib/utils/logger'
 import { normalizeToolInvocations, type ToolInvocation } from '@/lib/types/tool-invocation'
 import { quotaManager } from '@/lib/management/quota-manager'
 import { detectRequestType } from '@/lib/utils/request-type-detector'
+import { extractFsActionWrites } from '@/lib/chat/file-edit-parser'
 
 // Import router services
 import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from '@/lib/chat/fast-agent-service'
@@ -1878,6 +1879,7 @@ export class ResponseRouter {
     request: RouterRequest & {
       mode?: 'normal' | 'enhanced' | 'max'
       agentMode?: 'v1' | 'v2' | 'auto'
+      emit?: (event: string, data: any) => void
     }
   ): Promise<UnifiedResponse> {
     const startTime = Date.now()
@@ -1899,7 +1901,7 @@ export class ResponseRouter {
       // Get fastest model from telemetry
       const { getModelStatsFromTelemetry, getSpecGenerationModel } = await import('@/lib/models/model-ranker')
       const modelStats = await getModelStatsFromTelemetry()
-      let fastModel = getSpecGenerationModel()
+      let fastModel = await getSpecGenerationModel()
 
       // Fallback: If no telemetry data available, use Mistral Small (fast & cheap)
       if (!fastModel) {
@@ -1921,7 +1923,7 @@ export class ResponseRouter {
         fastModel: fastModel.model,
         mode: request.mode,
         provider: fastModel.provider,
-        fromTelemetry: !!getSpecGenerationModel()  // true if from telemetry, false if fallback
+        fromTelemetry: !!getSpecGenerationModel()  // true if telemetry returned model, false if fallback
       })
 
       // PARALLEL EXECUTION
@@ -1937,7 +1939,6 @@ export class ResponseRouter {
         provider: fastModel.provider,
         model: fastModel.model,
         messages: buildSpecPrompt(
-          // Use last user message content, handling non-string content
           (() => {
             const lastUser = [...request.messages].reverse().find(m => m.role === 'user');
             return typeof lastUser?.content === 'string'
@@ -1950,99 +1951,43 @@ export class ResponseRouter {
         requestId: specRequestId
       })
 
-      // Use Promise.allSettled to avoid duplicate routing when spec fails
-      const [primaryResult, specResult] = await Promise.all([
-        primaryPromise.then(res => ({ success: true, data: res })).catch(err => ({ success: false, error: err })),
-        specPromise.then(res => ({ success: true, data: res })).catch(err => ({ success: false, error: err }))
-      ])
-
-      // Always return primary response if it succeeded
-      if (!primaryResult.success) {
-        logger.error('Primary routing failed', { error: primaryResult.error })
-        throw primaryResult.error
-      }
-
-      // Skip spec-based refinement if spec generation failed
-      if (!specResult.success) {
-        logger.warn('Spec generation failed, returning primary response only', { error: specResult.error })
-        return primaryResult.data
-      }
-
-      const specResponse = specResult.data
-
-      // Extract spec content from response
-      const rawSpec = specResponse.content || ''
-
-      // Parse spec
-      const { safeParseSpec, chunkSpec, explodeChunks } = await import('@/lib/chat/spec-parser')
-      const parsed = safeParseSpec(rawSpec)
-
-      if (!parsed) {
-        logger.warn('Spec parsing failed, returning primary response only')
-        return primaryResponse
-      }
-
-      // Validate spec quality
-      const { validateSpec, scoreSpec } = await import('@/lib/prompts/spec-generator')
-      if (!validateSpec(parsed)) {
-        logger.warn('Spec validation failed, returning primary response only')
-        return primaryResponse
-      }
-
-      const specScore = scoreSpec(parsed)
-      if (specScore < 4) {
-        logger.warn('Spec quality too low, skipping refinement', { score: specScore })
-        return primaryResponse
-      }
-
-      // Chunk spec
-      let chunks = chunkSpec(parsed)
-
-      if (request.mode === 'max') {
-        chunks = explodeChunks(chunks)
-      }
-
-      // Refine response with DAG parallelization (non-streaming)
-      const { executeRefinementWithDAG } = await import('@/lib/chat/dag-refinement-engine')
-      const refinedOutput = await executeRefinementWithDAG({
-        model: request.model,
-        baseResponse: primaryResponse.content || '',
-        chunks,
-        mode: request.mode,
-        userId: request.userId,
-        conversationId: request.conversationId,
-        maxConcurrency: request.mode === 'max' ? 5 : 2,
-        timeBudgetMs: request.mode === 'max' ? 15000 : 10000
-      })
-
-      // Record telemetry for spec generation
-      const specDuration = Date.now() - startTime
-      recordEndpointUsage('spec-generation', specDuration, true)
-
-      logger.info('Spec amplification complete', {
-        duration: specDuration,
-        sectionsProcessed: chunks.length,
-        specScore
-      })
-
-      return {
-        ...primaryResponse,
-        content: refinedOutput,
-        metadata: {
-          ...primaryResponse.metadata,
-          specAmplification: {
-            enabled: true,
-            mode: request.mode,
-            fastModel: fastModel.model,
-            sectionsGenerated: parsed.sections.length,
-            refinementIterations: chunks.length,
-            duration: specDuration,
-            timedOut: false,
-            specScore
-          }
-        }
-      }
+      // Wait for primary response (needed for content)
+      const primaryResult = await primaryPromise.catch(err => ({ success: false, error: err }))
       
+      // Always return primary response immediately
+      if (!(primaryResult as any).success) {
+        const err = (primaryResult as any).error
+        logger.error('Primary routing failed', { error: err })
+        throw err
+      }
+
+      const primaryData = (primaryResult as any).data
+      
+      // Emit primary response immediately if emit is provided
+      if (request.emit) {
+        request.emit('primary_response', { content: primaryData.content, timestamp: Date.now() })
+      }
+
+      // Start spec generation in background (don't await - run in parallel)
+      const specGenerationPromise = specPromise
+        .then(res => ({ success: true, data: res }))
+        .catch(err => ({ success: false, error: err }))
+
+      // Return primary response immediately, start background refinement
+      // Background refinement will emit events that appear as new chat messages
+      this.runBackgroundRefinement({
+        primaryData,
+        specGenerationPromise,
+        request,
+        fastModel,
+        startTime
+      }).catch(err => {
+        logger.error('Background refinement failed', { error: err })
+      })
+
+      // Return primary response immediately
+      return primaryData
+
     } catch (error) {
       logger.error('Spec amplification failed', error)
       recordEndpointUsage('spec-generation', Date.now() - startTime, false)
@@ -2051,6 +1996,130 @@ export class ResponseRouter {
       return await this.routeAndFormat(request)
     } finally {
       span.end()
+    }
+  }
+
+  /**
+   * Run refinement in background, sending updates via SSE
+   * Creates new chat messages for each refinement improvement
+   */
+  private async runBackgroundRefinement(params: {
+    primaryData: UnifiedResponse
+    specGenerationPromise: Promise<{ success: boolean; data?: any; error?: any }>
+    request: RouterRequest & { mode?: 'normal' | 'enhanced' | 'max'; emit?: (event: string, data: any) => void }
+    fastModel: any
+    startTime: number
+  }): Promise<void> {
+    const { primaryData, specGenerationPromise, request, fastModel, startTime } = params
+    const { safeParseSpec, chunkSpec, explodeChunks } = await import('@/lib/chat/spec-parser')
+    const { validateSpec, scoreSpec } = await import('@/lib/prompts/spec-generator')
+
+    try {
+      // Wait for spec generation
+      const specResult = await specGenerationPromise
+
+      if (!specResult.success) {
+        logger.warn('Spec generation failed in background', { error: specResult.error })
+        if (request.emit) {
+          request.emit('spec_amplification', { stage: 'spec_failed', error: specResult.error?.message })
+        }
+        return
+      }
+
+      const specResponse = specResult.data
+      const rawSpec = specResponse.content || ''
+
+      // Parse spec
+      const parsed = safeParseSpec(rawSpec)
+      if (!parsed) {
+        logger.warn('Spec parsing failed in background')
+        if (request.emit) {
+          request.emit('spec_amplification', { stage: 'parse_failed' })
+        }
+        return
+      }
+
+      // Validate spec quality
+      if (!validateSpec(parsed)) {
+        logger.warn('Spec validation failed in background')
+        if (request.emit) {
+          request.emit('spec_amplification', { stage: 'validation_failed' })
+        }
+        return
+      }
+
+      const specScore = scoreSpec(parsed)
+      if (specScore < 4) {
+        logger.warn('Spec quality too low in background', { score: specScore })
+        if (request.emit) {
+          request.emit('spec_amplification', { stage: 'low_quality', score: specScore })
+        }
+        return
+      }
+
+      // Chunk spec
+      let chunks = chunkSpec(parsed)
+      if (request.mode === 'max') {
+        chunks = explodeChunks(chunks)
+      }
+
+      const primaryProvider = primaryData.data?.provider || fastModel?.provider || 'openrouter'
+      const primaryModel = primaryData.data?.model || fastModel?.model || request.model
+
+      // Run refinement with emit
+      const { executeRefinementWithDAG } = await import('@/lib/chat/dag-refinement-engine')
+      const refinedOutput = await executeRefinementWithDAG({
+        model: primaryModel,
+        provider: primaryProvider,
+        baseResponse: primaryData.content || '',
+        chunks,
+        mode: request.mode as 'enhanced' | 'max',
+        userId: request.userId,
+        conversationId: request.conversationId,
+        maxConcurrency: request.mode === 'max' ? 3 : 2,
+        emit: request.emit
+      })
+
+      // Extract file writes from refined output 
+      const fileWriteEdits = extractFsActionWrites(refinedOutput);
+      
+      // Send refined content via SSE
+      if (request.emit) {
+        const eventData: any = {
+          stage: 'complete',
+          refinedContent: refinedOutput,
+          specScore,
+          sectionsProcessed: chunks.length,
+          hasFileWrites: fileWriteEdits.length > 0,
+          fileWrites: fileWriteEdits.map(w => ({ path: w.path, operation: 'write' }))
+        }
+        
+        // If there are file writes, include them in the event
+        // Frontend will handle creating message with filesystem metadata
+        if (fileWriteEdits.length > 0) {
+          eventData.filesystem = {
+            status: 'detected',
+            applied: fileWriteEdits.map(w => ({
+              path: w.path,
+              operation: 'write',
+              timestamp: Date.now()
+            }))
+          }
+        }
+        
+        request.emit('spec_amplification', eventData)
+      }
+
+      logger.info('Background refinement complete', { specScore, sectionsProcessed: chunks.length })
+
+    } catch (error) {
+      logger.error('Background refinement error', error)
+      if (request.emit) {
+        request.emit('spec_amplification', { 
+          stage: 'error', 
+          error: error instanceof Error ? error.message : 'Unknown error' 
+        })
+      }
     }
   }
 

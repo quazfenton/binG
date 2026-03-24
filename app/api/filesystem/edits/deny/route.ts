@@ -3,7 +3,7 @@ import { z } from 'zod';
 import {
   withAnonSessionCookie,
   filesystemEditSessionService,
-} from '@/lib/virtual-filesystem';
+} from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../../utils';
 import { transactionIdSchema } from '@/lib/validation/schemas';
 

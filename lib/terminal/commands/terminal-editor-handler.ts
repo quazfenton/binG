@@ -162,6 +162,7 @@ export class TerminalEditorHandler {
     this.session = {
       type: editorType,
       filePath: finalPath,
+      content: content,
       cursor: 0,
       lines: lines.length > 0 ? lines : [''],
       cursorLine: 0,

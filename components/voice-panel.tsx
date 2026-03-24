@@ -105,6 +105,8 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
   const animationRef = useRef<number | null>(null);
   const abortControllerRef = useRef<AbortController | null>(null);
   const isListeningRef = useRef(isListening);
+  const handleUserSpeechRef = useRef<typeof handleUserSpeech | null>(null);
+  const speakTextRef = useRef<typeof speakText | null>(null);
 
   // Keep ref in sync with state
   useEffect(() => {
@@ -185,8 +187,8 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
           if (final) {
             setTranscript(prev => prev + " " + final);
             setInterimTranscript("");
-            // Add to messages
-            handleUserSpeech(final.trim());
+            // Add to messages - use ref to always call latest handleUserSpeech
+            handleUserSpeechRef.current?.(final.trim());
           } else {
             setInterimTranscript(interim);
           }
@@ -213,7 +215,6 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
         recognitionRef.current = recognition;
       }
     }
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   // Audio level monitoring
@@ -330,7 +331,7 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
     toast.info("Microphone deactivated");
   }, []);
 
-  const handleUserSpeech = async (text: string) => {
+  const handleUserSpeech = useCallback(async (text: string) => {
     if (!text.trim() || isProcessingAI) return;
 
     // Cancel any existing request
@@ -413,14 +414,14 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
           // Prepend buffer and split by lines
           const content = buffer + chunk;
           const lines = content.split('\n');
-          
+
           // Keep last incomplete line in buffer
           buffer = lines.pop() || '';
 
           for (const line of lines) {
             const trimmedLine = line.trim();
             if (!trimmedLine) continue;
-            
+
             if (trimmedLine.startsWith('data: ')) {
               const data = trimmedLine.slice(6);
               if (data === '[DONE]') continue;
@@ -451,13 +452,13 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
         .trim() || "I didn't get a response. Please try again.";
 
       // Update the final message
-      setVoiceMessages(prev => prev.map(msg => 
+      setVoiceMessages(prev => prev.map(msg =>
         msg.id === loadingId ? { ...msg, content: cleanedResponse } : msg
       ));
 
-      // If auto-speak is on, speak the response
+      // If auto-speak is on, speak the response - use ref for latest settings
       if (settings.autoSpeak && cleanedResponse) {
-        await speakText(cleanedResponse);
+        await speakTextRef.current?.(cleanedResponse);
       }
 
     } catch (error: any) {
@@ -467,7 +468,7 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
       }
       console.error('[VoicePanel] Chat API error:', error);
       // Update loading message with error
-      setVoiceMessages(prev => prev.map(msg => 
+      setVoiceMessages(prev => prev.map(msg =>
         msg.id === loadingId ? { ...msg, content: `Error: ${error.message || 'Failed to get response'}` } : msg
       ));
       toast.error('Failed to get AI response');
@@ -475,9 +476,14 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
       setIsProcessingAI(false);
       abortControllerRef.current = null;
     }
-  };
+  }, [isProcessingAI, settings.autoSpeak]);
 
-  const speakText = async (text: string) => {
+  // Sync handleUserSpeech ref - ensures recognition.onresult always calls latest version
+  useEffect(() => {
+    handleUserSpeechRef.current = handleUserSpeech;
+  }, [handleUserSpeech]);
+
+  const speakText = useCallback(async (text: string) => {
     if (!text) return;
 
     setIsSpeaking(true);
@@ -496,7 +502,7 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
         });
 
         const data = await response.json();
-        
+
         if (data.success && data.audioData) {
           // Play the audio
           const audio = new Audio(data.audioData);
@@ -524,7 +530,12 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
       setIsSpeaking(false);
       toast.error(`Speech error: ${error.message}`);
     }
-  };
+  }, [settings.ttsProvider, settings.voice, settings.model, ttsAvailable]);
+
+  // Sync speakText ref - ensures latest version is always used
+  useEffect(() => {
+    speakTextRef.current = speakText;
+  }, [speakText]);
 
   const stopSpeaking = () => {
     speechSynthesis.cancel();

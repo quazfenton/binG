@@ -1,6 +1,9 @@
+// Server-only module - do not import directly in Client Components
+export const runtime = 'nodejs';
+
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { generateSecureId } from '@/lib/utils';
+import { generateSecureId } from '@/lib/utils/server-id';
 
 export interface FilesystemOwnerResolution {
   ownerId: string;

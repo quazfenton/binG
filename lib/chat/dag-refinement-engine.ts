@@ -18,7 +18,7 @@ export interface DAGTask {
   title: string
   tasks: string[]
   dependencies: string[]
-  status: 'pending' | 'running' | 'complete' | 'error'
+  status: 'pending' | 'running' | 'complete' | 'error' | 'timeout'
   error?: string
   startedAt?: number
   completedAt?: number
@@ -27,6 +27,10 @@ export interface DAGTask {
 
 export interface DAGConfig {
   model: string
+  /** LLM provider to use for refinement tasks. Defaults to 'auto'. Use the fast
+   *  spec model's provider here, NOT the user's primary model provider, to avoid
+   *  rate-limiting free-tier models with concurrent DAG tasks. */
+  provider?: string
   baseResponse: string
   chunks: RefinementChunk[]
   mode: 'enhanced' | 'max'
@@ -34,6 +38,8 @@ export interface DAGConfig {
   conversationId?: string
   maxConcurrency?: number
   timeBudgetMs?: number
+  /** Callback for emitting SSE events during refinement */
+  emit?: (event: string, data: any) => void
 }
 
 export interface DAGProgress {
@@ -144,11 +150,20 @@ export class DAGExecutor {
       }, '')
 
       const { enhancedLLMService } = await import('@/lib/chat/enhanced-llm-service')
+      const { getProviderForTask } = await import('@/lib/config/task-providers')
 
       const refinementPrompt = this.buildRefinementPrompt(task)
 
+      // Extract provider from config, or from model name (e.g., "nvidia/nemotron-..." -> "nvidia")
+      // or fall back to default chat provider
+      let provider = this.config.provider
+      if (!provider || provider === 'auto') {
+        const modelParts = this.config.model.split('/')
+        provider = modelParts.length > 1 ? modelParts[0] : getProviderForTask('chat')
+      }
+
       const refined = await enhancedLLMService.generateResponse({
-        provider: 'auto',
+        provider,
         model: this.config.model, // Use user's selected model from config
         messages: [
           {
@@ -160,7 +175,7 @@ export class DAGExecutor {
             content: baseContent
           }
         ],
-        maxTokens: 8000,
+        maxTokens: 80000,
         temperature: 0.7,
         stream: false
       })
@@ -387,20 +402,20 @@ Return ONLY the improved output, no explanations.`
  */
 export async function executeRefinementWithDAG(
   config: DAGConfig,
-  emit?: ReturnType<typeof createSSEEmitter>
+  emitFn?: ReturnType<typeof createSSEEmitter>
 ): Promise<string> {
+  // Use config.emit if provided, otherwise use the emitFn parameter
+  const emitter = config.emit || emitFn || (() => {})
   const executor = new DAGExecutor(config)
   
   try {
-    return await executor.execute(emit || (() => {}))
+    return await executor.execute(emitter)
   } catch (error) {
-    if (emit) {
-      emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
-        stage: 'error',
-        error: error instanceof Error ? error.message : 'DAG execution failed',
-        timestamp: Date.now()
-      })
-    }
+    emitter(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
+      stage: 'error',
+      error: error instanceof Error ? error.message : 'DAG execution failed',
+      timestamp: Date.now()
+    })
     
     // Fallback to base response
     const baseTask = (executor as any).tasks.get('base')

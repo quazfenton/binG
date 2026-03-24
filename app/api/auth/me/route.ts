@@ -41,12 +41,11 @@ export async function GET() {
 
     const auth0UserId = session.user.sub;
     const localUserId = await getLocalUserIdFromAuth0(auth0UserId);
-    
-    const connectedProviders = new Set(
-      localUserId ? getConnectedAccountsByUser(localUserId).map((account) => account.provider) : []
-    );
+
+    const connectedAccounts = localUserId ? await getConnectedAccountsByUser(localUserId) : [];
+    const connectedProviders = new Set(connectedAccounts.map((account) => account.provider));
     const connections = Object.entries(AUTH0_CONNECTIONS).map(([name, connection]) => {
-      const normalizedConnection = AUTH0_TO_CANONICAL[connection] || connection;
+      const normalizedConnection = AUTH0_TO_CANONICAL[connection as string] || connection;
       return {
         provider: name.toLowerCase(),
         connection,

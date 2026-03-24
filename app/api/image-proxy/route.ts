@@ -37,7 +37,8 @@ interface CachedImage {
   data: ArrayBuffer;
   contentType: string;
   etag: string;
-  timestamp: number;
+  fetchedAt: number;      // When fetched from origin (for TTL calculation)
+  lastAccessed: number;   // When last accessed (for LRU eviction ordering)
   size: number;
 }
 
@@ -122,8 +123,8 @@ export function getCacheStats(): {
  */
 function evictOldestUntilSpaceAvailable(neededBytes: number): void {
   const entries = Array.from(IMAGE_CACHE.entries())
-    .sort((a, b) => a[1].timestamp - b[1].timestamp);
-  
+    .sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
+
   let freed = 0;
   for (const [key, value] of entries) {
     if (cacheTotalBytes - freed + neededBytes <= CACHE_MAX_BYTES) break;
@@ -141,21 +142,21 @@ function evictOldestUntilSpaceAvailable(neededBytes: number): void {
 function cleanupCache(): void {
   const now = Date.now();
   let freed = 0;
-  
-  // Remove expired entries
+
+  // Remove expired entries (based on fetchedAt, not lastAccessed)
   for (const [key, value] of IMAGE_CACHE.entries()) {
-    if (now - value.timestamp > CACHE_TTL) {
+    if (now - value.fetchedAt > CACHE_TTL) {
       freed += value.size;
       IMAGE_CACHE.delete(key);
       cacheEvictions++;
     }
   }
   cacheTotalBytes -= freed;
-  
-  // Enforce max size using LRU (remove oldest first)
+
+  // Enforce max size using LRU (remove oldest lastAccessed first)
   if (IMAGE_CACHE.size > CACHE_MAX_SIZE) {
     const entries = Array.from(IMAGE_CACHE.entries())
-      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+      .sort((a, b) => a[1].lastAccessed - b[1].lastAccessed);
     const toDelete = entries.slice(0, entries.length - CACHE_MAX_SIZE);
     for (const [key, value] of toDelete) {
       cacheTotalBytes -= value.size;
@@ -175,8 +176,8 @@ function getCachedImage(cacheKey: string): CachedImage | null {
     return null;
   }
 
-  // Check if expired
-  if (Date.now() - cached.timestamp > CACHE_TTL) {
+  // Check if expired (based on fetchedAt, not lastAccessed)
+  if (Date.now() - cached.fetchedAt > CACHE_TTL) {
     cacheTotalBytes -= cached.size;
     IMAGE_CACHE.delete(cacheKey);
     cacheEvictions++;
@@ -184,8 +185,8 @@ function getCachedImage(cacheKey: string): CachedImage | null {
     return null;
   }
 
-  // Update timestamp for LRU (move to end of logical queue)
-  cached.timestamp = Date.now();
+  // Update lastAccessed for LRU eviction ordering (not for TTL)
+  cached.lastAccessed = Date.now();
   IMAGE_CACHE.set(cacheKey, cached);
   cacheHits++;
   return cached;
@@ -196,6 +197,7 @@ function getCachedImage(cacheKey: string): CachedImage | null {
  */
 function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string, etag: string, imageUrl: string): void {
   const imageSize = data.byteLength;
+  const now = Date.now();
 
   // Periodic cleanup instead of on every write (every 10 writes)
   if (IMAGE_CACHE.size % 10 === 0) {
@@ -217,7 +219,7 @@ function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string
 
     // Re-calculate total after eviction
     const postEvictionTotal = cacheTotalBytes - existingSize;
-    
+
     // If still not enough space after eviction, skip caching
     if (postEvictionTotal + imageSize > CACHE_MAX_BYTES) {
       console.log('[Image Proxy] Skipping cache: would exceed memory limit even after eviction', {
@@ -236,10 +238,11 @@ function setCachedImage(cacheKey: string, data: ArrayBuffer, contentType: string
     data,
     contentType,
     etag,
-    timestamp: Date.now(),
+    fetchedAt: now,        // When fetched from origin (for TTL)
+    lastAccessed: now,     // When cached (for LRU eviction ordering)
     size: imageSize,
   });
-  
+
   // Adjust byte counter: subtract old size (if update) and add new size
   cacheTotalBytes = cacheTotalBytes - existingSize + imageSize;
 }

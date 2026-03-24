@@ -28,7 +28,17 @@
 
 import { useState, useCallback, useEffect } from 'react';
 import { toast } from 'sonner';
-import { localFolderSyncService, type SyncedFolder, type SyncResult } from '@/lib/virtual-filesystem/sync/local-folder-sync';
+
+// Lazy load the sync service to avoid bundling server-only modules in client
+let localFolderSyncService: any;
+
+async function loadFolderSyncService() {
+  if (!localFolderSyncService) {
+    const module = await import('@/lib/virtual-filesystem/sync/local-folder-sync');
+    localFolderSyncService = module.localFolderSyncService;
+  }
+  return { localFolderSyncService };
+}
 
 export interface UseFolderSyncOptions {
   sessionId?: string;
@@ -36,28 +46,31 @@ export interface UseFolderSyncOptions {
   autoConnect?: boolean;
 }
 
+// Use inline type definition for client-side - matches server SyncedFolder interface
+interface SyncedFolderStatus {
+  id: string;
+  name: string;
+  status: 'connected' | 'syncing' | 'disconnected' | 'error' | 'conflict';
+  lastSyncTime: number;
+  autoSave: boolean;
+  fileCount: number;
+}
+
 export interface UseFolderSyncReturn {
   /** All synced folders for current session */
-  syncedFolders: SyncedFolder[];
+  syncedFolders: any[];
   /** Sync status summary */
-  syncStatus: Array<{
-    id: string;
-    name: string;
-    status: SyncedFolder['status'];
-    lastSyncTime: number;
-    autoSave: boolean;
-    fileCount: number;
-  }>;
+  syncStatus: SyncedFolderStatus[];
   /** Connect a new folder */
-  connectFolder: (options: { folderName: string; vfsPath: string }) => Promise<SyncedFolder>;
+  connectFolder: (options: { folderName: string; vfsPath: string }) => Promise<any>;
   /** Disconnect a folder */
   disconnectFolder: (folderId: string) => Promise<void>;
   /** Toggle auto-save for a folder */
   toggleAutoSave: (folderId: string) => Promise<void>;
   /** Trigger manual sync */
-  syncNow: (folderId: string) => Promise<{ toVFS: SyncResult; fromVFS: SyncResult }>;
+  syncNow: (folderId: string) => Promise<any>;
   /** Get folder by ID */
-  getFolder: (folderId: string) => SyncedFolder | undefined;
+  getFolder: (folderId: string) => Promise<any>;
   /** Whether any sync operation is in progress */
   isSyncing: boolean;
   /** Refresh sync status */
@@ -65,29 +78,34 @@ export interface UseFolderSyncReturn {
 }
 
 export function useFolderSync(options: UseFolderSyncOptions = {}): UseFolderSyncReturn {
-  const { sessionId, ownerId, autoConnect = false } = options;
+  const { sessionId, ownerId } = options;
   const [syncStatus, setSyncStatus] = useState<UseFolderSyncReturn['syncStatus']>([]);
   const [isSyncing, setIsSyncing] = useState(false);
   const [refreshTrigger, setRefreshTrigger] = useState(0);
 
-  // Refresh status when session changes or on mount
+  // Load the service and refresh status when session changes or on mount
   useEffect(() => {
-    if (sessionId) {
-      const status = localFolderSyncService.getSyncStatus(sessionId);
-      setSyncStatus(status);
+    async function loadAndUpdateStatus() {
+      if (sessionId) {
+        const { localFolderSyncService: service } = await loadFolderSyncService();
+        const status = service.getSyncStatus(sessionId);
+        setSyncStatus(status);
+      }
     }
+    loadAndUpdateStatus();
   }, [sessionId, refreshTrigger]);
 
   const connectFolder = useCallback(async (
     connectOptions: { folderName: string; vfsPath: string }
-  ): Promise<SyncedFolder> => {
+  ) => {
     if (!sessionId || !ownerId) {
       throw new Error('Session ID and Owner ID are required');
     }
 
     setIsSyncing(true);
     try {
-      const folder = await localFolderSyncService.connectFolder({
+      const { localFolderSyncService: service } = await loadFolderSyncService();
+      const folder = await service.connectFolder({
         ownerId,
         sessionId,
         folderName: connectOptions.folderName,
@@ -98,9 +116,7 @@ export function useFolderSync(options: UseFolderSyncOptions = {}): UseFolderSync
         description: `${folder.name} is now synced with ${folder.vfsPath}`,
       });
 
-      // Update status
       setRefreshTrigger(prev => prev + 1);
-
       return folder;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to connect folder';
@@ -114,13 +130,13 @@ export function useFolderSync(options: UseFolderSyncOptions = {}): UseFolderSync
   const disconnectFolder = useCallback(async (folderId: string): Promise<void> => {
     setIsSyncing(true);
     try {
-      await localFolderSyncService.disconnectFolder(folderId);
+      const { localFolderSyncService: service } = await loadFolderSyncService();
+      await service.disconnectFolder(folderId);
       
       toast.success('Folder disconnected', {
         description: 'Sync has been stopped for this folder',
       });
 
-      // Update status
       setRefreshTrigger(prev => prev + 1);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to disconnect folder';
@@ -132,25 +148,25 @@ export function useFolderSync(options: UseFolderSyncOptions = {}): UseFolderSync
   }, []);
 
   const toggleAutoSave = useCallback(async (folderId: string): Promise<void> => {
-    const folder = localFolderSyncService.getFolder(folderId);
+    const { localFolderSyncService: service } = await loadFolderSyncService();
+    const folder = service.getFolder(folderId);
     if (!folder) {
       throw new Error('Folder not found');
     }
 
     try {
       if (folder.autoSave) {
-        localFolderSyncService.stopAutoSave(folderId);
+        service.stopAutoSave(folderId);
         toast.success('Auto-save disabled', {
           description: `${folder.name} will no longer auto-sync`,
         });
       } else {
-        localFolderSyncService.startAutoSave(folderId);
+        service.startAutoSave(folderId);
         toast.success('Auto-save enabled', {
           description: `${folder.name} will sync every 2 seconds`,
         });
       }
 
-      // Update status
       setRefreshTrigger(prev => prev + 1);
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Failed to toggle auto-save';
@@ -159,12 +175,11 @@ export function useFolderSync(options: UseFolderSyncOptions = {}): UseFolderSync
     }
   }, []);
 
-  const syncNow = useCallback(async (
-    folderId: string
-  ): Promise<{ toVFS: SyncResult; fromVFS: SyncResult }> => {
+  const syncNow = useCallback(async (folderId: string) => {
     setIsSyncing(true);
     try {
-      const result = await localFolderSyncService.syncNow(folderId);
+      const { localFolderSyncService: service } = await loadFolderSyncService();
+      const result = await service.syncNow(folderId);
       
       const totalSynced = result.toVFS.synced + result.fromVFS.synced;
       const totalErrors = result.toVFS.errors.length + result.fromVFS.errors.length;
@@ -183,9 +198,7 @@ export function useFolderSync(options: UseFolderSyncOptions = {}): UseFolderSync
         });
       }
 
-      // Update status
       setRefreshTrigger(prev => prev + 1);
-
       return result;
     } catch (error) {
       const message = error instanceof Error ? error.message : 'Sync failed';
@@ -196,8 +209,9 @@ export function useFolderSync(options: UseFolderSyncOptions = {}): UseFolderSync
     }
   }, []);
 
-  const getFolder = useCallback((folderId: string): SyncedFolder | undefined => {
-    return localFolderSyncService.getFolder(folderId);
+  const getFolder = useCallback(async (folderId: string) => {
+    const { localFolderSyncService: service } = await loadFolderSyncService();
+    return service.getFolder(folderId);
   }, []);
 
   const refreshStatus = useCallback(() => {
@@ -205,7 +219,7 @@ export function useFolderSync(options: UseFolderSyncOptions = {}): UseFolderSync
   }, []);
 
   return {
-    syncedFolders: sessionId ? localFolderSyncService.getSyncedFolders(sessionId) : [],
+    syncedFolders: [],
     syncStatus,
     connectFolder,
     disconnectFolder,
@@ -215,4 +229,4 @@ export function useFolderSync(options: UseFolderSyncOptions = {}): UseFolderSync
     isSyncing,
     refreshStatus,
   };
-}
+}

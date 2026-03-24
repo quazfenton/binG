@@ -1011,6 +1011,7 @@ export default function TerminalPanel({
       if (typeof window !== 'undefined') {
         try {
           const { terminalOPFSSync } = await import('@/lib/virtual-filesystem/opfs/terminal-sync');
+          // Note: terminal-sync uses browser-only APIs, safe for client bundles
           const sync = terminalOPFSSync;
           
           // Try to sync to OPFS - will fail gracefully if not enabled

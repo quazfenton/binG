@@ -1,19 +1,44 @@
 /**
  * OPFS Core Service
- * 
+ *
  * Low-level wrapper around Origin Private File System API
  * Provides native file system access with handle caching and atomic operations
- * 
+ *
  * Browser Support:
  * - Chrome 119+ ✅
  * - Edge 119+ ✅
  * - Firefox 123+ (behind flag) ⚠️
  * - Safari 17.4+ (limited) ⚠️
- * 
+ *
  * @see https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system
  */
 
-import { EventEmitter } from 'events';
+'use client';
+
+// Simple event emitter for browser compatibility (avoid Node.js 'events' module)
+class SimpleEventEmitter<T extends Record<string, any[]>> {
+  private listeners: Map<keyof T, Set<(...args: any[]) => void>> = new Map();
+
+  on<K extends keyof T>(event: K, listener: (...args: T[K]) => void): void {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event)!.add(listener as any);
+  }
+
+  off<K extends keyof T>(event: K, listener: (...args: T[K]) => void): void {
+    this.listeners.get(event)?.delete(listener as any);
+  }
+
+  emit<K extends keyof T>(event: K, ...args: T[K]): boolean {
+    const eventListeners = this.listeners.get(event);
+    if (!eventListeners || eventListeners.size === 0) {
+      return false;
+    }
+    eventListeners.forEach(listener => listener(...args));
+    return true;
+  }
+}
 
 export interface OPFSFileHandle {
   path: string;
@@ -67,7 +92,7 @@ export type OPFSEventMap = {
   close: [];
 };
 
-export class OPFSCore extends EventEmitter<OPFSEventMap> {
+export class OPFSCore extends SimpleEventEmitter<OPFSEventMap> {
   private rootHandle: FileSystemDirectoryHandle | null = null;
   private fileHandleCache: Map<string, OPFSFileHandle> = new Map();
   private directoryHandleCache: Map<string, FileSystemDirectoryHandle> = new Map();

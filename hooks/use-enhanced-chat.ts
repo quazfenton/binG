@@ -617,7 +617,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                 case 'spec_amplification':
                   // Spec amplification lifecycle event
-                  // eventData contains: { stage, fastModel, specScore, sectionsGenerated, currentIteration, totalIterations, currentSection, error, timestamp }
+                  // eventData contains: { stage, fastModel, specScore, sectionsGenerated, currentIteration, totalIterations, currentSection, error, timestamp, filesystem }
                   setAgentActivity(prev => ({
                     ...prev,
                     status: eventData.stage === 'complete' || eventData.stage === 'error' ? 'idle' : 'processing',
@@ -642,6 +642,21 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       timestamp: eventData.timestamp || Date.now(),
                     },
                   }));
+
+                  // When refinement completes, create a new message with filesystem edits if present
+                  if (eventData.stage === 'complete' && eventData.filesystem) {
+                    const refinementMessage: Message = {
+                      id: `refinement-${Date.now()}`,
+                      role: 'assistant',
+                      content: eventData.refinedContent || 'Refinement complete',
+                      metadata: {
+                        filesystem: eventData.filesystem,
+                        provider: eventData.fastModel,
+                        specScore: eventData.specScore,
+                      },
+                    };
+                    setMessages(prev => [...prev, refinementMessage]);
+                  }
                   break;
 
                 case 'spec_refinement':

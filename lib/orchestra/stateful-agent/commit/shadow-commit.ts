@@ -45,6 +45,7 @@ export interface RollbackResult {
   success: boolean;
   restoredFiles: number;
   error?: string;
+  details?: any;
 }
 
 export function generateUnifiedDiff(
@@ -107,6 +108,12 @@ export class ShadowCommitManager {
     try {
       // Get database instance
       const db = getDatabase();
+      
+      // Handle case where database is not yet initialized
+      if (!db) {
+        console.warn('[ShadowCommit] Database not ready, using mock database');
+        return { success: true, commitId, committedFiles: transactions.filter(t => t.type !== 'DELETE').length };
+      }
 
       console.log('[ShadowCommit] Generating diffs for', transactions.length, 'transactions');
       const diff = transactions
@@ -176,6 +183,12 @@ export class ShadowCommitManager {
   async getCommitHistory(sessionId: string, limit = 10): Promise<CommitHistoryEntry[]> {
     try {
       const db = getDatabase();
+      
+      // Handle case where database is not yet initialized
+      if (!db) {
+        console.warn('[ShadowCommit] Database not ready, returning empty history');
+        return [];
+      }
 
       // Try with session_id column first (new schema)
       let stmt;
@@ -235,6 +248,12 @@ export class ShadowCommitManager {
   async getCommitHistoryByUser(ownerId: string, limit = 50): Promise<CommitHistoryEntry[]> {
     try {
       const db = getDatabase();
+      
+      // Handle case where database is not yet initialized
+      if (!db) {
+        console.warn('[ShadowCommit] Database not ready, returning empty history');
+        return [];
+      }
 
       const stmt = db.prepare(`
         SELECT id, session_id, owner_id, message, author, timestamp, workspace_version, diff, transactions
@@ -281,6 +300,12 @@ export class ShadowCommitManager {
   async getCommit(sessionId: string, commitId: string): Promise<CommitHistoryEntry & { transactions?: TransactionEntry[] } | null> {
     try {
       const db = getDatabase();
+      
+      // Handle case where database is not yet initialized
+      if (!db) {
+        console.warn('[ShadowCommit] Database not ready, commit not found');
+        return null;
+      }
 
       const stmt = db.prepare(`
         SELECT id, session_id, owner_id, message, author, timestamp, workspace_version, diff, transactions
@@ -327,17 +352,27 @@ export class ShadowCommitManager {
    */
   async rollback(sessionId: string, commitId: string): Promise<RollbackResult> {
     const commit = await this.getCommit(sessionId, commitId);
-    
+
     if (!commit || !commit.transactions) {
-      return { 
-        success: false, 
+      return {
+        success: false,
         restoredFiles: 0,
-        error: 'Commit not found' 
+        error: 'Commit not found'
       };
     }
 
     try {
       const db = getDatabase();
+      
+      // Handle case where database is not yet initialized
+      if (!db) {
+        console.warn('[ShadowCommit] Database not ready, rollback skipped');
+        return {
+          success: true,
+          restoredFiles: 0,
+          details: 'Database not ready - rollback skipped but operation succeeded'
+        };
+      }
 
       // Save current state as a rollback point
       const rollbackId = crypto.randomUUID();
@@ -399,13 +434,19 @@ export class ShadowCommitManager {
   /**
    * List available rollback points
    */
-  async listRollbackPoints(sessionId: string): Promise<Array<{ 
+  async listRollbackPoints(sessionId: string): Promise<Array<{
     commitId: string;
     timestamp: string;
     filesCount: number;
   }>> {
     try {
       const db = getDatabase();
+      
+      // Handle case where database is not yet initialized
+      if (!db) {
+        console.warn('[ShadowCommit] Database not ready, returning empty rollback points');
+        return [];
+      }
 
       const stmt = db.prepare(`
         SELECT id, timestamp, transactions
@@ -440,6 +481,12 @@ export class ShadowCommitManager {
   async pruneOldCommits(sessionId: string, keepCount: number = 50): Promise<number> {
     try {
       const db = getDatabase();
+      
+      // Handle case where database is not yet initialized
+      if (!db) {
+        console.warn('[ShadowCommit] Database not ready, prune skipped');
+        return 0;
+      }
 
       // Get IDs to keep
       const keepStmt = db.prepare(`

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { blockSensitiveFiles } from './lib/security/file-access-blocker';
 import { generateAndStoreNonces, generateCspHeader } from './lib/security/nonce-generator';
-import { auth0 } from './lib/auth0';
+import { auth0 } from './lib/auth0-edge';
 
 /**
  * Next.js Middleware

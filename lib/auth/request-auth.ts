@@ -1,3 +1,6 @@
+// Server-only module - do not import directly in Client Components
+export const runtime = 'nodejs';
+
 import { NextRequest } from 'next/server';
 import { verifyAuth } from './jwt';
 import { authService } from './auth-service';

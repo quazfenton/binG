@@ -272,6 +272,12 @@ export function extractSimpleJsonFileEdits(content: string): FileEdit[] {
 /**
  * Extract files from markdown code blocks with filename hints
  * This handles LLMs that output code blocks with filename comments like:
+ * 
+ * @deprecated Not currently used in the codebase.
+ * Was created for a specific SSE vs. JSON response parsing issue that has been resolved.
+ * Kept for potential future use or reference.
+ * 
+ * @example
  * ```typescript
  * // src/app.tsx
  * export default function App() {...}
@@ -388,11 +394,14 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
 /**
  * Extract WRITE commands from fs-actions blocks and top-level
  * Format: WRITE path <<<content>>> or ```fs-actions WRITE path <<<content>>>
+ * 
+ * Case-insensitive matching to handle LLM output variations (WRITE, write, Write, etc.)
  */
 export function extractFsActionWrites(content: string): FileEdit[] {
   const writes: FileEdit[] = [];
-  
-  if (!content.includes('WRITE') && !content.includes('fs-actions')) return writes;
+
+  // Case-insensitive check for WRITE or fs-actions (handles WRITE, write, Write, etc.)
+  if (!/write/i.test(content) && !/fs-actions/i.test(content)) return writes;
 
   // Extract from ```fs-actions ... ``` code blocks
   const blockRegex = /```fs-actions\s*([\s\S]*?)```/gi;

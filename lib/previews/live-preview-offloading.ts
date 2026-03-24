@@ -1126,8 +1126,8 @@ export class LivePreviewOffloading {
    * Normalize files relative to selected root
    */
   normalizeFiles(
-    files: Record<string, string>, 
-    root: string, 
+    files: Record<string, string>,
+    root: string,
     scopePath?: string
   ): Record<string, string> {
     const normalized: Record<string, string> = {};
@@ -1155,11 +1155,7 @@ export class LivePreviewOffloading {
         relativePath = relativePath.slice(root.length + 1);
       }
 
-      // Ensure path starts with /
-      if (!relativePath.startsWith('/')) {
-        relativePath = '/' + relativePath;
-      }
-
+      // Keep as relative path without leading slash for Sandpack compatibility
       normalized[relativePath] = content;
     }
 
@@ -1483,11 +1479,11 @@ export class LivePreviewOffloading {
    */
   getSandpackConfig(detection: ProjectDetection): SandpackConfig {
     const template = FRAMEWORK_TO_TEMPLATE[detection.framework] || 'vanilla';
-    
+
     // Filter out build outputs and node_modules
     const buildDirs = ['dist', 'build', '.next', '.nuxt', '.output', 'public'];
     const filteredFiles: Record<string, { code: string }> = {};
-    
+
     for (const [path, content] of Object.entries(detection.normalizedFiles)) {
       // Skip build outputs
       if (buildDirs.some(dir => path.startsWith(dir + '/') || path.startsWith('/' + dir + '/'))) continue;
@@ -1495,9 +1491,11 @@ export class LivePreviewOffloading {
       if (path.includes('node_modules/')) continue;
       // Skip map files
       if (path.endsWith('.map') || path.includes('.map')) continue;
-      
+
+      // Remove leading slash - Sandpack expects relative paths
+      const sandpackPath = path.replace(/^\/+/, '');
       if (typeof content === 'string' && content.trim()) {
-        filteredFiles[path.startsWith('/') ? path : '/' + path] = { code: content };
+        filteredFiles[sandpackPath] = { code: content };
       }
     }
 
@@ -1529,7 +1527,7 @@ export class LivePreviewOffloading {
     switch (framework) {
       case 'vue':
       case 'nuxt':
-        files['/src/App.vue'] = {
+        files['src/App.vue'] = {
           code: `<template>
   <div id="app">
     <h1>Hello Vue!</h1>
@@ -1552,12 +1550,12 @@ export default {
 }
 </style>`,
         };
-        files['/src/main.js'] = {
+        files['src/main.js'] = {
           code: `import { createApp } from 'vue';
 import App from './App.vue';
 createApp(App).mount('#app');`,
         };
-        files['/index.html'] = {
+        files['index.html'] = {
           code: `<!doctype html>
 <html>
   <head>
@@ -1567,7 +1565,7 @@ createApp(App).mount('#app');`,
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
+    <script type="module" src="src/main.js"></script>
   </body>
 </html>`,
         };
@@ -1576,7 +1574,7 @@ createApp(App).mount('#app');`,
       case 'next':
       case 'vite-react':
       default:
-        files['/src/index.jsx'] = {
+        files['src/index.jsx'] = {
           code: `import React from 'react';
 import ReactDOM from 'react-dom/client';
 
@@ -1592,7 +1590,7 @@ function App() {
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);`,
         };
-        files['/index.html'] = {
+        files['index.html'] = {
           code: `<!doctype html>
 <html>
   <head>
@@ -1602,7 +1600,7 @@ root.render(<App />);`,
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/index.jsx"></script>
+    <script type="module" src="src/index.jsx"></script>
   </body>
 </html>`,
         };

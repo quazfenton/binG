@@ -2553,9 +2553,8 @@ Generated on: ${new Date().toLocaleString()}
               );
             }
 
-            // The path should already be correctly formatted by cleanFilename.
-            // We just need to ensure it's prefixed with '/' for Sandpack.
-            const sandpackPath = path.startsWith("/") ? path : `/${path}`;
+            // Remove leading slash - Sandpack expects relative paths
+            const sandpackPath = path.replace(/^\/+/, '');
 
             acc[sandpackPath] = { code: transformedContent };
             return acc;
@@ -2565,18 +2564,18 @@ Generated on: ${new Date().toLocaleString()}
 
         // Framework-specific entry file detection and handling
         const addEntryFileIfMissing = () => {
-          // Define framework-specific entry file priorities
+          // Define framework-specific entry file priorities (relative paths without leading slash)
           const entryPriorityMap: Record<string, string[]> = {
-            react: ['/src/main.tsx', '/src/main.jsx', '/src/index.tsx', '/src/index.jsx', '/src/App.tsx', '/src/App.jsx', '/index.tsx', '/index.jsx', '/App.tsx', '/App.jsx'],
-            next: ['/src/app/page.tsx', '/src/app/page.jsx', '/pages/index.tsx', '/pages/index.jsx', '/src/pages/index.tsx', '/src/pages/index.jsx', '/src/index.tsx'],
-            vue: ['/src/main.ts', '/src/main.js', '/src/App.vue', '/main.ts', '/main.js', '/index.ts', '/index.js'],
-            nuxt: ['/src/main.ts', '/src/main.js', '/src/App.vue', '/app.vue', '/pages/index.ts', '/pages/index.js'],
-            svelte: ['/src/main.ts', '/src/main.js', '/src/App.svelte', '/App.svelte', '/main.ts', '/main.js'],
-            angular: ['/src/main.ts', '/src/main.js', '/src/app/app.component.ts', '/src/app/app.component.js'],
-            solid: ['/src/index.tsx', '/src/index.jsx', '/src/App.tsx', '/src/App.jsx', '/index.tsx', '/index.jsx'],
-            astro: ['/src/pages/index.astro', '/pages/index.astro', '/index.astro'],
-            remix: ['/app/routes/_index.tsx', '/app/routes/_index.jsx', '/app/root.tsx', '/app/root.jsx'],
-            gatsby: ['/src/pages/index.js', '/src/pages/index.tsx', '/pages/index.js'],
+            react: ['src/main.tsx', 'src/main.jsx', 'src/index.tsx', 'src/index.jsx', 'src/App.tsx', 'src/App.jsx', 'index.tsx', 'index.jsx', 'App.tsx', 'App.jsx'],
+            next: ['src/app/page.tsx', 'src/app/page.jsx', 'pages/index.tsx', 'pages/index.jsx', 'src/pages/index.tsx', 'src/pages/index.jsx', 'src/index.tsx'],
+            vue: ['src/main.ts', 'src/main.js', 'src/App.vue', 'main.ts', 'main.js', 'index.ts', 'index.js'],
+            nuxt: ['src/main.ts', 'src/main.js', 'src/App.vue', 'app.vue', 'pages/index.ts', 'pages/index.js'],
+            svelte: ['src/main.ts', 'src/main.js', 'src/App.svelte', 'App.svelte', 'main.ts', 'main.js'],
+            angular: ['src/main.ts', 'src/main.js', 'src/app/app.component.ts', 'src/app/app.component.js'],
+            solid: ['src/index.tsx', 'src/index.jsx', 'src/App.tsx', 'src/App.jsx', 'index.tsx', 'index.jsx'],
+            astro: ['src/pages/index.astro', 'pages/index.astro', 'index.astro'],
+            remix: ['app/routes/_index.tsx', 'app/routes/_index.jsx', 'app/root.tsx', 'app/root.jsx'],
+            gatsby: ['src/pages/index.js', 'src/pages/index.tsx', 'pages/index.js'],
           };
 
           const framework = effectiveFramework;
@@ -2608,13 +2607,13 @@ Generated on: ${new Date().toLocaleString()}
 
           // No entry file found - add framework-specific stub
           log(`[addEntryFileIfMissing] No entry file found, adding stub for ${framework}`);
-          
+
           switch (framework) {
             case "react":
             case "next":
             case "gatsby":
               // Use index.tsx as entry for React/Next.js projects
-              sandpackFiles["/src/index.tsx"] = {
+              sandpackFiles["src/index.tsx"] = {
                 code: `import React from 'react';
 import ReactDOM from 'react-dom/client';
 
@@ -2630,7 +2629,7 @@ function App() {
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);`,
               };
-              sandpackFiles["/index.html"] = {
+              sandpackFiles["index.html"] = {
                 code: `<!doctype html>
 <html>
   <head>
@@ -2640,14 +2639,14 @@ root.render(<App />);`,
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/index.tsx"></script>
+    <script type="module" src="src/index.tsx"></script>
   </body>
 </html>`,
               };
               break;
             case "vue":
             case "nuxt":
-              sandpackFiles["/src/App.vue"] = {
+              sandpackFiles["src/App.vue"] = {
                 code: `<template>
   <div id="app">
     <h1>Hello Vue!</h1>
@@ -2670,12 +2669,12 @@ export default {
 }
 </style>`,
               };
-              sandpackFiles["/src/main.ts"] = {
+              sandpackFiles["src/main.ts"] = {
                 code: `import { createApp } from 'vue';
 import App from './App.vue';
 createApp(App).mount('#app');`,
               };
-              sandpackFiles["/index.html"] = {
+              sandpackFiles["index.html"] = {
                 code: `<!doctype html>
 <html>
   <head>
@@ -2685,13 +2684,13 @@ createApp(App).mount('#app');`,
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="src/main.ts"></script>
   </body>
 </html>`,
               };
               break;
             case "svelte":
-              sandpackFiles["/src/App.svelte"] = {
+              sandpackFiles["src/App.svelte"] = {
                 code: `<script>
   let name = 'Svelte';
 </script>
@@ -2710,12 +2709,12 @@ createApp(App).mount('#app');`,
   }
 </style>`,
               };
-              sandpackFiles["/src/main.ts"] = {
+              sandpackFiles["src/main.ts"] = {
                 code: `import App from './App.svelte';
 const app = new App({ target: document.getElementById('app') });
 export default app;`,
               };
-              sandpackFiles["/index.html"] = {
+              sandpackFiles["index.html"] = {
                 code: `<!doctype html>
 <html>
   <head>
@@ -2725,17 +2724,17 @@ export default app;`,
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="src/main.ts"></script>
   </body>
 </html>`,
               };
               break;
             default:
               // vanilla or unknown framework - use index.js
-              sandpackFiles["/src/index.js"] = {
+              sandpackFiles["src/index.js"] = {
                 code: `console.log('Hello from ${framework}!');`,
               };
-              sandpackFiles["/index.html"] = {
+              sandpackFiles["index.html"] = {
                 code: `<!doctype html>
 <html>
   <head>
@@ -2745,7 +2744,7 @@ export default app;`,
   </head>
   <body>
     <div id="root"></div>
-    <script src="/src/index.js"></script>
+    <script src="src/index.js"></script>
   </body>
 </html>`,
               };
@@ -2799,8 +2798,9 @@ export default app;`,
                   }
                 }
               }
-              
-              const sandpackPath = path.startsWith('/') ? path : `/${path}`;
+
+              // Remove leading slash - Sandpack expects relative paths
+              const sandpackPath = path.replace(/^\/+/, '');
               normalized[sandpackPath] = { code: content };
             }
           }
@@ -2812,54 +2812,54 @@ export default app;`,
           files: Record<string, { code: string }>,
           framework: string
         ): string | null => {
-          // Framework-specific entry file patterns
+          // Framework-specific entry file patterns (paths are now relative without leading slash)
           const entryPatterns: Record<string, RegExp[]> = {
             react: [
-              /\/src\/index\.(tsx|jsx|ts|js)$/,
-              /\/src\/main\.(tsx|jsx|ts|js)$/,
-              /\/src\/App\.(tsx|jsx)$/,
-              /\/index\.(tsx|jsx)$/,
-              /\/main\.(tsx|jsx)$/,
+              /^src\/index\.(tsx|jsx|ts|js)$/,
+              /^src\/main\.(tsx|jsx|ts|js)$/,
+              /^src\/App\.(tsx|jsx)$/,
+              /^index\.(tsx|jsx)$/,
+              /^main\.(tsx|jsx)$/,
             ],
             next: [
-              /\/src\/app\/page\.(tsx|jsx|ts|js)$/,
-              /\/src\/app\/layout\.(tsx|jsx|ts|js)$/,
-              /\/pages\/index\.(tsx|jsx|ts|js)$/,
-              /\/src\/pages\/index\.(tsx|jsx|ts|js)$/,
+              /^src\/app\/page\.(tsx|jsx|ts|js)$/,
+              /^src\/app\/layout\.(tsx|jsx|ts|js)$/,
+              /^pages\/index\.(tsx|jsx|ts|js)$/,
+              /^src\/pages\/index\.(tsx|jsx|ts|js)$/,
             ],
             vue: [
-              /\/src\/main\.(ts|js)$/,
-              /\/src\/App\.vue$/,
-              /\/main\.(ts|js)$/,
-              /\/App\.vue$/,
+              /^src\/main\.(ts|js)$/,
+              /^src\/App\.vue$/,
+              /^main\.(ts|js)$/,
+              /^App\.vue$/,
             ],
             nuxt: [
-              /\/src\/main\.(ts|js)$/,
-              /\/app\.vue$/,
-              /\/pages\/index\.(ts|js)$/,
+              /^src\/main\.(ts|js)$/,
+              /^app\.vue$/,
+              /^pages\/index\.(ts|js)$/,
             ],
             svelte: [
-              /\/src\/main\.(ts|js)$/,
-              /\/src\/App\.svelte$/,
-              /\/main\.(ts|js)$/,
+              /^src\/main\.(ts|js)$/,
+              /^src\/App\.svelte$/,
+              /^main\.(ts|js)$/,
             ],
             angular: [
-              /\/src\/main\.(ts|js)$/,
-              /\/src\/app\/app\.component\.(ts|js)$/,
+              /^src\/main\.(ts|js)$/,
+              /^src\/app\/app\.component\.(ts|js)$/,
             ],
             solid: [
-              /\/src\/index\.(tsx|jsx)$/,
-              /\/src\/App\.(tsx|jsx)$/,
+              /^src\/index\.(tsx|jsx)$/,
+              /^src\/App\.(tsx|jsx)$/,
             ],
             astro: [
-              /\/src\/pages\/index\.astro$/,
-              /\/pages\/index\.astro$/,
-              /\/index\.astro$/,
+              /^src\/pages\/index\.astro$/,
+              /^pages\/index\.astro$/,
+              /^index\.astro$/,
             ],
             vite: [
-              /\/src\/main\.(ts|js|tsx|jsx)$/,
-              /\/src\/index\.(ts|js|tsx|jsx)$/,
-              /\/main\.(ts|js)$/,
+              /^src\/main\.(ts|js|tsx|jsx)$/,
+              /^src\/index\.(ts|js|tsx|jsx)$/,
+              /^main\.(ts|js)$/,
             ],
           };
 
@@ -2892,8 +2892,8 @@ export default app;`,
           baseSandpackFiles = {};
           for (const [path, content] of Object.entries(projectDetection.normalizedFiles)) {
             if (typeof content === 'string' && content.trim()) {
-              // Ensure path starts with / for Sandpack
-              const sandpackPath = path.startsWith('/') ? path : `/${path}`;
+              // Remove leading slash - Sandpack expects relative paths
+              const sandpackPath = path.replace(/^\/+/, '');
               baseSandpackFiles[sandpackPath] = { code: content };
             }
           }
@@ -2903,8 +2903,8 @@ export default app;`,
           baseSandpackFiles = {};
           for (const [path, content] of Object.entries(manualPreviewFiles)) {
             if (typeof content === 'string' && content.trim()) {
-              // Ensure path starts with / for Sandpack
-              const sandpackPath = path.startsWith('/') ? path : `/${path}`;
+              // Remove leading slash - Sandpack expects relative paths
+              const sandpackPath = path.replace(/^\/+/, '');
               baseSandpackFiles[sandpackPath] = { code: content };
             }
           }
@@ -2936,7 +2936,7 @@ export default app;`,
             switch (framework) {
               case "vue":
               case "nuxt":
-                filesCopy["/src/App.vue"] = { code: `<template>
+                filesCopy["src/App.vue"] = { code: `<template>
   <div id="app">
     <h1>Hello Vue!</h1>
     <p>This is a generated Vue application.</p>
@@ -2957,10 +2957,10 @@ export default {
   margin-top: 60px;
 }
 </style>` };
-                filesCopy["/src/main.js"] = { code: `import { createApp } from 'vue';
+                filesCopy["src/main.js"] = { code: `import { createApp } from 'vue';
 import App from './App.vue';
 createApp(App).mount('#app');` };
-                filesCopy["/index.html"] = { code: `<!doctype html>
+                filesCopy["index.html"] = { code: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -2969,7 +2969,7 @@ createApp(App).mount('#app');` };
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
+    <script type="module" src="src/main.js"></script>
   </body>
 </html>` };
                 break;
@@ -2977,7 +2977,7 @@ createApp(App).mount('#app');` };
               case "next":
               case "vite-react":
               default:
-                filesCopy["/src/index.jsx"] = { code: `import React from 'react';
+                filesCopy["src/index.jsx"] = { code: `import React from 'react';
 import ReactDOM from 'react-dom/client';
 
 function App() {
@@ -2991,7 +2991,7 @@ function App() {
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);` };
-                filesCopy["/index.html"] = { code: `<!doctype html>
+                filesCopy["index.html"] = { code: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -3000,7 +3000,7 @@ root.render(<App />);` };
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/index.jsx"></script>
+    <script type="module" src="src/index.jsx"></script>
   </body>
 </html>` };
                 break;
@@ -3200,11 +3200,12 @@ root.render(<App />);` };
           if (htmlFileEntry) {
             // Use Sandpack with vanilla template for proper HTML/CSS/JS bundling
             const sandpackFiles: Record<string, { code: string }> = {};
-            
+
             // Add all files to Sandpack
             Object.entries(useStructure.files).forEach(([path, content]) => {
               if (typeof content === "string" && content.trim()) {
-                const sandpackPath = path.startsWith("/") ? path : `/${path}`;
+                // Remove leading slash - Sandpack expects relative paths
+                const sandpackPath = path.replace(/^\/+/, '');
                 sandpackFiles[sandpackPath] = { code: content };
               }
             });
@@ -5116,44 +5117,45 @@ root.render(<App />);` };
         if (useStructure) {
           Object.entries(useStructure.files).forEach(([path, content]) => {
             if (typeof content === "string" && content.trim()) {
-              const sandpackPath = path.startsWith("/") ? path : `/${path}`;
+              // Remove leading slash - Sandpack expects relative paths
+              const sandpackPath = path.replace(/^\/+/, '');
               sandpackFiles[sandpackPath] = { code: content };
             }
           });
         }
 
         // If HTML file found via codeBlocks (not structure), add it
-        if (htmlFile && !sandpackFiles["/index.html"]) {
-          sandpackFiles["/index.html"] = { code: htmlFile.code };
+        if (htmlFile && !sandpackFiles["index.html"]) {
+          sandpackFiles["index.html"] = { code: htmlFile.code };
         }
 
         // Add CSS file if found
         if (cssFile && !Object.keys(sandpackFiles).some(p => p.endsWith(".css"))) {
-          sandpackFiles["/style.css"] = { code: cssFile.code };
+          sandpackFiles["style.css"] = { code: cssFile.code };
         }
 
         // Add JS file if found
         if (jsFile && !Object.keys(sandpackFiles).some(p => p.endsWith(".js"))) {
-          sandpackFiles["/index.js"] = { code: jsFile.code };
+          sandpackFiles["index.js"] = { code: jsFile.code };
         }
 
         // Ensure we have an entry point
-        if (!sandpackFiles["/index.html"] && (cssFile || jsFile)) {
-          sandpackFiles["/index.html"] = {
+        if (!sandpackFiles["index.html"] && (cssFile || jsFile)) {
+          sandpackFiles["index.html"] = {
             code: `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Preview</title>
-  ${cssFile ? '<link rel="stylesheet" href="/style.css">' : ''}
+  ${cssFile ? '<link rel="stylesheet" href="style.css">' : ''}
 </head>
 <body>
   <div id="app">
     <h1>Preview</h1>
     <p>Generated from your code</p>
   </div>
-  ${jsFile ? '<script src="/index.js"></script>' : ''}
+  ${jsFile ? '<script src="index.js"></script>' : ''}
 </body>
 </html>`,
           };
