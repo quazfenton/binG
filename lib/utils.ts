@@ -1,6 +1,5 @@
 import { clsx, type ClassValue } from "clsx";
 import { twMerge } from "tailwind-merge";
-import crypto from 'crypto';
 
 export function cn(...inputs: ClassValue[]) {
   return twMerge(clsx(inputs));
@@ -16,18 +15,20 @@ export function cn(...inputs: ClassValue[]) {
  * Uses crypto.getRandomValues in browser, crypto.randomBytes in Node.js
  */
 export function secureRandom(): number {
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
+  // Browser: Use Web Crypto API
+  if (typeof window !== 'undefined' && window.crypto && window.crypto.getRandomValues) {
     const array = new Uint32Array(1);
-    crypto.getRandomValues(array);
+    window.crypto.getRandomValues(array);
     return array[0] / 0x100000000;
   }
 
-  // Fallback for Node.js environment
-  try {
-    return crypto.randomBytes(4).readUInt32LE(0) / 0x100000000;
-  } catch {
-    throw new Error('No secure random number generator available');
+  // Node.js: Use dynamic import for crypto module
+  if (typeof globalThis.process !== 'undefined' && globalThis.process.versions?.node) {
+    const nodeCrypto = require('crypto');
+    return nodeCrypto.randomBytes(4).readUInt32LE(0) / 0x100000000;
   }
+
+  throw new Error('No secure random number generator available');
 }
 
 /**
@@ -135,28 +136,39 @@ export function buildApiHeaders(options?: { json?: boolean }): Record<string, st
  * Generate a UUID v4 using crypto.randomUUID or crypto.getRandomValues
  */
 export function generateUUID(): string {
-  if (typeof crypto !== 'undefined' && (crypto as any).randomUUID) {
-    return (crypto as any).randomUUID();
-  }
-  
-  // Manual UUID v4 generation using crypto.getRandomValues
-  const array = new Uint8Array(16);
-  if (typeof crypto !== 'undefined' && crypto.getRandomValues) {
-    crypto.getRandomValues(array);
-  } else {
-    // Node.js fallback
-    try {
-      const bytes = crypto.randomBytes(16);
-      array.set(bytes);
-    } catch {
-      throw new Error('No secure random number generator available');
+  // Browser: Use Web Crypto API
+  if (typeof window !== 'undefined') {
+    const browserCrypto = (window as any).crypto;
+    if (browserCrypto && browserCrypto.randomUUID) {
+      return browserCrypto.randomUUID();
     }
+    // Manual UUID v4 generation using crypto.getRandomValues
+    const array = new Uint8Array(16);
+    if (browserCrypto && browserCrypto.getRandomValues) {
+      browserCrypto.getRandomValues(array);
+    } else {
+      // Fallback for older browsers
+      return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, c => {
+        const r = Math.random() * 16 | 0;
+        const v = c === 'x' ? r : (r & 0x3 | 0x8);
+        return v.toString(16);
+      });
+    }
+    // Set version (4) and variant bits
+    array[6] = (array[6] & 0x0f) | 0x40;
+    array[8] = (array[8] & 0x3f) | 0x80;
+    const hex = Array.from(array, byte => byte.toString(16).padStart(2, '0'));
+    return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10, 16).join('')}`;
   }
-  
-  // Set version (4) and variant bits
-  array[6] = (array[6] & 0x0f) | 0x40;
-  array[8] = (array[8] & 0x3f) | 0x80;
-  
-  const hex = Array.from(array, byte => byte.toString(16).padStart(2, '0'));
-  return `${hex.slice(0, 4).join('')}-${hex.slice(4, 6).join('')}-${hex.slice(6, 8).join('')}-${hex.slice(8, 10).join('')}-${hex.slice(10, 16).join('')}`;
+
+  // Node.js: Use dynamic import
+  if (typeof globalThis.process !== 'undefined' && globalThis.process.versions?.node) {
+    const nodeCrypto = require('crypto');
+    if (nodeCrypto.randomUUID) {
+      return nodeCrypto.randomUUID();
+    }
+    return nodeCrypto.randomBytes(16).toString('hex').replace(/(.{8})(.{4})(.{4})(.{4})(.{12})/, '$1-$2-$3-$4-$5');
+  }
+
+  throw new Error('No crypto API available');
 }

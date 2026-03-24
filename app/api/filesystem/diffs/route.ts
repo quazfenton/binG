@@ -7,9 +7,9 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { withAnonSessionCookie } from '@/lib/virtual-filesystem';
+import { withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
-import { diffTracker } from '@/lib/virtual-filesystem';
+import { diffTracker } from '@/lib/virtual-filesystem/index.server';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Filesystem:Diffs');

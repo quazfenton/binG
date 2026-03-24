@@ -12,8 +12,27 @@
  * - Size and quota validation
  */
 
-import { VirtualFilesystemService } from './virtual-filesystem-service';
-import { ShadowCommitManager, type CommitResult } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
+// Lazy load to avoid bundling in client
+let VirtualFilesystemService: any;
+
+async function getVFS() {
+  if (!VirtualFilesystemService) {
+    const vfs = await import('./virtual-filesystem-service');
+    VirtualFilesystemService = vfs.VirtualFilesystemService;
+  }
+  return VirtualFilesystemService;
+}
+
+// Lazy load ShadowCommitManager to avoid bundling in client
+let ShadowCommitManager: any;
+
+async function getCommitManager() {
+  if (!ShadowCommitManager) {
+    const mod = await import('@/lib/orchestra/stateful-agent/commit/shadow-commit');
+    ShadowCommitManager = mod.ShadowCommitManager;
+  }
+  return ShadowCommitManager;
+}
 import { resolveScopedPath, normalizeScopePath, extractSessionIdFromPath } from './scope-utils';
 import { createLogger } from '@/lib/utils/logger';
 
@@ -217,7 +236,8 @@ export class FileImportService {
     let commitId: string | undefined;
     if (autoCommit && operations.length > 0 && sessionId) {
       try {
-        const commitManager = new ShadowCommitManager();
+        const CommitManager = await getCommitManager();
+        const commitManager = new CommitManager();
         
         // Build VFS snapshot for commit
         const vfsSnapshot: Record<string, string> = {};
@@ -390,13 +410,13 @@ export class FileImportService {
   }
 }
 
-// Singleton instance for convenience
+// Singleton instance for convenience - lazily initialized
 let importServiceInstance: FileImportService | undefined;
 
-export function getFileImportService(vfs?: VFSWriteable): FileImportService {
+export async function getFileImportService(vfs?: VFSWriteable): Promise<FileImportService> {
   if (!importServiceInstance) {
-    // Lazy import to avoid circular dependencies
-    const { virtualFilesystem } = require('./virtual-filesystem-service');
+    // Lazy load to avoid circular dependencies and bundling in client
+    const { virtualFilesystem } = await import('./virtual-filesystem-service');
     importServiceInstance = new FileImportService(vfs || virtualFilesystem);
   }
   return importServiceInstance;

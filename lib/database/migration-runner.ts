@@ -1,5 +1,7 @@
 // Note: fs and path modules are lazy-loaded to avoid Edge Runtime issues
 // They are only used at runtime, not at module load time
+// This file is server-only - do not import in Client Components
+export const runtime = 'nodejs';
 
 interface Migration {
   version: string;
@@ -23,28 +25,37 @@ export class MigrationRunner {
    * Initialize the migration runner (lazy initialization)
    * Must be called before running migrations to avoid Edge Runtime issues
    */
-  private initialize(): void {
+  private async initialize(): Promise<void> {
     if (this.initialized) return;
-    
+
+    // Only run migrations in Node.js runtime
+    if (process.env.NEXT_RUNTIME !== 'nodejs') {
+      console.log('[MigrationRunner] Skipping initialization in Edge Runtime');
+      this.migrationsPath = './lib/database/migrations';
+      this.initialized = true;
+      return;
+    }
+
     // Dynamic import to avoid Node.js API usage at module load time
     // This prevents build failures in Edge Runtime and during Next.js builds
-    const { getDatabase } = require('./connection');
-    this.db = getDatabase();
-    
+    const connectionModule = await import('./connection');
+    this.db = await connectionModule.getDatabase();
+
     // Use process.cwd() only at runtime in Node.js environment
     // Not available in Edge Runtime - use a fallback path
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
     const hasProcessCwd = typeof process !== 'undefined' && (process as any).cwd;
-    if (hasProcessCwd) {
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      const { join } = require('path') as any;
+    if (hasProcessCwd && process.env.NEXT_RUNTIME === 'nodejs') {
+      // Use require instead of dynamic import to avoid Edge Runtime analysis
+      const pathModule = require('path');
+      const join = pathModule.join;
       // eslint-disable-next-line @typescript-eslint/no-explicit-any
       this.migrationsPath = join((process as any).cwd(), 'lib', 'database', 'migrations');
     } else {
       // Fallback for Edge Runtime - this won't actually run migrations in Edge
       this.migrationsPath = './lib/database/migrations';
     }
-    
+
     this.initializeMigrationsTable();
     this.initialized = true;
   }
@@ -66,12 +77,21 @@ export class MigrationRunner {
     return new Set(results.map((row: any) => row.version));
   }
 
-  private getMigrationFiles(): Migration[] {
+  private async getMigrationFiles(): Promise<Migration[]> {
+    // Only read migration files in Node.js runtime
+    if (process.env.NEXT_RUNTIME !== 'nodejs') {
+      console.log('[MigrationRunner] Skipping file read in Edge Runtime');
+      return [];
+    }
+    
     try {
-      // Lazy-load fs and path modules at runtime, not at module load
-      const { readdirSync, readFileSync } = require('fs');
-      const { join } = require('path');
-      
+      // Use require instead of dynamic import to avoid Edge Runtime analysis
+      const fsModule = require('fs');
+      const pathModule = require('path');
+      const readdirSync = fsModule.readdirSync;
+      const readFileSync = fsModule.readFileSync;
+      const join = pathModule.join;
+
       const files = readdirSync(this.migrationsPath)
         .filter((file: string) => file.endsWith('.sql'))
         .sort();
@@ -87,10 +107,10 @@ export class MigrationRunner {
     }
   }
 
-  public runMigrationsSync(): void {
-    this.initialize(); // Ensure lazy initialization before running migrations
+  public async runMigrationsSync(): Promise<void> {
+    await this.initialize(); // Ensure lazy initialization before running migrations
     const executedMigrations = this.getExecutedMigrations();
-    const migrationFiles = this.getMigrationFiles();
+    const migrationFiles = await this.getMigrationFiles();
 
     const pendingMigrations = migrationFiles.filter(
       migration => !executedMigrations.has(migration.version)
@@ -141,12 +161,12 @@ export class MigrationRunner {
 
   public async runMigrations(): Promise<void> {
     // Delegate to synchronous implementation after lazy init
-    this.initialize();
-    this.runMigrationsSync();
+    await this.initialize();
+    await this.runMigrationsSync();
   }
 
   public async rollbackMigration(version: string): Promise<void> {
-    this.initialize(); // Ensure lazy initialization
+    await this.initialize(); // Ensure lazy initialization
     // Note: This is a basic rollback - in production you'd want proper rollback scripts
     console.warn(`Rollback requested for migration ${version}`);
     console.warn('Manual rollback required - check migration file for rollback instructions');
@@ -158,8 +178,8 @@ export class MigrationRunner {
     console.log(`Migration ${version} marked as not executed`);
   }
 
-  public getExecutedMigrationsList(): any[] {
-    this.initialize(); // Ensure lazy initialization
+  public async getExecutedMigrationsList(): Promise<any[]> {
+    await this.initialize(); // Ensure lazy initialization
     const stmt = this.db.prepare(`
       SELECT version, filename, executed_at 
       FROM schema_migrations 

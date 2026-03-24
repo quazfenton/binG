@@ -301,10 +301,12 @@ interface InteractionPanelProps {
   onSubmit: (content: string) => void;
   onNewChat: () => void;
   isProcessing: boolean;
+  allowInputWhileProcessing?: boolean; // Allow typing even when processing
   toggleAccessibility: () => void;
   toggleHistory: () => void;
   toggleCodePreview: () => void;
   onStopGeneration?: () => void;
+  onClearPendingInput?: () => void; // Callback to clear any pending queued input
   onRetry?: () => void;
   currentProvider?: string;
   currentModel?: string;
@@ -378,10 +380,12 @@ export default function InteractionPanel({
   onSubmit,
   onNewChat,
   isProcessing,
+  allowInputWhileProcessing = false,
   toggleAccessibility,
   toggleHistory,
   toggleCodePreview,
   onStopGeneration,
+  onClearPendingInput,
   onRetry: _onRetry,
   currentProvider = "openrouter",
   currentModel = "nvidia/nemotron-3-nano-30b-a3b:free",
@@ -441,6 +445,12 @@ export default function InteractionPanel({
   // Import dialog state
   const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
 
+  // Queue for input while processing
+  const [pendingInput, setPendingInput] = useState<string | null>(null);
+
+  // Compute whether input should be disabled
+  const isInputDisabled = isProcessing && !allowInputWhileProcessing;
+
   // Memoize select value to prevent infinite loop
   const selectValue = useMemo(() => {
     if (availableProviders.length === 0) return "";
@@ -450,6 +460,23 @@ export default function InteractionPanel({
       .flatMap((p: any) => p.models.map((m: string) => `${p.id}:${m}`));
     return validValues.includes(currentValue) ? currentValue : "";
   }, [currentProvider, currentModel, availableProviders]);
+
+  // Effect to submit pending input when processing completes naturally (not stopped)
+  useEffect(() => {
+    if (!isProcessing && pendingInput) {
+      const toSubmit = pendingInput;
+      setPendingInput(null);
+      onSubmit(toSubmit);
+    }
+    // If processing just completed (was processing, now not), could call onClearPendingInput
+    // But we intentionally keep pendingInput for the "natural completion" case to auto-submit
+  }, [isProcessing, pendingInput, onSubmit]);
+
+  // Expose a way to clear pending input from parent (e.g., when user manually sends)
+  const clearPendingInput = useCallback(() => {
+    setPendingInput(null);
+    onClearPendingInput?.();
+  }, [onClearPendingInput]);
 
   // Memoized handler for ProviderSelector
   const handleProviderSelect = useCallback((provider: string, model: string) => {
@@ -1872,6 +1899,14 @@ export default function InteractionPanel({
                     e.preventDefault();
                     const trimmed = input.trim();
                     if (!trimmed) return;
+                    // If processing and queuing allowed, queue instead of submitting
+                    if (isProcessing && allowInputWhileProcessing) {
+                      setPendingInput(trimmed);
+                      setInput("");
+                      return;
+                    }
+                    // Clear any pending input before submitting new one
+                    setPendingInput(null);
                     onSubmit(trimmed);
                     setInput("");
                   }}
@@ -1890,6 +1925,12 @@ export default function InteractionPanel({
                           e.preventDefault();
                           const trimmed = input.trim();
                           if (!trimmed) return;
+                          // If processing and queuing allowed, queue instead of submitting
+                          if (isProcessing && allowInputWhileProcessing) {
+                            setPendingInput(trimmed);
+                            setInput("");
+                            return;
+                          }
                           onSubmit(trimmed);
                           setInput("");
                         }
@@ -1905,7 +1946,7 @@ export default function InteractionPanel({
                           }, 300);
                         }
                       }}
-                      disabled={isProcessing}
+                      disabled={isInputDisabled}
                     />
                     <div className="absolute right-3 top-3 flex gap-1" style={{ zIndex: 10 }}>
                       <button

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
-import { resolveRequestAuth } from '@/lib/auth/request-auth';
+import { resolveFilesystemOwnerWithFallback } from '@/app/api/filesystem/utils';
+import { withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { getGitBackedVFSForOwner } from '@/lib/virtual-filesystem/git-backed-vfs';
 import { VirtualFilesystemService } from '@/lib/virtual-filesystem/virtual-filesystem-service';
@@ -33,80 +34,87 @@ export async function POST(
   try {
     const { sessionId } = await params;
 
-    // Step 1: Enforce authentication
-    const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
-    if (!authResult.success || !authResult.userId) {
-      return NextResponse.json(
-        { success: false, error: 'Authentication required' },
-        { status: 401 }
-      );
-    }
+    // Step 1: Resolve auth with fallback (allows anonymous users)
+    const authResolution = await resolveFilesystemOwnerWithFallback(request, {
+      route: 'rollback',
+      requestId: Math.random().toString(36).slice(2, 8),
+    });
+    const ownerId = authResolution.ownerId;
 
     const body = await request.json().catch(() => null);
     if (!body) {
-      return NextResponse.json(
+      const errorResponse = NextResponse.json(
         { success: false, error: 'Invalid JSON body' },
         { status: 400 }
       );
+      return withAnonSessionCookie(errorResponse, authResolution);
     }
 
     const { version, mode = 'shadow', files } = body;
 
     if (!Number.isInteger(version) || version < 0) {
-      return NextResponse.json(
+      const errorResponse = NextResponse.json(
         { success: false, error: 'Invalid version number (must be non-negative integer)' },
         { status: 400 }
       );
+      return withAnonSessionCookie(errorResponse, authResolution);
     }
 
     // Validate files array if provided
     let targetFiles: string[] | undefined;
     if (files !== undefined) {
       if (!Array.isArray(files)) {
-        return NextResponse.json(
+        const errorResponse = NextResponse.json(
           { success: false, error: 'files must be an array of file paths' },
           { status: 400 }
         );
+        return withAnonSessionCookie(errorResponse, authResolution);
       }
       if (files.length === 0) {
-        return NextResponse.json(
+        const errorResponse = NextResponse.json(
           { success: false, error: 'files array cannot be empty' },
           { status: 400 }
         );
+        return withAnonSessionCookie(errorResponse, authResolution);
       }
       // Validate each file path
       targetFiles = files.filter(f => typeof f === 'string' && f.length > 0);
       if (targetFiles.length === 0) {
-        return NextResponse.json(
+        const errorResponse = NextResponse.json(
           { success: false, error: 'files array must contain valid file paths' },
           { status: 400 }
         );
+        return withAnonSessionCookie(errorResponse, authResolution);
       }
     }
 
     const db = getDatabase();
 
+    // Session IDs are scoped to owner
+    const scopedSessionId = `${ownerId}:${sessionId}`;
+
     // Step 2: Verify session exists AND ownership check
     const session = db.prepare(`
-      SELECT user_id, workspace_id FROM user_sessions 
-      WHERE id = ? AND user_id = ? AND is_active = TRUE
-    `).get(sessionId, authResult.userId) as { user_id: number; workspace_id?: string } | undefined;
+      SELECT user_id, workspace_id FROM user_sessions
+      WHERE session_id = ? AND is_active = TRUE
+    `).get(scopedSessionId) as { user_id: number; workspace_id?: string } | undefined;
 
     if (!session) {
       logger.warn('[Git Rollback] Unauthorized access attempt', {
         sessionId,
-        userId: authResult.userId,
+        ownerId,
         version,
       });
-      return NextResponse.json(
+      const errorResponse = NextResponse.json(
         { success: false, error: 'Session not found or access denied' },
         { status: 404 }
       );
+      return withAnonSessionCookie(errorResponse, authResolution);
     }
 
     logger.info('[Git Rollback] Rollback requested', {
       sessionId,
-      userId: authResult.userId,
+      ownerId,
       version,
       mode,
       files: targetFiles?.length || 'all',
@@ -122,22 +130,23 @@ export async function POST(
 
     switch (mode) {
       case 'shadow':
-        rollbackResult = await executeShadowRollback(sessionId, version, targetFiles);
+        rollbackResult = await executeShadowRollback(scopedSessionId, version, targetFiles);
         break;
 
       case 'vfs-snapshot':
-        rollbackResult = await executeVFSSnapshotRollback(db, sessionId, version, Number(authResult.userId), targetFiles);
+        rollbackResult = await executeVFSSnapshotRollback(db, scopedSessionId, version, Number(ownerId), targetFiles);
         break;
 
       case 'git':
-        rollbackResult = await executeGitRollback(sessionId, version, Number(authResult.userId), targetFiles);
+        rollbackResult = await executeGitRollback(scopedSessionId, version, Number(ownerId), targetFiles);
         break;
 
       default:
-        return NextResponse.json(
+        const errorResponse = NextResponse.json(
           { success: false, error: `Invalid rollback mode: ${mode}. Use 'shadow', 'vfs-snapshot', or 'git'` },
           { status: 400 }
         );
+        return withAnonSessionCookie(errorResponse, authResolution);
     }
 
     if (!rollbackResult.success) {
@@ -147,14 +156,15 @@ export async function POST(
         mode,
         error: rollbackResult.error,
       });
-      return NextResponse.json(
-        { 
-          success: false, 
+      const errorResponse = NextResponse.json(
+        {
+          success: false,
           error: rollbackResult.error || 'Rollback failed',
           details: rollbackResult.details,
         },
         { status: 400 }
       );
+      return withAnonSessionCookie(errorResponse, authResolution);
     }
 
     logger.info('[Git Rollback] Rollback successful', {
@@ -164,18 +174,24 @@ export async function POST(
       filesRestored: rollbackResult.filesRestored,
     });
 
-    return NextResponse.json({
+    const response = NextResponse.json({
       success: true,
       message: `Successfully rolled back to version ${version}`,
       filesRestored: rollbackResult.filesRestored,
       mode,
     });
+    return withAnonSessionCookie(response, authResolution);
   } catch (error) {
     logger.error('[Git Rollback] Unexpected error:', error);
-    return NextResponse.json(
+    const errorResponse = NextResponse.json(
       { success: false, error: 'Failed to rollback', details: error instanceof Error ? error.message : String(error) },
       { status: 500 }
     );
+    return withAnonSessionCookie(errorResponse, {
+      ownerId: 'unknown',
+      source: 'anonymous',
+      isAuthenticated: false,
+    });
   }
 }
 

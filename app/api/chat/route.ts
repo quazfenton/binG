@@ -28,9 +28,11 @@ import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events
 import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
 import { 
   sanitizeFileEditTags, 
-  extractFileEdits, 
-  extractFileWriteEdits, 
+  extractFileEdits,
+  extractFileWriteEdits,
   extractFencedDiffEdits as extractFencedDiffEditsShared,
+  extractFsActionWrites,
+  extractTopLevelWrites,
   createIncrementalParser,
   extractIncrementalFileEdits,
 } from '@/lib/chat/file-edit-parser';
@@ -651,6 +653,25 @@ export async function POST(request: NextRequest) {
     actualProvider = provider;
     actualModel = normalizedModel;
 
+    // Use a mutable ref for emit - will be set when stream starts
+    const emitRef: { current: ((event: string, data: any) => void) | null } = { current: null };
+
+    // Placeholder emit that stores events until real emit is available
+    interface PendingEvent {
+      event: string;
+      data: any;
+      timestamp: number;
+    }
+    const pendingEvents: PendingEvent[] = [];
+    const placeholderEmit = (event: string, data: any) => {
+      // Fix #7: Remove debug logging to prevent performance impact at scale
+      if (emitRef.current) {
+        emitRef.current(event, data);
+      } else {
+        pendingEvents.push({ event, data, timestamp: Date.now() });
+      }
+    };
+
     try {
       let unifiedResponse
 
@@ -661,7 +682,11 @@ export async function POST(request: NextRequest) {
         unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
       } else {
         // V1 mode or auto - use spec amplification if enabled
-        unifiedResponse = await responseRouter.routeWithSpecAmplification(routerRequest)
+        // Pass placeholder emit - will be replaced with real emit when stream starts
+        unifiedResponse = await responseRouter.routeWithSpecAmplification({
+          ...routerRequest,
+          emit: placeholderEmit
+        })
       }
 
       // Extract actual provider/model from response metadata (after fallbacks)
@@ -853,8 +878,26 @@ export async function POST(request: NextRequest) {
 
           const readableStream = new ReadableStream({
             async start(controller) {
+              // Set up real emit that writes directly to stream controller
+              const realEmit = (eventType: string, data: any) => {
+                if (request.signal?.aborted) return;
+                const eventStr = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+                controller.enqueue(encoderRef.encode(eventStr));
+                chunkCount++;
+              };
+
+              // Replace placeholder emit with real emit - background refinement will now stream directly
+              emitRef.current = realEmit;
+
+              // Flush any pending events that arrived before stream started
+              for (const pending of pendingEvents) {
+                realEmit(pending.event, { requestId: streamRequestId, ...pending.data, timestamp: pending.timestamp });
+              }
+              pendingEvents.length = 0;
+
               const cleanup = () => {
                 encoderRef = null;
+                emitRef.current = null;
               };
 
               if (request.signal) {
@@ -873,7 +916,7 @@ export async function POST(request: NextRequest) {
                   agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), timeout);
                 });
 
-                // Stream from agent
+                  // Stream from agent
                 const streamPromise = (async () => {
                   // First, send initial token events from base response
                   const baseEvents = responseRouter.createStreamingEvents(clientResponse, streamRequestId);
@@ -883,6 +926,9 @@ export async function POST(request: NextRequest) {
                     chunkCount++;
                     await new Promise(resolve => setTimeout(resolve, 30));
                   }
+
+                  // Note: spec amplification events will now be streamed via emitRef.current
+                  // as background refinement progresses (no longer pre-captured)
 
                   // Now stream tool invocations and reasoning in real-time
                   for await (const chunk of agentLoop.executeTaskStreaming(task)) {
@@ -1050,9 +1096,27 @@ export async function POST(request: NextRequest) {
 
         const readableStream = new ReadableStream({
           async start(controller) {
+            // Set up real emit that writes directly to stream controller
+            const realEmit = (eventType: string, data: any) => {
+              if (request.signal?.aborted) return;
+              const eventStr = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+              controller.enqueue(encoderRef.encode(eventStr));
+              chunkCount++;
+            };
+
+            // Replace placeholder emit with real emit - background refinement will now stream directly
+            emitRef.current = realEmit;
+
+            // Flush any pending events that arrived before stream started
+            for (const pending of pendingEvents) {
+              realEmit(pending.event, { requestId: streamRequestId, ...pending.data, timestamp: pending.timestamp });
+            }
+            pendingEvents.length = 0;
+
             // Cleanup function for resource management
             const cleanup = () => {
               encoderRef = null;
+              emitRef.current = null;
             };
 
             // Handle client disconnect
@@ -1077,7 +1141,8 @@ export async function POST(request: NextRequest) {
                 e.includes('event: step') ||
                 e.includes('event: filesystem') ||
                 e.includes('event: diffs') ||
-                e.includes('event: sandbox_output')  // Include sandbox stdout/stderr
+                e.includes('event: sandbox_output') ||
+                e.includes('event: spec_amplification')  // Include spec amplification progress
               );
               const tokenEvents = events.filter(e => e.includes('event: token') && e.includes('"type":"token"'));
               const doneEvent = events.find(e => e.includes('event: done'));
@@ -1268,6 +1333,10 @@ export async function POST(request: NextRequest) {
         },
         timestamp: new Date().toISOString()
       }, { status: 503 })); // Service Unavailable - indicates temporary issue
+    } finally {
+      // Fix #2: Clear pendingEvents to prevent memory leak across requests
+      pendingEvents.length = 0;
+      emitRef.current = null;
     }
   }
   catch (error) {
@@ -2025,87 +2094,7 @@ function extractFencedDiffEdits(content: string): Array<{ path: string; diff: st
   return extractFencedDiffEditsShared(content);
 }
 
-function extractFsActionWrites(content: string): Array<{ path: string; content: string }> {
-  const writes: Array<{ path: string; content: string }> = [];
-
-  // Case-insensitive check for WRITE or fs-actions
-  if (!/write/i.test(content) && !/fs-actions/i.test(content)) return writes;
-
-  // Extract from ```fs-actions ... ``` code blocks
-  const blockRegex = /```fs-actions\s*([\s\S]*?)```/gi;
-  let blockMatch: RegExpExecArray | null;
-
-  while ((blockMatch = blockRegex.exec(content)) !== null) {
-    const blockContent = blockMatch[1] || '';
-    const writeRegex = /WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
-    let writeMatch: RegExpExecArray | null;
-    while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
-      const path = writeMatch[1]?.trim();
-      const fileContent = writeMatch[2] ?? '';
-      if (!path) continue;
-      writes.push({ path, content: fileContent });
-    }
-  }
-
-  // Extract from <fs-actions>...</fs-actions> XML tags
-  const xmlBlockRegex = /<fs-actions>([\s\S]*?)<\/fs-actions>/gi;
-  let xmlBlockMatch: RegExpExecArray | null;
-
-  while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
-    const blockContent = xmlBlockMatch[1] || '';
-    const writeRegex = /WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
-    let writeMatch: RegExpExecArray | null;
-    while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
-      const path = writeMatch[1]?.trim();
-      const fileContent = writeMatch[2] ?? '';
-      if (!path) continue;
-      writes.push({ path, content: fileContent });
-    }
-  }
-
-  // Extract top-level WRITE commands from regular code blocks
-  const regularBlockRegex = /```[a-zA-Z]*\s*([\s\S]*?)```/gi;
-  let regularBlockMatch: RegExpExecArray | null;
-
-  while ((regularBlockMatch = regularBlockRegex.exec(content)) !== null) {
-    const blockContent = regularBlockMatch[1] || '';
-    const writeRegex = /^WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
-    let writeMatch: RegExpExecArray | null;
-    while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
-      const path = writeMatch[1]?.trim();
-      const fileContent = writeMatch[2] ?? '';
-      if (!path) continue;
-      writes.push({ path, content: fileContent });
-    }
-  }
-
-  return writes;
-}
-
-function extractTopLevelWrites(content: string): Array<{ path: string; content: string }> {
-  const writes: Array<{ path: string; content: string }> = [];
-
-  const topLevelWriteRegex = /^WRITE\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
-  let match: RegExpExecArray | null;
-  while ((match = topLevelWriteRegex.exec(content)) !== null) {
-    const path = match[1]?.trim();
-    const fileContent = match[2] ?? '';
-    if (!path) continue;
-    writes.push({ path, content: fileContent });
-  }
-
-  const altWriteRegex = /^WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)>>>/gim;
-  while ((match = altWriteRegex.exec(content)) !== null) {
-    const path = match[1]?.trim();
-    const fileContent = match[2] ?? '';
-    if (!path) continue;
-    if (!writes.some(w => w.path === path && w.content === fileContent)) {
-      writes.push({ path, content: fileContent });
-    }
-  }
-
-  return writes;
-}
+// Note: extractFsActionWrites and extractTopLevelWrites are now imported from file-edit-parser.ts
 
 function extractTopLevelDeletes(content: string): string[] {
   const deletes: string[] = [];

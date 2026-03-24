@@ -80,9 +80,9 @@ function getEncryptionKeyEnv(): string | null {
  * SECURITY: Callback secrets are now encrypted using AES-256-GCM
  * This prevents database compromise from exposing webhook secrets
  */
-function initializeBlaxelDatabase(): void {
+async function initializeBlaxelDatabase(): Promise<void> {
   try {
-    const db = getDatabase();
+    const db = await getDatabase();
     db.exec(`
       CREATE TABLE IF NOT EXISTS blaxel_callback_secrets (
         id INTEGER PRIMARY KEY AUTOINCREMENT,
@@ -925,7 +925,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
    */
   private async persistCallbackSecret(key: string, secret: string): Promise<void> {
     try {
-      const db = getDatabase();
+      const db = await getDatabase();
 
       // SECURITY: Require encryption in production
       const encKey = getEncryptionKeyEnv();
@@ -964,7 +964,7 @@ export class BlaxelSandboxHandle implements SandboxHandle {
    */
   private async loadCallbackSecret(key: string): Promise<string | null> {
     try {
-      const db = getDatabase();
+      const db = await getDatabase();
       const stmt = db.prepare('SELECT secret_encrypted FROM blaxel_callback_secrets WHERE sandbox_id = ? AND agent = ?');
       const row = stmt.get(this.id, key) as { secret_encrypted: string } | undefined;
 

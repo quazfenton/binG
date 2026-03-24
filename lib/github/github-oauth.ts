@@ -310,10 +310,10 @@ export async function getGitHubUser(accessToken: string): Promise<GitHubUser> {
 export async function saveGitHubToken(userId: number, token: GitHubToken, user: GitHubUser): Promise<boolean> {
   try {
     const db = getDatabase();
-    
-    const { encrypted: accessTokenEncrypted } = encryptApiKey(token.accessToken);
-    const { encrypted: refreshTokenEncrypted } = token.refreshToken 
-      ? encryptApiKey(token.refreshToken) 
+
+    const { encrypted: accessTokenEncrypted } = await encryptApiKey(token.accessToken);
+    const { encrypted: refreshTokenEncrypted } = token.refreshToken
+      ? await encryptApiKey(token.refreshToken)
       : { encrypted: null };
 
     const stmt = db.prepare(`

@@ -1679,10 +1679,17 @@ export default function ConversationInterface() {
         }}
         onNewChat={handleNewChat}
         isProcessing={isLoading}
+        allowInputWhileProcessing={true}
         toggleAccessibility={toggleAccessibility}
         toggleHistory={toggleHistory}
         toggleCodePreview={toggleCodePreview}
-        onStopGeneration={stop}
+        onStopGeneration={() => {
+          // Abort the current request
+          stop();
+          // Note: We do NOT clear pendingInput - if user typed during processing,
+          // it stays queued and will be sent when they press Send again
+          // This allows them to continue their thought after stopping
+        }}
         onRetry={handleRetry}
         currentProvider={currentProvider}
         currentModel={currentModel}

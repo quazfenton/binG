@@ -441,10 +441,11 @@ export const loggers = {
 };
 
 // ============================================================================
-// REGISTER CLEANUP HANDLERS (server-side only)
+// REGISTER CLEANUP HANDLERS (server-side Node.js runtime only)
 // ============================================================================
 
-if (typeof process !== 'undefined' && typeof window === 'undefined') {
+// Only register process handlers in Node.js runtime (not Edge Runtime)
+if (typeof process !== 'undefined' && typeof window === 'undefined' && process.env.NEXT_RUNTIME === 'nodejs') {
   process.on('exit', () => {
     if (writeStream) {
       writeStream.end();

@@ -21,9 +21,38 @@
  */
 
 import { opfsCore } from '../opfs/opfs-core';
-import { virtualFilesystem } from '../virtual-filesystem-service';
 import { normalizeScopePath, resolveScopedPath } from '../scope-utils';
 import { createLogger } from '@/lib/utils/logger';
+import { buildApiHeaders } from '@/lib/utils';
+
+// VFS API endpoints - used instead of importing server-only virtualFilesystem
+const VFS_API_BASE = '/api/filesystem';
+
+async function vfsReadFile(ownerId: string, path: string) {
+  const response = await fetch(`${VFS_API_BASE}/read?path=${encodeURIComponent(path)}&ownerId=${encodeURIComponent(ownerId)}`, {
+    headers: buildApiHeaders({ json: false }),
+  });
+  if (!response.ok) throw new Error(`Failed to read file: ${response.statusText}`);
+  return response.json();
+}
+
+async function vfsWriteFile(ownerId: string, path: string, content: string, language?: string) {
+  const response = await fetch(`${VFS_API_BASE}/write`, {
+    method: 'POST',
+    headers: buildApiHeaders(),
+    body: JSON.stringify({ ownerId, path, content, language }),
+  });
+  if (!response.ok) throw new Error(`Failed to write file: ${response.statusText}`);
+  return response.json();
+}
+
+async function vfsListDirectory(ownerId: string, path: string) {
+  const response = await fetch(`${VFS_API_BASE}/list?path=${encodeURIComponent(path)}&ownerId=${encodeURIComponent(ownerId)}`, {
+    headers: buildApiHeaders({ json: false }),
+  });
+  if (!response.ok) throw new Error(`Failed to list directory: ${response.statusText}`);
+  return response.json();
+}
 
 const logger = createLogger('LocalFolderSync');
 
@@ -174,7 +203,7 @@ export class LocalFolderSyncService {
             
             // Check for conflicts (file exists in VFS with different content)
             try {
-              const vfsFile = await virtualFilesystem.readFile(folder.ownerId, vfsPath);
+              const vfsFile = await vfsReadFile(folder.ownerId, vfsPath);
               
               // Simple conflict detection: content differs and VFS is newer
               if (vfsFile.content !== file.content) {
@@ -199,7 +228,7 @@ export class LocalFolderSyncService {
             
             // Write to VFS
             const language = this.detectLanguage(entry.name);
-            await virtualFilesystem.writeFile(folder.ownerId, vfsPath, file.content, language);
+            await vfsWriteFile(folder.ownerId, vfsPath, file.content, language);
             
             logger.debug(`Synced to VFS: ${entry.path} -> ${vfsPath}`);
           } catch (error) {
@@ -244,13 +273,13 @@ export class LocalFolderSyncService {
 
     try {
       // List files in VFS
-      const listing = await virtualFilesystem.listDirectory(folder.ownerId, folder.vfsPath);
+      const listing = await vfsListDirectory(folder.ownerId, folder.vfsPath);
       
       for (const node of listing.nodes) {
         if (node.type === 'file') {
           try {
             // Read from VFS
-            const file = await virtualFilesystem.readFile(folder.ownerId, node.path);
+            const file = await vfsReadFile(folder.ownerId, node.path);
             
             // Map VFS path to OPFS path
             const opfsPath = node.path.replace(folder.vfsPath, folder.opfsRoot);
