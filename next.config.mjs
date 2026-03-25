@@ -6,28 +6,8 @@ const projectRoot = resolve(__dirname);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Turbopack configuration - use webpack for bundling (more mature handling of externals)
-  // Note: Using webpack for build as Turbopack has issues with Node.js module externals
   turbopack: {
     root: projectRoot,
-  },
-  // Use webpack for production builds (more mature handling of Node.js externals)
-  webpack: (config, { isServer }) => {
-    // Server-only packages should be externalized
-    if (!isServer) {
-      config.externals = [
-        ...(config.externals || []),
-        'fs', 'fs/promises', 'child_process', 'crypto', 'stream',
-        'net', 'tls', 'http', 'https', 'url', 'zlib', 'os', 'path',
-        'assert', 'buffer', 'util', 'events', 'module', 'vm',
-      ];
-    }
-    return config;
-  },
-  // Override the previous webpack config by merging
-  // (This replaces the existing webpack config below)
-  typescript: {
-    ignoreBuildErrors: true,
   },
   images: {
     unoptimized: false,
@@ -84,7 +64,6 @@ const nextConfig = {
         protocol: 'https',
         hostname: 'media.giphy.com',
       },
-      // Allow any HTTPS hostname for custom images (validated at runtime)
       {
         protocol: 'https',
         hostname: '**',
@@ -98,30 +77,27 @@ const nextConfig = {
     'localhost:3003',
     'localhost:3004',
     'localhost:3005',
-    'ddhhst-3000.csb.app', // For CodeSandbox environment
+    'ddhhst-3000.csb.app',
   ],
-  // Performance optimizations
   compress: true,
   poweredByHeader: false,
   generateEtags: true,
-  // Bundle optimization
   experimental: {
     optimizeCss: true,
     optimizePackageImports: [
       'lucide-react',
       '@radix-ui/react-icons',
       'date-fns',
-      'lodash'
+      'lodash',
     ],
   },
-  // Compiler optimizations
   compiler: {
-    removeConsole: process.env.NODE_ENV === 'production' ? {
-      exclude: ['error', 'warn'],
-    } : false,
+    removeConsole: process.env.NODE_ENV === 'production'
+      ? {
+          exclude: ['error', 'warn'],
+        }
+      : false,
   },
-  // Output optimization - disabled temporarily due to Next.js 15 bug with error pages
-  // output: 'standalone',
   env: {
     DEFAULT_LLM_PROVIDER: process.env.DEFAULT_LLM_PROVIDER,
     DEFAULT_MODEL: process.env.DEFAULT_MODEL,
@@ -136,44 +112,65 @@ const nextConfig = {
     REPLICATE_API_TOKEN: process.env.REPLICATE_API_TOKEN,
   },
   serverExternalPackages: [
-      "livekit-server-sdk",
-      "@anthropic-ai/sdk",
-      "openai",
-      "cohere-ai",
-      "together-ai",
-      "replicate",
-      "@google/generative-ai",
-      "portkey-ai",
-      // Sandbox providers - server-only
-      "@daytonaio/sdk",
-      "@e2b/code-interpreter",
-      "@e2b/desktop",
-      "e2b",
-      "dockerode",
-      "microsandbox",
-      "@blaxel/core",
-      // Database
-      "better-sqlite3",
-      "ioredis",
-      "bullmq",
-      // Email
-      "nodemailer",
-      "mailersend",
-      "@getbrevo/brevo",
-      // Auth
-      "jsonwebtoken",
-      "jose",
-      "bcryptjs",
-    ],
+    'livekit-server-sdk',
+    '@anthropic-ai/sdk',
+    'openai',
+    'cohere-ai',
+    'together-ai',
+    'replicate',
+    '@google/generative-ai',
+    'portkey-ai',
+    '@daytonaio/sdk',
+    '@e2b/code-interpreter',
+    '@e2b/desktop',
+    'e2b',
+    'dockerode',
+    'microsandbox',
+    '@blaxel/core',
+    'better-sqlite3',
+    'ioredis',
+    'bullmq',
+    'nodemailer',
+    'mailersend',
+    '@getbrevo/brevo',
+    'jsonwebtoken',
+    'jose',
+    'bcryptjs',
+  ],
   webpack: (config, { isServer, dev }) => {
-    // Suppress specific warnings in development
+    if (!isServer) {
+      config.externals = [
+        ...(config.externals || []),
+        'fs',
+        'fs/promises',
+        'child_process',
+        'crypto',
+        'stream',
+        'net',
+        'tls',
+        'http',
+        'https',
+        'url',
+        'zlib',
+        'os',
+        'path',
+        'assert',
+        'buffer',
+        'util',
+        'events',
+        'module',
+        'vm',
+      ];
+    }
+
     if (dev) {
       const existingIgnoreWarnings = config.ignoreWarnings || [];
       config.ignoreWarnings = [
         ...existingIgnoreWarnings,
-        // Suppress require-in-the-middle warnings (OpenTelemetry)
         (warning) => {
-          const moduleName = typeof warning.module === 'string' ? warning.module : (warning.module?.resource || '');
+          const moduleName = typeof warning.module === 'string'
+            ? warning.module
+            : (warning.module?.resource || '');
           const message = warning.message || '';
 
           if (moduleName && moduleName.includes('require-in-the-middle')) {
@@ -182,32 +179,19 @@ const nextConfig = {
           if (message.includes('Critical dependency: require function is used')) {
             return true;
           }
-          return false;
+          return message.includes('viewport');
         },
-        // Suppress viewport metadata warnings
-        (warning) => {
-          const message = warning.message || '';
-          if (message.includes('viewport')) {
-            return true;
-          }
-          return false;
-        }
       ];
     }
 
-    // Handle ESM modules with proper extension priority
     config.resolve.extensionAlias = {
-      ".js": [".js", ".ts", ".tsx", ".jsx"], // Prioritize .js over .ts
-      ".mjs": [".mjs", ".mts"],
-      ".cjs": [".cjs", ".cts"]
+      '.js': ['.js', '.ts', '.tsx', '.jsx'],
+      '.mjs': ['.mjs', '.mts'],
+      '.cjs': ['.cjs', '.cts'],
     };
 
-    // Explicitly define main fields for ESM/CJS resolution
     config.resolve.mainFields = ['module', 'main'];
 
-    // Server-side: alias node: protocol imports to unprefixed equivalents
-    // so webpack resolves them as native builtins instead of creating
-    // [externals]_node:* chunk files (which contain ":" — invalid on Windows NTFS).
     if (isServer) {
       config.resolve.alias = {
         ...config.resolve.alias,
@@ -232,7 +216,6 @@ const nextConfig = {
       };
     }
 
-    // Fix for canvas and other node-specific modules
     if (!isServer) {
       config.resolve.fallback = {
         ...config.resolve.fallback,
@@ -255,7 +238,6 @@ const nextConfig = {
         events: false,
       };
 
-      // Handle node: protocol imports by mapping them to false (exclude from bundle)
       config.resolve.alias = {
         ...config.resolve.alias,
         'node:crypto': false,
@@ -279,6 +261,7 @@ const nextConfig = {
     return config;
   },
   async headers() {
+
     return [
       {
         // Apply cross-origin isolation headers to ALL routes including static assets

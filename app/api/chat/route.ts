@@ -588,13 +588,13 @@ export async function POST(request: NextRequest) {
               
               // Cleanup: Clear streaming buffer to free memory
               streamingContentBuffer = '';
-              fileEditParserState.emittedPaths.clear();
+              fileEditParserState.emittedEdits.clear();
             } catch (error: any) {
               emit(SSE_EVENT_TYPES.ERROR, { message: error.message || 'Agentic execution failed' });
-              
+
               // Cleanup on error too
               streamingContentBuffer = '';
-              fileEditParserState.emittedPaths.clear();
+              fileEditParserState.emittedEdits.clear();
             } finally {
               controller.close();
             }

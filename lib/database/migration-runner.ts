@@ -72,6 +72,10 @@ export class MigrationRunner {
   }
 
   private getExecutedMigrations(): Set<string> {
+    if (!this.db) {
+      return new Set();
+    }
+
     const stmt = this.db.prepare('SELECT version FROM schema_migrations');
     const results = stmt.all();
     return new Set(results.map((row: any) => row.version));
@@ -109,6 +113,10 @@ export class MigrationRunner {
 
   public async runMigrationsSync(): Promise<void> {
     await this.initialize(); // Ensure lazy initialization before running migrations
+    if (!this.db) {
+      return;
+    }
+
     const executedMigrations = this.getExecutedMigrations();
     const migrationFiles = await this.getMigrationFiles();
 
@@ -167,6 +175,10 @@ export class MigrationRunner {
 
   public async rollbackMigration(version: string): Promise<void> {
     await this.initialize(); // Ensure lazy initialization
+    if (!this.db) {
+      return;
+    }
+
     // Note: This is a basic rollback - in production you'd want proper rollback scripts
     console.warn(`Rollback requested for migration ${version}`);
     console.warn('Manual rollback required - check migration file for rollback instructions');
@@ -180,6 +192,10 @@ export class MigrationRunner {
 
   public async getExecutedMigrationsList(): Promise<any[]> {
     await this.initialize(); // Ensure lazy initialization
+    if (!this.db) {
+      return [];
+    }
+
     const stmt = this.db.prepare(`
       SELECT version, filename, executed_at 
       FROM schema_migrations 

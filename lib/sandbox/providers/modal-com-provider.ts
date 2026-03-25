@@ -639,7 +639,7 @@ class ModalComApiClient {
 
   /**
    * Execute a command
-   * Note: Currently throws error - requires Modal Python SDK bridge
+   * Note: Requires Modal Python SDK bridge for actual execution
    */
   async executeCommand(config: {
     sandboxId: string
@@ -653,15 +653,7 @@ class ModalComApiClient {
     })
 
     // TODO: Implement actual Modal.com API call
-    // For now, return mock success for testing
-    // throw new Error('Modal.com API integration requires Modal Python SDK bridge')
-
-    // Mock implementation for development/testing
-    return {
-      stdout: `Command executed: ${config.command}`,
-      stderr: '',
-      exitCode: 0,
-    }
+    throw new Error('Modal.com executeCommand not implemented - requires Modal Python SDK bridge')
   }
 
   /**
@@ -677,6 +669,7 @@ class ModalComApiClient {
       path: config.path,
     })
     // TODO: Implement actual Modal.com API call
+    throw new Error('Modal.com writeFile not implemented - requires Modal Python SDK bridge')
   }
 
   /**

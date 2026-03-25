@@ -21,6 +21,6 @@
     "noFallthroughCasesInSwitch": true,
     "allowSyntheticDefaultImports": true
   },
-  "include": ["bin"],
+  "include": ["bin", "bin-enhanced"],
   "exclude": ["node_modules", "dist", "tests"]
 }

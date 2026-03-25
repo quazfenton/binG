@@ -1445,28 +1445,69 @@ export function ExperimentalWorkspacePanel() {
     }
 
     const parentPath = renamingFile.substring(0, renamingFile.lastIndexOf('/')) || '/';
-    // Normalize path to relative format (fixes 400 error)
     const normalizedParentPath = normalizePath(parentPath);
     const newPath = `${normalizedParentPath}/${renameValue.trim()}`;
 
-    // Check if new name exists
-    const exists = vfsSnapshot?.files.some(f => f.path === newPath && f.path !== renamingFile);
-    if (exists) {
-      setConfirmDialogData({
-        title: 'File Exists',
-        message: `A file named "${renameValue.trim()}" already exists. Overwrite?`,
-        onConfirm: async () => {
-          await performRename(newPath, renamingFile);
-          setShowConfirmDialog(false);
-          setConfirmDialogData(null);
-        },
+    try {
+      // Use new rename API with conflict detection
+      const response = await fetch('/api/filesystem/rename', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({
+          oldPath: resolveScopedPath(renamingFile, vfs?.currentPath || '/'),
+          newPath: resolveScopedPath(newPath, vfs?.currentPath || '/'),
+          overwrite: false,
+        }),
       });
-      setShowConfirmDialog(true);
-      return;
-    }
 
-    await performRename(newPath, renamingFile);
-  }, [renamingFile, renameValue, vfsSnapshot?.files]);
+      if (response.status === 409) {
+        // Conflict detected - show confirmation dialog
+        const data = await response.json();
+        setConfirmDialogData({
+          title: 'File Exists',
+          message: `A file named "${renameValue.trim()}" already exists. Overwrite?`,
+          onConfirm: async () => {
+            // Retry with overwrite=true
+            const retryResponse = await fetch('/api/filesystem/rename', {
+              method: 'POST',
+              headers: buildApiHeaders(),
+              body: JSON.stringify({
+                oldPath: resolveScopedPath(renamingFile, vfs?.currentPath || '/'),
+                newPath: resolveScopedPath(newPath, vfs?.currentPath || '/'),
+                overwrite: true,
+              }),
+            });
+
+            if (retryResponse.ok) {
+              await listDirectory(vfs?.currentPath || '/');
+              toast.success('File renamed successfully');
+            } else {
+              const errorData = await retryResponse.json().catch(() => null);
+              toast.error(`Rename failed: ${errorData?.error || 'Unknown error'}`);
+            }
+            setShowConfirmDialog(false);
+            setConfirmDialogData(null);
+            setRenamingFile(null);
+          },
+        });
+        setShowConfirmDialog(true);
+        return;
+      }
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || 'Rename failed');
+      }
+
+      await listDirectory(vfs?.currentPath || '/');
+      toast.success('File renamed successfully');
+      setRenamingFile(null);
+      setRenameValue("");
+    } catch (err: any) {
+      toast.error(`Rename failed: ${err.message}`);
+      setRenamingFile(null);
+    }
+  }, [renamingFile, renameValue, vfs?.currentPath, listDirectory]);
 
   const performRename = async (newPath: string, oldPath: string) => {
     if (!oldPath) return;
@@ -1567,27 +1608,55 @@ export function ExperimentalWorkspacePanel() {
     }
 
     try {
-      // Read source
-      const readResponse = await fetch('/api/filesystem/read', {
+      // Use new move API with conflict detection
+      const response = await fetch('/api/filesystem/move', {
         method: 'POST',
         headers: buildApiHeaders(),
-        body: JSON.stringify({ path: resolveScopedPath(sourcePath, vfs?.currentPath || '/') }),
+        body: JSON.stringify({
+          sourcePath: resolveScopedPath(sourcePath, vfs?.currentPath || '/'),
+          targetPath: resolveScopedPath(targetPath, vfs?.currentPath || '/'),
+          overwrite: false,
+        }),
       });
 
-      if (!readResponse.ok) throw new Error('Failed to read file');
-      const payload = await readResponse.json().catch(() => null);
-      const content = payload?.data?.content || '';
+      if (response.status === 409) {
+        // Conflict detected - show confirmation dialog
+        const fileName = sourcePath.split('/').pop() || '';
+        const data = await response.json();
+        setConfirmDialogData({
+          title: 'File Exists',
+          message: `A file named "${fileName}" already exists in this folder. Overwrite?`,
+          onConfirm: async () => {
+            // Retry with overwrite=true
+            const retryResponse = await fetch('/api/filesystem/move', {
+              method: 'POST',
+              headers: buildApiHeaders(),
+              body: JSON.stringify({
+                sourcePath: resolveScopedPath(sourcePath, vfs?.currentPath || '/'),
+                targetPath: resolveScopedPath(targetPath, vfs?.currentPath || '/'),
+                overwrite: true,
+              }),
+            });
 
-      // Write to target
-      await writeFile(targetPath, content);
+            if (retryResponse.ok) {
+              await listDirectory(vfs?.currentPath || '/');
+              toast.success('File moved successfully');
+            } else {
+              const errorData = await retryResponse.json().catch(() => null);
+              toast.error(`Move failed: ${errorData?.error || 'Unknown error'}`);
+            }
+            setShowConfirmDialog(false);
+            setConfirmDialogData(null);
+          },
+        });
+        setShowConfirmDialog(true);
+        return;
+      }
 
-      // Delete source
-      const deleteResponse = await fetch('/api/filesystem/delete', {
-        method: 'POST',
-        headers: buildApiHeaders(),
-        body: JSON.stringify({ path: resolveScopedPath(sourcePath, vfs?.currentPath || '/') }),
-      });
-      if (!deleteResponse.ok) throw new Error('Failed to delete source file');
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || 'Move failed');
+      }
 
       await listDirectory(vfs?.currentPath || '/');
       toast.success('File moved successfully');

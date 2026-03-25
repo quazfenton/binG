@@ -60,7 +60,10 @@ export const auth0 = new Auth0Client({
       return NextResponse.redirect(redirectUrl);
     } catch (e: any) {
       console.error('[Auth0] onCallback threw:', e?.message, e?.stack);
-      return NextResponse.redirect(new URL('/', baseUrl).toString());
+      const safeBaseUrl = (() => {
+        try { return new URL(baseUrl).origin; } catch { return 'http://localhost:3000'; }
+      })();
+      return NextResponse.redirect(new URL('/', safeBaseUrl).toString());
     }
   },
 });

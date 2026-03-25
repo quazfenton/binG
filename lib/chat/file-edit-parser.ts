@@ -48,11 +48,15 @@ export interface PatchEdit {
 /**
  * Extract HTML comment format: <!-- path -->content
  * Example: <!-- src/components/Card.vue --> ...content...
+ * 
+ * Only matches comments that look like file paths (contain path-like patterns)
  */
 export function extractHtmlCommentFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
-  // Match: <!-- path -->content or <!-- path -->
-  const regex = /<!--\s*([^\s\-]+(?:-[^\s]+)*)\s*-->\s*([\s\S]*?)(?=<!--\s*[^/]|$)/gi;
+  // Match: <!-- path/to/file -->content (stops at next <!-- or end)
+  // Path must look like a file path: contains / OR . OR common file patterns
+  // This avoids matching comments like <!-- TODO: fix this -->
+  const regex = /<!--\s*([^\s\-]+(?:[\/\.][^\s\-]+)*|[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)\s*-->\s*([\s\S]*?)(?=<!--|$)/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
@@ -130,27 +134,27 @@ export function extractMultiLineFileEdits(content: string): FileEdit[] {
  * <path>...</path>
  * content
  * <file Edit> or <file_edit> (as closing marker)
- * 
+ *
  * This handles cases where LLM doesn't properly wrap content in <file_edit> tags
  */
 export function extractMalformedFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
-  
+
   // Match: <path>path</path> followed by content, ending with <file Edit> or <file_edit> or next <path>
-  // Handles variations: <file Edit>, <file_edit>, <FILE_EDIT>, etc.
-  const regex = /<path>\s*([^\s<]+?)\s*<\/path>\s*([\s\S]*?)(?=<path>|<file\s*edit>|<FILE\s*EDIT>|$)/gi;
+  // Handles variations: <file Edit>, <file_edit>, <FILE_EDIT>, <File_Edit>, etc. (case insensitive)
+  const regex = /<path>\s*([^\s<]+?)\s*<\/path>\s*([\s\S]*?)(?=<path>|<file\s*edit>|$)/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
     const filePath = match[1]?.trim();
     let fileContent = match[2] ?? '';
-    
+
     // Skip if path looks invalid or contains tags
     if (!filePath || filePath.includes('<') || filePath.includes('>')) continue;
-    
-    // Remove trailing file edit markers from content
+
+    // Remove trailing file edit markers from content (case insensitive)
     fileContent = fileContent.replace(/\s*<file\s*edit\s*>?\s*$/gi, '').trim();
-    
+
     // Only add if there's actual content
     if (fileContent) {
       edits.push({ path: filePath, content: fileContent });
@@ -178,8 +182,9 @@ export function extractWsActionEdits(content: string): FileEdit[] {
     const startIndex = content.lastIndexOf('{', match.index);
     if (startIndex === -1) continue;
 
-    // Find the matching closing brace by counting braces (accounting for strings)
+    // Find the matching closing brace by counting braces AND brackets (accounting for strings)
     let braceCount = 0;
+    let bracketCount = 0;
     let inString = false;
     let escape = false;
     let endIndex = -1;
@@ -205,8 +210,10 @@ export function extractWsActionEdits(content: string): FileEdit[] {
       if (!inString) {
         if (char === '{') braceCount++;
         if (char === '}') braceCount--;
+        if (char === '[') bracketCount++;
+        if (char === ']') bracketCount--;
 
-        if (braceCount === 0) {
+        if (braceCount === 0 && bracketCount === 0) {
           endIndex = i + 1;
           break;
         }
@@ -249,8 +256,9 @@ export function extractSimpleJsonFileEdits(content: string): FileEdit[] {
     const startIndex = content.lastIndexOf('{', match.index);
     if (startIndex === -1) continue;
 
-    // Find the matching closing brace by counting braces (accounting for strings)
+    // Find the matching closing brace by counting braces AND brackets (accounting for strings)
     let braceCount = 0;
+    let bracketCount = 0;
     let inString = false;
     let escape = false;
     let endIndex = -1;
@@ -276,8 +284,10 @@ export function extractSimpleJsonFileEdits(content: string): FileEdit[] {
       if (!inString) {
         if (char === '{') braceCount++;
         if (char === '}') braceCount--;
+        if (char === '[') bracketCount++;
+        if (char === ']') bracketCount--;
 
-        if (braceCount === 0) {
+        if (braceCount === 0 && bracketCount === 0) {
           endIndex = i + 1;
           break;
         }
@@ -307,11 +317,11 @@ export function extractSimpleJsonFileEdits(content: string): FileEdit[] {
 /**
  * Extract files from markdown code blocks with filename hints
  * This handles LLMs that output code blocks with filename comments like:
- * 
+ *
  * @deprecated Not currently used in the codebase.
  * Was created for a specific SSE vs. JSON response parsing issue that has been resolved.
  * Kept for potential future use or reference.
- * 
+ *
  * @example
  * ```typescript
  * // src/app.tsx
@@ -325,23 +335,23 @@ export function extractSimpleJsonFileEdits(content: string): FileEdit[] {
  */
 export function extractMarkdownCodeBlockFiles(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
-  
+
   // Match code blocks with potential filename hints
   const codeBlockRegex = /```(\w+)?\s*\n([\s\S]*?)```/gi;
   let match: RegExpExecArray | null;
-  
+
   while ((match = codeBlockRegex.exec(content)) !== null) {
     const language = match[1] || '';
     const codeContent = match[2] || '';
-    
+
     // Try to extract filename from first few lines
     const lines = codeContent.split('\n');
     let filePath: string | null = null;
     let contentStartLine = 0;
-    
+
     for (let i = 0; i < Math.min(5, lines.length); i++) {
       const line = lines[i].trim();
-      
+
       // Pattern 1: // path/to/file.ts or # path/to/file.py
       const commentPathMatch = line.match(/^(?:\/\/|#)\s*([a-zA-Z0-9_./\-\\]+\.[a-zA-Z0-9]+)$/);
       if (commentPathMatch) {
@@ -349,7 +359,7 @@ export function extractMarkdownCodeBlockFiles(content: string): FileEdit[] {
         contentStartLine = i + 1;
         break;
       }
-      
+
       // Pattern 2: File: path/to/file.ts or FILE: path/to/file.ts
       const filePrefixMatch = line.match(/^(?:File|FILE):\s*([a-zA-Z0-9_./\-\\]+\.[a-zA-Z0-9]+)$/i);
       if (filePrefixMatch) {
@@ -357,16 +367,9 @@ export function extractMarkdownCodeBlockFiles(content: string): FileEdit[] {
         contentStartLine = i + 1;
         break;
       }
-      
-      // Pattern 3: // src/app.tsx style (just a path in comment)
-      const simplePathMatch = line.match(/^(?:\/\/|#)\s*([a-zA-Z0-9_./\-\\]+\.[a-zA-Z0-9]+)\s*$/);
-      if (simplePathMatch && !line.includes(' ')) {
-        filePath = simplePathMatch[1].replace(/\\/g, '/');
-        contentStartLine = i + 1;
-        break;
-      }
+      // Note: Pattern 3 removed - redundant with Pattern 1 (same regex, Pattern 1 already matches paths without spaces)
     }
-    
+
     // If we found a file path, extract the content
     if (filePath) {
       const fileContent = lines.slice(contentStartLine).join('\n').trim();
@@ -375,7 +378,7 @@ export function extractMarkdownCodeBlockFiles(content: string): FileEdit[] {
       }
     }
   }
-  
+
   return edits;
 }
 
@@ -383,33 +386,50 @@ export function extractMarkdownCodeBlockFiles(content: string): FileEdit[] {
  * Extract both compact and multi-line file_edit formats
  * Also extracts file_write, ws_action, and simple JSON formats
  * Uses conditional parsing - only runs regex if signature is detected
+ * 
+ * Deduplicates by path (first occurrence wins) to handle cases where multiple
+ * parsers might match the same file or LLM outputs duplicate edit blocks.
+ * First wins is chosen because: if LLM shows the same file twice, the first
+ * occurrence is typically the intended edit, and subsequent duplicates are
+ * usually restatements or examples.
  */
 export function extractFileEdits(content: string): FileEdit[] {
-  const edits: FileEdit[] = [];
+  const allEdits: FileEdit[] = [];
 
   // Only run parsers if their signature is detected (O(1) string check)
   if (content.includes('<file_edit')) {
-    edits.push(...extractCompactFileEdits(content));
-    edits.push(...extractMultiLineFileEdits(content));
+    allEdits.push(...extractCompactFileEdits(content));
+    allEdits.push(...extractMultiLineFileEdits(content));
   }
   if (content.includes('<file_write')) {
-    edits.push(...extractFileWriteEdits(content));
+    allEdits.push(...extractFileWriteEdits(content));
   }
   if (content.includes('ws_action')) {
-    edits.push(...extractWsActionEdits(content));
+    allEdits.push(...extractWsActionEdits(content));
   }
   if (content.includes('"file_edit"')) {
-    edits.push(...extractSimpleJsonFileEdits(content));
+    allEdits.push(...extractSimpleJsonFileEdits(content));
   }
   if (content.includes('<!--')) {
-    edits.push(...extractHtmlCommentFileEdits(content));
+    allEdits.push(...extractHtmlCommentFileEdits(content));
   }
   // Handle malformed format where LLM outputs <path>...</path> without proper wrapping
-  if (content.includes('<path>')) {
-    edits.push(...extractMalformedFileEdits(content));
+  // Require both opening and closing tags to avoid false positives on SVG/XML content
+  if (content.includes('<path>') && content.includes('</path>')) {
+    allEdits.push(...extractMalformedFileEdits(content));
   }
 
-  return edits;
+  // Deduplicate by path (first occurrence wins)
+  // This handles cases where multiple parsers match the same file or LLM outputs duplicates
+  const dedupedEdits = new Map<string, FileEdit>();
+  for (const edit of allEdits) {
+    // Only set if path not already in map (first wins)
+    if (!dedupedEdits.has(edit.path)) {
+      dedupedEdits.set(edit.path, edit);
+    }
+  }
+
+  return Array.from(dedupedEdits.values());
 }
 
 /**
@@ -417,6 +437,10 @@ export function extractFileEdits(content: string): FileEdit[] {
  */
 export function extractFencedDiffEdits(content: string): DiffEdit[] {
   const edits: DiffEdit[] = [];
+  
+  // Fast-path signature check (consistent with other extractors)
+  if (!content.includes('```diff')) return edits;
+  
   const regex = /```diff\s+([^\n]+)\n([\s\S]*?)```/gi;
   let match: RegExpExecArray | null;
 
@@ -433,14 +457,17 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
 /**
  * Extract WRITE commands from fs-actions blocks and top-level
  * Format: WRITE path <<<content>>> or ```fs-actions WRITE path <<<content>>>
- * 
+ *
  * Case-insensitive matching to handle LLM output variations (WRITE, write, Write, etc.)
  */
 export function extractFsActionWrites(content: string): FileEdit[] {
   const writes: FileEdit[] = [];
 
-  // Case-insensitive check for WRITE or fs-actions (handles WRITE, write, Write, etc.)
-  if (!/write/i.test(content) && !/fs-actions/i.test(content)) return writes;
+  // Check for WRITE (exact case) and heredoc markers to avoid false positives
+  // "I'll write a function..." should not trigger this parser
+  if (!content.includes('WRITE') && !content.includes('<<<') && !content.includes('fs-actions')) {
+    return writes;
+  }
 
   // Extract from ```fs-actions ... ``` code blocks
   const blockRegex = /```fs-actions\s*([\s\S]*?)```/gi;
@@ -499,7 +526,7 @@ export function extractFsActionWrites(content: string): FileEdit[] {
  */
 export function extractTopLevelWrites(content: string): FileEdit[] {
   const writes: FileEdit[] = [];
-  
+
   if (!content.includes('WRITE')) return writes;
 
   const topLevelWriteRegex = /^WRITE\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
@@ -508,7 +535,10 @@ export function extractTopLevelWrites(content: string): FileEdit[] {
     const path = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!path) continue;
-    writes.push({ path, content: fileContent });
+    // Deduplicate - check if we already have this exact edit
+    if (!writes.some(w => w.path === path && w.content === fileContent)) {
+      writes.push({ path, content: fileContent });
+    }
   }
 
   const altWriteRegex = /^WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)>>>/gim;
@@ -570,24 +600,26 @@ export function extractPatchEdits(content: string): PatchEdit[] {
  */
 export function extractApplyDiffEdits(content: string): PatchEdit[] {
   const patches: PatchEdit[] = [];
-  
+
   if (!content.includes('apply_diff')) return patches;
 
   const regex = /<apply_diff\b[\s\S]*?<\/apply_diff>/gi;
   let match: RegExpExecArray | null;
-  
+
   while ((match = regex.exec(content)) !== null) {
     const blockContent = match[0];
     // Try to extract path and diff from within the block
     const pathMatch = /path=["']([^"']+)["']/i.exec(blockContent);
     const diffMatch = /<diff>([\s\S]*?)<\/diff>/i.exec(blockContent);
-    
-    if (pathMatch) {
-      patches.push({ 
-        path: pathMatch[1], 
-        diff: diffMatch ? diffMatch[1] : blockContent 
+
+    if (pathMatch && diffMatch) {
+      // Only add if we have both path AND diff
+      patches.push({
+        path: pathMatch[1],
+        diff: diffMatch[1]
       });
     }
+    // Skip entries without proper <diff> tags - malformed input
   }
 
   return patches;
@@ -631,8 +663,9 @@ export function sanitizeFileEditTags(content: string): string {
 
   if (sanitized.includes('<!--')) {
     // Remove HTML comment file paths AND their associated content blocks
-    // Match: <!-- path -->content (until next <!-- or end of string)
-    sanitized = sanitized.replace(/<!--\s*[^\s<]+\s*-->\s*[\s\S]*?(?=<!--|$)/gi, '');
+    // Only match comments that look like file paths (contain / or . or file.ext pattern)
+    // This avoids stripping legitimate comments like <!-- TODO: fix this -->
+    sanitized = sanitized.replace(/<!--\s*[^\s<]*(?:[\/\.][^\s<]*|[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)\s*-->\s*[\s\S]*?(?=<!--|$)/gi, '');
   }
 
   if (sanitized.includes('<path>')) {
@@ -687,9 +720,9 @@ export function sanitizeFileEditTags(content: string): string {
 // ---------------------------------------------------------------------------
 
 interface IncrementalParseState {
-  /** Emitted file paths to avoid duplicates */
-  emittedPaths: Set<string>;
-  /** Last processed position in buffer */
+  /** Emitted file edits (path + content hash) to avoid duplicates */
+  emittedEdits: Set<string>;
+  /** Last processed position in buffer (for future optimization) */
   lastPosition: number;
 }
 
@@ -698,7 +731,7 @@ interface IncrementalParseState {
  */
 export function createIncrementalParser(): IncrementalParseState {
   return {
-    emittedPaths: new Set<string>(),
+    emittedEdits: new Set<string>(),
     lastPosition: 0,
   };
 }
@@ -706,31 +739,44 @@ export function createIncrementalParser(): IncrementalParseState {
 /**
  * Extract new file edits from a streaming buffer since last check
  * This enables progressive UI updates as file edits are detected
- * 
+ *
  * @param buffer - Accumulated response text so far
  * @param state - Parser state tracking what's been emitted
  * @returns New file edits detected since last call
  */
 export function extractIncrementalFileEdits(
-  buffer: string, 
+  buffer: string,
   state: IncrementalParseState
 ): FileEdit[] {
   const newEdits: FileEdit[] = [];
-  
+
   // Use the existing extractFileEdits to find all edits in the buffer
   const allEdits = extractFileEdits(buffer);
-  
+
   // Filter to only new edits we haven't emitted yet
+  // Use path + content hash to handle same-file multiple edits
   for (const edit of allEdits) {
-    if (!state.emittedPaths.has(edit.path)) {
-      state.emittedPaths.add(edit.path);
+    // Create unique key from path + simple content hash
+    // Use full content for short files (< 100 chars), otherwise hash first/last 50 chars + length
+    let contentSignature: string;
+    if (edit.content.length <= 100) {
+      contentSignature = edit.content;
+    } else {
+      contentSignature = `${edit.content.length}-${edit.content.slice(0, 50)}-${edit.content.slice(-50)}`;
+    }
+    const editKey = `${edit.path}::${contentSignature}`;
+    
+    if (!state.emittedEdits.has(editKey)) {
+      state.emittedEdits.add(editKey);
       newEdits.push(edit);
     }
   }
-  
+
   // Update position to end of buffer
+  // TODO: lastPosition tracked for future optimization - currently we re-parse from 0
+  // to handle cases where earlier content changes affect later parsing
   state.lastPosition = buffer.length;
-  
+
   return newEdits;
 }
 

@@ -57,10 +57,11 @@ export async function POST(req: NextRequest) {
     const result = await virtualFilesystem.deletePath(ownerId, targetPath);
     
     // Emit filesystem updated event for UI panels
+    const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(ownerId);
     emitFilesystemUpdated({
       path: targetPath,
       type: 'delete',
-      workspaceVersion: result.version,
+      workspaceVersion,
       applied: [{
         path: targetPath,
         operation: 'delete',

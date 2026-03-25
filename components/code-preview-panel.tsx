@@ -42,7 +42,7 @@ import JSZip from "jszip";
 import type { Message } from "../types/index";
 import { parsePatch, applyPatch } from "diff";
 import { useVirtualFilesystem } from "../hooks/use-virtual-filesystem";
-import { normalizeScopePath, stripWorkspacePrefixes } from "@/lib/virtual-filesystem/scope-utils";
+import { normalizeScopePath, resolveScopedPath, stripWorkspacePrefixes } from "@/lib/virtual-filesystem/scope-utils";
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 import { createRefreshScheduler } from "@/lib/virtual-filesystem/refresh-scheduler";
 import {
@@ -558,26 +558,62 @@ export default function CodePreviewPanel({
     const oldName = oldPath.split('/').pop() || '';
     const newName = prompt('Rename to:', oldName);
     if (!newName || newName === oldName) return;
-    
+
     const parentPath = oldPath.split('/').slice(0, -1).join('/');
     const newPath = parentPath ? `${parentPath}/${newName}` : newName;
-    
-    // Check if target already exists
+
     try {
-      const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
-      
-      if (targetExists && oldPath !== newPath) {
-        // Show confirmation dialog for overwrite
+      // Use new rename API with conflict detection
+      const response = await fetch('/api/filesystem/rename', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({
+          oldPath: resolveScopedPath(oldPath, normalizedFilesystemPath),
+          newPath: resolveScopedPath(newPath, normalizedFilesystemPath),
+          overwrite: false,
+        }),
+      });
+
+      if (response.status === 409) {
+        // Conflict detected - show confirmation dialog
         setConfirmDialog({
           isOpen: true,
           title: 'File Already Exists',
-          message: `A file named "${newName}" already exists in this directory. Do you want to overwrite it?`,
+          message: `A file named "${newName}" already exists. Overwrite?`,
           confirmLabel: 'Overwrite',
           cancelLabel: 'Cancel',
           variant: 'warning',
           onConfirm: async () => {
             setConfirmDialog(null);
-            await performRename(oldPath, newPath);
+            // Retry with overwrite=true
+            const retryResponse = await fetch('/api/filesystem/rename', {
+              method: 'POST',
+              headers: buildApiHeaders(),
+              body: JSON.stringify({
+                oldPath: resolveScopedPath(oldPath, normalizedFilesystemPath),
+                newPath: resolveScopedPath(newPath, normalizedFilesystemPath),
+                overwrite: true,
+              }),
+            });
+
+            if (retryResponse.ok) {
+              toast.success('Renamed to: ' + newName);
+              void debouncedListDirectory(filesystemCurrentPath);
+              emitFilesystemUpdated({
+                path: newPath,
+                scopePath: normalizedFilesystemPath,
+                source: 'code-preview',
+                type: 'update',
+              });
+            } else {
+              const errorData = await retryResponse.json().catch(() => null);
+              toast.error('Failed to rename: ' + (errorData?.error || 'Unknown error'));
+            }
+            setContextMenu(null);
+            if (selectedFilesystemPath === oldPath) {
+              setSelectedFilesystemPath('');
+              setSelectedFilesystemContent('');
+            }
           },
           onCancel: () => {
             setConfirmDialog(null);
@@ -585,43 +621,30 @@ export default function CodePreviewPanel({
         });
         return;
       }
-      
-      await performRename(oldPath, newPath);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || 'Rename failed');
+      }
+
+      toast.success('Renamed to: ' + newName);
+      void debouncedListDirectory(filesystemCurrentPath);
+      setContextMenu(null);
+      if (selectedFilesystemPath === oldPath) {
+        setSelectedFilesystemPath('');
+        setSelectedFilesystemContent('');
+      }
+
+      emitFilesystemUpdated({
+        path: newPath,
+        scopePath: normalizedFilesystemPath,
+        source: 'code-preview',
+        type: 'update',
+      });
     } catch (err: any) {
       toast.error('Failed to rename: ' + err.message);
     }
-    
-    async function performRename(sourcePath: string, targetPath: string) {
-      // Bail out when the target path equals the source path
-      if (sourcePath === targetPath) {
-        toast.info('Cannot rename file to itself');
-        return;
-      }
-
-      try {
-        const file = await readFilesystemFile(sourcePath);
-        await writeFilesystemFile(targetPath, file.content);
-        await deleteFilesystemPath(sourcePath);
-        
-        toast.success('Renamed to: ' + newName);
-        void debouncedListDirectory(filesystemCurrentPath);
-        setContextMenu(null);
-        if (selectedFilesystemPath === sourcePath) {
-          setSelectedFilesystemPath('');
-          setSelectedFilesystemContent('');
-        }
-        
-        emitFilesystemUpdated({
-          path: targetPath,
-          scopePath: normalizedFilesystemPath,
-          source: 'code-preview',
-          type: 'update',
-        });
-      } catch (err: any) {
-        toast.error('Failed to rename: ' + err.message);
-      }
-    }
-  }, [filesystemCurrentPath, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, listFilesystemDirectory, selectedFilesystemPath]);
+  }, [filesystemCurrentPath, normalizedFilesystemPath, selectedFilesystemPath]);
 
   // Handle double-click to rename file
   const handleDoubleClickFile = useCallback((node: { path: string; name: string; type: string }) => {
@@ -818,72 +841,96 @@ export default function CodePreviewPanel({
   const handleDrop = useCallback(async (e: React.DragEvent, targetPath: string, isDirectory: boolean) => {
     e.preventDefault();
     setDragOverPath(null);
-    
+
     const data = e.dataTransfer.getData('text/plain');
     if (!data) return;
-    
+
     try {
       const { path: sourcePath, name } = JSON.parse(data);
-      
+
       if (sourcePath === targetPath || sourcePath.split('/').slice(0, -1).join('/') === targetPath) {
         toast.info('File is already in this location');
         return;
       }
-      
+
       const targetDir = isDirectory ? targetPath : targetPath.split('/').slice(0, -1).join('/');
       const newPath = `${targetDir.replace(/\/+$/, '')}/${name}`;
-      
-      // Check if target exists
-      const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
-      
-      if (targetExists && sourcePath !== newPath) {
-        // Show confirmation for overwrite
+
+      // Use new move API with conflict detection
+      const response = await fetch('/api/filesystem/move', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({
+          sourcePath: resolveScopedPath(sourcePath, normalizedFilesystemPath),
+          targetPath: resolveScopedPath(newPath, normalizedFilesystemPath),
+          overwrite: false,
+        }),
+      });
+
+      if (response.status === 409) {
+        // Conflict detected - show confirmation dialog
         setConfirmDialog({
           isOpen: true,
           title: 'File Already Exists',
-          message: `A file named "${name}" already exists in this folder. Do you want to overwrite it?`,
+          message: `A file named "${name}" already exists. Overwrite?`,
           confirmLabel: 'Overwrite',
           cancelLabel: 'Cancel',
           variant: 'warning',
           onConfirm: async () => {
             setConfirmDialog(null);
-            await performMove(sourcePath, newPath);
+            // Retry with overwrite=true
+            const retryResponse = await fetch('/api/filesystem/move', {
+              method: 'POST',
+              headers: buildApiHeaders(),
+              body: JSON.stringify({
+                sourcePath: resolveScopedPath(sourcePath, normalizedFilesystemPath),
+                targetPath: resolveScopedPath(newPath, normalizedFilesystemPath),
+                overwrite: true,
+              }),
+            });
+
+            if (retryResponse.ok) {
+              toast.success(`Moved "${name}" to new location`);
+              await debouncedListDirectory(filesystemCurrentPath);
+              await debouncedListDirectory(targetDir);
+              emitFilesystemUpdated({
+                path: newPath,
+                scopePath: normalizedFilesystemPath,
+                source: 'code-preview',
+                type: 'update',
+              });
+            } else {
+              const errorData = await retryResponse.json().catch(() => null);
+              toast.error('Failed to move: ' + (errorData?.error || 'Unknown error'));
+            }
           },
           onCancel: () => {
             setConfirmDialog(null);
           },
         });
-      } else {
-        await performMove(sourcePath, newPath);
+        return;
       }
-      
-      async function performMove(source: string, dest: string) {
-        // Bail out when the target path equals the source path
-        if (source === dest) {
-          toast.info('Cannot move file into itself');
-          return;
-        }
 
-        const file = await readFilesystemFile(source);
-        await writeFilesystemFile(dest, file.content);
-        await deleteFilesystemPath(source);
-        toast.success(`Moved "${name}" to new location`);
-        await debouncedListDirectory(filesystemCurrentPath);
-        await debouncedListDirectory(targetDir);
-        
-        emitFilesystemUpdated({
-          path: dest,
-          scopePath: normalizedFilesystemPath,
-          source: 'code-preview',
-          type: 'update',
-        });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || 'Move failed');
       }
+
+      toast.success(`Moved "${name}" to new location`);
+      await debouncedListDirectory(filesystemCurrentPath);
+      await debouncedListDirectory(targetDir);
+      emitFilesystemUpdated({
+        path: newPath,
+        scopePath: normalizedFilesystemPath,
+        source: 'code-preview',
+        type: 'update',
+      });
     } catch (err: any) {
       toast.error('Failed to move file: ' + err.message);
     }
-    
+
     setDraggedFile(null);
-  }, [readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, normalizedFilesystemPath]);
+  }, [filesystemCurrentPath, normalizedFilesystemPath, listFilesystemDirectory]);
 
   // Helper to detect shell code blocks
   const isShellCodeBlock = useCallback((language: string, code: string): boolean => {

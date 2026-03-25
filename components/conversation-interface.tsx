@@ -215,7 +215,7 @@ export default function ConversationInterface() {
       const saved = sessionStorage.getItem('current_filesystem_session_id');
       if (saved) return saved;
     }
-    // Use new stock naming (OneXX, TwoXX, ThreeXX, then stock words)
+    // Use sequential naming (001, 002, 003, ...)
     return generateSessionName(undefined, true, false);
   };
   
@@ -628,25 +628,28 @@ export default function ConversationInterface() {
     if (newEntries.length === 0) return;
 
     // Rule #2: For existing sessions, check if edits would overwrite existing files
-    // If so, require user approval instead of auto-applying
+    // SMART CONFLICT DETECTION:
+    // - Editing existing files = OK (auto-apply, this is expected behavior)
+    // - New files with same names as existing = CONFLICT (require approval)
+    // - LLM suggesting folder name that exists = Check if folder is empty
     const isExistingSession = currentConversationId !== null || messages.length > 0;
-    
+
     if (isExistingSession) {
       // Query actual filesystem state for accurate conflict detection
       let existingFilePaths: string[] = [];
-      
+
       // Wrap async code in an async IIFE since useEffect can't be async
       const checkConflicts = async () => {
         try {
           const listResponse = await fetch('/api/filesystem/list', {
             method: 'POST',
             headers: buildFilesystemHeaders(),
-            body: JSON.stringify({ 
+            body: JSON.stringify({
               path: filesystemScopePath,
-              recursive: true 
+              recursive: true
             }),
           });
-          
+
           if (listResponse.ok) {
             const payload = await listResponse.json().catch(() => null);
             if (payload?.success && payload?.data?.nodes) {
@@ -667,16 +670,36 @@ export default function ConversationInterface() {
           // Fall back to attached files if API fails
           existingFilePaths = Object.keys(attachedFilesystemFiles);
         }
-        
+
         const newFilePaths = newEntries.map(e => e.path);
-        const conflictCheck = checkFileConflicts(existingFilePaths, newFilePaths, true);
         
+        // SMART CONFLICT LOGIC:
+        // 1. Check if ALL new files are editing existing files (expected behavior - auto-apply)
+        // 2. Check if ANY new files would create conflicts with different content (require approval)
+        const allFilesExist = newFilePaths.every(newPath => 
+          existingFilePaths.some(existingPath => existingPath.toLowerCase() === newPath.toLowerCase())
+        );
+        
+        // If all files being edited already exist, this is expected behavior - auto-apply
+        // This allows AI to fix bugs, update code, etc. in existing sessions
+        if (allFilesExist && newFilePaths.length > 0) {
+          console.log('[ConflictCheck] All files exist - this is an edit operation, auto-applying');
+          // Auto-apply the detected diffs immediately
+          if (applyDiffsRef.current) {
+            void applyDiffsRef.current(newEntries);
+          }
+          return;
+        }
+        
+        // Some files are new, check for actual conflicts
+        const conflictCheck = checkFileConflicts(existingFilePaths, newFilePaths, true);
+
         if (conflictCheck.needsApproval) {
           // Store pending diffs for approval instead of auto-applying
           setPendingApprovalDiffs(newEntries);
           setShowApprovalDialog(true);
           toast.info(`${conflictCheck.existingFiles.length} file(s) would be overwritten. Review required.`);
-          
+
           // Still store in commandsByFile for manual review
           setCommandsByFile((prev) => {
             const next: Record<string, string[]> = { ...prev };

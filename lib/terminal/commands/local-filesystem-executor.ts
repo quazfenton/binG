@@ -43,6 +43,7 @@ export interface LocalCommandExecutorConfig {
   onOpenEditor?: (filePath: string, editorType: 'nano' | 'vim' | 'vi') => void
   getCwd?: () => string
   setCwd?: (cwd: string) => void
+  onFileChanged?: (path: string, type: 'create' | 'update' | 'delete') => void
 }
 
 export class LocalCommandExecutor {
@@ -59,6 +60,7 @@ export class LocalCommandExecutor {
   private onOpenEditor?: (filePath: string, editorType: 'nano' | 'vim' | 'vi') => void
   private getExtCwd?: () => string
   private setExtCwd?: (cwd: string) => void
+  private onFileChanged?: (path: string, type: 'create' | 'update' | 'delete') => void
 
   constructor(config: LocalCommandExecutorConfig | string) {
     if (typeof config === 'string') {
@@ -74,6 +76,7 @@ export class LocalCommandExecutor {
       this.onOpenEditor = config.onOpenEditor
       this.getExtCwd = config.getCwd
       this.setExtCwd = config.setCwd
+      this.onFileChanged = config.onFileChanged
       
       // If external filesystem provided, load initial state from it
       if (this.getExtFileSystem) {
@@ -154,6 +157,11 @@ export class LocalCommandExecutor {
         write(`\x1b[31m${text}\x1b[0m\r\n`)
       }
       return true
+    }
+
+    // Check for pipes - chain commands
+    if (trimmed.includes('|')) {
+      return this.executePipedCommand(trimmed, write, writeLine, writeError)
     }
 
     // Parse command
@@ -245,7 +253,10 @@ export class LocalCommandExecutor {
       
       case 'env':
         return this.executeEnv(writeLine)
-      
+
+      case 'export':
+        return this.executeExport(args, writeLine, writeError)
+
       case 'connect':
         writeLine('\x1b[33mConnecting to sandbox...\x1b[0m')
         writeLine('\x1b[90m(Use the connect button in the UI)\x1b[0m')
@@ -512,6 +523,361 @@ export class LocalCommandExecutor {
     return ''
   }
 
+  /**
+   * Execute piped commands (e.g., "cat file.txt | grep pattern | wc -l")
+   */
+  private executePipedCommand(
+    command: string,
+    write: (text: string) => void,
+    writeLine: (text: string) => void,
+    writeError: (text: string) => void
+  ): string {
+    // Split by pipe, but respect quoted strings
+    const parts = this.splitPipes(command)
+    
+    if (parts.length === 0) {
+      writeError('Invalid pipe syntax')
+      return ''
+    }
+
+    let input = '' // Input for next command (output from previous)
+    
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i].trim()
+      if (!part) continue
+
+      // Execute single command with input from previous command
+      const output = this.executeSingleCommand(part, input, write, writeLine, writeError)
+      
+      // Last command writes to terminal
+      if (i === parts.length - 1) {
+        if (output) {
+          writeLine(output)
+        }
+      } else {
+        // Pass output to next command
+        input = output
+      }
+    }
+    
+    return ''
+  }
+
+  /**
+   * Split command string by pipes, respecting quoted strings
+   */
+  private splitPipes(command: string): string[] {
+    const parts: string[] = []
+    let current = ''
+    let inQuote = false
+    let quoteChar = ''
+
+    for (let i = 0; i < command.length; i++) {
+      const char = command[i]
+      
+      if ((char === '"' || char === "'") && !inQuote) {
+        inQuote = true
+        quoteChar = char
+        current += char
+      } else if (char === quoteChar && inQuote) {
+        inQuote = false
+        quoteChar = ''
+        current += char
+      } else if (char === '|' && !inQuote) {
+        parts.push(current.trim())
+        current = ''
+      } else {
+        current += char
+      }
+    }
+    
+    if (current.trim()) {
+      parts.push(current.trim())
+    }
+    
+    return parts
+  }
+
+  /**
+   * Execute a single command with optional input
+   */
+  private executeSingleCommand(
+    command: string,
+    input: string,
+    write: (text: string) => void,
+    writeLine: (text: string) => void,
+    writeError: (text: string) => void
+  ): string {
+    const args = this.parseArgs(command)
+    const cmd = args[0]?.toLowerCase()
+    
+    // Capture output instead of writing directly
+    let output = ''
+    const captureLine = (text: string) => {
+      output += text + '\n'
+    }
+    
+    // For commands that read from stdin, use input
+    switch (cmd) {
+      case 'grep':
+        return this.executeGrepWithInput(args, input, captureLine, writeError)
+      case 'wc':
+        return this.executeWcWithInput(args, input, captureLine, writeError)
+      case 'head':
+        return this.executeHeadWithInput(args, input, captureLine, writeError)
+      case 'tail':
+        return this.executeTailWithInput(args, input, captureLine, writeError)
+      case 'sort':
+        return this.executeSortWithInput(args, input, captureLine, writeError)
+      case 'uniq':
+        return this.executeUniqWithInput(args, input, captureLine, writeError)
+      case 'cut':
+        return this.executeCutWithInput(args, input, captureLine, writeError)
+      case 'cat':
+        // Cat with no args reads from stdin
+        if (!args[1]) {
+          return input
+        }
+        break
+      default:
+        // For other commands, execute normally but capture output
+        break
+    }
+    
+    // Execute command normally (writes to captureLine)
+    this.executeCommandImpl(cmd, args, write, captureLine, writeError)
+    
+    return output.trim()
+  }
+
+  /**
+   * Execute command implementation (extracted for pipe support)
+   */
+  private executeCommandImpl(
+    cmd: string,
+    args: string[],
+    write: (text: string) => void,
+    writeLine: (text: string) => void,
+    writeError: (text: string) => void
+  ): string {
+    const cwd = this.cwd[this.terminalId] || 'project'
+    
+    switch (cmd) {
+      case 'help':
+        return this.executeHelp(writeLine)
+      case 'clear':
+        write('\x1bc')
+        return ''
+      case 'pwd':
+        writeLine(cwd.replace(/^project/, '~'))
+        return ''
+      case 'cd':
+        return this.executeCd(args, writeError)
+      case 'ls':
+        return this.executeLs(args, writeLine, writeError)
+      case 'cat':
+        return this.executeCat(args, writeLine, writeError)
+      case 'mkdir':
+        return this.executeMkdir(args, writeLine, writeError)
+      case 'touch':
+        return this.executeTouch(args, writeError)
+      case 'rm':
+        return this.executeRm(args, writeLine, writeError)
+      case 'rmdir':
+        return this.executeRmdir(args, writeLine, writeError)
+      case 'cp':
+        return this.executeCp(args, writeLine, writeError)
+      case 'mv':
+        return this.executeMv(args, writeLine, writeError)
+      case 'echo':
+        return this.executeEcho(args, write, writeLine, writeError)
+      case 'head':
+        return this.executeHead(args, writeLine, writeError)
+      case 'tail':
+        return this.executeTail(args, writeLine, writeError)
+      case 'grep':
+        return this.executeGrep(args, writeLine, writeError)
+      case 'wc':
+        return this.executeWc(args, writeLine, writeError)
+      case 'uniq':
+        return this.executeUniq(args, writeLine, writeError)
+      case 'cut':
+        return this.executeCut(args, writeLine, writeError)
+      case 'tree':
+        return this.executeTree(writeLine)
+      case 'find':
+        return this.executeFind(args, writeLine)
+      case 'nano':
+      case 'vim':
+      case 'vi':
+        return this.executeEditor(cmd, args, writeLine, writeError)
+      case 'history':
+        return this.executeHistory(writeLine)
+      case 'whoami':
+        writeLine('user')
+        return ''
+      case 'date':
+        writeLine(new Date().toString())
+        return ''
+      case 'env':
+        return this.executeEnv(writeLine)
+      default:
+        writeError(`Command not found: ${cmd}`)
+        return ''
+    }
+  }
+
+  /**
+   * Grep with stdin input support
+   */
+  private executeGrepWithInput(
+    args: string[],
+    input: string,
+    writeLine: (text: string) => void,
+    writeError: (text: string) => void
+  ): string {
+    if (!args[1]) {
+      writeError('grep: pattern required')
+      return ''
+    }
+    
+    const pattern = args[1]
+    const lines = input.split('\n')
+    const regex = new RegExp(pattern, 'i')
+    const matchingLines = lines.filter(line => regex.test(line))
+    
+    return matchingLines.join('\n')
+  }
+
+  /**
+   * Wc with stdin input support
+   */
+  private executeWcWithInput(
+    args: string[],
+    input: string,
+    writeLine: (text: string) => void,
+    writeError: (text: string) => void
+  ): string {
+    const lines = input.split('\n').length
+    const words = input.split(/\s+/).length
+    const chars = input.length
+    
+    return `${lines} ${words} ${chars}`
+  }
+
+  /**
+   * Head with stdin input support
+   */
+  private executeHeadWithInput(
+    args: string[],
+    input: string,
+    writeLine: (text: string) => void,
+    writeError: (text: string) => void
+  ): string {
+    const lines = input.split('\n')
+    const count = args[1] ? parseInt(args[1].replace('-', '')) : 10
+    return lines.slice(0, count).join('\n')
+  }
+
+  /**
+   * Tail with stdin input support
+   */
+  private executeTailWithInput(
+    args: string[],
+    input: string,
+    writeLine: (text: string) => void,
+    writeError: (text: string) => void
+  ): string {
+    const lines = input.split('\n')
+    const count = args[1] ? parseInt(args[1].replace('-', '')) : 10
+    return lines.slice(-count).join('\n')
+  }
+
+  /**
+   * Sort with stdin input support
+   */
+  private executeSortWithInput(
+    args: string[],
+    input: string,
+    writeLine: (text: string) => void,
+    writeError: (text: string) => void
+  ): string {
+    const lines = input.split('\n').filter(l => l.trim())
+    const isReverse = args.includes('-r')
+    
+    const sorted = [...lines].sort((a, b) => {
+      if (isReverse) {
+        return b.localeCompare(a)
+      }
+      return a.localeCompare(b)
+    })
+    
+    return sorted.join('\n')
+  }
+
+  /**
+   * Uniq with stdin input support
+   */
+  private executeUniqWithInput(
+    args: string[],
+    input: string,
+    writeLine: (text: string) => void,
+    writeError: (text: string) => void
+  ): string {
+    const lines = input.split('\n').filter(l => l.trim())
+    const isCount = args.includes('-c')
+    
+    if (isCount) {
+      // Count occurrences
+      const counts = new Map<string, number>()
+      for (const line of lines) {
+        counts.set(line, (counts.get(line) || 0) + 1)
+      }
+      return Array.from(counts.entries())
+        .map(([line, count]) => `${count.toString().padStart(4)} ${line}`)
+        .join('\n')
+    } else {
+      // Remove consecutive duplicates
+      const unique: string[] = []
+      let prev = ''
+      for (const line of lines) {
+        if (line !== prev) {
+          unique.push(line)
+          prev = line
+        }
+      }
+      return unique.join('\n')
+    }
+  }
+
+  /**
+   * Cut with stdin input support
+   */
+  private executeCutWithInput(
+    args: string[],
+    input: string,
+    writeLine: (text: string) => void,
+    writeError: (text: string) => void
+  ): string {
+    const delimiter = args.includes('-d') ? args[args.indexOf('-d') + 1] : '\t'
+    const fieldsArg = args.find(a => a.startsWith('-f'))
+    
+    if (!fieldsArg) {
+      writeError('cut: -f required')
+      return ''
+    }
+    
+    const fields = fieldsArg.replace('-f', '').split(',').map(f => parseInt(f) - 1)
+    const lines = input.split('\n')
+    
+    const cutLines = lines.map(line => {
+      const parts = line.split(delimiter)
+      return fields.map(f => parts[f] || '').join(delimiter)
+    })
+    
+    return cutLines.join('\n')
+  }
+
   private executeCat(args: string[], writeLine: (text: string) => void, writeError: (text: string) => void): string {
     if (!args[1]) {
       writeError('cat: missing file operand')
@@ -541,10 +907,10 @@ export class LocalCommandExecutor {
     }
     const dirs = args[1].includes(' ') ? args[1].split(' ') : [args[1]]
     const fs = this.getFileSystem()
-    
+
     for (const d of dirs) {
       const dirPath = this.resolvePath(this.cwd[this.terminalId], d)
-      
+
       this.ensureProjectRootExists()
 
       // Use external filesystem for existence check
@@ -561,11 +927,14 @@ export class LocalCommandExecutor {
 
       // Write to external filesystem
       fs[dirPath] = { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() }
-      
+
       // Sync to VFS
       if (this.syncToVFS) {
         this.syncToVFS(`${dirPath}/.keep`, '')
       }
+      
+      // Emit filesystem event for UI update
+      this.emitFilesystemEvent(dirPath, 'create')
     }
     // Sync changes to external filesystem
     if (this.setExtFileSystem) {
@@ -583,7 +952,7 @@ export class LocalCommandExecutor {
     }
     const fs = this.getFileSystem()
     const files = args[1].includes(' ') ? args[1].split(' ') : [args[1]]
-    
+
     for (const f of files) {
       const filePath = this.resolvePath(this.cwd[this.terminalId], f)
       const parent = this.getParentPath(filePath)
@@ -595,11 +964,15 @@ export class LocalCommandExecutor {
 
       if (fs[filePath]) {
         fs[filePath].modifiedAt = Date.now()
+        // Emit update event for existing file
+        this.emitFilesystemEvent(filePath, 'update')
       } else {
         fs[filePath] = { type: 'file', content: '', createdAt: Date.now(), modifiedAt: Date.now() }
         if (this.syncToVFS) {
           this.syncToVFS(filePath, '')
         }
+        // Emit create event for new file
+        this.emitFilesystemEvent(filePath, 'create')
       }
     }
     // Sync changes to external filesystem
@@ -631,12 +1004,22 @@ export class LocalCommandExecutor {
       return ''
     }
 
+    // Collect paths to delete for event emission
+    const pathsToDelete: string[] = []
+    
     // Remove target and all children
     for (const path of Object.keys(fs)) {
       if (path === targetPath || path.startsWith(`${targetPath}/`)) {
+        pathsToDelete.push(path)
         delete fs[path]
       }
     }
+    
+    // Emit delete events for UI update
+    for (const path of pathsToDelete) {
+      this.emitFilesystemEvent(path, 'delete')
+    }
+    
     // Sync changes to external filesystem
     if (this.setExtFileSystem) {
       this.setExtFileSystem(fs)
@@ -671,6 +1054,10 @@ export class LocalCommandExecutor {
     }
 
     delete fs[dirPath]
+    
+    // Emit delete event for UI update
+    this.emitFilesystemEvent(dirPath, 'delete')
+    
     // Sync changes to external filesystem
     if (this.setExtFileSystem) {
       this.setExtFileSystem(fs)
@@ -704,6 +1091,12 @@ export class LocalCommandExecutor {
       return ''
     }
 
+    // Check for conflict - ask for confirmation if destination exists
+    if (this.fileSystem[dstPath]) {
+      writeError(`cp: '${args[2]}' already exists. Use -f to overwrite.`)
+      return ''
+    }
+
     const fs = this.getFileSystem()
     fs[dstPath] = {
       type: 'file',
@@ -717,6 +1110,10 @@ export class LocalCommandExecutor {
     } else {
       this.fileSystem = fs
     }
+    
+    // Emit filesystem event for UI update
+    this.emitFilesystemEvent(dstPath, 'create')
+    
     return ''
   }
 
@@ -741,32 +1138,60 @@ export class LocalCommandExecutor {
       return ''
     }
 
+    // Check for conflict - ask for confirmation if destination exists
+    if (fs[dstPath]) {
+      writeError(`mv: cannot move '${args[1]}': '${args[2]}' already exists. Use -f to overwrite.`)
+      return ''
+    }
+
+    // Check for circular move
+    if (dstPath.startsWith(srcPath + '/')) {
+      writeError(`mv: cannot move '${args[1]}': cannot move a directory into itself`)
+      return ''
+    }
+
     // Move within external filesystem
     fs[dstPath] = { ...fs[srcPath], modifiedAt: Date.now() }
     delete fs[srcPath]
-    
+
     // Update cwd if we moved the current directory
     if (this.cwd[this.terminalId] === srcPath) {
       this.cwd[this.terminalId] = dstPath
     }
-    
+
     // Sync changes to external filesystem
     if (this.setExtFileSystem) {
       this.setExtFileSystem(fs)
     } else {
       this.fileSystem = fs
     }
+    
+    // Emit filesystem event for UI update
+    this.emitFilesystemEvent(dstPath, 'create')
+
     return ''
+  }
+
+  /**
+   * Emit filesystem change event for UI synchronization
+   */
+  private emitFilesystemEvent(path: string, type: 'create' | 'update' | 'delete'): void {
+    if (this.onFileChanged) {
+      this.onFileChanged(path, type)
+    }
   }
 
   private executeEcho(args: string[], write: (text: string) => void, writeLine: (text: string) => void, writeError: (text: string) => void): string {
     let text = args.slice(1).join(' ')
-    
+
     // Remove quotes
     if ((text.startsWith('"') && text.endsWith('"')) ||
         (text.startsWith("'") && text.endsWith("'"))) {
       text = text.slice(1, -1)
     }
+
+    // Expand environment variables
+    text = this.expandVariables(text)
 
     // Check for redirect
     const redirectMatch = args.slice(1).join(' ').match(/^(.*?)\s*>\s*(.+?)$/)
@@ -788,13 +1213,13 @@ export class LocalCommandExecutor {
 
       this.fileSystem[filePath] = {
         type: 'file',
-        content: echoText.trim() + '\n',
+        content: this.expandVariables(echoText.trim()) + '\n',
         createdAt: Date.now(),
         modifiedAt: Date.now()
       }
 
       if (this.syncToVFS) {
-        this.syncToVFS(filePath, echoText.trim() + '\n')
+        this.syncToVFS(filePath, this.expandVariables(echoText.trim()) + '\n')
       }
       // Sync changes to external filesystem
       if (this.setExtFileSystem) {
@@ -884,6 +1309,77 @@ export class LocalCommandExecutor {
     return ''
   }
 
+  private executeUniq(args: string[], writeLine: (text: string) => void, writeError: (text: string) => void): string {
+    if (!args[1]) {
+      writeError('uniq: missing file operand')
+      return ''
+    }
+    const filePath = this.resolvePath(this.cwd[this.terminalId], args[1])
+    
+    if (!this.fileSystem[filePath]) {
+      writeError(`uniq: ${args[1]}: No such file or directory`)
+      return ''
+    }
+    
+    const content = this.fileSystem[filePath].content || ''
+    const lines = content.split('\n').filter(l => l.trim())
+    const isCount = args.includes('-c')
+    
+    if (isCount) {
+      const counts = new Map<string, number>()
+      for (const line of lines) {
+        counts.set(line, (counts.get(line) || 0) + 1)
+      }
+      writeLine(Array.from(counts.entries())
+        .map(([line, count]) => `${count.toString().padStart(4)} ${line}`)
+        .join('\n'))
+    } else {
+      const unique: string[] = []
+      let prev = ''
+      for (const line of lines) {
+        if (line !== prev) {
+          unique.push(line)
+          prev = line
+        }
+      }
+      writeLine(unique.join('\n'))
+    }
+    return ''
+  }
+
+  private executeCut(args: string[], writeLine: (text: string) => void, writeError: (text: string) => void): string {
+    if (!args[1]) {
+      writeError('cut: missing file operand')
+      return ''
+    }
+    
+    const fieldsArg = args.find(a => a.startsWith('-f'))
+    if (!fieldsArg) {
+      writeError('cut: -f required')
+      return ''
+    }
+    
+    const filePath = this.resolvePath(this.cwd[this.terminalId], args[args.length - 1])
+    
+    if (!this.fileSystem[filePath]) {
+      writeError(`cut: ${args[args.length - 1]}: No such file or directory`)
+      return ''
+    }
+    
+    const delimiter = args.includes('-d') ? args[args.indexOf('-d') + 1] : '\t'
+    const fields = fieldsArg.replace('-f', '').split(',').map(f => parseInt(f) - 1)
+    const content = this.fileSystem[filePath].content || ''
+    const lines = content.split('\n')
+    
+    const cutLines = lines.map(line => {
+      const parts = line.split(delimiter)
+      return fields.map(f => parts[f] || '').join(delimiter)
+    })
+    
+    writeLine(cutLines.join('\n'))
+    return ''
+  }
+
   private executeTree(writeLine: (text: string) => void): string {
     writeLine('project/')
     
@@ -956,14 +1452,72 @@ export class LocalCommandExecutor {
     return ''
   }
 
+  private envVars: Record<string, string> = {
+    'TERM': 'xterm-256color',
+    'LANG': 'en_US.UTF-8',
+    'PWD': 'project',
+    'HOME': '/home/user',
+    'USER': 'user',
+    'SHELL': '/bin/bash',
+  }
+
   private executeEnv(writeLine: (text: string) => void): string {
-    writeLine('TERM=xterm-256color')
-    writeLine('LANG=en_US.UTF-8')
-    writeLine('PWD=' + this.cwd[this.terminalId])
-    writeLine('HOME=/home/user')
-    writeLine('USER=user')
-    writeLine('SHELL=/bin/bash')
+    // Update PWD from current cwd
+    this.envVars['PWD'] = this.cwd[this.terminalId] || 'project'
+    
+    // Print all environment variables
+    for (const [key, value] of Object.entries(this.envVars)) {
+      writeLine(`${key}=${value}`)
+    }
     return ''
+  }
+
+  private executeExport(args: string[], writeLine: (text: string) => void, writeError: (text: string) => void): string {
+    if (!args[1]) {
+      // Print all exported variables
+      for (const [key, value] of Object.entries(this.envVars)) {
+        writeLine(`export ${key}="${value}"`)
+      }
+      return ''
+    }
+    
+    // Parse export VAR=value or export VAR
+    const exportArg = args[1]
+    const eqIndex = exportArg.indexOf('=')
+    
+    if (eqIndex > 0) {
+      const key = exportArg.substring(0, eqIndex)
+      let value = exportArg.substring(eqIndex + 1)
+      
+      // Remove quotes if present
+      if ((value.startsWith('"') && value.endsWith('"')) ||
+          (value.startsWith("'") && value.endsWith("'"))) {
+        value = value.slice(1, -1)
+      }
+      
+      // Expand existing variables
+      value = this.expandVariables(value)
+      
+      this.envVars[key] = value
+      this.envVars['PWD'] = this.cwd[this.terminalId] || 'project'
+    } else {
+      // Just mark variable for export (already exported if exists)
+      const key = exportArg
+      if (!this.envVars[key]) {
+        this.envVars[key] = ''
+      }
+    }
+    
+    return ''
+  }
+
+  /**
+   * Expand $VAR and ${VAR} in string
+   */
+  private expandVariables(str: string): string {
+    return str.replace(/\$\{?([A-Za-z_][A-Za-z0-9_]*)\}?/g, (match, varName) => {
+      return this.envVars[varName] || ''
+    })
   }
 
   // ==================== Getters ====================

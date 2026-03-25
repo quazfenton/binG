@@ -392,17 +392,42 @@ export class TerminalEditorHandler {
 
     const fs = this.getFileSystem()
     const fileContent = this.session.lines.join('\n')
+    const filePath = this.session.filePath
+    
+    // Check if file is new (for event emission)
+    const fileExists = !!fs[filePath]
 
-    fs[this.session.filePath] = {
+    fs[filePath] = {
       type: 'file',
       content: fileContent,
-      createdAt: fs[this.session.filePath]?.createdAt || Date.now(),
+      createdAt: fs[filePath]?.createdAt || Date.now(),
       modifiedAt: Date.now(),
     }
 
     this.setFileSystem(fs)
-    await this.syncToVFS(this.session.filePath, fileContent)
+    await this.syncToVFS(filePath, fileContent)
     this.session.originalContent = fileContent
+    
+    // Emit filesystem event for UI update
+    this.emitFilesystemEvent(filePath, fileExists ? 'update' : 'create')
+  }
+
+  /**
+   * Emit filesystem event for UI synchronization
+   */
+  private emitFilesystemEvent(path: string, type: 'create' | 'update' | 'delete'): void {
+    if (typeof window !== 'undefined') {
+      try {
+        const { emitFilesystemUpdated } = require('@/lib/virtual-filesystem/sync/sync-events')
+        emitFilesystemUpdated({
+          path,
+          type,
+          source: 'terminal-editor',
+        })
+      } catch (err) {
+        console.warn('[TerminalEditor] Failed to emit filesystem event:', err)
+      }
+    }
   }
 
   /**
