@@ -134,19 +134,20 @@ export async function POST(
         break;
 
       case 'vfs-snapshot':
-        rollbackResult = await executeVFSSnapshotRollback(db, scopedSessionId, version, Number(ownerId), targetFiles);
+        rollbackResult = await executeVFSSnapshotRollback(db, scopedSessionId, version, ownerId, targetFiles);
         break;
 
       case 'git':
-        rollbackResult = await executeGitRollback(scopedSessionId, version, Number(ownerId), targetFiles);
+        rollbackResult = await executeGitRollback(scopedSessionId, version, ownerId, targetFiles);
         break;
 
-      default:
+      default: {
         const errorResponse = NextResponse.json(
           { success: false, error: `Invalid rollback mode: ${mode}. Use 'shadow', 'vfs-snapshot', or 'git'` },
           { status: 400 }
         );
         return withAnonSessionCookie(errorResponse, authResolution);
+      }
     }
 
     if (!rollbackResult.success) {
@@ -225,19 +226,10 @@ async function executeShadowRollback(sessionId: string, version: number, targetF
 
     // Parse commit transactions to get file contents
     let filesToRestore: Record<string, string> = {};
-    let allTransactions: any[] = [];
-
-    if (targetCommit.diff) {
-      // Parse transactions from commit data
-      try {
-        const commitData = typeof targetCommit.diff === 'string' 
-          ? JSON.parse(targetCommit.diff) 
-          : targetCommit.diff;
-        allTransactions = commitData.transactions || [];
-      } catch {
-        // If parsing fails, we'll use the rollback method directly
-      }
-    }
+    
+    // Use getCommit to reliably extract transactions from the full commit record
+    const commit = await shadowCommitManager.getCommit(sessionId, targetCommit.commitId);
+    const allTransactions = commit?.transactions ?? [];
 
     // If targetFiles specified, filter to only those files (partial rollback)
     if (targetFiles && targetFiles.length > 0) {
@@ -331,7 +323,7 @@ async function executeVFSSnapshotRollback(
   db: any,
   sessionId: string,
   version: number,
-  userId: number,
+  userId: string,
   targetFiles?: string[]
 ) {
   try {
@@ -395,7 +387,7 @@ async function executeVFSSnapshotRollback(
 
     // Restore VFS state
     const vfs = new VirtualFilesystemService();
-    const ownerId = userId.toString();
+    const ownerId = userId;
     let restoredCount = 0;
     const errors: string[] = [];
 
@@ -412,7 +404,7 @@ async function executeVFSSnapshotRollback(
     db.prepare(`
       UPDATE user_sessions
       SET current_version = ?
-      WHERE id = ? AND user_id = ?
+      WHERE session_id = ? AND user_id = ?
     `).run(version, sessionId, userId);
 
     return {
@@ -450,19 +442,19 @@ async function executeVFSSnapshotRollback(
 async function executeGitRollback(
   sessionId: string,
   version: number,
-  userId: number,
+  userId: string,
   targetFiles?: string[]
 ) {
   try {
     // Get GitBackedVFS instance
     const vfs = new VirtualFilesystemService();
-    const gitBackedVFS = getGitBackedVFSForOwner(userId.toString(), vfs, {
+    const gitBackedVFS = getGitBackedVFSForOwner(userId, vfs, {
       sessionId,
       autoCommit: false,
     });
 
     // Execute rollback (GitBackedVFS.rollback already supports partial rollback via internal filtering)
-    const result = await gitBackedVFS.rollback(userId.toString(), version, targetFiles);
+    const result = await gitBackedVFS.rollback(userId, version, targetFiles);
 
     return {
       success: result.success,

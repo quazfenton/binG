@@ -41,6 +41,8 @@ export interface LocalCommandExecutorConfig {
   getFileSystem?: () => Record<string, LocalFilesystemEntry>
   setFileSystem?: (fs: Record<string, LocalFilesystemEntry>) => void
   onOpenEditor?: (filePath: string, editorType: 'nano' | 'vim' | 'vi') => void
+  getCwd?: () => string
+  setCwd?: (cwd: string) => void
 }
 
 export class LocalCommandExecutor {
@@ -55,6 +57,8 @@ export class LocalCommandExecutor {
   private getExtFileSystem?: () => Record<string, LocalFilesystemEntry>
   private setExtFileSystem?: (fs: Record<string, LocalFilesystemEntry>) => void
   private onOpenEditor?: (filePath: string, editorType: 'nano' | 'vim' | 'vi') => void
+  private getExtCwd?: () => string
+  private setExtCwd?: (cwd: string) => void
 
   constructor(config: LocalCommandExecutorConfig | string) {
     if (typeof config === 'string') {
@@ -68,6 +72,8 @@ export class LocalCommandExecutor {
       this.getExtFileSystem = config.getFileSystem
       this.setExtFileSystem = config.setFileSystem
       this.onOpenEditor = config.onOpenEditor
+      this.getExtCwd = config.getCwd
+      this.setExtCwd = config.setCwd
       
       // If external filesystem provided, load initial state from it
       if (this.getExtFileSystem) {
@@ -77,6 +83,13 @@ export class LocalCommandExecutor {
         }
       }
     }
+
+    // Initialize cwd - use external cwd if available, otherwise default
+    const extCwd = this.getExtCwd?.()
+    const defaultCwd = 'project/sessions'
+    
+    // Use external cwd if provided and valid, otherwise use default
+    this.cwd[this.terminalId] = extCwd && extCwd.trim() ? extCwd : defaultCwd
 
     // Ensure project root exists
     if (!this.fileSystem['project']) {
@@ -94,9 +107,6 @@ export class LocalCommandExecutor {
         modifiedAt: Date.now() 
       }
     }
-
-    // Default to project/sessions for local command mode
-    this.cwd[this.terminalId] = 'project/sessions'
   }
 
   /**
@@ -431,6 +441,10 @@ export class LocalCommandExecutor {
 
     if (fs[nextPath] && fs[nextPath].type === 'directory') {
       this.cwd[this.terminalId] = nextPath
+      // Sync cwd change to external (TerminalPanel)
+      if (this.setExtCwd) {
+        this.setExtCwd(nextPath)
+      }
     } else if (!fs[nextPath]) {
       writeError(`cd: no such directory: ${target}`)
     } else {
@@ -963,11 +977,30 @@ export class LocalCommandExecutor {
   }
 
   getCwd(): string {
-    return this.cwd[this.terminalId]
+    // Return external cwd if available, otherwise return internal
+    if (this.getExtCwd) {
+      const extCwd = this.getExtCwd()
+      if (extCwd && extCwd.trim()) {
+        return extCwd
+      }
+    }
+    return this.cwd[this.terminalId] || 'project'
   }
 
   setCwd(cwd: string): void {
+    // Validate cwd
+    if (!cwd || typeof cwd !== 'string') {
+      console.warn('[LocalCommandExecutor] Invalid cwd:', cwd)
+      return
+    }
+
+    // Update internal state
     this.cwd[this.terminalId] = cwd
+
+    // Sync to external if available
+    if (this.setExtCwd) {
+      this.setExtCwd(cwd)
+    }
   }
 
   setFileSystem(fs: Record<string, LocalFilesystemEntry>): void {

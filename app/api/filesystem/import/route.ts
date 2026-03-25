@@ -33,6 +33,7 @@ import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesyst
 import { FileImportService } from '@/lib/virtual-filesystem/import-service';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 export const runtime = 'nodejs';
@@ -77,11 +78,17 @@ export async function POST(req: NextRequest) {
     const formData = await req.formData();
 
     // Extract and validate options
+    // Use formData.has() to check presence, allowing Zod defaults to apply when fields are omitted
     const optionsData = {
       sessionId: formData.get('sessionId') as string | undefined,
       importFolderName: formData.get('importFolderName') as string | undefined,
-      preserveStructure: formData.get('preserveStructure') === 'true',
-      autoCommit: formData.get('autoCommit') === 'true',
+      // Only set boolean fields if present in form data, otherwise undefined (Zod will apply defaults)
+      preserveStructure: formData.has('preserveStructure')
+        ? formData.get('preserveStructure') === 'true'
+        : undefined,
+      autoCommit: formData.has('autoCommit')
+        ? formData.get('autoCommit') === 'true'
+        : undefined,
     };
 
     // Validate options (sessionId required)
@@ -143,6 +150,22 @@ export async function POST(req: NextRequest) {
       ownerId,
       ...options,
     });
+
+    // Emit filesystem updated event for UI panels
+    if (result.files && result.files.length > 0) {
+      emitFilesystemUpdated({
+        path: result.destinationPath,
+        type: 'create',
+        sessionId: optionsData.sessionId,
+        workspaceVersion: result.files.length,
+        applied: result.files.map(f => ({
+          path: f.path,
+          operation: 'write',
+          timestamp: Date.now(),
+        })),
+        source: 'api-import',
+      });
+    }
 
     // Build response
     const response = NextResponse.json(result);

@@ -17,7 +17,7 @@
 export { auth0, AUTH0_CONNECTIONS, PROVIDER_CONNECTION_MAP } from './auth0-edge';
 
 // Import auth0 for internal use
-import { auth0 as auth0Client, AUTH0_CONNECTIONS } from './auth0-edge';
+import { auth0, AUTH0_CONNECTIONS } from './auth0-edge';
 
 // Lazy-loaded database functions to avoid Edge Runtime issues
 // Node.js modules (crypto, fs, path) in connection.ts are not compatible with Edge
@@ -307,7 +307,7 @@ export async function getStoredAccessToken(userId: number, provider: string): Pr
  */
 export async function getAuth0Session() {
   try {
-    return await auth0Client.getSession();
+    return await auth0.getSession();
   } catch {
     return null;
   }
@@ -327,7 +327,7 @@ export async function isAuth0Authenticated() {
  */
 export async function getAuth0AccessToken() {
   try {
-    return await auth0Client.getAccessToken();
+    return await auth0.getAccessToken();
   } catch {
     return null;
   }
@@ -354,7 +354,7 @@ export async function getAccessTokenForConnection(connection: string, userId?: n
 
   // If userId provided, check database for stored token and ONLY use that
   if (userId) {
-    const storedToken = getStoredAccessToken(userId, connection);
+    const storedToken = await getStoredAccessToken(userId, connection);
     if (storedToken) {
       // Calculate remaining TTL based on actual token expiration
       const expiresIn = storedToken.expiresAt

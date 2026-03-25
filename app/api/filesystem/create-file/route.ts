@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 
 // ANSI color codes for terminal output
 const COLORS = {
@@ -94,6 +95,19 @@ export async function POST(req: NextRequest) {
     const duration = Date.now() - startTime;
 
     log(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.green}Success${COLORS.reset}: Created file ${COLORS.blue}"${result.path}"${COLORS.reset} (${COLORS.cyan}${result.size} bytes${COLORS.reset}) in ${COLORS.cyan}${duration}ms${COLORS.reset}`);
+
+    // Emit filesystem updated event for UI panels
+    emitFilesystemUpdated({
+      path: result.path,
+      type: 'create',
+      workspaceVersion: result.version,
+      applied: [{
+        path: result.path,
+        operation: 'write',
+        timestamp: Date.now(),
+      }],
+      source: 'api-create-file',
+    });
 
     return NextResponse.json({
       success: true,

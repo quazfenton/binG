@@ -141,8 +141,41 @@ export class OPFSCore extends SimpleEventEmitter<OPFSEventMap> {
   }
 
   /**
-   * Initialize OPFS for a specific workspace
+   * Sanitize workspace ID for OPFS directory names
+   * OPFS only allows alphanumeric characters, hyphens, and underscores
    * 
+   * Examples:
+   * - 'anon:1774419343101_cc940d2f08590253f2' → 'anon_1774419343101_cc940d2f08590253f2'
+   * - 'user@test.com' → 'user_test_com'
+   * - 'workspace/123' → 'workspace_123'
+   */
+  private sanitizeWorkspaceId(workspaceId: string): string {
+    if (!workspaceId || typeof workspaceId !== 'string') {
+      throw new OPFSError('Invalid workspace ID: must be a non-empty string');
+    }
+    
+    // Replace invalid characters with underscores
+    // Valid chars: a-z, A-Z, 0-9, -, _
+    const sanitized = workspaceId.replace(/[^a-zA-Z0-9_-]/g, '_');
+    
+    // Ensure the result isn't empty or too long
+    if (!sanitized || sanitized.length === 0) {
+      throw new OPFSError('Invalid workspace ID: results in empty name after sanitization');
+    }
+    
+    // Limit length to prevent filesystem issues (most filesystems limit to 255 chars)
+    const maxLength = 200;
+    if (sanitized.length > maxLength) {
+      console.warn('[OPFS] Workspace ID too long, truncating to', maxLength, 'chars');
+      return sanitized.substring(0, maxLength);
+    }
+    
+    return sanitized;
+  }
+
+  /**
+   * Initialize OPFS for a specific workspace
+   *
    * @param workspaceId - Unique identifier for the workspace
    * @throws OPFSError if initialization fails
    */
@@ -179,25 +212,29 @@ export class OPFSCore extends SimpleEventEmitter<OPFSEventMap> {
           this.fileHandleCache.clear();
           this.directoryHandleCache.clear();
         }
-        
+
+        // Sanitize workspace ID for OPFS compatibility
+        const sanitizedWorkspaceId = this.sanitizeWorkspaceId(workspaceId);
+
         // Get root directory handle from OPFS (getDirectory() takes no arguments)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const rootDir = await (navigator as any).storage.getDirectory();
-        // Navigate to workspace-specific subdirectory
+        
+        // Navigate to workspace-specific subdirectory using sanitized ID
         this.rootHandle = await rootDir.getDirectoryHandle(
-          `${this.options.rootName}/${workspaceId}`,
+          `${this.options.rootName}/${sanitizedWorkspaceId}`,
           { create: true }
         );
-        
-        this.workspaceId = workspaceId;
+
+        this.workspaceId = workspaceId; // Keep original ID for reference
         this.initialized = true;
-        
+
         // Load handle cache from metadata
         await this.loadHandleCache();
-        
+
         this.emit('initialized', { workspaceId });
-        
-        console.log('[OPFS] Initialized workspace:', workspaceId);
+
+        console.log('[OPFS] Initialized workspace:', workspaceId, '(sanitized:', sanitizedWorkspaceId + ')');
       } catch (error) {
         this.emit('error', { error, workspaceId });
         throw new OPFSError('Failed to initialize OPFS', error);

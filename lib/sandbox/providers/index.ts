@@ -45,6 +45,8 @@ export type SandboxProviderType =
   | 'vercel-sandbox'
   | 'oracle-vm'
   | 'zeroboot'
+  | 'modal'
+  | 'modal-com'
 
 // Provider registry
 interface ProviderEntry {
@@ -377,6 +379,44 @@ function initializeRegistry() {
       return new ZerobootProvider()
     },
   })
+
+  // Modal - Last resort fallback provider
+  // Shows UI modal when all other providers fail
+  // Best for: Graceful degradation, user notification
+  // Note: Does not actually execute code - triggers UI fallback
+  providerRegistry.set('modal', {
+    provider: null as any as any,
+    priority: 999, // Lowest priority - absolute last resort
+    enabled: true,
+    available: true, // Always available as fallback
+    healthy: true,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { modalProvider } = await import('./modal-provider')
+      return modalProvider
+    },
+  })
+
+  // Modal.com - Serverless container platform
+  // Fast GPU-enabled sandboxes with tunnel support
+  // Best for: GPU workloads, live previews, serverless execution
+  // Note: Requires MODAL_API_TOKEN environment variable
+  providerRegistry.set('modal-com', {
+    provider: null as any as any,
+    priority: 3, // High priority - fast and feature-rich
+    enabled: true,
+    available: !!process.env.MODAL_API_TOKEN,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { modalComProvider } = await import('./modal-com-provider')
+      return modalComProvider
+    },
+  })
 }
 
 // Initialize on module load
@@ -524,9 +564,16 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
  * Get a sandbox provider with automatic fallback.
  * Tries providers in priority order (lower number = higher priority).
  * Skips disabled, unhealthy, and circuit-breaker-OPEN providers.
+ * Falls back to modal provider as last resort.
  */
 export async function getSandboxProviderWithFallback(
   preferredType?: SandboxProviderType,
+  options?: {
+    /** Allow fallback to modal UI when all providers fail (default: true) */
+    allowModalFallback?: boolean
+    /** Reason for modal fallback */
+    modalReason?: import('./modal-provider').ModalFallbackReason
+  }
 ): Promise<{ provider: SandboxProvider; type: SandboxProviderType }> {
   // Build ordered list: preferred first, then by priority
   const sorted = Array.from(providerRegistry.entries())
@@ -545,6 +592,9 @@ export async function getSandboxProviderWithFallback(
 
   const errors: string[] = []
   for (const providerType of ordered) {
+    // Skip modal provider in the main loop - use it only as last resort
+    if (providerType === 'modal') continue
+
     // CIRCUIT BREAKER CHECK: Skip providers with OPEN circuit breakers
     if (!providerCircuitBreakers.isAvailable(providerType)) {
       const stats = providerCircuitBreakers.get(providerType).getStats()
@@ -562,6 +612,14 @@ export async function getSandboxProviderWithFallback(
     } catch (error: any) {
       errors.push(`${providerType}: ${error.message}`)
     }
+  }
+
+  // All providers failed - use modal as last resort
+  const allowModalFallback = options?.allowModalFallback ?? true
+  if (allowModalFallback) {
+    console.warn('[ProviderFallback] All providers failed, using modal fallback')
+    const modalProvider = await getSandboxProvider('modal')
+    return { provider: modalProvider, type: 'modal' }
   }
 
   throw new Error(
@@ -929,6 +987,38 @@ export {
   type AsyncExecutionResult,
   type BlaxelWebhookPayload,
 } from './blaxel-async';
+
+// ===========================================
+// Modal Provider Exports (Last Fallback)
+// ===========================================
+export {
+  ModalSandboxProvider,
+  modalProvider,
+  createModalProvider,
+  ModalSandboxHandle,
+  isModalFallback,
+  getModalState,
+  type ModalState,
+  type ModalSuggestion,
+  type ModalFallbackReason,
+} from './modal-provider';
+
+// ===========================================
+// Modal.com Provider Exports (Serverless Platform)
+// ===========================================
+export {
+  ModalComProvider,
+  modalComProvider,
+  createModalComProvider,
+  getModalComProvider,
+  cleanupModalComSandboxes,
+  ModalComSandboxHandle,
+  isModalComSandbox,
+  type ModalComConfig,
+  type ModalTunnelInfo,
+  type ModalSandboxData,
+  type ModalComVolumeConfig,
+} from './modal-com-provider';
 
 // Lazy export for MistralAgentProvider
 export function getMistralAgentProvider() {

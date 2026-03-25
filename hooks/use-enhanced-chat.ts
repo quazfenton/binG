@@ -617,16 +617,18 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                 case 'spec_amplification':
                   // Spec amplification lifecycle event
-                  // eventData contains: { stage, fastModel, specScore, sectionsGenerated, currentIteration, totalIterations, currentSection, error, timestamp, filesystem }
+                  // eventData contains: { stage, fastModel, specScore, sectionsGenerated, currentIteration, totalIterations, currentSection, error, timestamp, filesystem, content, taskId, taskTitle }
                   setAgentActivity(prev => ({
                     ...prev,
-                    status: eventData.stage === 'complete' || eventData.stage === 'error' ? 'idle' : 'processing',
+                    status: eventData.stage === 'complete' || eventData.stage === 'error' || eventData.stage === 'task_complete' ? 'idle' : 'processing',
                     currentAction: eventData.stage === 'started'
                       ? 'Generating improvement spec...'
                       : eventData.stage === 'spec_generated'
                       ? 'Spec generated, starting refinement...'
                       : eventData.stage === 'refining'
                       ? `Refining section ${eventData.currentIteration || 0}/${eventData.totalIterations || 0}...`
+                      : eventData.stage === 'task_complete'
+                      ? `Completed: ${eventData.taskTitle || 'Refinement task'}`
                       : eventData.stage === 'complete'
                       ? 'Refinement complete'
                       : eventData.error || 'Processing...',
@@ -640,19 +642,39 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       currentSection: eventData.currentSection,
                       error: eventData.error,
                       timestamp: eventData.timestamp || Date.now(),
+                      taskId: eventData.taskId,
+                      taskTitle: eventData.taskTitle,
                     },
                   }));
 
-                  // When refinement completes, create a new message with filesystem edits if present
+                  // When a refinement task completes, create a new message with the content
+                  if (eventData.stage === 'task_complete' && eventData.content) {
+                    const refinementMessage: Message = {
+                      id: `refinement-${eventData.taskId || Date.now()}`,
+                      role: 'assistant',
+                      content: eventData.content,
+                      metadata: {
+                        isRefinement: true,
+                        taskId: eventData.taskId,
+                        taskTitle: eventData.taskTitle,
+                        provider: eventData.fastModel,
+                        timestamp: eventData.timestamp,
+                      },
+                    };
+                    setMessages(prev => [...prev, refinementMessage]);
+                  }
+
+                  // When refinement completes, create a summary message with filesystem edits if present
                   if (eventData.stage === 'complete' && eventData.filesystem) {
                     const refinementMessage: Message = {
-                      id: `refinement-${Date.now()}`,
+                      id: `refinement-summary-${Date.now()}`,
                       role: 'assistant',
-                      content: eventData.refinedContent || 'Refinement complete',
+                      content: eventData.refinedContent || 'Refinement complete. Filesystem changes applied.',
                       metadata: {
                         filesystem: eventData.filesystem,
                         provider: eventData.fastModel,
                         specScore: eventData.specScore,
+                        isRefinementSummary: true,
                       },
                     };
                     setMessages(prev => [...prev, refinementMessage]);

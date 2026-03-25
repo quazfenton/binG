@@ -327,7 +327,7 @@ async function initializeSchema() {
 
 // Encryption utilities for API keys - lazy-loaded
 // Only available in Node.js runtime
-export async function encryptApiKey(apiKey: string): Promise<{ encrypted: string; hash: string }> {
+export function encryptApiKey(apiKey: string): { encrypted: string; hash: string } {
   // Not available in Edge Runtime - throw early to avoid crypto import
   if (process.env.NEXT_RUNTIME !== 'nodejs') {
     throw new Error('encryptApiKey is only available in Node.js runtime');
@@ -336,7 +336,7 @@ export async function encryptApiKey(apiKey: string): Promise<{ encrypted: string
   // Use require to avoid Edge Runtime analysis of crypto import
   const cryptoModule = require('crypto');
   const crypto = cryptoModule;
-  const key = await getEncryptionKey();
+  const key = getEncryptionKey();
 
   const iv = crypto.randomBytes(16);
   // Use createCipheriv which properly uses the IV (non-deprecated)
@@ -354,7 +354,7 @@ export async function encryptApiKey(apiKey: string): Promise<{ encrypted: string
   };
 }
 
-export async function decryptApiKey(encryptedData: string): Promise<string> {
+export function decryptApiKey(encryptedData: string): string {
   // Not available in Edge Runtime - throw early to avoid crypto import
   if (process.env.NEXT_RUNTIME !== 'nodejs') {
     throw new Error('decryptApiKey is only available in Node.js runtime');
@@ -363,7 +363,7 @@ export async function decryptApiKey(encryptedData: string): Promise<string> {
   // Use require to avoid Edge Runtime analysis of crypto import
   const cryptoModule = require('crypto');
   const crypto = cryptoModule;
-  const key = await getEncryptionKey();
+  const key = getEncryptionKey();
 
   const parts = encryptedData.split(':');
 
@@ -405,6 +405,9 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
   const db = getDatabase();
   let migrated = 0;
   let errors = 0;
+
+  // Load crypto module for encryption operations
+  const crypto = require('crypto');
 
   try {
     // Get all API credentials

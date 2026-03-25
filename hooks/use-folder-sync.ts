@@ -90,6 +90,9 @@ export function useFolderSync(options: UseFolderSyncOptions = {}): UseFolderSync
         const { localFolderSyncService: service } = await loadFolderSyncService();
         const status = service.getSyncStatus(sessionId);
         setSyncStatus(status);
+      } else {
+        // Clear status when sessionId is undefined to prevent stale data
+        setSyncStatus([]);
       }
     }
     loadAndUpdateStatus();

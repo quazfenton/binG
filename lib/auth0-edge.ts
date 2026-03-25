@@ -25,11 +25,12 @@ export const auth0 = new Auth0Client({
     connectAccount: "/auth/connect",
   },
   async onCallback(error, context, session) {
+    const baseUrl = context?.appBaseUrl
+      || process.env.APP_BASE_URL
+      || process.env.NEXT_PUBLIC_APP_URL
+      || 'http://localhost:3000';
+    
     try {
-      const baseUrl = context?.appBaseUrl
-        || process.env.APP_BASE_URL
-        || process.env.NEXT_PUBLIC_APP_URL
-        || 'http://localhost:3000';
       console.log('[Auth0] onCallback invoked', {
         error: error ? {
           message: error.message,
@@ -48,7 +49,7 @@ export const auth0 = new Auth0Client({
         errorUrl.searchParams.set('error_description', error.message);
         return NextResponse.redirect(errorUrl.toString());
       }
-      
+
       const returnTo = context?.returnTo || '/';
       const parsedReturnTo = new URL(returnTo, baseUrl);
       const appOrigin = new URL(baseUrl).origin;
@@ -59,7 +60,7 @@ export const auth0 = new Auth0Client({
       return NextResponse.redirect(redirectUrl);
     } catch (e: any) {
       console.error('[Auth0] onCallback threw:', e?.message, e?.stack);
-      return NextResponse.redirect('http://localhost:3000/');
+      return NextResponse.redirect(new URL('/', baseUrl).toString());
     }
   },
 });

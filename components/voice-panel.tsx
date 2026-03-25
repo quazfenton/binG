@@ -187,8 +187,11 @@ export function VoicePanel({ onClose, onTextSubmit }: VoicePanelProps) {
           if (final) {
             setTranscript(prev => prev + " " + final);
             setInterimTranscript("");
-            // Add to messages - use ref to always call latest handleUserSpeech
-            handleUserSpeechRef.current?.(final.trim());
+            // Avoid starting a new AI request while one is already in flight
+            // This prevents race conditions when recognition emits multiple final chunks
+            if (!abortControllerRef.current) {
+              void handleUserSpeechRef.current?.(final.trim());
+            }
           } else {
             setInterimTranscript(interim);
           }

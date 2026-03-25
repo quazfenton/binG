@@ -105,24 +105,27 @@ export async function POST(request: NextRequest) {
     );
 
     // Create new tree with proper handling for deleted files
-    const tree = blobs
-      .filter((blob: any) => blob.status !== 'deleted')
-      .map((blob: any) => ({
+    // GitHub API supports file deletion by including tree entries with sha: null
+    const tree = blobs.flatMap((blob: any) => {
+      if (blob.status === 'deleted') {
+        // Deleted files: include with sha: null to remove from repo
+        return [{
+          path: blob.path,
+          mode: '100644',
+          type: 'blob',
+          sha: null,
+        }];
+      }
+      // Modified/added files: include with actual sha
+      return [{
         path: blob.path,
         mode: '100644',
         type: 'blob',
         sha: blob.sha,
-      }));
+      }];
+    });
 
-    // For deleted files, we need to create a tree entry with null sha
-    const deletedBlobs = blobs.filter((blob: any) => blob.status === 'deleted');
-    if (deletedBlobs.length > 0) {
-      // Note: GitHub API requires fetching the existing tree and removing entries
-      // This is a simplified implementation - full deletion support needs tree manipulation
-      console.warn(`[GitHub Commit] Deleted files not fully supported: ${deletedBlobs.map((b: any) => b.path).join(', ')}`);
-    }
-
-    // Create new tree using the filtered tree (excludes deleted files)
+    // Create new tree with all entries (including deletions)
     const newTreeResponse = await githubApi<any>(
       `/repos/${targetOwner}/${targetRepo}/git/trees`,
       token,
@@ -130,7 +133,7 @@ export async function POST(request: NextRequest) {
         method: 'POST',
         body: JSON.stringify({
           base_tree: treeSha,
-          tree: tree,  // Use filtered tree instead of blobs.map()
+          tree: tree,
         }),
       }
     );
@@ -172,9 +175,8 @@ export async function POST(request: NextRequest) {
     });
   } catch (error: any) {
     console.error('[GitHub Commit] Error:', error);
-    return NextResponse.json({ 
-      error: error.message || 'Failed to create commit',
-      details: error.toString(),
+    return NextResponse.json({
+      error: 'Failed to create commit',
     }, { status: 500 });
   }
 }

@@ -445,7 +445,7 @@ export const loggers = {
 // ============================================================================
 
 // Only register process handlers in Node.js runtime (not Edge Runtime)
-if (typeof process !== 'undefined' && typeof window === 'undefined' && process.env.NEXT_RUNTIME === 'nodejs') {
+if (typeof process !== 'undefined' && typeof window === 'undefined' && process.env.NEXT_RUNTIME !== 'edge') {
   process.on('exit', () => {
     if (writeStream) {
       writeStream.end();
