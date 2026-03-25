@@ -549,8 +549,8 @@ export default function ConversationInterface() {
         const lastContinueMessageId = lastMessage.id;
         const lastContinueContent = lastMessage.content;
 
-        // Check if message actually contains CONTINUE_REQUESTED token
-        if (!lastContinueContent.includes('[CONTINUE_REQUESTED]')) {
+        // Check if message ends with CONTINUE_REQUESTED token (not just contains it)
+        if (!lastContinueContent.trimEnd().endsWith('[CONTINUE_REQUESTED]')) {
           return; // Skip - AI didn't request continuation
         }
 

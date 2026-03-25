@@ -235,10 +235,12 @@ export async function POST(request: NextRequest) {
       );
     } else {
       const selectedProvider = PROVIDERS[provider as keyof typeof PROVIDERS];
+      // Only allow exact model match or prefix match (e.g., "gpt-4" matches "gpt-4-turbo")
+      // Reject suffix-only matches like "free" or "latest" that could match multiple models
       const isModelSupported = selectedProvider.models.some(
-        m => m === model || m.startsWith(model + ':') || m.endsWith(':' + model.split(':')[0])
+        m => m === model || m.startsWith(`${model}:`)
       );
-      
+
       if (!isModelSupported) {
         chatLogger.error('Model not supported', { requestId, provider, model }, {
           availableModels: selectedProvider.models,
@@ -263,8 +265,9 @@ export async function POST(request: NextRequest) {
     });
 
     // Normalize model name to match PROVIDERS constant
+    // Only allow exact match or prefix match, not suffix-only matches
     const normalizedModel = selectedProvider.models.find(
-      m => m === model || m.startsWith(model + ':') || m.endsWith(':' + model.split(':')[0])
+      m => m === model || m.startsWith(`${model}:`)
     ) || model;
     const attachedFilesystemFiles = normalizeFilesystemContext(filesystemContext?.attachedFiles);
     const resolvedConversationId =
@@ -682,10 +685,10 @@ export async function POST(request: NextRequest) {
         unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
       } else {
         // V1 mode or auto - use spec amplification if enabled
-        // Pass placeholder emit - will be replaced with real emit when stream starts
+        // Only pass emit for streaming requests to avoid memory leak from pendingEvents accumulation
         unifiedResponse = await responseRouter.routeWithSpecAmplification({
           ...routerRequest,
-          emit: placeholderEmit
+          ...(stream ? { emit: placeholderEmit } : {})
         })
       }
 
@@ -1221,7 +1224,12 @@ export async function POST(request: NextRequest) {
               // Record latency for provider router (use actual provider after fallbacks)
               try {
                 llmProviderRouter.recordRequest(actualProvider as LLMProviderType, streamDuration, true);
-              } catch {}
+              } catch (error) {
+                chatLogger.warn('Failed to record provider metrics', { 
+                  provider: actualProvider, 
+                  error: error instanceof Error ? error.message : String(error) 
+                });
+              }
 
               controller.close();
             } catch (error) {
@@ -1235,7 +1243,12 @@ export async function POST(request: NextRequest) {
               // Record error latency for provider router
               try {
                 llmProviderRouter.recordRequest(actualProvider as LLMProviderType, streamDuration, false);
-              } catch {}
+              } catch (recordError) {
+                chatLogger.warn('Failed to record provider error metrics', { 
+                  provider: actualProvider, 
+                  error: recordError instanceof Error ? recordError.message : String(recordError) 
+                });
+              }
 
               // Only send error event if client hasn't disconnected
               if (!request.signal?.aborted) {
@@ -1287,7 +1300,12 @@ export async function POST(request: NextRequest) {
       // Record latency for provider router (use actual provider after fallbacks)
       try {
         llmProviderRouter.recordRequest(actualProvider as LLMProviderType, responseLatency, clientResponse.success !== false);
-      } catch {}
+      } catch (error) {
+        chatLogger.warn('Failed to record provider metrics', { 
+          provider: actualProvider, 
+          error: error instanceof Error ? error.message : String(error) 
+        });
+      }
 
       const responseStatus = clientResponse.success ? 200 : 500;
       return addAnonSessionCookie(NextResponse.json(
@@ -1334,9 +1352,12 @@ export async function POST(request: NextRequest) {
         timestamp: new Date().toISOString()
       }, { status: 503 })); // Service Unavailable - indicates temporary issue
     } finally {
-      // Fix #2: Clear pendingEvents to prevent memory leak across requests
-      pendingEvents.length = 0;
-      emitRef.current = null;
+      // Only clear pendingEvents and emitter for non-streaming responses
+      // Streaming responses handle cleanup in the stream's finally block
+      if (!(stream && selectedProvider.supportsStreaming)) {
+        pendingEvents.length = 0;
+        emitRef.current = null;
+      }
     }
   }
   catch (error) {
@@ -1354,7 +1375,12 @@ export async function POST(request: NextRequest) {
       // Record error latency for provider router (use actual provider)
       try {
         llmProviderRouter.recordRequest(actualProvider as LLMProviderType, errorLatency, false);
-      } catch {}
+      } catch (recordError) {
+        chatLogger.warn('Failed to record provider error metrics', { 
+          provider: actualProvider, 
+          error: recordError instanceof Error ? recordError.message : String(recordError) 
+        });
+      }
     } else {
       chatLogger.warn('Provider not available', { requestId, provider: actualProvider, model: actualModel }, {
         error: errorMessage,
@@ -1364,7 +1390,12 @@ export async function POST(request: NextRequest) {
       // Record error latency for provider router (use actual provider)
       try {
         llmProviderRouter.recordRequest(actualProvider as LLMProviderType, errorLatency, false);
-      } catch {}
+      } catch (recordError) {
+        chatLogger.warn('Failed to record provider error metrics', { 
+          provider: actualProvider, 
+          error: recordError instanceof Error ? recordError.message : String(recordError) 
+        });
+      }
     }
 
     // Process error with enhanced error handler for logging

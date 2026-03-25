@@ -56,7 +56,11 @@ export async function GET(request: NextRequest) {
     };
     cacheTimestamp = now;
 
-    return NextResponse.json(cachedProviders);
+    return NextResponse.json(cachedProviders, {
+      headers: {
+        'Cache-Control': 'public, max-age=300, stale-while-revalidate=600',
+      },
+    });
   } catch (error) {
     console.error("Error fetching providers:", error);
     return NextResponse.json(

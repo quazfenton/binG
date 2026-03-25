@@ -126,6 +126,41 @@ export function extractMultiLineFileEdits(content: string): FileEdit[] {
 }
 
 /**
+ * Extract malformed file edit format where LLM outputs:
+ * <path>...</path>
+ * content
+ * <file Edit> or <file_edit> (as closing marker)
+ * 
+ * This handles cases where LLM doesn't properly wrap content in <file_edit> tags
+ */
+export function extractMalformedFileEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  
+  // Match: <path>path</path> followed by content, ending with <file Edit> or <file_edit> or next <path>
+  // Handles variations: <file Edit>, <file_edit>, <FILE_EDIT>, etc.
+  const regex = /<path>\s*([^\s<]+?)\s*<\/path>\s*([\s\S]*?)(?=<path>|<file\s*edit>|<FILE\s*EDIT>|$)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const filePath = match[1]?.trim();
+    let fileContent = match[2] ?? '';
+    
+    // Skip if path looks invalid or contains tags
+    if (!filePath || filePath.includes('<') || filePath.includes('>')) continue;
+    
+    // Remove trailing file edit markers from content
+    fileContent = fileContent.replace(/\s*<file\s*edit\s*>?\s*$/gi, '').trim();
+    
+    // Only add if there's actual content
+    if (fileContent) {
+      edits.push({ path: filePath, content: fileContent });
+    }
+  }
+
+  return edits;
+}
+
+/**
  * Extract JSON format: { "ws_action": "CREATE", "path": "...", "content": "..." }
  * This is an alternative format used by some LLMs
  */
@@ -369,6 +404,10 @@ export function extractFileEdits(content: string): FileEdit[] {
   if (content.includes('<!--')) {
     edits.push(...extractHtmlCommentFileEdits(content));
   }
+  // Handle malformed format where LLM outputs <path>...</path> without proper wrapping
+  if (content.includes('<path>')) {
+    edits.push(...extractMalformedFileEdits(content));
+  }
 
   return edits;
 }
@@ -594,6 +633,14 @@ export function sanitizeFileEditTags(content: string): string {
     // Remove HTML comment file paths AND their associated content blocks
     // Match: <!-- path -->content (until next <!-- or end of string)
     sanitized = sanitized.replace(/<!--\s*[^\s<]+\s*-->\s*[\s\S]*?(?=<!--|$)/gi, '');
+  }
+
+  if (sanitized.includes('<path>')) {
+    // Remove malformed format: <path>...</path> content <file Edit>
+    // This handles cases where LLM outputs path tags without proper file_edit wrapping
+    sanitized = sanitized.replace(/<path>\s*[^\s<]+\s*<\/path>\s*[\s\S]*?(?=<path>|<file\s*edit>|$)/gi, '');
+    // Remove any remaining <file Edit> markers
+    sanitized = sanitized.replace(/<file\s*edit\s*>?\s*/gi, '');
   }
 
   // Additional formats from api/chat/route.ts

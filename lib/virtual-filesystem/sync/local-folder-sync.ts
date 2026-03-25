@@ -275,7 +275,7 @@ export class LocalFolderSyncService {
       // List files in VFS
       const listing = await vfsListDirectory(folder.ownerId, folder.vfsPath);
       
-      for (const node of listing.nodes) {
+      for (const node of listing.data.nodes) {
         if (node.type === 'file') {
           try {
             // Read from VFS
@@ -296,7 +296,7 @@ export class LocalFolderSyncService {
       }
 
       // Update file count
-      folder.fileCount = listing.nodes.filter(n => n.type === 'file').length;
+      folder.fileCount = listing.data.nodes.filter(n => n.type === 'file').length;
       folder.lastSyncTime = Date.now();
       folder.status = 'connected';
       

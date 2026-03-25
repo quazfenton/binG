@@ -130,8 +130,8 @@ export interface SSEFileEditPayload {
 }
 
 export interface SSESpecAmplificationPayload {
-  /** Amplification stage: started, spec_generated, refining, complete, error */
-  stage: 'started' | 'spec_generated' | 'refining' | 'complete' | 'error';
+  /** Amplification stage: started, spec_generated, refining, task_complete, complete, error */
+  stage: 'started' | 'spec_generated' | 'refining' | 'task_complete' | 'complete' | 'error' | 'complete_with_timeouts';
   /** Fast model used for spec generation */
   fastModel?: string;
   /** Spec quality score (1-10) */
@@ -144,10 +144,29 @@ export interface SSESpecAmplificationPayload {
   totalIterations?: number;
   /** Current section being refined */
   currentSection?: string;
+  /** Task ID for task_complete stage */
+  taskId?: string;
+  /** Task title for task_complete stage */
+  taskTitle?: string;
+  /** Refined content for task_complete stage (to be displayed as assistant message) */
+  content?: string;
   /** Error message if stage is error */
   error?: string;
   /** Timestamp */
   timestamp: number;
+  /** Refined output (on complete stage) */
+  refinedContent?: string;
+  /** Filesystem edits detected */
+  filesystem?: {
+    status: 'detected' | 'applied';
+    applied?: Array<{ path: string; operation: string; timestamp: number }>;
+  };
+  /** File writes detected */
+  fileWrites?: Array<{ path: string; operation: string }>;
+  /** Has file writes */
+  hasFilewrites?: boolean;
+  /** Timed out tasks (for complete_with_timeouts stage) */
+  timedOutTasks?: string[];
 }
 
 export interface SSESpecRefinementPayload {

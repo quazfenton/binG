@@ -188,6 +188,17 @@ export class DAGExecutor {
 
       logger.debug('Task complete', { taskId: task.id, duration: task.completedAt - task.startedAt! })
 
+      // Emit task result as a new assistant message for UI display
+      if (emit) {
+        emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
+          stage: 'task_complete',
+          taskId: task.id,
+          taskTitle: task.title,
+          content: refinedContent,
+          timestamp: Date.now()
+        })
+      }
+
       return refinedContent
 
     } catch (error) {
