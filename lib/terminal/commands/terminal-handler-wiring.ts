@@ -117,7 +117,14 @@ export function wireTerminalHandlers(config: TerminalHandlerWiringConfig): Termi
       getLocalFileSystem: config.getLocalFileSystem,
       setLocalFileSystem: config.setLocalFileSystem,
       getCwd: config.getCwd ? (() => config.getCwd(config.terminalId)) : undefined,
-      setCwd: config.setCwd ? ((cwd: string) => config.setCwd(config.terminalId, cwd)) : undefined,
+      setCwd: config.setCwd ? ((cwd: string) => {
+        const fn = config.setCwd as ((cwd: string) => void) | ((terminalId: string, cwd: string) => void)
+        if (fn.length >= 2) {
+          (fn as (terminalId: string, cwd: string) => void)(config.terminalId, cwd)
+        } else {
+          (fn as (cwd: string) => void)(cwd)
+        }
+      }) : undefined,
       onWrite: config.write,
       onWriteLine: config.writeLine,
       onWriteError: config.writeLine,

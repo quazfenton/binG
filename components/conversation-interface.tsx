@@ -206,7 +206,8 @@ export default function ConversationInterface() {
     return null;
   });
   // Generate initial session ID using new naming system
-  const generateInitialSessionId = () => {
+  // Start empty, will be set asynchronously to allow filesystem scan
+  const [filesystemSessionId, setFilesystemSessionId] = useState<string>(() => {
     const persisted = readPersistedConversationUiState();
     if (persisted?.filesystemSessionId) {
       return persisted.filesystemSessionId;
@@ -215,11 +216,15 @@ export default function ConversationInterface() {
       const saved = sessionStorage.getItem('current_filesystem_session_id');
       if (saved) return saved;
     }
-    // Use sequential naming (001, 002, 003, ...)
-    return generateSessionName(undefined, true, false);
-  };
-  
-  const [filesystemSessionId, setFilesystemSessionId] = useState<string>(generateInitialSessionId);
+    return '';
+  });
+
+  // Generate session name if not restored from persistence
+  useEffect(() => {
+    if (!filesystemSessionId) {
+      generateSessionName(undefined, true, false).then(setFilesystemSessionId);
+    }
+  }, [filesystemSessionId]);
 
   // Persist filesystemSessionId to sessionStorage so page refresh restores it
   useEffect(() => {
@@ -614,10 +619,11 @@ export default function ConversationInterface() {
     const detectedFolder = !llmFolderDetected && detectNewProjectFolder(lastAssistant.content);
     if (detectedFolder && messages.length === 0) {
       // Only apply for new sessions with no prior messages - use LLM-suggested folder name
-      const newSessionId = generateSessionName(detectedFolder, true, true);
-      setFilesystemSessionId(newSessionId);
-      setLlmFolderDetected(true); // Mark as detected to prevent re-triggering
-      toast.success(`Project initialized: ${newSessionId}`);
+      generateSessionName(detectedFolder, true, true).then((newSessionId) => {
+        setFilesystemSessionId(newSessionId);
+        setLlmFolderDetected(true); // Mark as detected to prevent re-triggering
+        toast.success(`Project initialized: ${newSessionId}`);
+      });
     }
 
     const newEntries: { path: string; diff: string }[] = processedResponse.fileDiffs.map(fileDiff => ({
@@ -921,9 +927,10 @@ export default function ConversationInterface() {
     // and the name is valid
     const cleanName = suggestedFolderName.replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 50);
     if (cleanName.length > 0 && messages.length === 0) {
-      const newSessionId = generateSessionName(cleanName, true, true);
-      setFilesystemSessionId(newSessionId);
-      toast.success(`Project initialized: ${newSessionId}`);
+      generateSessionName(cleanName, true, true).then((newSessionId) => {
+        setFilesystemSessionId(newSessionId);
+        toast.success(`Project initialized: ${newSessionId}`);
+      });
     }
   }, [messages.length]);
 
@@ -944,8 +951,8 @@ export default function ConversationInterface() {
 
     setMessages([]);
     setCurrentConversationId(null); // Ensure current conversation ID is reset for a new chat
-    // Use new stock naming for new sessions
-    setFilesystemSessionId(generateSessionName(undefined, true, false));
+    // Use new stock naming for new sessions (async)
+    generateSessionName(undefined, true, false).then(setFilesystemSessionId);
     // Reset LLM folder detection flag for new session
     setLlmFolderDetected(false);
     // Reset approval state for new session

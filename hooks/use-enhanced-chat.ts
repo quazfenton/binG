@@ -647,37 +647,95 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     },
                   }));
 
+                  // When refinement starts, create a pending message to show loading state
+                  if (eventData.stage === 'started' || eventData.stage === 'refining') {
+                    // Use functional update to check current state
+                    setMessages(prev => {
+                      const hasPendingRefinement = prev.some(m =>
+                        m.metadata?.isRefinement && m.metadata?.isPending
+                      );
+
+                      if (!hasPendingRefinement) {
+                        // Create pending refinement message with rotating statements
+                        const pendingMessage: Message = {
+                          id: 'refinement-pending',
+                          role: 'assistant',
+                          content: '',
+                          metadata: {
+                            isRefinement: true,
+                            isPending: true,
+                            isLoading: true,
+                          },
+                        };
+                        return [...prev, pendingMessage];
+                      }
+
+                      return prev;
+                    });
+                  }
+
                   // When a refinement task completes, create a new message with the content
                   if (eventData.stage === 'task_complete' && eventData.content) {
-                    const refinementMessage: Message = {
-                      id: `refinement-${eventData.taskId || Date.now()}`,
-                      role: 'assistant',
-                      content: eventData.content,
-                      metadata: {
-                        isRefinement: true,
-                        taskId: eventData.taskId,
-                        taskTitle: eventData.taskTitle,
-                        provider: eventData.fastModel,
-                        timestamp: eventData.timestamp,
-                      },
-                    };
-                    setMessages(prev => [...prev, refinementMessage]);
+                    // Use functional update to ensure we have current state
+                    setMessages(prev => {
+                      const hasPending = prev.some(m =>
+                        m.metadata?.isRefinement && m.metadata?.isPending
+                      );
+
+                      const refinementMessage: Message = {
+                        id: `refinement-${eventData.taskId || Date.now()}`,
+                        role: 'assistant',
+                        content: eventData.content,
+                        metadata: {
+                          isRefinement: true,
+                          taskId: eventData.taskId,
+                          taskTitle: eventData.taskTitle,
+                          provider: eventData.fastModel,
+                          timestamp: eventData.timestamp,
+                        },
+                      };
+
+                      // Remove pending and add new message
+                      if (hasPending) {
+                        return prev.filter(m =>
+                          !(m.metadata?.isRefinement && m.metadata?.isPending)
+                        ).concat(refinementMessage);
+                      }
+
+                      // Pending already removed, just add new message
+                      return prev.concat(refinementMessage);
+                    });
                   }
 
                   // When refinement completes, create a summary message with filesystem edits if present
                   if (eventData.stage === 'complete' && eventData.filesystem) {
-                    const refinementMessage: Message = {
-                      id: `refinement-summary-${Date.now()}`,
-                      role: 'assistant',
-                      content: eventData.refinedContent || 'Refinement complete. Filesystem changes applied.',
-                      metadata: {
-                        filesystem: eventData.filesystem,
-                        provider: eventData.fastModel,
-                        specScore: eventData.specScore,
-                        isRefinementSummary: true,
-                      },
-                    };
-                    setMessages(prev => [...prev, refinementMessage]);
+                    // Use functional update to ensure we have current state
+                    setMessages(prev => {
+                      const hasPending = prev.some(m =>
+                        m.metadata?.isRefinement && m.metadata?.isPending
+                      );
+
+                      if (!hasPending) {
+                        return prev;
+                      }
+
+                      const refinementMessage: Message = {
+                        id: `refinement-summary-${Date.now()}`,
+                        role: 'assistant',
+                        content: eventData.refinedContent || 'Refinement complete. Filesystem changes applied.',
+                        metadata: {
+                          filesystem: eventData.filesystem,
+                          provider: eventData.fastModel,
+                          specScore: eventData.specScore,
+                          isRefinementSummary: true,
+                        },
+                      };
+
+                      // Remove pending and add summary
+                      return prev.filter(m =>
+                        !(m.metadata?.isRefinement && m.metadata?.isPending)
+                      ).concat(refinementMessage);
+                    });
                   }
                   break;
 

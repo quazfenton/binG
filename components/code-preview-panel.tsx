@@ -52,6 +52,7 @@ import {
 import { createDebugLogger } from "@/config/features";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { checkFileConflicts } from "@/lib/session-naming";
+import { buildApiHeaders } from "@/lib/utils";
 
 // Import live preview offloading functions
 import {

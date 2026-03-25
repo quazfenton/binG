@@ -502,6 +502,36 @@ export default function MessageBubble({
     )
   }
 
+  // Check if this is a pending refinement message (show loading with rotating statements)
+  const isPendingRefinement = message.metadata?.isRefinement && message.metadata?.isPending && message.metadata?.isLoading;
+  
+  if (isPendingRefinement) {
+    const rotatingStatement = useMultiRotatingStatements(['interesting', 'task', 'funny'], 2000);
+    
+    return (
+      <div className={`flex justify-start mb-6 group w-full px-1`}>
+        <div
+          className={`
+            message-bubble-responsive relative transition-all duration-200
+            border border-purple-500/50 shadow-lg shadow-purple-500/20
+            rounded-2xl p-4 bg-gray-800/50
+          `}
+          style={{
+            maxWidth: '600px',
+          }}
+        >
+          <div className="flex items-center gap-3">
+            <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />
+            <div>
+              <p className="text-sm font-medium text-purple-300">AI is refining the response...</p>
+              <p className="text-xs text-gray-400 mt-1">{rotatingStatement}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
+  }
+
   return (
     <div className={`flex ${isUser ? "justify-end" : "justify-start"} ${useCompactLayout ? 'mb-3' : 'mb-6'} group w-full px-1`}>
       <div

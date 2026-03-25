@@ -949,7 +949,10 @@ export class ModalComProvider implements SandboxProvider {
         // Kill all PTY sessions
         // Note: PTY cleanup would happen automatically when sandbox is destroyed
         // but we attempt graceful cleanup here
-
+        
+        // Clean up PTY data handlers for this sandbox
+        this.ptyDataHandlers.delete(sandboxId)
+        
         this.sandboxes.delete(sandboxId)
         logger.info('Modal.com sandbox destroyed', { sandboxId })
       } catch (error: any) {
@@ -959,6 +962,7 @@ export class ModalComProvider implements SandboxProvider {
         })
         // Still remove from map even if cleanup failed
         this.sandboxes.delete(sandboxId)
+        this.ptyDataHandlers.delete(sandboxId)
       }
     } else {
       logger.debug('Attempted to destroy non-existent sandbox', { sandboxId })
