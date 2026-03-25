@@ -69,7 +69,8 @@ class LatencyTracker {
     // Initialize metrics for all providers
     const providers: SandboxProviderType[] = [
       'daytona', 'e2b', 'sprites', 'codesandbox', 'microsandbox',
-      'blaxel', 'opensandbox', 'mistral', 'vercel-sandbox', 'zeroboot'
+      'blaxel', 'opensandbox', 'mistral', 'vercel-sandbox', 'zeroboot',
+      'modal', 'modal-com'
     ];
 
     for (const provider of providers) {
@@ -377,6 +378,24 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     latencyTier: 'low',
     persistenceSupport: false,
     gpuSupport: false,
+  },
+  {
+    type: 'modal',
+    services: [],
+    bestFor: [], // Not used for actual execution
+    costTier: 'low',
+    latencyTier: 'low',
+    persistenceSupport: false,
+    gpuSupport: false,
+  },
+  {
+    type: 'modal-com',
+    services: ['pty', 'preview', 'snapshot', 'agent'],
+    bestFor: ['code-interpreter', 'agent', 'ml-training', 'fullstack-app'],
+    costTier: 'medium',
+    latencyTier: 'low', // Sub-second cold starts
+    persistenceSupport: true, // Via volumes
+    gpuSupport: true, // H100, A100, A10G, T4, L4, A10
   },
 ];
 

@@ -16,6 +16,7 @@
 'use client';
 
 import { OPFSCore, OPFSError, opfsCore } from './opfs-core';
+import { IndexedDBBackend, indexedDBBackend } from '../indexeddb-backend';
 import type { VirtualFile } from '../filesystem-types';
 import {
   fetchFileFromServer,
@@ -80,6 +81,8 @@ export interface OPFSAdapterOptions {
  */
 export class OPFSAdapter {
   private core: OPFSCore;
+  private fallbackBackend: IndexedDBBackend | null = null;
+  private usingFallback = false;
   private writeQueue: QueuedWrite[] = [];
   private syncInProgress = false;
   private lastSyncTime: Map<string, number> = new Map();
@@ -95,6 +98,7 @@ export class OPFSAdapter {
 
   constructor(options: OPFSAdapterOptions = {}) {
     this.core = opfsCore;
+    this.fallbackBackend = indexedDBBackend;
     this.options = {
       autoSync: true,
       autoSyncInterval: 30000, // 30 seconds
@@ -111,19 +115,14 @@ export class OPFSAdapter {
   }
 
   /**
-   * Enable OPFS for a workspace
-   * 
+   * Enable OPFS for a workspace (with IndexedDB fallback)
+   *
    * @param ownerId - Owner/session identifier
    * @param workspaceId - Workspace identifier (defaults to ownerId)
-   * @throws OPFSError if OPFS is not supported
    */
   private pendingEnableResolve: (() => void) | null = null;
 
   async enable(ownerId: string, workspaceId?: string): Promise<void> {
-    if (!OPFSCore.isSupported()) {
-      throw new OPFSError('OPFS not supported in this browser');
-    }
-
     const wsId = workspaceId || ownerId;
 
     // If already enabled for the same workspace, just increment reference count
@@ -150,51 +149,118 @@ export class OPFSAdapter {
       }
     }
 
-    // Mark that we're in the process of enabling (prevents disable() from racing ahead)
+    // Mark that we're in the process of enabling
     let finished = false;
     this.pendingEnableResolve = () => { finished = true; };
     this.enableCount = 1;
 
     try {
-      // If enabled for a different workspace, we need to reinitialize
-      if (this.enabled && this.currentWorkspaceId !== wsId) {
-        console.log('[OPFS] Switching workspace from', this.currentWorkspaceId, 'to', wsId);
-        await this.core.close();
-      }
+      // Try OPFS first
+      if (OPFSCore.isSupported()) {
+        try {
+          // If enabled for a different workspace, we need to reinitialize
+          if (this.enabled && this.currentWorkspaceId !== wsId) {
+            console.log('[OPFS] Switching workspace from', this.currentWorkspaceId, 'to', wsId);
+            await this.core.close();
+          }
 
-      await this.core.initialize(wsId);
-      this.enabled = true;
-      this.ownerId = ownerId;
-      this.currentWorkspaceId = wsId;
-    } catch (initError) {
+          await this.core.initialize(wsId);
+          this.enabled = true;
+          this.usingFallback = false;
+          this.ownerId = ownerId;
+          this.currentWorkspaceId = wsId;
+          console.log('[OPFS] Enabled with OPFS backend for workspace:', wsId);
+        } catch (opfsError) {
+          // OPFS failed, fall back to IndexedDB
+          console.warn('[OPFS] Initialization failed, falling back to IndexedDB:', opfsError);
+          await this.enableFallback(ownerId, wsId);
+        }
+      } else {
+        // OPFS not supported, use IndexedDB
+        console.log('[OPFS] Not supported, using IndexedDB fallback');
+        await this.enableFallback(ownerId, wsId);
+      }
+    } catch (enableError) {
       this.enableCount = 0;
       this.enabled = false;
-      throw initError;
+      throw enableError;
     } finally {
       if (finished) this.pendingEnableResolve = null;
     }
 
-    // Set up online/offline handlers
+    // Set up online/offline handler
     if (typeof window !== 'undefined') {
       this.onlineHandler = () => {
         if (navigator.onLine && this.options.autoSync) {
           this.flushWriteQueue(ownerId).catch(console.error);
         }
       };
+
       window.addEventListener('online', this.onlineHandler);
     }
 
     // Start background sync if enabled
-    if (this.options.autoSync) {
-      this.startBackgroundSync();
-    }
+    this.startBackgroundSyncLoop();
 
     // Initial sync from server (non-blocking)
     this.syncFromServer(ownerId).catch(err => {
       console.warn('[OPFS] Initial sync failed:', err);
     });
 
-    console.log('[OPFS] Enabled for owner:', ownerId);
+    console.log('[OPFS] Enabled for owner:', ownerId, '(fallback:', this.usingFallback + ')');
+  }
+
+  /**
+   * Enable IndexedDB fallback backend
+   */
+  private async enableFallback(ownerId: string, workspaceId: string): Promise<void> {
+    try {
+      if (!IndexedDBBackend.isSupported()) {
+        throw new Error('IndexedDB not supported');
+      }
+
+      await this.fallbackBackend!.initialize(ownerId);
+      this.enabled = true;
+      this.usingFallback = true;
+      this.ownerId = ownerId;
+      this.currentWorkspaceId = workspaceId;
+      console.log('[OPFS] Enabled with IndexedDB fallback for workspace:', workspaceId);
+    } catch (fallbackError) {
+      console.error('[OPFS] Fallback to IndexedDB failed:', fallbackError);
+      throw new Error(
+        `Failed to enable storage backend: ${fallbackError instanceof Error ? fallbackError.message : 'Unknown error'}`
+      );
+    }
+  }
+
+  /**
+   * Check if using fallback backend
+   */
+  isUsingFallback(): boolean {
+    return this.usingFallback;
+  }
+
+  /**
+   * Start background sync if enabled
+   */
+  private startBackgroundSyncLoop(): void {
+    if (this.options.autoSync && !this.syncInterval) {
+      this.syncInterval = setInterval(() => {
+        if (this.enabled && this.ownerId) {
+          this.syncFromServer(this.ownerId).catch(console.warn);
+        }
+      }, this.options.autoSyncInterval);
+    }
+  }
+
+  /**
+   * Stop background sync
+   */
+  private stopBackgroundSync(): void {
+    if (this.syncInterval) {
+      clearInterval(this.syncInterval);
+      this.syncInterval = null;
+    }
   }
 
   /**

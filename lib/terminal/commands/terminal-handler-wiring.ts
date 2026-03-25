@@ -116,6 +116,8 @@ export function wireTerminalHandlers(config: TerminalHandlerWiringConfig): Termi
       syncToVFS: config.syncFileToVFS,
       getLocalFileSystem: config.getLocalFileSystem,
       setLocalFileSystem: config.setLocalFileSystem,
+      getCwd: config.getCwd,
+      setCwd: config.setCwd,
       onWrite: config.write,
       onWriteLine: config.writeLine,
       onWriteError: config.writeLine,

@@ -24,7 +24,7 @@ import {
 } from "lucide-react"
 
 interface SpecAmplificationProgressProps {
-  stage?: 'started' | 'spec_generated' | 'refining' | 'complete' | 'error'
+  stage?: 'started' | 'spec_generated' | 'refining' | 'task_complete' | 'complete' | 'error' | 'complete_with_timeouts'
   fastModel?: string
   specScore?: number
   sectionsGenerated?: number
@@ -33,6 +33,9 @@ interface SpecAmplificationProgressProps {
   currentSection?: string
   error?: string
   timestamp?: number
+  taskId?: string
+  taskTitle?: string
+  content?: string
 }
 
 export function SpecAmplificationProgress({
@@ -44,7 +47,9 @@ export function SpecAmplificationProgress({
   totalIterations = 0,
   currentSection,
   error,
-  timestamp
+  timestamp,
+  taskTitle,
+  content
 }: SpecAmplificationProgressProps) {
   const progress = totalIterations > 0 
     ? Math.round((currentIteration / totalIterations) * 100) 
@@ -69,11 +74,23 @@ export function SpecAmplificationProgress({
       description: currentSection || `Section ${currentIteration}/${totalIterations}`,
       color: 'text-amber-400'
     },
+    task_complete: {
+      icon: CheckCircle2,
+      title: taskTitle || 'Task Complete',
+      description: 'Refinement task completed',
+      color: 'text-green-400'
+    },
     complete: {
       icon: CheckCircle2,
       title: 'Refinement Complete',
       description: specScore ? `Quality score: ${specScore}/10` : 'All sections refined',
       color: 'text-green-400'
+    },
+    complete_with_timeouts: {
+      icon: CheckCircle2,
+      title: 'Refinement Complete (Partial)',
+      description: 'Some tasks timed out',
+      color: 'text-amber-400'
     },
     error: {
       icon: AlertCircle,
@@ -83,7 +100,7 @@ export function SpecAmplificationProgress({
     }
   }
 
-  const config = stageConfig[stage]
+  const config = stageConfig[stage as keyof typeof stageConfig] || stageConfig.started
   const Icon = config.icon
 
   return (
