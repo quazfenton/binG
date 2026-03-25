@@ -33,6 +33,7 @@ export interface TerminalLocalFSConfig {
   onOpenEditor?: (filePath: string, editorType: 'nano' | 'vim' | 'vi') => void
   getCwd?: () => string
   setCwd?: (terminalId: string, cwd: string) => void
+  onFileChanged?: (path: string, type: 'create' | 'update' | 'delete') => void
 }
 
 /**
@@ -69,8 +70,15 @@ export class TerminalLocalFSHandler {
       getFileSystem: config.getLocalFileSystem,
       setFileSystem: config.setLocalFileSystem,
       onOpenEditor: config.onOpenEditor,
-      getCwd: config.getCwd ? (() => config.getCwd!(config.terminalId)) : undefined,
-      setCwd: config.setCwd ? ((cwd: string) => config.setCwd!(config.terminalId, cwd)) : undefined,
+      getCwd: config.getCwd ? (() => {
+        const fn = config.getCwd as (terminalId: string) => string
+        return fn(config.terminalId)
+      }) : undefined,
+      setCwd: config.setCwd ? ((cwd: string) => {
+        const fn = config.setCwd as (terminalId: string, cwd: string) => void
+        fn(config.terminalId, cwd)
+      }) : undefined,
+      onFileChanged: config.onFileChanged,
     })
   }
 
