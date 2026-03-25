@@ -487,10 +487,10 @@ export class OPFSAdapter {
 
   /**
    * Sync from server to OPFS
-   * 
+   *
    * Downloads all files from server VFS to OPFS cache.
    * Used for initial sync and refresh operations.
-   * 
+   *
    * @param ownerId - Owner identifier
    * @param options - Sync options
    * @returns Sync result with statistics
@@ -503,6 +503,19 @@ export class OPFSAdapter {
     let bytesTransferred = 0;
 
     try {
+      // FIX: Check if using IndexedDB fallback or if OPFS is not initialized
+      if (this.usingFallback || !this.core.isInitialized()) {
+        console.log('[OPFS] Skipping sync - using IndexedDB fallback or OPFS not initialized');
+        return {
+          success: true,
+          filesSynced: 0,
+          bytesTransferred: 0,
+          conflicts: [],
+          errors: [],
+          duration: Date.now() - startTime,
+        };
+      }
+
       // Get server snapshot via API
       const snapshot = await getWorkspaceSnapshot();
 

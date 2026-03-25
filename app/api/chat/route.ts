@@ -1096,15 +1096,35 @@ export async function POST(request: NextRequest) {
 
         const encoder = new TextEncoder();
         let encoderRef = encoder;  // Reference for cleanup
+        let streamClosed = false;  // Track stream state for cancel callback
+
+        // Cleanup function for resource management (defined here for cancel callback access)
+        const cleanup = () => {
+          encoderRef = null;
+          emitRef.current = null;
+        };
 
         const readableStream = new ReadableStream({
           async start(controller) {
             // Set up real emit that writes directly to stream controller
+            // Keep reference for background refinement to use
             const realEmit = (eventType: string, data: any) => {
-              if (request.signal?.aborted) return;
+              if (request.signal?.aborted || streamClosed) return;
               const eventStr = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
               controller.enqueue(encoderRef.encode(eventStr));
               chunkCount++;
+
+              // Close stream when refinement completes (any completion stage)
+              if (eventType === 'spec_amplification' && 
+                  (data.stage === 'complete' || 
+                   data.stage === 'task_complete' || 
+                   data.stage === 'complete_with_timeouts' ||
+                   data.stage === 'error' ||
+                   data.stage === 'spec_failed')) {
+                streamClosed = true;
+                controller.close();
+                cleanup();
+              }
             };
 
             // Replace placeholder emit with real emit - background refinement will now stream directly
@@ -1116,16 +1136,13 @@ export async function POST(request: NextRequest) {
             }
             pendingEvents.length = 0;
 
-            // Cleanup function for resource management
-            const cleanup = () => {
-              encoderRef = null;
-              emitRef.current = null;
-            };
-
             // Handle client disconnect
             if (request.signal) {
               request.signal.addEventListener('abort', () => {
-                cleanup();
+                if (!streamClosed) {
+                  streamClosed = true;
+                  cleanup();
+                }
                 const streamDuration = Date.now() - streamStartTime;
                 chatLogger.warn('Stream cancelled by client', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
                   chunkCount,
@@ -1174,11 +1191,11 @@ export async function POST(request: NextRequest) {
 
               // Stream content tokens with progressive delay for natural feel
               const totalTokens = tokenEvents.length;
-              
+
               // Calculate optimal delay based on token count for consistent streaming duration
               // Target: 10-30 seconds of streaming depending on response length
               const baseDelay = totalTokens > 200 ? 25 : totalTokens > 100 ? 35 : 50;
-              
+
               for (let i = 0; i < totalTokens; i++) {
                 if (request.signal?.aborted) {
                   cleanup();
@@ -1208,13 +1225,19 @@ export async function POST(request: NextRequest) {
                 await new Promise(resolve => setTimeout(resolve, delay));
               }
 
-              // Send done event
+              // Send done event for PRIMARY response
+              // DON'T close stream yet - background refinement may still be running
               if (doneEvent) {
                 controller.enqueue(encoderRef.encode(doneEvent));
+                chunkCount++;
               }
 
               const streamDuration = Date.now() - streamStartTime;
-              chatLogger.info('Stream completed successfully', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
+              chatLogger.info('Primary response stream completed, waiting for background refinement', { 
+                requestId: streamRequestId, 
+                provider: actualProvider, 
+                model: actualModel 
+              }, {
                 chunkCount,
                 latencyMs: streamDuration,
                 eventsCount: events.length,
@@ -1225,13 +1248,26 @@ export async function POST(request: NextRequest) {
               try {
                 llmProviderRouter.recordRequest(actualProvider as LLMProviderType, streamDuration, true);
               } catch (error) {
-                chatLogger.warn('Failed to record provider metrics', { 
-                  provider: actualProvider, 
-                  error: error instanceof Error ? error.message : String(error) 
+                chatLogger.warn('Failed to record provider metrics', {
+                  provider: actualProvider,
+                  error: error instanceof Error ? error.message : String(error)
                 });
               }
 
-              controller.close();
+              // Stream stays open for background refinement events
+              // The emit function will close the stream when refinement completes
+              // Add timeout fallback in case refinement never completes
+              setTimeout(() => {
+                if (!streamClosed) {
+                  chatLogger.warn('Background refinement timeout, closing stream', { 
+                    requestId: streamRequestId 
+                  });
+                  streamClosed = true;
+                  controller.close();
+                  cleanup();
+                }
+              }, 30000); // 30 second timeout for refinement
+
             } catch (error) {
               const streamDuration = Date.now() - streamStartTime;
               chatLogger.error('Streaming error', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
@@ -1244,9 +1280,9 @@ export async function POST(request: NextRequest) {
               try {
                 llmProviderRouter.recordRequest(actualProvider as LLMProviderType, streamDuration, false);
               } catch (recordError) {
-                chatLogger.warn('Failed to record provider error metrics', { 
-                  provider: actualProvider, 
-                  error: recordError instanceof Error ? recordError.message : String(recordError) 
+                chatLogger.warn('Failed to record provider error metrics', {
+                  provider: actualProvider,
+                  error: recordError instanceof Error ? recordError.message : String(recordError)
                 });
               }
 
@@ -1258,13 +1294,18 @@ export async function POST(request: NextRequest) {
                   canRetry: true  // Changed to true - most errors are retryable
                 })}\n\n`;
                 controller.enqueue(encoderRef.encode(errorEvent));
+                chunkCount++;
               }
+              streamClosed = true;
               controller.close();
-            } finally {
               cleanup();
             }
           },
           cancel() {
+            if (!streamClosed) {
+              streamClosed = true;
+              cleanup();
+            }
             const streamDuration = Date.now() - streamStartTime;
             chatLogger.warn('Stream cancelled (cancel callback)', { requestId: streamRequestId, provider: actualProvider, model: actualModel }, {
               chunkCount,

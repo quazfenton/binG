@@ -75,8 +75,12 @@ export class TerminalLocalFSHandler {
         return fn(config.terminalId)
       }) : undefined,
       setCwd: config.setCwd ? ((cwd: string) => {
-        const fn = config.setCwd as (terminalId: string, cwd: string) => void
-        fn(config.terminalId, cwd)
+        const fn = config.setCwd as ((cwd: string) => void) | ((terminalId: string, cwd: string) => void)
+        if (fn.length >= 2) {
+          (fn as (terminalId: string, cwd: string) => void)(config.terminalId, cwd)
+        } else {
+          (fn as (cwd: string) => void)(cwd)
+        }
       }) : undefined,
       onFileChanged: config.onFileChanged,
     })

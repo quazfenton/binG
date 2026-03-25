@@ -153,24 +153,46 @@ export class OPFSCore extends SimpleEventEmitter<OPFSEventMap> {
     if (!workspaceId || typeof workspaceId !== 'string') {
       throw new OPFSError('Invalid workspace ID: must be a non-empty string');
     }
-    
-    // Replace invalid characters with underscores
-    // Valid chars: a-z, A-Z, 0-9, -, _
-    const sanitized = workspaceId.replace(/[^a-zA-Z0-9_-]/g, '_');
-    
+
+    // Encode invalid characters as hex to preserve uniqueness (1:1 mapping)
+    // Valid chars: a-z, A-Z, 0-9, -, _ (passed through unchanged)
+    // Invalid chars: encoded as _XX where XX is hex code (e.g., ' ' → '_20', '!' → '_21')
+    let sanitized = '';
+    for (const char of workspaceId) {
+      if (/^[a-zA-Z0-9_-]$/.test(char)) {
+        sanitized += char;
+      } else {
+        sanitized += `_${char.charCodeAt(0).toString(16).padStart(2, '0')}`;
+      }
+    }
+
     // Ensure the result isn't empty or too long
     if (!sanitized || sanitized.length === 0) {
       throw new OPFSError('Invalid workspace ID: results in empty name after sanitization');
     }
-    
+
     // Limit length to prevent filesystem issues (most filesystems limit to 255 chars)
     const maxLength = 200;
     if (sanitized.length > maxLength) {
-      console.warn('[OPFS] Workspace ID too long, truncating to', maxLength, 'chars');
-      return sanitized.substring(0, maxLength);
+      // Truncate and add hash to preserve uniqueness
+      const hash = this.simpleHash(sanitized);
+      return sanitized.substring(0, maxLength - 8) + `_${hash}`;
     }
-    
+
     return sanitized;
+  }
+
+  /**
+   * Simple hash function for truncation suffix
+   */
+  private simpleHash(str: string): string {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return Math.abs(hash).toString(16).padStart(8, '0');
   }
 
   /**

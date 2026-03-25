@@ -71,10 +71,12 @@ export function extractHtmlCommentFileEdits(content: string): FileEdit[] {
 
 /**
  * Extract <file_edit path="...">content</file_edit> compact format
+ * Handles both with and without space: <file_edit path="..."> and <file_editpath="...">
  */
 export function extractCompactFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
-  const regex = /<file_edit\s+path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_edit>/gi;
+  // Use \s* to handle both spaced and non-spaced variants
+  const regex = /<file_edit\s*path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_edit>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
@@ -634,8 +636,8 @@ export function sanitizeFileEditTags(content: string): string {
 
   // Only run sanitizers if their signature is detected (O(1) string check)
   if (sanitized.includes('<file_edit')) {
-    // Remove compact format
-    sanitized = sanitized.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
+    // Remove compact format (handles both spaced and non-spaced variants)
+    sanitized = sanitized.replace(/<file_edit\s*path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
     // Remove multi-line format
     sanitized = sanitized.replace(/<file_edit>\s*<path>\s*[^\s<]+\s*<\/path>\s*[\s\S]*?\s*<\/file_edit>/gi, '');
   }
