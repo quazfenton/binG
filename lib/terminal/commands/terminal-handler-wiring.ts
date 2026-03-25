@@ -116,14 +116,26 @@ export function wireTerminalHandlers(config: TerminalHandlerWiringConfig): Termi
       syncToVFS: config.syncFileToVFS,
       getLocalFileSystem: config.getLocalFileSystem,
       setLocalFileSystem: config.setLocalFileSystem,
-      getCwd: config.getCwd,
-      setCwd: config.setCwd,
+      getCwd: config.getCwd ? (() => config.getCwd(config.terminalId)) : undefined,
+      setCwd: config.setCwd ? ((cwd: string) => config.setCwd(config.terminalId, cwd)) : undefined,
       onWrite: config.write,
       onWriteLine: config.writeLine,
       onWriteError: config.writeLine,
       onOpenEditor: (filePath, editorType) => {
         // Open file in the SHARED editor handler
         editorHandler.openFile(filePath, editorType)
+      },
+      onFileChanged: (path, type) => {
+        // Emit filesystem event for UI update
+        if (typeof window !== 'undefined') {
+          const { emitFilesystemUpdated } = require('@/lib/virtual-filesystem/sync/sync-events');
+          emitFilesystemUpdated({
+            path,
+            type,
+            source: 'terminal-local',
+            scopePath: config.filesystemScopePath,
+          });
+        }
       },
     }),
 

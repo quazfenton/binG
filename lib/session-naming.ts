@@ -1,6 +1,28 @@
+/**
+ * Session Naming Service
+ *
+ * Optimized for O(1) lookups with comprehensive conflict handling.
+ * Uses Set for O(1) has/add/delete operations.
+ *
+ * Naming scheme:
+ * - First 999 sessions: 001, 002, 003, ... 999 (zero-padded sequential)
+ * - After 999: Stock words (alpha, beta, gamma, ...)
+ * - LLM suggestions: Sanitized and conflict-checked
+ *
+ * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Set
+ */
+
 import { secureRandomString } from './utils';
 
-// Stock words for naming after OneXX, TwoXX, ThreeXX
+// Simple logger for session naming (defined early to avoid hoisting issues)
+const logger = {
+  debug: (msg: string) => console.debug(`[SessionNaming] ${msg}`),
+  info: (msg: string) => console.info(`[SessionNaming] ${msg}`),
+  warn: (msg: string) => console.warn(`[SessionNaming] ${msg}`),
+  error: (msg: string, err?: Error) => console.error(`[SessionNaming] ${msg}`, err),
+};
+
+// Stock words for naming after sequential numbers
 const STOCK_WORDS = [
   'alpha', 'beta', 'gamma', 'delta', 'epsilon', 'zeta', 'eta', 'theta',
   'iota', 'kappa', 'lambda', 'mu', 'nu', 'xi', 'omicron', 'pi', 'rho',
@@ -15,102 +37,147 @@ const STOCK_WORDS = [
   'peak', 'reef', 'spire', 'tundra', 'upland', 'vista', 'wilds',
 ];
 
-// Pre-defined first 3 names
-const FIRST_THREE = [
-  'One',   // Will add 2 random alphanumerics
-  'Two',
-  'Three',
-];
-
-// Session name state (in-memory for server restarts, would need DB for persistence)
-let usedNames = new Set<string>();
+// OPTIMIZATION: Set provides O(1) lookup vs O(n) for Array
+const usedNames = new Set<string>();
 let currentIndex = 0;
+
+// Cache for filesystem checks to avoid redundant API calls
+const filesystemCheckCache = new Map<string, { exists: boolean; checkedAt: number }>();
+const CACHE_TTL_MS = 5000; // 5 second cache
 
 /**
  * Register a session as used (for tracking active sessions)
- * This stores the conversationId in usedNames so it can be cleaned up later
+ * Time complexity: O(1)
  */
 export function registerActiveSession(conversationId: string): void {
-  usedNames.add(conversationId.toLowerCase());
+  const lowerId = conversationId.toLowerCase();
+  usedNames.add(lowerId);
+  // Also cache filesystem check result
+  filesystemCheckCache.set(lowerId, { exists: true, checkedAt: Date.now() });
 }
 
 /**
  * Unregister a session by conversationId (for cleanup when sessions are deleted)
- * Frees up the conversationId from usedNames
+ * Time complexity: O(1)
  */
 export function unregisterActiveSession(conversationId: string): void {
   const lowerId = conversationId.toLowerCase();
   if (usedNames.has(lowerId)) {
     usedNames.delete(lowerId);
+    filesystemCheckCache.delete(lowerId);
     logger.debug(`Unregistered session: ${lowerId}`);
   }
 }
 
 /**
  * Reset the naming counter (for testing or fresh starts)
+ * Time complexity: O(1)
  */
 export function resetSessionNaming(): void {
   usedNames.clear();
+  filesystemCheckCache.clear();
   currentIndex = 0;
 }
 
 /**
- * Generate a 2-character alphanumeric string (uppercase letters and digits)
+ * Generate a zero-padded 3-digit number (001, 002, 003, etc.)
+ * Time complexity: O(1)
  */
-function generateTwoCharSuffix(): string {
-  return secureRandomString(2, 'ABCDEFGHIJKLMNOPQRSTUVWXYZ0123456789');
+function generateSequentialNumber(index: number): string {
+  // Use 1-based indexing for human-friendly numbering (001 instead of 000)
+  return String(index + 1).padStart(3, '0');
 }
 
 /**
- * Get the next stock word name
+ * Get the next session name using sequential numbering
+ * Time complexity: O(1)
  */
 function getNextStockName(): string {
-  if (currentIndex < 3) {
-    // First three use OneXX, TwoXX, ThreeXX pattern
-    const prefix = FIRST_THREE[currentIndex];
+  // Use sequential numbering: 001, 002, 003, ... 999
+  if (currentIndex < 999) {
+    const name = generateSequentialNumber(currentIndex);
     currentIndex++;
-    return `${prefix}${generateTwoCharSuffix()}`;
+    return name;
   }
-  
-  // After first three, use stock words with suffix if needed
-  const baseIndex = currentIndex - 3;
+
+  // After 999 sessions, fall back to stock words with suffix if needed
+  const baseIndex = currentIndex - 999;
   const wordIndex = baseIndex % STOCK_WORDS.length;
   const repeatCount = Math.floor(baseIndex / STOCK_WORDS.length);
   const baseWord = STOCK_WORDS[wordIndex];
-  
+
   currentIndex++;
-  
+
   if (repeatCount === 0) {
     return baseWord;
   }
-  
+
   return `${baseWord}${repeatCount}`;
 }
 
 /**
- * Generate a unique session name
- * First checks if the name is already used, if so appends alphanumeric
+ * Generate a unique session name with O(1) conflict detection
+ * 
+ * OPTIMIZATION: Uses Set for O(1) lookup instead of Array.includes() which is O(n)
+ * Suffix strategy:
+ * - Sequential names (001): 001a, 001b, ..., 001z, 0011, 0012, ...
+ * - Stock words (alpha): alpha1, alpha2, alpha3, ...
+ * 
+ * Time complexity: O(1) average case, O(k) worst case where k = number of conflicts
+ * 
+ * @param baseName - Base name to make unique
+ * @returns Unique name with suffix if needed
  */
 function generateUniqueName(baseName: string): string {
-  let candidate = baseName.toLowerCase();
-  let suffix = '';
-  let attempt = 0;
+  const normalizedName = baseName.toLowerCase();
   
-  while (usedNames.has(candidate)) {
-    suffix = generateTwoCharSuffix();
-    attempt++;
-    candidate = `${baseName.toLowerCase()}${suffix}`;
-    
-    // Safety limit to prevent infinite loop
-    if (attempt > 100) {
-      // Fall back to random unique name
-      candidate = `session${generateTwoCharSuffix()}${Date.now().toString(36)}`;
-      break;
-    }
+  // OPTIMIZATION: O(1) lookup with Set
+  if (!usedNames.has(normalizedName)) {
+    usedNames.add(normalizedName);
+    return normalizedName;
   }
   
-  usedNames.add(candidate);
-  return candidate;
+  // Conflict detected - need suffix
+  let attempt = 0;
+  let candidate = '';
+  
+  // Determine suffix strategy based on name pattern
+  const isSequential = /^\d{3}$/.test(normalizedName);
+  
+  while (true) {
+    attempt++;
+    
+    // Generate suffix based on name type
+    if (isSequential) {
+      // Sequential names: 001a, 001b, ..., 001z, then 0011, 0012, ...
+      if (attempt <= 26) {
+        // Letter suffixes first (a-z)
+        const letter = String.fromCharCode(96 + attempt); // a=97, so 96+1=a
+        candidate = `${normalizedName}${letter}`;
+      } else {
+        // Then numeric suffixes
+        candidate = `${normalizedName}${attempt - 26}`;
+      }
+    } else {
+      // Stock words and LLM names: alpha1, alpha2, ...
+      candidate = `${normalizedName}${attempt}`;
+    }
+    
+    // O(1) conflict check
+    if (!usedNames.has(candidate)) {
+      usedNames.add(candidate);
+      return candidate;
+    }
+    
+    // Safety limit to prevent infinite loop (should never reach with good suffix strategy)
+    if (attempt > 100) {
+      // Fall back to guaranteed unique name with timestamp
+      candidate = `session${Date.now().toString(36)}${secureRandomString(4, 'abcdefghijklmnopqrstuvwxyz0123456789')}`;
+      usedNames.add(candidate);
+      logger.warn(`Generated fallback unique name after 100 conflicts: ${candidate}`);
+      return candidate;
+    }
+  }
 }
 
 /**
@@ -118,6 +185,16 @@ function generateUniqueName(baseName: string): string {
  * @param suggestedFolderName - Optional folder name from LLM response
  * @param isNewProject - Whether this is a new project (first generation)
  * @param hasOnlyOneFolder - Whether the response has only 1 pre-named folder
+ * 
+ * Naming scheme:
+ * - First 999 sessions: 001, 002, 003, ... 999 (zero-padded sequential)
+ * - After 999: Stock words (alpha, beta, gamma, ...)
+ * - If LLM suggests a name for single-folder projects, use that (with conflict check)
+ * 
+ * Conflict handling:
+ * - Editing existing files in existing session = OK (auto-apply)
+ * - New files with same names = CONFLICT (require approval in UI)
+ * - LLM suggests existing folder name = Use it if empty, otherwise append suffix
  */
 export function generateSessionName(
   suggestedFolderName?: string,
@@ -125,33 +202,55 @@ export function generateSessionName(
   hasOnlyOneFolder: boolean = false
 ): string {
   // Rule 1: If it's a new project, has only 1 folder, and LLM suggested a name,
-  // use the LLM-suggested folder name as the session ID
+  // use the LLM-suggested folder name as the session ID (with conflict handling)
   if (isNewProject && hasOnlyOneFolder && suggestedFolderName) {
     const cleanName = suggestedFolderName
       .replace(/[^a-zA-Z0-9_-]/g, '')  // Remove special chars
       .replace(/^\d+/, '')              // Remove leading numbers
       .substring(0, 50);                // Limit length
-    
+
     if (cleanName.length > 0) {
+      // generateUniqueName will handle conflicts by appending suffix
       return generateUniqueName(cleanName);
     }
   }
-  
-  // Rule 2: Use stock naming (OneXX, TwoXX, ThreeXX, then stock words)
+
+  // Rule 2: Use sequential numbering (001, 002, 003, ...)
   return generateUniqueName(getNextStockName());
 }
 
 /**
  * Check if a session name already exists in filesystem (for conflict detection)
- * Queries the actual filesystem state, not just in-memory cache
+ * 
+ * OPTIMIZATION: Uses 2-level caching:
+ * 1. In-memory Set (O(1) lookup)
+ * 2. Filesystem check cache (5 second TTL to avoid redundant API calls)
+ * 
+ * Time complexity: O(1) for cached checks, O(API) for uncached
+ * 
+ * @param name - Session name to check
+ * @returns true if name exists (in memory or filesystem)
  */
 export async function sessionNameExists(name: string): Promise<boolean> {
-  // Check in-memory cache first for quick response
-  if (usedNames.has(name.toLowerCase())) {
+  const normalizedName = name.toLowerCase();
+  
+  // Level 1: Check in-memory Set (O(1))
+  if (usedNames.has(normalizedName)) {
     return true;
   }
   
-  // Query filesystem to check if session folder already exists
+  // Level 2: Check filesystem cache (O(1) if cached)
+  const cached = filesystemCheckCache.get(normalizedName);
+  if (cached) {
+    const isFresh = (Date.now() - cached.checkedAt) < CACHE_TTL_MS;
+    if (isFresh) {
+      return cached.exists;
+    }
+    // Cache expired, remove it
+    filesystemCheckCache.delete(normalizedName);
+  }
+  
+  // Level 3: Query filesystem (expensive, but cached for 5 seconds)
   try {
     const response = await fetch('/api/filesystem/list', {
       method: 'POST',
@@ -161,55 +260,58 @@ export async function sessionNameExists(name: string): Promise<boolean> {
         recursive: false,
       }),
     });
-    
+
     if (response.ok) {
       const payload = await response.json().catch(() => null);
       // If directory exists, name is taken
-      if (payload?.success && payload?.data?.nodes?.length > 0) {
-        // Register the name so we don't query again
-        usedNames.add(name.toLowerCase());
-        return true;
-      }
+      const exists = !!(payload?.success && payload?.data?.nodes?.length > 0);
+      
+      // Cache the result
+      filesystemCheckCache.set(normalizedName, {
+        exists,
+        checkedAt: Date.now(),
+      });
+      
+      return exists;
     }
   } catch (error) {
     console.warn('Failed to check session name in filesystem:', error);
   }
-  
+
   return false;
 }
 
 /**
  * Register a session name as used (for loading existing sessions)
+ * Time complexity: O(1)
  */
 export function registerSessionName(name: string): void {
-  usedNames.add(name.toLowerCase());
+  const normalizedName = name.toLowerCase();
+  usedNames.add(normalizedName);
+  filesystemCheckCache.set(normalizedName, { exists: true, checkedAt: Date.now() });
 }
 
 /**
  * Unregister a session name (for cleanup when sessions are deleted)
  * Frees up the name for reuse
+ * Time complexity: O(1)
  */
 export function unregisterSessionName(name: string): void {
   const lowerName = name.toLowerCase();
   if (usedNames.has(lowerName)) {
     usedNames.delete(lowerName);
-    // Adjust currentIndex to allow reuse of names if we're at the end
-    // This is a simple heuristic - names can be reused if we've cycled through
-    const stockWordNames = [...STOCK_WORDS.map(w => w.toLowerCase()), ...FIRST_THREE.map(f => f.toLowerCase())];
-    if (!stockWordNames.includes(lowerName)) {
+    filesystemCheckCache.delete(lowerName);
+    
+    // Sequential names (001-999) and stock words can be reused safely
+    const isSequential = /^\d{3}$/.test(lowerName);
+    const isStockWord = STOCK_WORDS.some(w => w.toLowerCase() === lowerName);
+    
+    if (!isSequential && !isStockWord) {
       // It's a generated name with suffix, safe to allow reuse
       logger.debug(`Unregistered session name: ${lowerName}`);
     }
   }
 }
-
-// Simple logger for session naming
-const logger = {
-  debug: (msg: string) => console.debug(`[SessionNaming] ${msg}`),
-  info: (msg: string) => console.info(`[SessionNaming] ${msg}`),
-  warn: (msg: string) => console.warn(`[SessionNaming] ${msg}`),
-  error: (msg: string, err?: Error) => console.error(`[SessionNaming] ${msg}`, err),
-};
 
 /**
  * Check if writes would potentially overwrite existing files

@@ -305,16 +305,20 @@ export function useVirtualFilesystem(
   // and invalidate the snapshot cache AND trigger immediate re-fetch to ensure fresh data
   // Note: We define a local fetch function here since 'request' is defined after this useEffect
   useEffect(() => {
+    // Debounce rapid filesystem events to prevent excessive re-fetching
+    let debounceTimer: NodeJS.Timeout | null = null;
+    const DEBOUNCE_MS = 150; // Wait 150ms after last event before fetching
+
     const unsubscribe = onFilesystemUpdated((event) => {
       const detail = event.detail;
-      
+
       // Get current session ID when event fires (not at effect creation time)
       const ownerId = getSessionId();
       const currentPath = currentPathRef.current;
-      
+
       // Determine which paths need refresh (deduplicate)
       const pathsToRefreshSet = new Set<string>();
-      
+
       if (detail.scopePath) {
         pathsToRefreshSet.add(detail.scopePath);
       }
@@ -324,58 +328,64 @@ export function useVirtualFilesystem(
       if (detail.paths && detail.paths.length > 0) {
         detail.paths.forEach(p => pathsToRefreshSet.add(p));
       }
-      
-      // Convert to array for iteration
-      const pathsToRefresh = Array.from(pathsToRefreshSet);
-      
-      // Invalidate cache for all affected paths
-      for (const path of pathsToRefresh) {
+
+      // Invalidate cache immediately (don't debounce this)
+      for (const path of pathsToRefreshSet) {
         invalidateSnapshotCache(path, ownerId);
       }
-      
-      if (pathsToRefresh.length === 0) {
+
+      if (pathsToRefreshSet.size === 0) {
         // No path info - invalidate all caches to be safe
         log(`[filesystem-updated] Invalidating all snapshot caches (no path info)`);
         invalidateSnapshotCache(undefined, ownerId);
-        // Also trigger refresh of current path
         pathsToRefreshSet.add(currentPath);
       }
-      
-      // CRITICAL FIX: Trigger immediate re-fetch for affected directories
-      // This ensures the UI gets fresh data after file operations
-      log(`[filesystem-updated] Triggering immediate re-fetch for ${pathsToRefreshSet.size} paths`);
-      
-      // Use fetch directly to avoid the 'request' reference issue
-      for (const path of pathsToRefreshSet) {
-        // Invalidate and fetch fresh data immediately (bypass debounce for filesystem updates)
-        invalidateSnapshotCache(path, ownerId);
 
-        // Fetch fresh data using native fetch (bypassing the 'request' callback which is defined later)
-        fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
-          method: 'GET',
-          headers: buildApiHeaders({ json: false }),
-          credentials: 'include',
-        })
-        .then(res => res.json())
-        .then((payload: any) => {
-          if (payload?.success && payload?.data) {
-            const data = payload.data;
-            log(`[filesystem-updated] Refreshed directory: "${data.path}", ${data.nodes.length} entries`);
-            setCachedList(path, ownerId, data.nodes);
-            // Update UI state if this is the current path (use ref to avoid stale closure)
-            if (path === currentPathRef.current) {
-              setNodes(data.nodes);
-            }
-          }
-        })
-        .catch(err => {
-          logWarn(`[filesystem-updated] Failed to refresh "${path}":`, err);
-        });
+      // DEBOUNCE: Batch rapid filesystem events to prevent excessive API calls
+      // This fixes the polling issue where 4+ events fire in 66ms
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
       }
+
+      debounceTimer = setTimeout(() => {
+        log(`[filesystem-updated] Debounced refresh for ${pathsToRefreshSet.size} paths`);
+
+        // Fetch fresh data for all affected paths
+        for (const path of pathsToRefreshSet) {
+          // Use native fetch (bypassing the 'request' callback which is defined later)
+          fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
+            method: 'GET',
+            headers: buildApiHeaders({ json: false }),
+            credentials: 'include',
+          })
+          .then(res => res.json())
+          .then((payload: any) => {
+            if (payload?.success && payload?.data) {
+              const data = payload.data;
+              log(`[filesystem-updated] Refreshed directory: "${data.path}", ${data.nodes.length} entries`);
+              setCachedList(path, ownerId, data.nodes);
+              // Update UI state if this is the current path
+              if (path === currentPathRef.current) {
+                setNodes(data.nodes);
+              }
+            }
+          })
+          .catch(err => {
+            logWarn(`[filesystem-updated] Failed to refresh "${path}":`, err);
+          });
+        }
+
+        debounceTimer = null;
+      }, DEBOUNCE_MS);
     });
 
-    return unsubscribe;
-  }, [log, logWarn, getSessionId]);
+    return () => {
+      unsubscribe();
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+    };
+  }, [log, logWarn, getSessionId, invalidateSnapshotCache, setCachedList, buildApiHeaders]);
 
   const request = useCallback(async <TData>(
     url: string,

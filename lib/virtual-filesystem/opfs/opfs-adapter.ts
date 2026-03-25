@@ -752,14 +752,6 @@ export class OPFSAdapter {
     console.log('[OPFS] Background sync started (interval:', this.options.autoSyncInterval, 'ms)');
   }
 
-  private stopBackgroundSync(): void {
-    if (this.syncInterval) {
-      clearInterval(this.syncInterval);
-      this.syncInterval = null;
-      console.log('[OPFS] Background sync stopped');
-    }
-  }
-
   private async cacheInOPFS(path: string, content: string): Promise<void> {
     try {
       await this.core.writeFile(path, content);

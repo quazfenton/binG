@@ -40,11 +40,25 @@ export function emitFilesystemUpdated(detail: FilesystemUpdatedDetail = {}): voi
   }
 }
 
+/**
+ * Subscribe to filesystem-updated events
+ * Returns unsubscribe function
+ * 
+ * FIX: Store listener reference properly for cleanup
+ */
 export function onFilesystemUpdated(
   handler: (event: CustomEvent<FilesystemUpdatedDetail>) => void,
 ): () => void {
   if (typeof window === 'undefined') return () => {};
+  
+  // Create a stable listener that wraps the handler
   const listener = (event: Event) => handler(event as CustomEvent<FilesystemUpdatedDetail>);
+  
+  // Add listener
   window.addEventListener(FILESYSTEM_UPDATED_EVENT, listener as EventListener);
-  return () => window.removeEventListener(FILESYSTEM_UPDATED_EVENT, listener as EventListener);
+  
+  // Return cleanup function that removes THE SAME listener instance
+  return () => {
+    window.removeEventListener(FILESYSTEM_UPDATED_EVENT, listener as EventListener);
+  };
 }

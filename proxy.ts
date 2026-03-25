@@ -4,7 +4,7 @@ import { generateAndStoreNonces, generateCspHeader } from './lib/security/nonce-
 import { auth0 } from './lib/auth0-edge';
 
 /**
- * Next.js Middleware
+ * Next.js Proxy
  *
  * This middleware runs on every request and:
  * 1. Blocks access to sensitive files (.db, .env, etc.)
@@ -14,7 +14,7 @@ import { auth0 } from './lib/auth0-edge';
  * 5. Can add authentication checks, rate limiting, etc.
  */
 
-export async function middleware(request: NextRequest) {
+export async function proxy(request: NextRequest) {
   // Block access to sensitive files
   const blockedResponse = blockSensitiveFiles(request);
   if (blockedResponse) {
@@ -149,7 +149,7 @@ export async function middleware(request: NextRequest) {
   return response;
 }
 
-// Configure which routes the middleware runs on
+// Configure which routes the proxy runs on
 export const config = {
   matcher: [
     /*
