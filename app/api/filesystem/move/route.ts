@@ -92,15 +92,14 @@ export async function POST(req: NextRequest) {
       const file = await virtualFilesystem.readFile(ownerId, sourcePath);
       content = file.content;
     } catch {
-      try {
-        await virtualFilesystem.listDirectory(ownerId, sourcePath);
-        isDirectory = true;
-      } catch {
+      const listing = await virtualFilesystem.listDirectory(ownerId, sourcePath);
+      if (listing.nodes.length === 0) {
         return NextResponse.json(
           { error: 'Source path does not exist' },
           { status: 404 }
         );
       }
+      isDirectory = true;
     }
 
     // Check if target exists (conflict detection)
@@ -109,12 +108,8 @@ export async function POST(req: NextRequest) {
       await virtualFilesystem.readFile(ownerId, targetPath);
       targetExists = true;
     } catch {
-      try {
-        await virtualFilesystem.listDirectory(ownerId, targetPath);
-        targetExists = true;
-      } catch {
-        targetExists = false;
-      }
+      const listing = await virtualFilesystem.listDirectory(ownerId, targetPath);
+      targetExists = listing.nodes.length > 0;
     }
 
     // Handle conflict

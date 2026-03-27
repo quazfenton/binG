@@ -2,7 +2,8 @@
   "permissions": {
     "allow": [
       "Bash(npx *)",
-      "Bash(findstr *)"
+      "Bash(findstr *)",
+      "Bash(pnpm exec *)"
     ]
   },
   "$version": 3

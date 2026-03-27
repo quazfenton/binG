@@ -365,8 +365,14 @@ export function useAgentStatus() {
           setStatus('executing');
         }
         break;
+      case 'primary_done':
+        // Primary response done, but background tasks still running
+        setStatus('executing');
+        setCurrentAction('Processing background tasks...');
+        break;
       case 'done':
         setStatus('completed');
+        setCurrentAction(undefined);
         break;
       case 'error':
         setStatus('error');

@@ -1,49 +1,51 @@
 /**
  * Push to GitHub
- * 
+ *
  * Push committed changes to GitHub repository.
+ * This endpoint pushes local VFS changes to the remote GitHub repository.
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { auth0 } from '@/lib/auth0';
-import { getGitHubToken, githubApi } from '@/lib/github/github-oauth';
+import { getGitHubToken, githubApi, pushToGitHub } from '@/lib/github/github-oauth';
 import { getLocalUserIdFromAuth0 } from '@/lib/oauth/connections';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
   try {
     const session = await auth0.getSession(request);
-    
+
     if (!session?.user) {
       return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
     }
-    
+
     const body = await request.json();
-    const { branch, owner, repo } = body;
-    
+    const { branch, owner, repo, message = 'Push changes from binG' } = body;
+
     // Get local user ID
     const auth0UserId = session.user.sub;
     const localUserId = await getLocalUserIdFromAuth0(auth0UserId);
-    
+
     if (!localUserId) {
       return NextResponse.json({ error: 'Local user not found' }, { status: 404 });
     }
-    
+
     // Get GitHub token
     const token = await getGitHubToken(localUserId);
-    
+
     if (!token) {
-      return NextResponse.json({ 
+      return NextResponse.json({
         error: 'GitHub not connected',
         requiresAuth: true,
       }, { status: 401 });
     }
-    
+
     // Get owner/repo from user's repos if not provided
     let targetOwner = owner;
     let targetRepo = repo;
-    
+
     if (!targetOwner || !targetRepo) {
       const reposResponse = await githubApi<any[]>('/user/repos?per_page=100', token);
       if (reposResponse.length === 0) {
@@ -51,7 +53,7 @@ export async function POST(request: NextRequest) {
       }
       [targetOwner, targetRepo] = reposResponse[0].full_name.split('/');
     }
-    
+
     const targetBranch = branch || 'main';
 
     // Check if branch exists
@@ -68,42 +70,63 @@ export async function POST(request: NextRequest) {
       }
     }
 
-    // Get latest commit SHA
+    // Get local changes from VFS
+    // Get all files in the workspace for this user
+    const files = await virtualFilesystem.listDirectory(localUserId.toString(), '/');
+    
+    // Collect all file contents for push
+    const changes: Array<{ path: string; content: string; message: string }> = [];
+    
+    for (const node of files.nodes) {
+      if (node.type === 'file') {
+        try {
+          const file = await virtualFilesystem.readFile(localUserId.toString(), node.path);
+          changes.push({
+            path: node.path.startsWith('/') ? node.path.slice(1) : node.path,
+            content: file.content,
+            message: `${message} - ${node.path}`,
+          });
+        } catch (err) {
+          console.warn(`Failed to read file ${node.path}:`, err);
+        }
+      }
+    }
+
+    if (changes.length === 0) {
+      return NextResponse.json({
+        success: true,
+        message: 'No changes to push',
+        note: 'VFS is empty',
+      });
+    }
+
+    // Push to GitHub using the existing helper
+    await pushToGitHub(token, targetOwner, targetRepo, targetBranch, changes);
+
+    // Get updated commit info
     const refResponse = await githubApi<any>(
       `/repos/${targetOwner}/${targetRepo}/git/refs/heads/${targetBranch}`,
       token
     );
 
     const latestSha = refResponse.object.sha;
-
-    // Get commit details
     const commitResponse = await githubApi<any>(
       `/repos/${targetOwner}/${targetRepo}/commits/${latestSha}`,
       token
     );
 
-    // TODO: Implement actual push functionality
-    // This would require:
-    // 1. Get local changes from VFS
-    // 2. Create blobs for changed files
-    // 3. Create new tree with changes
-    // 4. Create new commit based on latestSha
-    // 5. Update branch ref to new commit
-    //
-    // For now, this endpoint verifies connection and returns current state
-
     return NextResponse.json({
       success: true,
-      message: 'Push endpoint ready (implementation in progress)',
+      message: 'Pushed successfully',
       sha: latestSha,
       url: commitResponse.html_url,
       branch: targetBranch,
       repo: `${targetOwner}/${targetRepo}`,
-      note: 'To implement full push: create blobs → tree → commit → update ref',
+      filesPushed: changes.length,
     });
   } catch (error: any) {
     console.error('[GitHub Push] Error:', error);
-    return NextResponse.json({ 
+    return NextResponse.json({
       error: error.message || 'Failed to push changes',
       details: error.toString(),
     }, { status: 500 });

@@ -445,6 +445,25 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }
                   break;
 
+                case 'primary_done':
+                  // Primary response completed, but stream stays open for background refinement
+                  // Update metadata but DON'T close the stream or call onFinish yet
+                  if (eventData.messageMetadata) {
+                    const metadata = eventData.messageMetadata;
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
+                        ? { ...msg, metadata: { ...(msg.metadata || {}), ...metadata } }
+                        : msg
+                    ));
+                  }
+                  // Update version if provided
+                  if (eventData.version) {
+                    setCurrentVersion(eventData.version);
+                  }
+                  // Mark primary as complete but keep listening for background events
+                  setAgentStatus('executing'); // Still executing background tasks
+                  break;
+
                 case 'done':
                   if (eventData.messageMetadata) {
                     const metadata = eventData.messageMetadata;
@@ -458,7 +477,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   if (eventData.version) {
                     setCurrentVersion(eventData.version);
                   }
-                  // Streaming complete
+                  // Streaming complete (all background tasks finished)
                   clearTimeout(timeoutId);
                   setIsLoading(false);
                   setAgentStatus('completed');
@@ -649,7 +668,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                   // When refinement starts, create a pending message to show loading state
                   if (eventData.stage === 'started' || eventData.stage === 'refining') {
-                    // Use functional update to check current state
                     setMessages(prev => {
                       const hasPendingRefinement = prev.some(m =>
                         m.metadata?.isRefinement && m.metadata?.isPending
@@ -674,16 +692,22 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     });
                   }
 
-                  // When a refinement task completes, create a new message with the content
+                  // When a refinement task completes, create/update a message with the content
+                  // Each task gets its own message to show progressive improvements
                   if (eventData.stage === 'task_complete' && eventData.content) {
-                    // Use functional update to ensure we have current state
                     setMessages(prev => {
-                      const hasPending = prev.some(m =>
-                        m.metadata?.isRefinement && m.metadata?.isPending
+                      // Remove pending message if it exists
+                      const withoutPending = prev.filter(m =>
+                        !(m.metadata?.isRefinement && m.metadata?.isPending)
+                      );
+
+                      // Check if this task message already exists (update vs create)
+                      const existingTaskIndex = withoutPending.findIndex(m =>
+                        m.metadata?.taskId === eventData.taskId
                       );
 
                       const refinementMessage: Message = {
-                        id: `refinement-${eventData.taskId || Date.now()}`,
+                        id: `refinement-${eventData.taskId || Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                         role: 'assistant',
                         content: eventData.content,
                         metadata: {
@@ -692,49 +716,58 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           taskTitle: eventData.taskTitle,
                           provider: eventData.fastModel,
                           timestamp: eventData.timestamp,
+                          isTaskComplete: true,
                         },
                       };
 
-                      // Remove pending and add new message
-                      if (hasPending) {
-                        return prev.filter(m =>
-                          !(m.metadata?.isRefinement && m.metadata?.isPending)
-                        ).concat(refinementMessage);
+                      if (existingTaskIndex >= 0) {
+                        // Update existing task message
+                        const updated = [...withoutPending];
+                        updated[existingTaskIndex] = refinementMessage;
+                        return updated;
                       }
 
-                      // Pending already removed, just add new message
-                      return prev.concat(refinementMessage);
+                      // Add new task message
+                      return withoutPending.concat(refinementMessage);
                     });
                   }
 
-                  // When refinement completes, create a summary message with filesystem edits if present
-                  if (eventData.stage === 'complete' && eventData.filesystem) {
-                    // Use functional update to ensure we have current state
+                  // When refinement completes, create/update summary message
+                  // This happens regardless of filesystem edits
+                  if (eventData.stage === 'complete') {
                     setMessages(prev => {
-                      const hasPending = prev.some(m =>
-                        m.metadata?.isRefinement && m.metadata?.isPending
+                      // Remove pending message if it exists
+                      const withoutPending = prev.filter(m =>
+                        !(m.metadata?.isRefinement && m.metadata?.isPending)
                       );
 
-                      if (!hasPending) {
-                        return prev;
-                      }
+                      // Check if summary message already exists
+                      const existingSummaryIndex = withoutPending.findIndex(m =>
+                        m.metadata?.isRefinementSummary
+                      );
 
                       const refinementMessage: Message = {
-                        id: `refinement-summary-${Date.now()}`,
+                        id: `refinement-summary-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                         role: 'assistant',
-                        content: eventData.refinedContent || 'Refinement complete. Filesystem changes applied.',
+                        content: eventData.refinedContent || 'Refinement complete.',
                         metadata: {
                           filesystem: eventData.filesystem,
                           provider: eventData.fastModel,
                           specScore: eventData.specScore,
                           isRefinementSummary: true,
+                          sectionsProcessed: eventData.sectionsProcessed,
                         },
                       };
 
-                      // Remove pending and add summary
-                      return prev.filter(m =>
-                        !(m.metadata?.isRefinement && m.metadata?.isPending)
-                      ).concat(refinementMessage);
+                      if (existingSummaryIndex >= 0) {
+                        // Update existing summary
+                        const updated = [...withoutPending];
+                        updated[existingSummaryIndex] = refinementMessage;
+                        return updated;
+                      }
+
+                      // Add new summary message
+                      return withoutPending.concat(refinementMessage);
                     });
                   }
                   break;

@@ -1,14 +1,27 @@
 /**
- * Client-side Filesystem Operations Hook
- * 
- * Provides Windows Explorer-like functionality:
+ * File Explorer Operations Hook
+ *
+ * Provides Windows Explorer-like functionality for file/folder operations:
  * - Rename with conflict detection
  * - Move with confirmation dialogs
  * - Copy/Paste with overwrite protection
  * - Delete with confirmation
  * - Batch operations
- * 
- * All operations emit filesystem-updated events for UI sync
+ *
+ * All operations emit filesystem-updated events for UI sync.
+ *
+ * @example
+ * ```typescript
+ * const { rename, move, copy, delete: deletePath, pendingConflict } = useFileExplorer();
+ *
+ * // Rename with conflict handling
+ * const result = await rename({ oldPath: '/old.txt', newPath: '/new.txt' });
+ *
+ * // Handle conflict dialog
+ * if (pendingConflict) {
+ *   return <ConflictDialog onResolve={resolveConflict} />;
+ * }
+ * ```
  */
 
 'use client';
@@ -46,14 +59,16 @@ export interface DeleteOptions {
   recursive?: boolean;
 }
 
-export function useFilesystemOperations() {
+interface PendingConflict {
+  type: 'rename' | 'move' | 'copy';
+  sourcePath: string;
+  targetPath: string;
+  resolve: (overwrite: boolean) => void;
+}
+
+export function useFileExplorer() {
   const [isOperating, setIsOperating] = useState(false);
-  const [pendingConflict, setPendingConflict] = useState<{
-    type: 'rename' | 'move' | 'copy';
-    sourcePath: string;
-    targetPath: string;
-    resolve: (overwrite: boolean) => void;
-  } | null>(null);
+  const [pendingConflict, setPendingConflict] = useState<PendingConflict | null>(null);
 
   /**
    * Check if a path exists (conflict detection)
@@ -67,10 +82,14 @@ export function useFilesystemOperations() {
 
       if (response.ok) {
         const payload = await response.json().catch(() => null);
-        const exists = !!(payload?.success && payload?.data?.nodes?.length > 0);
+        // Path exists if API returns success with data (even if nodes array is empty)
+        // Empty directory = exists with 0 entries
+        // Non-existent path = API returns error or no data
+        const exists = payload?.success === true && payload?.data !== undefined;
         return { exists, path, canOverwrite: true };
       }
 
+      // Non-OK response means path doesn't exist
       return { exists: false, path, canOverwrite: false };
     } catch (error) {
       console.error('Failed to check path:', error);
@@ -88,6 +107,7 @@ export function useFilesystemOperations() {
   ): Promise<boolean> => {
     return new Promise((resolve) => {
       setPendingConflict((current) => {
+        // Cancel any existing conflict
         if (current) {
           current.resolve(false);
         }
@@ -115,7 +135,7 @@ export function useFilesystemOperations() {
     try {
       // Check for conflicts
       const conflict = await checkPathExists(newPath);
-      
+
       let shouldOverwrite = overwrite;
       if (conflict.exists && !shouldOverwrite) {
         // Ask user for confirmation
@@ -182,7 +202,7 @@ export function useFilesystemOperations() {
     try {
       // Check for conflicts
       const conflict = await checkPathExists(targetPath);
-      
+
       let shouldOverwrite = overwrite;
       if (conflict.exists && !shouldOverwrite) {
         shouldOverwrite = await showConflictDialog('move', sourcePath, targetPath);
@@ -243,7 +263,7 @@ export function useFilesystemOperations() {
     try {
       // Check for conflicts
       const conflict = await checkPathExists(targetPath);
-      
+
       if (conflict.exists && !overwrite) {
         const shouldOverwrite = await showConflictDialog('copy', sourcePath, targetPath);
         if (!shouldOverwrite) {
@@ -298,7 +318,7 @@ export function useFilesystemOperations() {
   }, [checkPathExists, showConflictDialog]);
 
   /**
-   * Delete a file/folder with confirmation
+   * Delete a file/folder
    */
   const deletePath = useCallback(async (options: DeleteOptions): Promise<FileOperationResult> => {
     const { path, recursive = false } = options;
@@ -343,7 +363,7 @@ export function useFilesystemOperations() {
   }, []);
 
   /**
-   * Batch operations (multiple files)
+   * Batch delete multiple files/folders
    */
   const batchDelete = useCallback(async (paths: string[]): Promise<FileOperationResult[]> => {
     const results: FileOperationResult[] = [];
@@ -364,8 +384,10 @@ export function useFilesystemOperations() {
     delete: deletePath,
     batchDelete,
 
-    // Conflict dialog
+    // Conflict dialog state
     pendingConflict,
+    
+    // Resolve conflict dialog (call with true to overwrite, false to cancel)
     resolveConflict: useCallback((overwrite: boolean) => {
       setPendingConflict(prev => {
         if (prev) {
@@ -374,6 +396,8 @@ export function useFilesystemOperations() {
         return null;
       });
     }, []),
+    
+    // Cancel conflict dialog (equivalent to resolveConflict(false))
     cancelConflict: useCallback(() => {
       setPendingConflict(prev => {
         if (prev) {
@@ -383,7 +407,7 @@ export function useFilesystemOperations() {
       });
     }, []),
 
-    // State
+    // Operation state
     isOperating,
   };
 }

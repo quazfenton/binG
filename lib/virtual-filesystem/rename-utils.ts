@@ -133,6 +133,21 @@ export async function safeRename(options: RenameOptions): Promise<RenameResult> 
     sessionId,
   });
 
+  // Normalize paths for comparison
+  const normalizedSource = sourcePath.replace(/\/+/g, '/').replace(/\/$/, '');
+  const normalizedDest = destinationPath.replace(/\/+/g, '/').replace(/\/$/, '');
+
+  // Early return if renaming to itself - no-op
+  if (normalizedSource === normalizedDest) {
+    logger.debug('Rename source and destination are the same, skipping');
+    return {
+      success: true,
+      sourcePath,
+      destinationPath,
+      overwritten: false,
+    };
+  }
+
   try {
     // Check for conflicts
     const conflictCheck = await checkRenameConflicts(ownerId, sourcePath, destinationPath);

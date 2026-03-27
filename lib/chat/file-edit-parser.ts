@@ -439,10 +439,11 @@ export function extractFileEdits(content: string): FileEdit[] {
  */
 export function extractFencedDiffEdits(content: string): DiffEdit[] {
   const edits: DiffEdit[] = [];
-  
+
   // Fast-path signature check (consistent with other extractors)
-  if (!content.includes('```diff')) return edits;
-  
+  // Use case-insensitive regex to match the actual parser regex behavior
+  if (!/```diff/i.test(content)) return edits;
+
   const regex = /```diff\s+([^\n]+)\n([\s\S]*?)```/gi;
   let match: RegExpExecArray | null;
 
@@ -775,8 +776,9 @@ export function extractIncrementalFileEdits(
   }
 
   // Update position to end of buffer
-  // TODO: lastPosition tracked for future optimization - currently we re-parse from 0
-  // to handle cases where earlier content changes affect later parsing
+  // TODO Note: lastPosition tracking is available for future optimization
+  // Currently we re-parse from 0 to handle cases where earlier content
+  // changes affect later parsing (e.g., tag modifications mid-stream)
   state.lastPosition = buffer.length;
 
   return newEdits;

@@ -763,7 +763,7 @@ program
         
         // Visual bar
         const barLength = 30;
-        const filled = Math.round((percentage / 100) * barLength);
+        const filled = Math.max(0, Math.min(barLength, Math.round((percentage / 100) * barLength)));
         const bar = '█'.repeat(filled) + '░'.repeat(barLength - filled);
         console.log(`  [${bar}]`);
       } else {

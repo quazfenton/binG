@@ -1114,16 +1114,23 @@ export async function POST(request: NextRequest) {
               controller.enqueue(encoderRef.encode(eventStr));
               chunkCount++;
 
-              // Close stream when refinement completes (any completion stage)
-              if (eventType === 'spec_amplification' && 
-                  (data.stage === 'complete' || 
-                   data.stage === 'task_complete' || 
-                   data.stage === 'complete_with_timeouts' ||
-                   data.stage === 'error' ||
-                   data.stage === 'spec_failed')) {
-                streamClosed = true;
-                controller.close();
-                cleanup();
+              // Close stream when refinement completes (true terminal states only)
+              // Note: 'task_complete' is emitted per-task, NOT terminal - don't close on it
+              if (eventType === 'spec_amplification') {
+                const isTerminal =
+                  data.stage === 'complete' ||
+                  data.stage === 'complete_with_timeouts' ||
+                  data.stage === 'error' ||
+                  data.stage === 'spec_failed' ||
+                  data.stage === 'parse_failed' ||
+                  data.stage === 'validation_failed' ||
+                  data.stage === 'low_quality';
+
+                if (isTerminal) {
+                  streamClosed = true;
+                  controller.close();
+                  cleanup();
+                }
               }
             };
 
@@ -1225,10 +1232,13 @@ export async function POST(request: NextRequest) {
                 await new Promise(resolve => setTimeout(resolve, delay));
               }
 
-              // Send done event for PRIMARY response
+              // Send primary_done event for PRIMARY response completion
+              // This signals UI that primary response is ready, but stream stays open for background refinement
               // DON'T close stream yet - background refinement may still be running
               if (doneEvent) {
-                controller.enqueue(encoderRef.encode(doneEvent));
+                // Replace 'done' with 'primary_done' to avoid triggering client stream close
+                const primaryDoneEvent = doneEvent.replace(/^event:\s*done/m, 'event: primary_done');
+                controller.enqueue(encoderRef.encode(primaryDoneEvent));
                 chunkCount++;
               }
 
@@ -2614,7 +2624,7 @@ function chunkText(input: string, size: number): string[] {
   return chunks;
 }
 
-async function applyFilesystemEditsFromResponse(input: {
+export async function applyFilesystemEditsFromResponse(input: {
   ownerId: string;
   conversationId: string;
   requestId: string;
@@ -2919,7 +2929,7 @@ async function applyFilesystemEditsFromResponse(input: {
           previousVersion,
           existedBefore,
           content: updatedContent,
-          diff: null,
+          diff: `<<<\n${diffOp.search}\n===\n${diffOp.replace}\n>>>`,
         });
         filesystemEditSessionService.recordOperation(transaction.id, {
           path: file.path,
