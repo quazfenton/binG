@@ -793,6 +793,8 @@ export function ExperimentalWorkspacePanel() {
       DIFFS: 'diffs',
       REASONING: 'reasoning',
       SANDBOX_OUTPUT: 'sandbox_output',
+      FILE_EDIT: 'file_edit',
+      PRIMARY_DONE: 'primary_done',
       DONE: 'done',
       ERROR: 'error',
       HEARTBEAT: 'heartbeat',
@@ -979,8 +981,17 @@ export function ExperimentalWorkspacePanel() {
                   toast.error(data.data?.message || 'Stream error occurred');
                   break;
 
+                case SSE_EVENT_TYPES.PRIMARY_DONE:
+                  // Primary response completed, but background tasks may still be running
+                  setAgentActivity((prev) => ({
+                    ...prev,
+                    status: 'executing',
+                    currentAction: 'Processing background tasks...',
+                  }));
+                  break;
+
                 case SSE_EVENT_TYPES.DONE:
-                  // Stream completed
+                  // Stream completed (all background tasks finished)
                   setAgentActivity((prev) => ({
                     ...prev,
                     status: 'completed',

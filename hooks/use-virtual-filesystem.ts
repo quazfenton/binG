@@ -306,8 +306,12 @@ export function useVirtualFilesystem(
   // Note: We define a local fetch function here since 'request' is defined after this useEffect
   useEffect(() => {
     // Debounce rapid filesystem events to prevent excessive re-fetching
-    let debounceTimer: NodeJS.Timeout | null = null;
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
     const DEBOUNCE_MS = 150; // Wait 150ms after last event before fetching
+    
+    // CRITICAL: Keep one shared set across all events to accumulate paths
+    // This prevents losing paths when rapid events clear the timer
+    const pendingPathsToRefresh = new Set<string>();
 
     const unsubscribe = onFilesystemUpdated((event) => {
       const detail = event.detail;
@@ -317,41 +321,42 @@ export function useVirtualFilesystem(
       const currentPath = currentPathRef.current;
 
       // Determine which paths need refresh (deduplicate)
-      const pathsToRefreshSet = new Set<string>();
-
+      // Add to the SHARED pending set, not a local one
       if (detail.scopePath) {
-        pathsToRefreshSet.add(detail.scopePath);
+        pendingPathsToRefresh.add(detail.scopePath);
       }
       if (detail.path) {
-        pathsToRefreshSet.add(detail.path);
+        pendingPathsToRefresh.add(detail.path);
       }
       if (detail.paths && detail.paths.length > 0) {
-        detail.paths.forEach(p => pathsToRefreshSet.add(p));
+        detail.paths.forEach(p => pendingPathsToRefresh.add(p));
       }
 
       // Invalidate cache immediately (don't debounce this)
-      for (const path of pathsToRefreshSet) {
+      for (const path of pendingPathsToRefresh) {
         invalidateSnapshotCache(path, ownerId);
       }
 
-      if (pathsToRefreshSet.size === 0) {
+      if (pendingPathsToRefresh.size === 0) {
         // No path info - invalidate all caches to be safe
         log(`[filesystem-updated] Invalidating all snapshot caches (no path info)`);
         invalidateSnapshotCache(undefined, ownerId);
-        pathsToRefreshSet.add(currentPath);
+        pendingPathsToRefresh.add(currentPath);
       }
 
       // DEBOUNCE: Batch rapid filesystem events to prevent excessive API calls
       // This fixes the polling issue where 4+ events fire in 66ms
+      // IMPORTANT: We clear the timer but NOT the pendingPathsToRefresh set
+      // This ensures all accumulated paths are processed when the timer fires
       if (debounceTimer) {
         clearTimeout(debounceTimer);
       }
 
       debounceTimer = setTimeout(() => {
-        log(`[filesystem-updated] Debounced refresh for ${pathsToRefreshSet.size} paths`);
+        log(`[filesystem-updated] Debounced refresh for ${pendingPathsToRefresh.size} paths`);
 
         // Fetch fresh data for all affected paths
-        for (const path of pathsToRefreshSet) {
+        for (const path of pendingPathsToRefresh) {
           // Use native fetch (bypassing the 'request' callback which is defined later)
           fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
             method: 'GET',
@@ -375,6 +380,8 @@ export function useVirtualFilesystem(
           });
         }
 
+        // Clear the pending set AFTER all fetches are scheduled
+        pendingPathsToRefresh.clear();
         debounceTimer = null;
       }, DEBOUNCE_MS);
     });
@@ -384,6 +391,8 @@ export function useVirtualFilesystem(
       if (debounceTimer) {
         clearTimeout(debounceTimer);
       }
+      // Clear pending paths on cleanup
+      pendingPathsToRefresh.clear();
     };
   }, [log, logWarn, getSessionId, invalidateSnapshotCache, setCachedList, buildApiHeaders]);
 

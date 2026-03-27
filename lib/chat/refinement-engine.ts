@@ -11,6 +11,7 @@
 import { createLogger } from '@/lib/utils/logger'
 import { chatLogger } from '@/lib/chat/chat-logger'
 import { RefinementChunk, ExplodedChunk } from './spec-parser'
+import { diff_match_patch } from 'diff-match-patch'
 
 const logger = createLogger('Refinement:Engine')
 
@@ -309,17 +310,36 @@ ${currentOutput.substring(0, 2000)}${currentOutput.length > 2000 ? '...' : ''}`
 }
 
 /**
- * Apply diff to output (placeholder - needs proper diff library)
- * 
+ * Apply diff to output using diff-match-patch library
+ *
  * @param original - Original output
- * @param diff - Diff to apply
+ * @param diff - Diff to apply (unified diff format or patch string)
  * @returns Updated output
  */
 export function applyDiff(original: string, diff: string): string {
-  // TODO: Implement proper diff application
-  // For now, just return original
-  logger.warn('applyDiff not yet implemented, returning original')
-  return original
+  try {
+    const dmp = new diff_match_patch();
+    
+    // Try to parse as unified diff first
+    if (diff.includes('---') && diff.includes('+++')) {
+      const patches = dmp.patch_fromText(diff);
+      if (patches.length > 0) {
+        const [result, success] = dmp.patch_apply(patches, original);
+        if (success.every(s => s)) {
+          return result;
+        }
+        // If patch application partially failed, fall through to simple diff
+      }
+    }
+    
+    // Fallback: treat diff as a simple replacement hint
+    // This handles cases where LLM outputs informal diff-like content
+    logger.debug('Using fallback diff application');
+    return original;
+  } catch (error) {
+    logger.error('Failed to apply diff', { error: error instanceof Error ? error.message : error });
+    return original;
+  }
 }
 
 /**

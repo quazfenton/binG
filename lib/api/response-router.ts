@@ -2080,9 +2080,26 @@ export class ResponseRouter {
         emit: request.emit
       })
 
-      // Extract file writes from refined output 
+      // Apply filesystem edits from refined output using the same pipeline as main chat
+      // Import the exported function from route.ts - ensures consistent handling
       const fileWriteEdits = extractFsActionWrites(refinedOutput);
-      
+      let filesystemEdits: Awaited<ReturnType<typeof import('@/app/api/chat/route').applyFilesystemEditsFromResponse>> | null = null;
+      try {
+        const { applyFilesystemEditsFromResponse } = await import('@/app/api/chat/route')
+        
+        filesystemEdits = await applyFilesystemEditsFromResponse({
+          ownerId: request.userId?.toString() || '',
+          conversationId: request.conversationId || '',
+          requestId: `refinement-${Date.now()}`,
+          scopePath: `project/sessions/${request.conversationId || request.userId}`,
+          lastUserMessage: '',
+          attachedPaths: [],
+          responseContent: refinedOutput,
+        })
+      } catch (fsError) {
+        logger.error('Refinement filesystem edit application failed', fsError)
+      }
+
       // Send refined content via SSE
       if (request.emit) {
         const eventData: any = {
@@ -2093,20 +2110,21 @@ export class ResponseRouter {
           hasFileWrites: fileWriteEdits.length > 0,
           fileWrites: fileWriteEdits.map(w => ({ path: w.path, operation: 'write' }))
         }
-        
-        // If there are file writes, include them in the event
-        // Frontend will handle creating message with filesystem metadata
-        if (fileWriteEdits.length > 0) {
+
+        // Include filesystem metadata if edits were applied
+        // Frontend will display file edit UI with accept/deny options
+        if (filesystemEdits && filesystemEdits.transactionId) {
           eventData.filesystem = {
-            status: 'detected',
-            applied: fileWriteEdits.map(w => ({
-              path: w.path,
-              operation: 'write',
-              timestamp: Date.now()
-            }))
+            status: filesystemEdits.status,
+            transactionId: filesystemEdits.transactionId,
+            applied: filesystemEdits.applied,
+            errors: filesystemEdits.errors,
+            requestedFiles: filesystemEdits.requestedFiles,
+            scopePath: filesystemEdits.scopePath,
+            sessionId: filesystemEdits.sessionId,
           }
         }
-        
+
         request.emit('spec_amplification', eventData)
       }
 

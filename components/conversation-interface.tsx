@@ -949,10 +949,14 @@ export default function ConversationInterface() {
     // Clean up any active streaming sessions
     streamingState.cleanupCompletedSessions();
 
+    // Clear filesystem session ID synchronously FIRST to prevent stale session access
+    // This ensures no file operations can target the previous workspace
+    setFilesystemSessionId('');
+    filesystemSessionIdRef.current = '';
+
     setMessages([]);
     setCurrentConversationId(null); // Ensure current conversation ID is reset for a new chat
-    // Use new stock naming for new sessions (async)
-    generateSessionName(undefined, true, false).then(setFilesystemSessionId);
+    
     // Reset LLM folder detection flag for new session
     setLlmFolderDetected(false);
     // Reset approval state for new session
@@ -963,6 +967,9 @@ export default function ConversationInterface() {
     setChatHistory(getAllChats());
 
     toast.success("New chat started");
+    
+    // Generate new session name asynchronously AFTER state is cleared
+    // This will trigger the useEffect which handles the actual generation
   };
 
   const handleDeleteChat = (chatId: string) => {

@@ -279,13 +279,6 @@ Return ONLY the improved output, no explanations.`
 
       if (allDone) {
         logger.info('DAG execution complete')
-        
-        // Emit final completion event to close the stream
-        emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
-          stage: 'complete',
-          timestamp: Date.now()
-        })
-        
         break
       }
       

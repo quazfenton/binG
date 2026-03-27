@@ -80,9 +80,8 @@ export async function POST(req: NextRequest) {
     try {
       await virtualFilesystem.readFile(ownerId, oldPath);
     } catch {
-      try {
-        await virtualFilesystem.listDirectory(ownerId, oldPath);
-      } catch {
+      const listing = await virtualFilesystem.listDirectory(ownerId, oldPath);
+      if (listing.nodes.length === 0) {
         return NextResponse.json(
           { error: 'Source path does not exist' },
           { status: 404 }
@@ -96,12 +95,8 @@ export async function POST(req: NextRequest) {
       await virtualFilesystem.readFile(ownerId, newPath);
       destinationExists = true;
     } catch {
-      try {
-        await virtualFilesystem.listDirectory(ownerId, newPath);
-        destinationExists = true;
-      } catch {
-        destinationExists = false;
-      }
+      const listing = await virtualFilesystem.listDirectory(ownerId, newPath);
+      destinationExists = listing.nodes.length > 0;
     }
 
     // Handle conflict

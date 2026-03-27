@@ -6,6 +6,12 @@ export interface SandboxProvider {
   createSandbox(config: SandboxCreateConfig): Promise<SandboxHandle>
   getSandbox(sandboxId: string): Promise<SandboxHandle>
   destroySandbox(sandboxId: string): Promise<void>
+
+  /** Check if provider is available (configuration/credentials) */
+  isAvailable?(): boolean
+
+  /** Health check - verifies API connectivity and sandbox creation capability */
+  healthCheck?(): Promise<{ healthy: boolean; latency?: number; details?: any }>
 }
 
 export interface SandboxHandle {
