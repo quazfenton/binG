@@ -40,6 +40,7 @@ const HAS_ANY_PROVIDER_KEY = [
   process.env.E2B_API_KEY,
   process.env.DAYTONA_API_KEY,
   process.env.BLAXEL_API_KEY,
+  process.env.NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID,
 ].some(hasRealCredential);
 const SKIP_TESTS = process.env.TEST_SANDBOX_SKIP === 'true' || !ENABLE_LIVE_SANDBOX_TESTS || !HAS_ANY_PROVIDER_KEY;
 

@@ -61,6 +61,7 @@ interface ProviderEntry {
   circuitBreaker?: CircuitBreaker
   factory?: () => SandboxProvider
   asyncFactory?: () => Promise<SandboxProvider>
+  healthCheck?: (provider: SandboxProvider) => Promise<boolean>
 }
 
 const providerRegistry = new Map<SandboxProviderType, ProviderEntry>()
@@ -402,12 +403,12 @@ function initializeRegistry() {
   // Modal.com - Serverless container platform
   // Fast GPU-enabled sandboxes with tunnel support
   // Best for: GPU workloads, live previews, serverless execution
-  // Note: Requires MODAL_API_TOKEN environment variable
+  // Note: Requires MODAL_API_TOKEN and MODAL_API_SECRET environment variables
   providerRegistry.set('modal-com', {
     provider: null as any as any,
     priority: 3, // High priority - fast and feature-rich
     enabled: true,
-    available: !!process.env.MODAL_API_TOKEN,
+    available: !!(process.env.MODAL_API_TOKEN && process.env.MODAL_API_SECRET),
     healthy: false,
     initializing: false,
     initPromise: null,
@@ -415,6 +416,13 @@ function initializeRegistry() {
     asyncFactory: async () => {
       const { modalComProvider } = await import('./modal-com-provider')
       return modalComProvider
+    },
+    healthCheck: async (provider) => {
+      if (provider.healthCheck) {
+        const result = await provider.healthCheck();
+        return result.healthy;
+      }
+      return true;
     },
   })
 }
@@ -1014,10 +1022,12 @@ export {
   cleanupModalComSandboxes,
   ModalComSandboxHandle,
   isModalComSandbox,
+  createNamedSandbox,
+  getSandboxByName,
   type ModalComConfig,
   type ModalTunnelInfo,
-  type ModalSandboxData,
   type ModalComVolumeConfig,
+  type ModalComCloudBucketMountConfig,
 } from './modal-com-provider';
 
 // Lazy export for MistralAgentProvider

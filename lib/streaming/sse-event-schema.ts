@@ -32,7 +32,9 @@ export const SSE_EVENT_TYPES = {
   SANDBOX_OUTPUT: 'sandbox_output',
   /** Progressive file edit detected during streaming */
   FILE_EDIT: 'file_edit',
-  /** Stream completed */
+  /** Primary response completed (stream still open for background tasks) */
+  PRIMARY_DONE: 'primary_done',
+  /** Stream completed (all background tasks finished) */
   DONE: 'done',
   /** Stream error */
   ERROR: 'error',

@@ -390,12 +390,13 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
   },
   {
     type: 'modal-com',
-    services: ['pty', 'preview', 'snapshot', 'agent'],
+    services: ['pty', 'preview', 'snapshot', 'agent', 'persistent-fs'],
     bestFor: ['code-interpreter', 'agent', 'ml-training', 'fullstack-app'],
     costTier: 'medium',
     latencyTier: 'low', // Sub-second cold starts
     persistenceSupport: true, // Via volumes
     gpuSupport: true, // H100, A100, A10G, T4, L4, A10
+    // NOTE: Full implementation complete - command execution, filesystem, tunnels, PTY all implemented
   },
 ];
 

@@ -486,6 +486,12 @@ export default function MessageBubble({
     onAuthPromptDismiss?.()
   }
 
+  // Check if this is a pending refinement message (show loading with rotating statements)
+  const isPendingRefinement = message.metadata?.isRefinement && message.metadata?.isPending && message.metadata?.isLoading;
+
+  // Hook must be called unconditionally at top level
+  const rotatingStatement = useMultiRotatingStatements(['interesting', 'task', 'funny'], 2000);
+
   // If auth is required and not dismissed, show auth prompt
   if (authInfo && !authDismissed && !isUser) {
     return (
@@ -502,12 +508,7 @@ export default function MessageBubble({
     )
   }
 
-  // Check if this is a pending refinement message (show loading with rotating statements)
-  const isPendingRefinement = message.metadata?.isRefinement && message.metadata?.isPending && message.metadata?.isLoading;
-  
   if (isPendingRefinement) {
-    const rotatingStatement = useMultiRotatingStatements(['interesting', 'task', 'funny'], 2000);
-    
     return (
       <div className={`flex justify-start mb-6 group w-full px-1`}>
         <div
