@@ -54,43 +54,44 @@ export async function POST(request: NextRequest) {
       [targetOwner, targetRepo] = reposResponse[0].full_name.split('/');
     }
 
-    const targetBranch = branch || 'main';
-
-    // Validate GitHub identifiers to prevent URL injection
-    const validateGitHubIdentifier = (value: string, name: string): boolean => {
-      // GitHub allows: alphanumeric, hyphens, underscores, periods
-      // See: https://docs.github.com/en/rest/overview/resources-in-the-rest-api
-      if (!/^[\w.\-]+$/.test(value)) {
+    // Validate owner/repo (branch is validated separately after getting default)
+    const validateOwnerRepo = (value: string): boolean => {
+      // GitHub allows: alphanumeric, hyphens, underscores, periods, forward slashes
+      if (!/^[\w.\-/]+$/.test(value)) {
         return false;
       }
       return true;
     };
 
-    if (!validateGitHubIdentifier(targetOwner, 'owner')) {
+    if (!validateOwnerRepo(targetOwner)) {
       return NextResponse.json(
         { error: 'Invalid owner: contains disallowed characters' },
         { status: 400 }
       );
     }
     
-    if (!validateGitHubIdentifier(targetRepo, 'repo')) {
+    if (!validateOwnerRepo(targetRepo)) {
       return NextResponse.json(
         { error: 'Invalid repo: contains disallowed characters' },
         { status: 400 }
       );
     }
-    
-    if (!validateGitHubIdentifier(targetBranch, 'branch')) {
-      return NextResponse.json(
-        { error: 'Invalid branch: contains disallowed characters' },
-        { status: 400 }
+
+    // Get default branch from repo if not specified
+    let targetBranch = branch;
+    if (!targetBranch) {
+      const repoResponse = await githubApi<any>(
+        `/repos/${targetOwner}/${targetRepo}`,
+        token
       );
+      targetBranch = repoResponse.default_branch || 'main';
     }
 
-    // Check if branch exists
+    // Check if branch exists (URL encode branch for paths with slashes)
+    const encodedBranch = encodeURIComponent(targetBranch);
     try {
       await githubApi(
-        `/repos/${targetOwner}/${targetRepo}/branches/${targetBranch}`,
+        `/repos/${targetOwner}/${targetRepo}/branches/${encodedBranch}`,
         token
       );
     } catch (error: any) {
@@ -130,11 +131,11 @@ export async function POST(request: NextRequest) {
     }
 
     // Push to GitHub using the existing helper
-    await pushToGitHub(token, targetOwner, targetRepo, targetBranch, changes);
+    await pushToGitHub(token, targetOwner, targetRepo, encodedBranch, changes);
 
     // Get updated commit info
     const refResponse = await githubApi<any>(
-      `/repos/${targetOwner}/${targetRepo}/git/refs/heads/${targetBranch}`,
+      `/repos/${targetOwner}/${targetRepo}/git/refs/heads/${encodedBranch}`,
       token
     );
 

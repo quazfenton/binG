@@ -181,6 +181,15 @@ export async function POST(request: NextRequest) {
     // or leave orphan conversations if message insertion fails
     const db = getDatabase();
     
+    // Database not initialized yet - return error
+    if (!db) {
+      console.error('[Chat History] Database not initialized');
+      return NextResponse.json(
+        { error: 'Database not ready. Please try again in a moment.' },
+        { status: 503 }
+      );
+    }
+    
     const saveConversationTransaction = db.transaction(() => {
       // Check if conversation exists and verify ownership
       const existingConversation = db.prepare(`

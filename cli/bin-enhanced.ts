@@ -195,16 +195,25 @@ async function confirm(question: string): Promise<boolean> {
 /**
  * Interactive chat loop
  */
-async function chatLoop(options: { agent?: string; stream?: boolean }): Promise<void> {
+async function chatLoop(options: { 
+  agent?: string; 
+  stream?: boolean;
+  provider?: string;
+  model?: string;
+}): Promise<void> {
   const config = loadConfig();
-  
+
+  // Use command-line overrides if provided, otherwise use config
+  const provider = options.provider || config.provider;
+  const model = options.model || config.model;
+
   console.log(COLORS.gradient(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                    binG Chat Interface                     ║
 ║                                                           ║
 ║  Mode: ${options.agent || 'auto'}                                    ║
-║  Provider: ${config.provider}                                      ║
-║  Model: ${config.model}                                          ║
+║  Provider: ${provider}                                      ║
+║  Model: ${model}                                          ║
 ║                                                           ║
 ║  Commands: exit, clear, help, config, models              ║
 ╚═══════════════════════════════════════════════════════════╝
@@ -286,8 +295,8 @@ ${COLORS.primary('Tips:')}
         method: 'POST',
         data: {
           messages,
-          provider: config.provider,
-          model: config.model,
+          provider: provider,
+          model: model,
           stream: false,
           agentMode: options.agent === 'auto' ? 'auto' : options.agent,
         },
@@ -329,18 +338,34 @@ async function websocketTerminal(sandboxId: string): Promise<void> {
     console.log(COLORS.error('Sandbox ID required'));
     process.exit(1);
   }
-  
+
   console.log(COLORS.gradient('\n=== binG WebSocket Terminal ===\n'));
   console.log(COLORS.info(`Connecting to sandbox: ${sandboxId}`));
-  
+
   try {
-    // Get WebSocket URL from API
-    const wsInfo = await apiRequest('/sandbox/terminal/ws', {
+    // First, ensure sandbox session exists and get sessionId
+    // POST /sandbox/terminal creates/returns session with both sessionId and sandboxId
+    const sessionResponse = await apiRequest('/sandbox/terminal', {
       method: 'POST',
-      data: { sandboxId },
+      data: {},
     });
-    
-    const wsUrl = wsInfo.url || `ws://localhost:8080/ws/terminal?sessionId=${sandboxId}`;
+
+    const sessionId = sessionResponse.sessionId || sessionResponse.id;
+    const actualSandboxId = sessionResponse.sandboxId || sandboxId;
+
+    if (!sessionId) {
+      console.log(COLORS.error('Failed to create terminal session'));
+      process.exit(1);
+    }
+
+    // Get WebSocket URL from API (GET endpoint requires both sessionId and sandboxId)
+    const wsInfo = await apiRequest(
+      `/sandbox/terminal/ws?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(actualSandboxId)}`,
+      { method: 'GET' }
+    );
+
+    const wsUrl = wsInfo.url || wsInfo.sseUrl || 
+      `ws://localhost:3001/ws?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(actualSandboxId)}`;
     
     // Connect to WebSocket
     const ws = new WebSocket(wsUrl, {
@@ -465,14 +490,11 @@ program
   .option('-p, --provider <provider>', 'LLM provider (default: from config)')
   .option('-m, --model <model>', 'Model name (default: from config)')
   .action(async (options) => {
-    const config = loadConfig();
-    
-    if (options.provider) config.provider = options.provider;
-    if (options.model) config.model = options.model;
-    
     await chatLoop({
       agent: options.agent,
       stream: options.stream !== false,
+      provider: options.provider,
+      model: options.model,
     });
   });
 

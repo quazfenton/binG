@@ -9,6 +9,7 @@ import { detectRequestType } from "@/lib/utils/request-type-detector";
 import { generateSecureId } from '@/lib/utils';
 import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
 import { chatLogger } from '@/lib/chat/chat-logger';
+import { parsePatch, applyPatch } from 'diff';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
@@ -25,7 +26,7 @@ import { workforceManager } from '@/lib/agent/workforce-manager';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
-import {
+import { 
   sanitizeFileEditTags, 
   extractFileEdits,
   extractFileWriteEdits,
@@ -35,7 +36,6 @@ import {
   createIncrementalParser,
   extractIncrementalFileEdits,
 } from '@/lib/chat/file-edit-parser';
-import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -59,90 +59,6 @@ const WORKFORCE_ENABLED = process.env.WORKFORCE_ENABLED === 'true';
 // Provider/model validation cache to reduce repeated lookups
 const validationCache = new Map<string, { provider: string; isValid: boolean; timestamp: number }>();
 const VALIDATION_CACHE_TTL_MS = 30000;
-
-// FIX 4: Cap pendingEvents to prevent memory leaks
-const MAX_PENDING_EVENTS = 64;
-
-// FIX 2: Pre-compiled RegExp for isCodeOrAgenticRequest (module-level, not per request)
-const STRONG_CODE_PATTERN =
-  /\b(refactor|bug\s*fix|stack\s*trace|typescript|javascript|python|react|next\.js|vue\.js|angular|node\.?js|endpoint|database|schema|compile|lint|migrations?|docker|kubernetes|k8s|redis|mongodb|postgresql|mysql|sqlite|express|fastapi|flask|django|spring|rails|laravel|symfony|golang|rust|java|c\+\+|cpp|c#|dotnet|swift|kotlin|flutter|react\s*native|electron|code|build|implement|create\s+app|create\s+project|scaffold|generate\s+app)\b/i
-
-const WEAK_CODE_KEYWORDS = [
-  'app', 'project', 'component', 'file', 'api',
-  'function', 'class', 'module', 'package', 'implement', 'build', 'develop',
-] as const
-
-const WEAK_CODE_PATTERNS = WEAK_CODE_KEYWORDS.map(
-  kw => new RegExp(`\\b${kw}\\b`, 'i'),
-)
-
-// FIX 3: Pre-compiled RegExp for shouldUseContextPack
-const CONTEXT_PACK_PATTERN = new RegExp(
-  [
-    'full project',
-    'entire project',
-    'whole project',
-    'complete codebase',
-    'full codebase',
-    'entire codebase',
-    'project structure',
-    'codebase structure',
-    'project overview',
-    'codebase overview',
-    'all files',
-    'everything in',
-    'context pack',
-    'repomix',
-    'gitingest',
-    'bundle.*context',
-    'pack.*files',
-    'scaffold.*project',
-    'understand.*project',
-    'analyze.*project',
-    'review.*codebase',
-  ].join('|'),
-  'i',
-)
-
-// FIX 6: Pre-compiled RegExp for validateExtractedPath
-const PATH_CONTROL_CHARS_RE = /[\r\n\t\0]/
-const PATH_HEREDOC_RE = /(<<<|>>>|===)/
-const PATH_UNSAFE_CHARS_RE = /[<>"'`]/
-const PATH_BAD_START_RE = /^[^\w./]/
-const PATH_TOO_MANY_DOTS_RE = /^\.{3,}/
-const PATH_TRAVERSAL_RE = /(?:^|\/)\.\.(?:\/|$)/
-const PATH_COMMAND_RE = /\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i
-
-// FIX 7: Helper for safe search/replace (avoids RegExp special char issues)
-function applySearchReplace(content: string, search: string, replace: string): string {
-  const idx = content.indexOf(search)
-  if (idx === -1) return content
-  return content.slice(0, idx) + replace + content.slice(idx + search.length)
-}
-
-// FIX 8: Polling helper with exponential backoff
-async function pollWithBackoff<T>(
-  fetcher: () => Promise<T | null>,
-  isDone: (v: T) => boolean,
-  options: { maxWaitMs: number; initialIntervalMs?: number; maxIntervalMs?: number },
-): Promise<T> {
-  const { maxWaitMs, initialIntervalMs = 500, maxIntervalMs = 5_000 } = options
-  const deadline = Date.now() + maxWaitMs
-  let interval = initialIntervalMs
-
-  while (Date.now() < deadline) {
-    const result = await fetcher()
-    if (result !== null && isDone(result)) return result
-    await new Promise(resolve => setTimeout(resolve, interval))
-    interval = Math.min(interval * 1.5, maxIntervalMs)
-  }
-
-  throw new Error('Polling timed out')
-}
-
-// FIX 9: Pre-compiled RegExp for requiresThirdPartyOAuth
-const THIRD_PARTY_OAUTH_RE =
-  /\b(my\s+)?gmail|(my\s+)?google\s+(drive|sheets|docs|calendar)|slack|discord|twitter|x\s*api|notion|zoom|hubspot|salesforce|shopify|stripe|pipedrive|airtable|jira|confluence|trello|dropbox|onedrive|box\s*file|aws\s*s3|s3\s*bucket|heroku|vercel|netlify|railway|render\s*static|cloudflare\s*pages|figma|miro|miroboard|(my|our)\s+github\s+(repo|branch|pr|issue|organization|team)/i
 
 const chatMessageSchema = z.object({
   role: z.enum(['user', 'assistant', 'system']),
@@ -758,9 +674,10 @@ export async function POST(request: NextRequest) {
     }
     const pendingEvents: PendingEvent[] = [];
     const placeholderEmit = (event: string, data: any) => {
+      // Fix #7: Remove debug logging to prevent performance impact at scale
       if (emitRef.current) {
         emitRef.current(event, data);
-      } else if (pendingEvents.length < MAX_PENDING_EVENTS) {
+      } else {
         pendingEvents.push({ event, data, timestamp: Date.now() });
       }
     };
@@ -1766,7 +1683,33 @@ function shouldUseContextPack(messages: LLMMessage[]): boolean {
     return false;
   }
 
-  return CONTEXT_PACK_PATTERN.test(lastUserMessage);
+  // Keywords that suggest user wants comprehensive project context
+  const contextPackKeywords = [
+    'full project',
+    'entire project',
+    'whole project',
+    'complete codebase',
+    'full codebase',
+    'entire codebase',
+    'project structure',
+    'codebase structure',
+    'project overview',
+    'codebase overview',
+    'all files',
+    'everything in',
+    'context pack',
+    'repomix',
+    'gitingest',
+    'bundle.*context',
+    'pack.*files',
+    'scaffold.*project',
+    'understand.*project',
+    'analyze.*project',
+    'review.*codebase',
+  ];
+
+  const pattern = new RegExp(contextPackKeywords.join('|'), 'i');
+  return pattern.test(lastUserMessage);
 }
 
 /**
@@ -1802,26 +1745,38 @@ async function handleGatewayRequest(params: {
 
     const { jobId, sessionId } = await jobResponse.json();
 
-    const result = await pollWithBackoff(
-      async () => {
-        const statusResponse = await fetch(`${gatewayUrl}/jobs/${jobId}`);
-        if (!statusResponse.ok) return null;
-        const jobStatus = await statusResponse.json();
-        if (jobStatus.status === 'failed') {
-          throw new Error(jobStatus.error || 'Job failed');
-        }
-        return jobStatus;
-      },
-      (status) => status.status === 'completed',
-      { maxWaitMs: 120000 }
-    );
+    // Poll for completion
+    const maxWaitMs = 120000; // 2 minutes
+    const startTime = Date.now();
 
-    return {
-      success: true,
-      data: result,
-      sessionId,
-      jobId,
-    };
+    while (Date.now() - startTime < maxWaitMs) {
+      const statusResponse = await fetch(`${gatewayUrl}/jobs/${jobId}`);
+      
+      if (!statusResponse.ok) {
+        await new Promise(resolve => setTimeout(resolve, 1000));
+        continue;
+      }
+
+      const jobStatus = await statusResponse.json();
+
+      if (jobStatus.status === 'completed') {
+        return {
+          success: true,
+          data: jobStatus,
+          sessionId,
+          jobId,
+        };
+      }
+
+      if (jobStatus.status === 'failed') {
+        throw new Error(jobStatus.error || 'Job failed');
+      }
+
+      // Still processing, wait a bit
+      await new Promise(resolve => setTimeout(resolve, 1000));
+    }
+
+    throw new Error('Job timed out');
   } catch (error: any) {
     chatLogger.error('Gateway request failed', {}, { error: error.message });
     throw error;
@@ -2210,19 +2165,23 @@ function isCodeOrAgenticRequest(
   attachedFiles: ChatFilesystemFileContext[],
 ): boolean {
   if (attachedFiles.length > 0) return true;
-
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
   const content =
     typeof lastUser?.content === 'string'
       ? lastUser.content
       : JSON.stringify(lastUser?.content || '');
 
-  if (STRONG_CODE_PATTERN.test(content)) return true;
+  // Strong signals — unambiguous coding/agentic keywords (single match sufficient)
+  // These are for V2/OpenCode execution, NOT for 3rd party OAuth
+  // "code a nextjs app" should route to V2 for interactive coding session
+  const strongPattern = /\b(refactor|bug\s*fix|stack\s*trace|typescript|javascript|python|react|next\.js|vue\.js|angular|node\.?js|endpoint|database|schema|compile|lint|migrations?|docker|kubernetes|k8s|redis|mongodb|postgresql|mysql|sqlite|express|fastapi|flask|django|spring|rails|laravel|symfony|golang|rust|java|c\+\+|cpp|c#|dotnet|swift|kotlin|flutter|react\s*native|electron|code|build|implement|create\s+app|create\s+project|scaffold|generate\s+app)\b/i;
+  if (strongPattern.test(content)) return true;
 
-  let weakMatches = 0;
-  for (const re of WEAK_CODE_PATTERNS) {
-    if (re.test(content) && ++weakMatches >= 2) return true;
-  }
+  // Weak signals — require 2+ signals to trigger (lower threshold, not higher)
+  // We WANT coding requests to use V2 (OpenCode) for interactive sessioning
+  const weakKeywords = ['app', 'project', 'component', 'file', 'api', 'function', 'class', 'module', 'package', 'implement', 'build', 'develop'];
+  const weakMatches = weakKeywords.filter(kw => new RegExp(`\\b${kw}\\b`, 'i').test(content));
+  if (weakMatches.length >= 2) return true;
 
   return false;
 }
@@ -2238,7 +2197,11 @@ function requiresThirdPartyOAuth(messages: LLMMessage[]): boolean {
       ? lastUser.content
       : JSON.stringify(lastUser?.content || '');
 
-  return THIRD_PARTY_OAUTH_RE.test(content);
+  // EXPLICIT 3RD PARTY INTEGRATION SIGNALS - these require OAuth to external services
+  // Must have specific service names that are known 3rd party integrations
+  // Use possessive/contextual patterns to avoid false positives like "github clone"
+  const thirdPartyServicePattern = /\b(my\s+)?gmail|(my\s+)?google\s+(drive|sheets|docs|calendar)|slack|discord|twitter|x\s*api|notion|zoom|hubspot|salesforce|shopify|stripe|pipedrive|airtable|jira|confluence|trello|dropbox|onedrive|box\s*file|aws\s*s3|s3\s*bucket|heroku|vercel|netlify|railway|render\s*static|cloudflare\s*pages|figma|miro|miroboard|(my|our)\s+github\s+(repo|branch|pr|issue|organization|team)/i;
+  return thirdPartyServicePattern.test(content);
 }
 
 function buildAgenticContext(messages: LLMMessage[]): string {
@@ -2479,13 +2442,14 @@ function validateExtractedPath(raw: string): string | null {
   const path = (raw || '').trim().replace(/^['"`]|['"`]$/g, '');
   if (!path) return null;
   if (path.length > 300) return null;
-  if (PATH_CONTROL_CHARS_RE.test(path)) return null;
-  if (PATH_HEREDOC_RE.test(path)) return null;
-  if (PATH_UNSAFE_CHARS_RE.test(path)) return null;
-  if (PATH_BAD_START_RE.test(path)) return null;
-  if (PATH_TOO_MANY_DOTS_RE.test(path)) return null;
-  if (PATH_TRAVERSAL_RE.test(path)) return null;
-  if (PATH_COMMAND_RE.test(path)) return null;
+  if (/[\r\n\t\0]/.test(path)) return null;
+  if (/(<<<|>>>|===)/.test(path)) return null;
+  if (/[<>"'`]/.test(path)) return null;
+  // Reject paths starting with problematic chars but allow dots (for dotfiles) and relative paths
+  // Allow: .gitignore, ./src/file.ts, ../parent/file.ts
+  // Reject: @#$file, <<<path, etc.
+  if (/^[^\w./]/.test(path) || /^\.{3,}/.test(path) || /(?:^|\/)\.\.(?:\/|$)/.test(path)) return null;
+  if (/\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i.test(path)) return null;
   return path;
 }
 
@@ -2575,6 +2539,23 @@ function resolveScopedPath(input: {
     ? rawPath.slice('project/'.length)
     : rawPath;
   return resolveScopeUtil(normalizedRelative, input.scopePath);
+}
+
+function applyUnifiedDiff(currentContent: string, targetPath: string, rawDiff: string): string {
+  const diffBody = rawDiff.endsWith('\n') ? rawDiff : `${rawDiff}\n`;
+  const unifiedDiff = `--- ${targetPath}\n+++ ${targetPath}\n${diffBody}`;
+  const parsedPatches = parsePatch(unifiedDiff);
+
+  if (parsedPatches.length === 0) {
+    throw new Error(`Invalid unified diff for ${targetPath}`);
+  }
+
+  const patched = applyPatch(currentContent, parsedPatches[0]);
+  if (patched === false) {
+    throw new Error(`Patch could not be applied for ${targetPath}`);
+  }
+
+  return patched;
 }
 
 function buildSupplementalAgenticEvents(response: any, requestId: string, existingEvents: string[] = []): string[] {
@@ -2881,11 +2862,7 @@ export async function applyFilesystemEditsFromResponse(input: {
           existedBefore = false;
         }
 
-        const patchedContent = applyUnifiedDiffToContent(currentContent, targetPath, diffOperation.diff);
-        if (patchedContent === null) {
-          result.errors.push(`Failed to apply unified diff for ${targetPath}: patch could not be applied`);
-          continue;
-        }
+        const patchedContent = applyUnifiedDiff(currentContent, targetPath, diffOperation.diff);
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, patchedContent);
 
         result.applied.push({
@@ -2989,7 +2966,7 @@ export async function applyFilesystemEditsFromResponse(input: {
           continue;
         }
 
-        const updatedContent = applySearchReplace(currentContent, diffOp.search, diffOp.replace);
+        const updatedContent = currentContent.replace(diffOp.search, diffOp.replace);
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, updatedContent);
 
         result.applied.push({

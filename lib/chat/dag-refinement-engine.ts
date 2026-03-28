@@ -1,15 +1,18 @@
 /**
  * DAG (Directed Acyclic Graph) Execution Engine
- * 
- * Enables parallel refinement of spec sections with dependency tracking
- * Streams progress updates via SSE events
- * 
+ *
+ * Enables parallel refinement of spec sections with dependency tracking.
+ * Streams progress updates via SSE events.
+ *
  * @see lib/streaming/sse-event-schema.ts
  */
 
 import { createLogger } from '@/lib/utils/logger'
 import { RefinementChunk } from './spec-parser'
-import { createSSEEmitter, SSE_EVENT_TYPES, SSESpecAmplificationPayload, SSEDAGTaskStatusPayload } from '@/lib/streaming/sse-event-schema'
+import {
+  createSSEEmitter,
+  SSE_EVENT_TYPES,
+} from '@/lib/streaming/sse-event-schema'
 
 const logger = createLogger('Refinement:DAG')
 
@@ -27,9 +30,11 @@ export interface DAGTask {
 
 export interface DAGConfig {
   model: string
-  /** LLM provider to use for refinement tasks. Defaults to 'auto'. Use the fast
-   *  spec model's provider here, NOT the user's primary model provider, to avoid
-   *  rate-limiting free-tier models with concurrent DAG tasks. */
+  /**
+   * LLM provider to use for refinement tasks. Defaults to 'auto'.
+   * Use the fast spec model's provider here, NOT the user's primary model
+   * provider, to avoid rate-limiting free-tier models with concurrent DAG tasks.
+   */
   provider?: string
   baseResponse: string
   chunks: RefinementChunk[]
@@ -39,7 +44,7 @@ export interface DAGConfig {
   maxConcurrency?: number
   timeBudgetMs?: number
   /** Callback for emitting SSE events during refinement */
-  emit?: (event: string, data: any) => void
+  emit?: (event: string, data: unknown) => void
 }
 
 export interface DAGProgress {
@@ -51,33 +56,47 @@ export interface DAGProgress {
   partialResults: Map<string, string>
 }
 
+// ---------------------------------------------------------------------------
+// Internal helper types
+// ---------------------------------------------------------------------------
+
+type SSEEmitter = ReturnType<typeof createSSEEmitter>
+
+interface TaskOutcome {
+  taskId: string
+  result: string | null
+  success: boolean
+  error?: unknown
+}
+
+// ---------------------------------------------------------------------------
+// DAGExecutor
+// ---------------------------------------------------------------------------
+
 export class DAGExecutor {
-  private tasks: Map<string, DAGTask>
-  private results: Map<string, string>
-  private startTime: number
-  private timeBudgetMs: number
-  private maxConcurrency: number
-  private abortController: AbortController
-  private config: DAGConfig
+  private readonly tasks: Map<string, DAGTask>
+  private readonly startTime: number
+  private readonly timeBudgetMs: number
+  private readonly maxConcurrency: number
+  private readonly abortController: AbortController
+  private readonly config: DAGConfig
 
   constructor(config: DAGConfig) {
     this.tasks = new Map()
-    this.results = new Map()
     this.startTime = Date.now()
-    this.timeBudgetMs = config.timeBudgetMs || 10000
-    this.maxConcurrency = config.maxConcurrency || 3
+    this.timeBudgetMs = config.timeBudgetMs ?? 10_000
+    this.maxConcurrency = config.maxConcurrency ?? 3
     this.abortController = new AbortController()
     this.config = config
 
-    // Build task graph from chunks
     this.buildTaskGraph(config.chunks, config.baseResponse)
   }
-  
-  /**
-   * Build DAG from spec chunks
-   */
-  private buildTaskGraph(chunks: RefinementChunk[], baseResponse: string) {
-    // First task is always the base response
+
+  // -------------------------------------------------------------------------
+  // Graph construction
+  // -------------------------------------------------------------------------
+
+  private buildTaskGraph(chunks: RefinementChunk[], baseResponse: string): void {
     this.tasks.set('base', {
       id: 'base',
       title: 'Base Response',
@@ -86,138 +105,137 @@ export class DAGExecutor {
       status: 'complete',
       startedAt: this.startTime,
       completedAt: this.startTime,
-      result: baseResponse
+      result: baseResponse,
     })
-    
-    // Add refinement tasks
-    chunks.forEach((chunk, index) => {
-      const taskId = `refine-${index}`
+
+    for (let i = 0; i < chunks.length; i++) {
+      const chunk = chunks[i]
+      const taskId = `refine-${i}`
       this.tasks.set(taskId, {
         id: taskId,
         title: chunk.title,
         tasks: chunk.tasks,
-        dependencies: ['base'], // All depend on base completing
+        dependencies: ['base'],
         status: 'pending',
-        startedAt: undefined,
-        completedAt: undefined
       })
-    })
-    
+    }
+
     logger.debug('DAG task graph built', {
       totalTasks: this.tasks.size,
       tasks: Array.from(this.tasks.values()).map(t => ({
         id: t.id,
         title: t.title,
-        dependencies: t.dependencies
-      }))
+        dependencies: t.dependencies,
+      })),
     })
   }
-  
-  /**
-   * Get tasks ready to execute (all dependencies met)
-   */
+
+  // -------------------------------------------------------------------------
+  // Scheduling helpers
+  // -------------------------------------------------------------------------
+
   private getReadyTasks(): DAGTask[] {
     return Array.from(this.tasks.values()).filter(task => {
       if (task.status !== 'pending') return false
-      
-      // Check if all dependencies are complete
-      const depsMet = task.dependencies.every(depId => {
-        const depTask = this.tasks.get(depId)
-        return depTask?.status === 'complete'
-      })
-      
-      return depsMet
+      return task.dependencies.every(
+        depId => this.tasks.get(depId)?.status === 'complete',
+      )
     })
   }
-  
+
+  private calculateProgress(): number {
+    const completed = Array.from(this.tasks.values()).filter(
+      t => t.status === 'complete',
+    ).length
+    return Math.round((completed / this.tasks.size) * 100)
+  }
+
+  // -------------------------------------------------------------------------
+  // Provider resolution
+  // -------------------------------------------------------------------------
+
   /**
-   * Execute a single refinement task
+   * Resolve the LLM provider for refinement tasks.
+   *
+   * Priority:
+   * 1. Explicit provider in config (not 'auto')
+   * 2. Namespace prefix in model string (e.g. "nvidia/nemotron-…" → "nvidia")
+   * 3. Default chat provider from task-providers config
    */
-  private async executeTask(
-    task: DAGTask,
-    emit?: ReturnType<typeof createSSEEmitter>
-  ): Promise<string> {
+  private async resolveProvider(): Promise<string> {
+    const { provider, model } = this.config
+
+    if (provider && provider !== 'auto') return provider
+
+    const slashIdx = model.indexOf('/')
+    if (slashIdx > 0) return model.slice(0, slashIdx)
+
+    const { getProviderForTask } = await import('@/lib/config/task-providers')
+    return getProviderForTask('chat')
+  }
+
+  // -------------------------------------------------------------------------
+  // Task execution
+  // -------------------------------------------------------------------------
+
+  private async executeTask(task: DAGTask, emit?: SSEEmitter): Promise<string> {
     task.status = 'running'
     task.startedAt = Date.now()
 
     logger.debug('Executing task', { taskId: task.id, title: task.title })
 
     try {
-      // Get base response from dependencies
       const baseContent = task.dependencies.reduce((acc, depId) => {
-        const depTask = this.tasks.get(depId)
-        return depTask?.result || acc
+        return this.tasks.get(depId)?.result ?? acc
       }, '')
 
       const { enhancedLLMService } = await import('@/lib/chat/enhanced-llm-service')
-      const { getProviderForTask } = await import('@/lib/config/task-providers')
-
-      const refinementPrompt = this.buildRefinementPrompt(task)
-
-      // Extract provider from config, or from model name (e.g., "nvidia/nemotron-..." -> "nvidia")
-      // or fall back to default chat provider
-      let provider = this.config.provider
-      if (!provider || provider === 'auto') {
-        const modelParts = this.config.model.split('/')
-        provider = modelParts.length > 1 ? modelParts[0] : getProviderForTask('chat')
-      }
+      const provider = await this.resolveProvider()
 
       const refined = await enhancedLLMService.generateResponse({
         provider,
-        model: this.config.model, // Use user's selected model from config
+        model: this.config.model,
         messages: [
-          {
-            role: 'system',
-            content: refinementPrompt
-          },
-          {
-            role: 'user',
-            content: baseContent
-          }
+          { role: 'system', content: this.buildRefinementPrompt(task) },
+          { role: 'user', content: baseContent },
         ],
-        maxTokens: 80000,
+        maxTokens: 80_000,
         temperature: 0.7,
-        stream: false
+        stream: false,
       })
 
-      const refinedContent = refined.content || ''
+      const refinedContent = refined.content ?? ''
 
       task.status = 'complete'
       task.completedAt = Date.now()
       task.result = refinedContent
 
-      logger.debug('Task complete', { taskId: task.id, duration: task.completedAt - task.startedAt! })
+      logger.debug('Task complete', {
+        taskId: task.id,
+        durationMs: task.completedAt - task.startedAt!,
+      })
 
-      // Emit task result as a new assistant message for UI display
-      if (emit) {
-        emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
-          stage: 'task_complete',
-          taskId: task.id,
-          taskTitle: task.title,
-          content: refinedContent,
-          timestamp: Date.now()
-        })
-      }
+      emit?.(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
+        stage: 'task_complete',
+        taskId: task.id,
+        taskTitle: task.title,
+        content: refinedContent,
+        timestamp: Date.now(),
+      })
 
       return refinedContent
-
     } catch (error) {
       task.status = 'error'
       task.completedAt = Date.now()
       task.error = error instanceof Error ? error.message : 'Unknown error'
 
       logger.error('Task failed', { taskId: task.id, error: task.error })
-
       throw error
     }
   }
-  
-  /**
-   * Build refinement prompt for a task
-   */
+
   private buildRefinementPrompt(task: DAGTask): string {
     const tasksList = task.tasks.map((t, i) => `${i + 1}. ${t}`).join('\n')
-    
     return `You are improving an existing AI-generated solution.
 
 FOCUS AREA:
@@ -236,63 +254,66 @@ RULES:
 
 Return ONLY the improved output, no explanations.`
   }
-  
-  /**
-   * Execute DAG with parallel task execution
-   */
-  async execute(
-    emit: ReturnType<typeof createSSEEmitter>
-  ): Promise<string> {
+
+  // -------------------------------------------------------------------------
+  // Main execution loop
+  // -------------------------------------------------------------------------
+
+  async execute(emit: SSEEmitter): Promise<string> {
     logger.info('Starting DAG execution', {
       totalTasks: this.tasks.size,
       maxConcurrency: this.maxConcurrency,
-      timeBudgetMs: this.timeBudgetMs
+      timeBudgetMs: this.timeBudgetMs,
     })
-    
-    // Emit initial status
+
     emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
       stage: 'refining',
       currentIteration: 0,
-      totalIterations: this.tasks.size - 1, // Exclude base
-      timestamp: Date.now()
+      totalIterations: this.tasks.size - 1, // exclude base
+      timestamp: Date.now(),
     })
-    
-    const activeTasks = new Map<string, Promise<string>>()
-    
+
+    // activeTasks maps taskId → a Promise<TaskOutcome> that never rejects
+    const activeTasks = new Map<string, Promise<TaskOutcome>>()
+
+    const wrapTask = (task: DAGTask): Promise<TaskOutcome> =>
+      this.executeTask(task, emit)
+        .then(result => ({ taskId: task.id, result, success: true }))
+        .catch(error => ({ taskId: task.id, result: null, success: false, error }))
+
     while (true) {
-      // Check time budget
-      const elapsed = Date.now() - this.startTime
-      if (elapsed > this.timeBudgetMs) {
+      // Budget check
+      if (Date.now() - this.startTime > this.timeBudgetMs) {
         logger.warn('Time budget exceeded, stopping DAG execution')
+        // Mark still-pending / running tasks as timed-out
+        for (const task of this.tasks.values()) {
+          if (task.status === 'pending' || task.status === 'running') {
+            task.status = 'timeout'
+          }
+        }
         emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
           stage: 'complete',
           error: 'Time budget exceeded',
-          timestamp: Date.now()
+          timestamp: Date.now(),
         })
         break
       }
-      
-      // Check if all tasks are done
-      const allDone = Array.from(this.tasks.values()).every(
-        t => t.status === 'complete' || t.status === 'error'
-      )
 
+      // Completion check
+      const allDone = Array.from(this.tasks.values()).every(
+        t => t.status === 'complete' || t.status === 'error' || t.status === 'timeout',
+      )
       if (allDone) {
         logger.info('DAG execution complete')
         break
       }
-      
-      // Get ready tasks
+
+      // Start newly-ready tasks up to the concurrency limit
       const readyTasks = this.getReadyTasks()
-      
-      // Start new tasks up to concurrency limit
       for (const task of readyTasks) {
         if (activeTasks.size >= this.maxConcurrency) break
-        
-        const promise = this.executeTask(task, emit)
-        activeTasks.set(task.id, promise)
-        
-        // Emit task status
+        activeTasks.set(task.id, wrapTask(task))
+
         emit(SSE_EVENT_TYPES.DAG_TASK_STATUS, {
           tasks: Array.from(this.tasks.values()).map(t => ({
             taskId: t.id,
@@ -301,135 +322,119 @@ Return ONLY the improved output, no explanations.`
             dependencies: t.dependencies,
             error: t.error,
             startedAt: t.startedAt,
-            completedAt: t.completedAt
+            completedAt: t.completedAt,
           })),
           overallProgress: this.calculateProgress(),
           activeTasks: Array.from(activeTasks.keys()),
-          timestamp: Date.now()
+          timestamp: Date.now(),
         })
       }
-      
-      // Wait for at least one task to complete
+
+      // Wait for at least one task to finish before re-evaluating
       if (activeTasks.size > 0) {
-        const completed = await Promise.race(
-          Array.from(activeTasks.entries()).map(async ([taskId, promise]) => {
-            try {
-              const result = await promise
-              return { taskId, result, success: true }
-            } catch (error) {
-              return { taskId, result: null, success: false, error }
-            }
-          })
-        )
-        
+        const completed = await Promise.race(Array.from(activeTasks.values()))
         activeTasks.delete(completed.taskId)
-        
-        // Update progress
+
         emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
           stage: 'refining',
           currentIteration: Array.from(this.tasks.values()).filter(
-            t => t.status === 'complete'
+            t => t.status === 'complete',
           ).length,
           totalIterations: this.tasks.size - 1,
           currentSection: completed.taskId,
-          timestamp: Date.now()
+          timestamp: Date.now(),
         })
+      } else {
+        // No active tasks and no ready tasks — all remaining must be blocked
+        // (shouldn't happen in a correct DAG, but guard against infinite loop)
+        break
       }
     }
-    
-    // Merge all results
+
     const finalOutput = this.mergeResults()
 
-    // Only emit complete event if no tasks timed out
-    const hasTimeouts = Array.from(this.tasks.values()).some(t => t.status === 'timeout');
-    if (!hasTimeouts) {
+    const timedOutTasks = Array.from(this.tasks.values()).filter(
+      t => t.status === 'timeout',
+    )
+
+    if (timedOutTasks.length === 0) {
       emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
         stage: 'complete',
         currentIteration: this.tasks.size - 1,
         totalIterations: this.tasks.size - 1,
-        timestamp: Date.now()
+        timestamp: Date.now(),
       })
     } else {
-      // Emit partial completion with timeout info
       emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
         stage: 'complete_with_timeouts',
         currentIteration: this.tasks.size - 1,
         totalIterations: this.tasks.size - 1,
-        timedOutTasks: Array.from(this.tasks.values()).filter(t => t.status === 'timeout').map(t => t.id),
-        timestamp: Date.now()
+        timedOutTasks: timedOutTasks.map(t => t.id),
+        timestamp: Date.now(),
       })
     }
 
     return finalOutput
   }
-  
-  /**
-   * Calculate overall progress (0-100)
-   */
-  private calculateProgress(): number {
-    const completed = Array.from(this.tasks.values()).filter(
-      t => t.status === 'complete'
-    ).length
-    const total = this.tasks.size
-    return Math.round((completed / total) * 100)
-  }
-  
-  /**
-   * Merge all task results into final output
-   */
+
+  // -------------------------------------------------------------------------
+  // Result merging
+  // -------------------------------------------------------------------------
+
   private mergeResults(): string {
-    // Start with base response
     const baseTask = this.tasks.get('base')
-    let output = baseTask?.result || ''
-    
-    // Append completed refinement results
+    let output = baseTask?.result ?? ''
+
     const completedTasks = Array.from(this.tasks.values())
       .filter(t => t.status === 'complete' && t.id !== 'base')
-      .sort((a, b) => {
-        // Sort by completion time
-        return (a.completedAt || 0) - (b.completedAt || 0)
-      })
-    
+      .sort((a, b) => (a.completedAt ?? 0) - (b.completedAt ?? 0))
+
     for (const task of completedTasks) {
       if (task.result) {
         output += '\n\n---\n\n' + task.result
       }
     }
-    
+
     return output
   }
-  
-  /**
-   * Abort execution
-   */
-  abort() {
+
+  // -------------------------------------------------------------------------
+  // Abort
+  // -------------------------------------------------------------------------
+
+  abort(): void {
     this.abortController.abort()
     logger.info('DAG execution aborted')
   }
 }
 
+// ---------------------------------------------------------------------------
+// Convenience wrapper
+// ---------------------------------------------------------------------------
+
 /**
- * Execute refinement with DAG parallelization
+ * Execute refinement with DAG parallelization.
+ * Falls back to the base response if execution fails.
  */
 export async function executeRefinementWithDAG(
   config: DAGConfig,
-  emitFn?: ReturnType<typeof createSSEEmitter>
+  emitFn?: SSEEmitter,
 ): Promise<string> {
-  // Use config.emit if provided, otherwise use the emitFn parameter
-  const emitter = config.emit || emitFn || (() => {})
+  // Prefer config.emit; fall back to the parameter; then no-op
+  const emitter: SSEEmitter = config.emit ?? emitFn ?? (() => {})
   const executor = new DAGExecutor(config)
-  
+
   try {
     return await executor.execute(emitter)
   } catch (error) {
     emitter(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
       stage: 'error',
       error: error instanceof Error ? error.message : 'DAG execution failed',
-      timestamp: Date.now()
+      timestamp: Date.now(),
     })
-    
-    // Fallback to base response
-    const baseTask = (executor as any).tasks.get('base')
-    return baseTask?.result || ''
+
+    // Safe fallback: return base response via private map access
+    const baseTask = (executor as unknown as { tasks: Map<string, DAGTask> }).tasks.get('base')
+    return baseTask?.result ?? ''
   }
 }
