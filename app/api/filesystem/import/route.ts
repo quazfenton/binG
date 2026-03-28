@@ -34,6 +34,7 @@ import { FileImportService } from '@/lib/virtual-filesystem/import-service';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
+import { extractScopePath } from '@/lib/virtual-filesystem/scope-utils';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 export const runtime = 'nodejs';
@@ -156,6 +157,8 @@ export async function POST(req: NextRequest) {
       const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(ownerId);
       emitFilesystemUpdated({
         path: result.destinationPath,
+        paths: result.files.map(f => f.path),
+        scopePath: extractScopePath(result.destinationPath),
         type: 'create',
         sessionId: optionsData.sessionId,
         workspaceVersion,

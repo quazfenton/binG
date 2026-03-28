@@ -370,7 +370,7 @@ interface UseRotatingStatementsOptions {
 }
 
 export function useRotatingStatements(options: UseRotatingStatementsOptions = {}) {
-  const { statementType = 'interesting', intervalMs = 2500 } = options;
+  const { statementType = 'interesting', intervalMs = 3500 } = options;
 
   const getStatements = useCallback(() => {
     switch (statementType) {

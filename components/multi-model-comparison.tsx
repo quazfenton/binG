@@ -13,7 +13,6 @@ import {
   Copy,
   RefreshCw,
   Zap,
-  Clock,
   CheckCircle,
   AlertCircle,
   Loader2,
@@ -725,7 +724,7 @@ export default function MultiModelComparison({
                         </div>
                       ) : response.status === 'pending' ? (
                         <div className="flex items-center gap-2 text-white/40 text-sm">
-                          <Clock className="h-4 w-4" />
+                          <Loader2 className="h-4 w-4 thinking-spinner" />
                           Waiting...
                         </div>
                       ) : response.status === 'streaming' ? (

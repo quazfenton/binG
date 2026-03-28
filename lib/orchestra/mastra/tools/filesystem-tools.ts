@@ -7,6 +7,8 @@
  * @see lib/virtual-filesystem/virtual-filesystem-service.ts
  */
 
+import { checkCommandSecurity } from '@/lib/terminal/security/terminal-security';
+import { bashToolExecutor } from '@/lib/tools/tool-integration/bash-tool';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 
 export interface ToolCallResult {
@@ -30,12 +32,21 @@ export interface FilesystemTool {
   execute: (args: Record<string, any>) => Promise<ToolCallResult>;
 }
 
+export interface FilesystemToolOptions {
+  sandboxId?: string;
+  sandboxProvider?: string;
+  workspacePath?: string;
+}
+
 /**
  * Filesystem tools for LLM agent
  * Factory function that creates tools bound to a specific user ID for tenant/session isolation
  */
-export function createFilesystemTools(userId: string): FilesystemTool[] {
-  return [
+export function createFilesystemTools(
+  userId: string,
+  options: FilesystemToolOptions = {},
+): FilesystemTool[] {
+  const tools: FilesystemTool[] = [
     {
       name: 'read_file',
       description: 'Read the contents of a file from the workspace',
@@ -143,6 +154,69 @@ export function createFilesystemTools(userId: string): FilesystemTool[] {
     },
 
     {
+      name: 'create_directory',
+      description: 'Create a new directory (including parent directories if needed)',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Directory path to create (e.g., "src/components")',
+          },
+        },
+        required: ['path'],
+      },
+      execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
+        try {
+          // Create directory by writing a .keep file (VFS creates parent dirs automatically)
+          const keepFilePath = `${path}/.keep`;
+          await virtualFilesystem.writeFile(userId, keepFilePath, '');
+          return {
+            success: true,
+            path: path,
+            message: `Directory created: ${path}`,
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to create directory',
+          };
+        }
+      },
+    },
+
+    {
+      name: 'delete_file',
+      description: 'Delete a file or empty directory',
+      parameters: {
+        type: 'object',
+        properties: {
+          path: {
+            type: 'string',
+            description: 'Path to delete',
+          },
+        },
+        required: ['path'],
+      },
+      execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
+        try {
+          const result = await virtualFilesystem.deletePath(userId, path);
+          return {
+            success: true,
+            path: path,
+            deletedCount: result.deletedCount,
+            message: `Deleted: ${path}`,
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to delete',
+          };
+        }
+      },
+    },
+
+    {
       name: 'search_files',
       description: 'Search for files matching a pattern (grep-like search in filenames and content)',
       parameters: {
@@ -189,35 +263,6 @@ export function createFilesystemTools(userId: string): FilesystemTool[] {
           return {
             success: false,
             error: error.message || 'Failed to search files',
-          };
-        }
-      },
-    },
-
-    {
-      name: 'delete_file',
-      description: 'Delete a file from the workspace',
-      parameters: {
-        type: 'object',
-        properties: {
-          path: {
-            type: 'string',
-            description: 'Path to the file to delete',
-          },
-        },
-        required: ['path'],
-      },
-      execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
-        try {
-          await virtualFilesystem.deletePath(userId, path);
-          return {
-            success: true,
-            message: `Deleted: ${path}`,
-          };
-        } catch (error: any) {
-          return {
-            success: false,
-            error: error.message || 'Failed to delete file',
           };
         }
       },
@@ -350,6 +395,74 @@ export function createFilesystemTools(userId: string): FilesystemTool[] {
       },
     },
   ];
+
+  if (options.sandboxId) {
+    tools.push({
+      name: 'execute_bash',
+      description: 'Execute a bash command in the sandboxed workspace. Use for installs, tests, builds, and other CLI operations.',
+      parameters: {
+        type: 'object',
+        properties: {
+          command: {
+            type: 'string',
+            description: 'Bash command to execute',
+          },
+          cwd: {
+            type: 'string',
+            description: 'Optional working directory inside the sandbox workspace',
+          },
+          timeout: {
+            type: 'number',
+            description: 'Optional timeout in milliseconds',
+          },
+        },
+        required: ['command'],
+      },
+      execute: async ({ command, cwd, timeout }: { command: string; cwd?: string; timeout?: number }): Promise<ToolCallResult> => {
+        try {
+          const security = checkCommandSecurity(command);
+          if (!security.allowed) {
+            return {
+              success: false,
+              error: security.reason || 'Command blocked by sandbox security policy',
+              blocked: true,
+              severity: security.severity,
+            };
+          }
+
+          const result = await bashToolExecutor.execute({
+            userId,
+            sandboxId: options.sandboxId,
+            sandboxProvider: options.sandboxProvider as any,
+            params: {
+              command,
+              cwd: cwd || options.workspacePath,
+              timeout,
+              enableHealing: true,
+            },
+          });
+
+          return {
+            success: result.success,
+            output: result.output,
+            stdout: result.stdout,
+            stderr: result.stderr,
+            exitCode: result.exitCode,
+            duration: result.duration,
+            attempts: result.attempts,
+            fixesApplied: result.fixesApplied,
+          };
+        } catch (error: any) {
+          return {
+            success: false,
+            error: error.message || 'Failed to execute bash command',
+          };
+        }
+      },
+    });
+  }
+
+  return tools;
 }
 
 /**

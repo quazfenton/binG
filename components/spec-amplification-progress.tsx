@@ -107,11 +107,12 @@ export function SpecAmplificationProgress({
     <div className="w-full space-y-3 p-3 rounded-lg border border-white/10 bg-white/5">
       {/* Header */}
       <div className="flex items-center gap-2">
-        <Icon className={`w-4 h-4 ${config.color}`} />
-        <span className="text-sm font-medium text-white">{config.title}</span>
-        {stage === 'refining' && (
-          <Loader2 className="w-3 h-3 animate-spin text-amber-400" />
+        {stage === 'refining' ? (
+          <Loader2 className={`w-5 h-5 thinking-spinner ${config.color}`} />
+        ) : (
+          <Icon className={`w-4 h-4 ${config.color}`} />
         )}
+        <span className="text-sm font-medium text-white">{config.title}</span>
       </div>
 
       {/* Description */}
@@ -221,7 +222,7 @@ export function DAGProgressDisplay({
             `}
           >
             {task.status === 'complete' && <CheckCircle2 className="w-3 h-3" />}
-            {task.status === 'running' && <Loader2 className="w-3 h-3 animate-spin" />}
+            {task.status === 'running' && <Loader2 className="w-4 h-4 thinking-spinner" />}
             {task.status === 'pending' && <Clock className="w-3 h-3" />}
             {task.status === 'error' && <AlertCircle className="w-3 h-3" />}
             <span className="truncate">{task.title}</span>

@@ -169,10 +169,10 @@ export function extractMkdirEdits(content: string): BashDirectoryEdit[] {
   }
   
   const stripped = stripHeredocBodies(content);
-  
+
   // Match: mkdir [-p] path1 [path2 ...]
-  // First capture the full mkdir invocation, then split paths
-  const regex = /mkdir\s+(-p\s+)?((?:[^\s&|;<>]+\s*)+)/gi;
+  // FIX: Don't capture across newlines to avoid parsing subsequent commands as paths
+  const regex = /mkdir\s+(-p\s+)?([^\n&|;<>]+)/gi;
   let match: RegExpExecArray | null;
   
   while ((match = regex.exec(stripped)) !== null) {
@@ -347,12 +347,12 @@ export function toStandardFileEdits(bashEdits: {
     });
   }
 
-  // Convert directories (mkdir - represented as empty file with action)
+  // Convert directories (mkdir - represented as write with empty content)
   for (const dir of bashEdits.directories) {
     edits.push({
       path: dir.path,
       content: '',
-      action: 'mkdir',
+      action: 'write',
     });
   }
 
@@ -365,14 +365,12 @@ export function toStandardFileEdits(bashEdits: {
     });
   }
 
-  // Convert patches (sed commands) - preserve flags
+  // Convert patches (sed commands)
   for (const patch of bashEdits.patches) {
-    const flags = patch.flags || '';
     edits.push({
       path: patch.path,
-      content: `s/${patch.pattern}/${patch.replacement}/${flags}`,
+      content: `s/${patch.pattern}/${patch.replacement}/${patch.flags || ''}`,
       action: 'patch',
-      flags, // Preserve flags for downstream consumers
     });
   }
 

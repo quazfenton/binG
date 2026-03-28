@@ -131,11 +131,11 @@ export function extractRedirect(command: string): { command: string; outputFile?
     (_, idx) => quotedStrings[parseInt(idx)] || ''
   );
 
-  // Reconstruct command without the output redirect
-  const commandWithoutRedirect = unquotedCommand
-    .slice(0, lastMatch.index) + unquotedCommand.slice(lastMatch.index + lastMatch[0].length);
-  
-  // Restore quoted strings in the reconstructed command
+  // Reconstruct command by removing only the redirect operator and file
+  // Keep the original command part before the redirect
+  const commandWithoutRedirect = cmdPart.trim();
+
+  // Restore quoted strings in the command
   const finalCommand = commandWithoutRedirect.replace(
     new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
     (_, idx) => quotedStrings[parseInt(idx)] || ''
