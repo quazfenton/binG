@@ -14,7 +14,7 @@ import { contextPackService } from '@/lib/virtual-filesystem/context-pack-servic
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath, extractScopePath } from '@/lib/virtual-filesystem/scope-utils';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
-import type { LLMMessage } from "@/lib/chat/llm-providers";
+import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
 import { executeV2Task, executeV2TaskStreaming } from '@/lib/agent/v2-executor';
@@ -696,6 +696,13 @@ export async function POST(request: NextRequest) {
     }
 
     // PRIORITY-BASED ROUTING - Routes through Fast-Agent → n8n → Custom Fallback → Original System
+    // Providers that use Vercel AI SDK and support native tool calling
+    const VERCEL_AI_PROVIDERS = new Set([
+      'openai', 'anthropic', 'google', 'mistral', 'openrouter',
+      'chutes', 'github', 'zen', 'nvidia', 'together', 'groq',
+      'fireworks', 'anyscale', 'deepinfra', 'lepton',
+    ]);
+
     const routerRequest = {
       messages: contextualMessages,
       provider,
@@ -717,6 +724,8 @@ export async function POST(request: NextRequest) {
       enableSandbox: requestType === 'sandbox' ? !!authenticatedUserId : undefined,
       enableComposio: requestType === 'tool' ? !!authenticatedUserId : undefined,
       mode: body.mode || 'enhanced', // Add mode from request
+      // When Vercel AI SDK handles tool calling natively, skip regex intent parsing
+      nativeToolCalling: VERCEL_AI_PROVIDERS.has(provider) && !!authenticatedUserId,
     };
 
     chatLogger.debug('Routing request through priority chain', { requestId, provider, model }, {
@@ -762,12 +771,24 @@ export async function POST(request: NextRequest) {
       if (agentMode === 'v2') {
         chatLogger.debug('V2 agent mode, using standard routing without spec amplification', { requestId })
         unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
-      } else {
-        // V1 mode or auto - use spec amplification if enabled
-        // Stream spec amplification events only when explicitly enabled.
+      } else if (stream && SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED) {
+        // NEW: For streaming with spec amplification, we need special handling
+        // The response will contain a stream generator that we consume in real-time
+        chatLogger.debug('V1 mode with streaming, using routeWithSpecAmplification with emit', { requestId })
         unifiedResponse = await responseRouter.routeWithSpecAmplification({
           ...routerRequest,
-          ...(stream && SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED ? { emit: placeholderEmit } : {})
+          emit: placeholderEmit
+        })
+        
+        // Check if response has streaming generator (real-time LLM streaming)
+        if (unifiedResponse.stream && typeof unifiedResponse.stream === 'object' && Symbol.asyncIterator in unifiedResponse.stream) {
+          chatLogger.info('Received streaming response with generator, will consume chunks in real-time', { requestId })
+          // The stream generator will be consumed below in the streaming section
+        }
+      } else {
+        // V1 mode or auto - use spec amplification if enabled (non-streaming)
+        unifiedResponse = await responseRouter.routeWithSpecAmplification({
+          ...routerRequest,
         })
       }
 
@@ -994,6 +1015,201 @@ export async function POST(request: NextRequest) {
         const streamStartTime = Date.now();
         let chunkCount = 0;
 
+        // NEW: Check if we have LLM stream generator from enhancedLLMService (real-time LLM token streaming)
+        const hasLLMStreamGenerator = unifiedResponse.stream && 
+          typeof unifiedResponse.stream === 'object' && 
+          Symbol.asyncIterator in unifiedResponse.stream;
+
+        if (hasLLMStreamGenerator) {
+          // Handle real-time LLM streaming with progressive parsing
+          chatLogger.info('Streaming with LLM generator (real-time token streaming)', { requestId: streamRequestId, provider: actualProvider, model: actualModel });
+
+          const encoder = new TextEncoder();
+          let encoderRef = encoder;
+          let streamingContentBuffer = '';
+          const fileEditParserState = createIncrementalParser();
+
+          const readableStream = new ReadableStream({
+            async start(controller) {
+              const realEmit = (eventType: string, data: any) => {
+                if (request.signal?.aborted) return;
+                const eventStr = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+                controller.enqueue(encoderRef.encode(eventStr));
+                chunkCount++;
+              };
+
+              emitRef.current = realEmit;
+
+              // Flush any pending events
+              for (const pending of pendingEvents) {
+                realEmit(pending.event, { requestId: streamRequestId, ...pending.data, timestamp: pending.timestamp });
+              }
+              pendingEvents.length = 0;
+
+              const cleanup = () => {
+                encoderRef = null;
+                emitRef.current = null;
+                streamingContentBuffer = '';
+                fileEditParserState.emittedEdits.clear();
+              };
+
+              if (request.signal) {
+                request.signal.addEventListener('abort', () => {
+                  cleanup();
+                  chatLogger.warn('LLM stream cancelled by client', { requestId: streamRequestId });
+                });
+              }
+
+              try {
+                // Consume the LLM stream generator in real-time
+                // This is where TRUE streaming happens - tokens as they're generated by the LLM
+                for await (const streamChunk of unifiedResponse.stream as AsyncGenerator<StreamingResponse>) {
+                  if (request.signal?.aborted) break;
+
+                  // Emit token chunk immediately
+                  if (streamChunk.content) {
+                    realEmit('token', { 
+                      content: streamChunk.content, 
+                      timestamp: Date.now(),
+                      type: 'token'
+                    });
+
+                    // Progressive file edit detection from streaming content
+                    streamingContentBuffer += streamChunk.content;
+                    const newFileEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
+
+                    for (const edit of newFileEdits) {
+                      realEmit('file_edit', {
+                        path: edit.path,
+                        status: 'detected',
+                        timestamp: Date.now(),
+                      });
+                      chatLogger.debug('Progressive file edit detected during LLM stream', { path: edit.path });
+                    }
+                  }
+
+                  // Handle reasoning traces if present (for models that support it)
+                  if (streamChunk.reasoning) {
+                    realEmit('reasoning', {
+                      reasoning: streamChunk.reasoning,
+                      timestamp: Date.now(),
+                    });
+                  }
+
+                  // Handle tool calls if present
+                  if (streamChunk.toolCalls && streamChunk.toolCalls.length > 0) {
+                    for (const toolCall of streamChunk.toolCalls) {
+                      realEmit('tool_call', {
+                        toolCallId: toolCall.id,
+                        toolName: toolCall.name,
+                        args: toolCall.arguments,
+                        timestamp: Date.now(),
+                      });
+                    }
+                  }
+
+                  // Handle tool invocations if present
+                  if (streamChunk.toolInvocations && streamChunk.toolInvocations.length > 0) {
+                    for (const toolInvocation of streamChunk.toolInvocations) {
+                      realEmit('tool_invocation', {
+                        toolCallId: toolInvocation.toolCallId,
+                        toolName: toolInvocation.toolName,
+                        state: toolInvocation.state,
+                        args: toolInvocation.args,
+                        result: toolInvocation.result,
+                        timestamp: Date.now(),
+                      });
+                    }
+                  }
+
+                  // Handle files if present
+                  if (streamChunk.files && streamChunk.files.length > 0) {
+                    for (const file of streamChunk.files) {
+                      realEmit('file_edit', {
+                        path: file.path,
+                        status: file.operation === 'delete' ? 'deleted' : 'detected',
+                        operation: file.operation,
+                        content: file.content,
+                        timestamp: Date.now(),
+                      });
+                    }
+                  }
+
+                  // Handle commands if present
+                  if (streamChunk.commands) {
+                    if (streamChunk.commands.request_files) {
+                      realEmit('request_files', {
+                        paths: streamChunk.commands.request_files,
+                        timestamp: Date.now(),
+                      });
+                    }
+                    if (streamChunk.commands.write_diffs) {
+                      realEmit('diffs', {
+                        files: streamChunk.commands.write_diffs,
+                        timestamp: Date.now(),
+                      });
+                    }
+                  }
+
+                  // Handle finish reason at end of stream
+                  if (streamChunk.isComplete) {
+                    realEmit('done', {
+                      requestId: streamRequestId,
+                      timestamp: Date.now(),
+                      success: true,
+                      finishReason: streamChunk.finishReason,
+                      tokensUsed: streamChunk.tokensUsed,
+                      usage: streamChunk.usage,
+                    });
+                    break; // Exit loop when complete
+                  }
+                }
+
+                cleanup();
+              } catch (streamError) {
+                chatLogger.error('LLM stream error', { requestId: streamRequestId }, {
+                  error: streamError instanceof Error ? streamError.message : String(streamError),
+                });
+
+                if (!request.signal?.aborted) {
+                  realEmit('error', {
+                    message: 'LLM streaming error',
+                    error: streamError instanceof Error ? streamError.message : String(streamError),
+                  });
+                }
+                cleanup();
+              } finally {
+                controller.close();
+              }
+            },
+            cancel() {
+              const streamDuration = Date.now() - streamStartTime;
+              chatLogger.warn('LLM stream cancelled (cancel callback)', { requestId: streamRequestId }, {
+                chunkCount,
+                latencyMs: streamDuration,
+              });
+            }
+          });
+
+          return new Response(readableStream, {
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              Pragma: 'no-cache',
+              Expires: '0',
+              Connection: 'keep-alive',
+              'X-Accel-Buffering': 'no',
+              'Access-Control-Allow-Origin': process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || '',
+              'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+              'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-anonymous-session-id',
+              'Vary': 'Origin',
+              ...(anonSessionIdToSet ? {
+                'Set-Cookie': `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
+              } : {}),
+            },
+          });
+        }
+
         // Check if we have ToolLoopAgent streaming available
         const hasToolLoopStreaming = agentToolStreamingResult && stream;
 
@@ -1167,8 +1383,15 @@ export async function POST(request: NextRequest) {
         }
 
         // Fallback: Standard streaming (non-agent or ToolLoopAgent not available)
-        // Create streaming events from unified response
-        const events = responseRouter.createStreamingEvents(clientResponse, streamRequestId);
+        // Create streaming events from unified response with faster initial text display
+        const events = responseRouter.createStreamingEvents(clientResponse, streamRequestId, {
+          includeReasoning: true,
+          includeToolState: true,
+          includeFilesystem: true,
+          includeDiffs: true,
+          chunkSize: 8, // Smaller chunks for smoother progressive display
+          emitPrimaryContentImmediately: true, // NEW: Show first 16 chars immediately for faster perceived response
+        });
         const supplementalAgenticEvents = buildSupplementalAgenticEvents(clientResponse, streamRequestId, events);
         if (supplementalAgenticEvents.length > 0) {
           events.splice(Math.max(0, events.length - 1), 0, ...supplementalAgenticEvents);
@@ -1332,9 +1555,9 @@ export async function POST(request: NextRequest) {
 
               const totalTokens = tokenEvents.length;
 
-              // Keep a slight simulated cadence without making the stream lag behind
-              // the already-available provider response.
-              const baseDelay = totalTokens > 200 ? 1 : totalTokens > 100 ? 2 : 3;
+              // OPTIMIZED: Faster streaming for better perceived performance
+              // Reduced delays while maintaining natural "typing" rhythm
+              const baseDelay = totalTokens > 500 ? 0 : totalTokens > 200 ? 1 : totalTokens > 100 ? 2 : 3;
 
               for (let i = 0; i < totalTokens; i++) {
                 if (request.signal?.aborted || streamClosed) {
@@ -1350,22 +1573,26 @@ export async function POST(request: NextRequest) {
                 controller.enqueue(encoderRef.encode(event));
                 chunkCount++;
 
-                // Progressive delay: faster start, slower middle, fast end
-                // Creates natural "thinking and typing" rhythm
+                // OPTIMIZED: Minimal delays for faster text display
+                // First 10 tokens: almost instant (feels responsive)
+                // Middle section: slight rhythm (feels natural)
+                // Final tokens: fast completion
                 let delay: number;
-                if (i < 5) {
-                  delay = baseDelay;
-                } else if (i < 20) {
-                  delay = baseDelay + 1;
-                } else if (i < totalTokens * 0.8) {
-                  delay = baseDelay + 1;
+                if (i < 10) {
+                  delay = 0; // No delay for initial tokens - instant gratification
+                } else if (i < 50) {
+                  delay = baseDelay; // Minimal delay for early streaming
+                } else if (i < totalTokens * 0.7) {
+                  delay = baseDelay + 1; // Slight rhythm in middle
                 } else {
-                  delay = baseDelay;
+                  delay = 0; // Fast finish at the end
                 }
 
-                delay = Math.max(1, Math.min(delay, 5));
+                delay = Math.max(0, Math.min(delay, 3)); // Cap at 3ms max
 
-                await new Promise(resolve => setTimeout(resolve, delay));
+                if (delay > 0) {
+                  await new Promise(resolve => setTimeout(resolve, delay));
+                }
               }
 
               // Send primary_done event for PRIMARY response completion
@@ -2102,6 +2329,13 @@ function appendFilesystemContextMessages(
         ? [
             'For file changes, prefer one of these parseable schemas:',
             '',
+            'CAPABILITY CHOICE:',
+            '- For modifying an existing file, use APPLY_DIFF first.',
+            '- For creating a brand-new file, use WRITE or <file_edit path="...">...</file_edit>.',
+            '- For deleting a file, use DELETE <path>.',
+            '- For reading or referring to existing workspace content, use <file_read path="..." /> when needed.',
+            '- For shell/runtime instructions meant for the user terminal, emit a single ```bash block.',
+            '',
             'FOR EXISTING FILES, prefer surgical edits (APPLY_DIFF) over full rewrites:',
             '  <apply_diff path="src/utils.ts">',
             '    <search>function oldName() {',
@@ -2136,6 +2370,19 @@ function appendFilesystemContextMessages(
             'IMPORTANT: For edits to existing files, ALWAYS use APPLY_DIFF instead of WRITE.',
             'APPLY_DIFF only replaces the exact block you specify, preventing context truncation.',
             'Use WRITE only when creating new files or when a complete rewrite is explicitly needed.',
+            'Do not rewrite whole existing files unless the user explicitly wants a full rewrite.',
+            '',
+            'DIFF AUTHORING RULES:',
+            '- The <search> block or APPLY_DIFF search section must match the existing code exactly, including spacing and punctuation.',
+            '- Keep each diff surgical and minimal; prefer multiple small APPLY_DIFF operations over one large rewrite.',
+            '- Include enough surrounding context in the search block to uniquely identify the target.',
+            '- If multiple files are involved, emit one operation per file rather than mixing contents.',
+            '',
+            'DIFF-BASED SELF-HEALING:',
+            '- If an edit might fail because surrounding code may have drifted, first read/reference the latest file content and then emit a narrower APPLY_DIFF.',
+            '- If a search block is large, brittle, or repeated, reduce it to the smallest unique exact block.',
+            '- If an earlier attempted patch likely failed, do not repeat the same broad patch; emit a corrected APPLY_DIFF with fresher exact context.',
+            '- Prefer preserving user code and making the minimum viable edit rather than replacing entire functions or files.',
             'Prefer concrete multi-file edits when user requests full project scaffolding.',
             '',
             'To read a file from the workspace, use: <file_read path="..." />',
@@ -2143,6 +2390,7 @@ function appendFilesystemContextMessages(
             'When the user asks how to run code, include shell commands in ```bash blocks.',
             'The user has a terminal that can execute these commands.',
             'For multi-step setups, provide all commands in a single bash block so they can be run together.',
+            'Use bash blocks for user-facing commands only; use filesystem edit schemas for file mutations.',
             'If a task is too large for a single response, end with the exact token: [CONTINUE_REQUESTED]',
             'Example: ```bash',
             'npm install',

@@ -227,13 +227,69 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'nvidia',
     name: 'NVIDIA NIM',
     models: [
+      // NVIDIA Nemotron models
+      'nvidia/nemotron-4-340b-instruct',
+      'nvidia/nemotron-4-340b-reward',
+      'nvidia/nemotron-3-super-120b-a12b',
+      'nvidia/nemotron-3-nano-30b-a3b:free',
+      'nvidia/nemotron-nano-12b-v2-vl:free',
+      // DeepSeek models
       'deepseek-ai/deepseek-v3.2',
-      'deepseek-ai/deepseek-v3.1-terminus',
       'deepseek-ai/deepseek-v3.1',
+      'deepseek-ai/deepseek-v3.1-terminus',
+      'deepseek-ai/deepseek-r1-distill-llama-8b',
+      'deepseek-ai/deepseek-r1-distill-qwen-7b',
+      'deepseek-ai/deepseek-r1-distill-qwen-14b',
+      'deepseek-ai/deepseek-r1-distill-qwen-32b',
+      'deepseek-ai/deepseek-coder-6.7b-instruct',
+      // Meta Llama models
+      'meta/llama-4-maverick-17b-128e-instruct',
+      'meta/llama-3.3-70b-instruct',
+      'meta/llama2-70b',
+      // Mistral models
+      'mistralai/mistral-large-2-instruct',
+      'mistralai/mistral-large-3-675b-instruct-2512',
+      'mistralai/mistral-large',
+      'mistralai/mistral-medium-3-instruct',
+      'mistralai/mistral-7b-instruct-v0.3',
+      'mistralai/mistral-7b-instruct-v0.2',
+      'mistralai/codestral-22b-instruct-v0.1',
+      'mistralai/devstral-2-123b-instruct-2512',
+      'mistralai/magistral-small-2506',
+      'mistralai/mamba-codestral-7b-v0.1',
+      'mistralai/mathstral-7b-v0.1',
+      'mistralai/ministral-14b-instruct-2512',
+      // Google models
+      'google/gemma-3-27b-it',
+      // Baichuan models
+      'baichuan-inc/baichuan2-13b-chat',
+      // BigCode models
+      'bigcode/starcoder2-15b',
+      // Microsoft models
+      'microsoft/phi-4-multimodal-instruct',
+      // Qwen models
+      'qwen/qwen3.5-122b-a10b',
+      // TII Falcon models
+      'tiiuae/falcon3-7b-instruct',
+      // Writer models
+      'writer/palmyra-creative-122b',
+      // OpenAI models
+      'openai/gpt-oss-120b',
+      // Moonshot models
+      'moonshotai/kimi-k2-instruct',
+      'moonshotai/kimi-k2-instruct-0905',
+      'moonshotai/kimi-k2-thinking',
+      'moonshotai/kimi-k2.5',
+      // MiniMax models
+      'minimaxai/minimax-m2.5',
+      // IBM models
+      'ibm/granite-guardian-3.0-8b',
+      // iGenius models
+      'igenius/colosseum_355b_instruct_16k',
     ],
     supportsStreaming: true,
     maxTokens: 128000,
-    description: 'NVIDIA NIM - DeepSeek models optimized for NVIDIA GPUs'
+    description: 'NVIDIA NIM - Enterprise AI models optimized for NVIDIA GPUs'
   },
   zo: {
     id: 'zo',
