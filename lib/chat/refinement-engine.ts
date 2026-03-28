@@ -21,7 +21,7 @@ const POLICY = {
   maxCost: 0.02,  // USD
   maxTokens: 8000,
   maxSpecSections: 5,
-  timeBudgetMs: 8000,
+  timeBudgetMs: 60_000, // Increased from 8s to 60s for complex refinements
   maxChunkTasks: 10,
 }
 

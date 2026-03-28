@@ -98,42 +98,16 @@ class VFSProvider implements CapabilityProvider {
         }
 
         case 'file.write': {
-          // If append is true, use file.append logic instead
-          if (input.append) {
-            // Read existing content first
-            let existingContent = '';
-            try {
-              const existingFile = await virtualFilesystem.readFile(ownerId, input.path);
-              existingContent = existingFile.content || '';
-            } catch {
-              // File doesn't exist, will create it
-              existingContent = '';
-            }
-
-            // Append new content
-            const file = await virtualFilesystem.writeFile(
-              ownerId,
-              input.path,
-              existingContent + input.content,
-              input.language,
-              { failIfExists: false }
-            );
-            return {
-              success: true,
-              output: {
-                success: true,
-                path: file.path,
-                bytesWritten: file.size,
-              },
-            };
-          }
-
           const file = await virtualFilesystem.writeFile(
             ownerId,
             input.path,
             input.content,
             input.language,
-            input.failIfExists ? { failIfExists: true } : undefined
+            input.append
+              ? { failIfExists: false, append: true }
+              : input.failIfExists
+                ? { failIfExists: true }
+                : undefined
           );
           return {
             success: true,
@@ -146,23 +120,12 @@ class VFSProvider implements CapabilityProvider {
         }
 
         case 'file.append': {
-          // Read existing content first
-          let existingContent = '';
-          try {
-            const existingFile = await virtualFilesystem.readFile(ownerId, input.path);
-            existingContent = existingFile.content || '';
-          } catch {
-            // File doesn't exist, will create it
-            existingContent = '';
-          }
-
-          // Append new content
           const file = await virtualFilesystem.writeFile(
             ownerId,
             input.path,
-            existingContent + input.content,
+            input.content,
             input.language,
-            { failIfExists: false }
+            { failIfExists: false, append: true }
           );
           return {
             success: true,

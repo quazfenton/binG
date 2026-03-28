@@ -381,8 +381,8 @@ function fixMissingDependency(failure: BashFailure): string | null {
   }
 
   if (failure.command.includes('node') || failure.command.includes('npm') || failure.command.includes('pnpm')) {
-    // Use pnpm (repo standard) but fall back to npm if pnpm not available
-    return `pnpm add ${missingModule} || npm install ${missingModule} && ${failure.command}`;
+    // Use pnpm (repo standard) but fall back to npm only if pnpm is not available
+    return `if command -v pnpm >/dev/null 2>&1; then pnpm add ${missingModule}; else npm install ${missingModule}; fi && ${failure.command}`;
   }
 
   if (failure.command.includes('apt') || failure.command.includes('apt-get')) {

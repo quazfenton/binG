@@ -171,6 +171,27 @@ export async function executeDAG(
   // Execute nodes respecting dependencies
   for (const node of dag.nodes) {
     try {
+      // Check if all dependencies succeeded
+      const failedDeps = node.dependsOn.filter(depId => {
+        const depResult = results[depId];
+        return !depResult || depResult.success === false;
+      });
+
+      if (failedDeps.length > 0) {
+        // Skip this node - prerequisite dependencies failed
+        logger.warn('Skipping node due to failed dependencies', {
+          id: node.id,
+          failedDeps,
+        });
+        
+        errors.push({
+          nodeId: node.id,
+          error: `Dependency failed: ${failedDeps.join(', ')}`,
+          attempt: 0,
+        });
+        continue; // Skip to next node
+      }
+
       // Wait for dependencies
       const inputs = node.dependsOn.map(depId => results[depId]);
 
@@ -190,13 +211,13 @@ export async function executeDAG(
         }
       }
 
-      logger.debug('Node completed', { 
-        id: node.id, 
+      logger.debug('Node completed', {
+        id: node.id,
         success: result.success,
       });
     } catch (error: any) {
-      logger.error('Node failed', { 
-        id: node.id, 
+      logger.error('Node failed', {
+        id: node.id,
         error: error.message,
       });
 
@@ -284,20 +305,47 @@ export async function executeDAGParallel(
     };
   }
 
-  while (executed.size < optimizedDag.nodes.length) {
-    // Find ready nodes (all dependencies satisfied)
+  // Track failed nodes separately to prevent downstream execution
+  const failed = new Set<string>();
+
+  while (executed.size + failed.size < optimizedDag.nodes.length) {
+    // Find ready nodes (all dependencies satisfied AND succeeded)
     const readyNodes = optimizedDag.nodes.filter(
-      node => 
+      node =>
         !executed.has(node.id) &&
-        node.dependsOn.every(dep => executed.has(dep))
+        !failed.has(node.id) &&
+        node.dependsOn.every(dep => executed.has(dep) && results[dep]?.success === true)
     );
 
     if (readyNodes.length === 0) {
-      logger.error('Deadlock detected: no ready nodes but execution incomplete');
-      throw new Error('DAG execution deadlock');
+      // Check if remaining nodes are blocked by failures
+      const remainingNodes = optimizedDag.nodes.filter(
+        node => !executed.has(node.id) && !failed.has(node.id)
+      );
+      
+      if (remainingNodes.length === 0) {
+        break; // All nodes processed (either executed or failed)
+      }
+      
+      // Remaining nodes are blocked by failed dependencies
+      logger.warn('Nodes blocked by failed dependencies', {
+        blockedCount: remainingNodes.length,
+        blockedNodes: remainingNodes.map(n => n.id),
+      });
+      
+      // Mark blocked nodes as failed
+      for (const node of remainingNodes) {
+        failed.add(node.id);
+        errors.push({
+          nodeId: node.id,
+          error: 'Blocked by failed dependency',
+          attempt: 0,
+        });
+      }
+      break;
     }
 
-    logger.debug('Executing parallel nodes', { 
+    logger.debug('Executing parallel nodes', {
       count: readyNodes.length,
       nodes: readyNodes.map(n => n.id),
     });
@@ -322,33 +370,43 @@ export async function executeDAGParallel(
     for (let i = 0; i < nodeResults.length; i++) {
       const settlement = nodeResults[i];
       const nodeId = readyNodes[i].id;
-      
+
       if (settlement.status === 'fulfilled') {
         const { result } = settlement.value;
         results[nodeId] = result;
-        executed.add(nodeId);
+        
+        if (result.success === true) {
+          executed.add(nodeId);
 
-        // Collect outputs
-        const node = optimizedDag.nodes.find(n => n.id === nodeId);
-        if (node?.outputs) {
-          for (const outputPath of node.outputs) {
-            try {
-              const file = await virtualFilesystem.readFile(ctx.agentId, outputPath);
-              outputs[outputPath] = file.content;
-            } catch (error: any) {
-              logger.debug('Output file not yet available', { outputPath });
+          // Collect outputs
+          const node = optimizedDag.nodes.find(n => n.id === nodeId);
+          if (node?.outputs) {
+            for (const outputPath of node.outputs) {
+              try {
+                const file = await virtualFilesystem.readFile(ctx.agentId, outputPath);
+                outputs[outputPath] = file.content;
+              } catch (error: any) {
+                logger.debug('Output file not yet available', { outputPath });
+              }
             }
           }
+        } else {
+          // Node executed but returned failure
+          failed.add(nodeId);
+          errors.push({
+            nodeId,
+            error: result.error || 'Node execution failed',
+            attempt: 0,
+          });
         }
       } else {
         // Handle rejection - use index to reliably identify the failed node
+        failed.add(nodeId);
         errors.push({
           nodeId,
           error: settlement.reason?.message || 'Unknown error',
           attempt: 0,
         });
-
-        executed.add(nodeId); // Mark as executed to avoid infinite loop
       }
     }
   }

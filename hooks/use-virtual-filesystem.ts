@@ -283,7 +283,7 @@ export function useVirtualFilesystem(
     };
   }, [useOPFS, offlineMode]);
 
-  // Update sync status periodically
+  // Update sync status periodically (reduced frequency — local in-memory read only)
   useEffect(() => {
     if (!useOPFS) return;
 
@@ -296,7 +296,7 @@ export function useVirtualFilesystem(
         lastSyncTime: status.lastSyncTime,
         isOnline: status.isOnline,
       }));
-    }, 5000);
+    }, 15000);
 
     return () => clearInterval(interval);
   }, [useOPFS]);

@@ -19,22 +19,28 @@ const MAX_CACHE_SIZE = 50; // Max entries before proactive cleanup
 let cleanupInterval: NodeJS.Timeout | null = null;
 function startPeriodicCleanup() {
   if (cleanupInterval) return;
+  // Use .unref() to allow process to exit without waiting for timer
   cleanupInterval = setInterval(() => {
     const now = Date.now();
     const cacheThreshold = CACHE_TTL_MS * 2;
     let deleted = 0;
-    
+
     for (const [key, value] of snapshotCache.entries()) {
       if (now - value.timestamp > cacheThreshold) {
         snapshotCache.delete(key);
+        // Also clean up corresponding latestSeenVersion entry
+        const ownerFromKey = key.split(':')[0];
+        if (ownerFromKey && !Array.from(snapshotCache.keys()).some(k => k.startsWith(`${ownerFromKey}:`))) {
+          latestSeenVersion.delete(ownerFromKey);
+        }
         deleted++;
       }
     }
-    
+
     if (deleted > 0) {
       console.log('[VFS SNAPSHOT] Periodic cache cleanup:', deleted, 'entries removed');
     }
-    
+
     // Also enforce max size - remove oldest entries if over limit
     if (snapshotCache.size > MAX_CACHE_SIZE) {
       const entries = Array.from(snapshotCache.entries())
@@ -42,15 +48,15 @@ function startPeriodicCleanup() {
       const toDelete = entries.slice(0, entries.length - MAX_CACHE_SIZE);
       for (const [key] of toDelete) {
         snapshotCache.delete(key);
+        // Also clean up corresponding latestSeenVersion entry
+        const ownerFromKey = key.split(':')[0];
+        if (ownerFromKey && !Array.from(snapshotCache.keys()).some(k => k.startsWith(`${ownerFromKey}:`))) {
+          latestSeenVersion.delete(ownerFromKey);
+        }
       }
       console.log('[VFS SNAPSHOT] Size limit cleanup:', toDelete.length, 'entries removed');
     }
-  }, 60000); // Run every 60 seconds
-  
-  // Clean up interval on process exit
-  process.on('beforeExit', () => {
-    if (cleanupInterval) clearInterval(cleanupInterval);
-  });
+  }, 60000).unref(); // Run every 60 seconds, unref to allow process exit
 }
 
 // Start periodic cleanup
@@ -79,33 +85,47 @@ const REQUEST_WINDOW_MS = 5000; // 5 second window for tracking
 const MAX_TRACKER_SIZE = 100; // Max entries before cleanup
 
 // Periodic request tracker cleanup
-setInterval(() => {
-  const now = Date.now();
-  let deleted = 0;
-  
-  for (const [key, tracker] of requestTracker.entries()) {
-    // Remove entries older than 2x the request window
-    if (now - tracker.lastRequest > REQUEST_WINDOW_MS * 2) {
-      requestTracker.delete(key);
-      deleted++;
+let requestTrackerInterval: NodeJS.Timeout | null = null;
+function startRequestTrackerCleanup() {
+  if (requestTrackerInterval) return;
+  // Use .unref() to allow process to exit without waiting for timer
+  requestTrackerInterval = setInterval(() => {
+    const now = Date.now();
+    let deleted = 0;
+
+    for (const [key, tracker] of requestTracker.entries()) {
+      // Remove entries older than 2x the request window
+      if (now - tracker.lastRequest > REQUEST_WINDOW_MS * 2) {
+        requestTracker.delete(key);
+        deleted++;
+      }
     }
-  }
-  
-  // Also enforce max size - remove oldest entries if over limit
-  if (requestTracker.size > MAX_TRACKER_SIZE) {
-    const entries = Array.from(requestTracker.entries())
-      .sort((a, b) => a[1].lastRequest - b[1].lastRequest);
-    const toDelete = entries.slice(0, entries.length - MAX_TRACKER_SIZE);
-    for (const [key] of toDelete) {
-      requestTracker.delete(key);
+
+    // Also enforce max size - remove oldest entries if over limit
+    if (requestTracker.size > MAX_TRACKER_SIZE) {
+      const entries = Array.from(requestTracker.entries())
+        .sort((a, b) => a[1].lastRequest - b[1].lastRequest);
+      const toDelete = entries.slice(0, entries.length - MAX_TRACKER_SIZE);
+      for (const [key] of toDelete) {
+        requestTracker.delete(key);
+      }
+      deleted += toDelete.length;
     }
-    deleted += toDelete.length;
-  }
-  
-  if (deleted > 0 && DEBUG) {
-    console.log('[VFS SNAPSHOT] Request tracker cleanup:', deleted, 'entries removed');
-  }
-}, 120000); // Run every 2 minutes
+
+    if (deleted > 0 && DEBUG) {
+      console.log('[VFS SNAPSHOT] Request tracker cleanup:', deleted, 'entries removed');
+    }
+  }, 120000).unref(); // Run every 2 minutes, unref to allow process exit
+}
+
+// Start request tracker cleanup
+startRequestTrackerCleanup();
+
+// Clean up intervals on process exit
+process.on('beforeExit', () => {
+  if (cleanupInterval) clearInterval(cleanupInterval);
+  if (requestTrackerInterval) clearInterval(requestTrackerInterval);
+});
 
 // Debug flag
 const DEBUG = process.env.DEBUG_VFS === 'true' || process.env.NODE_ENV === 'development';

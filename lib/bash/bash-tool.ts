@@ -19,6 +19,8 @@ import {
 } from './bash-event-schema';
 import { executeWithHealing, isCommandSafe } from './self-healing';
 
+export { isCommandSafe };
+
 const logger = createLogger('Bash:Tool');
 
 // ============================================================================
@@ -183,11 +185,12 @@ export async function executeBashCommand(
  * Persist command output to VFS
  */
 async function persistToVFS(
+  enabled: boolean,
   agentId: string,
   command: string,
   result: BashExecutionResult
 ): Promise<string | null> {
-  if (!DEFAULT_CONFIG.persistToVFS) {
+  if (!enabled) {
     return null;
   }
 
@@ -297,7 +300,7 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
 
           // Persist to VFS if requested
           if (persist) {
-            const outputPath = await persistToVFS(agentId, command, result);
+            const outputPath = await persistToVFS(cfg.persistToVFS, agentId, command, result);
             if (outputPath) {
               result.outputPath = outputPath;
             }
@@ -365,7 +368,7 @@ export async function executeBashViaEvent(
 
     // Persist to VFS if requested
     if (event.persist) {
-      const outputPath = await persistToVFS(event.agentId, event.command, result);
+      const outputPath = await persistToVFS(DEFAULT_CONFIG.persistToVFS, event.agentId, event.command, result);
       if (outputPath) {
         result.outputPath = outputPath;
       }

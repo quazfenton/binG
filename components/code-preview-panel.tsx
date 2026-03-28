@@ -1596,6 +1596,7 @@ export default function CodePreviewPanel({
   const filesystemCurrentPathRef = useRef(filesystemCurrentPath);
   const filesystemScopePathRef = useRef(filesystemScopePath);
   const lastWorkspaceVersionRef = useRef(0);
+  const pendingRefreshRef = useRef(false);
 
   useEffect(() => {
     filesystemCurrentPathRef.current = filesystemCurrentPath;
@@ -1660,6 +1661,13 @@ export default function CodePreviewPanel({
   useEffect(() => {
     const refresh = async (detail?: any) => {
       log(`[filesystem-updated event] received`, detail);
+
+      // Skip expensive network fetches when panel is closed — defer until re-open
+      if (!isOpen) {
+        pendingRefreshRef.current = true;
+        log(`[filesystem-updated] panel closed, deferring refresh`);
+        return;
+      }
 
       try {
         const eventWorkspaceVersion = typeof detail?.workspaceVersion === 'number' ? detail.workspaceVersion : null;
@@ -1762,6 +1770,16 @@ export default function CodePreviewPanel({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]); // Only depend on isOpen - listener stays stable
+
+  // Flush deferred refresh when panel re-opens
+  useEffect(() => {
+    if (isOpen && pendingRefreshRef.current) {
+      pendingRefreshRef.current = false;
+      log('[CodePreviewPanel] panel opened with pending refresh, triggering now');
+      const currentPath = filesystemCurrentPathRef.current || filesystemScopePathRef.current || 'project';
+      void debouncedListDirectory(normalizeProjectPath(currentPath));
+    }
+  }, [isOpen]);
 
   // Generate project structure for complex projects
   // Also merge virtual filesystem files for live preview

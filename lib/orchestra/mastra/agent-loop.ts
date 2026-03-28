@@ -511,15 +511,9 @@ Response Format:
 Example:
 User: "Create a todo app"
 Assistant:
-cat > package.json << 'EOF'
-{
-  "name": "todo-app",
-  "version": "1.0.0"
-}
-EOF
-cat > src/index.js << 'EOF'
-// Todo app code
-EOF
+[Tool: create_directory] { "path": "src" }
+[Tool: write_file] { "path": "package.json", "content": "{\\n  \\"name\\": \\"todo-app\\",\\n  \\"version\\": \\"1.0.0\\"\\n}" }
+[Tool: write_file] { "path": "src/index.js", "content": "// Todo app code\\nconsole.log('Hello from todo app');" }
 Assistant: { "done": true, "message": "Created a todo app with package.json and src/index.js" }`;
   }
 
