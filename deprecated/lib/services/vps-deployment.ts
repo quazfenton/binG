@@ -1,3 +1,24 @@
+/**
+ * @deprecated VPS Deployment Service - No longer maintained
+ * 
+ * This module was created for early VPS deployment experiments but is no longer
+ * actively developed or used. The sandbox provider system (lib/sandbox/providers/)
+ * is now the preferred approach for remote execution environments.
+ * 
+ * These TODOs are kept as reference for potential future implementations:
+ * - DigitalOcean API integration (createDroplet)
+ * - Linode provider implementation
+ * - Vultr provider implementation  
+ * - Google Compute Engine provider implementation
+ * 
+ * If VPS deployment is needed, consider using the existing sandbox providers:
+ * - Daytona (primary)
+ * - Blaxel
+ * - Runloop
+ * - Fly.io Sprites
+ * - Microsandbox (Docker-based)
+ */
+
 import { 
   FEATURE_FLAGS, 
   VPSDeploymentService, 
@@ -45,8 +66,8 @@ class DigitalOceanVPSService implements VPSDeploymentService {
       if (!this.apiToken) {
         throw new Error('DigitalOcean API token not configured');
       }
-      
-      // TODO: Implement actual DigitalOcean droplet creation
+
+      // @deprecated - See module-level deprecation notice
       throw new Error('DigitalOcean droplet creation not implemented in production');
     } catch (error) {
       console.error('Droplet creation failed:', error);
@@ -159,13 +180,13 @@ export const createVPSDeploymentService = (): VPSDeploymentService => {
     case 'digitalocean':
       return new DigitalOceanVPSService();
     case 'linode':
-      // TODO: Implement Linode service
+      // @deprecated - See module-level deprecation notice
       throw new Error('Linode VPS service not yet implemented');
     case 'vultr':
-      // TODO: Implement Vultr service
+      // @deprecated - See module-level deprecation notice
       throw new Error('Vultr VPS service not yet implemented');
     case 'gcp':
-      // TODO: Implement Google Compute Engine service
+      // @deprecated - See module-level deprecation notice
       throw new Error('GCP Compute Engine service not yet implemented');
     default:
       throw new Error(`Unsupported VPS provider: ${FEATURE_FLAGS.VPS_PROVIDER}`);

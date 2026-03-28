@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getOrCreateAnonymousSessionId, buildApiHeaders } from '@/lib/utils';
+import { getOrCreateAnonymousSessionId, buildApiHeaders, syncAnonymousSessionId } from '@/lib/utils';
 import { createDebugLogger } from '@/config/features';
 import type {
   VirtualFile,
@@ -25,6 +25,7 @@ export interface UseVirtualFilesystemOptions {
   autoLoad?: boolean;
   useOPFS?: boolean;       // Enable OPFS caching for instant reads/writes
   offlineMode?: boolean;   // Force offline operation
+  sessionId?: string;      // Optional session ID for session isolation
 }
 
 export interface SyncStatus {
@@ -68,14 +69,17 @@ interface SnapshotCacheEntry {
 }
 
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
+const listCache = new Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }>();
 const inFlightRequests = new Map<string, Promise<any>>();
-const SNAPSHOT_CACHE_TTL_MS = 60000; // 60 seconds for snapshots (increased from 30s)
-const LIST_CACHE_TTL_MS = 30000;     // 30 seconds for directory listings (increased from 15s)
-const SNAPSHOT_CACHE_MAX_ENTRIES = 100; // Increased from 50
+const SNAPSHOT_CACHE_TTL_MS = 5000;  // 5 seconds for snapshots - reduced for fresher data
+const LIST_CACHE_TTL_MS = 3000;      // 3 seconds for directory listings - reduced for responsiveness
+const SNAPSHOT_CACHE_MAX_ENTRIES = 100;
 
 // Debounce map to prevent duplicate API calls within short time windows
 const lastApiCallTime = new Map<string, number>();
-const API_CALL_DEBOUNCE_MS = 500; // Minimum 500ms between same API calls
+const API_CALL_DEBOUNCE_MS = 100; // Reduced for faster response - mainly for GET requests
+const REQUEST_COOLDOWN_MS = 50;  // Minimal cooldown for faster response
+let lastGlobalVfsCall = 0;
 
 function getCacheKey(path: string, ownerId: string): string {
   return `${ownerId}:${path}`;
@@ -122,10 +126,49 @@ function setCachedSnapshot(path: string, ownerId: string, snapshot: SnapshotCach
   snapshotCache.set(key, { snapshot, timestamp: Date.now() });
 }
 
+// Get cached directory listing
+function getCachedList(path: string, ownerId: string): { nodes: VirtualFilesystemNode[]; isFresh: boolean } | null {
+  const key = getCacheKey(path, ownerId);
+  const entry = listCache.get(key);
+  
+  if (!entry) return null;
+  
+  const age = Date.now() - entry.timestamp;
+  const isFresh = age < LIST_CACHE_TTL_MS;
+  
+  if (!isFresh) {
+    listCache.delete(key);
+    return null;
+  }
+  
+  return { nodes: entry.nodes, isFresh };
+}
+
+// Set cached directory listing
+function setCachedList(path: string, ownerId: string, nodes: VirtualFilesystemNode[]): void {
+  const key = getCacheKey(path, ownerId);
+  
+  // Limit cache size
+  if (listCache.size >= SNAPSHOT_CACHE_MAX_ENTRIES) {
+    let oldestKey: string | null = null;
+    let oldestTimestamp = Infinity;
+    for (const [k, v] of listCache.entries()) {
+      if (v.timestamp < oldestTimestamp) {
+        oldestTimestamp = v.timestamp;
+        oldestKey = k;
+      }
+    }
+    if (oldestKey) listCache.delete(oldestKey);
+  }
+  
+  listCache.set(key, { nodes, timestamp: Date.now() });
+}
+
 function invalidateSnapshotCache(path?: string, ownerId?: string): void {
   if (!path && !ownerId) {
     // Clear all
     snapshotCache.clear();
+    listCache.clear();
     inFlightRequests.clear();
     return;
   }
@@ -135,6 +178,12 @@ function invalidateSnapshotCache(path?: string, ownerId?: string): void {
     if (ownerId && !key.startsWith(ownerId + ':')) continue;
     if (path && !key.includes(path)) continue;
     snapshotCache.delete(key);
+  }
+  
+  for (const key of listCache.keys()) {
+    if (ownerId && !key.startsWith(ownerId + ':')) continue;
+    if (path && !key.includes(path)) continue;
+    listCache.delete(key);
   }
   
   // Also remove matching keys from inFlightRequests to fence off stale in-flight promises
@@ -152,6 +201,21 @@ export function useVirtualFilesystem(
   const autoLoad = options?.autoLoad !== false; // default true
   const useOPFS = options?.useOPFS ?? false;
   const offlineMode = options?.offlineMode ?? false;
+  
+  // Derive session ID from initialPath if it's a scoped path (e.g., "project/sessions/OneGB")
+  // This ensures the VFS uses the same session ID as the path
+  const deriveSessionIdFromPath = (path: string): string | null => {
+    const match = path.match(/^project\/sessions\/([^/]+)/);
+    return match ? match[1] : null;
+  };
+  
+  // Allow passing sessionId from parent, or derive from path, or fall back to anonymous
+  const getSessionId = useCallback(() => {
+    if (options?.sessionId) return options.sessionId;
+    const derived = deriveSessionIdFromPath(initialPath);
+    if (derived) return derived;
+    return getOrCreateAnonymousSessionId();
+  }, [options?.sessionId, initialPath]);
 
   const [currentPath, setCurrentPath] = useState(initialPath);
   const currentPathRef = useRef(currentPath);
@@ -175,7 +239,7 @@ export function useVirtualFilesystem(
   // Initialize OPFS on mount if enabled
   useEffect(() => {
     if (useOPFS && typeof window !== 'undefined') {
-      const sessionId = getOrCreateAnonymousSessionId();
+      const sessionId = getSessionId();
       
       // Check if OPFS is supported
       if (!OPFSAdapter.isSupported()) {
@@ -186,7 +250,7 @@ export function useVirtualFilesystem(
       opfsAdapter.enable(sessionId).then(() => {
         log('OPFS enabled successfully for session:', sessionId);
       }).catch(err => {
-        logWarn('OPFS initialization failed, falling back to server-only:', err);
+        logWarn('OPFS initialization failed, falling back to server-only:', err?.message || err);
       });
     }
 
@@ -195,7 +259,7 @@ export function useVirtualFilesystem(
         opfsAdapter.disable().catch(console.error);
       }
     };
-  }, [useOPFS, logWarn]);
+  }, [useOPFS, logWarn, getSessionId]);
 
   // Track online status
   useEffect(() => {
@@ -238,38 +302,103 @@ export function useVirtualFilesystem(
   }, [useOPFS]);
 
   // Listen for filesystem-updated events from other panels (code-preview-panel, conversation-interface, etc.)
-  // and invalidate the snapshot cache to ensure fresh data
+  // and invalidate the snapshot cache AND trigger immediate re-fetch to ensure fresh data
+  // Note: We define a local fetch function here since 'request' is defined after this useEffect
   useEffect(() => {
+    // Debounce rapid filesystem events to prevent excessive re-fetching
+    let debounceTimer: ReturnType<typeof setTimeout> | null = null;
+    const DEBOUNCE_MS = 150; // Wait 150ms after last event before fetching
+    
+    // CRITICAL: Keep one shared set across all events to accumulate paths
+    // This prevents losing paths when rapid events clear the timer
+    const pendingPathsToRefresh = new Set<string>();
+
     const unsubscribe = onFilesystemUpdated((event) => {
       const detail = event.detail;
-      
+
       // Get current session ID when event fires (not at effect creation time)
-      const ownerId = getOrCreateAnonymousSessionId();
-      
-      // Invalidate cache when files are updated from anywhere in the app
-      // This fixes Bug #4: Stale snapshot cache never invalidated during edit flow
-      if (detail.path || detail.paths || detail.scopePath) {
-        // Invalidate all provided paths
-        if (detail.scopePath) {
-          invalidateSnapshotCache(detail.scopePath, ownerId);
-        }
-        if (detail.path) {
-          invalidateSnapshotCache(detail.path, ownerId);
-        }
-        if (detail.paths && detail.paths.length > 0) {
-          for (const path of detail.paths) {
-            invalidateSnapshotCache(path, ownerId);
-          }
-        }
-      } else {
+      const ownerId = getSessionId();
+      const currentPath = currentPathRef.current;
+
+      // Determine which paths need refresh (deduplicate)
+      // Add to the SHARED pending set, not a local one
+      if (detail.scopePath) {
+        pendingPathsToRefresh.add(detail.scopePath);
+      }
+      if (detail.path) {
+        pendingPathsToRefresh.add(detail.path);
+      }
+      if (detail.paths && detail.paths.length > 0) {
+        detail.paths.forEach(p => pendingPathsToRefresh.add(p));
+      }
+
+      // Invalidate cache immediately (don't debounce this)
+      for (const path of pendingPathsToRefresh) {
+        invalidateSnapshotCache(path, ownerId);
+      }
+
+      if (pendingPathsToRefresh.size === 0) {
         // No path info - invalidate all caches to be safe
         log(`[filesystem-updated] Invalidating all snapshot caches (no path info)`);
         invalidateSnapshotCache(undefined, ownerId);
+        pendingPathsToRefresh.add(currentPath);
       }
+
+      // DEBOUNCE: Batch rapid filesystem events to prevent excessive API calls
+      // This fixes the polling issue where 4+ events fire in 66ms
+      // IMPORTANT: We clear the timer but NOT the pendingPathsToRefresh set
+      // This ensures all accumulated paths are processed when the timer fires
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+
+      debounceTimer = setTimeout(() => {
+        log(`[filesystem-updated] Debounced refresh for ${pendingPathsToRefresh.size} paths`);
+
+        // Fetch fresh data for all affected paths
+        for (const path of pendingPathsToRefresh) {
+          // Use native fetch (bypassing the 'request' callback which is defined later)
+          fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
+            method: 'GET',
+            headers: buildApiHeaders({ json: false }),
+            credentials: 'include',
+          })
+          .then(res => {
+            // Sync session ID with server to prevent fragmentation
+            syncAnonymousSessionId(res);
+            return res.json();
+          })
+          .then((payload: any) => {
+            if (payload?.success && payload?.data) {
+              const data = payload.data;
+              log(`[filesystem-updated] Refreshed directory: "${data.path}", ${data.nodes.length} entries`);
+              setCachedList(path, ownerId, data.nodes);
+              // Update UI state if this is the current path
+              if (path === currentPathRef.current) {
+                setNodes(data.nodes);
+              }
+            }
+          })
+          .catch(err => {
+            logWarn(`[filesystem-updated] Failed to refresh "${path}":`, err);
+          });
+        }
+
+        // Clear the pending set AFTER all fetches are scheduled
+        pendingPathsToRefresh.clear();
+        debounceTimer = null;
+      }, DEBOUNCE_MS);
     });
 
-    return unsubscribe;
-  }, [log]);
+    return () => {
+      unsubscribe();
+      if (debounceTimer) {
+        clearTimeout(debounceTimer);
+      }
+      // Clear pending paths on cleanup
+      pendingPathsToRefresh.clear();
+    };
+  }, [log, logWarn, getSessionId, invalidateSnapshotCache, setCachedList, buildApiHeaders]);
 
   const request = useCallback(async <TData>(
     url: string,
@@ -277,10 +406,26 @@ export function useVirtualFilesystem(
   ): Promise<TData> => {
     const { includeJsonContentType = true, ...rest } = options;
     
-    // Debounce duplicate GET requests only - POST/PUT/DELETE should not be debounced
+    // Global VFS cooldown - but don't delay write operations excessively
+    const now = Date.now();
+    const timeSinceLastCall = now - lastGlobalVfsCall;
+    
+    // Allow writes to proceed with shorter delay, GET requests have longer debounce
     const method = (options.method || 'GET').toUpperCase();
+    const isWriteOperation = method === 'POST' || method === 'PUT' || method === 'PATCH' || method === 'DELETE';
+    
+    // Write operations have much shorter cooldown
+    const effectiveCooldown = isWriteOperation ? 100 : REQUEST_COOLDOWN_MS;
+    
+    if (timeSinceLastCall < effectiveCooldown) {
+      const waitTime = effectiveCooldown - timeSinceLastCall;
+      log(`request: cooldown active for ${method}, waiting ${waitTime}ms`);
+      await new Promise(resolve => setTimeout(resolve, waitTime));
+    }
+    lastGlobalVfsCall = Date.now();
+    
+    // Debounce duplicate GET requests only - POST/PUT/DELETE should not be debounced
     if (method === 'GET') {
-      const now = Date.now();
       const requestKey = `${method}:${url}`;
       const lastCall = lastApiCallTime.get(requestKey);
       if (lastCall && (now - lastCall) < API_CALL_DEBOUNCE_MS) {
@@ -299,6 +444,7 @@ export function useVirtualFilesystem(
     
     log(`request: ${method} ${url}`);
 
+    const fetchStartTime = Date.now();
     const response = await fetch(url, {
       ...rest,
       headers: {
@@ -308,7 +454,10 @@ export function useVirtualFilesystem(
       credentials: 'include',
     });
 
-    log(`request: response status=${response.status}`);
+    // Sync session ID with server to prevent fragmentation
+    syncAnonymousSessionId(response);
+
+    log(`request: response status=${response.status} (${Date.now() - fetchStartTime}ms)`);
 
     let payload: ApiResponse<TData> | null = null;
     try {
@@ -335,19 +484,34 @@ export function useVirtualFilesystem(
   }, [currentPath]);
 
   const listDirectory = useCallback(async (pathToLoad?: string) => {
-    // Invalidate snapshot cache when directory changes
-    invalidateSnapshotCache(pathToLoad || currentPathRef.current, getOrCreateAnonymousSessionId());
+    const targetPath = pathToLoad || currentPathRef.current;
+      const ownerId = getSessionId();
     
-    log(`listDirectory: loading "${pathToLoad || currentPathRef.current}"`);
+    // Check list cache first
+    const cachedList = getCachedList(targetPath, ownerId);
+    if (cachedList) {
+      log(`listDirectory: cache hit for "${targetPath}" (fresh: ${cachedList.isFresh})`);
+      setCurrentPath(targetPath);
+      setNodes(cachedList.nodes);
+      return cachedList.nodes;
+    }
+    
+    // Invalidate snapshot cache when directory changes (not list cache since we're fetching new data)
+    invalidateSnapshotCache(targetPath, ownerId);
+    
+    log(`listDirectory: cache miss for "${targetPath}", fetching from API`);
     setIsLoading(true);
     setError(null);
     try {
-      const targetPath = pathToLoad || currentPathRef.current;
       const data = await request<{ path: string; nodes: VirtualFilesystemNode[] }>(
         `/api/filesystem/list?path=${encodeURIComponent(targetPath)}`,
         { method: 'GET', includeJsonContentType: false },
       );
       log(`listDirectory: loaded "${data.path}", ${data.nodes.length} entries`);
+      
+      // Cache the result
+      setCachedList(targetPath, ownerId, data.nodes);
+      
       setCurrentPath(data.path);
       setNodes(data.nodes);
       return data.nodes;
@@ -384,7 +548,7 @@ export function useVirtualFilesystem(
     log(`writeFile: writing "${filePath}" (contentLength=${content.length})`);
     
     // Invalidate snapshot cache on write
-    invalidateSnapshotCache(filePath, getOrCreateAnonymousSessionId());
+    invalidateSnapshotCache(filePath, getSessionId());
     
     // OPFS write-through strategy: write to OPFS for instant local reads,
     // then also write to server so listDirectory (server-backed) stays in sync
@@ -471,7 +635,7 @@ export function useVirtualFilesystem(
 
   const getSnapshot = useCallback(async (pathForSnapshot?: string) => {
     const targetPath = pathForSnapshot || currentPathRef.current;
-    const ownerId = getOrCreateAnonymousSessionId();
+      const ownerId = getSessionId();
     const cacheKey = `${ownerId}:${targetPath}`;
 
     // Check shared cache first
@@ -533,7 +697,7 @@ export function useVirtualFilesystem(
     setSyncStatus(prev => ({ ...prev, isSyncing: true }));
 
     try {
-      const ownerId = getOrCreateAnonymousSessionId();
+      const ownerId = getSessionId();
       const result = await opfsAdapter.syncToServer(ownerId);
       
       setSyncStatus(prev => ({
@@ -600,14 +764,38 @@ export function useVirtualFilesystem(
 
   // Load directory on first mount and when initialPath changes
   const hasMountedRef = useRef(false);
+  const isLoadingRef = useRef(false); // Track if a load is in progress
+  const pendingPathRef = useRef<string | null>(null); // Queue pending path changes
   useEffect(() => {
     if (!autoLoad) return;
+    
+    const loadPath = (path: string) => {
+      isLoadingRef.current = true;
+      void listDirectory(path).finally(() => {
+        isLoadingRef.current = false;
+        // Check if there's a pending path to load
+        if (pendingPathRef.current !== null) {
+          const nextPath = pendingPathRef.current;
+          pendingPathRef.current = null;
+          initialPathRef.current = nextPath;
+          loadPath(nextPath);
+        }
+      });
+    };
+    
+    // If already loading, queue this path for later instead of skipping
+    if (isLoadingRef.current) {
+      log('listDirectory: queuing path change for after current load completes:', initialPath);
+      pendingPathRef.current = initialPath;
+      return;
+    }
+    
     if (!hasMountedRef.current) {
       hasMountedRef.current = true;
-      void listDirectory(initialPath);
+      loadPath(initialPath);
     } else if (initialPathRef.current !== initialPath) {
       initialPathRef.current = initialPath;
-      void listDirectory(initialPath);
+      loadPath(initialPath);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [initialPath, autoLoad]);

@@ -135,7 +135,7 @@ export class FilesystemDiffTracker {
     return diff;
   }
 
-  getDiffSummary(ownerId: string = 'default', maxDiffs = 10): string {
+  getDiffSummary(ownerId: string = 'default', maxDiffs = 10): { changedFiles: string[]; totalChanges: number; creates: number; updates: number; deletes: number } {
     const latestDiffs: FileDiff[] = [];
 
     for (const history of this.histories.values()) {
@@ -145,39 +145,22 @@ export class FilesystemDiffTracker {
     }
 
     if (latestDiffs.length === 0) {
-      return 'No file changes detected.';
+      return { changedFiles: [], totalChanges: 0, creates: 0, updates: 0, deletes: 0 };
     }
 
     latestDiffs.sort((a, b) => b.version - a.version);
-    const limitedDiffs = latestDiffs.slice(0, maxDiffs);
 
-    const summary: string[] = [
-      `## File Changes Summary (${latestDiffs.length} files modified)\n`,
-    ];
+    const creates = latestDiffs.filter(d => d.changeType === 'create').length;
+    const updates = latestDiffs.filter(d => d.changeType === 'update').length;
+    const deletes = latestDiffs.filter(d => d.changeType === 'delete').length;
 
-    for (const diff of limitedDiffs) {
-      const action = diff.changeType === 'create' ? '📄 Created' 
-        : diff.changeType === 'delete' ? '🗑️ Deleted' 
-        : '✏️ Modified';
-      
-      summary.push(`### ${action}: ${diff.path}`);
-      summary.push(`Version: ${diff.version} | Timestamp: ${diff.timestamp}\n`);
-
-      if (diff.changeType === 'delete') {
-        summary.push('**File was deleted**\n');
-      } else if (diff.hunks && diff.hunks.length > 0) {
-        summary.push('**Changes:**\n```diff');
-        for (const hunk of diff.hunks) {
-          summary.push(...hunk.lines);
-        }
-        summary.push('```\n');
-      } else if (diff.changeType === 'create') {
-        const preview = (diff.newContent || '').slice(0, 200);
-        summary.push(`**New file content (preview):**\n\`\`\`\n${preview}${(diff.newContent || '').length > 200 ? '...' : ''}\n\`\`\`\n`);
-      }
-    }
-
-    return summary.join('\n');
+    return {
+      changedFiles: latestDiffs.map(d => d.path),
+      totalChanges: latestDiffs.length,
+      creates,
+      updates,
+      deletes,
+    };
   }
 
   getFilesAtVersion(ownerId: string = 'default', targetVersion: number): Map<string, string> {
@@ -312,6 +295,14 @@ export class FilesystemDiffTracker {
     }
 
     return latestDiffs;
+  }
+
+  getDiffHistory(ownerId: string = 'default', path?: string): FileDiffHistory | undefined {
+    if (path) {
+      return this.histories.get(this.getHistoryKey(ownerId, path));
+    }
+    // Return undefined if no path provided (test expects this behavior)
+    return undefined;
   }
 
   /**

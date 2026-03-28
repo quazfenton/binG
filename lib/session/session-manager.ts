@@ -241,7 +241,7 @@ export class SessionManager {
 
     const sessions: Session[] = [];
     for (const sessionId of sessionIds) {
-      const session = this.sessions.get(sessionId);
+      const session = this.sessionsById.get(sessionId);
       if (session && Date.now() - session.lastActivity <= SESSION_TTL_MS) {
         sessions.push(session);
       }

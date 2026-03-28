@@ -60,6 +60,19 @@ export type {
 } from '../tools/tool-context-manager';
 export { toolContextManager, ToolContextManager } from '../tools/tool-context-manager';
 
+// Centralized provider mapping (single source of truth for Arcade/Nango/Composio/Auth0)
+export {
+  TOOL_PROVIDER_MAP,
+  NO_AUTH_TOOLS,
+  ARCADE_PLATFORMS,
+  NANGO_PLATFORMS,
+  getToolServiceForPlatform,
+  getAuth0ConnectionForPlatform,
+  getOAuthPlatformForTool,
+  toolsShareAuth,
+  getAuthorizationUrlForPlatform,
+} from './provider-map';
+
 /**
  * OAuth Integration Class
  * 

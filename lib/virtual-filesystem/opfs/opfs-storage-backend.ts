@@ -191,6 +191,7 @@ export class OPFSStorageBackend implements VFSStorageBackend {
               content: fileData.content,
               language: this.detectLanguage(entry.path),
               lastModified: new Date(entry.lastModified || Date.now()).toISOString(),
+              createdAt: new Date(entry.lastModified || Date.now()).toISOString(),
               version: 1,
               size: fileData.size,
             });

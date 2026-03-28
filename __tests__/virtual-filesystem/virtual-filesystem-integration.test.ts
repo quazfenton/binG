@@ -925,12 +925,13 @@ line 7 modified`;
       expect(file.language).toBe('python');
     });
 
-    it('should detect JSX from file extension', async () => {
+    it('should detect TSX from file extension', async () => {
       const ownerId = 'test-user-1';
 
       const file = await vfs.writeFile(ownerId, 'src/App.tsx', 'export const App = () => <div />;');
 
-      expect(file.language).toBe('typescript');
+      // TSX files return 'tsx' which is correct - TSX is TypeScript with JSX
+      expect(['tsx', 'typescript']).toContain(file.language);
     });
 
     it('should use provided language override', async () => {

@@ -312,7 +312,7 @@ export default function TerminalPanel({
 
    // Debounce initial sync to prevent flood on mount
    const timeoutId = setTimeout(() => {
-     syncVfsToLocal();
+     void syncVfsToLocal();
    }, 500);
 
    return () => clearTimeout(timeoutId);
@@ -329,7 +329,12 @@ export default function TerminalPanel({
     terminals.forEach(term => {
       if (term.terminal && term.mode === 'local') {
         // Clear terminal and show updated status
-        term.terminal.clear();
+        // Guard: xterm's RenderService may not be ready if terminal hasn't been fully opened
+        try {
+          term.terminal.clear();
+        } catch (error) {
+          console.warn('[TerminalPanel] Failed to clear terminal:', error);
+        }
         term.terminal.writeln('');
         term.terminal.writeln('\x1b[1;32m● Terminal Ready\x1b[0m');
         
@@ -567,6 +572,10 @@ export default function TerminalPanel({
           if (activeTerminalId) {
             connectTerminal(activeTerminalId);
           }
+        } else if (res.status === 401) {
+          const errData = await res.json().catch(() => null);
+          toast.error(errData?.error || 'Sign in required to use sandbox terminal');
+          setSandboxStatus('disconnected');
         } else {
           toast.error('Failed to connect sandbox');
           setSandboxStatus('disconnected');
@@ -794,9 +803,9 @@ export default function TerminalPanel({
       isConnected: false,
     };
 
-    // Set default cwd to 'project' - VFS stores files relative to project root
-    // The session scope path is only for VFS lookups, not for terminal cwd
-    localShellCwdRef.current[id] = 'project';
+    // Set default cwd to the current filesystem scope path
+    // This ensures the terminal starts within the active workspace scope
+    localShellCwdRef.current[id] = normalizeScopePath(filesystemScopePathRef.current);
     reconnectCooldownUntilRef.current[id] = 0;
     commandQueueRef.current[id] = [];
     commandHistoryRef.current[id] = [];
@@ -822,7 +831,7 @@ export default function TerminalPanel({
         term?.terminal?.write(text + '\r\n');
       },
       getPrompt: getPrompt,
-      getCwd: (terminalId) => localShellCwdRef.current[terminalId] || 'project',
+      getCwd: (terminalId) => localShellCwdRef.current[terminalId] || normalizeScopePath(filesystemScopePathRef.current),
       setCwd: (terminalId, cwd) => { localShellCwdRef.current[terminalId] = cwd },
       updateTerminalState: updateTerminalState,
       sendInput: sendInput,
@@ -1011,6 +1020,7 @@ export default function TerminalPanel({
       if (typeof window !== 'undefined') {
         try {
           const { terminalOPFSSync } = await import('@/lib/virtual-filesystem/opfs/terminal-sync');
+          // Note: terminal-sync uses browser-only APIs, safe for client bundles
           const sync = terminalOPFSSync;
           
           // Try to sync to OPFS - will fail gracefully if not enabled
@@ -1066,7 +1076,11 @@ export default function TerminalPanel({
   // listLocalDirectory migrated to TerminalLocalFSHandler
 
   const getPrompt = (mode: TerminalMode, cwd: string): string => {
-    const displayCwd = cwd.replace(/^(project|workspace)/, '~');
+    // Only replace 'project' or 'workspace' at root level with '~', not subdirectories
+    // e.g., 'project' -> '~' but 'project/sessions' stays as 'project/sessions'
+    const displayCwd = (cwd === 'project' || cwd === 'workspace') 
+      ? cwd.replace(/^(project|workspace)/, '~')
+      : cwd;
     switch (mode) {
       case 'local':
         return `\x1b[34m[local]\x1b[0m \x1b[1;32m${displayCwd}$\x1b[0m `;
@@ -1255,7 +1269,23 @@ export default function TerminalPanel({
       containerEl.addEventListener('click', () => terminal.focus());
 
       requestAnimationFrame(() => {
-        try { fitAddon.fit(); } catch {}
+        const safeFit = (phase: 'initial' | 'deferred') => {
+          try {
+            const dims = fitAddon.proposeDimensions();
+            if (!dims || dims.rows <= 0 || dims.cols <= 0) return false;
+            fitAddon.fit();
+            return true;
+          } catch (error) {
+            logger.debug(`${phase} terminal fit failed`, error);
+            return false;
+          }
+        };
+
+        if (!safeFit('initial')) {
+          setTimeout(() => {
+            void safeFit('deferred');
+          }, 100);
+        }
         terminal.focus();
       });
 
@@ -1266,7 +1296,7 @@ export default function TerminalPanel({
       terminal.writeln('\x1b[90m  Type "connect" to connect to sandbox.\x1b[0m');
       terminal.writeln('');
 
-      const cwd = localShellCwdRef.current[terminalId] || 'project';
+      const cwd = localShellCwdRef.current[terminalId] || normalizeScopePath(filesystemScopePathRef.current);
       terminal.write(getPrompt('local', cwd));
 
       updateTerminalState(terminalId, { terminal, fitAddon, mode: 'local' });

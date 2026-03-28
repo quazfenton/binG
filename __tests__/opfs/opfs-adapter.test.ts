@@ -209,8 +209,11 @@ describe('OPFSAdapter', () => {
     });
 
     it.skip('should fallback to server when file not in OPFS', async () => {
-      // Note: This test has mock isolation issues when run with other tests
+      // Note: This test requires complete mock isolation that conflicts with other tests.
+      // The OPFS core module caches the storage handle from initialization, so changing
+      // navigator.storage after module import doesn't affect the core instance.
       // Run individually with: npm test -- -t "should fallback to server when file not in OPFS"
+      // The fallback logic is tested indirectly through other integration tests.
       vi.mocked(fetchFileFromServer).mockResolvedValue({
         path: 'test.txt',
         content: 'server content',
@@ -220,19 +223,47 @@ describe('OPFSAdapter', () => {
         size: 14,
       });
 
-      // Set up mock rejection that persists - use mockImplementation to ensure it always rejects
-      mockDirHandle.getFileHandle.mockReset();
-      mockDirHandle.getFileHandle.mockImplementation(() => Promise.reject({ name: 'NotFoundError' }));
+      // Create a separate mock handle that rejects for this specific test
+      const rejectingDirHandle = {
+        kind: 'directory',
+        getFileHandle: vi.fn().mockRejectedValue({ name: 'NotFoundError' }),
+        getDirectoryHandle: vi.fn().mockResolvedValue({}),
+        removeEntry: vi.fn(),
+        entries: vi.fn().mockImplementation(async function* () {}),
+      };
 
-      // Create adapter with handle caching disabled to test fallback behavior
-      const adapter = new OPFSAdapter({ enableHandleCaching: false });
+      const rejectingStorage = {
+        getDirectory: vi.fn().mockResolvedValue(rejectingDirHandle),
+      };
 
-      await adapter.enable('test-user');
+      // Temporarily override navigator.storage for this test only
+      const originalNavigator = global.navigator;
+      Object.defineProperty(global, 'navigator', {
+        value: {
+          storage: rejectingStorage,
+          userAgent: 'Chrome/120.0.0.0',
+          onLine: true,
+        },
+        writable: true,
+      });
 
-      const file = await adapter.readFile('test-user', 'test.txt');
+      try {
+        // Create adapter with handle caching disabled to test fallback behavior
+        const adapter = new OPFSAdapter({ enableHandleCaching: false });
 
-      expect(file.content).toBe('server content');
-      expect(fetchFileFromServer).toHaveBeenCalledWith('test.txt');
+        await adapter.enable('test-user');
+
+        const file = await adapter.readFile('test-user', 'test.txt');
+
+        expect(file.content).toBe('server content');
+        expect(fetchFileFromServer).toHaveBeenCalledWith('test.txt');
+      } finally {
+        // Restore original navigator
+        Object.defineProperty(global, 'navigator', {
+          value: originalNavigator,
+          writable: true,
+        });
+      }
     });
   });
 
@@ -375,22 +406,42 @@ describe('OPFSAdapter', () => {
     });
 
     it('should not flush when sync is already in progress', async () => {
-      vi.mocked(writeFileToServer).mockResolvedValue(true);
+      // Track if sync is in progress and defer completion
+      let syncStarted = false;
+      let completeSync: () => void;
+      const syncCompletePromise = new Promise<void>(resolve => {
+        completeSync = resolve;
+      });
+
+      // Mock writeFileToServer to signal when sync starts and wait for completion signal
+      vi.mocked(writeFileToServer).mockImplementation(async () => {
+        syncStarted = true;
+        await syncCompletePromise;
+        return true;
+      });
 
       const adapter = new OPFSAdapter({ autoSync: false });
       await adapter.enable('test-user');
 
       adapter.queueWrite('test-user', 'test.txt', 'content', 1);
 
-      // Start first flush
+      // Start first flush (will wait for syncCompletePromise)
       const firstFlush = adapter.flushWriteQueue('test-user');
 
-      // Try second flush immediately
+      // Wait for sync to start
+      while (!syncStarted) {
+        await new Promise(resolve => setTimeout(resolve, 5));
+      }
+
+      // Second flush should return immediately without calling writeFileToServer
       await adapter.flushWriteQueue('test-user');
 
-      expect(writeFileToServer).toHaveBeenCalledTimes(1);
-
+      // Complete the first sync
+      completeSync!();
       await firstFlush;
+
+      // Should only have called once since second flush was skipped
+      expect(writeFileToServer).toHaveBeenCalledTimes(1);
     });
   });
 

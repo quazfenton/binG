@@ -448,6 +448,63 @@ services:
       # Otherwise app will spawn containers dynamically
       - "com.bing.nullclaw.enabled=${NULLCLAW_ENABLED:-true}"
 
+  # ===========================================
+  # Zeroboot (Optional - KVM-based Code Execution)
+  # ===========================================
+  # Sub-millisecond VM sandboxes for untrusted code execution.
+  # REQUIREMENTS:
+  # - Linux host with KVM enabled (/dev/kvm)
+  # - Hardware virtualization support (VT-x/AMD-V)
+  # - Cannot run on Windows/macOS without WSL2 + nested virtualization
+  #
+  # USAGE:
+  # - Set ZERObOOT_BASE_URL=http://zeroboot:8080
+  # - Best for: eval(), untrusted code, security-critical execution
+  # - NOT for: npm install, git clone (no network inside sandboxes)
+  #
+  # HYBRID ARCHITECTURE:
+  # - Use Docker sandboxes (microsandbox) for tool commands with network
+  # - Use Zeroboot for isolated code execution (hardware isolation)
+  zeroboot:
+    image: ghcr.io/zerobootdev/zeroboot:latest
+    container_name: bing-zeroboot
+    restart: unless-stopped
+    ports:
+      - "8080:8080"
+    environment:
+      - ZERObOOT_PORT=8080
+      - ZERObOOT_API_KEY=${ZERObOOT_API_KEY:-}
+      - ZERObOOT_TEMPLATE=${ZERObOOT_TEMPLATE:-node20}
+    volumes:
+      - zeroboot-templates:/zeroboot/templates
+    # CRITICAL: KVM device passthrough required
+    # This container MUST run on a KVM-capable Linux host
+    devices:
+      - /dev/kvm:/dev/kvm
+    # Security: Restrict container capabilities
+    security_opt:
+      - apparmor:unconfined
+    cap_add:
+      - NET_ADMIN
+      - SYS_ADMIN
+    networks:
+      - bing-network
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:8080/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 20s
+    deploy:
+      resources:
+        limits:
+          cpus: '2'
+          memory: 2G
+    profiles:
+      - zeroboot
+    # Note: Only enable on Linux hosts with KVM
+    # For development on Windows/macOS, use managed Zeroboot API instead
+
 # ===========================================
 # Networks
 # ===========================================
@@ -481,4 +538,6 @@ volumes:
   postgres-data:
     driver: local
   nullclaw-config:
+    driver: local
+  zeroboot-templates:
     driver: local

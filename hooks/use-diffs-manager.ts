@@ -2,6 +2,7 @@
 
 import { useState, useCallback, useEffect, useRef } from 'react';
 import { toast } from 'sonner';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 
 export interface PendingDiff {
   id: string;
@@ -139,7 +140,19 @@ export function useDiffsManager(options?: {
         if (!result.success) {
           throw new Error(result.error || 'Failed to apply diffs');
         }
-        
+
+        // Notify UI panels of filesystem changes
+        emitFilesystemUpdated({
+          paths: toApply.map(d => d.path),
+          type: 'update',
+          source: 'diffs-apply',
+          applied: toApply.map(d => ({
+            path: d.path,
+            operation: d.changeType,
+            timestamp: Date.now(),
+          })),
+        });
+
         toast.success(`Applied ${toApply.length} diff${toApply.length === 1 ? '' : 's'}`);
       }
 

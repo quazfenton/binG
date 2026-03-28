@@ -107,10 +107,17 @@ class TamboComponentRegistry {
 
   /**
    * Clear all components (for testing)
+   * Safely resets initialization flags only if not currently initializing
    */
   clear(): void {
     this.components.clear();
     this.interactableComponents.clear();
+    // Only reset initialization if there's no in-flight initialization
+    // This prevents race conditions where clear() is called during init
+    if (!initializationPromise) {
+      hasInitialized = false;
+    }
+    initializationPromise = null;
   }
 
   /**
@@ -177,14 +184,27 @@ export function withInteractable<T extends Record<string, any>>(
 
 /**
  * Initialize default components
+ * Uses a promise-based singleton to prevent duplicate initialization
  */
+let initializationPromise: Promise<void> | null = null;
+let hasInitialized = false;
+
 export function initializeDefaultComponents(): void {
-  if (tamboComponentRegistry.count > 0) {
-    return; // Already initialized
+  // Already initialized - skip
+  if (hasInitialized) {
+    return;
   }
 
+  // Already initializing - wait for it
+  if (initializationPromise) {
+    return;
+  }
+
+  // Mark as initializing immediately to prevent race conditions
+  hasInitialized = true;
+
   // Import components dynamically to avoid SSR issues
-  const registerDefaultComponents = async () => {
+  initializationPromise = (async () => {
     try {
       const {
         Chart,
@@ -358,11 +378,11 @@ export function initializeDefaultComponents(): void {
       console.log(`[TamboComponentRegistry] Initialized ${tamboComponentRegistry.count} default components`);
     } catch (error) {
       console.error('[TamboComponentRegistry] Failed to load default components:', error);
+      // Reset flag on error to allow retry
+      hasInitialized = false;
+      initializationPromise = null;
     }
-  };
-
-  // Trigger async registration
-  registerDefaultComponents();
+  })();
 }
 
 /**

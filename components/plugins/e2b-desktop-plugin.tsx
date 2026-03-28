@@ -141,19 +141,19 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
         throw new Error(data.error || 'Failed to create desktop')
       }
 
-      setDesktopId(data.data!.sandboxId)
-      setStreamUrl(data.data!.streamUrl)
+      setDesktopId(data.data?.sandboxId)
+      setStreamUrl(data.data?.streamUrl)
       setIsConnected(true)
 
       // Start stats polling
       const statsInterval = setInterval(async () => {
         try {
-          const statsResponse = await fetch(`/api/desktop/${data.data!.sandboxId}`)
+          const statsResponse = await fetch(`/api/desktop/${data.data?.sandboxId}`)
           const statsData: ApiResponse<{ stats: DesktopStats; screenshot: string }> = await statsResponse.json()
           
           if (statsData.success) {
-            setStats(statsData.data!.stats)
-            setCurrentScreenshot(statsData.data!.screenshot)
+            setStats(statsData.data?.stats)
+            setCurrentScreenshot(statsData.data?.screenshot)
           } else {
             clearInterval(statsInterval)
           }
@@ -162,7 +162,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
         }
       }, 5000)
 
-      console.log('[DesktopPlugin] Connected to desktop:', data.data!.sandboxId)
+      console.log('[DesktopPlugin] Connected to desktop:', data.data?.sandboxId)
     } catch (err: any) {
       console.error('[DesktopPlugin] Connection error:', err)
       setError(err.message || 'Failed to connect to desktop')
@@ -212,7 +212,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
         throw new Error(data.error || 'Failed to execute command')
       }
 
-      setTerminalOutput(prev => [...prev, `$ ${command}`, data.data!.output])
+      setTerminalOutput(prev => [...prev, `$ ${command}`, data.data?.output])
       terminalEndRef.current?.scrollIntoView({ behavior: 'smooth' })
     } catch (err: any) {
       setTerminalOutput(prev => [...prev, `$ ${command}`, `Error: ${err.message}`])

@@ -118,9 +118,11 @@ export async function resolveEnhancedRequestAuth(
     if (anonCookie) {
       const normalized = normalizeAnonymousId(anonCookie);
       if (normalized) {
+        // Strip 'anon_' prefix if present (from generateSecureId format) for consistent ownerId
+        const sessionId = normalized.startsWith('anon_') ? normalized.slice(5) : normalized;
         return {
           success: true,
-          userId: `anon:${normalized}`,
+          userId: `anon:${sessionId}`,
           source: 'anonymous',
         };
       }
