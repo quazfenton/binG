@@ -19,7 +19,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
-import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 export const runtime = 'nodejs';
@@ -67,6 +66,14 @@ export async function POST(req: NextRequest) {
     }
 
     const { oldPath, newPath, overwrite } = validation.data;
+
+    // No-op: source and destination are the same
+    if (oldPath === newPath) {
+      return NextResponse.json({
+        success: true,
+        data: { oldPath, newPath, overwritten: false },
+      });
+    }
 
     // Check for circular move (moving folder into itself)
     if (newPath.startsWith(oldPath + '/')) {
@@ -133,24 +140,13 @@ export async function POST(req: NextRequest) {
     const file = await virtualFilesystem.readFile(ownerId, oldPath);
     await virtualFilesystem.writeFile(ownerId, newPath, file.content, file.language);
 
-    // Delete old path
-    await virtualFilesystem.deletePath(ownerId, oldPath);
-
-    // Get workspace version for event
-    const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(ownerId);
-
-    // Emit filesystem updated event
-    emitFilesystemUpdated({
-      type: 'update',
-      path: newPath,
-      workspaceVersion,
-      applied: [{
-        path: newPath,
-        operation: 'write',
-        timestamp: Date.now(),
-      }],
-      source: 'api-rename',
-    });
+    // Delete old path with rollback on failure
+    try {
+      await virtualFilesystem.deletePath(ownerId, oldPath);
+    } catch (deleteError) {
+      await virtualFilesystem.deletePath(ownerId, newPath);
+      throw deleteError;
+    }
 
     return NextResponse.json({
       success: true,

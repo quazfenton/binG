@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveFilesystemOwner, virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { absolutePathSchema } from '@/lib/validation/schemas';
 
 // ANSI color codes for terminal output
@@ -84,20 +83,6 @@ export async function POST(req: NextRequest) {
     const duration = Date.now() - startTime;
 
     log(`${COLORS.dim}[${requestId}]${COLORS.reset} ${COLORS.green}Success${COLORS.reset}: Created directory ${COLORS.blue}"${result.path}"${COLORS.reset} in ${COLORS.cyan}${duration}ms${COLORS.reset}`);
-
-    // Emit filesystem updated event for UI panels
-    const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(authenticatedOwnerId);
-    emitFilesystemUpdated({
-      path: result.path,
-      type: 'create',
-      workspaceVersion,
-      applied: [{
-        path: result.path,
-        operation: 'write',
-        timestamp: Date.now(),
-      }],
-      source: 'api-mkdir',
-    });
 
     return NextResponse.json({
       success: true,

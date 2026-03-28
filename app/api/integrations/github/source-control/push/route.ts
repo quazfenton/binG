@@ -68,28 +68,21 @@ export async function POST(request: NextRequest) {
           error: `Branch '${targetBranch}' not found in repository`,
         }, { status: 404 });
       }
+      // Rethrow non-404 errors (e.g. 401 unauthorized, 500 server error)
+      throw error;
     }
 
-    // Get local changes from VFS
-    // Get all files in the workspace for this user
-    const files = await virtualFilesystem.listDirectory(localUserId.toString(), '/');
-    
+    // Get local changes from VFS (all files recursively)
+    const snapshot = await virtualFilesystem.exportWorkspace(localUserId.toString());
+
     // Collect all file contents for push
     const changes: Array<{ path: string; content: string; message: string }> = [];
-    
-    for (const node of files.nodes) {
-      if (node.type === 'file') {
-        try {
-          const file = await virtualFilesystem.readFile(localUserId.toString(), node.path);
-          changes.push({
-            path: node.path.startsWith('/') ? node.path.slice(1) : node.path,
-            content: file.content,
-            message: `${message} - ${node.path}`,
-          });
-        } catch (err) {
-          console.warn(`Failed to read file ${node.path}:`, err);
-        }
-      }
+    for (const file of snapshot.files) {
+      changes.push({
+        path: file.path.startsWith('/') ? file.path.slice(1) : file.path,
+        content: file.content,
+        message: `${message} - ${file.path}`,
+      });
     }
 
     if (changes.length === 0) {

@@ -221,9 +221,17 @@ export default function ConversationInterface() {
 
   // Generate session name if not restored from persistence
   useEffect(() => {
+    let cancelled = false;
     if (!filesystemSessionId) {
-      generateSessionName(undefined, true, false).then(setFilesystemSessionId);
+      generateSessionName(undefined, true, false).then((newId) => {
+        if (!cancelled) {
+          setFilesystemSessionId(newId);
+        }
+      });
     }
+    return () => {
+      cancelled = true;
+    };
   }, [filesystemSessionId]);
 
   // Persist filesystemSessionId to sessionStorage so page refresh restores it

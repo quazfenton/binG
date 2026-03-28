@@ -635,6 +635,9 @@ export async function POST(request: NextRequest) {
       apiKeys,
       requestId,
       userId: authenticatedUserId, // Include userId for tool and sandbox authorization
+      // For filesystem operations (including spec enhancement background refinement),
+      // use the resolved filesystem owner ID which handles anonymous users correctly
+      filesystemOwnerId: filesystemOwnerId,
       // Keep these tri-state so router-level detection can still route specialized endpoints.
       // `false` means "explicitly disable", `undefined` means "auto-detect".
       enableTools: requestType === 'tool' ? !!authenticatedUserId : undefined,

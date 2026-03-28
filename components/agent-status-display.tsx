@@ -376,6 +376,7 @@ export function useAgentStatus() {
         break;
       case 'error':
         setStatus('error');
+        setCurrentAction(undefined);
         break;
     }
   }, []);
