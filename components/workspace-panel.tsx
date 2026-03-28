@@ -90,6 +90,8 @@ import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { useMultiRotatingStatements } from "@/hooks/use-rotating-statements";
 import { useReasoningUI } from "@/lib/chat/use-chat-hooks";
+import { useOrchestrationMode, getOrchestrationModeHeaders } from "@/contexts/orchestration-mode-context";
+import AgentTab from "@/components/agent-tab";
 
 function ChatLoadingIndicator({ provider, model }: { provider: string; model: string }) {
   const statement = useMultiRotatingStatements(['interesting', 'funny', 'task'], 2500);
@@ -201,6 +203,9 @@ export function ExperimentalWorkspacePanel() {
   const [chatModel, setChatModel] = useState('nvidia/nemotron-3-30b-a3b:free');
   
   // Abort controller for stopping chat
+  // Agent mode context from orchestration mode selector
+  const { config: orchestrationConfig } = useOrchestrationMode();
+  
   const chatAbortControllerRef = useRef<AbortController | null>(null);
   
   // Code preview panel
@@ -827,6 +832,7 @@ export function ExperimentalWorkspacePanel() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...getOrchestrationModeHeaders(orchestrationConfig),  // Add orchestration mode headers
         },
         body: JSON.stringify({
           messages: messagesPayload,
@@ -2908,6 +2914,11 @@ export function ExperimentalWorkspacePanel() {
                       </div>
                     )}
                   </div>
+                </TabsContent>
+
+                {/* Agent Tab - Orchestration Mode Selector */}
+                <TabsContent value="agent" className="flex-1 mt-0 overflow-hidden">
+                  <AgentTab onClose={() => setTab('explorer')} />
                 </TabsContent>
 
                 {/* Thinking Area Tab */}
