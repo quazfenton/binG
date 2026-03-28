@@ -1,14 +1,14 @@
 /**
  * Bash Tool Implementation
- * 
+ *
  * LLM-facing bash execution tool with VFS integration
- * 
+ *
  * @see bash.md - Bash-native agent execution patterns
  */
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import { virtualFilesystem } from '@/lib/virtual-filesystem';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { createLogger } from '@/lib/utils/logger';
 import {
   BashExecutionEvent,
@@ -17,7 +17,7 @@ import {
   createBashExecutionEvent,
   createBashFailureContext,
 } from './bash-event-schema';
-import { executeWithHealing } from './self-healing';
+import { executeWithHealing, isCommandSafe } from './self-healing';
 
 const logger = createLogger('Bash:Tool');
 
@@ -74,10 +74,26 @@ export async function executeBashCommand(
   try {
     const { spawn } = await import('child_process');
 
+    // SECURITY: Use minimal safe environment instead of spreading process.env
+    // This prevents exposing server secrets (API keys, DB credentials, etc.) to LLM commands
+    const safeEnv: Record<string, string> = {
+      // Essential path for finding commands
+      PATH: process.env.PATH || '/usr/local/bin:/usr/bin:/bin',
+      // Basic system vars
+      HOME: process.env.HOME || '/tmp',
+      USER: process.env.USER || 'nobody',
+      SHELL: '/bin/bash',
+      // Locale settings for consistent output
+      LANG: process.env.LANG || 'en_US.UTF-8',
+      LC_ALL: process.env.LC_ALL || 'en_US.UTF-8',
+      // Allow user-provided env to override defaults
+      ...options.env,
+    };
+
     return new Promise((resolve, reject) => {
       const proc = spawn('bash', ['-c', command], {
         cwd: workingDir,
-        env: { ...process.env, ...options.env },
+        env: safeEnv,
         timeout: options.timeout || DEFAULT_CONFIG.defaultTimeout,
         shell: false, // Explicitly use bash from spawn
       });
@@ -101,12 +117,12 @@ export async function executeBashCommand(
 
       proc.on('close', (exitCode) => {
         const duration = Date.now() - startTime;
-        
+
         const result: BashExecutionResult = {
           success: exitCode === 0,
           stdout,
           stderr,
-          exitCode: exitCode || 0,
+          exitCode: exitCode ?? -1, // Preserve null (signal kills) as -1, not 0
           duration,
           command,
           workingDir,
@@ -124,8 +140,9 @@ export async function executeBashCommand(
 
       proc.on('error', (err) => {
         const duration = Date.now() - startTime;
-        
-        reject({
+
+        const error = new Error(`Command failed: ${err.message}`);
+        Object.assign(error, {
           success: false,
           stdout: '',
           stderr: err.message,
@@ -133,7 +150,9 @@ export async function executeBashCommand(
           duration,
           command,
           workingDir,
-        } as BashExecutionResult);
+        } as BashExecutionResult & { success: false; exitCode: -1 });
+
+        reject(error);
       });
 
       proc.on('timeout', () => {
@@ -254,6 +273,10 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           agentId,
           selfHeal,
         });
+
+        if (!isCommandSafe(command)) {
+          throw new Error(`Command blocked by safety filter: ${command.slice(0, 100)}`);
+        }
 
         let result: BashExecutionResult;
 
@@ -391,20 +414,4 @@ export function extractOutputFiles(command: string): string[] {
   return files;
 }
 
-/**
- * Check if command is safe to execute
- */
-export function isCommandSafe(command: string): boolean {
-  const DANGEROUS_PATTERNS = [
-    'rm -rf /',
-    'shutdown',
-    'reboot',
-    ':(){ :|:& };:', // Fork bomb
-    'mkfs',
-    'dd if=/dev/zero',
-    'chmod -R 777 /',
-    'chown -R root:root /',
-  ];
 
-  return !DANGEROUS_PATTERNS.some(pattern => command.includes(pattern));
-}

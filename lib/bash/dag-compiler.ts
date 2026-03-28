@@ -73,34 +73,140 @@ export function parsePipeline(command: string): string[] {
 
 /**
  * Extract output redirection from command
+ *
+ * Handles:
+ * - Both > (overwrite) and >> (append) patterns
+ * - Quoted filenames (single and double quotes)
+ * - Multiple redirections (returns the last output redirect)
+ * - Commands with < input redirection combined with > output
+ *
+ * Limitations: Does not handle heredocs (<<) or process substitution (>(...))
  */
 export function extractRedirect(command: string): { command: string; outputFile?: string } {
-  // Match > or >> patterns
-  const match = command.match(/(.+?)>\s*(.+)/);
-  
-  if (!match) {
+  // Skip if command contains heredoc syntax (too complex for simple parsing)
+  if (command.includes('<<')) {
     return { command };
   }
 
+  // Remove quoted strings temporarily to avoid matching > inside quotes
+  const quotedStrings: string[] = [];
+  let placeholderIndex = 0;
+  const placeholderChar = '\x00'; // Use null byte as placeholder
+  
+  // Replace quoted strings with placeholders
+  const unquotedCommand = command.replace(/(["'])(?:(?!\1).)*\1/g, (match) => {
+    quotedStrings[placeholderIndex] = match;
+    return `${placeholderChar}${placeholderIndex++}${placeholderChar}`;
+  });
+
+  // Match output redirection: > or >> (but not >> as part of other operators)
+  // We want the LAST output redirect in case of multiple redirects
+  const redirectRegex = /([^|;&]+)(>>?)\s*([^\s|;&]+)/g;
+  let lastMatch: RegExpExecArray | null = null;
+  let match: RegExpExecArray | null;
+  
+  while ((match = redirectRegex.exec(unquotedCommand)) !== null) {
+    // Skip if this looks like a comparison operator (e.g., a > b in test context)
+    const beforeMatch = unquotedCommand.slice(0, match.index).trimEnd();
+    if (beforeMatch.endsWith("'") || beforeMatch.endsWith('test') ||
+        beforeMatch.endsWith('-gt') || beforeMatch.endsWith('-lt')) {
+      continue; // Skip shell test comparisons
+    }
+    lastMatch = match;
+  }
+
+  if (!lastMatch) {
+    return { command };
+  }
+
+  // Restore quoted strings in the command part
+  let cmdPart = lastMatch[1].replace(
+    new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
+    (_, idx) => quotedStrings[parseInt(idx)] || ''
+  );
+
+  // Restore quoted strings in the file part
+  let filePart = lastMatch[3].replace(
+    new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
+    (_, idx) => quotedStrings[parseInt(idx)] || ''
+  );
+
+  // Reconstruct command without the output redirect
+  const commandWithoutRedirect = unquotedCommand
+    .slice(0, lastMatch.index) + unquotedCommand.slice(lastMatch.index + lastMatch[0].length);
+  
+  // Restore quoted strings in the reconstructed command
+  const finalCommand = commandWithoutRedirect.replace(
+    new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
+    (_, idx) => quotedStrings[parseInt(idx)] || ''
+  );
+
+  logger.debug('Extracted redirect', {
+    original: command,
+    command: finalCommand.trim(),
+    outputFile: filePart,
+  });
+
   return {
-    command: match[1].trim(),
-    outputFile: match[2].trim(),
+    command: finalCommand.trim(),
+    outputFile: filePart.trim(),
   };
 }
 
 /**
  * Extract input redirection from command
+ *
+ * Handles:
+ * - < input redirection
+ * - Quoted filenames (single and double quotes)
+ * - Skips heredoc syntax (<<)
  */
 export function extractInputRedirect(command: string): { command: string; inputFile?: string } {
-  const match = command.match(/(.+?)<\s*(.+)/);
+  // Skip heredoc syntax (too complex for simple parsing)
+  if (command.includes('<<')) {
+    return { command };
+  }
+
+  // Remove quoted strings temporarily to avoid matching < inside quotes
+  const quotedStrings: string[] = [];
+  let placeholderIndex = 0;
+  const placeholderChar = '\x00';
   
+  const unquotedCommand = command.replace(/(["'])(?:(?!\1).)*\1/g, (match) => {
+    quotedStrings[placeholderIndex] = match;
+    return `${placeholderChar}${placeholderIndex++}${placeholderChar}`;
+  });
+
+  // Match input redirection: < (but not <<)
+  const match = unquotedCommand.match(/([^|;&<]+)<\s*([^\s|;&<]+)/);
+
   if (!match) {
     return { command };
   }
 
+  // Restore quoted strings
+  const cmdPart = match[1].replace(
+    new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
+    (_, idx) => quotedStrings[parseInt(idx)] || ''
+  );
+  
+  const filePart = match[2].replace(
+    new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
+    (_, idx) => quotedStrings[parseInt(idx)] || ''
+  );
+
+  // Reconstruct command without the input redirect
+  const commandWithoutRedirect = unquotedCommand
+    .slice(0, match.index) + unquotedCommand.slice(match.index + match[0].length);
+  
+  const finalCommand = commandWithoutRedirect.replace(
+    new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
+    (_, idx) => quotedStrings[parseInt(idx)] || ''
+  );
+
   return {
-    command: match[1].trim(),
-    inputFile: match[2].trim(),
+    command: finalCommand.trim(),
+    inputFile: filePart.trim(),
   };
 }
 
@@ -240,11 +346,19 @@ export function mergeConsecutiveNodes(dag: DAG): DAG {
         } else {
           // Merge into single node
           const mergedCommand = currentGroup.map(n => n.command).join(' | ');
+          const allDeps = new Set<string>();
+          for (const n of currentGroup) {
+            if (n.dependsOn) {
+              for (const dep of n.dependsOn) {
+                allDeps.add(dep);
+              }
+            }
+          }
           const mergedNode = createDAGNode(
             currentGroup[0].id,
             'bash',
             mergedCommand,
-            currentGroup[0].dependsOn
+            Array.from(allDeps)
           );
           mergedNode.outputs = currentGroup[currentGroup.length - 1].outputs;
           mergedNode.metadata = {
@@ -264,11 +378,19 @@ export function mergeConsecutiveNodes(dag: DAG): DAG {
       mergedNodes.push(currentGroup[0]);
     } else {
       const mergedCommand = currentGroup.map(n => n.command).join(' | ');
+      const allDeps = new Set<string>();
+      for (const n of currentGroup) {
+        if (n.dependsOn) {
+          for (const dep of n.dependsOn) {
+            allDeps.add(dep);
+          }
+        }
+      }
       const mergedNode = createDAGNode(
         currentGroup[0].id,
         'bash',
         mergedCommand,
-        currentGroup[0].dependsOn
+        Array.from(allDeps)
       );
       mergedNode.outputs = currentGroup[currentGroup.length - 1].outputs;
       mergedNode.metadata = {
@@ -326,12 +448,15 @@ export function identifyParallelism(dag: DAG): string[][] {
 
 /**
  * Reorder DAG for optimal parallel execution
+ * 
+ * Groups nodes by dependency level to maximize parallel execution opportunities
  */
 export function optimizeForParallelism(dag: DAG): DAG {
   const levels = identifyParallelism(dag);
-  
-  if (levels.length <= dag.nodes.length) {
-    // Already optimal or close to it
+
+  // Only reorder if we have multiple levels (parallelism opportunities)
+  if (levels.length <= 1) {
+    // No parallelism opportunities - all nodes are sequential
     return dag;
   }
 

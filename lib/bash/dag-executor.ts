@@ -1,12 +1,12 @@
 /**
  * DAG Executor - Execute bash pipelines with retries & parallelism
- * 
+ *
  * @see bash.md - Bash-native agent execution patterns
  */
 
 import { DAG, DAGNode, DAGExecutionResult, createDAG } from './bash-event-schema';
 import { executeBashCommand } from './bash-tool';
-import { virtualFilesystem } from '@/lib/virtual-filesystem';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { createLogger } from '@/lib/utils/logger';
 import { optimizeDAG, validateDAG } from './dag-compiler';
 
@@ -37,20 +37,32 @@ export async function executeNode(
   ctx: ExecutionContext,
   inputs: any[] = []
 ): Promise<any> {
-  logger.info('Executing DAG node', { 
-    id: node.id, 
-    type: node.type,
-    command: node.command?.slice(0, 100),
+  const nodeType = node.type;
+  
+  logger.info('Executing DAG node', {
+    id: node.id,
+    type: nodeType,
+    command: 'command' in node ? (node as any).command?.slice(0, 100) : undefined,
   });
 
   try {
     let result: any;
 
-    if (node.type === 'bash') {
+    // Type guard for bash nodes
+    if (nodeType === 'bash') {
+      const bashNode = node as any as {
+        id: string;
+        type: 'bash';
+        command: string;
+        dependsOn: string[];
+        outputs?: string[];
+        stdin?: string;
+        metadata?: any;
+      };
       // Combine stdin from previous node
       const stdin = inputs.length > 0 ? inputs[0]?.stdout : undefined;
-      
-      result = await executeBashCommand(node.command!, {
+
+      result = await executeBashCommand(bashNode.command, {
         workingDir: ctx.workingDir,
         env: ctx.env,
         stdin,
@@ -58,8 +70,8 @@ export async function executeNode(
       });
 
       // Persist output to VFS if specified
-      if (node.outputs && node.outputs.length > 0) {
-        for (const outputPath of node.outputs) {
+      if (bashNode.outputs && bashNode.outputs.length > 0) {
+        for (const outputPath of bashNode.outputs) {
           try {
             await virtualFilesystem.writeFile(
               ctx.agentId,
@@ -72,22 +84,37 @@ export async function executeNode(
           }
         }
       }
-    } else if (node.type === 'tool') {
+    } else if (nodeType === 'tool') {
+      // Type guard for tool nodes
+      const toolNode = node as any as {
+        type: 'tool';
+        tool: string;
+        args?: any;
+        command?: string;
+      };
       // TODO: Route to structured tool
       logger.warn('Tool execution not yet implemented, falling back to bash');
-      result = await executeBashCommand(node.command!, { 
+      result = await executeBashCommand(toolNode.command || '', {
         workingDir: ctx.workingDir,
         env: ctx.env,
       });
-    } else if (node.type === 'container') {
+    } else if (nodeType === 'container') {
+      // Type guard for container nodes
+      const containerNode = node as any as {
+        type: 'container';
+        command: string;
+        args?: any;
+      };
       // TODO: Route to sandbox provider (Daytona/E2B)
       logger.warn('Container execution not yet implemented, falling back to bash');
-      result = await executeBashCommand(node.command!, { 
+      result = await executeBashCommand(containerNode.command, {
         workingDir: ctx.workingDir,
         env: ctx.env,
       });
     } else {
-      throw new Error(`Unknown node type: ${node.type}`);
+      // Exhaustive check - this should never happen with proper typing
+      const _exhaustive: never = nodeType;
+      throw new Error(`Unknown node type: ${_exhaustive}`);
     }
 
     logger.debug('Node completed', { 
@@ -186,8 +213,7 @@ export async function executeDAG(
 
   const duration = Date.now() - startTime;
 
-  const success = errors.length === 0 || 
-    dag.nodes.filter(n => !errors.find(e => e.nodeId === n.id)).length > 0;
+  const success = errors.length === 0;
 
   logger.info('DAG execution completed', { 
     nodeId: dag.nodes.length,
@@ -246,6 +272,18 @@ export async function executeDAGParallel(
     optimizedDag = optimizeDAG(dag);
   }
 
+  const optimizedValidation = validateDAG(optimizedDag);
+  if (!optimizedValidation.valid) {
+    logger.error('Optimized DAG validation failed', optimizedValidation.errors);
+    return {
+      success: false,
+      nodeResults: {},
+      outputs: {},
+      duration: Date.now() - startTime,
+      errors: optimizedValidation.errors.map(e => ({ nodeId: 'dag', error: e, attempt: 0 })),
+    };
+  }
+
   while (executed.size < optimizedDag.nodes.length) {
     // Find ready nodes (all dependencies satisfied)
     const readyNodes = optimizedDag.nodes.filter(
@@ -266,17 +304,27 @@ export async function executeDAGParallel(
 
     // Execute ready nodes in parallel
     const nodeResults = await Promise.allSettled(
-      readyNodes.map(async node => {
+      readyNodes.map(async (node, index) => {
         const inputs = node.dependsOn.map(depId => results[depId]);
-        const result = await executeNode(node, ctx, inputs);
-        return { nodeId: node.id, result };
+        try {
+          const result = await executeNode(node, ctx, inputs);
+          return { nodeId: node.id, index, result };
+        } catch (error: any) {
+          // Attach nodeId and index so rejection handler can identify the failed node
+          error.nodeId = node.id;
+          error.index = index;
+          throw error;
+        }
       })
     );
 
     // Process results
-    for (const settlement of nodeResults) {
+    for (let i = 0; i < nodeResults.length; i++) {
+      const settlement = nodeResults[i];
+      const nodeId = readyNodes[i].id;
+      
       if (settlement.status === 'fulfilled') {
-        const { nodeId, result } = settlement.value;
+        const { result } = settlement.value;
         results[nodeId] = result;
         executed.add(nodeId);
 
@@ -293,17 +341,13 @@ export async function executeDAGParallel(
           }
         }
       } else {
-        // Handle rejection
-        const nodeId = readyNodes.find(n => 
-          settlement.reason?.nodeId === n.id
-        )?.id || 'unknown';
-        
+        // Handle rejection - use index to reliably identify the failed node
         errors.push({
           nodeId,
           error: settlement.reason?.message || 'Unknown error',
           attempt: 0,
         });
-        
+
         executed.add(nodeId); // Mark as executed to avoid infinite loop
       }
     }
@@ -405,14 +449,3 @@ export async function executeDAGWithRetry(
 
   return lastResult!;
 }
-
-// ============================================================================
-// Exports
-// ============================================================================
-
-export {
-  executeDAG as executeDAGSequential,
-  executeDAGParallel,
-  executeDAGSmart,
-  executeDAGWithRetry,
-};
