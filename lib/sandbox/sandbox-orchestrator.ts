@@ -3,22 +3,9 @@
  *
  * Coordinates existing sandbox components for unified lifecycle management.
  * DOES NOT replace existing components - orchestrates them.
- *
- * Components coordinated:
- * - provider-router.ts: Provider selection with latency tracking
- * - session-manager.ts: Session lifecycle management
- * - resource-monitor.ts: Resource monitoring and alerts
- * - task-router.ts: Task routing (OpenCode vs Nullclaw)
- *
- * NEW features added:
- * - Warm pool management (pre-warmed sandboxes)
- * - Auto-migration coordination
- * - Risk-based execution blocking
- * - Unified API for sandbox access
- *
- * @see EXECUTION_POLICY_AUDIT.md for integration strategy
  */
 
+import { ESCALATION_PROFILES } from '../agent/timeout-escalation';
 import { createLogger } from '../utils/logger';
 import { providerRouter, type TaskContext } from './provider-router';
 import { sessionManager } from '../session/session-manager';
@@ -28,22 +15,23 @@ import {
   assessRisk,
   type ExecutionPolicy,
   type RiskAssessment,
+  getExecutionPolicyConfig,
+  getPreferredProviders,
 } from './types';
 import type { SandboxHandle } from './providers/sandbox-provider';
-import type { SandboxProviderType } from './providers';
+import { getSandboxProvider, type SandboxProviderType } from './providers';
 
 const logger = createLogger('Sandbox:Orchestrator');
 
-/**
- * Sandbox session metadata (extends existing Session)
- */
 export interface OrchestratorSession {
-  sessionId: string;
+  sessionId: string; // Handle-based ID (may change on migration)
+  logicalId: string; // Stable logical ID for identification across migrations
   userId: string;
   conversationId: string;
   handle: SandboxHandle;
   provider: SandboxProviderType;
   policy: ExecutionPolicy;
+  taskType: 'coding' | 'browsing' | 'automation' | 'general' | 'messaging' | 'api' | 'unknown'; // Persisted task type for migration
   riskAssessment?: RiskAssessment;
   createdAt: number;
   lastActivityAt: number;
@@ -51,9 +39,6 @@ export interface OrchestratorSession {
   isWarm: boolean;
 }
 
-/**
- * Sandbox migration result
- */
 export interface MigrationResult {
   success: boolean;
   fromProvider: SandboxProviderType | 'unknown';
@@ -63,33 +48,19 @@ export interface MigrationResult {
   error?: string;
 }
 
-/**
- * Sandbox Orchestrator Class
- *
- * Coordinates existing components - does NOT replace them.
- */
 export class SandboxOrchestrator {
   private warmPool = new Map<SandboxProviderType, SandboxHandle[]>();
+  private sessions = new Map<string, OrchestratorSession>();
   private readonly WARM_POOL_SIZE = 3;
-  private readonly IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
-  private readonly MIGRATION_CPU_THRESHOLD = 80; // 80% CPU
-  private readonly MIGRATION_MEMORY_THRESHOLD = 90; // 90% memory
+  private readonly IDLE_TIMEOUT_MS = 5 * 60 * 1000;
+  private readonly MIGRATION_CPU_THRESHOLD = 80;
+  private readonly MIGRATION_MEMORY_THRESHOLD = 90;
 
   constructor() {
-    this.initializeWarmPool();
+    void this.initializeWarmPool();
     this.startIdleCleanup();
   }
 
-  /**
-   * Get or create sandbox session
-   *
-   * Coordinates:
-   * 1. task-router.ts for task analysis
-   * 2. assessRisk() for security check
-   * 3. provider-router.ts for provider selection
-   * 4. session-manager.ts for session creation
-   * 5. Warm pool for fast startup
-   */
   async getSandbox(options: {
     userId: string;
     conversationId: string;
@@ -98,25 +69,27 @@ export class SandboxOrchestrator {
   }): Promise<OrchestratorSession> {
     const { userId, conversationId, task, policy: explicitPolicy } = options;
 
-    // Step 1: Risk assessment (NEW - security check)
     const risk = assessRisk(task);
     if (risk.shouldBlock) {
       throw new Error(risk.blockReason);
     }
 
-    // Step 2: Task routing (existing component)
+    const existingSession = Array.from(this.sessions.values()).find(
+      (session) =>
+        session.userId === userId &&
+        session.conversationId === conversationId &&
+        Date.now() - session.lastActivityAt < this.IDLE_TIMEOUT_MS,
+    );
+    if (existingSession) {
+      existingSession.lastActivityAt = Date.now();
+      return existingSession;
+    }
+
     const routing = taskRouter.analyzeTask(task);
+    const policy = this.normalizePolicyForSandbox(explicitPolicy || risk.recommendedPolicy);
+    const providerContext = this.buildTaskContext(routing.type, policy);
+    const provider = await providerRouter.selectOptimalProvider(providerContext);
 
-    // Step 3: Determine execution policy
-    const policy = explicitPolicy || risk.recommendedPolicy;
-
-    // Step 4: Select provider using existing provider-router
-    const provider = await providerRouter.selectOptimalProvider({
-      type: routing.type as any,
-      executionPolicy: policy,
-    } as TaskContext);
-
-    // Step 5: Try warm pool first (NEW - performance)
     const warmSandbox = await this.getFromWarmPool(provider);
 
     let handle: SandboxHandle;
@@ -124,7 +97,6 @@ export class SandboxOrchestrator {
       logger.info('Using warm sandbox from pool', { provider });
       handle = warmSandbox;
     } else {
-      // Step 6: Create session using existing session-manager
       logger.info('Creating new session via session-manager', { provider, policy });
       const session = await sessionManager.getOrCreateSession(userId, conversationId, {
         executionPolicy: policy,
@@ -132,17 +104,22 @@ export class SandboxOrchestrator {
         conversationId,
       });
 
-      handle = session.sandboxHandle!;
+      if (!session.sandboxHandle) {
+        handle = await this.createSandboxHandle(userId, conversationId, provider, policy);
+      } else {
+        handle = session.sandboxHandle;
+      }
     }
 
-    // Create orchestrator session
     const orchestratorSession: OrchestratorSession = {
       sessionId: handle.id,
+      logicalId: `${userId}-${conversationId}`, // Stable logical ID across migrations
       userId,
       conversationId,
       handle,
       provider,
       policy,
+      taskType: routing.type, // Persist analyzed task type for migration
       createdAt: Date.now(),
       lastActivityAt: Date.now(),
       riskAssessment: risk,
@@ -150,8 +127,9 @@ export class SandboxOrchestrator {
       isWarm: !!warmSandbox,
     };
 
-    // Replenish warm pool
-    this.replenishWarmPool(provider);
+    this.sessions.set(orchestratorSession.logicalId, orchestratorSession);
+    resourceMonitor.startMonitoring(handle.id, provider);
+    void this.replenishWarmPool(provider);
 
     logger.info('Sandbox session created', {
       sessionId: orchestratorSession.sessionId,
@@ -163,13 +141,6 @@ export class SandboxOrchestrator {
     return orchestratorSession;
   }
 
-  /**
-   * Execute command in sandbox with monitoring
-   *
-   * Coordinates:
-   * - resource-monitor.ts for resource tracking
-   * - Auto-migration if thresholds exceeded
-   */
   async executeInSandbox(
     sessionId: string,
     command: string,
@@ -183,17 +154,14 @@ export class SandboxOrchestrator {
       throw new Error(`Session not found: ${sessionId}`);
     }
 
-    // Update activity
     session.lastActivityAt = Date.now();
 
-    // Assess command risk
     const risk = assessRisk(command);
     if (risk.shouldBlock) {
       throw new Error(risk.blockReason);
     }
 
-    // Check if migration needed before execution
-    const metrics = await resourceMonitor.getResourceUsage(sessionId);
+    const metrics = await resourceMonitor.getResourceUsage(session.handle.id);
     if (this.shouldMigrate(metrics)) {
       logger.warn('Resource threshold exceeded, migrating before execution', {
         sessionId,
@@ -206,45 +174,45 @@ export class SandboxOrchestrator {
     const startTime = Date.now();
     const timeout = options?.timeout || 60000;
 
-    try {
-      // Execute command using handle's executeCommand method
-      const result = await Promise.race([
-        session.handle.executeCommand(command, undefined, timeout),
-        new Promise<{ success: boolean; output?: string; error?: string }>((_, reject) =>
-          setTimeout(() => reject(new Error('Command timeout')), timeout)
-        ),
-      ]);
+    const escalation = timeout <= 15000
+      ? ESCALATION_PROFILES.quick
+      : timeout <= 60000
+        ? ESCALATION_PROFILES.standard
+        : ESCALATION_PROFILES.thorough;
 
-      const duration = Date.now() - startTime;
+    const escalationResult = await escalation.executeWithEscalation(
+      sessionId,
+      () => session.handle.executeCommand(command, undefined, timeout),
+      (ctx) => {
+        logger.warn('Sandbox execution escalation', {
+          sessionId,
+          action: ctx.action,
+          elapsedMs: ctx.elapsedMs,
+          stage: ctx.stageIndex + 1,
+        });
+      },
+    );
 
-      // Report progress if callback provided
-      if (options?.onProgress) {
-        const updatedMetrics = await resourceMonitor.getResourceUsage(sessionId);
-        options.onProgress(updatedMetrics);
-      }
-
-      return { 
-        output: result.output || '', 
-        exitCode: 'exitCode' in result ? (result.exitCode ?? (result.success ? 0 : 1)) : (result.success ? 0 : 1), 
-        duration 
-      };
-    } catch (error: any) {
-      logger.error('Command execution failed', {
-        sessionId,
-        command: command.substring(0, 100),
-        error: error.message,
-      });
-      throw error;
+    if (!escalationResult.success) {
+      throw new Error(escalationResult.error || 'Command execution failed');
     }
+
+    const result = escalationResult.result!;
+
+    const duration = Date.now() - startTime;
+
+    if (options?.onProgress) {
+      const updatedMetrics = await resourceMonitor.getResourceUsage(session.handle.id);
+      options.onProgress(updatedMetrics);
+    }
+
+    return {
+      output: result.output || '',
+      exitCode: result.exitCode ?? (result.success ? 0 : 1),
+      duration,
+    };
   }
 
-  /**
-   * Migrate session to different provider
-   *
-   * Coordinates:
-   * - provider-router.ts for new provider selection
-   * - session-manager.ts for session transfer
-   */
   async migrateSession(
     sessionId: string,
     reason: 'resource_threshold' | 'provider_failure' | 'policy_change'
@@ -265,17 +233,15 @@ export class SandboxOrchestrator {
     const fromProvider = session.provider;
 
     try {
-      // Select new provider using existing provider-router
-      const toProvider = await providerRouter.selectOptimalProvider({
-        type: 'general',
-        executionPolicy: session.policy,
-      } as TaskContext);
+      const recommendations = await providerRouter.getRecommendations(this.buildTaskContext(session.taskType, session.policy));
+      const toProvider = [recommendations.primary, ...recommendations.alternatives.map((alt) => alt.provider)]
+        .find((candidate) => candidate !== fromProvider);
 
-      if (toProvider === fromProvider) {
+      if (!toProvider) {
         return {
           success: false,
           fromProvider,
-          toProvider,
+          toProvider: fromProvider,
           reason,
           duration: Date.now() - startTime,
           error: 'No alternative provider available',
@@ -289,22 +255,19 @@ export class SandboxOrchestrator {
         reason,
       });
 
-      // Create new session using session-manager
-      const newSession = await sessionManager.getOrCreateSession(
-        session.userId,
-        session.conversationId,
-        { 
-          executionPolicy: session.policy,
-          userId: session.userId,
-          conversationId: session.conversationId,
-        }
-      );
+      const newHandle = await this.createSandboxHandle(session.userId, session.conversationId, toProvider, session.policy);
+      resourceMonitor.stopMonitoring(session.handle.id);
+      resourceMonitor.startMonitoring(newHandle.id, toProvider);
 
-      // Update orchestrator session
-      session.handle = newSession.sandboxHandle!;
+      const oldSessionId = session.sessionId;
+      session.handle = newHandle;
       session.provider = toProvider;
+      session.sessionId = newHandle.id;
       session.migrationCount++;
       session.lastActivityAt = Date.now();
+
+      this.sessions.delete(oldSessionId);
+      this.sessions.set(session.logicalId, session);
 
       const duration = Date.now() - startTime;
 
@@ -340,16 +303,43 @@ export class SandboxOrchestrator {
     }
   }
 
-  /**
-   * Get session by ID
-   */
-  async getSession(sessionId: string): Promise<OrchestratorSession | null> {
-    // This would need to track sessions - for now returns null
-    // In production, would integrate with session-manager
-    return null;
+  async getSession(identifier: string): Promise<OrchestratorSession | null> {
+    let session = this.sessions.get(identifier);
+    if (!session) {
+      session = Array.from(this.sessions.values()).find(
+        s => s.sessionId === identifier || s.logicalId === identifier
+      );
+    }
+    if (!session) {
+      return null;
+    }
+
+    if (Date.now() - session.lastActivityAt > this.IDLE_TIMEOUT_MS) {
+      this.evictSession(session);
+      return null;
+    }
+
+    return session;
   }
 
-  // ========== Private Methods ==========
+  private async evictSession(session: OrchestratorSession): Promise<void> {
+    logger.info('Evicting idle session', {
+      sessionId: session.sessionId,
+      logicalId: session.logicalId,
+      lastActivity: new Date(session.lastActivityAt).toISOString(),
+    });
+
+    this.sessions.delete(session.logicalId);
+    resourceMonitor.stopMonitoring(session.handle.id);
+
+    if (session.isWarm) {
+      try {
+        await session.handle.executeCommand('echo "warm_sandbox_evicted"');
+      } catch {
+        logger.debug('Warm sandbox already terminated');
+      }
+    }
+  }
 
   private async getFromWarmPool(provider: SandboxProviderType): Promise<SandboxHandle | null> {
     const pool = this.warmPool.get(provider);
@@ -358,13 +348,10 @@ export class SandboxOrchestrator {
     }
 
     const handle = pool.pop()!;
-
-    // Verify sandbox is still healthy
     try {
       await handle.executeCommand('echo health_check');
       return handle;
     } catch {
-      // Sandbox unhealthy, discard and try next
       logger.warn('Warm sandbox unhealthy, discarding', { provider });
       return this.getFromWarmPool(provider);
     }
@@ -386,18 +373,13 @@ export class SandboxOrchestrator {
 
     while (pool.length < this.WARM_POOL_SIZE) {
       try {
-        // Create sandbox using session-manager
-        const session = await sessionManager.getOrCreateSession(
+        const handle = await this.createSandboxHandle(
           'warm-pool',
           `warm-${provider}-${Date.now()}`,
-          { 
-            executionPolicy: 'sandbox-preferred',
-            userId: 'warm-pool',
-            conversationId: `warm-${provider}-${Date.now()}`,
-          }
+          provider,
+          'sandbox-preferred',
         );
-
-        pool.push(session.sandboxHandle!);
+        pool.push(handle);
         logger.debug('Added warm sandbox', { provider, poolSize: pool.length });
       } catch (error: any) {
         logger.warn('Failed to create warm sandbox', { provider, error: error.message });
@@ -409,19 +391,89 @@ export class SandboxOrchestrator {
   }
 
   private shouldMigrate(metrics: ResourceMetrics): boolean {
+    const memoryPercent = metrics.memoryLimit > 0
+      ? (metrics.memoryUsage / metrics.memoryLimit) * 100
+      : metrics.memoryUsage;
+
     return (
       metrics.cpuUsage > this.MIGRATION_CPU_THRESHOLD ||
-      metrics.memoryUsage > this.MIGRATION_MEMORY_THRESHOLD
+      memoryPercent > this.MIGRATION_MEMORY_THRESHOLD
     );
   }
 
   private startIdleCleanup(): void {
     setInterval(async () => {
-      // Would integrate with session-manager for actual cleanup
-      // This is a placeholder for the coordination logic
-    }, 60000); // Check every minute
+      const cutoff = Date.now() - this.IDLE_TIMEOUT_MS;
+      for (const [logicalId, session] of this.sessions.entries()) {
+        if (session.lastActivityAt < cutoff) {
+          await this.evictSession(session);
+        }
+      }
+    }, 60000);
+  }
+
+  private normalizePolicyForSandbox(policy: ExecutionPolicy): ExecutionPolicy {
+    return policy === 'local-safe' ? 'sandbox-preferred' : policy;
+  }
+
+  private buildTaskContext(
+    taskType: 'coding' | 'browsing' | 'automation' | 'general' | 'messaging' | 'api' | 'unknown',
+    policy: ExecutionPolicy,
+  ): TaskContext {
+    switch (policy) {
+      case 'desktop-required':
+        return { type: 'computer-use', needsServices: ['desktop'], performancePriority: 'latency' };
+      case 'persistent-sandbox':
+        return { type: 'persistent-service', requiresPersistence: true, needsServices: ['pty', 'snapshot'], performancePriority: 'balanced' };
+      case 'sandbox-heavy':
+      case 'cloud-sandbox':
+        return { type: 'fullstack-app', requiresBackend: true, needsServices: ['pty', 'preview'], performancePriority: 'throughput' };
+      case 'isolated-code-exec':
+        return { type: 'code-interpreter', needsServices: ['pty'], performancePriority: 'latency' };
+      default:
+        if (taskType === 'browsing' || taskType === 'automation') {
+          return { type: 'general', needsServices: ['pty'], performancePriority: 'latency' };
+        }
+        return { type: 'agent', needsServices: ['pty'], performancePriority: 'latency' };
+    }
+  }
+
+  private async createSandboxHandle(
+    userId: string,
+    conversationId: string,
+    providerType: SandboxProviderType,
+    policy: ExecutionPolicy,
+  ): Promise<SandboxHandle> {
+    const provider = await getSandboxProvider(providerType);
+    const policyConfig = getExecutionPolicyConfig(policy);
+    const preferredProviders = getPreferredProviders(policy);
+
+    const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+    const safeConvId = conversationId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+    const workspaceDir = `/workspace/users/${safeUserId}/sessions/${safeConvId}`;
+    const handle = await provider.createSandbox({
+      language: 'typescript',
+      autoStopInterval: 3600,
+      envVars: {
+        USER_ID: userId,
+        CONVERSATION_ID: conversationId,
+        EXECUTION_POLICY: policy,
+        PREFERRED_PROVIDERS: preferredProviders.join(','),
+      },
+      labels: {
+        userId,
+        conversationId,
+        executionPolicy: policy,
+        createdBy: 'sandbox-orchestrator',
+      },
+      resources: {
+        cpu: policyConfig.resources?.cpu || 1,
+        memory: policyConfig.resources?.memory || 2,
+      },
+    });
+    await handle.executeCommand(`mkdir -p "${workspaceDir.replace(/(["\\$`])/g, '\\$1')}"`);
+    return handle;
   }
 }
 
-// Singleton instance
 export const sandboxOrchestrator = new SandboxOrchestrator();

@@ -1,0 +1,22 @@
+# Lightweight preview sandbox image
+# Used by OpenSandbox server to spawn dev-server containers
+# Pre-installs common Node.js tools for fast preview startup
+
+FROM node:20-slim
+
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    git curl python3 python3-pip python3-venv ca-certificates \
+  && rm -rf /var/lib/apt/lists/*
+
+# Pre-install common global tools
+RUN npm install -g serve vite create-vite http-server \
+  && npm cache clean --force
+
+WORKDIR /workspace
+
+RUN groupadd -r sandbox && useradd -r -g sandbox -d /workspace -s /usr/sbin/nologin sandbox \
+  && chown -R sandbox:sandbox /workspace
+USER sandbox
+
+# Keep container alive for exec-based usage
+CMD ["sleep", "infinity"]

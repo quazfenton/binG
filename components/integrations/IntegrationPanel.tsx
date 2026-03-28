@@ -21,19 +21,71 @@ interface Integration {
   connected: boolean;
   scopes: string[];
   authUrl?: string;
+  connectionSource?: 'auth0' | 'arcade' | 'nango' | 'oauth' | null;
+}
+
+// Icons for each OAuth source
+const SOURCE_ICONS: Record<string, React.ReactNode> = {
+  auth0: <Shield className="w-3 h-3" />,
+  arcade: <Cloud className="w-3 h-3" />,
+  nango: <Database className="w-3 h-3" />,
+  oauth: <ExternalLink className="w-3 h-3" />,
+};
+
+// Colors for each OAuth source
+const SOURCE_COLORS: Record<string, string> = {
+  auth0: 'bg-purple-500/20 text-purple-400 border-purple-500/30',
+  arcade: 'bg-blue-500/20 text-blue-400 border-blue-500/30',
+  nango: 'bg-orange-500/20 text-orange-400 border-orange-500/30',
+  oauth: 'bg-gray-500/20 text-gray-400 border-gray-500/30',
+};
+
+const SOURCE_LABELS: Record<string, string> = {
+  auth0: 'Auth0',
+  arcade: 'Arcade',
+  nango: 'Nango',
+  oauth: 'OAuth',
+};
+
+// Provider auth configuration — derived from centralized provider-map
+// Auth0 handles UX-level social logins; Arcade/Nango/Composio handle tool-level OAuth
+// For providers supported by both, Auth0 is used for the UI connect flow
+// and the tool service is used at execution time (tokens are shared via the database).
+
+// Auth0 Connected Accounts: social logins that link user accounts
+const AUTH0_CONNECT_PROVIDERS: Record<string, string> = {
+  github: 'github',
+  google: 'google-oauth2',
+  facebook: 'facebook',
+  twitter: 'twitter',
+  linkedin: 'linkedin',
+  apple: 'apple',
+  microsoft: 'windowslive',
+  instagram: 'instagram',
+  bitbucket: 'bitbucket',
+  slack: 'slack',
+};
+
+// Arcade tool providers (agent automation)
+const ARCADE_PROVIDERS = new Set([
+  'gmail', 'googledocs', 'googlesheets', 'googlecalendar', 'googledrive',
+  'exa', 'twilio', 'spotify', 'vercel', 'railway',
+]);
+
+// Nango tool providers (agent automation)
+const NANGO_PROVIDERS = new Set(['discord', 'reddit']);
+
+function getProviderAuthConfig(provider: string): { method: 'auth0' | 'arcade' | 'nango' | 'oauth'; connection?: string } {
+  if (AUTH0_CONNECT_PROVIDERS[provider]) {
+    return { method: 'auth0', connection: AUTH0_CONNECT_PROVIDERS[provider] };
+  }
+  if (ARCADE_PROVIDERS.has(provider)) return { method: 'arcade' };
+  if (NANGO_PROVIDERS.has(provider)) return { method: 'nango' };
+  return { method: 'oauth' };
 }
 
 const INTEGRATIONS: Integration[] = [
-  {
-    id: 'google',
-    name: 'Google Workspace',
-    provider: 'google',
-    description: 'Access Gmail, Calendar, Drive, Docs, and Sheets',
-    icon: <Mail className="w-5 h-5" />,
-    category: 'Productivity',
-    connected: false,
-    scopes: ['gmail', 'calendar', 'drive', 'docs', 'sheets']
-  },
+  // Auth0 Connected Accounts (primary for social logins)
   {
     id: 'github',
     name: 'GitHub',
@@ -45,25 +97,107 @@ const INTEGRATIONS: Integration[] = [
     scopes: ['repo', 'issues', 'pull_requests']
   },
   {
+    id: 'google',
+    name: 'Google Workspace',
+    provider: 'google',
+    description: 'Access Gmail, Calendar, Drive, Docs, and Sheets via Auth0',
+    icon: <Mail className="w-5 h-5" />,
+    category: 'Productivity',
+    connected: false,
+    scopes: ['gmail', 'calendar', 'drive', 'docs', 'sheets']
+  },
+  {
+    id: 'slack',
+    name: 'Slack',
+    provider: 'slack',
+    description: 'Send messages to Slack channels via Auth0',
+    icon: <MessageSquare className="w-5 h-5" />,
+    category: 'Communication',
+    connected: false,
+    scopes: ['chat:write', 'channels:read']
+  },
+  {
     id: 'twitter',
     name: 'X (Twitter)',
     provider: 'twitter',
-    description: 'Post tweets and search for content',
+    description: 'Post tweets and search for content via Auth0',
     icon: <Twitter className="w-5 h-5" />,
     category: 'Social',
     connected: false,
     scopes: ['tweet', 'read']
   },
   {
-    id: 'slack',
-    name: 'Slack',
-    provider: 'slack',
-    description: 'Send messages to Slack channels',
+    id: 'linkedin',
+    name: 'LinkedIn',
+    provider: 'linkedin',
+    description: 'Post updates and manage professional network via Auth0',
+    icon: <MessageSquare className="w-5 h-5" />,
+    category: 'Social',
+    connected: false,
+    scopes: ['profile', 'contacts']
+  },
+  {
+    id: 'microsoft',
+    name: 'Microsoft 365',
+    provider: 'microsoft',
+    description: 'Access Outlook, Teams, and Office apps via Auth0',
+    icon: <Mail className="w-5 h-5" />,
+    category: 'Productivity',
+    connected: false,
+    scopes: ['mail', 'calendar', 'files']
+  },
+  {
+    id: 'apple',
+    name: 'Apple',
+    provider: 'apple',
+    description: 'Sign in with Apple via Auth0',
+    icon: <Cloud className="w-5 h-5" />,
+    category: 'Identity',
+    connected: false,
+    scopes: ['name', 'email']
+  },
+  {
+    id: 'instagram',
+    name: 'Instagram',
+    provider: 'instagram',
+    description: 'Access Instagram content via Auth0',
+    icon: <Cloud className="w-5 h-5" />,
+    category: 'Social',
+    connected: false,
+    scopes: ['media', 'profile']
+  },
+  {
+    id: 'bitbucket',
+    name: 'Bitbucket',
+    provider: 'bitbucket',
+    description: 'Manage repositories via Auth0',
+    icon: <Github className="w-5 h-5" />,
+    category: 'Development',
+    connected: false,
+    scopes: ['repo', 'pull_requests']
+  },
+  // Nango providers
+  {
+    id: 'discord',
+    name: 'Discord',
+    provider: 'discord',
+    description: 'Send messages to Discord channels',
     icon: <MessageSquare className="w-5 h-5" />,
     category: 'Communication',
     connected: false,
-    scopes: ['chat:write', 'channels:read']
+    scopes: ['bot', 'messages']
   },
+  {
+    id: 'reddit',
+    name: 'Reddit',
+    provider: 'reddit',
+    description: 'Post to subreddits and manage account',
+    icon: <MessageSquare className="w-5 h-5" />,
+    category: 'Social',
+    connected: false,
+    scopes: ['submit', 'read']
+  },
+  // Arcade providers
   {
     id: 'spotify',
     name: 'Spotify',
@@ -83,16 +217,6 @@ const INTEGRATIONS: Integration[] = [
     category: 'Productivity',
     connected: false,
     scopes: ['pages', 'databases']
-  },
-  {
-    id: 'dropbox',
-    name: 'Dropbox',
-    provider: 'dropbox',
-    description: 'Upload and download files from Dropbox',
-    icon: <Cloud className="w-5 h-5" />,
-    category: 'Storage',
-    connected: false,
-    scopes: ['files']
   },
   {
     id: 'exa',
@@ -133,16 +257,6 @@ const INTEGRATIONS: Integration[] = [
     category: 'Development',
     connected: false,
     scopes: ['deployments']
-  },
-  {
-    id: 'discord',
-    name: 'Discord',
-    provider: 'discord',
-    description: 'Send messages to Discord channels',
-    icon: <MessageSquare className="w-5 h-5" />,
-    category: 'Communication',
-    connected: false,
-    scopes: ['bot', 'messages']
   }
 ];
 
@@ -161,8 +275,10 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
 
   useEffect(() => {
     if (userId) {
+      console.log('[IntegrationPanel] User ID changed, fetching integrations for:', userId);
       fetchConnectedIntegrations();
     }
+    // Don't reset integrations when logged out - keep showing last known state
   }, [userId]);
 
   useEffect(() => {
@@ -172,14 +288,24 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
       if (event.origin !== window.location.origin) return;
 
       if (event.data?.type === 'oauth_success') {
+        console.log('[IntegrationPanel] OAuth success message received');
         setPopupWindow(null);
         setLoading(null);
         fetchConnectedIntegrations();
         toast.success('Integration connected successfully');
       } else if (event.data?.type === 'oauth_cancel') {
+        console.log('[IntegrationPanel] OAuth cancel message received');
         setPopupWindow(null);
         setLoading(null);
         toast.info('Connection cancelled');
+        fetchConnectedIntegrations();
+      } else if (event.data?.type === 'auth0_success') {
+        // Auth0 specific success message
+        console.log('[IntegrationPanel] Auth0 success message received');
+        setPopupWindow(null);
+        setLoading(null);
+        fetchConnectedIntegrations();
+        toast.success(`${event.data.provider || 'Integration'} connected successfully`);
       }
     };
 
@@ -190,9 +316,10 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
     if (popupWindow) {
       interval = setInterval(() => {
         if (popupWindow.closed) {
+          console.log('[IntegrationPanel] Popup closed');
           setPopupWindow(null);
           setLoading(null);
-          // Popup closed without sending message - treat as cancel
+          // Refresh integrations to show updated connection status
           fetchConnectedIntegrations();
         }
       }, 500);
@@ -213,20 +340,33 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
       const token = (() => {
         try { return localStorage.getItem('token'); } catch { return null; }
       })();
-      const response = await fetch(`/api/tools/execute?userId=${userId}`, {
+
+      // Fetch connection status and source from API
+      const response = await fetch(`/api/user/integrations/status?userId=${userId}`, {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });
+
       if (response.ok) {
         const data = await response.json();
-        const connectedProviders = data.connectedProviders || [];
-        
+        const connections = data.connections || [];
+
+        // Create a map of provider -> connection source
+        const connectionMap = new Map<string, 'auth0' | 'arcade' | 'nango' | 'oauth'>();
+        connections.forEach((conn: { provider: string; source: string }) => {
+          connectionMap.set(conn.provider, conn.source as 'auth0' | 'arcade' | 'nango' | 'oauth');
+        });
+
         setIntegrations(prev => prev.map(integration => ({
           ...integration,
-          connected: connectedProviders.includes(integration.provider)
+          connected: connectionMap.has(integration.provider),
+          connectionSource: connectionMap.get(integration.provider) || null
         })));
+        console.log('[IntegrationPanel] Updated integrations:', connectionMap.size, 'connected');
+      } else {
+        console.error('[IntegrationPanel] Failed to fetch integrations:', response.status);
       }
     } catch (error) {
-      console.error('Failed to fetch connected integrations:', error);
+      console.error('[IntegrationPanel] Failed to fetch connected integrations:', error);
     }
   };
 
@@ -239,53 +379,65 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
     setLoading(integration.id);
 
     try {
-      // Determine the auth endpoint based on provider
-      let authEndpoint = `/api/auth/oauth/initiate?provider=${integration.provider}&userId=${userId}`;
-
-      // Check if provider uses Arcade
-      const arcadeProviders = ['google', 'gmail', 'googledocs', 'googlesheets', 'googlecalendar', 'googledrive', 'exa', 'twilio', 'spotify', 'vercel', 'railway'];
-      if (arcadeProviders.includes(integration.provider)) {
+      // Get the auth config for this provider
+      const authConfig = getProviderAuthConfig(integration.provider);
+      
+      // Handle Auth0 Connected Accounts (for GitHub, Google when Auth0 is configured)
+      if (authConfig?.method === 'auth0' && authConfig.connection) {
         try {
-          const token = (() => {
-            try { return localStorage.getItem('token'); } catch { return null; }
-          })();
-          // SECURITY: Only send token via Authorization header, NOT in URL query string
-          // URL tokens can leak via logs, browser history, and Referer headers
-          const response = await fetch(`/api/auth/arcade/authorize?provider=${integration.provider}&userId=${userId}`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          });
-          if (response.ok) {
-            const data = await response.json();
-            authEndpoint = data.authUrl;
-          } else {
-            toast.error(`Failed to initialize ${integration.name} connection`);
-            setLoading(null);
+          // Use /auth/login with connection parameter for Auth0 social login
+          const authUrl = `/auth/login?connection=${authConfig.connection}&returnTo=${encodeURIComponent(window.location.href)}`;
+
+          const width = 600;
+          const height = 700;
+          const left = window.screenX + (window.outerWidth - width) / 2;
+          const top = window.screenY + (window.outerHeight - height) / 2;
+
+          const popup = window.open(
+            authUrl,
+            'auth0_connect',
+            `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes,noopener=yes,noreferrer=yes`
+          );
+
+          if (popup) {
+            setPopupWindow(popup);
+            toast.info(`Connecting to ${integration.name} via Auth0...`);
             return;
+          } else {
+            toast.error('Popup blocked. Please allow popups for this site.');
+            setLoading(null);
           }
-        } catch {
-          toast.error(`Failed to reach authorization service for ${integration.name}`);
+        } catch (auth0Error) {
+          console.warn('Auth0 connection failed, falling back to:', auth0Error);
+          toast.error(`Failed to connect to ${integration.name} via Auth0`);
           setLoading(null);
           return;
         }
       }
 
-      // Check if provider uses Nango
-      const nangoProviders = ['github', 'slack', 'discord', 'twitter', 'reddit'];
-      if (nangoProviders.includes(integration.provider)) {
+      // Determine which auth endpoint to use based on provider config
+      let authEndpoint: string;
+      
+      // Resolve auth token once for all service types
+      const token = (() => {
+        try { return localStorage.getItem('token'); } catch { return null; }
+      })();
+      const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+      if (authConfig?.method === 'arcade' || authConfig?.method === 'nango') {
+        // Use Arcade or Nango authorization endpoint
+        const servicePath = authConfig.method === 'arcade' ? 'arcade' : 'nango';
         try {
-          const token = (() => {
-            try { return localStorage.getItem('token'); } catch { return null; }
-          })();
-          // SECURITY: Only send token via Authorization header, NOT in URL query string
-          // URL tokens can leak via logs, browser history, and Referer headers
-          const response = await fetch(`/api/auth/nango/authorize?provider=${integration.provider}&userId=${userId}`, {
-            headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          });
+          const response = await fetch(
+            `/api/auth/${servicePath}/authorize?provider=${integration.provider}&userId=${userId}`,
+            { headers: authHeaders },
+          );
           if (response.ok) {
             const data = await response.json();
-            authEndpoint = data.connectLink || data.authUrl || authEndpoint;
+            authEndpoint = data.authUrl || data.connectLink || `/api/auth/oauth/initiate?provider=${integration.provider}`;
           } else {
-            toast.error(`Failed to initialize ${integration.name} connection`);
+            const errorData = await response.json().catch(() => ({}));
+            toast.error(errorData.error || `Failed to initialize ${integration.name} connection`);
             setLoading(null);
             return;
           }
@@ -294,6 +446,10 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
           setLoading(null);
           return;
         }
+      } else {
+        // Standard OAuth — include token in query for popup redirect auth
+        const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
+        authEndpoint = `/api/auth/oauth/initiate?provider=${integration.provider}${tokenParam}`;
       }
 
       // Calculate popup position centered on screen
@@ -329,28 +485,44 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
   };
 
   const handleDisconnect = async (integration: Integration) => {
-    if (!userId) return;
+    if (!userId) {
+      toast.error('Please sign in to disconnect integrations');
+      return;
+    }
+
+    if (!confirm(`Are you sure you want to disconnect from ${integration.name}?`)) {
+      return;
+    }
 
     setLoading(integration.id);
 
     try {
+      const token = (() => {
+        try { return localStorage.getItem('token'); } catch { return null; }
+      })();
+
       // Call API to revoke connection
       const response = await fetch(`/api/user/integrations/${integration.provider}`, {
         method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
+        headers: { 
+          'Content-Type': 'application/json',
+          ...(token ? { Authorization: `Bearer ${token}` } : {}),
+        },
         body: JSON.stringify({ userId })
       });
 
       if (response.ok) {
-        setIntegrations(prev => prev.map(i => 
-          i.id === integration.id ? { ...i, connected: false } : i
+        setIntegrations(prev => prev.map(i =>
+          i.id === integration.id ? { ...i, connected: false, connectionSource: null } : i
         ));
         toast.success(`Disconnected from ${integration.name}`);
       } else {
-        throw new Error('Failed to disconnect');
+        const errorData = await response.json().catch(() => ({}));
+        throw new Error(errorData.error || 'Failed to disconnect');
       }
-    } catch (error) {
-      toast.error(`Failed to disconnect from ${integration.name}`);
+    } catch (error: any) {
+      console.error('Disconnect error:', error);
+      toast.error(error.message || `Failed to disconnect from ${integration.name}`);
     } finally {
       setLoading(null);
     }
@@ -442,13 +614,25 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
                       {integration.icon}
                     </div>
                     <div>
-                      <div className="flex items-center gap-2">
+                      <div className="flex items-center gap-2 flex-wrap">
                         <h3 className="font-medium text-white">{integration.name}</h3>
                         {integration.connected && (
-                          <Badge variant="outline" className="text-xs bg-green-500/20 text-green-400 border-green-500/30">
-                            <CheckCircle className="w-3 h-3 mr-1" />
-                            Connected
-                          </Badge>
+                          <>
+                            <Badge variant="outline" className="text-xs bg-green-500/20 text-green-400 border-green-500/30">
+                              <CheckCircle className="w-3 h-3 mr-1" />
+                              Connected
+                            </Badge>
+                            {/* Connection Source Badge */}
+                            {integration.connectionSource && (
+                              <Badge 
+                                variant="outline" 
+                                className={`text-xs border ${SOURCE_COLORS[integration.connectionSource]}`}
+                              >
+                                {SOURCE_ICONS[integration.connectionSource]}
+                                <span className="ml-1">{SOURCE_LABELS[integration.connectionSource]}</span>
+                              </Badge>
+                            )}
+                          </>
                         )}
                       </div>
                       <p className="text-xs text-white/60 mt-1">{integration.description}</p>

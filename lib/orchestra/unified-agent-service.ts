@@ -32,13 +32,34 @@ import {
 import { createLogger } from '@/lib/utils/logger';
 import { mastraWorkflowIntegration } from '../agent/mastra-workflow-integration';
 
-import { 
-  AgentOrchestrator, 
+import {
+  AgentOrchestrator,
   type OrchestratorConfig,
-  type OrchestratorEvent 
+  type OrchestratorEvent
 } from '../agent/orchestration/agent-orchestrator';
 
+import {
+  createTaskClassifier,
+  type TaskClassification,
+  type ClassificationContext,
+} from '../agent/task-classifier';
+
 const log = createLogger('UnifiedAgentService');
+
+/**
+ * Task classifier instance (singleton)
+ */
+const taskClassifier = createTaskClassifier({
+  simpleThreshold: parseFloat(process.env.TASK_CLASSIFIER_SIMPLE_THRESHOLD || '0.3'),
+  complexThreshold: parseFloat(process.env.TASK_CLASSIFIER_COMPLEX_THRESHOLD || '0.7'),
+  keywordWeight: 0.4,
+  semanticWeight: parseFloat(process.env.TASK_CLASSIFIER_SEMANTIC_WEIGHT || '0.3'),
+  contextWeight: parseFloat(process.env.TASK_CLASSIFIER_CONTEXT_WEIGHT || '0.2'),
+  historicalWeight: parseFloat(process.env.TASK_CLASSIFIER_HISTORY_WEIGHT || '0.1'),
+  enableSemanticAnalysis: process.env.TASK_CLASSIFIER_ENABLE_SEMANTIC !== 'false',
+  enableHistoricalLearning: process.env.TASK_CLASSIFIER_ENABLE_HISTORY !== 'false',
+  enableContextAwareness: process.env.TASK_CLASSIFIER_ENABLE_CONTEXT !== 'false',
+});
 
 export interface UnifiedAgentConfig {
   // Core
@@ -141,23 +162,73 @@ export function checkProviderHealth(): ProviderHealth {
 }
 
 /**
- * Determine which mode to use based on config and health
+ * Determine which mode to use based on config and task classification
+ * 
+ * Uses multi-factor task classifier instead of fragile regex matching.
+ * Returns both mode and classification for logging/metrics.
  */
-function determineMode(config: UnifiedAgentConfig): 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' {
+async function determineMode(config: UnifiedAgentConfig): Promise<{
+  mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow';
+  classification?: TaskClassification;
+}> {
   // Explicit mode override
   if (config.mode && config.mode !== 'auto') {
-    return config.mode;
+    return { mode: config.mode };
   }
 
   // Check if Mastra workflow should be used
   if (config.enableMastraWorkflows !== false && config.workflowId) {
-    // Use Mastra workflow if workflow ID is specified
-    return 'mastra-workflow';
+    return { mode: 'mastra-workflow' };
   }
 
-  // Auto-detect from environment
-  const health = checkProviderHealth();
-  return health.preferredMode;
+  // Use task classifier for intelligent routing
+  try {
+    const classification = await taskClassifier.classify(config.userMessage, {
+      projectSize: process.env.PROJECT_SIZE as any,
+      userPreference: process.env.AGENT_PREFERENCE as any,
+    });
+
+    log.debug('Task classified', {
+      complexity: classification.complexity,
+      recommendedMode: classification.recommendedMode,
+      confidence: classification.confidence,
+      factors: classification.factors,
+    });
+
+    // Map classifier recommendation to actual mode
+    // Note: classifier may return 'stateful-agent' but we need to map to valid execution modes
+    const health = checkProviderHealth();
+    let mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow';
+    
+    if (classification.recommendedMode === 'stateful-agent') {
+      // StatefulAgent runs as v2-native mode
+      mode = health.v2Native ? 'v2-native' : health.v2Containerized ? 'v2-containerized' : health.v2Local ? 'v2-local' : 'v1-api';
+    } else if (classification.recommendedMode === 'mastra-workflow') {
+      mode = 'mastra-workflow';
+    } else {
+      // v1-api or v2-native from classifier
+      mode = classification.recommendedMode;
+    }
+    
+    // Final health check - ensure mode is available
+    if (mode === 'v2-native' && !health.v2Native) {
+      mode = health.v2Containerized ? 'v2-containerized' : health.v2Local ? 'v2-local' : 'v1-api';
+    } else if (mode === 'v2-containerized' && !health.v2Containerized) {
+      mode = health.v2Local ? 'v2-local' : 'v1-api';
+    } else if (mode === 'v2-local' && !health.v2Local) {
+      mode = 'v1-api';
+    }
+
+    return { 
+      mode,
+      classification,
+    };
+  } catch (error) {
+    log.warn('Task classification failed, using health-based fallback', error);
+    // Fallback to health-based detection
+    const health = checkProviderHealth();
+    return { mode: health.preferredMode };
+  }
 }
 
 /**
@@ -165,17 +236,18 @@ function determineMode(config: UnifiedAgentConfig): 'v1-api' | 'v2-containerized
  *
  * Routes to OpenCode V2 Engine (primary) or V1 API (fallback) based on configuration.
  * Implements fallback chain for reliability.
+ * Uses task classifier for intelligent mode selection.
  */
 export async function processUnifiedAgentRequest(
   config: UnifiedAgentConfig
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
-  const mode = determineMode(config);
+  const { mode, classification } = await determineMode(config);
 
   try {
     switch (mode) {
       case 'v2-native':
-        return await runV2Native(config);
+        return await runV2Native(config, classification);
 
       case 'v2-containerized':
         return await runV2Containerized(config);
@@ -200,6 +272,10 @@ export async function processUnifiedAgentRequest(
         metadata: {
           ...fallbackResult.metadata,
           fallbackFrom: mode,
+          classification: classification ? {
+            complexity: classification.complexity,
+            confidence: classification.confidence,
+          } : undefined,
         },
       };
     }
@@ -212,6 +288,10 @@ export async function processUnifiedAgentRequest(
       error: error instanceof Error ? error.message : String(error),
       metadata: {
         duration: Date.now() - startTime,
+        classification: classification ? {
+          complexity: classification.complexity,
+          confidence: classification.confidence,
+        } : undefined,
       },
     };
   }
@@ -221,33 +301,61 @@ export async function processUnifiedAgentRequest(
  * Run V2 Native mode - OpenCode CLI as primary agentic engine
  * This is the MAIN mode for agentic tasks with native bash/file ops
  */
-async function runV2Native(config: UnifiedAgentConfig): Promise<UnifiedAgentResult> {
+async function runV2Native(
+  config: UnifiedAgentConfig,
+  classification?: TaskClassification
+): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
-  log.info('Running V2 Native mode', { 
+  log.info('Running V2 Native mode', {
     userMessageLength: config.userMessage.length,
     maxSteps: config.maxSteps,
+    classification: classification ? {
+      complexity: classification.complexity,
+      confidence: classification.confidence,
+      recommendedMode: classification.recommendedMode,
+    } : undefined,
   });
 
-  // For complex multi-step tasks, use StatefulAgent (Plan-Act-Verify workflow)
-  // Enhanced pattern matching for better detection
-  const isComplexTask = /(create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page|dashboard|authentication|database|integration|deployment|setup|initialize|scaffold|generate|boilerplate)/i.test(config.userMessage);
+  // Use classification to determine if StatefulAgent should be used
+  // Fall back to regex-based detection if classification not provided
+  let shouldUseStatefulAgent = false;
   
-  // Also check for task indicators (multiple steps implied)
-  const hasMultipleSteps = /\b(and|then|after|before|first|next|finally|also|plus)\b/i.test(config.userMessage);
-  const mentionsFiles = /\b(file|files|folder|directory|component|page|module|service|api)\b/i.test(config.userMessage);
-  
-  const shouldUseStatefulAgent = isComplexTask || (hasMultipleSteps && mentionsFiles);
-  
-  if (shouldUseStatefulAgent && process.env.ENABLE_STATEFUL_AGENT !== 'false') {
-    log.info('Complex task detected, using StatefulAgent for Plan-Act-Verify workflow', {
+  if (classification) {
+    // Use classifier recommendation
+    shouldUseStatefulAgent = 
+      classification.complexity === 'complex' ||
+      classification.recommendedMode === 'stateful-agent';
+    
+    log.info('Task classification result', {
+      complexity: classification.complexity,
+      confidence: classification.confidence,
+      reasoning: classification.reasoning?.slice(0, 3),
+    });
+  } else {
+    // Fallback to regex-based detection (backward compatibility)
+    const isComplexTask = /(create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page|dashboard|authentication|database|integration|deployment|setup|initialize|scaffold|generate|boilerplate)/i.test(config.userMessage);
+    const hasMultipleSteps = /\b(and|then|after|before|first|next|finally|also|plus)\b/i.test(config.userMessage);
+    const mentionsFiles = /\b(file|files|folder|directory|component|page|module|service|api)\b/i.test(config.userMessage);
+    shouldUseStatefulAgent = isComplexTask || (hasMultipleSteps && mentionsFiles);
+    
+    log.info('Using fallback regex-based task detection', {
       isComplexTask,
       hasMultipleSteps,
       mentionsFiles,
     });
+  }
+
+  if (shouldUseStatefulAgent && process.env.ENABLE_STATEFUL_AGENT !== 'false') {
+    log.info('Complex task detected, using StatefulAgent for Plan-Act-Verify workflow', {
+      classification: classification?.complexity,
+      confidence: classification?.confidence,
+    });
     return await runStatefulAgentMode(config);
   }
 
-  log.info('Simple task detected, using OpenCode Engine', { isComplexTask, hasMultipleSteps, mentionsFiles });
+  log.info('Simple task detected, using OpenCode Engine', { 
+    classification: classification?.complexity || 'unknown',
+  });
 
   // Use OpenCode Engine for simpler tasks
   const engineConfig: OpenCodeEngineConfig = {
@@ -695,7 +803,7 @@ async function runV1ApiCompletion(
 
 /**
  * Attempt fallback to other modes on error
- * 
+ *
  * Fallback chain respects task complexity:
  * - Complex tasks: StatefulAgent → OpenCode Engine → V1 API
  * - Simple tasks: OpenCode Engine → V1 API
@@ -706,9 +814,20 @@ async function attemptFallback(
   error: any
 ): Promise<UnifiedAgentResult | null> {
   const health = checkProviderHealth();
-  
-  // Detect if this is a complex task that should use StatefulAgent
-  const isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(config.userMessage);
+
+  // Use task classifier for complexity detection (with regex fallback)
+  let isComplexTask = false;
+  try {
+    const classification = await taskClassifier.classify(config.userMessage);
+    isComplexTask = classification.complexity === 'complex' || classification.complexity === 'moderate';
+    log.debug('Fallback classification', {
+      complexity: classification.complexity,
+      isComplexTask,
+    });
+  } catch {
+    // Fallback to regex
+    isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(config.userMessage);
+  }
 
   // Try fallback chain based on what failed
   // Priority: V2 Native (with StatefulAgent for complex) → V2 Containerized → V2 Local → V1 API

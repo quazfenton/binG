@@ -1,6 +1,6 @@
 /**
  * Strip common sandbox/workspace prefixes from a path.
- * 
+ *
  * This is the single source of truth for prefix stripping. All subsystems
  * (VFS service, preview panel, terminal, OPFS) must use this function
  * instead of duplicating the regex list.

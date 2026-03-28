@@ -42,6 +42,7 @@ import type { SandboxProviderType } from './providers';
 import type { ExecutionPolicy } from './types';
 import { getExecutionPolicyConfig, getPreferredProviders } from './types';
 import { createLogger } from '../utils/logger';
+import { providerHealthTracker } from './provider-health';
 
 const logger = createLogger('Phase2:ProviderRouter');
 
@@ -68,9 +69,10 @@ class LatencyTracker {
     // Initialize metrics for all providers
     const providers: SandboxProviderType[] = [
       'daytona', 'e2b', 'sprites', 'codesandbox', 'microsandbox',
-      'blaxel', 'opensandbox', 'mistral', 'vercel-sandbox'
+      'blaxel', 'opensandbox', 'mistral', 'vercel-sandbox', 'zeroboot',
+      'modal', 'modal-com'
     ];
-    
+
     for (const provider of providers) {
       this.metrics.set(provider, {
         provider,
@@ -103,6 +105,8 @@ class LatencyTracker {
     metric.avgLatencyMs = this.calculateAverage(metric.recentLatencies);
     metric.p95LatencyMs = this.calculatePercentile(metric.recentLatencies, 95);
     metric.p99LatencyMs = this.calculatePercentile(metric.recentLatencies, 99);
+    // Also record to provider health tracker
+    providerHealthTracker.recordCall(provider, true, latencyMs);
   }
 
   /**
@@ -366,6 +370,34 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     persistenceSupport: false,
     gpuSupport: false,
   },
+  {
+    type: 'zeroboot',
+    services: [],
+    bestFor: ['code-interpreter', 'ml-training'],
+    costTier: 'low',
+    latencyTier: 'low',
+    persistenceSupport: false,
+    gpuSupport: false,
+  },
+  {
+    type: 'modal',
+    services: [],
+    bestFor: [], // Not used for actual execution
+    costTier: 'low',
+    latencyTier: 'low',
+    persistenceSupport: false,
+    gpuSupport: false,
+  },
+  {
+    type: 'modal-com',
+    services: ['pty', 'preview', 'snapshot', 'agent', 'persistent-fs'],
+    bestFor: ['code-interpreter', 'agent', 'ml-training', 'fullstack-app'],
+    costTier: 'medium',
+    latencyTier: 'low', // Sub-second cold starts
+    persistenceSupport: true, // Via volumes
+    gpuSupport: true, // H100, A100, A10G, T4, L4, A10
+    // NOTE: Full implementation complete - command execution, filesystem, tunnels, PTY all implemented
+  },
 ];
 
 /**
@@ -607,6 +639,12 @@ export class ProviderRouter {
       } else if (currentLatencyTier === 'high' && !latencyTracker.isLatencyAcceptable(profile.type, 10000)) {
         score -= 5; // Penalty for very slow providers
         reasons.push('Provider experiencing high latency');
+      }
+
+      // Provider health prediction scoring
+      if (providerHealthTracker.shouldDeprioritize(profile.type)) {
+        score -= 15;
+        reasons.push('Provider health degraded');
       }
 
       // Quota check (soft penalty, doesn't disqualify)

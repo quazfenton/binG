@@ -73,12 +73,7 @@ export type {
 
 export {
   RequestDeduplicator,
-  codeRequestDeduplicator,
-} from './request-deduplicator';
-export type {
-  RequestFingerprint,
-  InFlightRequest,
-  DeduplicationConfig,
+  getRequestDeduplicator,
 } from './request-deduplicator';
 
 // Image loader with SSRF protection
@@ -87,3 +82,16 @@ export {
   isHostnameSafe,
   getHostname,
 } from './image-loader';
+
+// Crypto-secure random utilities
+export {
+  secureRandom,
+  secureRandomInt,
+  secureRandomString,
+  secureRandomId,
+  secureRandomUUID,
+  secureRandomSeed,
+  secureJitter,
+  secureShuffle,
+  securePick,
+} from './crypto-random';

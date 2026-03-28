@@ -43,14 +43,44 @@ export interface AuthConfig {
   secretKey?: string;
 }
 
-const DEFAULT_AUTH_CONFIG: AuthConfig = {
-  algorithm: 'HS256',
-  expirationHours: 24,
-  issuer: process.env.IDP_ISSUER,
-  audience: process.env.IDP_AUDIENCE,
-  publicKey: process.env.AUTH_PUBLIC_KEY,
-  secretKey: process.env.JWT_SECRET,
-};
+// Lazy-loaded auth config to avoid build failures
+let defaultAuthConfig: AuthConfig | null = null;
+
+function getDefaultAuthConfig(): AuthConfig {
+  if (defaultAuthConfig) return defaultAuthConfig;
+
+  const env: any = typeof process !== 'undefined' ? process.env : {};
+
+  // Skip validation during build - use dummy values
+  const isBuild = env.SKIP_DB_INIT === 'true' ||
+                  env.NEXT_BUILD === 'true' ||
+                  env.NEXT_PHASE === 'phase-production-build' ||
+                  env.NEXT_PHASE === 'build';
+  
+  if (isBuild) {
+    console.warn('[Auth] Skipping auth config validation during build');
+    defaultAuthConfig = {
+      algorithm: 'HS256',
+      expirationHours: 24,
+      issuer: 'dummy-issuer',
+      audience: 'dummy-audience',
+      publicKey: 'dummy-public-key',
+      secretKey: 'dummy-secret-key',
+    };
+    return defaultAuthConfig;
+  }
+  
+  defaultAuthConfig = {
+    algorithm: 'HS256',
+    expirationHours: 24,
+    issuer: env.IDP_ISSUER,
+    audience: env.IDP_AUDIENCE,
+    publicKey: env.AUTH_PUBLIC_KEY,
+    secretKey: env.JWT_SECRET,
+  };
+  
+  return defaultAuthConfig;
+}
 
 /**
  * Validate user ID to prevent path traversal and command injection
@@ -63,7 +93,8 @@ export function validateUserId(userId: string): boolean {
 /**
  * Get and validate user ID from JWT token
  */
-export async function getUserId(token: string, config: AuthConfig = DEFAULT_AUTH_CONFIG): Promise<string> {
+export async function getUserId(token: string, config?: AuthConfig): Promise<string> {
+  const effectiveConfig = config || getDefaultAuthConfig();
   try {
     let key: CryptoKey;
 
@@ -117,22 +148,23 @@ export async function getUserId(token: string, config: AuthConfig = DEFAULT_AUTH
  */
 export async function createToken(
   userId: string,
-  config: AuthConfig = DEFAULT_AUTH_CONFIG
+  config?: AuthConfig
 ): Promise<string> {
+  const effectiveConfig = config || getDefaultAuthConfig();
   const { SignJWT } = await import('jose');
 
-  if (!config.secretKey) {
+  if (!effectiveConfig.secretKey) {
     throw new Error('Secret key required for token creation');
   }
 
   const token = await new SignJWT({})
-    .setProtectedHeader({ alg: config.algorithm })
+    .setProtectedHeader({ alg: effectiveConfig.algorithm })
     .setSubject(userId)
     .setIssuedAt()
-    .setExpirationTime(`${config.expirationHours}h`)
-    .setIssuer(config.issuer)
-    .setAudience(config.audience)
-    .sign(new TextEncoder().encode(config.secretKey));
+    .setExpirationTime(`${effectiveConfig.expirationHours}h`)
+    .setIssuer(effectiveConfig.issuer)
+    .setAudience(effectiveConfig.audience)
+    .sign(new TextEncoder().encode(effectiveConfig.secretKey));
 
   return token;
 }
@@ -164,9 +196,10 @@ export async function requireAuth(request: Request): Promise<string> {
 /**
  * Check if token is valid without extracting user ID
  */
-export async function validateToken(token: string, config: AuthConfig = DEFAULT_AUTH_CONFIG): Promise<boolean> {
+export async function validateToken(token: string, config?: AuthConfig): Promise<boolean> {
+  const effectiveConfig = config || getDefaultAuthConfig();
   try {
-    await getUserId(token, config);
+    await getUserId(token, effectiveConfig);
     return true;
   } catch {
     return false;
@@ -223,9 +256,10 @@ export class AuthManager {
   private config: AuthConfig;
   private static instance: AuthManager | null = null;
 
-  constructor(config: AuthConfig = DEFAULT_AUTH_CONFIG) {
-    validateAuthConfig(config);
-    this.config = config;
+  constructor(config?: AuthConfig) {
+    const effectiveConfig = config || getDefaultAuthConfig();
+    validateAuthConfig(effectiveConfig);
+    this.config = effectiveConfig;
   }
 
   static getInstance(config?: AuthConfig): AuthManager {

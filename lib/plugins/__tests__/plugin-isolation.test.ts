@@ -73,6 +73,7 @@ describe('PluginIsolationManager', () => {
     });
 
     it('should handle execution timeout', async () => {
+      vi.useRealTimers(); // Need real timers for timeout test
       const sandboxId = manager.createSandbox('test-plugin');
 
       await expect(
@@ -142,6 +143,7 @@ describe('PluginIsolationManager', () => {
 
   describe('Resource Monitoring', () => {
     it('should track resource usage over time', async () => {
+      vi.useRealTimers(); // Need real timers for setTimeout
       const sandboxId = manager.createSandbox('test-plugin');
 
       await manager.executeInSandbox(sandboxId, async () => {

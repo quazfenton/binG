@@ -27,6 +27,7 @@ import { createLogger } from '../../utils/logger'
 import { getSandboxProvider, type SandboxProviderType } from '../../sandbox/providers'
 import { quotaManager } from '../../management/quota-manager'
 import type { SandboxHandle } from '../../sandbox/providers/sandbox-provider'
+import { secureRandomId } from '@/lib/utils/crypto-random'
 
 const logger = createLogger('Terminal:SessionManager')
 
@@ -421,7 +422,7 @@ export class TerminalSessionManager {
 
     quotaManager.recordUsage(providerType)
 
-    const sessionId = `user-${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`
+    const sessionId = `user-${userId}-${Date.now()}-${secureRandomId()}`
     const session: UserTerminalSession = {
       sessionId,
       sandboxId: handle.id,
@@ -589,7 +590,7 @@ export class TerminalSessionManager {
 
       const restoredSession: UserTerminalSession = {
         ...targetSession,
-        sessionId: `user-${userId}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+        sessionId: `user-${userId}-${Date.now()}-${secureRandomId()}`,
         lastActive: Date.now(),
         metadata: {
           ...targetSession.metadata,

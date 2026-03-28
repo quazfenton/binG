@@ -1,313 +1,255 @@
-"use client";
-
 /**
  * Request Deduplicator
  * 
- * Prevents duplicate API requests by tracking in-flight requests
- * and providing request fingerprinting and deduplication logic.
+ * Prevents duplicate in-flight requests to the same endpoint with the same parameters.
+ * Useful for preventing race conditions when multiple components request the same data.
+ * 
+ * @example
+ * ```typescript
+ * // In a component
+ * const data = await requestDeduplicator.executeRequest(
+ *   '/api/vfs/read',
+ *   'POST',
+ *   { path: '/src/index.ts' }
+ * );
+ * ```
  */
 
-export interface RequestFingerprint {
-  id: string;
-  url: string;
-  method: string;
-  bodyHash: string;
-  timestamp: number;
-}
-
-export interface InFlightRequest {
-  id: string;
-  fingerprint: RequestFingerprint;
+interface PendingRequest {
   promise: Promise<any>;
-  abortController: AbortController;
   timestamp: number;
-  timeoutId?: NodeJS.Timeout;
+  count: number; // Number of duplicate requests merged
+  abortController?: AbortController; // Track abort controller for cleanup
 }
 
-export interface DeduplicationConfig {
-  timeoutMs: number;
-  maxConcurrentRequests: number;
-  enableFingerprinting: boolean;
-  cleanupIntervalMs: number;
+interface RequestDeduplicatorConfig {
+  /** How long to keep pending requests (ms) */
+  ttl?: number;
+  /** Maximum number of pending requests to track */
+  maxPending?: number;
 }
 
 export class RequestDeduplicator {
-  private inFlightRequests: Map<string, InFlightRequest> = new Map();
-  private config: DeduplicationConfig;
+  private pendingRequests = new Map<string, PendingRequest>();
+  private readonly ttl: number;
+  private readonly maxPending: number;
   private cleanupInterval?: NodeJS.Timeout;
 
-  constructor(config: Partial<DeduplicationConfig> = {}) {
-    this.config = {
-      timeoutMs: 30000, // 30 seconds
-      maxConcurrentRequests: 10,
-      enableFingerprinting: true,
-      cleanupIntervalMs: 60000, // 1 minute
-      ...config
-    };
-
-    // Start cleanup interval
+  constructor(config: RequestDeduplicatorConfig = {}) {
+    this.ttl = config.ttl || 30000; // 30 seconds default
+    this.maxPending = config.maxPending || 100;
+    
+    // Start periodic cleanup
     this.startCleanup();
   }
 
   /**
-   * Generate a unique fingerprint for a request
+   * Generate a cache key from request parameters
    */
-  generateFingerprint(url: string, method: string, body?: any): RequestFingerprint {
-    const bodyString = body ? JSON.stringify(body) : '';
-    const bodyHash = this.hashString(bodyString);
-    
-    return {
-      id: `${method.toUpperCase()}_${this.hashString(url)}_${bodyHash}`,
-      url,
-      method: method.toUpperCase(),
-      bodyHash,
-      timestamp: Date.now()
-    };
+  private getKey(endpoint: string, method: string, body?: any): string {
+    return `${method}:${endpoint}:${body ? JSON.stringify(body) : ''}`;
   }
 
   /**
-   * Check if a request is already in flight
+   * Execute a request, deduplicating with any in-flight request
+   *
+   * @param endpoint - API endpoint URL
+   * @param method - HTTP method
+   * @param body - Request body (will be JSON stringified)
+   * @param headers - Optional headers
+   * @returns Promise resolving to response data
    */
-  isRequestInFlight(fingerprint: RequestFingerprint): boolean {
-    if (!this.config.enableFingerprinting) {
-      return false;
-    }
+  async executeRequest(
+    endpoint: string,
+    method: string = 'GET',
+    body?: any,
+    headers?: Record<string, string>
+  ): Promise<any> {
+    const key = this.getKey(endpoint, method, body);
 
-    const existing = this.inFlightRequests.get(fingerprint.id);
-    if (!existing) {
-      return false;
-    }
-
-    // Check if request is still valid (not timed out)
-    const age = Date.now() - existing.timestamp;
-    if (age > this.config.timeoutMs) {
-      this.removeRequest(fingerprint.id);
-      return false;
-    }
-
-    return true;
-  }
-
-  /**
-   * Get existing request promise if available
-   */
-  getExistingRequest(fingerprint: RequestFingerprint): Promise<any> | null {
-    const existing = this.inFlightRequests.get(fingerprint.id);
-    return existing ? existing.promise : null;
-  }
-
-  /**
-   * Register a new request
-   */
-  registerRequest<T>(
-    fingerprint: RequestFingerprint,
-    requestFn: (abortController: AbortController) => Promise<T>
-  ): Promise<T> {
-    // Check concurrent request limit
-    if (this.inFlightRequests.size >= this.config.maxConcurrentRequests) {
-      throw new Error('Too many concurrent requests');
+    // Check if there's already a pending request
+    const pending = this.pendingRequests.get(key);
+    if (pending) {
+      pending.count++;
+      return pending.promise;
     }
 
     // Create abort controller for this request
     const abortController = new AbortController();
+    
+    // Create new request
+    const promise = this.makeRequest(endpoint, method, body, headers, abortController);
 
-    // Create the request promise
-    const promise = requestFn(abortController)
-      .finally(() => {
-        // Clean up when request completes
-        this.removeRequest(fingerprint.id);
-      });
-
-    // Set up timeout
-    const timeoutId = setTimeout(() => {
-      abortController.abort();
-      this.removeRequest(fingerprint.id);
-    }, this.config.timeoutMs);
-
-    // Store the in-flight request
-    const inFlightRequest: InFlightRequest = {
-      id: fingerprint.id,
-      fingerprint,
+    // Store pending request with abort controller
+    this.pendingRequests.set(key, {
       promise,
-      abortController,
       timestamp: Date.now(),
-      timeoutId
-    };
+      count: 1,
+      abortController,
+    });
 
-    this.inFlightRequests.set(fingerprint.id, inFlightRequest);
+    // Cleanup if too many pending requests
+    if (this.pendingRequests.size > this.maxPending) {
+      this.cleanupOldest();
+    }
 
-    return promise;
+    try {
+      return await promise;
+    } finally {
+      // Remove from pending after completion (success or failure)
+      this.pendingRequests.delete(key);
+    }
   }
 
   /**
-   * Execute a request with deduplication
+   * Make the actual fetch request
    */
-  async executeRequest<T>(
-    url: string,
+  private async makeRequest(
+    endpoint: string,
     method: string,
     body?: any,
-    requestFn?: (abortController: AbortController) => Promise<T>
-  ): Promise<T> {
-    const fingerprint = this.generateFingerprint(url, method, body);
-
-    // Check if request is already in flight
-    if (this.isRequestInFlight(fingerprint)) {
-      const existingPromise = this.getExistingRequest(fingerprint);
-      if (existingPromise) {
-        console.log('Deduplicating request:', fingerprint.id);
-        return existingPromise;
-      }
-    }
-
-    // Create default request function if not provided
-    const defaultRequestFn = async (abortController: AbortController): Promise<T> => {
-      const response = await fetch(url, {
-        method,
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: body ? JSON.stringify(body) : undefined,
-        signal: abortController.signal,
-      });
-
-      if (!response.ok) {
-        throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-      }
-
-      return response.json();
+    headers?: Record<string, string>,
+    abortController?: AbortController
+  ): Promise<any> {
+    const fetchOptions: RequestInit = {
+      method,
+      headers: {
+        'Content-Type': 'application/json',
+        ...headers,
+      },
+      signal: abortController?.signal, // Attach abort signal
     };
 
-    const actualRequestFn = requestFn || defaultRequestFn;
-
-    return this.registerRequest(fingerprint, actualRequestFn);
-  }
-
-  /**
-   * Cancel a specific request
-   */
-  cancelRequest(fingerprintId: string): boolean {
-    const request = this.inFlightRequests.get(fingerprintId);
-    if (request) {
-      request.abortController.abort();
-      this.removeRequest(fingerprintId);
-      return true;
+    if (body && method !== 'GET') {
+      fetchOptions.body = JSON.stringify(body);
     }
-    return false;
-  }
 
-  /**
-   * Cancel all requests
-   */
-  cancelAllRequests(): void {
-    for (const request of this.inFlightRequests.values()) {
-      request.abortController.abort();
+    const response = await fetch(endpoint, fetchOptions);
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      throw new Error(errorData.error || `Request failed with status ${response.status}`);
     }
-    this.inFlightRequests.clear();
+
+    return response.json();
   }
 
   /**
-   * Get statistics about in-flight requests
+   * Clear a specific pending request
+   */
+  cancelRequest(endpoint: string, method: string = 'GET', body?: any): void {
+    const key = this.getKey(endpoint, method, body);
+    this.pendingRequests.delete(key);
+  }
+
+  /**
+   * Clear all pending requests
+   */
+  cancelAll(): void {
+    this.pendingRequests.clear();
+  }
+
+  /**
+   * Get statistics about pending requests
    */
   getStats(): {
-    inFlightCount: number;
-    oldestRequestAge: number;
-    requestsByMethod: { [method: string]: number };
+    pending: number;
+    totalDuplicates: number;
   } {
-    const now = Date.now();
-    const requestsByMethod: { [method: string]: number } = {};
-    let oldestRequestAge = 0;
-
-    for (const request of this.inFlightRequests.values()) {
-      const age = now - request.timestamp;
-      oldestRequestAge = Math.max(oldestRequestAge, age);
-
-      const method = request.fingerprint.method;
-      requestsByMethod[method] = (requestsByMethod[method] || 0) + 1;
+    let totalDuplicates = 0;
+    for (const pending of this.pendingRequests.values()) {
+      totalDuplicates += pending.count - 1; // Subtract 1 for the original request
     }
-
+    
     return {
-      inFlightCount: this.inFlightRequests.size,
-      oldestRequestAge,
-      requestsByMethod
+      pending: this.pendingRequests.size,
+      totalDuplicates,
     };
   }
 
   /**
-   * Remove a request from tracking
-   */
-  private removeRequest(fingerprintId: string): void {
-    const request = this.inFlightRequests.get(fingerprintId);
-    if (request) {
-      if (request.timeoutId) {
-        clearTimeout(request.timeoutId);
-      }
-      this.inFlightRequests.delete(fingerprintId);
-    }
-  }
-
-  /**
-   * Start cleanup interval
+   * Start periodic cleanup of stale requests
    */
   private startCleanup(): void {
     this.cleanupInterval = setInterval(() => {
-      this.cleanupExpiredRequests();
-    }, this.config.cleanupIntervalMs);
+      this.cleanup();
+    }, this.ttl / 2);
   }
 
   /**
-   * Clean up expired requests
+   * Clean up stale pending requests
    */
-  private cleanupExpiredRequests(): void {
+  private cleanup(): void {
     const now = Date.now();
-    const expiredIds: string[] = [];
+    const cutoff = now - this.ttl;
 
-    for (const [id, request] of this.inFlightRequests.entries()) {
-      const age = now - request.timestamp;
-      if (age > this.config.timeoutMs) {
-        expiredIds.push(id);
+    for (const [key, pending] of this.pendingRequests.entries()) {
+      if (pending.timestamp < cutoff) {
+        // Abort the request if it's still running
+        if (pending.abortController && !pending.abortController.signal.aborted) {
+          pending.abortController.abort(new Error('Request timeout - cleaned up by deduplicator'));
+        }
+        this.pendingRequests.delete(key);
       }
     }
-
-    for (const id of expiredIds) {
-      this.cancelRequest(id);
-    }
-
-    if (expiredIds.length > 0) {
-      console.log(`Cleaned up ${expiredIds.length} expired requests`);
-    }
   }
 
   /**
-   * Simple string hashing function
+   * Remove oldest pending requests when limit is exceeded
    */
-  private hashString(str: string): string {
-    let hash = 0;
-    if (str.length === 0) return hash.toString();
-    
-    for (let i = 0; i < str.length; i++) {
-      const char = str.charCodeAt(i);
-      hash = ((hash << 5) - hash) + char;
-      hash = hash & hash; // Convert to 32-bit integer
+  private cleanupOldest(): void {
+    const entries = Array.from(this.pendingRequests.entries())
+      .sort((a, b) => a[1].timestamp - b[1].timestamp);
+
+    // Remove oldest 20%
+    const toRemove = Math.max(1, Math.floor(entries.length * 0.2));
+    for (let i = 0; i < toRemove; i++) {
+      const [key, pending] = entries[i];
+      // Abort the request if it's still running
+      if (pending.abortController && !pending.abortController.signal.aborted) {
+        pending.abortController.abort(new Error('Request deduplicated - oldest request aborted'));
+      }
+      this.pendingRequests.delete(key);
     }
-    
-    return Math.abs(hash).toString(36);
   }
 
   /**
-   * Cleanup resources
+   * Stop the deduplicator and clean up resources
    */
   destroy(): void {
     if (this.cleanupInterval) {
       clearInterval(this.cleanupInterval);
+      this.cleanupInterval = undefined;
     }
-    this.cancelAllRequests();
+    
+    // Abort all pending requests
+    for (const [, pending] of this.pendingRequests.entries()) {
+      if (pending.abortController && !pending.abortController.signal.aborted) {
+        pending.abortController.abort(new Error('Deduplicator destroyed - all requests aborted'));
+      }
+    }
+    this.pendingRequests.clear();
   }
 }
 
-// Export singleton instance for code API requests
-export const codeRequestDeduplicator = new RequestDeduplicator({
-  timeoutMs: 120000, // 2 minutes for code operations
-  maxConcurrentRequests: 5, // Limit concurrent code operations
-  enableFingerprinting: true,
-  cleanupIntervalMs: 30000 // 30 seconds cleanup
-});
+// Singleton instance for application-wide deduplication
+let globalDeduplicator: RequestDeduplicator | null = null;
+
+export function getRequestDeduplicator(): RequestDeduplicator {
+  if (!globalDeduplicator) {
+    globalDeduplicator = new RequestDeduplicator({
+      ttl: 30000,
+      maxPending: 100,
+    });
+  }
+  return globalDeduplicator;
+}
+
+// Cleanup on process exit
+if (typeof process !== 'undefined') {
+  process.on('exit', () => {
+    if (globalDeduplicator) {
+      globalDeduplicator.destroy();
+    }
+  });
+}

@@ -1,6 +1,7 @@
-import { readFileSync, readdirSync } from 'fs';
-import * as path from 'path';
-import { getDatabase } from './connection';
+// Note: fs and path modules are lazy-loaded to avoid Edge Runtime issues
+// They are only used at runtime, not at module load time
+// This file is server-only - do not import in Client Components
+export const runtime = 'nodejs';
 
 interface Migration {
   version: string;
@@ -11,11 +12,52 @@ interface Migration {
 export class MigrationRunner {
   private db: any;
   private migrationsPath: string;
+  private initialized = false;
 
   constructor() {
-    this.db = getDatabase();
-    this.migrationsPath = path.join(process.cwd(), 'lib', 'database', 'migrations');
+    // Lazy initialization - don't access database or file system at construction time
+    // This prevents Edge Runtime errors during build
+    this.migrationsPath = '';
+    this.db = null;
+  }
+
+  /**
+   * Initialize the migration runner (lazy initialization)
+   * Must be called before running migrations to avoid Edge Runtime issues
+   */
+  private async initialize(): Promise<void> {
+    if (this.initialized) return;
+
+    // Only run migrations in Node.js runtime
+    if (process.env.NEXT_RUNTIME !== 'nodejs') {
+      console.log('[MigrationRunner] Skipping initialization in Edge Runtime');
+      this.migrationsPath = './lib/database/migrations';
+      this.initialized = true;
+      return;
+    }
+
+    // Dynamic import to avoid Node.js API usage at module load time
+    // This prevents build failures in Edge Runtime and during Next.js builds
+    const connectionModule = await import('./connection');
+    this.db = await connectionModule.getDatabase();
+
+    // Use process.cwd() only at runtime in Node.js environment
+    // Not available in Edge Runtime - use a fallback path
+    // eslint-disable-next-line @typescript-eslint/no-explicit-any
+    const hasProcessCwd = typeof process !== 'undefined' && (process as any).cwd;
+    if (hasProcessCwd && process.env.NEXT_RUNTIME === 'nodejs') {
+      // Use require instead of dynamic import to avoid Edge Runtime analysis
+      const pathModule = require('path');
+      const join = pathModule.join;
+      // eslint-disable-next-line @typescript-eslint/no-explicit-any
+      this.migrationsPath = join((process as any).cwd(), 'lib', 'database', 'migrations');
+    } else {
+      // Fallback for Edge Runtime - this won't actually run migrations in Edge
+      this.migrationsPath = './lib/database/migrations';
+    }
+
     this.initializeMigrationsTable();
+    this.initialized = true;
   }
 
   private initializeMigrationsTable() {
@@ -30,20 +72,37 @@ export class MigrationRunner {
   }
 
   private getExecutedMigrations(): Set<string> {
+    if (!this.db) {
+      return new Set();
+    }
+
     const stmt = this.db.prepare('SELECT version FROM schema_migrations');
     const results = stmt.all();
     return new Set(results.map((row: any) => row.version));
   }
 
-  private getMigrationFiles(): Migration[] {
+  private async getMigrationFiles(): Promise<Migration[]> {
+    // Only read migration files in Node.js runtime
+    if (process.env.NEXT_RUNTIME !== 'nodejs') {
+      console.log('[MigrationRunner] Skipping file read in Edge Runtime');
+      return [];
+    }
+    
     try {
+      // Use require instead of dynamic import to avoid Edge Runtime analysis
+      const fsModule = require('fs');
+      const pathModule = require('path');
+      const readdirSync = fsModule.readdirSync;
+      const readFileSync = fsModule.readFileSync;
+      const join = pathModule.join;
+
       const files = readdirSync(this.migrationsPath)
-        .filter(file => file.endsWith('.sql'))
+        .filter((file: string) => file.endsWith('.sql'))
         .sort();
 
-      return files.map(filename => {
+      return files.map((filename: string) => {
         const version = filename.split('_')[0];
-        const sql = readFileSync(path.join(this.migrationsPath, filename), 'utf-8');
+        const sql = readFileSync(join(this.migrationsPath, filename), 'utf-8');
         return { version, filename, sql };
       });
     } catch (error) {
@@ -52,9 +111,14 @@ export class MigrationRunner {
     }
   }
 
-  public runMigrationsSync(): void {
+  public async runMigrationsSync(): Promise<void> {
+    await this.initialize(); // Ensure lazy initialization before running migrations
+    if (!this.db) {
+      return;
+    }
+
     const executedMigrations = this.getExecutedMigrations();
-    const migrationFiles = this.getMigrationFiles();
+    const migrationFiles = await this.getMigrationFiles();
 
     const pendingMigrations = migrationFiles.filter(
       migration => !executedMigrations.has(migration.version)
@@ -104,11 +168,17 @@ export class MigrationRunner {
   }
 
   public async runMigrations(): Promise<void> {
-    // Delegate to synchronous implementation
-    this.runMigrationsSync();
+    // Delegate to synchronous implementation after lazy init
+    await this.initialize();
+    await this.runMigrationsSync();
   }
 
   public async rollbackMigration(version: string): Promise<void> {
+    await this.initialize(); // Ensure lazy initialization
+    if (!this.db) {
+      return;
+    }
+
     // Note: This is a basic rollback - in production you'd want proper rollback scripts
     console.warn(`Rollback requested for migration ${version}`);
     console.warn('Manual rollback required - check migration file for rollback instructions');
@@ -120,7 +190,12 @@ export class MigrationRunner {
     console.log(`Migration ${version} marked as not executed`);
   }
 
-  public getExecutedMigrationsList(): any[] {
+  public async getExecutedMigrationsList(): Promise<any[]> {
+    await this.initialize(); // Ensure lazy initialization
+    if (!this.db) {
+      return [];
+    }
+
     const stmt = this.db.prepare(`
       SELECT version, filename, executed_at 
       FROM schema_migrations 
@@ -130,5 +205,34 @@ export class MigrationRunner {
   }
 }
 
-// Export singleton instance
-export const migrationRunner = new MigrationRunner();
+/**
+ * Get MigrationRunner singleton instance
+ * Uses lazy initialization to avoid Edge Runtime issues during build
+ */
+let migrationRunnerInstance: MigrationRunner | null = null;
+
+export function getMigrationRunner(): MigrationRunner {
+  if (!migrationRunnerInstance) {
+    migrationRunnerInstance = new MigrationRunner();
+  }
+  return migrationRunnerInstance;
+}
+
+// Keep backward compatibility - but mark as deprecated
+export const migrationRunner = {
+  get instance() {
+    return getMigrationRunner();
+  },
+  runMigrationsSync() {
+    return getMigrationRunner().runMigrationsSync();
+  },
+  runMigrations() {
+    return getMigrationRunner().runMigrations();
+  },
+  rollbackMigration(version: string) {
+    return getMigrationRunner().rollbackMigration(version);
+  },
+  getExecutedMigrationsList() {
+    return getMigrationRunner().getExecutedMigrationsList();
+  },
+};

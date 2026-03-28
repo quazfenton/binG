@@ -18,6 +18,9 @@ RUN apk add --no-cache \
 # Enable corepack for pnpm
 RUN corepack enable
 
+# Set CI=true to avoid interactive prompts in pnpm
+ENV CI=true
+
 # Set working directory
 WORKDIR /app
 

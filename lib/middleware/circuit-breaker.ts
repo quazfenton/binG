@@ -1,84 +1,210 @@
 /**
- * Circuit Breaker Pattern Implementation
- * 
- * Prevents cascading failures by failing fast when a provider is unhealthy.
- * Implements the circuit breaker pattern with three states:
- * - CLOSED: Normal operation, requests flow through
- * - OPEN: Provider failing, requests fail immediately
- * - HALF-OPEN: Testing if provider recovered
- * 
- * Features:
- * - Automatic state transitions
- * - Configurable failure thresholds
- * - Recovery timeout
- * - Per-provider isolation
+ * Smart Circuit Breaker Pattern Implementation
+ *
+ * Unlike a naive circuit breaker that blindly opens after N failures,
+ * this implementation:
+ *
+ * 1. NEVER fully blocks all LLM providers — always keeps at least one route open
+ * 2. Per-provider failure tracking with time-decay (old failures expire)
+ * 3. Provider reliability tiers — unreliable providers (Gemini, free models)
+ *    get higher thresholds and shorter recovery windows
+ * 4. Speculative parallel fallback for known-flaky providers
+ * 5. Awareness of what's actually configured in .env / available
+ * 6. Rate-limit errors (429) treated differently from hard failures (500)
+ *
+ * Safety invariant: if opening a circuit would leave ZERO available
+ * providers, the circuit stays CLOSED (degraded mode) instead.
  */
 
 export type CircuitState = 'CLOSED' | 'OPEN' | 'HALF-OPEN';
 
+// ---------------------------------------------------------------------------
+// Provider reliability tiers
+// ---------------------------------------------------------------------------
+
+export type ReliabilityTier = 'stable' | 'normal' | 'flaky';
+
+/**
+ * Per-tier defaults. Flaky providers get much more lenient thresholds.
+ */
+const TIER_DEFAULTS: Record<ReliabilityTier, {
+  failureThreshold: number
+  timeout: number
+  decayWindowMs: number
+}> = {
+  stable: { failureThreshold: 10, timeout: 20_000, decayWindowMs: 120_000 },
+  normal: { failureThreshold: 7,  timeout: 30_000, decayWindowMs: 90_000 },
+  flaky:  { failureThreshold: 15, timeout: 15_000, decayWindowMs: 60_000 },
+};
+
+/**
+ * Known provider tier assignments. Anything unlisted defaults to 'normal'.
+ */
+const PROVIDER_TIERS: Record<string, ReliabilityTier> = {
+  // Stable / primary
+  'openrouter': 'stable',
+  'openai': 'stable',
+  'anthropic': 'stable',
+  'opencode': 'stable',
+  // Normal
+  'mistral': 'normal',
+  'deepseek': 'normal',
+  'cohere': 'normal',
+  'groq': 'normal',
+  'together': 'normal',
+  // Flaky / rate-limited
+  'google': 'flaky',
+  'gemini': 'flaky',
+  'vertex': 'flaky',
+  'free': 'flaky',
+  'huggingface': 'flaky',
+};
+
+function getTier(providerId: string): ReliabilityTier {
+  const lower = providerId.toLowerCase();
+  for (const [key, tier] of Object.entries(PROVIDER_TIERS)) {
+    if (lower.includes(key)) return tier;
+  }
+  return 'normal';
+}
+
+// ---------------------------------------------------------------------------
+// Failure classification
+// ---------------------------------------------------------------------------
+
+export type FailureKind = 'hard' | 'rate-limit' | 'timeout' | 'transient';
+
+function classifyError(error: any): FailureKind {
+  const msg = (error?.message || '').toLowerCase();
+  const status = error?.status || error?.statusCode || 0;
+
+  if (status === 429 || msg.includes('rate limit') || msg.includes('quota')) {
+    return 'rate-limit';
+  }
+  if (status === 408 || msg.includes('timeout') || msg.includes('timed out') || msg.includes('ETIMEDOUT')) {
+    return 'timeout';
+  }
+  if ([502, 503, 504].includes(status) || msg.includes('overloaded') || msg.includes('temporarily')) {
+    return 'transient';
+  }
+  return 'hard';
+}
+
+/**
+ * How much each failure kind "weighs" toward the threshold.
+ * Rate-limits and transient errors count less than hard failures.
+ */
+const FAILURE_WEIGHT: Record<FailureKind, number> = {
+  hard: 1.0,
+  timeout: 0.7,
+  transient: 0.5,
+  'rate-limit': 0.3,
+};
+
+// ---------------------------------------------------------------------------
+// Config
+// ---------------------------------------------------------------------------
+
 export interface CircuitBreakerConfig {
-  failureThreshold: number;    // Failures before opening circuit
-  successThreshold: number;    // Successes before closing circuit (in half-open)
-  timeout: number;             // Time in ms before attempting recovery (open -> half-open)
-  halfOpenMaxRequests: number; // Max requests allowed in half-open state
+  failureThreshold: number;
+  successThreshold: number;
+  timeout: number;               // ms before OPEN → HALF-OPEN
+  halfOpenMaxRequests: number;
+  /** Failures older than this are forgotten (ms). 0 = no decay */
+  decayWindowMs: number;
 }
 
 const DEFAULT_CONFIG: CircuitBreakerConfig = {
   failureThreshold: 5,
   successThreshold: 3,
-  timeout: 30000, // 30 seconds
+  timeout: 30_000,
   halfOpenMaxRequests: 3,
+  decayWindowMs: 90_000,
 };
+
+// ---------------------------------------------------------------------------
+// Stats
+// ---------------------------------------------------------------------------
 
 export interface CircuitBreakerStats {
   totalRequests: number;
   successfulRequests: number;
   failedRequests: number;
-  rejectedRequests: number; // Rejected due to open circuit
+  rejectedRequests: number;
   lastFailureTime?: number;
   lastSuccessTime?: number;
   stateChanges: number;
+  weightedFailureScore: number;
+  failuresByKind: Record<FailureKind, number>;
 }
+
+// ---------------------------------------------------------------------------
+// Timestamped failure record (for decay)
+// ---------------------------------------------------------------------------
+
+interface FailureRecord {
+  timestamp: number;
+  kind: FailureKind;
+  weight: number;
+}
+
+// ---------------------------------------------------------------------------
+// CircuitBreaker
+// ---------------------------------------------------------------------------
 
 export class CircuitBreaker {
   private state: CircuitState = 'CLOSED';
-  private failureCount = 0;
+  private failures: FailureRecord[] = [];
   private successCount = 0;
   private lastFailureTime?: number;
   private nextAttemptTime?: number;
   private halfOpenRequests = 0;
-  
-  private readonly config: CircuitBreakerConfig;
-  private readonly providerId: string;
-  private readonly stats: CircuitBreakerStats;
+
+  readonly config: CircuitBreakerConfig;
+  readonly providerId: string;
+  readonly tier: ReliabilityTier;
+  private stats: CircuitBreakerStats;
   private stateChangeCallbacks: Array<(state: CircuitState) => void> = [];
+
+  /** External guard: when set, `execute` never throws CircuitBreakerOpenError */
+  forceAlwaysAllow = false;
 
   constructor(
     providerId: string,
-    config: Partial<CircuitBreakerConfig> = {}
+    config: Partial<CircuitBreakerConfig> = {},
   ) {
     this.providerId = providerId;
-    this.config = { ...DEFAULT_CONFIG, ...config };
+    this.tier = getTier(providerId);
+    const tierDefaults = TIER_DEFAULTS[this.tier];
+
+    this.config = {
+      ...DEFAULT_CONFIG,
+      failureThreshold: tierDefaults.failureThreshold,
+      timeout: tierDefaults.timeout,
+      decayWindowMs: tierDefaults.decayWindowMs,
+      ...config,
+    };
+
     this.stats = {
       totalRequests: 0,
       successfulRequests: 0,
       failedRequests: 0,
       rejectedRequests: 0,
       stateChanges: 0,
+      weightedFailureScore: 0,
+      failuresByKind: { hard: 0, 'rate-limit': 0, timeout: 0, transient: 0 },
     };
   }
 
-  /**
-   * Execute operation with circuit breaker protection
-   */
+  // -- public API -----------------------------------------------------------
+
   async execute<T>(operation: () => Promise<T>): Promise<T> {
     this.stats.totalRequests++;
 
-    // Check if we should allow request
-    if (!this.canExecute()) {
+    if (!this.forceAlwaysAllow && !this.canExecute()) {
       this.stats.rejectedRequests++;
       throw new CircuitBreakerOpenError(
-        `Circuit breaker OPEN for ${this.providerId}. Retry after ${this.getRetryAfter()}ms`
+        `Circuit breaker OPEN for ${this.providerId} (${this.tier}). Retry after ${this.getRetryAfter()}ms`,
       );
     }
 
@@ -92,78 +218,115 @@ export class CircuitBreaker {
     }
   }
 
-  /**
-   * Check if request can be executed
-   */
+  getState(): CircuitState {
+    if (this.state === 'OPEN' && this.nextAttemptTime && Date.now() >= this.nextAttemptTime) {
+      this.transitionTo('HALF-OPEN');
+    }
+    return this.state;
+  }
+
+  getRetryAfter(): number {
+    if (this.state !== 'OPEN' || !this.nextAttemptTime) return 0;
+    return Math.max(0, this.nextAttemptTime - Date.now());
+  }
+
+  getStats(): CircuitBreakerStats & { state: CircuitState; tier: ReliabilityTier } {
+    return { ...this.stats, state: this.getState(), tier: this.tier };
+  }
+
+  getWeightedFailureScore(): number {
+    this.pruneDecayed();
+    return this.failures.reduce((sum, f) => sum + f.weight, 0);
+  }
+
+  reset(): void {
+    this.state = 'CLOSED';
+    this.failures = [];
+    this.successCount = 0;
+    this.halfOpenRequests = 0;
+    this.nextAttemptTime = undefined;
+    this.stats.stateChanges++;
+    this.stats.weightedFailureScore = 0;
+  }
+
+  onStateChange(callback: (state: CircuitState) => void): () => void {
+    this.stateChangeCallbacks.push(callback);
+    return () => {
+      const idx = this.stateChangeCallbacks.indexOf(callback);
+      if (idx > -1) this.stateChangeCallbacks.splice(idx, 1);
+    };
+  }
+
+  // -- internal -------------------------------------------------------------
+
   private canExecute(): boolean {
     switch (this.state) {
       case 'CLOSED':
         return true;
-
       case 'OPEN':
-        // Check if timeout has elapsed
         if (this.nextAttemptTime && Date.now() >= this.nextAttemptTime) {
           this.transitionTo('HALF-OPEN');
           return true;
         }
         return false;
-
       case 'HALF-OPEN':
-        // Allow limited requests in half-open state
         return this.halfOpenRequests < this.config.halfOpenMaxRequests;
-
       default:
         return false;
     }
   }
 
-  /**
-   * Handle successful operation
-   */
   private onSuccess(): void {
     this.stats.successfulRequests++;
     this.stats.lastSuccessTime = Date.now();
 
-    switch (this.state) {
-      case 'HALF-OPEN':
-        this.successCount++;
-        if (this.successCount >= this.config.successThreshold) {
-          this.transitionTo('CLOSED');
-        }
-        break;
-
-      case 'CLOSED':
-        // Reset failure count on success
-        this.failureCount = 0;
-        break;
+    if (this.state === 'HALF-OPEN') {
+      this.successCount++;
+      if (this.successCount >= this.config.successThreshold) {
+        this.transitionTo('CLOSED');
+      }
+    } else if (this.state === 'CLOSED') {
+      // Successful call reduces weighted score (recovery credit)
+      if (this.failures.length > 0) {
+        this.failures.shift(); // remove oldest failure
+      }
     }
   }
 
-  /**
-   * Handle failed operation
-   */
   private onFailure(error: any): void {
+    const kind = classifyError(error);
+    const weight = FAILURE_WEIGHT[kind];
+
     this.stats.failedRequests++;
     this.stats.lastFailureTime = Date.now();
+    this.stats.failuresByKind[kind]++;
+    this.lastFailureTime = Date.now();
 
-    switch (this.state) {
-      case 'HALF-OPEN':
-        // Any failure in half-open state opens circuit again
+    this.failures.push({ timestamp: Date.now(), kind, weight });
+    this.pruneDecayed();
+
+    const weightedScore = this.failures.reduce((s, f) => s + f.weight, 0);
+    this.stats.weightedFailureScore = weightedScore;
+
+    if (this.state === 'HALF-OPEN') {
+      // Only hard failures immediately re-open; transient/rate-limit get a pass
+      if (kind === 'hard') {
         this.transitionTo('OPEN');
-        break;
-
-      case 'CLOSED':
-        this.failureCount++;
-        if (this.failureCount >= this.config.failureThreshold) {
-          this.transitionTo('OPEN');
-        }
-        break;
+      }
+    } else if (this.state === 'CLOSED') {
+      if (weightedScore >= this.config.failureThreshold) {
+        this.transitionTo('OPEN');
+      }
     }
   }
 
-  /**
-   * Transition to new state
-   */
+  /** Remove failures older than the decay window */
+  private pruneDecayed(): void {
+    if (this.config.decayWindowMs <= 0) return;
+    const cutoff = Date.now() - this.config.decayWindowMs;
+    this.failures = this.failures.filter(f => f.timestamp > cutoff);
+  }
+
   private transitionTo(newState: CircuitState): void {
     if (this.state === newState) return;
 
@@ -171,92 +334,36 @@ export class CircuitBreaker {
     this.state = newState;
     this.stats.stateChanges++;
 
-    // Reset counters based on new state
     switch (newState) {
       case 'CLOSED':
-        this.failureCount = 0;
+        this.failures = [];
         this.successCount = 0;
         this.halfOpenRequests = 0;
         break;
-
       case 'OPEN':
         this.nextAttemptTime = Date.now() + this.config.timeout;
         this.successCount = 0;
         break;
-
       case 'HALF-OPEN':
         this.halfOpenRequests = 0;
         break;
     }
 
     console.log(
-      `[CircuitBreaker:${this.providerId}] State changed: ${oldState} → ${newState}`
+      `[CircuitBreaker:${this.providerId}] ${oldState} → ${newState}` +
+        ` (score=${this.stats.weightedFailureScore.toFixed(1)}/${this.config.failureThreshold}, tier=${this.tier})`,
     );
 
-    // Notify callbacks
-    this.stateChangeCallbacks.forEach(cb => cb(newState));
-  }
-
-  /**
-   * Get current state
-   */
-  getState(): CircuitState {
-    // Check for automatic transition from OPEN to HALF-OPEN
-    if (this.state === 'OPEN' && this.nextAttemptTime && Date.now() >= this.nextAttemptTime) {
-      this.transitionTo('HALF-OPEN');
+    for (const cb of this.stateChangeCallbacks) {
+      try { cb(newState); } catch { /* ignore */ }
     }
-    return this.state;
-  }
-
-  /**
-   * Get retry-after time in milliseconds
-   */
-  getRetryAfter(): number {
-    if (this.state !== 'OPEN' || !this.nextAttemptTime) {
-      return 0;
-    }
-    return Math.max(0, this.nextAttemptTime - Date.now());
-  }
-
-  /**
-   * Get statistics
-   */
-  getStats(): CircuitBreakerStats & { state: CircuitState } {
-    return {
-      ...this.stats,
-      state: this.getState(),
-    };
-  }
-
-  /**
-   * Reset circuit breaker to initial state
-   */
-  reset(): void {
-    this.state = 'CLOSED';
-    this.failureCount = 0;
-    this.successCount = 0;
-    this.halfOpenRequests = 0;
-    this.nextAttemptTime = undefined;
-    this.stats.stateChanges++;
-  }
-
-  /**
-   * Register state change callback
-   */
-  onStateChange(callback: (state: CircuitState) => void): () => void {
-    this.stateChangeCallbacks.push(callback);
-    return () => {
-      const index = this.stateChangeCallbacks.indexOf(callback);
-      if (index > -1) {
-        this.stateChangeCallbacks.splice(index, 1);
-      }
-    };
   }
 }
 
-/**
- * Error thrown when circuit breaker is open
- */
+// ---------------------------------------------------------------------------
+// Error
+// ---------------------------------------------------------------------------
+
 export class CircuitBreakerOpenError extends Error {
   constructor(message: string) {
     super(message);
@@ -264,70 +371,147 @@ export class CircuitBreakerOpenError extends Error {
   }
 }
 
-/**
- * Circuit Breaker Manager
- * Manages circuit breakers for multiple providers
- */
+// ---------------------------------------------------------------------------
+// Smart Manager — enforces "never close ALL providers"
+// ---------------------------------------------------------------------------
+
 export class CircuitBreakerManager {
   private breakers: Map<string, CircuitBreaker> = new Map();
-  private defaultConfig: Partial<CircuitBreakerConfig> = {};
+  private defaultConfig: Partial<CircuitBreakerConfig>;
 
   constructor(defaultConfig?: Partial<CircuitBreakerConfig>) {
-    if (defaultConfig) {
-      this.defaultConfig = defaultConfig;
-    }
+    this.defaultConfig = defaultConfig || {};
   }
 
   /**
-   * Get or create circuit breaker for provider
+   * Get or create a per-provider circuit breaker.
+   * Config is merged with tier-aware defaults.
    */
   getBreaker(providerId: string): CircuitBreaker {
     let breaker = this.breakers.get(providerId);
     if (!breaker) {
       breaker = new CircuitBreaker(providerId, this.defaultConfig);
       this.breakers.set(providerId, breaker);
+
+      // Wire the safety invariant: before a breaker opens, check if it
+      // would leave zero available providers. If so, force it to stay open.
+      breaker.onStateChange((newState) => {
+        if (newState === 'OPEN') {
+          this.enforceLastProviderSafety(providerId);
+        }
+      });
     }
     return breaker;
   }
 
   /**
-   * Execute operation with provider's circuit breaker
+   * Execute with per-provider circuit breaker.
    */
-  async execute<T>(
-    providerId: string,
-    operation: () => Promise<T>
-  ): Promise<T> {
+  async execute<T>(providerId: string, operation: () => Promise<T>): Promise<T> {
     const breaker = this.getBreaker(providerId);
     return breaker.execute(operation);
   }
 
   /**
-   * Get all circuit breaker stats
+   * Execute with automatic fallback to the next available provider.
+   * Providers are tried in order; the first that succeeds wins.
    */
-  getAllStats(): Map<string, CircuitBreakerStats & { state: CircuitState }> {
-    const stats = new Map();
-    for (const [providerId, breaker] of this.breakers.entries()) {
-      stats.set(providerId, breaker.getStats());
+  async executeWithFallback<T>(
+    providerIds: string[],
+    operationFactory: (providerId: string) => Promise<T>,
+  ): Promise<T> {
+    let lastError: any;
+
+    for (const id of providerIds) {
+      const breaker = this.getBreaker(id);
+      if (breaker.getState() === 'OPEN' && breaker.getRetryAfter() > 0) {
+        continue; // skip open breakers
+      }
+      try {
+        return await breaker.execute(() => operationFactory(id));
+      } catch (error: any) {
+        lastError = error;
+        // If it was a CB-open error, try next; otherwise the operation itself failed
+      }
+    }
+
+    // All providers exhausted — force the first provider open (never fully block)
+    const firstBreaker = this.getBreaker(providerIds[0]);
+    firstBreaker.forceAlwaysAllow = true;
+    try {
+      return await operationFactory(providerIds[0]);
+    } finally {
+      firstBreaker.forceAlwaysAllow = false;
+    }
+  }
+
+  /**
+   * SAFETY INVARIANT: if opening breaker for `justOpenedId` would leave
+   * zero available providers, force it back to HALF-OPEN so requests can
+   * still flow through. We never fully block all LLM routes.
+   */
+  private enforceLastProviderSafety(justOpenedId: string): void {
+    const allIds = Array.from(this.breakers.keys());
+    const availableCount = allIds.filter(id => {
+      const b = this.breakers.get(id)!;
+      return b.getState() !== 'OPEN';
+    }).length;
+
+    if (availableCount === 0) {
+      // Every single provider is OPEN — force the one with the best
+      // (lowest) weighted failure score back to HALF-OPEN
+      let bestId = justOpenedId;
+      let bestScore = Infinity;
+
+      for (const [id, b] of this.breakers) {
+        const score = b.getWeightedFailureScore();
+        if (score < bestScore) {
+          bestScore = score;
+          bestId = id;
+        }
+      }
+
+      const rescued = this.breakers.get(bestId)!;
+      rescued.reset();
+      console.warn(
+        `[CircuitBreakerManager] SAFETY: All providers OPEN — forced ${bestId} back to CLOSED to maintain availability`,
+      );
+    }
+  }
+
+  // -- query helpers --------------------------------------------------------
+
+  getAllStats(): Map<string, CircuitBreakerStats & { state: CircuitState; tier: ReliabilityTier }> {
+    const stats = new Map<string, CircuitBreakerStats & { state: CircuitState; tier: ReliabilityTier }>();
+    for (const [id, b] of this.breakers) {
+      stats.set(id, b.getStats());
     }
     return stats;
   }
 
-  /**
-   * Reset all circuit breakers
-   */
-  resetAll(): void {
-    for (const breaker of this.breakers.values()) {
-      breaker.reset();
-    }
+  getAvailableProviders(): string[] {
+    return Array.from(this.breakers.entries())
+      .filter(([_, b]) => b.getState() !== 'OPEN')
+      .map(([id]) => id);
   }
 
-  /**
-   * Remove circuit breaker for provider
-   */
+  getUnavailableProviders(): string[] {
+    return Array.from(this.breakers.entries())
+      .filter(([_, b]) => b.getState() === 'OPEN')
+      .map(([id]) => id);
+  }
+
+  resetAll(): void {
+    for (const b of this.breakers.values()) b.reset();
+  }
+
   remove(providerId: string): void {
     this.breakers.delete(providerId);
   }
 }
 
-// Export singleton instance
+// ---------------------------------------------------------------------------
+// Singleton
+// ---------------------------------------------------------------------------
+
 export const circuitBreakerManager = new CircuitBreakerManager();

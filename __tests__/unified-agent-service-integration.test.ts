@@ -281,8 +281,10 @@ describe('Unified Agent Service', () => {
 
       const result = await processUnifiedAgentRequest(config);
 
-      // Mode may fallback to v2-native if v1-api fails, but should attempt v1-api first
-      expect(['v1-api', 'v2-native']).toContain(result.mode);
+      // Verify the request was attempted in v1-api mode (may fallback on failure)
+      expect(
+        result.mode === 'v1-api' || result.metadata?.fallbackFrom === 'v1-api'
+      ).toBe(true);
     });
   });
 
@@ -319,7 +321,11 @@ describe('Unified Agent Service', () => {
       const result = await processUnifiedAgentRequest(config);
 
       // Should have error details (may succeed via fallback)
-      expect(result.error || result.response).toBeDefined();
+      if (result.success) {
+        expect(result.metadata?.fallbackFrom).toBeDefined();
+      } else {
+        expect(result.error).toBeDefined();
+      }
     });
   });
 

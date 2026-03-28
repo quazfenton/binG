@@ -16,6 +16,7 @@ import type {
 import { ImageGenerationErrorType as ErrorType } from './types';
 import { MistralImageProvider } from './providers/mistral-provider';
 import { ReplicateImageProvider } from './providers/replicate-provider';
+import { CloudflareImageProvider } from './providers/cloudflare-provider';
 
 const DEFAULT_TIMEOUT = parseInt(process.env.IMAGE_GENERATION_TIMEOUT_MS || '120000', 10);
 
@@ -40,7 +41,7 @@ export class ImageProviderRegistry {
     if (envChain) {
       return envChain.split(',').map(p => p.trim()).filter(Boolean);
     }
-    return ['mistral', 'replicate'];
+    return ['mistral', 'replicate', 'cloudflare'];
   }
 
   /**
@@ -307,6 +308,7 @@ export function createDefaultRegistry(): ImageProviderRegistry {
   // Register built-in providers
   registry.register(new MistralImageProvider(), 1, true); // Priority 1 (highest)
   registry.register(new ReplicateImageProvider(), 2, true); // Priority 2
+  registry.register(new CloudflareImageProvider(), 3, true); // Priority 3
 
   return registry;
 }

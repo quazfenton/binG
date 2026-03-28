@@ -21,6 +21,7 @@ export class PluginMigrationService {
   private static instance: PluginMigrationService;
   private tabConfigs: Map<string, PluginTabConfig> = new Map();
   private migrationHistory: PluginMigrationConfig[] = [];
+  private initialized = false;
 
   private constructor() {
     this.initializeDefaultTabs();
@@ -34,6 +35,15 @@ export class PluginMigrationService {
   }
 
   private initializeDefaultTabs(): void {
+    // Prevent multiple initializations
+    if (this.initialized) {
+      return;
+    }
+    this.initialized = true;
+    
+    // Clear existing configs first to ensure clean state
+    this.tabConfigs.clear();
+    
     // Initialize default tab configurations
     this.tabConfigs.set('plugins', {
       id: 'plugins',
@@ -52,6 +62,7 @@ export class PluginMigrationService {
 
   /**
    * Move plugins from one tab to another
+   * Idempotent - plugins already in target tab won't be duplicated
    */
   public movePluginsToTab(pluginIds: string[], targetTab: string): boolean {
     try {
@@ -61,21 +72,29 @@ export class PluginMigrationService {
         return false;
       }
 
+      // Filter out plugins that are already in the target tab (idempotent)
+      const newPlugins = pluginIds.filter(id => !targetConfig.plugins.includes(id));
+      
+      if (newPlugins.length === 0) {
+        // All plugins already in target tab, no-op
+        return true;
+      }
+
       // Find source tabs and remove plugins
       for (const [tabId, config] of this.tabConfigs.entries()) {
         if (tabId !== targetTab) {
-          config.plugins = config.plugins.filter(id => !pluginIds.includes(id));
+          config.plugins = config.plugins.filter(id => !newPlugins.includes(id));
         }
       }
 
-      // Add plugins to target tab
-      targetConfig.plugins.push(...pluginIds);
+      // Add only the new plugins to target tab
+      targetConfig.plugins.push(...newPlugins);
 
       // Record migration
       this.migrationHistory.push({
         sourceTab: 'multiple', // Could be from multiple tabs
         targetTab,
-        pluginIds,
+        pluginIds: newPlugins,
         preserveOrder: true
       });
 

@@ -28,6 +28,12 @@ import {
   Trophy,
   Check,
   Server,
+  Key,
+  ChevronLeft,
+  MoreHorizontal,
+  Save,
+  Eye,
+  EyeOff,
 } from "lucide-react";
 import ModalLoginForm from "@/components/auth/modal-login-form";
 import ModalSignupForm from "@/components/auth/modal-signup-form";
@@ -35,6 +41,7 @@ import { useAuth } from "@/contexts/auth-context";
 import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import Image from "next/image";
+import { isBackgroundUrlAllowed } from "@/lib/utils/url-validation";
 
 interface SettingsProps {
   onClose: () => void;
@@ -53,7 +60,7 @@ const ASSISTANT_BUBBLE_BG_KEY = "assistant_bubble_bg";
 const ASSISTANT_BUBBLE_TEXT_KEY = "assistant_bubble_text";
 const ASSISTANT_BUBBLE_BORDER_KEY = "assistant_bubble_border";
 
-const applyCustomBackgroundMedia = (value: string) => {
+const applyCustomBackgroundMedia = async (value: string) => {
   if (typeof document === "undefined") return;
   const root = document.documentElement;
   if (!value) {
@@ -61,8 +68,16 @@ const applyCustomBackgroundMedia = (value: string) => {
     root.style.setProperty("--app-bg-media-opacity", "0");
     return;
   }
-  
+
+  // SECURITY: Validate URL before applying (client-side check)
+  // Uses shared validation helper with anchored regexes to match server-side validation
+  if (!isBackgroundUrlAllowed(value)) {
+    console.warn('[Settings] Blocked unsafe background URL:', value);
+    return;
+  }
+
   // Use image proxy for external URLs to bypass CORS/hotlinking restrictions
+  // The proxy will perform additional server-side SSRF validation
   const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(value)}`;
   root.style.setProperty("--app-bg-media", `url("${proxiedUrl}")`);
   root.style.setProperty("--app-bg-media-opacity", "0.12");
@@ -121,6 +136,45 @@ export default function Settings({
   const [assistantBubbleBg, setAssistantBubbleBg] = useState("#000000");
   const [assistantBubbleText, setAssistantBubbleText] = useState("#ffffff");
   const [assistantBubbleBorder, setAssistantBubbleBorder] = useState("#ffffff");
+
+  // More page state
+  const [showMorePage, setShowMorePage] = useState(false);
+  const [userApiKeys, setUserApiKeys] = useState<Record<string, string>>({});
+  const [showApiKeys, setShowApiKeys] = useState<Record<string, boolean>>({});
+  const [hasApiKeyChanges, setHasApiKeyChanges] = useState(false);
+
+  // Load user API keys from localStorage on mount
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const saved = localStorage.getItem('user_api_keys');
+    if (saved) {
+      try {
+        setUserApiKeys(JSON.parse(saved));
+      } catch (e) {
+        console.error('Failed to load user API keys:', e);
+      }
+    }
+  }, []);
+
+  // Save user API keys to localStorage
+  const handleSaveApiKeys = () => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('user_api_keys', JSON.stringify(userApiKeys));
+      setHasApiKeyChanges(false);
+      toast.success('API keys saved (stored locally in browser)');
+    }
+  };
+
+  // Handle API key change
+  const handleApiKeyChange = (provider: string, value: string) => {
+    setUserApiKeys(prev => ({ ...prev, [provider]: value }));
+    setHasApiKeyChanges(true);
+  };
+
+  // Toggle API key visibility
+  const toggleApiKeyVisibility = (provider: string) => {
+    setShowApiKeys(prev => ({ ...prev, [provider]: !prev[provider] }));
+  };
 
   // Environment variable toggles state (user-specific overrides)
   const [envVars, setEnvVars] = useState<Record<string, boolean>>({
@@ -271,6 +325,26 @@ export default function Settings({
     { id: 'natura', name: 'Natura', url: 'https://64.media.tumblr.com/54f8f2ac56a71691c4d6e5c7fe290e68/tumblr_pgrkl8nswk1r7rste_500.gif' },
     { id: 'none', name: 'None', url: '' },
   ];
+
+  // Warm cache for preset backgrounds on mount (preload images)
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    
+    // Preload preset backgrounds with valid URLs
+    const validPresets = PRESET_BACKGROUNDS.filter(p => p.url && p.url.trim());
+    
+    validPresets.forEach((preset) => {
+      // Create image proxy URL for caching
+      const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(preset.url)}`;
+      
+      // Preload image to warm the server-side cache
+      // Use document.createElement to avoid conflict with Next.js Image import
+      const img = document.createElement('img');
+      img.src = proxiedUrl;
+      img.loading = 'lazy'; // Don't block page load
+      console.log(`[Settings] Preloading background: ${preset.name}`);
+    });
+  }, []);
   
   // Get saved backgrounds from localStorage
   const getSavedBackgrounds = (): Array<{ name: string; url: string }> => {
@@ -284,9 +358,24 @@ export default function Settings({
   };
   
   const [savedBackgrounds, setSavedBackgrounds] = useState<Array<{ name: string; url: string }>>([]);
-  
+
   useEffect(() => {
-    setSavedBackgrounds(getSavedBackgrounds());
+    const backgrounds = getSavedBackgrounds();
+    setSavedBackgrounds(backgrounds);
+    
+    // Warm cache for saved backgrounds
+    if (typeof window !== 'undefined' && backgrounds.length > 0) {
+      backgrounds.forEach((bg) => {
+        if (bg.url && bg.url.trim()) {
+          const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(bg.url)}`;
+          // Use document.createElement to avoid conflict with Next.js Image import
+          const img = document.createElement('img');
+          img.src = proxiedUrl;
+          img.loading = 'lazy';
+          console.log(`[Settings] Preloading saved background: ${bg.name}`);
+        }
+      });
+    }
   }, []);
   
   const saveToBackgroundHistory = (url: string, name?: string) => {
@@ -507,6 +596,13 @@ export default function Settings({
       if (typeof window !== "undefined") {
         localStorage.setItem(CUSTOM_BG_MEDIA_KEY, trimmed);
         saveToBackgroundHistory(trimmed, bgUrlName || undefined);
+        
+        // Warm cache for the new custom background
+        const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(trimmed)}`;
+        // Use document.createElement to avoid conflict with Next.js Image import
+        const img = document.createElement('img');
+        img.src = proxiedUrl;
+        console.log('[Settings] Preloading custom background:', trimmed);
       }
       applyCustomBackgroundMedia(trimmed);
       toast.success("Custom ambient background applied");
@@ -634,7 +730,11 @@ export default function Settings({
           {isAuthenticated ? (
             <div className="space-y-3">
               <div className="flex items-center justify-between">
-                <div className="flex-1 min-w-0">
+                <div 
+                  className="flex-1 min-w-0 cursor-pointer hover:bg-white/5 rounded p-2 -ml-2 transition-colors"
+                  onClick={() => setShowMorePage(true)}
+                  title="Click to manage API keys and more"
+                >
                   <p className="text-sm font-medium truncate" title={user?.email}>
                     {user?.email || 'N/A'}
                   </p>
@@ -659,6 +759,15 @@ export default function Settings({
                     <a href="/settings">
                       <SettingsIcon className="h-3 w-3" />
                     </a>
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setShowMorePage(true)}
+                    className="text-xs px-2"
+                    title="More Options"
+                  >
+                    <MoreHorizontal className="h-3 w-3" />
                   </Button>
                   <Button
                     size="sm"
@@ -768,55 +877,79 @@ export default function Settings({
               <div className="space-y-3 mt-2 p-3 bg-black/30 rounded-lg border border-white/10">
                 <div className="text-xs text-gray-400 font-medium">Preset Backgrounds</div>
                 <div className="grid grid-cols-2 gap-2">
-                  {PRESET_BACKGROUNDS.map((preset) => (
-                    <button
-                      key={preset.id}
-                      onClick={() => handleSelectBackground(preset.url, preset.name)}
-                      className="relative overflow-hidden h-16 rounded-lg border border-white/10 hover:border-white/30 transition-all group"
-                    >
-                      {preset.url ? (
-                        <Image
-                          src={preset.url}
-                          alt={preset.name}
-                          fill
-                          className="object-cover"
-                          sizes="64px"
-                        />
-                      ) : (
-                        <div className="w-full h-full flex items-center justify-center bg-gray-800">
-                          <X className="w-6 h-6 text-gray-500" />
+                  {PRESET_BACKGROUNDS.map((preset) => {
+                    // Use image proxy for external URLs to bypass CORS and enable SSRF validation
+                    const proxiedUrl = preset.url ? `/api/image-proxy?url=${encodeURIComponent(preset.url)}` : null;
+                    return (
+                      <button
+                        key={preset.id}
+                        onClick={() => handleSelectBackground(preset.url, preset.name)}
+                        className="relative overflow-hidden h-16 rounded-lg border border-white/10 hover:border-white/30 transition-all group"
+                      >
+                        {preset.url ? (
+                          <Image
+                            src={proxiedUrl || preset.url}
+                            alt={preset.name}
+                            fill
+                            className="object-cover"
+                            sizes="64px"
+                            unoptimized={Boolean(proxiedUrl)}
+                            onError={(e) => {
+                              // Fallback to direct URL if proxy fails
+                              const target = e.target as HTMLImageElement;
+                              if (target.src.includes('/api/image-proxy')) {
+                                target.src = preset.url;
+                              }
+                            }}
+                          />
+                        ) : (
+                          <div className="w-full h-full flex items-center justify-center bg-gray-800">
+                            <X className="w-6 h-6 text-gray-500" />
+                          </div>
+                        )}
+                        <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
+                          <span className="text-xs text-white font-medium">{preset.name}</span>
                         </div>
-                      )}
-                      <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center">
-                        <span className="text-xs text-white font-medium">{preset.name}</span>
-                      </div>
-                    </button>
-                  ))}
+                      </button>
+                    );
+                  })}
                 </div>
 
                 {savedBackgrounds.length > 0 && (
                   <>
                     <div className="text-xs text-gray-400 font-medium mt-3">Saved Backgrounds</div>
                     <div className="space-y-1 max-h-32 overflow-auto">
-                      {savedBackgrounds.map((bg, idx) => (
-                        <button
-                          key={idx}
-                          onClick={() => handleSelectBackground(bg.url, bg.name)}
-                          className="w-full flex items-center gap-2 p-2 rounded bg-black/20 hover:bg-white/10 transition-all text-left"
-                        >
-                          <div className="w-8 h-6 rounded overflow-hidden flex-shrink-0 bg-gray-800 relative">
-                            <Image
-                              src={bg.url}
-                              alt={bg.name}
-                              fill
-                              className="object-cover"
-                              sizes="32px"
-                            />
-                          </div>
-                          <span className="text-xs text-white/80 truncate flex-1">{bg.name}</span>
-                          <span className="text-[10px] text-gray-500 truncate max-w-[100px]">{bg.url}</span>
-                        </button>
-                      ))}
+                      {savedBackgrounds.map((bg, idx) => {
+                        // Use image proxy for external URLs to bypass CORS and enable SSRF validation
+                        const proxiedUrl = bg.url ? `/api/image-proxy?url=${encodeURIComponent(bg.url)}` : null;
+                        return (
+                          <button
+                            key={idx}
+                            onClick={() => handleSelectBackground(bg.url, bg.name)}
+                            className="w-full flex items-center gap-2 p-2 rounded bg-black/20 hover:bg-white/10 transition-all text-left"
+                          >
+                            <div className="w-8 h-6 rounded overflow-hidden flex-shrink-0 bg-gray-800 relative">
+                              <Image
+                                src={proxiedUrl || bg.url}
+                                alt={bg.name}
+                                fill
+                                className="object-cover"
+                                sizes="32px"
+                                unoptimized={Boolean(proxiedUrl)}
+                                onError={(e) => {
+                                  // Fallback to direct URL if proxy fails
+                                  const target = e.target as HTMLImageElement;
+                                  if (target.src.includes('/api/image-proxy')) {
+                                    target.src = bg.url;
+                                  }
+                                }}
+                              />
+                            </div>
+                            <span className="text-xs text-white/80 truncate flex-1">{bg.name}</span>
+                            <span className="text-[10px] text-gray-500 truncate max-w-[100px]">{bg.url}</span>
+                          </button>
+                        );
+                      })}
                     </div>
                   </>
                 )}
@@ -1434,8 +1567,237 @@ export default function Settings({
                 onError={setAuthError}
               />
             )}
+            
+            {/* OAuth Providers (Auth0 sidelayer) */}
+            <div className="mt-4 pt-4 border-t border-white/10">
+              <p className="text-xs text-white/50 text-center mb-3">Or continue with</p>
+              <div className="flex gap-2 justify-center">
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => window.location.href = '/auth/login?connection=google-oauth2'}
+                  className="flex items-center gap-2 bg-white text-gray-800 hover:bg-gray-100 border-0"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24">
+                    <path fill="#4285F4" d="M22.56 12.25c0-.78-.07-1.53-.2-2.25H12v4.26h5.92c-.26 1.37-1.04 2.53-2.21 3.31v2.77h3.57c2.08-1.92 3.28-4.74 3.28-8.09z"/>
+                    <path fill="#34A853" d="M12 23c2.97 0 5.46-.98 7.28-2.66l-3.57-2.77c-.98.66-2.23 1.06-3.71 1.06-2.86 0-5.29-1.93-6.16-4.53H2.18v2.84C3.99 20.53 7.7 23 12 23z"/>
+                    <path fill="#FBBC05" d="M5.84 14.09c-.22-.66-.35-1.36-.35-2.09s.13-1.43.35-2.09V7.07H2.18C1.43 8.55 1 10.22 1 12s.43 3.45 1.18 4.93l2.85-2.22.81-.62z"/>
+                    <path fill="#EA4335" d="M12 5.38c1.62 0 3.06.56 4.21 1.64l3.15-3.15C17.45 2.09 14.97 1 12 1 7.7 1 3.99 3.47 2.18 7.07l3.66 2.84c.87-2.6 3.3-4.53 6.16-4.53z"/>
+                  </svg>
+                  Google
+                </Button>
+                <Button
+                  variant="outline"
+                  size="sm"
+                  onClick={() => window.location.href = '/auth/login?connection=github'}
+                  className="flex items-center gap-2 bg-gray-800 text-white hover:bg-gray-700 border-0"
+                >
+                  <svg className="w-4 h-4" viewBox="0 0 24 24" fill="currentColor">
+                    <path d="M12 0c-6.626 0-12 5.373-12 12 0 5.302 3.438 9.8 8.207 11.387.599.111.793-.261.793-.577v-2.234c-3.338.726-4.033-1.416-4.033-1.416-.546-1.387-1.333-1.756-1.333-1.756-1.089-.745.083-.729.083-.729 1.205.084 1.839 1.237 1.839 1.237 1.07 1.834 2.807 1.304 3.492.997.107-.775.418-1.305.762-1.604-2.665-.305-5.467-1.334-5.467-5.931 0-1.311.469-2.381 1.236-3.221-.124-.303-.535-1.524.117-3.176 0 0 1.008-.322 3.301 1.23.957-.266 1.983-.399 3.003-.404 1.02.005 2.047.138 3.006.404 2.291-1.552 3.297-1.23 3.297-1.23.653 1.653.242 2.874.118 3.176.77.84 1.235 1.911 1.235 3.221 0 4.609-2.807 5.624-5.479 5.921.43.372.823 1.102.823 2.222v3.293c0 .319.192.694.801.576 4.765-1.589 8.199-6.086 8.199-11.386 0-6.627-5.373-12-12-12z"/>
+                  </svg>
+                  GitHub
+                </Button>
+              </div>
+              <p className="text-[10px] text-white/30 text-center mt-2">
+                Powered by Auth0 (AI Agent integrations sidelayer)
+              </p>
+            </div>
           </div>
         </div>
+      )}
+
+      {/* More Page - API Key Management */}
+      {showMorePage && (
+        <>
+          <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/95">
+            <div className="w-full max-w-4xl h-[90vh] flex flex-col rounded-xl bg-gradient-to-br from-gray-950 via-gray-900 to-gray-950 border border-white/10 overflow-hidden">
+              {/* Header */}
+              <div className="flex items-center gap-3 px-6 py-4 border-b border-white/10">
+                <Button
+                  size="sm"
+                  variant="ghost"
+                  onClick={() => setShowMorePage(false)}
+                  className="text-white/60 hover:text-white"
+                >
+                  <ChevronLeft className="h-4 w-4" />
+                </Button>
+                <div className="flex items-center gap-2">
+                  <Key className="h-5 w-5 text-purple-400" />
+                  <h2 className="text-lg font-semibold text-white">API Keys & Credentials</h2>
+                </div>
+              </div>
+
+              {/* Content */}
+              <div className="flex-1 overflow-y-auto p-6 space-y-6">
+                {/* Info Banner */}
+                <div className="p-4 rounded-lg bg-purple-950/30 border border-purple-900">
+                  <div className="flex items-start gap-3">
+                    <div className="p-2 rounded-lg bg-purple-900/30 border border-purple-800">
+                      <Key className="h-4 w-4 text-purple-400" />
+                    </div>
+                    <div className="flex-1">
+                      <h3 className="text-sm font-medium text-purple-200 mb-1">
+                        Bring Your Own Keys (BYOK)
+                      </h3>
+                      <ul className="text-xs text-purple-300 space-y-1">
+                        <li>• Keys are stored locally in your browser (never sent to servers)</li>
+                        <li>• User keys override server .env keys automatically</li>
+                        <li>• Models from providers with user keys will appear in the selector</li>
+                        <li>• Clear browser data to remove all saved keys</li>
+                      </ul>
+                    </div>
+                  </div>
+                </div>
+
+                {/* LLM Providers */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-medium text-white/80 flex items-center gap-2">
+                    <Server className="h-4 w-4" />
+                    LLM Provider API Keys
+                  </h3>
+
+                  {[
+                    { id: 'openai', name: 'OpenAI', placeholder: 'sk-...', env: 'OPENAI_API_KEY' },
+                    { id: 'anthropic', name: 'Anthropic', placeholder: 'sk-ant-...', env: 'ANTHROPIC_API_KEY' },
+                    { id: 'google', name: 'Google', placeholder: 'AIza...', env: 'GOOGLE_API_KEY' },
+                    { id: 'mistral', name: 'Mistral', placeholder: '...', env: 'MISTRAL_API_KEY' },
+                    { id: 'openrouter', name: 'OpenRouter', placeholder: 'sk-or-...', env: 'OPENROUTER_API_KEY' },
+                    { id: 'together', name: 'Together AI', placeholder: '...', env: 'TOGETHER_API_KEY' },
+                    { id: 'replicate', name: 'Replicate', placeholder: 'r8_...', env: 'REPLICATE_API_TOKEN' },
+                    { id: 'chutes', name: 'Chutes', placeholder: '...', env: 'CHUTES_API_KEY' },
+                    { id: 'cohere', name: 'Cohere', placeholder: '...', env: 'COHERE_API_KEY' },
+                    { id: 'groq', name: 'Groq', placeholder: 'gsk_...', env: 'GROQ_API_KEY' },
+                    { id: 'perplexity', name: 'Perplexity', placeholder: 'pplx-...', env: 'PERPLEXITY_API_KEY' },
+                    { id: 'anyscale', name: 'Anyscale', placeholder: '...', env: 'ANYSCALE_API_KEY' },
+                    { id: 'deepinfra', name: 'DeepInfra', placeholder: '...', env: 'DEEPINFRA_API_KEY' },
+                  ].map((provider) => {
+                    const value = userApiKeys[provider.id] || '';
+                    const isSet = !!value;
+                    const isVisible = showApiKeys[provider.id];
+
+                    return (
+                      <div key={provider.id} className="p-4 rounded-lg bg-black/30 border border-white/10">
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <h4 className="text-sm font-medium text-white">{provider.name}</h4>
+                            <p className="text-xs text-gray-500">Env: {provider.env}</p>
+                          </div>
+                          {isSet && (
+                            <div className="flex items-center gap-1">
+                              <Check className="h-3 w-3 text-green-400" />
+                              <span className="text-xs text-green-400">Configured</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex gap-2">
+                          <div className="flex-1 relative">
+                            <Input
+                              type={isVisible ? 'text' : 'password'}
+                              value={value}
+                              onChange={(e) => handleApiKeyChange(provider.id, e.target.value)}
+                              placeholder={provider.placeholder}
+                              className="bg-black/50 border-white/20 text-white placeholder:text-gray-600 pr-10"
+                            />
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => toggleApiKeyVisibility(provider.id)}
+                              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0 text-gray-400 hover:text-white"
+                            >
+                              {isVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* Tool Providers */}
+                <div className="space-y-4">
+                  <h3 className="text-sm font-medium text-white/80 flex items-center gap-2">
+                    <Server className="h-4 w-4" />
+                    Tool Provider API Keys
+                  </h3>
+
+                  {[
+                    { id: 'composio', name: 'Composio', placeholder: '...', env: 'COMPOSIO_API_KEY' },
+                    { id: 'nango', name: 'Nango', placeholder: '...', env: 'NANGO_API_KEY' },
+                    { id: 'arcade', name: 'Arcade', placeholder: '...', env: 'ARCADE_API_KEY' },
+                    { id: 'serper', name: 'Serper (Search)', placeholder: '...', env: 'SERPER_API_KEY' },
+                    { id: 'exa', name: 'Exa (Search)', placeholder: '...', env: 'EXA_API_KEY' },
+                  ].map((provider) => {
+                    const value = userApiKeys[provider.id] || '';
+                    const isSet = !!value;
+                    const isVisible = showApiKeys[provider.id];
+
+                    return (
+                      <div key={provider.id} className="p-4 rounded-lg bg-black/30 border border-white/10">
+                        <div className="flex items-center justify-between mb-3">
+                          <div>
+                            <h4 className="text-sm font-medium text-white">{provider.name}</h4>
+                            <p className="text-xs text-gray-500">Env: {provider.env}</p>
+                          </div>
+                          {isSet && (
+                            <div className="flex items-center gap-1">
+                              <Check className="h-3 w-3 text-green-400" />
+                              <span className="text-xs text-green-400">Configured</span>
+                            </div>
+                          )}
+                        </div>
+
+                        <div className="flex gap-2">
+                          <div className="flex-1 relative">
+                            <Input
+                              type={isVisible ? 'text' : 'password'}
+                              value={value}
+                              onChange={(e) => handleApiKeyChange(provider.id, e.target.value)}
+                              placeholder={provider.placeholder}
+                              className="bg-black/50 border-white/20 text-white placeholder:text-gray-600 pr-10"
+                            />
+                            <Button
+                              size="sm"
+                              variant="ghost"
+                              onClick={() => toggleApiKeyVisibility(provider.id)}
+                              className="absolute right-1 top-1/2 -translate-y-1/2 h-7 w-7 p-0 text-gray-400 hover:text-white"
+                            >
+                              {isVisible ? <EyeOff className="h-3 w-3" /> : <Eye className="h-3 w-3" />}
+                            </Button>
+                          </div>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+
+              {/* Footer */}
+              <div className="flex items-center justify-between px-6 py-4 border-t border-white/10">
+                <Button
+                  variant="outline"
+                  onClick={() => {
+                    setUserApiKeys({});
+                    setHasApiKeyChanges(true);
+                    toast.success('All keys cleared locally');
+                  }}
+                  className="border-red-900 text-red-400 hover:bg-red-950"
+                >
+                  <Key className="h-4 w-4 mr-2" />
+                  Clear All Keys
+                </Button>
+                <Button
+                  onClick={handleSaveApiKeys}
+                  disabled={!hasApiKeyChanges}
+                  className="bg-gradient-to-r from-purple-600 to-blue-600 hover:from-purple-700 hover:to-blue-700"
+                >
+                  <Save className="h-4 w-4 mr-2" />
+                  Save Changes
+                </Button>
+              </div>
+            </div>
+          </div>
+        </>
       )}
     </div>
   );

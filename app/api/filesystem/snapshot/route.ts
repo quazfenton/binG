@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { resolveFilesystemOwner, virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem';
+import { resolveFilesystemOwner, virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 export const runtime = 'nodejs';

@@ -1,3 +1,6 @@
+// Server-only module - do not import directly in Client Components
+export const runtime = 'nodejs';
+
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
@@ -118,6 +121,7 @@ export class VirtualFilesystemService {
   }
 
   async readFile(ownerId: string, filePath: string): Promise<VirtualFile> {
+    console.log('[VFS] readFile called', { ownerId, filePath });
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
     const file = workspace.files.get(normalizedPath);
@@ -136,6 +140,7 @@ export class VirtualFilesystemService {
     language?: string,
     options?: { failIfExists?: boolean },
   ): Promise<VirtualFile> {
+    console.log('[VFS] writeFile called', { ownerId, filePath, contentLength: content?.length });
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
     const previous = workspace.files.get(normalizedPath);
@@ -199,6 +204,7 @@ export class VirtualFilesystemService {
       content: normalizedContent,
       language: language ?? this.getLanguageFromPath(normalizedPath),
       lastModified: now,
+      createdAt: previous?.createdAt || now,
       version: (previous?.version || 0) + 1,
       size: fileSize,
     };
@@ -251,6 +257,7 @@ export class VirtualFilesystemService {
       content: '',
       language: 'markdown',
       lastModified: now,
+      createdAt: now,
       version: 1,
       size: 0,
       isDirectoryMarker: true,
@@ -434,13 +441,15 @@ export class VirtualFilesystemService {
     query: string,
     options: {
       path?: string;
+      pathPattern?: string;
       limit?: number;
+      language?: string;
     } = {},
-  ): Promise<VirtualFilesystemSearchResult[]> {
+  ): Promise<{ files: VirtualFilesystemSearchResult[] }> {
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) {
-      return [];
+      return { files: [] };
     }
 
     const searchBasePath = this.normalizePath(options.path || this.workspaceRoot);
@@ -450,6 +459,20 @@ export class VirtualFilesystemService {
 
     for (const file of workspace.files.values()) {
       if (file.path !== searchBasePath && !file.path.startsWith(searchPrefix)) {
+        continue;
+      }
+
+      // Apply path pattern filter if provided
+      if (options.pathPattern) {
+        const pattern = options.pathPattern.replace(/\*\*/g, '.*').replace(/\*/g, '[^/]*');
+        const regex = new RegExp(pattern);
+        if (!regex.test(file.path)) {
+          continue;
+        }
+      }
+
+      // Apply language filter if provided
+      if (options.language && file.language !== options.language) {
         continue;
       }
 
@@ -480,27 +503,45 @@ export class VirtualFilesystemService {
       });
     }
 
-    return matches
-      .sort((a, b) => (b.score - a.score) || a.path.localeCompare(b.path))
-      .slice(0, limit);
+    return {
+      files: matches
+        .sort((a, b) => (b.score - a.score) || a.path.localeCompare(b.path))
+        .slice(0, limit)
+    };
   }
 
   async getWorkspaceVersion(ownerId: string): Promise<number> {
+    console.log('[VFS] getWorkspaceVersion called', { ownerId });
     const workspace = await this.ensureWorkspace(ownerId);
     return workspace.version;
   }
 
-  async exportWorkspace(ownerId: string): Promise<VirtualWorkspaceSnapshot> {
+  async exportWorkspace(ownerId: string): Promise<VirtualWorkspaceSnapshot & { structure?: Record<string, string[]> }> {
     const workspace = await this.ensureWorkspace(ownerId);
     const files = Array.from(workspace.files.values())
       .map((file) => ({ ...file }))
       .sort((a, b) => a.path.localeCompare(b.path));
 
+    // Build directory structure
+    const structure: Record<string, string[]> = {};
+    for (const file of files) {
+      const parts = file.path.split('/');
+      if (parts.length > 1) {
+        const dir = parts.slice(0, -1).join('/');
+        if (!structure[dir]) {
+          structure[dir] = [];
+        }
+        structure[dir].push(parts[parts.length - 1]);
+      }
+    }
+
     return {
       root: this.workspaceRoot,
       version: workspace.version,
       updatedAt: workspace.updatedAt,
+      exportedAt: new Date().toISOString(),
       files,
+      structure,
     };
   }
 
@@ -573,9 +614,17 @@ export class VirtualFilesystemService {
     }
 
     // Strip common sandbox/workspace prefixes (single source of truth in scope-utils)
+    // BUT preserve project/ prefix if it's already there - don't strip it away
     let strippedPath = stripWorkspacePrefixes(rawPath);
-    // Also strip project/ prefix for server-side resolution
-    strippedPath = strippedPath.replace(/^project\//, '');
+    
+    // Only strip project/ if it's at the beginning AND the stripped path doesn't start with project
+    // This ensures consistent path format: always starts with 'project/'
+    if (!strippedPath.startsWith('project/') && !strippedPath.startsWith('project$')) {
+      // Already stripped, now add project/ prefix back if needed
+      if (!strippedPath.startsWith('project')) {
+        strippedPath = strippedPath.replace(/^project\//, '');
+      }
+    }
 
     // Handle empty path after stripping
     if (!strippedPath) {
@@ -613,12 +662,23 @@ export class VirtualFilesystemService {
       throw new Error(`Path exceeds max length (${MAX_PATH_LENGTH})`);
     }
 
+    // DEBUG: Log path normalization for troubleshooting
+    if (rawPath !== normalizedPath) {
+      console.log('[VFS] normalizePath:', rawPath, '->', normalizedPath);
+    }
+
     return normalizedPath;
   }
 
   private sanitizeOwnerId(ownerId: string): string {
     const trimmed = (ownerId || '').trim();
-    if (!trimmed) return 'anon:public';
+    if (!trimmed) {
+      // WARNING: Empty ownerId should never happen if callers use resolveFilesystemOwner()
+      // Using generateSecureId would cause inconsistent workspace per-request
+      // Caller MUST provide a valid ownerId via resolveFilesystemOwner()
+      console.warn('[VFS] Empty ownerId - callers should use resolveFilesystemOwner()');
+      return 'anon:public';
+    }
     if (trimmed.length > 256) return trimmed.slice(0, 256);
     return trimmed;
   }
@@ -630,10 +690,16 @@ export class VirtualFilesystemService {
   }
 
   private async ensureWorkspace(ownerId: string): Promise<WorkspaceState> {
+    console.log('[VFS] ensureWorkspace called', { ownerId });
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
     let workspace = this.workspaces.get(normalizedOwnerId);
 
     if (!workspace) {
+      console.log('[VFS] Creating new workspace', { ownerId: normalizedOwnerId });
+      
+      // DEBUG: Check if storage file exists
+      const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
+      console.log('[VFS] Storage file path:', storageFilePath);
       workspace = {
         files: new Map<string, VirtualFile>(),
         version: 0,
@@ -644,6 +710,7 @@ export class VirtualFilesystemService {
     }
 
     if (!workspace.loaded) {
+      console.log('[VFS] Loading workspace from storage', { ownerId: normalizedOwnerId });
       const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
       try {
         const raw = await fs.readFile(storageFilePath, 'utf8');
@@ -696,12 +763,21 @@ export class VirtualFilesystemService {
   private async persistWorkspace(ownerId: string, workspace: WorkspaceState): Promise<void> {
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
     const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
+    
+    // DEBUG: Log what's being persisted
+    console.log('[VFS persistWorkspace] Saving', workspace.files.size, 'files for owner:', normalizedOwnerId);
+    
     const serialized: PersistedWorkspace = {
       root: this.workspaceRoot,
       version: workspace.version,
       updatedAt: workspace.updatedAt,
       files: Array.from(workspace.files.values()).sort((a, b) => a.path.localeCompare(b.path)),
     };
+    
+    // DEBUG: Log file paths being saved
+    if (serialized.files.length > 0) {
+      console.log('[VFS persistWorkspace] File paths:', serialized.files.map(f => f.path).slice(0, 5));
+    }
 
     const previous = this.persistQueues.get(normalizedOwnerId) || Promise.resolve();
     const next = previous
@@ -740,7 +816,8 @@ export class VirtualFilesystemService {
    * Returns a human-readable summary of all file changes
    */
   getDiffSummary(ownerId: string, maxDiffs = 10): string {
-    return diffTracker.getDiffSummary(ownerId, maxDiffs);
+    const result = diffTracker.getDiffSummary(ownerId, maxDiffs);
+    return JSON.stringify(result);
   }
 
   /**
@@ -895,13 +972,18 @@ class GitBackedVFSProxy {
     }
     
     const result = await this.vfs.deletePath(ownerId, targetPath);
-    
+
     // Commit the deletion
-    if (result.deletedCount > 0) {
+    if (result !== null && result !== undefined && typeof result === 'object' && result.deletedCount > 0) {
       await gitVFS.commitChanges(ownerId, `Delete ${targetPath}`);
     }
-    
-    return result;
+
+    const deletedCount = result === null || result === undefined
+      ? 0
+      : typeof result === 'object'
+        ? result.deletedCount || 0
+        : (result ? 1 : 0);
+    return { deletedCount };
   }
 
   async listDirectory(
@@ -916,7 +998,9 @@ class GitBackedVFSProxy {
     query: string,
     options?: { path?: string; limit?: number }
   ): Promise<import('./filesystem-types').VirtualFilesystemSearchResult[]> {
-    return this.vfs.search(ownerId, query, options);
+    const result = await this.vfs.search(ownerId, query, options);
+    // Handle both array and object return types
+    return Array.isArray(result) ? result : (result.files || []);
   }
 
   async getWorkspaceVersion(ownerId: string): Promise<number> {

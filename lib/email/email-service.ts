@@ -1,3 +1,6 @@
+// Server-only module - do not import directly in Client Components
+export const runtime = 'nodejs';
+
 /**
  * Email Service
  * Handles sending verification emails, password resets, and notifications

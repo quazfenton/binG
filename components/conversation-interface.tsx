@@ -1,6 +1,7 @@
 "use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"; // Import useCallback, useMemo, and useRef
+import { usePanel } from "@/contexts/panel-context";
 import { useEnhancedChat } from "@/hooks/use-enhanced-chat"; // Import enhanced chat hook
 import { useDiffsPoller } from "@/hooks/use-diffs-poller";
 import type { ChatHistory } from "@/types";
@@ -115,7 +116,24 @@ import { applyDiffToContent } from '@/lib/chat/file-diff-utils';
 
 export default function ConversationInterface() {
   const { user } = useAuth();
+  const { isOpen: isWorkspaceOpen } = usePanel();
   const [embedMode, setEmbedMode] = useState(false);
+
+  // Chat panel horizontal resizing state
+  const [chatPanelWidth, setChatPanelWidth] = useState(450); // Default width
+  const [isDesktop, setIsDesktop] = useState(false); // Track if we're on desktop
+  const [isChatResizing, setIsChatResizing] = useState(false);
+  const chatResizeStartX = useRef(0);
+  const chatResizeStartWidth = useRef(450);
+  const chatSnapThreshold = useRef(false); // Use ref to avoid effect re-runs during drag
+
+  // Detect desktop viewport
+  useEffect(() => {
+    const checkDesktop = () => setIsDesktop(window.innerWidth >= 768);
+    checkDesktop();
+    window.addEventListener('resize', checkDesktop);
+    return () => window.removeEventListener('resize', checkDesktop);
+  }, []);
 
   useEffect(() => {
     try {
@@ -188,7 +206,8 @@ export default function ConversationInterface() {
     return null;
   });
   // Generate initial session ID using new naming system
-  const generateInitialSessionId = () => {
+  // Start empty, will be set asynchronously to allow filesystem scan
+  const [filesystemSessionId, setFilesystemSessionId] = useState<string>(() => {
     const persisted = readPersistedConversationUiState();
     if (persisted?.filesystemSessionId) {
       return persisted.filesystemSessionId;
@@ -197,11 +216,23 @@ export default function ConversationInterface() {
       const saved = sessionStorage.getItem('current_filesystem_session_id');
       if (saved) return saved;
     }
-    // Use new stock naming (OneXX, TwoXX, ThreeXX, then stock words)
-    return generateSessionName(undefined, true, false);
-  };
-  
-  const [filesystemSessionId, setFilesystemSessionId] = useState<string>(generateInitialSessionId);
+    return '';
+  });
+
+  // Generate session name if not restored from persistence
+  useEffect(() => {
+    let cancelled = false;
+    if (!filesystemSessionId) {
+      generateSessionName(undefined, true, false).then((newId) => {
+        if (!cancelled) {
+          setFilesystemSessionId(newId);
+        }
+      });
+    }
+    return () => {
+      cancelled = true;
+    };
+  }, [filesystemSessionId]);
 
   // Persist filesystemSessionId to sessionStorage so page refresh restores it
   useEffect(() => {
@@ -531,6 +562,11 @@ export default function ConversationInterface() {
         const lastContinueMessageId = lastMessage.id;
         const lastContinueContent = lastMessage.content;
 
+        // Check if message ends with CONTINUE_REQUESTED token (not just contains it)
+        if (!lastContinueContent.trimEnd().endsWith('[CONTINUE_REQUESTED]')) {
+          return; // Skip - AI didn't request continuation
+        }
+
         // Check if we already processed this CONTINUE_REQUESTED message
         const alreadyProcessed = continueProcessedRef.current === lastContinueMessageId;
         if (alreadyProcessed) {
@@ -591,10 +627,11 @@ export default function ConversationInterface() {
     const detectedFolder = !llmFolderDetected && detectNewProjectFolder(lastAssistant.content);
     if (detectedFolder && messages.length === 0) {
       // Only apply for new sessions with no prior messages - use LLM-suggested folder name
-      const newSessionId = generateSessionName(detectedFolder, true, true);
-      setFilesystemSessionId(newSessionId);
-      setLlmFolderDetected(true); // Mark as detected to prevent re-triggering
-      toast.success(`Project initialized: ${newSessionId}`);
+      generateSessionName(detectedFolder, true, true).then((newSessionId) => {
+        setFilesystemSessionId(newSessionId);
+        setLlmFolderDetected(true); // Mark as detected to prevent re-triggering
+        toast.success(`Project initialized: ${newSessionId}`);
+      });
     }
 
     const newEntries: { path: string; diff: string }[] = processedResponse.fileDiffs.map(fileDiff => ({
@@ -605,25 +642,23 @@ export default function ConversationInterface() {
     if (newEntries.length === 0) return;
 
     // Rule #2: For existing sessions, check if edits would overwrite existing files
-    // If so, require user approval instead of auto-applying
+    // SMART CONFLICT DETECTION:
+    // - Editing existing files = OK (auto-apply, this is expected behavior)
+    // - New files with same names as existing = CONFLICT (require approval)
+    // - LLM suggesting folder name that exists = Check if folder is empty
     const isExistingSession = currentConversationId !== null || messages.length > 0;
-    
+
     if (isExistingSession) {
       // Query actual filesystem state for accurate conflict detection
       let existingFilePaths: string[] = [];
-      
+
       // Wrap async code in an async IIFE since useEffect can't be async
       const checkConflicts = async () => {
         try {
-          const listResponse = await fetch('/api/filesystem/list', {
-            method: 'POST',
+          const listResponse = await fetch(`/api/filesystem/list?path=${encodeURIComponent(filesystemScopePath)}`, {
             headers: buildFilesystemHeaders(),
-            body: JSON.stringify({ 
-              path: filesystemScopePath,
-              recursive: true 
-            }),
           });
-          
+
           if (listResponse.ok) {
             const payload = await listResponse.json().catch(() => null);
             if (payload?.success && payload?.data?.nodes) {
@@ -644,16 +679,36 @@ export default function ConversationInterface() {
           // Fall back to attached files if API fails
           existingFilePaths = Object.keys(attachedFilesystemFiles);
         }
-        
+
         const newFilePaths = newEntries.map(e => e.path);
-        const conflictCheck = checkFileConflicts(existingFilePaths, newFilePaths, true);
         
+        // SMART CONFLICT LOGIC:
+        // 1. Check if ALL new files are editing existing files (expected behavior - auto-apply)
+        // 2. Check if ANY new files would create conflicts with different content (require approval)
+        const allFilesExist = newFilePaths.every(newPath => 
+          existingFilePaths.some(existingPath => existingPath.toLowerCase() === newPath.toLowerCase())
+        );
+        
+        // If all files being edited already exist, this is expected behavior - auto-apply
+        // This allows AI to fix bugs, update code, etc. in existing sessions
+        if (allFilesExist && newFilePaths.length > 0) {
+          console.log('[ConflictCheck] All files exist - this is an edit operation, auto-applying');
+          // Auto-apply the detected diffs immediately
+          if (applyDiffsRef.current) {
+            void applyDiffsRef.current(newEntries);
+          }
+          return;
+        }
+        
+        // Some files are new, check for actual conflicts
+        const conflictCheck = checkFileConflicts(existingFilePaths, newFilePaths, true);
+
         if (conflictCheck.needsApproval) {
           // Store pending diffs for approval instead of auto-applying
           setPendingApprovalDiffs(newEntries);
           setShowApprovalDialog(true);
           toast.info(`${conflictCheck.existingFiles.length} file(s) would be overwritten. Review required.`);
-          
+
           // Still store in commandsByFile for manual review
           setCommandsByFile((prev) => {
             const next: Record<string, string[]> = { ...prev };
@@ -875,9 +930,10 @@ export default function ConversationInterface() {
     // and the name is valid
     const cleanName = suggestedFolderName.replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 50);
     if (cleanName.length > 0 && messages.length === 0) {
-      const newSessionId = generateSessionName(cleanName, true, true);
-      setFilesystemSessionId(newSessionId);
-      toast.success(`Project initialized: ${newSessionId}`);
+      generateSessionName(cleanName, true, true).then((newSessionId) => {
+        setFilesystemSessionId(newSessionId);
+        toast.success(`Project initialized: ${newSessionId}`);
+      });
     }
   }, [messages.length]);
 
@@ -896,10 +952,14 @@ export default function ConversationInterface() {
     // Clean up any active streaming sessions
     streamingState.cleanupCompletedSessions();
 
+    // Clear filesystem session ID synchronously FIRST to prevent stale session access
+    // This ensures no file operations can target the previous workspace
+    setFilesystemSessionId('');
+    filesystemSessionIdRef.current = '';
+
     setMessages([]);
     setCurrentConversationId(null); // Ensure current conversation ID is reset for a new chat
-    // Use new stock naming for new sessions
-    setFilesystemSessionId(generateSessionName(undefined, true, false));
+    
     // Reset LLM folder detection flag for new session
     setLlmFolderDetected(false);
     // Reset approval state for new session
@@ -910,6 +970,9 @@ export default function ConversationInterface() {
     setChatHistory(getAllChats());
 
     toast.success("New chat started");
+    
+    // Generate new session name asynchronously AFTER state is cleared
+    // This will trigger the useEffect which handles the actual generation
   };
 
   const handleDeleteChat = (chatId: string) => {
@@ -1096,9 +1159,17 @@ export default function ConversationInterface() {
       sessionId?: string | null;
     } | null = null;
 
+    console.debug('[applyDiffsToFilesystem] Starting diff application', {
+      entryCount: entries.length,
+      entries: entries.map(e => ({ path: e.path, diffLength: e.diff.length, diffPreview: e.diff.slice(0, 200) })),
+      filesystemScopePath: scopePath,
+      filesystemSessionId,
+    });
+
     for (const entry of entries) {
       const resolvedPath = resolveScopedPath(entry.path, scopePath);
       let currentContent = "";
+      let readErrorMsg: string | null = null;
       try {
         const readResponse = await fetch("/api/filesystem/read", {
           method: "POST",
@@ -1110,9 +1181,11 @@ export default function ConversationInterface() {
           if (payload?.success && payload?.data?.content != null) {
             currentContent = payload.data.content;
           }
+        } else {
+          readErrorMsg = `Read failed with status ${readResponse.status}`;
         }
-      } catch (readError) {
-        // If read fails, try applying diff to empty content
+      } catch (readError: any) {
+        readErrorMsg = readError.message || 'Network error during read';
         currentContent = "";
       }
 
@@ -1121,6 +1194,23 @@ export default function ConversationInterface() {
       if (nextContent == null) {
         failed[entry.path] = failed[entry.path] || [];
         failed[entry.path].push(entry.diff);
+        console.warn('[applyDiffsToFilesystem] Diff application returned null', {
+          path: resolvedPath,
+          currentContentLength: currentContent.length,
+          currentContentPreview: currentContent.slice(0, 300),
+          diffPreview: entry.diff.slice(0, 500),
+          readError: readErrorMsg,
+          suggestion: 'This usually means the file content has changed since the diff was generated, or the diff targets text that no longer exists in the file.',
+        });
+        continue;
+      }
+
+      if (nextContent === currentContent) {
+        appliedCount += 1;
+        console.debug('[applyDiffsToFilesystem] Diff produced no change (already applied or no-op)', {
+          path: resolvedPath,
+          contentLength: currentContent.length,
+        });
         continue;
       }
 
@@ -1150,9 +1240,19 @@ export default function ConversationInterface() {
           sessionId: payload?.data?.sessionId,
         };
         appliedCount += 1;
+        console.debug('[applyDiffsToFilesystem] Diff applied successfully', {
+          path: resolvedPath,
+          previousContentLength: currentContent.length,
+          newContentLength: nextContent.length,
+        });
       } catch (writeError: any) {
         failed[entry.path] = failed[entry.path] || [];
         failed[entry.path].push(entry.diff);
+        console.warn('[applyDiffsToFilesystem] Write failed', {
+          path: resolvedPath,
+          error: writeError.message,
+          nextContentLength: nextContent.length,
+        });
       }
     }
 
@@ -1197,6 +1297,11 @@ export default function ConversationInterface() {
         failedFiles: failedPaths,
         failedDiffs: failed,
         reason: 'Search blocks not found or patches could not be applied',
+        totalEntriesAttempted: entries.length,
+        appliedCount,
+        failedCount: totalFailedDiffs,
+        sessionId: filesystemSessionId,
+        scopePath,
       });
     }
   }, [filesystemScopePath, filesystemSessionId]);
@@ -1455,6 +1560,54 @@ export default function ConversationInterface() {
     handleToggleCodePreview();
   }, [handleToggleCodePreview]);
 
+  // Chat panel resize handlers
+  const handleChatResizeStart = useCallback((e: React.MouseEvent) => {
+    e.preventDefault();
+    setIsChatResizing(true);
+    chatResizeStartX.current = e.clientX;
+    chatResizeStartWidth.current = chatPanelWidth;
+    chatSnapThreshold.current = false;
+  }, [chatPanelWidth]);
+
+  useEffect(() => {
+    if (!isChatResizing) return;
+    
+    const handleChatResizeMove = (e: MouseEvent) => {
+      const delta = e.clientX - chatResizeStartX.current;
+      // Reverse: dragging left makes panel wider, dragging right makes it narrower
+      let newWidth = chatResizeStartWidth.current - delta;
+      
+      // Min/max constraints
+      newWidth = Math.max(300, Math.min(1200, newWidth));
+      
+      // Check snap threshold to workspace panel (within 20px of edge when workspace is open)
+      if (isWorkspaceOpen) {
+        const snapPoint = 400; // Approximate workspace panel width
+        const distanceToSnap = Math.abs(newWidth - snapPoint);
+        chatSnapThreshold.current = distanceToSnap < 20;
+      }
+      
+      setChatPanelWidth(newWidth);
+    };
+    
+    const handleChatResizeEnd = () => {
+      setIsChatResizing(false);
+      
+      // Optional snap to workspace panel edge (user must intentionally drag to snap point)
+      if (isWorkspaceOpen && chatSnapThreshold.current) {
+        setChatPanelWidth(400); // Snap to workspace panel edge
+      }
+    };
+    
+    document.addEventListener('mousemove', handleChatResizeMove);
+    document.addEventListener('mouseup', handleChatResizeEnd);
+    
+    return () => {
+      document.removeEventListener('mousemove', handleChatResizeMove);
+      document.removeEventListener('mouseup', handleChatResizeEnd);
+    };
+  }, [isChatResizing, isWorkspaceOpen]);
+
   return (
     <div className="relative w-full h-screen overflow-hidden touch-pan-y z-[1]">
       {/* Subtle animated background */}
@@ -1489,8 +1642,27 @@ export default function ConversationInterface() {
           </div>
         </div>
 
-        {/* Chat Panel - full width on mobile */}
-        <div className="flex-1 md:flex-initial md:border-l md:border-white/10 relative z-10 flex flex-col min-h-0">
+        {/* Chat Panel - full width on mobile, resizable on desktop */}
+        <div 
+          className="relative z-10 flex flex-col min-h-0 w-full md:border-l md:border-white/10"
+          style={{ 
+            width: isDesktop ? chatPanelWidth : '100%',
+            minWidth: '300px',
+            maxWidth: '1200px',
+          } as React.CSSProperties}
+        >
+          {/* Resize handle - thin invisible line on left edge */}
+          <div
+            className={`absolute left-0 top-0 bottom-0 w-1 cursor-ew-resize z-20 transition-colors ${
+              isChatResizing 
+                ? 'bg-blue-400/50' 
+                : chatSnapThreshold.current 
+                  ? 'bg-cyan-400/70'  // Show snap indicator
+                  : 'hover:bg-white/30 bg-transparent'
+            }`}
+            onMouseDown={handleChatResizeStart}
+            title="Drag to resize chat panel"
+          />
           {/* Header showing current provider/model */}
           {!embedMode && (
             <div className="flex items-center justify-between px-3 py-2 border-b border-white/10 bg-black/30">
@@ -1524,7 +1696,7 @@ export default function ConversationInterface() {
             onStopGeneration={stop} // Pass stop from useChat
             availableProviders={availableProviders}
             onClearChat={handleNewChat} // Map to handleNewChat
-            onShowHistory={() => setShowHistory(true)} // Map to setShowHistory
+            onShowHistory={() => { setShowHistory(true); }} // Map to setShowHistory
             currentConversationId={currentConversationId}
             onSelectHistoryChat={handleLoadChat}
             currentProvider={currentProvider}
@@ -1547,10 +1719,17 @@ export default function ConversationInterface() {
         }}
         onNewChat={handleNewChat}
         isProcessing={isLoading}
+        allowInputWhileProcessing={true}
         toggleAccessibility={toggleAccessibility}
         toggleHistory={toggleHistory}
         toggleCodePreview={toggleCodePreview}
-        onStopGeneration={stop}
+        onStopGeneration={() => {
+          // Abort the current request
+          stop();
+          // Note: We do NOT clear pendingInput - if user typed during processing,
+          // it stays queued and will be sent when they press Send again
+          // This allows them to continue their thought after stopping
+        }}
         onRetry={handleRetry}
         currentProvider={currentProvider}
         currentModel={currentModel}
@@ -1599,7 +1778,7 @@ export default function ConversationInterface() {
         <CodePreviewPanel
           isOpen={showCodePreview}
           messages={messages}
-          onClose={() => setShowCodePreview(false)}
+          onClose={() => { setShowCodePreview(false); }}
           filesystemScopePath={filesystemScopePath}
           commandsByFile={commandsByFile}
           onApplyAllCommandDiffs={applyAllCommandDiffs}

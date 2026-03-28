@@ -1,19 +1,44 @@
 /**
  * OPFS Core Service
- * 
+ *
  * Low-level wrapper around Origin Private File System API
  * Provides native file system access with handle caching and atomic operations
- * 
+ *
  * Browser Support:
  * - Chrome 119+ ✅
  * - Edge 119+ ✅
  * - Firefox 123+ (behind flag) ⚠️
  * - Safari 17.4+ (limited) ⚠️
- * 
+ *
  * @see https://developer.mozilla.org/en-US/docs/Web/API/File_System_API/Origin_private_file_system
  */
 
-import { EventEmitter } from 'events';
+'use client';
+
+// Simple event emitter for browser compatibility (avoid Node.js 'events' module)
+class SimpleEventEmitter<T extends Record<string, any[]>> {
+  private listeners: Map<keyof T, Set<(...args: any[]) => void>> = new Map();
+
+  on<K extends keyof T>(event: K, listener: (...args: T[K]) => void): void {
+    if (!this.listeners.has(event)) {
+      this.listeners.set(event, new Set());
+    }
+    this.listeners.get(event)!.add(listener as any);
+  }
+
+  off<K extends keyof T>(event: K, listener: (...args: T[K]) => void): void {
+    this.listeners.get(event)?.delete(listener as any);
+  }
+
+  emit<K extends keyof T>(event: K, ...args: T[K]): boolean {
+    const eventListeners = this.listeners.get(event);
+    if (!eventListeners || eventListeners.size === 0) {
+      return false;
+    }
+    eventListeners.forEach(listener => listener(...args));
+    return true;
+  }
+}
 
 export interface OPFSFileHandle {
   path: string;
@@ -67,7 +92,7 @@ export type OPFSEventMap = {
   close: [];
 };
 
-export class OPFSCore extends EventEmitter<OPFSEventMap> {
+export class OPFSCore extends SimpleEventEmitter<OPFSEventMap> {
   private rootHandle: FileSystemDirectoryHandle | null = null;
   private fileHandleCache: Map<string, OPFSFileHandle> = new Map();
   private directoryHandleCache: Map<string, FileSystemDirectoryHandle> = new Map();
@@ -75,6 +100,7 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
   private options: Required<OPFSOptions>;
   private initialized = false;
   private workspaceId: string | null = null;
+  private initPromise: Promise<void> | null = null; // Prevent concurrent initialization
 
   constructor(options: OPFSOptions = {}) {
     super();
@@ -115,14 +141,83 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
   }
 
   /**
-   * Initialize OPFS for a specific workspace
+   * Sanitize workspace ID for OPFS directory names
+   * OPFS only allows alphanumeric characters, hyphens, and underscores
    * 
+   * Examples:
+   * - 'anon:1774419343101_cc940d2f08590253f2' → 'anon_1774419343101_cc940d2f08590253f2'
+   * - 'user@test.com' → 'user_test_com'
+   * - 'workspace/123' → 'workspace_123'
+   */
+  private sanitizeWorkspaceId(workspaceId: string): string {
+    if (!workspaceId || typeof workspaceId !== 'string') {
+      throw new OPFSError('Invalid workspace ID: must be a non-empty string');
+    }
+
+    // Encode invalid characters as hex to preserve uniqueness (1:1 mapping)
+    // Valid chars: a-z, A-Z, 0-9, -, _ (passed through unchanged)
+    // Invalid chars: encoded as _XX where XX is hex code (e.g., ' ' → '_20', '!' → '_21')
+    let sanitized = '';
+    for (const char of workspaceId) {
+      if (/^[a-zA-Z0-9_-]$/.test(char)) {
+        sanitized += char;
+      } else {
+        sanitized += `_${char.charCodeAt(0).toString(16).padStart(2, '0')}`;
+      }
+    }
+
+    // Ensure the result isn't empty or too long
+    if (!sanitized || sanitized.length === 0) {
+      throw new OPFSError('Invalid workspace ID: results in empty name after sanitization');
+    }
+
+    // Limit length to prevent filesystem issues (most filesystems limit to 255 chars)
+    const maxLength = 200;
+    if (sanitized.length > maxLength) {
+      // Truncate and add hash to preserve uniqueness
+      const hash = this.simpleHash(sanitized);
+      return sanitized.substring(0, maxLength - 8) + `_${hash}`;
+    }
+
+    return sanitized;
+  }
+
+  /**
+   * Simple hash function for truncation suffix
+   */
+  private simpleHash(str: string): string {
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      const char = str.charCodeAt(i);
+      hash = ((hash << 5) - hash) + char;
+      hash = hash & hash; // Convert to 32-bit integer
+    }
+    return Math.abs(hash).toString(16).padStart(8, '0');
+  }
+
+  /**
+   * Initialize OPFS for a specific workspace
+   *
    * @param workspaceId - Unique identifier for the workspace
    * @throws OPFSError if initialization fails
    */
   async initialize(workspaceId: string): Promise<void> {
+    // If already initialized for this workspace, return immediately
     if (this.initialized && this.workspaceId === workspaceId) {
       return;
+    }
+
+    // If initialization is already in progress, wait for it
+    if (this.initPromise) {
+      try {
+        await this.initPromise;
+      } catch {
+        // Previous initialization failed; continue with a fresh attempt
+      }
+      // After waiting, check if we need to initialize again
+      if (this.initialized && this.workspaceId === workspaceId) {
+        return;
+      }
     }
 
     if (!OPFSCore.isSupported()) {
@@ -131,26 +226,53 @@ export class OPFSCore extends EventEmitter<OPFSEventMap> {
       throw error;
     }
 
-    try {
-      // Get root directory handle from OPFS
-      // eslint-disable-next-line @typescript-eslint/no-explicit-any
-      this.rootHandle = await (navigator as any).storage.getDirectory(
-        `${this.options.rootName}/${workspaceId}`
-      );
-      
-      this.workspaceId = workspaceId;
-      this.initialized = true;
-      
-      // Load handle cache from metadata
-      await this.loadHandleCache();
-      
-      this.emit('initialized', { workspaceId });
-      
-      console.log('[OPFS] Initialized workspace:', workspaceId);
-    } catch (error) {
-      this.emit('error', { error, workspaceId });
-      throw new OPFSError('Failed to initialize OPFS', error);
-    }
+    // Create initialization promise to prevent concurrent initializations
+    this.initPromise = (async () => {
+      try {
+        // Clear caches when switching to a different workspace
+        if (this.initialized && this.workspaceId !== workspaceId) {
+          this.fileHandleCache.clear();
+          this.directoryHandleCache.clear();
+        }
+
+        // Sanitize workspace ID for OPFS compatibility
+        const sanitizedWorkspaceId = this.sanitizeWorkspaceId(workspaceId);
+
+        // Get root directory handle from OPFS (getDirectory() takes no arguments)
+        // eslint-disable-next-line @typescript-eslint/no-explicit-any
+        const rootDir = await (navigator as any).storage.getDirectory();
+
+        // Navigate to workspace-specific subdirectory using sanitized ID
+        // IMPORTANT: getDirectoryHandle doesn't accept paths with slashes.
+        // We need to navigate step by step: first to rootName, then to workspace.
+        const rootNameHandle = await rootDir.getDirectoryHandle(
+          this.options.rootName || 'bing-workspace',
+          { create: true }
+        );
+
+        this.rootHandle = await rootNameHandle.getDirectoryHandle(
+          sanitizedWorkspaceId,
+          { create: true }
+        );
+
+        this.workspaceId = workspaceId; // Keep original ID for reference
+        this.initialized = true;
+
+        // Load handle cache from metadata
+        await this.loadHandleCache();
+
+        this.emit('initialized', { workspaceId });
+
+        console.log('[OPFS] Initialized workspace:', workspaceId, '(sanitized:', sanitizedWorkspaceId + ')');
+      } catch (error) {
+        this.emit('error', { error, workspaceId });
+        throw new OPFSError('Failed to initialize OPFS', error);
+      } finally {
+        this.initPromise = null;
+      }
+    })();
+
+    await this.initPromise;
   }
 
   /**

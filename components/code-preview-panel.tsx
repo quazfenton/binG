@@ -42,7 +42,7 @@ import JSZip from "jszip";
 import type { Message } from "../types/index";
 import { parsePatch, applyPatch } from "diff";
 import { useVirtualFilesystem } from "../hooks/use-virtual-filesystem";
-import { normalizeScopePath, stripWorkspacePrefixes } from "@/lib/virtual-filesystem/scope-utils";
+import { normalizeScopePath, resolveScopedPath, stripWorkspacePrefixes } from "@/lib/virtual-filesystem/scope-utils";
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 import { createRefreshScheduler } from "@/lib/virtual-filesystem/refresh-scheduler";
 import {
@@ -52,6 +52,7 @@ import {
 import { createDebugLogger } from "@/config/features";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { checkFileConflicts } from "@/lib/session-naming";
+import { buildApiHeaders } from "@/lib/utils";
 
 // Import live preview offloading functions
 import {
@@ -310,6 +311,7 @@ export default function CodePreviewPanel({
   const pyodideRef = useRef<any>(null);
   const manualPreviewPathRef = useRef<string | null>(null);
   const manualPreviewActiveRef = useRef(false);
+  const opensandboxScopeRef = useRef<string | null>(null);
 
   // WebContainer refs (top-level to satisfy Rules of Hooks)
   const webcontainerInstanceRef = useRef<any>(null);
@@ -557,26 +559,62 @@ export default function CodePreviewPanel({
     const oldName = oldPath.split('/').pop() || '';
     const newName = prompt('Rename to:', oldName);
     if (!newName || newName === oldName) return;
-    
+
     const parentPath = oldPath.split('/').slice(0, -1).join('/');
     const newPath = parentPath ? `${parentPath}/${newName}` : newName;
-    
-    // Check if target already exists
+
     try {
-      const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
-      
-      if (targetExists && oldPath !== newPath) {
-        // Show confirmation dialog for overwrite
+      // Use new rename API with conflict detection
+      const response = await fetch('/api/filesystem/rename', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({
+          oldPath: resolveScopedPath(oldPath, normalizedFilesystemPath),
+          newPath: resolveScopedPath(newPath, normalizedFilesystemPath),
+          overwrite: false,
+        }),
+      });
+
+      if (response.status === 409) {
+        // Conflict detected - show confirmation dialog
         setConfirmDialog({
           isOpen: true,
           title: 'File Already Exists',
-          message: `A file named "${newName}" already exists in this directory. Do you want to overwrite it?`,
+          message: `A file named "${newName}" already exists. Overwrite?`,
           confirmLabel: 'Overwrite',
           cancelLabel: 'Cancel',
           variant: 'warning',
           onConfirm: async () => {
             setConfirmDialog(null);
-            await performRename(oldPath, newPath);
+            // Retry with overwrite=true
+            const retryResponse = await fetch('/api/filesystem/rename', {
+              method: 'POST',
+              headers: buildApiHeaders(),
+              body: JSON.stringify({
+                oldPath: resolveScopedPath(oldPath, normalizedFilesystemPath),
+                newPath: resolveScopedPath(newPath, normalizedFilesystemPath),
+                overwrite: true,
+              }),
+            });
+
+            if (retryResponse.ok) {
+              toast.success('Renamed to: ' + newName);
+              void debouncedListDirectory(filesystemCurrentPath);
+              emitFilesystemUpdated({
+                path: newPath,
+                scopePath: normalizedFilesystemPath,
+                source: 'code-preview',
+                type: 'update',
+              });
+            } else {
+              const errorData = await retryResponse.json().catch(() => null);
+              toast.error('Failed to rename: ' + (errorData?.error || 'Unknown error'));
+            }
+            setContextMenu(null);
+            if (selectedFilesystemPath === oldPath) {
+              setSelectedFilesystemPath('');
+              setSelectedFilesystemContent('');
+            }
           },
           onCancel: () => {
             setConfirmDialog(null);
@@ -584,43 +622,30 @@ export default function CodePreviewPanel({
         });
         return;
       }
-      
-      await performRename(oldPath, newPath);
+
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || 'Rename failed');
+      }
+
+      toast.success('Renamed to: ' + newName);
+      void debouncedListDirectory(filesystemCurrentPath);
+      setContextMenu(null);
+      if (selectedFilesystemPath === oldPath) {
+        setSelectedFilesystemPath('');
+        setSelectedFilesystemContent('');
+      }
+
+      emitFilesystemUpdated({
+        path: newPath,
+        scopePath: normalizedFilesystemPath,
+        source: 'code-preview',
+        type: 'update',
+      });
     } catch (err: any) {
       toast.error('Failed to rename: ' + err.message);
     }
-    
-    async function performRename(sourcePath: string, targetPath: string) {
-      // Bail out when the target path equals the source path
-      if (sourcePath === targetPath) {
-        toast.info('Cannot rename file to itself');
-        return;
-      }
-
-      try {
-        const file = await readFilesystemFile(sourcePath);
-        await writeFilesystemFile(targetPath, file.content);
-        await deleteFilesystemPath(sourcePath);
-        
-        toast.success('Renamed to: ' + newName);
-        void debouncedListDirectory(filesystemCurrentPath);
-        setContextMenu(null);
-        if (selectedFilesystemPath === sourcePath) {
-          setSelectedFilesystemPath('');
-          setSelectedFilesystemContent('');
-        }
-        
-        emitFilesystemUpdated({
-          path: targetPath,
-          scopePath: normalizedFilesystemPath,
-          source: 'code-preview',
-          type: 'update',
-        });
-      } catch (err: any) {
-        toast.error('Failed to rename: ' + err.message);
-      }
-    }
-  }, [filesystemCurrentPath, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, listFilesystemDirectory, selectedFilesystemPath]);
+  }, [filesystemCurrentPath, normalizedFilesystemPath, selectedFilesystemPath]);
 
   // Handle double-click to rename file
   const handleDoubleClickFile = useCallback((node: { path: string; name: string; type: string }) => {
@@ -817,72 +842,96 @@ export default function CodePreviewPanel({
   const handleDrop = useCallback(async (e: React.DragEvent, targetPath: string, isDirectory: boolean) => {
     e.preventDefault();
     setDragOverPath(null);
-    
+
     const data = e.dataTransfer.getData('text/plain');
     if (!data) return;
-    
+
     try {
       const { path: sourcePath, name } = JSON.parse(data);
-      
+
       if (sourcePath === targetPath || sourcePath.split('/').slice(0, -1).join('/') === targetPath) {
         toast.info('File is already in this location');
         return;
       }
-      
+
       const targetDir = isDirectory ? targetPath : targetPath.split('/').slice(0, -1).join('/');
       const newPath = `${targetDir.replace(/\/+$/, '')}/${name}`;
-      
-      // Check if target exists
-      const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
-      
-      if (targetExists && sourcePath !== newPath) {
-        // Show confirmation for overwrite
+
+      // Use new move API with conflict detection
+      const response = await fetch('/api/filesystem/move', {
+        method: 'POST',
+        headers: buildApiHeaders(),
+        body: JSON.stringify({
+          sourcePath: resolveScopedPath(sourcePath, normalizedFilesystemPath),
+          targetPath: resolveScopedPath(newPath, normalizedFilesystemPath),
+          overwrite: false,
+        }),
+      });
+
+      if (response.status === 409) {
+        // Conflict detected - show confirmation dialog
         setConfirmDialog({
           isOpen: true,
           title: 'File Already Exists',
-          message: `A file named "${name}" already exists in this folder. Do you want to overwrite it?`,
+          message: `A file named "${name}" already exists. Overwrite?`,
           confirmLabel: 'Overwrite',
           cancelLabel: 'Cancel',
           variant: 'warning',
           onConfirm: async () => {
             setConfirmDialog(null);
-            await performMove(sourcePath, newPath);
+            // Retry with overwrite=true
+            const retryResponse = await fetch('/api/filesystem/move', {
+              method: 'POST',
+              headers: buildApiHeaders(),
+              body: JSON.stringify({
+                sourcePath: resolveScopedPath(sourcePath, normalizedFilesystemPath),
+                targetPath: resolveScopedPath(newPath, normalizedFilesystemPath),
+                overwrite: true,
+              }),
+            });
+
+            if (retryResponse.ok) {
+              toast.success(`Moved "${name}" to new location`);
+              await debouncedListDirectory(filesystemCurrentPath);
+              await debouncedListDirectory(targetDir);
+              emitFilesystemUpdated({
+                path: newPath,
+                scopePath: normalizedFilesystemPath,
+                source: 'code-preview',
+                type: 'update',
+              });
+            } else {
+              const errorData = await retryResponse.json().catch(() => null);
+              toast.error('Failed to move: ' + (errorData?.error || 'Unknown error'));
+            }
           },
           onCancel: () => {
             setConfirmDialog(null);
           },
         });
-      } else {
-        await performMove(sourcePath, newPath);
+        return;
       }
-      
-      async function performMove(source: string, dest: string) {
-        // Bail out when the target path equals the source path
-        if (source === dest) {
-          toast.info('Cannot move file into itself');
-          return;
-        }
 
-        const file = await readFilesystemFile(source);
-        await writeFilesystemFile(dest, file.content);
-        await deleteFilesystemPath(source);
-        toast.success(`Moved "${name}" to new location`);
-        await debouncedListDirectory(filesystemCurrentPath);
-        await debouncedListDirectory(targetDir);
-        
-        emitFilesystemUpdated({
-          path: dest,
-          scopePath: normalizedFilesystemPath,
-          source: 'code-preview',
-          type: 'update',
-        });
+      if (!response.ok) {
+        const errorData = await response.json().catch(() => null);
+        throw new Error(errorData?.error || 'Move failed');
       }
+
+      toast.success(`Moved "${name}" to new location`);
+      await debouncedListDirectory(filesystemCurrentPath);
+      await debouncedListDirectory(targetDir);
+      emitFilesystemUpdated({
+        path: newPath,
+        scopePath: normalizedFilesystemPath,
+        source: 'code-preview',
+        type: 'update',
+      });
     } catch (err: any) {
       toast.error('Failed to move file: ' + err.message);
     }
-    
+
     setDraggedFile(null);
-  }, [readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, normalizedFilesystemPath]);
+  }, [filesystemCurrentPath, normalizedFilesystemPath, listFilesystemDirectory]);
 
   // Helper to detect shell code blocks
   const isShellCodeBlock = useCallback((language: string, code: string): boolean => {
@@ -1016,22 +1065,22 @@ export default function CodePreviewPanel({
       const loadFiles = async (path: string, basePath: string = '') => {
         const dirNodes = await listFilesystemDirectory(path);
         for (const node of dirNodes) {
+          // Build relative path from the targetPath (session root)
           const relativePath = basePath ? `${basePath}/${node.name}` : node.name;
           if (node.type === 'directory') {
             await loadFiles(node.path, relativePath);
           } else {
             try {
               const file = await readFilesystemFile(node.path);
-              if (file.content) {
-                files[relativePath] = file.content;
-              }
+              // Store file even if empty (zero-byte files are valid modules/assets)
+              files[relativePath] = file.content ?? '';
             } catch (err) {
               console.warn('Failed to load file:', node.path, err);
             }
           }
         }
       };
-      
+
       await loadFiles(targetPath);
 
       if (Object.keys(files).length === 0) {
@@ -1054,14 +1103,32 @@ export default function CodePreviewPanel({
         if (parts.length === 0) continue;
         const fileName = parts[parts.length - 1];
         const dir = parts.slice(0, -1).join('/');
-        
+
         // Score directories based on presence of config/entry files
-        if (fileName === 'package.json') addRootScore(dir, 8);
-        if (fileName === 'index.html') addRootScore(dir, 6);
-        if (fileName === 'vite.config.ts' || fileName === 'vite.config.js' || fileName === 'webpack.config.js' || fileName === '.parcelrc') addRootScore(dir, 6);
+        if (fileName === 'package.json') {
+          // package.json at root level - project root is ''
+          if (dir === '') addRootScore('', 8);
+          // package.json in subdirectory - that dir is a potential root
+          else addRootScore(dir, 8);
+        }
+        if (fileName === 'index.html') {
+          if (dir === '') addRootScore('', 6);
+          else addRootScore(dir, 6);
+        }
+        if (fileName === 'vite.config.ts' || fileName === 'vite.config.js' || fileName === 'webpack.config.js' || fileName === '.parcelrc') {
+          if (dir === '') addRootScore('', 6);
+          else addRootScore(dir, 6);
+        }
         if (/^main\.(js|jsx|ts|tsx)$/.test(fileName)) {
-          if (dir.endsWith('/src')) addRootScore(dir.replace(/\/src$/, ''), 5);
+          // main.js in src/ means project root is parent of src (i.e., '')
+          if (dir === 'src') addRootScore('', 5);
+          // Also score the src directory itself
           addRootScore(dir, 2);
+        }
+        // Additional entry point patterns
+        if (/^index\.(js|jsx|ts|tsx)$/.test(fileName)) {
+          if (dir === 'src') addRootScore('', 3);
+          addRootScore(dir, 1);
         }
       }
 
@@ -1074,31 +1141,22 @@ export default function CodePreviewPanel({
           return aDepth - bDepth;
         })[0]?.[0] || '';
 
-      // Normalize files to be relative to the detected root
-      const previewFiles = Object.entries(files).reduce((acc, [filePath, content]) => {
-        const cleanPath = filePath.replace(/^\/+/, '');
-        const relativePath = selectedRoot && cleanPath.startsWith(`${selectedRoot}/`)
-          ? cleanPath.slice(selectedRoot.length + 1)
-          : cleanPath;
-        acc[relativePath] = content;
-        return acc;
-      }, {} as Record<string, string>);
-
-      log(`[handleManualPreview] detected root="${selectedRoot}", files normalized from ${Object.keys(files).length} to ${Object.keys(previewFiles).length}`);
+      log(`[handleManualPreview] detected root="${selectedRoot}", file count: ${Object.keys(files).length}`);
 
       // Auto-detect best preview mode AND execution mode using centralized logic
       let selectedMode: PreviewMode = mode as PreviewMode || 'sandpack';
       let detectedExecutionMode: 'local' | 'cloud' | 'hybrid' = 'local';
 
-      // Use centralized live preview offloading detection
+      // Use centralized live preview offloading detection for framework/bundler detection only
+      // IMPORTANT: Pass the ORIGINAL files (before root normalization) to preserve directory structure
       const detection = livePreviewOffloading.detectProject({
-        files: previewFiles,
+        files: files,  // Use original 'files' with full directory structure preserved
         scopePath: normalizeProjectPath(targetPath),
       });
       
       if (!mode) {
         selectedMode = detection.previewMode;
-        
+
         // Determine execution mode based on project requirements
         if (detection.hasHeavyComputation || detection.hasAPIKeys) {
           detectedExecutionMode = 'cloud';
@@ -1107,19 +1165,36 @@ export default function CodePreviewPanel({
         } else {
           detectedExecutionMode = 'local';
         }
-        
+
         log(`[handleManualPreview] Detected via live-preview-offloading: framework=${detection.framework}, bundler=${detection.bundler}, mode=${selectedMode}, root="${detection.selectedRoot}"`);
       }
 
       log(`[handleManualPreview] mode="${selectedMode}", execution="${detectedExecutionMode}", root="${detection.selectedRoot}"`);
 
-      // Store detection result for use in renderLivePreview
+      // Store detection result for use in renderLivePreview (for framework info only)
       setProjectDetection(detection);
 
       // Set execution mode
       setExecutionMode(detectedExecutionMode);
 
-      // Set manual preview files and activate (use normalized previewFiles, not raw files)
+      // Strip the detected project root from file paths for Sandpack
+      // Sandpack runners expect files relative to project root (e.g., src/App.tsx not my-app/src/App.tsx)
+      const previewRoot = detection.selectedRoot || selectedRoot;
+      const previewFiles = previewRoot
+        ? Object.fromEntries(
+            Object.entries(files)
+              .filter(([path]) => path.startsWith(`${previewRoot}/`) || path === previewRoot)
+              .map(([path, content]) => {
+                // Strip the root prefix: my-app/src/App.tsx -> src/App.tsx
+                const relativePath = path === previewRoot ? path : path.slice(previewRoot.length + 1);
+                return [relativePath, content];
+              }),
+          )
+        : files;
+
+      log(`[handleManualPreview] Storing ${Object.keys(previewFiles).length} files (root: "${previewRoot || 'project root'}")`);
+
+      // Store files with root-relative paths for Sandpack runners
       setManualPreviewFiles(previewFiles);
       setIsManualPreviewActive(true);
       setPreviewMode(selectedMode);
@@ -1127,17 +1202,34 @@ export default function CodePreviewPanel({
         setSelectedTab('preview');  // Always switch to preview tab
       }
 
-      const modeIcon = {
-        sandpack: '▶', iframe: '📄', raw: '📝', parcel: '⚡',
-        devbox: '🔵', pyodide: '🐍', vite: '⚡', webpack: '📦', 
-        webcontainer: '📀', nextjs: '▲', codesandbox: '🏖️', node: '🟢', local: '💻', cloud: '☁️'
-      }[selectedMode] || '▶';
+      const modeLabel = {
+        sandpack: 'Live Preview',
+        iframe: 'HTML Preview',
+        raw: 'Source View',
+        parcel: 'Parcel Build',
+        devbox: 'Cloud DevBox',
+        pyodide: 'Python Runtime',
+        vite: 'Vite Build',
+        webpack: 'Webpack Build',
+        webcontainer: 'WebContainer',
+        nextjs: 'Next.js Preview',
+        codesandbox: 'CodeSandbox',
+        opensandbox: 'OpenSandbox',
+        node: 'Node.js Runtime',
+        local: 'Local Execution',
+        cloud: 'Cloud Execution',
+      }[selectedMode] || 'Preview';
 
-      const execIcon = { local: '💻', cloud: '☁️', hybrid: '🔄' }[detectedExecutionMode];
+      const execLabel = { 
+        local: 'Local', 
+        cloud: 'Cloud', 
+        hybrid: 'Hybrid' 
+      }[detectedExecutionMode] || 'Local';
 
       if (!silent) {
-        toast.success(`${modeIcon} Preview loaded (${selectedMode}) - ${execIcon} ${detectedExecutionMode} execution`, {
-          description: `${Object.keys(previewFiles).length} files (root: "${selectedRoot || 'project root'}")`
+        toast.success(`Preview ready`, {
+          description: `${modeLabel} • ${execLabel} • ${Object.keys(files).length} files`,
+          duration: 2000,
         });
       }
     } catch (error: any) {
@@ -2306,6 +2398,19 @@ Generated on: ${new Date().toLocaleString()}
     return undefined;
   }, [isDragging, handleMouseMove, handleMouseUp]);
 
+  // ============================================================================
+  // Auto-redirect for Vite/Webpack modes to Sandpack
+  // ============================================================================
+  useEffect(() => {
+    if (previewMode === 'vite' || previewMode === 'webpack') {
+      const timer = setTimeout(() => {
+        setPreviewMode('sandpack');
+        toast.info(`Redirected to Sandpack for instant ${previewMode === 'vite' ? 'Vite-compatible' : 'bundling'} preview`);
+      }, 2000);
+      return () => clearTimeout(timer);
+    }
+  }, [previewMode]);
+
   // Function to detect popular dependencies from code content (only used when package.json is missing)
   const getPopularDependencies = (
     codeContent: string,
@@ -2343,13 +2448,21 @@ Generated on: ${new Date().toLocaleString()}
 
   const renderLivePreview = () => {
     // Use manual preview files if active, otherwise use auto-detected structure (must be defined FIRST)
-    const useStructure = isManualPreviewActive && manualPreviewFiles
+    // CRITICAL: For manual preview, use projectDetection.normalizedFiles which are already properly normalized
+    // Do NOT use manualPreviewFiles directly - those are pre-normalization and will be double-normalized
+    const useStructure = isManualPreviewActive && projectDetection?.normalizedFiles
       ? {
           name: 'Manual Preview',
-          files: manualPreviewFiles,
-          framework: 'react' as const,
+          files: projectDetection.normalizedFiles,
+          framework: projectDetection.framework as AppFramework,
         }
-      : (projectStructureWithScopedFiles || projectStructure);
+      : (isManualPreviewActive && manualPreviewFiles
+        ? {
+            name: 'Manual Preview',
+            files: manualPreviewFiles,
+            framework: 'react' as AppFramework,
+          }
+        : (projectStructureWithScopedFiles || projectStructure));
 
     // Use centralized framework detection from live-preview-offloading
     // If projectDetection exists (from handleManualPreview), use it; otherwise compute from structure
@@ -2364,34 +2477,78 @@ Generated on: ${new Date().toLocaleString()}
       return config.template;
     };
 
-    // Detect if project has Vue Router configured
-    const hasVueRouter = useStructure?.files && Object.keys(useStructure.files).some(path => {
-      const lowerPath = path.toLowerCase();
-      return lowerPath.includes('router/') || 
-             lowerPath.includes('router.') ||
-             lowerPath.endsWith('router.js') ||
-             lowerPath.endsWith('router.ts') ||
-             lowerPath.endsWith('router/index.js') ||
-             lowerPath.endsWith('router/index.ts');
-    });
-
-    // Get dependencies, adding vue-router if needed
+    // ============================================================================
+    // Improved Dependency Detection - Parse package.json properly
+    // ============================================================================
     const getDependencies = (): Record<string, string> => {
-      const deps = useStructure?.dependencies?.reduce(
-        (acc, dep) => {
-          acc[dep] = "latest";
+      // PRIORITY 1: Parse package.json if available
+      const packageJsonPath = useStructure?.files && Object.keys(useStructure.files).find(
+        path => path.endsWith('package.json')
+      );
+
+      if (packageJsonPath && useStructure?.files) {
+        try {
+          const pkgContent = useStructure.files[packageJsonPath];
+          if (typeof pkgContent === 'string' && pkgContent.trim()) {
+            const pkg = JSON.parse(pkgContent);
+            const deps: Record<string, string> = {};
+
+            // Add all dependencies with 'latest' version
+            if (pkg.dependencies && typeof pkg.dependencies === 'object') {
+              Object.keys(pkg.dependencies).forEach(dep => {
+                if (dep && typeof dep === 'string') {
+                  deps[dep] = 'latest';
+                }
+              });
+            }
+            if (pkg.devDependencies && typeof pkg.devDependencies === 'object') {
+              Object.keys(pkg.devDependencies).forEach(dep => {
+                if (dep && typeof dep === 'string' && !deps[dep]) {
+                  deps[dep] = 'latest';
+                }
+              });
+            }
+
+            // Return parsed dependencies if we found any
+            if (Object.keys(deps).length > 0) {
+              return deps;
+            }
+          }
+        } catch (parseError) {
+          console.warn('[CodePreview] Failed to parse package.json:', parseError);
+          // Fall through to regex detection
+        }
+      }
+
+      // PRIORITY 2: Fallback to regex-based detection from code content
+      const deps = (useStructure as any)?.dependencies?.reduce(
+        (acc: Record<string, string>, dep: string) => {
+          if (dep && typeof dep === 'string') {
+            acc[dep] = "latest";
+          }
           return acc;
         },
         {} as Record<string, string>,
       ) || getPopularDependencies(
-        Object.values(useStructure?.files || {}).join("\n"),
+        Object.values(useStructure?.files || {}).filter(Boolean).join("\n"),
         useStructure?.framework || 'vanilla',
       );
 
       // Add vue-router if project has router files but doesn't include it
+      const hasVueRouter = useStructure?.files && Object.keys(useStructure.files).some(path => {
+        const lowerPath = path.toLowerCase();
+        return lowerPath.includes('router/') ||
+               lowerPath.includes('router.') ||
+               lowerPath.endsWith('router.js') ||
+               lowerPath.endsWith('router.ts') ||
+               lowerPath.endsWith('router/index.js') ||
+               lowerPath.endsWith('router/index.ts');
+      });
+
       if (hasVueRouter && !deps['vue-router']) {
         deps['vue-router'] = 'latest';
       }
+
       return deps;
     };
     
@@ -2444,9 +2601,8 @@ Generated on: ${new Date().toLocaleString()}
               );
             }
 
-            // The path should already be correctly formatted by cleanFilename.
-            // We just need to ensure it's prefixed with '/' for Sandpack.
-            const sandpackPath = path.startsWith("/") ? path : `/${path}`;
+            // Remove leading slash - Sandpack expects relative paths
+            const sandpackPath = path.replace(/^\/+/, '');
 
             acc[sandpackPath] = { code: transformedContent };
             return acc;
@@ -2456,18 +2612,18 @@ Generated on: ${new Date().toLocaleString()}
 
         // Framework-specific entry file detection and handling
         const addEntryFileIfMissing = () => {
-          // Define framework-specific entry file priorities
+          // Define framework-specific entry file priorities (relative paths without leading slash)
           const entryPriorityMap: Record<string, string[]> = {
-            react: ['/src/main.tsx', '/src/main.jsx', '/src/index.tsx', '/src/index.jsx', '/src/App.tsx', '/src/App.jsx', '/index.tsx', '/index.jsx', '/App.tsx', '/App.jsx'],
-            next: ['/src/app/page.tsx', '/src/app/page.jsx', '/pages/index.tsx', '/pages/index.jsx', '/src/pages/index.tsx', '/src/pages/index.jsx', '/src/index.tsx'],
-            vue: ['/src/main.ts', '/src/main.js', '/src/App.vue', '/main.ts', '/main.js', '/index.ts', '/index.js'],
-            nuxt: ['/src/main.ts', '/src/main.js', '/src/App.vue', '/app.vue', '/pages/index.ts', '/pages/index.js'],
-            svelte: ['/src/main.ts', '/src/main.js', '/src/App.svelte', '/App.svelte', '/main.ts', '/main.js'],
-            angular: ['/src/main.ts', '/src/main.js', '/src/app/app.component.ts', '/src/app/app.component.js'],
-            solid: ['/src/index.tsx', '/src/index.jsx', '/src/App.tsx', '/src/App.jsx', '/index.tsx', '/index.jsx'],
-            astro: ['/src/pages/index.astro', '/pages/index.astro', '/index.astro'],
-            remix: ['/app/routes/_index.tsx', '/app/routes/_index.jsx', '/app/root.tsx', '/app/root.jsx'],
-            gatsby: ['/src/pages/index.js', '/src/pages/index.tsx', '/pages/index.js'],
+            react: ['src/main.tsx', 'src/main.jsx', 'src/index.tsx', 'src/index.jsx', 'src/App.tsx', 'src/App.jsx', 'index.tsx', 'index.jsx', 'App.tsx', 'App.jsx'],
+            next: ['src/app/page.tsx', 'src/app/page.jsx', 'pages/index.tsx', 'pages/index.jsx', 'src/pages/index.tsx', 'src/pages/index.jsx', 'src/index.tsx'],
+            vue: ['src/main.ts', 'src/main.js', 'src/App.vue', 'main.ts', 'main.js', 'index.ts', 'index.js'],
+            nuxt: ['src/main.ts', 'src/main.js', 'src/App.vue', 'app.vue', 'pages/index.ts', 'pages/index.js'],
+            svelte: ['src/main.ts', 'src/main.js', 'src/App.svelte', 'App.svelte', 'main.ts', 'main.js'],
+            angular: ['src/main.ts', 'src/main.js', 'src/app/app.component.ts', 'src/app/app.component.js'],
+            solid: ['src/index.tsx', 'src/index.jsx', 'src/App.tsx', 'src/App.jsx', 'index.tsx', 'index.jsx'],
+            astro: ['src/pages/index.astro', 'pages/index.astro', 'index.astro'],
+            remix: ['app/routes/_index.tsx', 'app/routes/_index.jsx', 'app/root.tsx', 'app/root.jsx'],
+            gatsby: ['src/pages/index.js', 'src/pages/index.tsx', 'pages/index.js'],
           };
 
           const framework = effectiveFramework;
@@ -2499,13 +2655,13 @@ Generated on: ${new Date().toLocaleString()}
 
           // No entry file found - add framework-specific stub
           log(`[addEntryFileIfMissing] No entry file found, adding stub for ${framework}`);
-          
+
           switch (framework) {
             case "react":
             case "next":
             case "gatsby":
               // Use index.tsx as entry for React/Next.js projects
-              sandpackFiles["/src/index.tsx"] = {
+              sandpackFiles["src/index.tsx"] = {
                 code: `import React from 'react';
 import ReactDOM from 'react-dom/client';
 
@@ -2521,7 +2677,7 @@ function App() {
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);`,
               };
-              sandpackFiles["/index.html"] = {
+              sandpackFiles["index.html"] = {
                 code: `<!doctype html>
 <html>
   <head>
@@ -2531,14 +2687,14 @@ root.render(<App />);`,
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/index.tsx"></script>
+    <script type="module" src="src/index.tsx"></script>
   </body>
 </html>`,
               };
               break;
             case "vue":
             case "nuxt":
-              sandpackFiles["/src/App.vue"] = {
+              sandpackFiles["src/App.vue"] = {
                 code: `<template>
   <div id="app">
     <h1>Hello Vue!</h1>
@@ -2561,12 +2717,12 @@ export default {
 }
 </style>`,
               };
-              sandpackFiles["/src/main.ts"] = {
+              sandpackFiles["src/main.ts"] = {
                 code: `import { createApp } from 'vue';
 import App from './App.vue';
 createApp(App).mount('#app');`,
               };
-              sandpackFiles["/index.html"] = {
+              sandpackFiles["index.html"] = {
                 code: `<!doctype html>
 <html>
   <head>
@@ -2576,13 +2732,13 @@ createApp(App).mount('#app');`,
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="src/main.ts"></script>
   </body>
 </html>`,
               };
               break;
             case "svelte":
-              sandpackFiles["/src/App.svelte"] = {
+              sandpackFiles["src/App.svelte"] = {
                 code: `<script>
   let name = 'Svelte';
 </script>
@@ -2601,12 +2757,12 @@ createApp(App).mount('#app');`,
   }
 </style>`,
               };
-              sandpackFiles["/src/main.ts"] = {
+              sandpackFiles["src/main.ts"] = {
                 code: `import App from './App.svelte';
 const app = new App({ target: document.getElementById('app') });
 export default app;`,
               };
-              sandpackFiles["/index.html"] = {
+              sandpackFiles["index.html"] = {
                 code: `<!doctype html>
 <html>
   <head>
@@ -2616,17 +2772,17 @@ export default app;`,
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/main.ts"></script>
+    <script type="module" src="src/main.ts"></script>
   </body>
 </html>`,
               };
               break;
             default:
               // vanilla or unknown framework - use index.js
-              sandpackFiles["/src/index.js"] = {
+              sandpackFiles["src/index.js"] = {
                 code: `console.log('Hello from ${framework}!');`,
               };
-              sandpackFiles["/index.html"] = {
+              sandpackFiles["index.html"] = {
                 code: `<!doctype html>
 <html>
   <head>
@@ -2636,7 +2792,7 @@ export default app;`,
   </head>
   <body>
     <div id="root"></div>
-    <script src="/src/index.js"></script>
+    <script src="src/index.js"></script>
   </body>
 </html>`,
               };
@@ -2690,8 +2846,9 @@ export default app;`,
                   }
                 }
               }
-              
-              const sandpackPath = path.startsWith('/') ? path : `/${path}`;
+
+              // Remove leading slash - Sandpack expects relative paths
+              const sandpackPath = path.replace(/^\/+/, '');
               normalized[sandpackPath] = { code: content };
             }
           }
@@ -2703,54 +2860,54 @@ export default app;`,
           files: Record<string, { code: string }>,
           framework: string
         ): string | null => {
-          // Framework-specific entry file patterns
+          // Framework-specific entry file patterns (paths are now relative without leading slash)
           const entryPatterns: Record<string, RegExp[]> = {
             react: [
-              /\/src\/index\.(tsx|jsx|ts|js)$/,
-              /\/src\/main\.(tsx|jsx|ts|js)$/,
-              /\/src\/App\.(tsx|jsx)$/,
-              /\/index\.(tsx|jsx)$/,
-              /\/main\.(tsx|jsx)$/,
+              /^src\/index\.(tsx|jsx|ts|js)$/,
+              /^src\/main\.(tsx|jsx|ts|js)$/,
+              /^src\/App\.(tsx|jsx)$/,
+              /^index\.(tsx|jsx)$/,
+              /^main\.(tsx|jsx)$/,
             ],
             next: [
-              /\/src\/app\/page\.(tsx|jsx|ts|js)$/,
-              /\/src\/app\/layout\.(tsx|jsx|ts|js)$/,
-              /\/pages\/index\.(tsx|jsx|ts|js)$/,
-              /\/src\/pages\/index\.(tsx|jsx|ts|js)$/,
+              /^src\/app\/page\.(tsx|jsx|ts|js)$/,
+              /^src\/app\/layout\.(tsx|jsx|ts|js)$/,
+              /^pages\/index\.(tsx|jsx|ts|js)$/,
+              /^src\/pages\/index\.(tsx|jsx|ts|js)$/,
             ],
             vue: [
-              /\/src\/main\.(ts|js)$/,
-              /\/src\/App\.vue$/,
-              /\/main\.(ts|js)$/,
-              /\/App\.vue$/,
+              /^src\/main\.(ts|js)$/,
+              /^src\/App\.vue$/,
+              /^main\.(ts|js)$/,
+              /^App\.vue$/,
             ],
             nuxt: [
-              /\/src\/main\.(ts|js)$/,
-              /\/app\.vue$/,
-              /\/pages\/index\.(ts|js)$/,
+              /^src\/main\.(ts|js)$/,
+              /^app\.vue$/,
+              /^pages\/index\.(ts|js)$/,
             ],
             svelte: [
-              /\/src\/main\.(ts|js)$/,
-              /\/src\/App\.svelte$/,
-              /\/main\.(ts|js)$/,
+              /^src\/main\.(ts|js)$/,
+              /^src\/App\.svelte$/,
+              /^main\.(ts|js)$/,
             ],
             angular: [
-              /\/src\/main\.(ts|js)$/,
-              /\/src\/app\/app\.component\.(ts|js)$/,
+              /^src\/main\.(ts|js)$/,
+              /^src\/app\/app\.component\.(ts|js)$/,
             ],
             solid: [
-              /\/src\/index\.(tsx|jsx)$/,
-              /\/src\/App\.(tsx|jsx)$/,
+              /^src\/index\.(tsx|jsx)$/,
+              /^src\/App\.(tsx|jsx)$/,
             ],
             astro: [
-              /\/src\/pages\/index\.astro$/,
-              /\/pages\/index\.astro$/,
-              /\/index\.astro$/,
+              /^src\/pages\/index\.astro$/,
+              /^pages\/index\.astro$/,
+              /^index\.astro$/,
             ],
             vite: [
-              /\/src\/main\.(ts|js|tsx|jsx)$/,
-              /\/src\/index\.(ts|js|tsx|jsx)$/,
-              /\/main\.(ts|js)$/,
+              /^src\/main\.(ts|js|tsx|jsx)$/,
+              /^src\/index\.(ts|js|tsx|jsx)$/,
+              /^main\.(ts|js)$/,
             ],
           };
 
@@ -2774,13 +2931,44 @@ export default app;`,
           log(`[Sandpack] Detected entry file: ${detectedEntryFile}`);
         }
 
+        // Build sandpackFiles based on whether this is manual preview or auto-detected
+        let baseSandpackFiles: Record<string, { code: string }>;
+
+        if (isManualPreviewActive && projectDetection?.normalizedFiles) {
+          // For manual preview, use pre-normalized files from detectProject
+          // These are already properly formatted for Sandpack - no need to re-process
+          baseSandpackFiles = {};
+          for (const [path, content] of Object.entries(projectDetection.normalizedFiles)) {
+            if (typeof content === 'string' && content.trim()) {
+              // Remove leading slash - Sandpack expects relative paths
+              const sandpackPath = path.replace(/^\/+/, '');
+              baseSandpackFiles[sandpackPath] = { code: content };
+            }
+          }
+          log(`[Sandpack] Using pre-normalized files from detectProject:`, Object.keys(baseSandpackFiles).slice(0, 10));
+        } else if (isManualPreviewActive && manualPreviewFiles) {
+          // For manual preview without normalizedFiles, use manualPreviewFiles (already root-relative)
+          baseSandpackFiles = {};
+          for (const [path, content] of Object.entries(manualPreviewFiles)) {
+            if (typeof content === 'string' && content.trim()) {
+              // Remove leading slash - Sandpack expects relative paths
+              const sandpackPath = path.replace(/^\/+/, '');
+              baseSandpackFiles[sandpackPath] = { code: content };
+            }
+          }
+          log(`[Sandpack] Using manual preview files (root-relative):`, Object.keys(baseSandpackFiles).slice(0, 10));
+        } else {
+          // For auto-detected projects, use the normalized sandpackFiles from earlier
+          baseSandpackFiles = normalizedSandpackFiles;
+        }
+
         // CRITICAL FIX: Normalize file paths to be relative to project root for Sandpack
         // The VFS paths are like "/project/sessions/draft-chat_xxx/src/main.js" but Sandpack needs "/src/main.js"
         // We need to strip the filesystem scope prefix from all file paths
         const finalSandpackFiles = (() => {
-          // Create a copy of sandpackFiles to work with
-          const filesCopy = { ...sandpackFiles };
-          
+          // Create a copy of baseSandpackFiles to work with
+          const filesCopy = { ...baseSandpackFiles };
+
           // Add entry file stub if missing (using same logic as addEntryFileIfMissing but as pure function)
           const existingEntryFile = Object.keys(filesCopy).some(path => {
             const fileName = path.split('/').pop() || '';
@@ -2789,14 +2977,14 @@ export default app;`,
                    /^App\.(js|jsx|ts|tsx|vue)$/.test(fileName) ||
                    /^page\.(js|jsx|ts|tsx)$/.test(fileName);
           });
-          
+
           if (!existingEntryFile) {
             // Add framework-specific stub files
             const framework = effectiveFramework;
             switch (framework) {
               case "vue":
               case "nuxt":
-                filesCopy["/src/App.vue"] = { code: `<template>
+                filesCopy["src/App.vue"] = { code: `<template>
   <div id="app">
     <h1>Hello Vue!</h1>
     <p>This is a generated Vue application.</p>
@@ -2817,10 +3005,10 @@ export default {
   margin-top: 60px;
 }
 </style>` };
-                filesCopy["/src/main.js"] = { code: `import { createApp } from 'vue';
+                filesCopy["src/main.js"] = { code: `import { createApp } from 'vue';
 import App from './App.vue';
 createApp(App).mount('#app');` };
-                filesCopy["/index.html"] = { code: `<!doctype html>
+                filesCopy["index.html"] = { code: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -2829,7 +3017,7 @@ createApp(App).mount('#app');` };
   </head>
   <body>
     <div id="app"></div>
-    <script type="module" src="/src/main.js"></script>
+    <script type="module" src="src/main.js"></script>
   </body>
 </html>` };
                 break;
@@ -2837,7 +3025,7 @@ createApp(App).mount('#app');` };
               case "next":
               case "vite-react":
               default:
-                filesCopy["/src/index.jsx"] = { code: `import React from 'react';
+                filesCopy["src/index.jsx"] = { code: `import React from 'react';
 import ReactDOM from 'react-dom/client';
 
 function App() {
@@ -2851,7 +3039,7 @@ function App() {
 
 const root = ReactDOM.createRoot(document.getElementById('root'));
 root.render(<App />);` };
-                filesCopy["/index.html"] = { code: `<!doctype html>
+                filesCopy["index.html"] = { code: `<!doctype html>
 <html>
   <head>
     <meta charset="UTF-8" />
@@ -2860,98 +3048,196 @@ root.render(<App />);` };
   </head>
   <body>
     <div id="root"></div>
-    <script type="module" src="/src/index.jsx"></script>
+    <script type="module" src="src/index.jsx"></script>
   </body>
 </html>` };
                 break;
             }
           }
-          
-          // Step 1: Normalize (filter build outputs, cache files, etc.)
-          const normalized = normalizeFilesForSandpack(filesCopy);
 
-          // Step 2: Strip any leading project folder to get paths relative to project root
-          // Files at this point are like: "/my-vue-app/src/main.js" or "/src/main.js" or "/index.html"
-          // We need them to be: "/src/main.js" or "/index.html" (relative to project root for Sandpack)
-          const stripped: Record<string, { code: string }> = {};
+          // For auto-detected projects (not manual preview), strip scope prefix and project subfolders
+          // Manual preview files are already normalized, so skip this step
+          if (!isManualPreviewActive) {
+            // Step 1: Normalize (filter build outputs, cache files, etc.)
+            const normalized = normalizeFilesForSandpack(filesCopy);
 
-          // Common project subfolder names that indicate the preceding folder is a project root
-          const projectSubfolderPatterns = [
-            /^\/([^/]+)\/src\//,      // /my-app/src/...
-            /^\/([^/]+)\/pages\//,    // /my-app/pages/...
-            /^\/([^/]+)\/app\//,      // /my-app/app/...
-            /^\/([^/]+)\/public\//,   // /my-app/public/...
-            /^\/([^/]+)\/lib\//,      // /my-app/lib/...
-            /^\/([^/]+)\/components\//, // /my-app/components/...
-            /^\/([^/]+)\/styles\//,   // /my-app/styles/...
-            /^\/([^/]+)\/assets\//,   // /my-app/assets/...
-          ];
+            // Step 2: Strip any leading project folder to get paths relative to project root
+            // Files at this point are like: "/my-vue-app/src/main.js" or "/src/main.js" or "/index.html"
+            // We need them to be: "/src/main.js" or "/index.html" (relative to project root for Sandpack)
+            const stripped: Record<string, { code: string }> = {};
 
-          // Also strip VFS scope prefix (e.g. /project/sessions/draft-chat_xxx/)
-          const scopePrefix = normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath);
-
-          for (const [path, fileObj] of Object.entries(normalized)) {
-            let relativePath = path;
-
-            // First, ensure path has leading slash for consistent handling
-            if (!relativePath.startsWith('/')) {
-              relativePath = '/' + relativePath;
-            }
-
-            // Strip VFS scope prefix first (e.g. /project/sessions/draft-chat_xxx/my-vue-app/src/main.js -> /my-vue-app/src/main.js)
-            // Try both with and without leading slash variants
-            const prefixVariants = [
-              `/${scopePrefix}/`,
-              `${scopePrefix}/`,
-              `/project/sessions/`,
+            // Common project subfolder names that indicate the preceding folder is a project root
+            const projectSubfolderPatterns = [
+              /^\/([^/]+)\/src\//,      // /my-app/src/...
+              /^\/([^/]+)\/pages\//,    // /my-app/pages/...
+              /^\/([^/]+)\/app\//,      // /my-app/app/...
+              /^\/([^/]+)\/public\//,   // /my-app/public/...
+              /^\/([^/]+)\/lib\//,      // /my-app/lib/...
+              /^\/([^/]+)\/components\//, // /my-app/components/...
+              /^\/([^/]+)\/styles\//,   // /my-app/styles/...
+              /^\/([^/]+)\/assets\//,   // /my-app/assets/...
             ];
-            for (const prefix of prefixVariants) {
-              if (relativePath.startsWith(prefix)) {
-                relativePath = relativePath.slice(prefix.length);
-                // If we stripped a sessions prefix, also strip the session ID folder
-                if (prefix === '/project/sessions/' || prefix === 'project/sessions/') {
-                  const slashIdx = relativePath.indexOf('/');
-                  if (slashIdx > 0) {
-                    relativePath = relativePath.slice(slashIdx);
-                  }
-                }
-                break;
-              }
-            }
 
-            // Try to strip leading project folder if path contains a known subfolder pattern
-            // e.g., /my-vue-app/src/main.js -> /src/main.js
-            for (const pattern of projectSubfolderPatterns) {
-              const match = relativePath.match(pattern);
-              if (match) {
-                const projectFolder = match[1];
-                // Don't strip if the "project folder" is actually a standard folder name
-                if (!['src', 'pages', 'app', 'public', 'lib', 'components', 'styles', 'assets'].includes(projectFolder)) {
-                  relativePath = relativePath.replace(`/${projectFolder}/`, '/');
+            // Strip VFS scope prefix (e.g. /project/sessions/draft-chat_xxx/)
+            const scopePrefix = normalizeProjectPath(filesystemScopePath || normalizedFilesystemPath);
+
+            for (const [path, fileObj] of Object.entries(normalized)) {
+              let relativePath = path;
+
+              // First, ensure path has leading slash for consistent handling
+              if (!relativePath.startsWith('/')) {
+                relativePath = '/' + relativePath;
+              }
+
+              // Strip VFS scope prefix first (e.g. /project/sessions/draft-chat_xxx/my-vue-app/src/main.js -> /my-vue-app/src/main.js)
+              // Try both with and without leading slash variants
+              const prefixVariants = [
+                `/${scopePrefix}/`,
+                `${scopePrefix}/`,
+                `/project/sessions/`,
+              ];
+              for (const prefix of prefixVariants) {
+                if (relativePath.startsWith(prefix)) {
+                  relativePath = relativePath.slice(prefix.length);
+                  // If we stripped a sessions prefix, also strip the session ID folder
+                  if (prefix === '/project/sessions/' || prefix === 'project/sessions/') {
+                    const slashIdx = relativePath.indexOf('/');
+                    if (slashIdx > 0) {
+                      relativePath = relativePath.slice(slashIdx);
+                    }
+                  }
                   break;
                 }
               }
+
+              // Try to strip leading project folder if path contains a known subfolder pattern
+              // e.g., /my-vue-app/src/main.js -> /src/main.js
+              for (const pattern of projectSubfolderPatterns) {
+                const match = relativePath.match(pattern);
+                if (match) {
+                  const projectFolder = match[1];
+                  // Don't strip if the "project folder" is actually a standard folder name
+                  if (!['src', 'pages', 'app', 'public', 'lib', 'components', 'styles', 'assets'].includes(projectFolder)) {
+                    relativePath = relativePath.replace(`/${projectFolder}/`, '/');
+                    break;
+                  }
+                }
+              }
+
+              // Ensure path starts with /
+              if (!relativePath.startsWith('/')) {
+                relativePath = '/' + relativePath;
+              }
+
+              stripped[relativePath] = fileObj;
             }
 
-            // Ensure path starts with /
-            if (!relativePath.startsWith('/')) {
-              relativePath = '/' + relativePath;
+            // Log normalization results
+            const resultKey = `${Object.keys(stripped).length}-${Object.keys(stripped).sort().join('|').slice(0, 50)}`;
+            if (resultKey !== lastNormalizationRef.current) {
+              log(`[Sandpack] Normalized ${Object.keys(filesCopy).length} -> ${Object.keys(normalized).length} (filtered) -> ${Object.keys(stripped).length} (scope strip)`);
+              lastNormalizationRef.current = resultKey;
             }
 
-            stripped[relativePath] = fileObj;
+            return stripped;
           }
 
-          const result = stripped;
-          // Only log once when files actually change (not on every render)
-          const resultKey = `${Object.keys(result).length}-${Object.keys(result).sort().join('|').slice(0, 50)}`;
+          // For manual preview, files are already root-relative (stripped in handleManualPreview)
+          // Just apply normalizeFilesForSandpack filtering (removes build outputs, cache files, etc.)
+          const normalized = normalizeFilesForSandpack(filesCopy);
+          const resultKey = `${Object.keys(normalized).length}-${Object.keys(normalized).sort().join('|').slice(0, 50)}`;
           if (resultKey !== lastNormalizationRef.current) {
-            log(`[Sandpack] Normalized ${Object.keys(filesCopy).length} -> ${Object.keys(normalized).length} (filtered) -> ${Object.keys(result).length} (scope strip)`);
+            log(`[Sandpack] Manual preview: ${Object.keys(normalized).length} files (root-relative, no scope stripping)`);
             lastNormalizationRef.current = resultKey;
           }
-          return result;
+          return normalized;
         })();
 
-        const template = getSandpackTemplate(effectiveFramework);
+        const template = getSandpackTemplate(effectiveFramework) as any;
+
+        // Manual preview - Sandpack mode (primary framework preview)
+        if (isManualPreviewActive && previewMode === 'sandpack') {
+          const sandpackFiles: Record<string, { code: string }> = {};
+
+          // Add all files to Sandpack - useStructure.files is already normalized
+          // (paths are relative to project root, e.g., /src/App.tsx)
+          Object.entries(useStructure.files).forEach(([path, content]) => {
+            if (typeof content === "string" && content.trim()) {
+              // Ensure path starts with / (normalization should already do this)
+              const normalizedPath = path.startsWith("/") ? path : `/${path}`;
+              sandpackFiles[normalizedPath] = { code: content };
+            }
+          });
+
+          // Get template from project detection (uses FRAMEWORK_TO_TEMPLATE mapping)
+          const template = projectDetection?.framework
+            ? getSandpackTemplate(projectDetection.framework)
+            : 'react'; // Default to react for unknown frameworks
+
+          return (
+            <Suspense fallback={
+              <div className="h-full flex items-center justify-center bg-gray-900 rounded-lg">
+                <div className="text-center text-gray-400">
+                  <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin" />
+                  <p>Loading {effectiveFramework} preview...</p>
+                  <p className="text-xs text-gray-500 mt-1">
+                    Template: {template} • {Object.keys(sandpackFiles).length} files
+                  </p>
+                </div>
+              </div>
+            }>
+              <div className="h-full bg-gray-900 rounded-lg overflow-hidden flex flex-col">
+                <div className="bg-purple-900 px-4 py-2 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-white text-sm font-medium">⚛️ {effectiveFramework.toUpperCase()} Preview</span>
+                    <span className="text-purple-300 text-xs">{Object.keys(sandpackFiles).length} files • {template}</span>
+                  </div>
+                  <div className="flex gap-2">
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setPreviewMode('raw')}
+                      className="text-xs bg-purple-800 hover:bg-purple-700 text-white"
+                    >
+                      View Raw
+                    </Button>
+                    <Button
+                      size="sm"
+                      variant="outline"
+                      onClick={() => setPreviewMode('iframe')}
+                      className="text-xs bg-purple-800 hover:bg-purple-700 text-white"
+                    >
+                      Iframe
+                    </Button>
+                  </div>
+                </div>
+                <div className="flex-1 overflow-hidden">
+                  <Sandpack
+                    template={template as any}
+                    theme="dark"
+                    options={{
+                      showTabs: true,
+                      showLineNumbers: false,
+                      showNavigator: true,
+                      showConsole: true,
+                      showRefreshButton: true,
+                      autorun: true,
+                      recompileMode: "delayed",
+                      recompileDelay: 500,
+                    }}
+                    files={sandpackFiles}
+                    customSetup={{
+                      dependencies: (projectDetection as any)?.dependencies?.reduce(
+                        (acc: Record<string, string>, dep: string) => { acc[dep] = "latest"; return acc; },
+                        {} as Record<string, string>
+                      ) || {},
+                    }}
+                  />
+                </div>
+              </div>
+            </Suspense>
+          );
+        }
 
         // Manual preview with HTML files - use Sandpack for proper bundling
         if (isManualPreviewActive && previewMode === 'iframe') {
@@ -2962,11 +3248,12 @@ root.render(<App />);` };
           if (htmlFileEntry) {
             // Use Sandpack with vanilla template for proper HTML/CSS/JS bundling
             const sandpackFiles: Record<string, { code: string }> = {};
-            
+
             // Add all files to Sandpack
             Object.entries(useStructure.files).forEach(([path, content]) => {
               if (typeof content === "string" && content.trim()) {
-                const sandpackPath = path.startsWith("/") ? path : `/${path}`;
+                // Remove leading slash - Sandpack expects relative paths
+                const sandpackPath = path.replace(/^\/+/, '');
                 sandpackFiles[sandpackPath] = { code: content };
               }
             });
@@ -2980,29 +3267,27 @@ root.render(<App />);` };
                   </div>
                 </div>
               }>
-                <div className="h-full bg-gray-900 rounded-lg overflow-hidden flex flex-col">
-                  <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
-                    <div className="flex items-center gap-2">
-                      <span className="text-white text-sm font-medium">📄 HTML Preview (Sandpack)</span>
-                      <span className="text-blue-300 text-xs">Bundled with CSS/JS</span>
+                <div className="h-full bg-black/40 backdrop-blur-xl rounded-xl overflow-hidden flex flex-col border border-white/10">
+                  <div className="bg-gradient-to-r from-black/80 via-black/60 to-black/80 backdrop-blur-sm px-4 py-2.5 flex items-center justify-between border-b border-white/10">
+                    <div className="flex items-center gap-3">
+                      <div className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                      <span className="text-white/90 text-sm font-medium tracking-wide">HTML Preview</span>
+                      <span className="text-white/40 text-xs">•</span>
+                      <span className="text-white/50 text-xs">Bundled</span>
                     </div>
                     <div className="flex gap-2">
-                      <Button
-                        size="sm"
-                        variant="outline"
+                      <button
                         onClick={() => setPreviewMode('raw')}
-                        className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                        className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all duration-200 backdrop-blur-sm"
                       >
-                        View Raw
-                      </Button>
-                      <Button
-                        size="sm"
-                        variant="outline"
+                        View Source
+                      </button>
+                      <button
                         onClick={() => setPreviewMode('sandpack')}
-                        className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                        className="px-3 py-1.5 text-xs font-medium text-white bg-gradient-to-r from-emerald-500/80 to-teal-500/80 hover:from-emerald-400 hover:to-teal-400 rounded-lg transition-all duration-200 shadow-lg shadow-emerald-500/20 border border-emerald-500/30"
                       >
-                        Full Sandpack
-                      </Button>
+                        Live Preview
+                      </button>
                     </div>
                   </div>
                   <div className="flex-1 overflow-hidden">
@@ -3218,64 +3503,64 @@ root.render(<App />);` };
           };
 
           return (
-            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
-              <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-white text-sm font-medium">🏗️ DevBox</span>
-                  <span className="text-blue-300 text-xs">Cloud Dev Environment</span>
+            <div className="h-full bg-black/40 backdrop-blur-xl rounded-xl overflow-hidden flex flex-col border border-white/10">
+              <div className="bg-gradient-to-r from-black/80 via-black/60 to-black/80 backdrop-blur-sm px-4 py-2.5 flex items-center justify-between border-b border-white/10">
+                <div className="flex items-center gap-3">
+                  <div className={`w-2 h-2 rounded-full ${isCodesandboxLoading ? 'bg-amber-500 animate-pulse' : 'bg-cyan-500'}`} />
+                  <span className="text-white/90 text-sm font-medium tracking-wide">Cloud DevBox</span>
+                  <span className="text-white/40 text-xs">•</span>
+                  <span className="text-white/50 text-xs">{runtime || 'Auto'}</span>
                 </div>
                 <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
+                  <button
                     onClick={startDevBox}
-                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
                     disabled={isCodesandboxLoading}
+                    className="px-4 py-1.5 text-xs font-medium text-white bg-gradient-to-r from-cyan-500/80 to-blue-500/80 hover:from-cyan-400 hover:to-blue-400 disabled:from-gray-600 disabled:to-gray-700 rounded-lg transition-all duration-200 shadow-lg shadow-cyan-500/20 border border-cyan-500/30 disabled:cursor-not-allowed"
                   >
-                    {isCodesandboxLoading ? '⏳ Creating...' : '▶ Start DevBox'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
+                    {isCodesandboxLoading ? 'Starting...' : 'Start DevBox'}
+                  </button>
+                  <button
                     onClick={() => setPreviewMode('sandpack')}
-                    className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                    className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all duration-200 backdrop-blur-sm"
                   >
-                    Use Sandpack
-                  </Button>
+                    Local Preview
+                  </button>
                 </div>
               </div>
 
               <div className="flex-1 flex flex-col">
-                <div className="p-2 bg-gray-900 border-b border-gray-800">
-                  <div className="grid grid-cols-3 gap-2 text-xs">
-                    <div>
-                      <p className="text-gray-400">📦 Runtime:</p>
-                      <p className="text-blue-300">{runtime}</p>
+                <div className="p-3 bg-black/60 border-b border-white/10">
+                  <div className="grid grid-cols-3 gap-4 text-xs">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Runtime</span>
+                      <span className="text-white/80 font-medium">{runtime || 'Auto-detect'}</span>
                     </div>
-                    <div>
-                      <p className="text-gray-400">📁 Files:</p>
-                      <p className="text-blue-300">{Object.keys(useStructure.files).length} files</p>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Files</span>
+                      <span className="text-white/80 font-medium">{Object.keys(useStructure.files).length}</span>
                     </div>
-                    <div>
-                      <p className="text-gray-400">🐍 Python files:</p>
-                      <p className="text-blue-300">{pythonFiles.length} files</p>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Python</span>
+                      <span className="text-white/80 font-medium">{pythonFiles.length} files</span>
                     </div>
                   </div>
                 </div>
 
                 <div className="flex-1 flex items-center justify-center p-8">
                   {isCodesandboxLoading ? (
-                    <div className="text-center space-y-4">
-                      <div className="w-16 h-16 mx-auto bg-blue-500/20 rounded-full flex items-center justify-center">
-                        <RefreshCw className="w-8 h-8 text-blue-400 animate-spin" />
+                    <div className="text-center space-y-6">
+                      <div className="w-20 h-20 mx-auto bg-gradient-to-br from-cyan-500/20 to-blue-500/20 rounded-2xl flex items-center justify-center backdrop-blur-sm border border-cyan-500/30">
+                        <RefreshCw className="w-10 h-10 text-cyan-400 animate-spin" />
                       </div>
-                      <h3 className="text-white text-lg font-medium">Creating DevBox Environment</h3>
-                      <p className="text-gray-400 text-sm max-w-md">
-                        Setting up a cloud development container with your {runtime} project...
-                      </p>
-                      <p className="text-gray-500 text-xs">
-                        This may take 30-60 seconds for complex projects
-                      </p>
+                      <div className="space-y-2">
+                        <h3 className="text-white text-lg font-medium">Starting DevBox</h3>
+                        <p className="text-white/60 text-sm max-w-md">
+                          Setting up cloud development environment...
+                        </p>
+                        <p className="text-white/40 text-xs">
+                          This may take 30-60 seconds
+                        </p>
+                      </div>
                     </div>
                   ) : codesandboxUrl ? (
                     codesandboxUrl.startsWith('http') ? (
@@ -3323,6 +3608,158 @@ root.render(<App />);` };
                         <Play className="w-4 h-4 mr-2" />
                         Start DevBox
                       </Button>
+                    </div>
+                  )}
+                </div>
+              </div>
+            </div>
+          );
+        }
+
+        // OpenSandbox container preview (full-stack, isolated)
+        if (isManualPreviewActive && previewMode === 'opensandbox') {
+          const deployToOpenSandbox = async () => {
+            if (!useStructure?.files || isOpensandboxDeploying) return;
+
+            setIsOpensandboxDeploying(true);
+            setOpensandboxLogs(['Deploying to OpenSandbox container...']);
+            setOpensandboxUrl(null);
+
+            try {
+              const reusableSandboxId =
+                opensandboxId && opensandboxScopeRef.current === manualPreviewPathRef.current
+                  ? opensandboxId
+                  : undefined;
+
+              const resp = await fetch('/api/preview/sandbox', {
+                method: reusableSandboxId ? 'PUT' : 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  files: useStructure.files,
+                  framework: effectiveFramework,
+                  sandboxId: reusableSandboxId,
+                }),
+              });
+
+              const result = await resp.json();
+
+              if (result.success && result.previewUrl) {
+                setOpensandboxUrl(result.previewUrl);
+                setOpensandboxId(result.sandboxId);
+                opensandboxScopeRef.current = manualPreviewPathRef.current;
+                setOpensandboxLogs(result.logs || ['Deployed successfully']);
+              } else {
+                setOpensandboxLogs(prev => [
+                  ...prev,
+                  ...(result.logs || []),
+                  `Error: ${result.error || 'Deployment failed'}`,
+                ]);
+              }
+            } catch (err: any) {
+              setOpensandboxLogs(prev => [...prev, `Network error: ${err.message}`]);
+            } finally {
+              setIsOpensandboxDeploying(false);
+            }
+          };
+
+          // If we already have a URL, show iframe; otherwise show deploy UI
+          if (opensandboxUrl) {
+            return (
+              <div className="h-full flex flex-col bg-gray-950 rounded-lg overflow-hidden">
+                <div className="px-4 py-2 bg-emerald-900 flex items-center justify-between">
+                  <div className="flex items-center gap-2">
+                    <span className="text-white text-sm font-medium">📦 OpenSandbox Preview</span>
+                    <span className="text-emerald-300 text-xs">{effectiveFramework}</span>
+                  </div>
+                  <div className="flex items-center gap-2">
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={deployToOpenSandbox}
+                      disabled={isOpensandboxDeploying}
+                      className="text-emerald-200 hover:text-white h-6 px-2 text-xs"
+                    >
+                      <RefreshCw className={`w-3 h-3 mr-1 ${isOpensandboxDeploying ? 'animate-spin' : ''}`} />
+                      {isOpensandboxDeploying ? 'Syncing...' : 'Sync Files'}
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => setPreviewMode('sandpack')}
+                      className="text-emerald-200 hover:text-white h-6 px-2 text-xs"
+                    >
+                      Use Sandpack
+                    </Button>
+                    <Button
+                      variant="ghost"
+                      size="sm"
+                      onClick={() => {
+                        if (opensandboxId) {
+                          fetch(`/api/preview/sandbox?sandboxId=${opensandboxId}`, { method: 'DELETE' }).catch(() => {});
+                        }
+                        setOpensandboxUrl(null);
+                        setOpensandboxId(null);
+                        setOpensandboxLogs([]);
+                        opensandboxScopeRef.current = null;
+                      }}
+                      className="text-red-300 hover:text-red-100 h-6 px-2 text-xs"
+                    >
+                      <X className="w-3 h-3" />
+                    </Button>
+                  </div>
+                </div>
+                <iframe
+                  ref={iframeRef}
+                  src={opensandboxUrl}
+                  className="flex-1 w-full border-0"
+                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                  allow="cross-origin-isolated"
+                  title="OpenSandbox Preview"
+                />
+              </div>
+            );
+          }
+
+          // Deploy UI (no URL yet)
+          return (
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
+              <div className="flex-1 flex items-center justify-center p-8">
+                <div className="text-center max-w-md">
+                  <div className="w-20 h-20 mx-auto mb-6 bg-emerald-500/20 rounded-full flex items-center justify-center">
+                    <Package className="w-10 h-10 text-emerald-400" />
+                  </div>
+                  <h3 className="text-white text-xl font-medium mb-2">OpenSandbox Preview</h3>
+                  <p className="text-gray-400 text-sm mb-2">
+                    Full-stack isolated container for {effectiveFramework} applications
+                  </p>
+                  <p className="text-gray-500 text-xs mb-6">
+                    Deploys your {Object.keys(useStructure?.files || {}).length} files into a Docker container with dependencies
+                  </p>
+                  <div className="flex gap-3 justify-center">
+                    <Button
+                      onClick={deployToOpenSandbox}
+                      disabled={isOpensandboxDeploying}
+                      className="bg-emerald-600 hover:bg-emerald-700 text-white px-6"
+                    >
+                      {isOpensandboxDeploying ? (
+                        <><RefreshCw className="w-4 h-4 mr-2 animate-spin" /> Deploying...</>
+                      ) : (
+                        <>▶ Deploy to Sandbox</>
+                      )}
+                    </Button>
+                    <Button
+                      variant="outline"
+                      onClick={() => setPreviewMode('sandpack')}
+                      className="border-gray-600 text-gray-300 hover:bg-gray-800"
+                    >
+                      Use Sandpack
+                    </Button>
+                  </div>
+                  {opensandboxLogs.length > 0 && (
+                    <div className="mt-6 text-left bg-gray-900 rounded-lg p-3 max-h-40 overflow-y-auto">
+                      {opensandboxLogs.map((line, i) => (
+                        <div key={i} className="text-xs text-gray-400 font-mono">{line}</div>
+                      ))}
                     </div>
                   )}
                 </div>
@@ -3538,42 +3975,46 @@ root.render(<App />);` };
           );
         }
 
-        // Vite build preview mode - removed fake build simulation, use Sandpack instead
+        // Vite build preview mode - Auto-redirect to Sandpack after brief delay
         if (isManualPreviewActive && previewMode === 'vite') {
           return (
             <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex items-center justify-center p-8">
               <div className="text-center max-w-md">
-                <Zap className="w-16 h-16 mx-auto mb-4 text-cyan-500" />
+                <div className="w-16 h-16 mx-auto mb-4 bg-cyan-500/20 rounded-full flex items-center justify-center">
+                  <RefreshCw className="w-8 h-8 text-cyan-400 animate-spin" />
+                </div>
                 <h3 className="text-white text-lg font-medium mb-2">Vite Preview</h3>
                 <p className="text-gray-400 text-sm mb-4">
-                  Use Sandpack for instant Vite-compatible preview
+                  Redirecting to Sandpack for instant Vite-compatible preview...
                 </p>
                 <Button
                   onClick={() => setPreviewMode('sandpack')}
                   className="bg-cyan-600 hover:bg-cyan-700 text-white"
                 >
-                  Open Sandpack
+                  Go Now
                 </Button>
               </div>
             </div>
           );
         }
 
-        // Webpack build preview mode - removed fake build simulation, use Sandpack instead
+        // Webpack build preview mode - Auto-redirect to Sandpack after brief delay
         if (isManualPreviewActive && previewMode === 'webpack') {
           return (
             <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex items-center justify-center p-8">
               <div className="text-center max-w-md">
-                <Package className="w-16 h-16 mx-auto mb-4 text-indigo-500" />
+                <div className="w-16 h-16 mx-auto mb-4 bg-indigo-500/20 rounded-full flex items-center justify-center">
+                  <RefreshCw className="w-8 h-8 text-indigo-400 animate-spin" />
+                </div>
                 <h3 className="text-white text-lg font-medium mb-2">Webpack Preview</h3>
                 <p className="text-gray-400 text-sm mb-4">
-                  Use Sandpack for instant bundling preview
+                  Redirecting to Sandpack for instant bundling preview...
                 </p>
                 <Button
                   onClick={() => setPreviewMode('sandpack')}
                   className="bg-indigo-600 hover:bg-indigo-700 text-white"
                 >
-                  Open Sandpack
+                  Go Now
                 </Button>
               </div>
             </div>
@@ -4154,60 +4595,62 @@ root.render(<App />);` };
           };
 
           return (
-            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
-              <div className="bg-blue-900 px-4 py-2 flex items-center justify-between">
-                <div className="flex items-center gap-2">
-                  <span className="text-white text-sm font-medium">🏖️ CodeSandbox</span>
-                  <span className="text-blue-300 text-xs">Cloud Dev Environment</span>
+            <div className="h-full bg-black/40 backdrop-blur-xl rounded-xl overflow-hidden flex flex-col border border-white/10">
+              <div className="bg-gradient-to-r from-black/80 via-black/60 to-black/80 backdrop-blur-sm px-4 py-2.5 flex items-center justify-between border-b border-white/10">
+                <div className="flex items-center gap-3">
+                  <div className={`w-2 h-2 rounded-full ${isCodesandboxLoading ? 'bg-amber-500 animate-pulse' : 'bg-violet-500'}`} />
+                  <span className="text-white/90 text-sm font-medium tracking-wide">CodeSandbox</span>
+                  <span className="text-white/40 text-xs">•</span>
+                  <span className="text-white/50 text-xs">Cloud IDE</span>
                 </div>
                 <div className="flex gap-2">
-                  <Button
-                    size="sm"
-                    variant="outline"
+                  <button
                     onClick={() => {
                       void bootCodeSandbox();
                     }}
-                    className="text-xs bg-blue-600 hover:bg-blue-700 text-white"
                     disabled={isCodesandboxLoading}
+                    className="px-4 py-1.5 text-xs font-medium text-white bg-gradient-to-r from-violet-500/80 to-purple-500/80 hover:from-violet-400 hover:to-purple-400 disabled:from-gray-600 disabled:to-gray-700 rounded-lg transition-all duration-200 shadow-lg shadow-violet-500/20 border border-violet-500/30 disabled:cursor-not-allowed"
                   >
-                    {isCodesandboxLoading ? '⏳ Creating...' : '🚀 Launch'}
-                  </Button>
-                  <Button
-                    size="sm"
-                    variant="outline"
+                    {isCodesandboxLoading ? 'Starting...' : 'Launch Cloud IDE'}
+                  </button>
+                  <button
                     onClick={() => setPreviewMode('webcontainer')}
-                    className="text-xs bg-blue-800 hover:bg-blue-700 text-white"
+                    className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all duration-200 backdrop-blur-sm"
                   >
                     WebContainer
-                  </Button>
+                  </button>
                 </div>
               </div>
 
               <div className="flex-1 flex flex-col">
-                <div className="p-2 bg-gray-900 border-b border-gray-800">
-                  <div className="grid grid-cols-3 gap-2 text-xs">
-                    <div>
-                      <p className="text-gray-400">📦 package.json:</p>
-                      <p className="text-blue-300">{packageJson ? '✓ Found' : '⚠ Not found'}</p>
+                <div className="p-3 bg-black/60 border-b border-white/10">
+                  <div className="grid grid-cols-3 gap-4 text-xs">
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Package</span>
+                      <span className={`${packageJson ? 'text-emerald-400' : 'text-amber-400'} font-medium`}>
+                        {packageJson ? 'Found' : 'Not found'}
+                      </span>
                     </div>
-                    <div>
-                      <p className="text-gray-400">🐳 Docker:</p>
-                      <p className="text-blue-300">{hasDocker ? '✓ Detected' : 'Standard'}</p>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Docker</span>
+                      <span className={`${hasDocker ? 'text-cyan-400' : 'text-white/60'} font-medium`}>
+                        {hasDocker ? 'Detected' : 'Standard'}
+                      </span>
                     </div>
-                    <div>
-                      <p className="text-gray-400">📁 Server files:</p>
-                      <p className="text-blue-300">{serverFiles.length} files</p>
+                    <div className="flex flex-col gap-0.5">
+                      <span className="text-white/40 uppercase tracking-wider text-[10px]">Server Files</span>
+                      <span className="text-white/80 font-medium">{serverFiles.length}</span>
                     </div>
                   </div>
                 </div>
 
                 <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
                   {isCodesandboxLoading ? (
-                    <div className="flex items-center gap-2 text-blue-300">
-                      <div className="w-4 h-4 border-2 border-blue-300 border-t-transparent rounded-full animate-spin" />
+                    <div className="flex items-center gap-3 text-violet-300">
+                      <div className="w-5 h-5 border-2 border-violet-300 border-t-transparent rounded-full animate-spin" />
                       <div className="space-y-1">
-                        <p>Creating cloud development environment...</p>
-                        <p className="text-xs text-blue-400">This may take 30-60 seconds for complex projects</p>
+                        <p className="text-white/80">Starting cloud environment...</p>
+                        <p className="text-xs text-white/50">This may take 30-60 seconds</p>
                       </div>
                     </div>
                   ) : codesandboxUrl ? (
@@ -4245,6 +4688,132 @@ root.render(<App />);` };
                     </div>
                   )}
                 </div>
+              </div>
+            </div>
+          );
+        }
+
+        // Node.js preview mode - CLI output in browser via WebContainer
+        if (isManualPreviewActive && previewMode === 'node') {
+          const packageJson = Object.entries(useStructure.files).find(
+            ([path]) => path === 'package.json'
+          );
+          const jsFiles = Object.entries(useStructure.files).filter(
+            ([path]) => path.endsWith('.js') || path.endsWith('.ts')
+          );
+          const entryFile = jsFiles.find(([path]) =>
+            path === 'index.js' || path === 'index.ts' || path === 'main.js' || path === 'main.ts' ||
+            path === 'app.js' || path === 'app.ts' || path === 'server.js' || path === 'server.ts'
+          ) || jsFiles[0];
+
+          const runNodeScript = async () => {
+            if (!entryFile) {
+              setNodeOutput('❌ No entry file found. Expected index.js, main.js, app.js, or server.js\n');
+              return;
+            }
+
+            setIsNodeRunning(true);
+            setNodeOutput('> Starting Node.js runtime...\n');
+
+            try {
+              const { WebContainer } = await import('@webcontainer/api');
+              const webcontainer = await WebContainer.boot();
+
+              // Write files
+              setNodeOutput(prev => prev + '📁 Writing files...\n');
+              for (const [path, content] of Object.entries(useStructure.files)) {
+                if (typeof content === 'string' && content.trim()) {
+                  const dir = path.substring(0, path.lastIndexOf('/'));
+                  if (dir) {
+                    await webcontainer.fs.mkdir(dir, { recursive: true });
+                  }
+                  await webcontainer.fs.writeFile(path, content);
+                }
+              }
+
+              // Install dependencies
+              if (packageJson) {
+                setNodeOutput(prev => prev + '\n📦 Installing dependencies...\n');
+                const install = await webcontainer.spawn('npm', ['install']);
+                install.output.pipeTo(new WritableStream({
+                  write(data) {
+                    setNodeOutput(prev => prev + data);
+                  }
+                }));
+                const exitCode = await install.exit;
+                if (exitCode !== 0) {
+                  setNodeOutput(prev => prev + `\n⚠️ npm install exited with code ${exitCode}\n`);
+                }
+              }
+
+              // Run the entry file
+              setNodeOutput(prev => prev + `\n▶ Running ${entryFile[0]}...\n\n`);
+              const process = await webcontainer.spawn('node', [entryFile[0]]);
+
+              process.output.pipeTo(new WritableStream({
+                write(data) {
+                  setNodeOutput(prev => prev + data);
+                }
+              }));
+
+              const exitCode = await process.exit;
+              if (exitCode === 0) {
+                setNodeOutput(prev => prev + '\n✅ Process completed successfully\n');
+              } else {
+                setNodeOutput(prev => prev + `\n❌ Process exited with code ${exitCode}\n`);
+              }
+
+            } catch (err: any) {
+              setNodeOutput(prev => prev + `\n❌ Error: ${err.message || 'Failed to run Node.js'}\n`);
+            } finally {
+              setIsNodeRunning(false);
+            }
+          };
+
+          return (
+            <div className="h-full bg-gray-950 rounded-lg overflow-hidden flex flex-col">
+              <div className="bg-green-900 px-4 py-2 flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <span className="text-white text-sm font-medium">🟢 Node.js Runtime</span>
+                  <span className="text-green-300 text-xs">CLI Output</span>
+                </div>
+                <div className="flex gap-2">
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={runNodeScript}
+                    className="text-xs bg-green-600 hover:bg-green-700 text-white"
+                    disabled={isNodeRunning}
+                  >
+                    {isNodeRunning ? '⏳ Running...' : '▶ Run'}
+                  </Button>
+                  <Button
+                    size="sm"
+                    variant="outline"
+                    onClick={() => setPreviewMode('webcontainer')}
+                    className="text-xs bg-green-800 hover:bg-green-700 text-white"
+                  >
+                    Full WebContainer
+                  </Button>
+                </div>
+              </div>
+
+              <div className="flex-1 p-4 font-mono text-sm overflow-auto bg-black/50">
+                {isNodeRunning ? (
+                  <div className="flex items-center gap-2 text-green-400">
+                    <div className="w-4 h-4 border-2 border-green-400 border-t-transparent rounded-full animate-spin" />
+                    <span>Running Node.js...</span>
+                  </div>
+                ) : nodeOutput ? (
+                  <pre className="text-green-400 whitespace-pre-wrap">{nodeOutput}</pre>
+                ) : (
+                  <div className="text-gray-500 space-y-2">
+                    <p># Node.js CLI Runtime</p>
+                    <p>{entryFile ? `Entry: ${entryFile[0]}` : 'No entry file found'}</p>
+                    <p className="text-gray-600">Click "▶ Run" to execute</p>
+                  </div>
+                )}
+                <p className="text-blue-400 animate-pulse">▊</p>
               </div>
             </div>
           );
@@ -4502,12 +5071,13 @@ root.render(<App />);` };
                   autorun: true,
                   recompileMode: "delayed",
                   recompileDelay: 300,
+                  externalResources: [],
                 }}
                 files={finalSandpackFiles}
                 customSetup={{
                   dependencies: getDependencies(),
-                  devDependencies: useStructure.devDependencies?.reduce(
-                    (acc, dep) => {
+                  devDependencies: (useStructure as any).devDependencies?.reduce(
+                    (acc: Record<string, string>, dep: string) => {
                       acc[dep] = "latest";
                       return acc;
                     },
@@ -4595,44 +5165,45 @@ root.render(<App />);` };
         if (useStructure) {
           Object.entries(useStructure.files).forEach(([path, content]) => {
             if (typeof content === "string" && content.trim()) {
-              const sandpackPath = path.startsWith("/") ? path : `/${path}`;
+              // Remove leading slash - Sandpack expects relative paths
+              const sandpackPath = path.replace(/^\/+/, '');
               sandpackFiles[sandpackPath] = { code: content };
             }
           });
         }
 
         // If HTML file found via codeBlocks (not structure), add it
-        if (htmlFile && !sandpackFiles["/index.html"]) {
-          sandpackFiles["/index.html"] = { code: htmlFile.code };
+        if (htmlFile && !sandpackFiles["index.html"]) {
+          sandpackFiles["index.html"] = { code: htmlFile.code };
         }
 
         // Add CSS file if found
         if (cssFile && !Object.keys(sandpackFiles).some(p => p.endsWith(".css"))) {
-          sandpackFiles["/style.css"] = { code: cssFile.code };
+          sandpackFiles["style.css"] = { code: cssFile.code };
         }
 
         // Add JS file if found
         if (jsFile && !Object.keys(sandpackFiles).some(p => p.endsWith(".js"))) {
-          sandpackFiles["/index.js"] = { code: jsFile.code };
+          sandpackFiles["index.js"] = { code: jsFile.code };
         }
 
         // Ensure we have an entry point
-        if (!sandpackFiles["/index.html"] && (cssFile || jsFile)) {
-          sandpackFiles["/index.html"] = {
+        if (!sandpackFiles["index.html"] && (cssFile || jsFile)) {
+          sandpackFiles["index.html"] = {
             code: `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>Preview</title>
-  ${cssFile ? '<link rel="stylesheet" href="/style.css">' : ''}
+  ${cssFile ? '<link rel="stylesheet" href="style.css">' : ''}
 </head>
 <body>
   <div id="app">
     <h1>Preview</h1>
     <p>Generated from your code</p>
   </div>
-  ${jsFile ? '<script src="/index.js"></script>' : ''}
+  ${jsFile ? '<script src="index.js"></script>' : ''}
 </body>
 </html>`,
           };
@@ -5127,6 +5698,7 @@ root.render(<App />);` };
                     </div>
                   )}
                   <PreviewErrorBoundary
+                    previewMode={previewMode}
                     onReset={() => {
                       log('[PreviewErrorBoundary] Reset triggered, clearing preview state');
                       handleClearManualPreview();
@@ -5746,8 +6318,12 @@ root.render(<App />);` };
                           </div>
                         </div>
                       ) : (
-                        <div className="h-full flex items-center justify-center text-sm text-gray-500">
-                          Select a file or code snippet to preview.
+                        <div className="h-full flex flex-col items-center justify-center text-sm">
+                          <div className="w-16 h-16 mb-4 rounded-2xl bg-gradient-to-br from-white/5 to-white/10 border border-white/10 flex items-center justify-center backdrop-blur-sm">
+                            <Eye className="w-8 h-8 text-white/30" />
+                          </div>
+                          <p className="text-white/50 font-medium">No preview selected</p>
+                          <p className="text-white/30 text-xs mt-1">Select a file to preview</p>
                         </div>
                       )}
                     </div>

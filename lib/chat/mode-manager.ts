@@ -1,85 +1,90 @@
 /**
  * Mode Manager
- * 
+ *
  * Handles mode-aware response processing to ensure proper separation
  * between Chat and Code modes, preventing incorrect diff proposals
  * and code preview panel triggers.
  */
 
-import { extractFileEdits, extractFencedDiffEdits, isFullFileContent } from './file-edit-parser';
+import { extractFileEdits, extractFencedDiffEdits, isFullFileContent } from './file-edit-parser'
 
-export type AppMode = 'chat' | 'code' | 'extras' | 'integrations' | 'shell';
+export type AppMode = 'chat' | 'code' | 'extras' | 'integrations' | 'shell'
 
 export interface ProcessedResponse {
-  mode: AppMode;
-  content: string;
-  codeBlocks?: CodeBlock[];
-  fileDiffs?: FileDiff[];
-  shouldShowDiffs: boolean;
-  shouldOpenCodePreview: boolean;
-  isInputParsing: boolean;
+  mode: AppMode
+  content: string
+  codeBlocks?: CodeBlock[]
+  fileDiffs?: FileDiff[]
+  shouldShowDiffs: boolean
+  shouldOpenCodePreview: boolean
+  isInputParsing: boolean
 }
 
 export interface CodeBlock {
-  language: string;
-  code: string;
-  filename?: string;
-  isFileEdit: boolean;
+  language: string
+  code: string
+  filename?: string
+  isFileEdit: boolean
 }
 
 export interface FileDiff {
-  path: string;
-  diff: string;
-  type: 'create' | 'modify' | 'delete';
+  path: string
+  diff: string
+  type: 'create' | 'modify' | 'delete'
 }
 
 export interface FileOperation {
-  type: 'create' | 'modify' | 'delete';
-  path: string;
-  content?: string;
-  diff?: string;
+  type: 'create' | 'modify' | 'delete'
+  path: string
+  content?: string
+  diff?: string
 }
 
-/**
- * Detected folder structure from LLM response
- */
+/** Detected folder structure from LLM response */
 export interface DetectedFolderStructure {
-  isSingleFolder: boolean;
-  folderName: string | null;
-  totalFiles: number;
-  filesInFolder: number;
-  filesOutsideFolder: string[];
-  isNewProject: boolean;
+  isSingleFolder: boolean
+  folderName: string | null
+  totalFiles: number
+  filesInFolder: number
+  filesOutsideFolder: string[]
+  isNewProject: boolean
 }
 
-/**
- * Mode Manager class for handling mode-aware response processing
- */
+// ---------------------------------------------------------------------------
+// Shared constants
+// ---------------------------------------------------------------------------
+
+/** File extensions / name patterns that imply a complete, editable file. */
+const FILE_STRUCTURE_LANGUAGES = new Set(['javascript', 'typescript', 'jsx', 'tsx'])
+const CONFIG_FILENAME_PATTERNS = ['.json', '.yml', '.yaml', 'config']
+
+const EXAMPLE_KEYWORDS = ['example', 'demo', 'sample'] as const
+
+/** Minimum number of files in a folder for it to be treated as a new project. */
+const NEW_PROJECT_MIN_FILES = 2
+
+// ---------------------------------------------------------------------------
+// ModeManager
+// ---------------------------------------------------------------------------
+
 export class ModeManager {
-  private currentMode: AppMode = 'chat';
+  private currentMode: AppMode = 'chat'
 
-  /**
-   * Set the current application mode
-   */
   setMode(mode: AppMode): void {
-    this.currentMode = mode;
+    this.currentMode = mode
   }
 
-  /**
-   * Get the current application mode
-   */
   getCurrentMode(): AppMode {
-    return this.currentMode;
+    return this.currentMode
   }
 
   /**
-   * Route and process response based on current mode
+   * Route and process a response based on the current mode.
    */
   routeResponse(response: string, isInputParsing: boolean = false): ProcessedResponse {
-    const codeBlocks = this.extractCodeBlocks(response);
-    const fileDiffs = this.detectFileDiffs(response);
-    
-    // Never show diffs or open code preview for input parsing
+    const codeBlocks = this.extractCodeBlocks(response)
+    const fileDiffs = this.detectFileDiffs(response)
+
     if (isInputParsing) {
       return {
         mode: this.currentMode,
@@ -89,61 +94,57 @@ export class ModeManager {
         shouldShowDiffs: false,
         shouldOpenCodePreview: false,
         isInputParsing: true,
-      };
+      }
     }
 
-    // Mode-specific processing
     switch (this.currentMode) {
-      case 'chat':
-        return this.processChatResponse(response, codeBlocks, fileDiffs);
       case 'code':
-        return this.processCodeResponse(response, codeBlocks, fileDiffs);
+        return this.processCodeResponse(response, codeBlocks, fileDiffs)
       default:
-        return this.processChatResponse(response, codeBlocks, fileDiffs);
+        return this.processChatResponse(response, codeBlocks, fileDiffs)
     }
   }
 
-  /**
-   * Process response for Chat mode
-   */
+  // -------------------------------------------------------------------------
+  // Mode-specific processing
+  // -------------------------------------------------------------------------
+
   private processChatResponse(
-    response: string, 
-    codeBlocks: CodeBlock[], 
-    fileDiffs: FileDiff[]
+    response: string,
+    codeBlocks: CodeBlock[],
+    fileDiffs: FileDiff[],
   ): ProcessedResponse {
-    // In Chat mode, code blocks are for display only, not file edits
-    const displayCodeBlocks = codeBlocks.map(block => ({
-      ...block,
-      isFileEdit: false, // Never treat as file edits in chat mode
-    }));
+    // Auto-escalate to Code mode processing when file edits are detected.
+    const hasFileEdits =
+      fileDiffs.length > 0 || codeBlocks.some(block => this.isFileEdit(block))
+    if (hasFileEdits) {
+      return this.processCodeResponse(response, codeBlocks, fileDiffs)
+    }
 
     return {
       mode: 'chat',
       content: response,
-      codeBlocks: displayCodeBlocks,
-      fileDiffs: [], // Never show file diffs in chat mode
-      shouldShowDiffs: false, // Never show diffs in chat mode
-      shouldOpenCodePreview: false, // Never auto-open code preview in chat mode
+      codeBlocks: codeBlocks.map(block => ({ ...block, isFileEdit: false })),
+      fileDiffs: [],
+      shouldShowDiffs: false,
+      shouldOpenCodePreview: false,
       isInputParsing: false,
-    };
+    }
   }
 
-  /**
-   * Process response for Code mode
-   */
   private processCodeResponse(
-    response: string, 
-    codeBlocks: CodeBlock[], 
-    fileDiffs: FileDiff[]
+    response: string,
+    codeBlocks: CodeBlock[],
+    fileDiffs: FileDiff[],
   ): ProcessedResponse {
-    // In Code mode, determine which code blocks are actual file edits
     const processedCodeBlocks = codeBlocks.map(block => ({
       ...block,
       isFileEdit: this.isFileEdit(block),
-    }));
+    }))
 
-    const actualFileDiffs = this.filterActualFileDiffs(fileDiffs);
-    const hasActualCode = processedCodeBlocks.some(block => block.isFileEdit) || actualFileDiffs.length > 0;
+    const actualFileDiffs = this.filterActualFileDiffs(fileDiffs)
+    const hasActualCode =
+      processedCodeBlocks.some(block => block.isFileEdit) || actualFileDiffs.length > 0
 
     return {
       mode: 'code',
@@ -153,200 +154,178 @@ export class ModeManager {
       shouldShowDiffs: actualFileDiffs.length > 0,
       shouldOpenCodePreview: hasActualCode,
       isInputParsing: false,
-    };
+    }
   }
 
-  /**
-   * Determine if a code block represents a file edit
-   */
+  // -------------------------------------------------------------------------
+  // Code-block classification
+  // -------------------------------------------------------------------------
+
   private isFileEdit(codeBlock: CodeBlock): boolean {
-    // Check if the code block has a filename and appears to be a complete file
-    if (!codeBlock.filename) {
-      return false;
-    }
+    if (!codeBlock.filename) return false
 
-    // Check for file edit indicators
-    const code = codeBlock.code.toLowerCase();
-    const filename = codeBlock.filename.toLowerCase();
+    const lang = codeBlock.language.toLowerCase()
+    const filename = codeBlock.filename.toLowerCase()
+    const code = codeBlock.code.toLowerCase()
 
-    // Exclude example/demo code
+    // Exclude example / demo / sample code
     if (
+      EXAMPLE_KEYWORDS.some(kw => filename.includes(kw)) ||
       code.includes('// example') ||
       code.includes('// demo') ||
       code.includes('/* example') ||
-      code.includes('# example') ||
-      filename.includes('example') ||
-      filename.includes('demo') ||
-      filename.includes('sample')
+      code.includes('# example')
     ) {
-      return false;
+      return false
     }
 
-    // Check for complete file structure indicators
-    const hasFileStructure = 
-      // JavaScript/TypeScript files
-      (codeBlock.language.includes('javascript') || codeBlock.language.includes('typescript')) &&
-      (code.includes('import') || code.includes('export') || code.includes('module.exports')) ||
-      
-      // HTML files
-      codeBlock.language === 'html' && code.includes('<!doctype') ||
-      
-      // CSS files
-      codeBlock.language === 'css' && (code.includes('{') && code.includes('}')) ||
-      
-      // Python files
-      codeBlock.language === 'python' && (code.includes('def ') || code.includes('class ')) ||
-      
-      // Configuration files
-      filename.includes('config') || filename.includes('.json') || filename.includes('.yml');
+    // JS/TS: must have import or export or module.exports
+    if (FILE_STRUCTURE_LANGUAGES.has(lang)) {
+      return code.includes('import') || code.includes('export') || code.includes('module.exports')
+    }
 
-    return hasFileStructure;
+    // HTML
+    if (lang === 'html') return code.includes('<!doctype')
+
+    // CSS: any selector block
+    if (lang === 'css') return code.includes('{') && code.includes('}')
+
+    // Python
+    if (lang === 'python') return code.includes('def ') || code.includes('class ')
+
+    // Config files
+    if (CONFIG_FILENAME_PATTERNS.some(p => filename.includes(p))) return true
+
+    return false
   }
 
-  /**
-   * Extract code blocks from response content
-   */
-  private extractCodeBlocks(content: string): CodeBlock[] {
-    const codeBlockRegex = /```(?:([a-zA-Z0-9+\-_.]+)(?:\s+(.+?))?)?\n([\s\S]*?)```/g;
-    const blocks: CodeBlock[] = [];
-    let match;
+  // -------------------------------------------------------------------------
+  // Code block extraction
+  // -------------------------------------------------------------------------
 
-    while ((match = codeBlockRegex.exec(content)) !== null) {
-      const [, language = 'text', filename, code] = match;
-      
+  private extractCodeBlocks(content: string): CodeBlock[] {
+    const regex = /```(?:([a-zA-Z0-9+\-_.]+)(?:\s+(.+?))?)?[\r\n]([\s\S]*?)```/g
+    const blocks: CodeBlock[] = []
+    let match: RegExpExecArray | null
+
+    while ((match = regex.exec(content)) !== null) {
+      const [, language = 'text', filename, code] = match
       blocks.push({
         language: language.toLowerCase(),
         code: code.trim(),
         filename: filename?.trim(),
-        isFileEdit: false, // Will be determined later
-      });
+        isFileEdit: false,
+      })
     }
 
-    return blocks;
+    return blocks
   }
 
-  /**
-   * Detect file diffs in response content
-   */
+  // -------------------------------------------------------------------------
+  // File diff detection
+  // -------------------------------------------------------------------------
+
   private detectFileDiffs(content: string): FileDiff[] {
-    const diffs: FileDiff[] = [];
+    const diffs: FileDiff[] = []
+    // Deduplicate by path (first occurrence wins across all parsers)
+    const seen = new Set<string>()
 
-    // Use shared parser for <file_edit> tags (both compact and multi-line formats)
-    const fileEdits = extractFileEdits(content);
-    for (const edit of fileEdits) {
-      diffs.push({
-        path: edit.path,
-        diff: edit.content,
-        type: isFullFileContent(edit.content) ? 'create' : 'modify',
-      });
-    }
-
-    // Use shared parser for fenced diff blocks
-    const fencedDiffs = extractFencedDiffEdits(content);
-    for (const diff of fencedDiffs) {
-      diffs.push({
-        path: diff.path,
-        diff: diff.diff,
-        type: this.determineDiffType(diff.diff),
-      });
-    }
-
-    // Look for COMMANDS blocks with write_diffs
-    const commandsRegex = /=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/g;
-    let match;
-    while ((match = commandsRegex.exec(content)) !== null) {
-      const commandBlock = match[1];
-      const diffsMatch = commandBlock.match(/write_diffs:\s*\[([\s\S]*?)\]/);
-      
-      if (diffsMatch) {
-        try {
-          const items = diffsMatch[1]
-            .split(/},/)
-            .map((s) => (s.endsWith("}") ? s : s + "}"))
-            .map((s) => s.trim())
-            .filter(Boolean);
-
-          items.forEach(item => {
-            const pathMatch = item.match(/path:\s*"([^"]+)"/);
-            const diffMatch = item.match(/diff:\s*"([\s\S]*)"/);
-            
-            if (pathMatch && diffMatch) {
-              diffs.push({
-                path: pathMatch[1],
-                diff: diffMatch[1].replace(/\\n/g, "\n"),
-                type: this.determineDiffType(diffMatch[1]),
-              });
-            }
-          });
-        } catch (error) {
-          console.warn('Failed to parse COMMANDS diff block:', error);
-        }
+    const addDiff = (path: string, diff: string, type: FileDiff['type']) => {
+      if (!seen.has(path)) {
+        seen.add(path)
+        diffs.push({ path, diff, type })
       }
     }
 
-    return diffs;
-  }
-
-  /**
-   * Determine the type of diff operation
-   */
-  private determineDiffType(diffContent: string): 'create' | 'modify' | 'delete' {
-    const lines = diffContent.split('\n');
-    const addedLines = lines.filter(line => line.startsWith('+')).length;
-    const removedLines = lines.filter(line => line.startsWith('-')).length;
-
-    if (addedLines > 0 && removedLines === 0) {
-      return 'create';
-    } else if (addedLines === 0 && removedLines > 0) {
-      return 'delete';
-    } else {
-      return 'modify';
+    // <file_edit> tags (both compact and multi-line)
+    for (const edit of extractFileEdits(content)) {
+      addDiff(
+        edit.path,
+        edit.content,
+        isFullFileContent(edit.content) ? 'create' : 'modify',
+      )
     }
+
+    // Fenced diff blocks
+    for (const diff of extractFencedDiffEdits(content)) {
+      addDiff(diff.path, diff.diff, this.determineDiffType(diff.diff))
+    }
+
+    // COMMANDS blocks with write_diffs
+    const commandsRegex = /=== COMMANDS_START ===([\s\S]*?)=== COMMANDS_END ===/g
+    let match: RegExpExecArray | null
+
+    while ((match = commandsRegex.exec(content)) !== null) {
+      const commandBlock = match[1]
+      const diffsMatch = commandBlock.match(/write_diffs:\s*\[([\s\S]*?)\]/)
+      if (!diffsMatch) continue
+
+      try {
+        const items = diffsMatch[1]
+          .split(/},/)
+          .map(s => (s.endsWith('}') ? s : s + '}'))
+          .map(s => s.trim())
+          .filter(Boolean)
+
+        for (const item of items) {
+          const pathMatch = item.match(/path:\s*"([^"]+)"/)
+          const diffMatch = item.match(/diff:\s*"((?:\\.|[^"\\])*)"/)
+          if (pathMatch && diffMatch) {
+            const rawDiff = diffMatch[1].replace(/\\n/g, '\n')
+            addDiff(pathMatch[1], rawDiff, this.determineDiffType(rawDiff))
+          }
+        }
+      } catch (error) {
+        // Malformed COMMANDS block — skip gracefully
+      }
+    }
+
+    return diffs
   }
 
-  /**
-   * Filter out non-actual file diffs (e.g., examples, demos)
-   */
+  private determineDiffType(diffContent: string): FileDiff['type'] {
+    let added = 0
+    let removed = 0
+    for (const line of diffContent.split('\n')) {
+      if (line.startsWith('+')) added++
+      else if (line.startsWith('-')) removed++
+    }
+    if (added > 0 && removed === 0) return 'create'
+    if (added === 0 && removed > 0) return 'delete'
+    return 'modify'
+  }
+
+  // -------------------------------------------------------------------------
+  // Filtering
+  // -------------------------------------------------------------------------
+
   private filterActualFileDiffs(diffs: FileDiff[]): FileDiff[] {
     return diffs.filter(diff => {
-      const path = diff.path.toLowerCase();
-      
-      // Exclude example/demo files
-      if (
-        path.includes('example') ||
-        path.includes('demo') ||
-        path.includes('sample') ||
-        path.includes('test') && !path.includes('src/test') // Exclude test files unless in src/test
-      ) {
-        return false;
-      }
-
-      return true;
-    });
+      const path = diff.path.toLowerCase()
+      // Exclude obvious example / demo / sample files
+      if (EXAMPLE_KEYWORDS.some(kw => path.includes(kw))) return false
+      // Exclude test files unless they live under src/test
+      if (path.includes('test') && !path.includes('src/test')) return false
+      return true
+    })
   }
 
-  /**
-   * Extract file operations from response
-   */
+  // -------------------------------------------------------------------------
+  // File operations
+  // -------------------------------------------------------------------------
+
   extractFileOperations(response: string): FileOperation[] {
-    const operations: FileOperation[] = [];
-    const fileDiffs = this.detectFileDiffs(response);
-
-    fileDiffs.forEach(diff => {
-      operations.push({
-        type: diff.type,
-        path: diff.path,
-        diff: diff.diff,
-      });
-    });
-
-    return operations;
+    return this.detectFileDiffs(response).map(diff => ({
+      type: diff.type,
+      path: diff.path,
+      diff: diff.diff,
+    }))
   }
 
-  /**
-   * Detect folder structure from file operations
-   * Analyzes if all files are under a single folder (indicating new project with pre-named folder)
-   */
+  // -------------------------------------------------------------------------
+  // Folder structure detection
+  // -------------------------------------------------------------------------
+
   detectFolderStructure(fileOperations: FileOperation[]): DetectedFolderStructure {
     if (fileOperations.length === 0) {
       return {
@@ -356,179 +335,144 @@ export class ModeManager {
         filesInFolder: 0,
         filesOutsideFolder: [],
         isNewProject: false,
-      };
-    }
-
-    const paths = fileOperations.map(op => op.path);
-    const totalFiles = paths.length;
-    
-    // Extract folder names from paths
-    const folderNames = new Set<string>();
-    const filesOutsideAnyFolder: string[] = [];
-    
-    for (const path of paths) {
-      const parts = path.split('/').filter(Boolean);
-      
-      if (parts.length >= 2) {
-        // Has at least one folder level (e.g., my_vue_app/src/...)
-        folderNames.add(parts[0]);
-      } else if (parts.length === 1) {
-        // File at root level (e.g., package.json directly)
-        filesOutsideAnyFolder.push(path);
       }
     }
 
-    // Check if all files are under a single folder with no external files
-    const folderNameArray = Array.from(folderNames);
-    const isSingleFolder = folderNameArray.length === 1;
-    const singleFolderName = isSingleFolder ? folderNameArray[0] : null;
-    
-    // Determine if this looks like a new project
-    // New project = single folder with multiple files inside OR files at root level
-    const isNewProject = isSingleFolder || (paths.length > 1 && filesOutsideAnyFolder.length === 0);
+    const paths = fileOperations.map(op => op.path)
+    const folderNames = new Set<string>()
+    const filesOutsideAnyFolder: string[] = []
 
-    // Count files inside the single folder
-    let filesInFolder = 0;
-    if (isSingleFolder && singleFolderName) {
-      filesInFolder = paths.filter(p => p.startsWith(singleFolderName + '/')).length;
+    for (const path of paths) {
+      const parts = path.split('/').filter(Boolean)
+      if (parts.length >= 2) {
+        folderNames.add(parts[0])
+      } else {
+        filesOutsideAnyFolder.push(path)
+      }
     }
+
+    const folderNameArray = Array.from(folderNames)
+    const isSingleFolder = folderNameArray.length === 1
+    const singleFolderName = isSingleFolder ? folderNameArray[0] : null
+
+    const filesInFolder =
+      isSingleFolder && singleFolderName
+        ? paths.filter(p => p.startsWith(singleFolderName + '/')).length
+        : 0
+
+    const isNewProject =
+      isSingleFolder || (paths.length > 1 && filesOutsideAnyFolder.length === 0)
 
     return {
       isSingleFolder,
       folderName: singleFolderName,
-      totalFiles,
+      totalFiles: paths.length,
       filesInFolder,
       filesOutsideFolder: filesOutsideAnyFolder,
       isNewProject,
-    };
+    }
   }
 
-  /**
-   * Extract file paths from code blocks (files with path comments like "// src/App.js")
-   */
-  extractPathsFromCodeBlocks(response: string): string[] {
-    const paths: string[] = [];
-    const codeBlockRegex = /```(?:([a-zA-Z0-9+\-_.]+)(?:\s+(.+?))?)?\n([\s\S]*?)```/g;
-    let match;
+  // -------------------------------------------------------------------------
+  // Path extraction from code blocks
+  // -------------------------------------------------------------------------
 
-    while ((match = codeBlockRegex.exec(response)) !== null) {
-      const [, language, filename, code] = match;
-      
-      // Check if filename looks like a file path (contains /)
+  extractPathsFromCodeBlocks(response: string): string[] {
+    const paths: string[] = []
+    const regex = /```(?:[a-zA-Z0-9+\-_.]+)?(?:\s+(.+?))?[\r\n]/g
+    let match: RegExpExecArray | null
+
+    while ((match = regex.exec(response)) !== null) {
+      const filename = match[1]?.trim()
       if (filename?.includes('/')) {
-        paths.push(filename.trim());
-      }
-      
-      // Also check code content for file path patterns
-      const pathInCodeMatch = code.match(/^(?:\/\/\s*)?(?:src|lib|app|package\.json|index\.|app\.)/);
-      if (pathInCodeMatch) {
-        // This is a hint but not a full path - skip for now
+        paths.push(filename)
       }
     }
 
-    return paths;
+    return paths
   }
 
-  /**
-   * Check if response indicates a new project with single folder structure
-   * Returns folder name if detected, null otherwise
-   */
+  // -------------------------------------------------------------------------
+  // New-project folder detection
+  // -------------------------------------------------------------------------
+
   detectNewProjectFolder(response: string): string | null {
-    // First check file operations (diffs and COMMANDS blocks)
-    const fileOperations = this.extractFileOperations(response);
-    const structureFromDiffs = this.detectFolderStructure(fileOperations);
-    
-    // Also check code blocks for file paths
-    const codeBlockPaths = this.extractPathsFromCodeBlocks(response);
-    const structureFromCodeBlocks = this.detectFolderStructure(
-      codeBlockPaths.map(p => ({ type: 'create' as const, path: p }))
-    );
-    
-    // Prefer diffs if available, otherwise use code blocks
-    const structure = fileOperations.length > 0 ? structureFromDiffs : structureFromCodeBlocks;
-    
-    // Rule: New project with single folder AND all files inside it (no external files)
-    // AND at least 2 files (to distinguish from intentional subdirectory writes)
+    const fileOperations = this.extractFileOperations(response)
+    const structure =
+      fileOperations.length > 0
+        ? this.detectFolderStructure(fileOperations)
+        : this.detectFolderStructure(
+            this.extractPathsFromCodeBlocks(response).map(p => ({
+              type: 'create' as const,
+              path: p,
+            })),
+          )
+
     if (
       structure.isSingleFolder &&
       structure.folderName &&
-      structure.filesInFolder > 1 &&
+      structure.filesInFolder >= NEW_PROJECT_MIN_FILES &&
       structure.filesOutsideFolder.length === 0
     ) {
-      return structure.folderName;
+      return structure.folderName
     }
-    
-    return null;
+
+    return null
   }
 
-  /**
-   * Check if response should generate diffs based on mode
-   */
+  // -------------------------------------------------------------------------
+  // Convenience predicates
+  // -------------------------------------------------------------------------
+
   shouldGenerateDiffs(response: string, mode?: AppMode): boolean {
-    const currentMode = mode || this.currentMode;
-    
-    // Never generate diffs in chat mode
-    if (currentMode === 'chat') {
-      return false;
-    }
-
-    // In code mode, only generate diffs if there are actual file operations
-    const fileDiffs = this.detectFileDiffs(response);
-    const actualDiffs = this.filterActualFileDiffs(fileDiffs);
-    
-    return actualDiffs.length > 0;
+    const currentMode = mode ?? this.currentMode
+    if (currentMode === 'chat') return false
+    return this.filterActualFileDiffs(this.detectFileDiffs(response)).length > 0
   }
 
-  /**
-   * Check if code preview panel should open based on mode and content
-   */
   shouldOpenCodePreview(response: string, mode?: AppMode): boolean {
-    const currentMode = mode || this.currentMode;
-    
-    // Never auto-open code preview in chat mode
-    if (currentMode === 'chat') {
-      return false;
-    }
+    const currentMode = mode ?? this.currentMode
+    if (currentMode === 'chat') return false
 
-    // In code mode, only open if there's actual code to preview
-    const codeBlocks = this.extractCodeBlocks(response);
-    const hasActualCode = codeBlocks.some(block => this.isFileEdit(block));
-    const fileDiffs = this.detectFileDiffs(response);
-    const hasActualDiffs = this.filterActualFileDiffs(fileDiffs).length > 0;
-
-    return hasActualCode || hasActualDiffs;
+    const hasActualCode = this.extractCodeBlocks(response).some(b => this.isFileEdit(b))
+    const hasActualDiffs = this.filterActualFileDiffs(this.detectFileDiffs(response)).length > 0
+    return hasActualCode || hasActualDiffs
   }
 }
 
-// Create singleton instance
-export const modeManager = new ModeManager();
+// ---------------------------------------------------------------------------
+// Singleton + convenience exports
+// ---------------------------------------------------------------------------
 
-// Export utility functions
+export const modeManager = new ModeManager()
+
 export function setCurrentMode(mode: AppMode): void {
-  modeManager.setMode(mode);
+  modeManager.setMode(mode)
 }
 
 export function getCurrentMode(): AppMode {
-  return modeManager.getCurrentMode();
+  return modeManager.getCurrentMode()
 }
 
-export function processResponse(response: string, isInputParsing: boolean = false): ProcessedResponse {
-  return modeManager.routeResponse(response, isInputParsing);
+export function processResponse(
+  response: string,
+  isInputParsing: boolean = false,
+): ProcessedResponse {
+  return modeManager.routeResponse(response, isInputParsing)
 }
 
 export function shouldShowDiffs(response: string, mode?: AppMode): boolean {
-  return modeManager.shouldGenerateDiffs(response, mode);
+  return modeManager.shouldGenerateDiffs(response, mode)
 }
 
 export function shouldOpenCodePreview(response: string, mode?: AppMode): boolean {
-  return modeManager.shouldOpenCodePreview(response, mode);
+  return modeManager.shouldOpenCodePreview(response, mode)
 }
 
 export function detectNewProjectFolder(response: string): string | null {
-  return modeManager.detectNewProjectFolder(response);
+  return modeManager.detectNewProjectFolder(response)
 }
 
 export function detectFolderStructure(response: string): DetectedFolderStructure {
-  const fileOperations = modeManager.extractFileOperations(response);
-  return modeManager.detectFolderStructure(fileOperations);
+  return modeManager.detectFolderStructure(modeManager.extractFileOperations(response))
 }

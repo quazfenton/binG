@@ -7,7 +7,42 @@ export const runtime = 'nodejs';
 
 export async function POST(request: NextRequest) {
   try {
-    // Try session-based validation first
+    // Try Auth0 session first (uses encrypted auth0_session cookie)
+    try {
+      const { auth0 } = await import('@/lib/auth0');
+      const { getLocalUserIdFromAuth0 } = await import('@/lib/oauth/connections');
+      const auth0Session = await auth0.getSession(request);
+      if (auth0Session?.user) {
+        const localUserId = await getLocalUserIdFromAuth0(auth0Session.user.sub);
+        
+        // If Auth0 session exists but not linked to local user, reject auth
+        // Do NOT fall back to legacy/JWT which could authenticate a different account
+        if (!localUserId) {
+          return NextResponse.json(
+            { valid: false, error: 'Auth0 account not linked to local user' },
+            { status: 401 }
+          );
+        }
+        
+        const user = await authService.getUserById(localUserId);
+        if (!user) {
+          return NextResponse.json(
+            { valid: false, error: 'User not found' },
+            { status: 401 }
+          );
+        }
+
+        return NextResponse.json({
+          valid: true,
+          user,
+        });
+      }
+    } catch (auth0Error) {
+      // Auth0 not configured or session unavailable — fall through
+      console.debug('[validate] Auth0 session check failed:', auth0Error);
+    }
+
+    // Try legacy session_id cookie
     const sessionId = request.cookies.get('session_id')?.value;
     
     if (sessionId) {

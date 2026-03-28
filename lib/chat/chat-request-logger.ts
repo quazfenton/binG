@@ -133,7 +133,7 @@ class ChatRequestLogger {
     requestId: string,
     userId: string,
     provider: string,
-    model: string,
+    model: string | undefined,  // Make model optional
     messages: any[],
     streaming: boolean,
     metadata?: Record<string, any>
@@ -142,8 +142,9 @@ class ChatRequestLogger {
     if (!this.db) return;
 
     try {
+      // Use INSERT OR IGNORE to avoid duplicate requestIds (first write wins)
       const stmt = this.db.prepare(`
-        INSERT INTO chat_request_logs
+        INSERT OR IGNORE INTO chat_request_logs
         (id, user_id, provider, model, message_count, request_size, streaming, created_at, metadata)
         VALUES (?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, ?)
       `);
@@ -154,14 +155,17 @@ class ChatRequestLogger {
         requestId,
         userId,
         provider,
-        model,
+        model || 'unknown',  // Default to 'unknown' if model is undefined
         messages.length,
         requestSize,
         streaming ? 1 : 0,
         metadata ? JSON.stringify(metadata) : null
       );
-    } catch (error) {
-      console.error('[ChatRequestLogger] Failed to log request start:', error);
+    } catch (error: any) {
+      // Silently ignore UNIQUE constraint errors (already logged with INSERT OR REPLACE)
+      if (error?.code !== 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+        console.error('[ChatRequestLogger] Failed to log request start:', error);
+      }
     }
   }
 
@@ -339,6 +343,61 @@ class ChatRequestLogger {
         averageTokensPerRequest: 0,
         successRate: 0,
       };
+    }
+  }
+
+  /**
+   * Get per-model performance metrics
+   * Used by model-ranker for telemetry-based model selection
+   */
+  async getModelPerformance(minutesBack: number = 10): Promise<Array<{
+    provider: string;
+    model: string;
+    avgLatency: number;
+    failureRate: number;
+    totalCalls: number;
+    lastUpdated: number;
+    successRate: number;
+  }>> {
+    await this.initialize();
+    if (!this.db) {
+      return [];
+    }
+
+    try {
+      // Match SQLite datetime format (YYYY-MM-DD HH:MM:SS)
+      const cutoffTime = new Date(Date.now() - minutesBack * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
+
+      const stmt = this.db.prepare(`
+        SELECT 
+          provider,
+          model,
+          COUNT(*) as totalCalls,
+          AVG(latency_ms) as avgLatency,
+          SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failures,
+          MAX(created_at) as lastUpdated,
+          AVG(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successRate
+        FROM chat_request_logs
+        WHERE created_at >= ?
+        GROUP BY provider, model
+        HAVING totalCalls >= 1
+        ORDER BY avgLatency ASC
+      `);
+
+      const results = stmt.all(cutoffTime) as any[];
+
+      return results.map(row => ({
+        provider: row.provider,
+        model: row.model,
+        avgLatency: Math.round(row.avgLatency || 0),
+        failureRate: row.totalCalls > 0 ? row.failures / row.totalCalls : 0,
+        lastUpdated: new Date(row.lastUpdated).getTime(),
+        totalCalls: row.totalCalls,
+        successRate: row.successRate || 1 - (row.failures / row.totalCalls),
+      }));
+    } catch (error) {
+      console.error('[ChatRequestLogger] Failed to get model performance:', error);
+      return [];
     }
   }
 

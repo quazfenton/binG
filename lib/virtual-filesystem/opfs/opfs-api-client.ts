@@ -44,6 +44,7 @@ export async function fetchFileFromServer(path: string): Promise<{
   language: string;
   size: number;
   lastModified: string;
+  createdAt: string;
 } | null> {
   try {
     const response = await authenticatedFetch('/api/filesystem/read', {
@@ -55,6 +56,11 @@ export async function fetchFileFromServer(path: string): Promise<{
 
     const result = await response.json();
     if (!result.success) return null;
+
+    // Add createdAt if missing (backward compatibility)
+    if (!result.data.createdAt) {
+      result.data.createdAt = result.data.lastModified;
+    }
 
     return result.data;
   } catch {

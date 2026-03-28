@@ -45,7 +45,7 @@ export interface HealthCheckConfig {
 const DEFAULT_CONFIG: HealthCheckConfig = {
   interval: 30000, // 30 seconds
   timeout: 5000,   // 5 seconds
-  failureThreshold: 3,
+  failureThreshold: 8,
   historySize: 10,
 };
 

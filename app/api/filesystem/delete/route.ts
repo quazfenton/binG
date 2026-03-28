@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem';
+import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 import { absolutePathSchema } from '@/lib/validation/schemas';
@@ -54,6 +54,7 @@ export async function POST(req: NextRequest) {
     const ownerId = authResolution.ownerId;
 
     const result = await virtualFilesystem.deletePath(ownerId, targetPath);
+
     const response = NextResponse.json({
       success: true,
       data: result,
