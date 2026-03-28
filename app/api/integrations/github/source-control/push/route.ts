@@ -78,6 +78,11 @@ export async function POST(request: NextRequest) {
     // Collect all file contents for push
     const changes: Array<{ path: string; content: string; message: string }> = [];
     for (const file of snapshot.files) {
+      // Skip VFS directory marker files (internal to VFS, not for Git repos)
+      if (file.path.endsWith('/.directory') || file.path === '.directory') {
+        continue;
+      }
+      
       changes.push({
         path: file.path.startsWith('/') ? file.path.slice(1) : file.path,
         content: file.content,

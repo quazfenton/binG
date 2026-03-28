@@ -366,6 +366,7 @@ export async function POST(request: NextRequest) {
             task,
             context,
             requestId,
+            anonSessionIdToSet,
           });
         }
 
@@ -638,6 +639,8 @@ export async function POST(request: NextRequest) {
       // For filesystem operations (including spec enhancement background refinement),
       // use the resolved filesystem owner ID which handles anonymous users correctly
       filesystemOwnerId: filesystemOwnerId,
+      // Include conversation ID for spec enhancement filesystem edits
+      conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
       // Keep these tri-state so router-level detection can still route specialized endpoints.
       // `false` means "explicitly disable", `undefined` means "auto-detect".
       enableTools: requestType === 'tool' ? !!authenticatedUserId : undefined,
@@ -1039,6 +1042,9 @@ export async function POST(request: NextRequest) {
               "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
               "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
               "Vary": "Origin",
+              ...(anonSessionIdToSet ? {
+                "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`,
+              } : {}),
             },
           });
         }
@@ -1343,6 +1349,9 @@ export async function POST(request: NextRequest) {
             "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
             "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
             "Vary": "Origin",
+            ...(anonSessionIdToSet ? {
+              "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`,
+            } : {}),
           },
         });
       }
@@ -1527,6 +1536,12 @@ function sanitizeAssistantDisplayContent(content: string): string {
   // Match WRITE/PATCH/APPLY_DIFF at start of line with heredoc markers anywhere
   next = next.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]*\n?\s*<<<[\s\S]*?>>>/gim, '');
   
+  // Pattern 5.5: Remove tool_call XML tags that leak into display
+  if (next.includes('tool_call')) {
+    next = next.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '');
+    next = next.replace(/<\/tool_call>/gi, '');
+  }
+
   // Pattern 6: Clean up leftover <<< and >>> markers that weren't properly paired
   next = next.replace(/^\s*<<<\s*$/gm, '');
   next = next.replace(/^\s*>>>\s*$/gm, '');
@@ -1757,8 +1772,9 @@ async function handleGatewayStreaming(params: {
   task: string;
   context?: string;
   requestId: string;
+  anonSessionIdToSet?: string;
 }): Promise<Response> {
-  const { gatewayUrl, userId, conversationId, task, context, requestId } = params;
+  const { gatewayUrl, userId, conversationId, task, context, requestId, anonSessionIdToSet } = params;
 
   // Create job first
   const jobResponse = await fetch(`${gatewayUrl}/jobs`, {
@@ -1853,6 +1869,9 @@ async function handleGatewayStreaming(params: {
       'Cache-Control': 'no-cache, no-store, must-revalidate',
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
+      ...(anonSessionIdToSet ? {
+        'Set-Cookie': `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`,
+      } : {}),
     },
   });
 }

@@ -3,13 +3,13 @@
   "version": "1.0.0",
   "description": "binG - Agentic Workspace CLI",
   "type": "module",
-  "main": "bin",
+  "main": "dist/bin.js",
   "bin": {
-    "bing": "./bin"
+    "bing": "./dist/bin.js"
   },
   "scripts": {
-    "start": "node bin",
-    "dev": "node --watch bin",
+    "start": "node dist/bin.js",
+    "dev": "node bin",
     "build": "tsc",
     "test": "vitest run",
     "lint": "eslint .",
@@ -62,7 +62,6 @@
     "vitest": "^2.0.0"
   },
   "files": [
-    "bin",
     "dist",
     "README.md"
   ],

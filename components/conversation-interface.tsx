@@ -655,13 +655,8 @@ export default function ConversationInterface() {
       // Wrap async code in an async IIFE since useEffect can't be async
       const checkConflicts = async () => {
         try {
-          const listResponse = await fetch('/api/filesystem/list', {
-            method: 'POST',
+          const listResponse = await fetch(`/api/filesystem/list?path=${encodeURIComponent(filesystemScopePath)}`, {
             headers: buildFilesystemHeaders(),
-            body: JSON.stringify({
-              path: filesystemScopePath,
-              recursive: true
-            }),
           });
 
           if (listResponse.ok) {

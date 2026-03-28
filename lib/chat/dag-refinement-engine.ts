@@ -227,10 +227,10 @@ TASKS:
 ${tasksList}
 
 RULES:
-- Improve depth and correctness
-- Add missing implementation details
-- Do not repeat unchanged parts
-- Output the COMPLETE improved result
+- Improve depth and correctness for YOUR FOCUS AREA only
+- Add missing implementation details for YOUR assigned tasks
+- Output ONLY new or changed files relevant to your focus area
+- Do NOT re-output files that are unchanged or belong to other focus areas
 - Focus on QUALITY over speed
 - Make it PRODUCTION-READY
 

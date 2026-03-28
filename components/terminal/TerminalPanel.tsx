@@ -329,7 +329,12 @@ export default function TerminalPanel({
     terminals.forEach(term => {
       if (term.terminal && term.mode === 'local') {
         // Clear terminal and show updated status
-        term.terminal.clear();
+        // Guard: xterm's RenderService may not be ready if terminal hasn't been fully opened
+        try {
+          term.terminal.clear();
+        } catch {
+          // Terminal renderer not yet initialized, skip clear
+        }
         term.terminal.writeln('');
         term.terminal.writeln('\x1b[1;32m● Terminal Ready\x1b[0m');
         
@@ -567,6 +572,10 @@ export default function TerminalPanel({
           if (activeTerminalId) {
             connectTerminal(activeTerminalId);
           }
+        } else if (res.status === 401) {
+          const errData = await res.json().catch(() => null);
+          toast.error(errData?.error || 'Sign in required to use sandbox terminal');
+          setSandboxStatus('disconnected');
         } else {
           toast.error('Failed to connect sandbox');
           setSandboxStatus('disconnected');
