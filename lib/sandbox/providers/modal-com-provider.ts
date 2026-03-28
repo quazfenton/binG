@@ -76,7 +76,7 @@ export interface ModalComConfig extends SandboxCreateConfig {
   /** Memory in MB */
   memory?: number;
 
-  /** Timeout in milliseconds (default: 300000 = 5 minutes) */
+  /** Timeout in seconds (default: 300 = 5 minutes) */
   timeout?: number;
 
   /** Idle timeout in milliseconds */
@@ -250,8 +250,7 @@ export class ModalComSandboxHandle implements SandboxHandle {
     const startTime = Date.now();
 
     try {
-      const commandParts = command.split(' ');
-      const process = await this.sandbox.exec(commandParts, {
+      const process = await this.sandbox.exec(['sh', '-c', command], {
         workdir: cwd || this.workspaceDir,
         timeoutMs: timeout || this.config.timeout || 300000,
         stdout: 'pipe',
@@ -1032,7 +1031,7 @@ export class ModalComProvider implements SandboxProvider {
       // Prepare sandbox create params
       const createParams: any = {
         cpu: config.cpu,
-        memoryMiB: config.memory ? config.memory * 1024 * 1024 : undefined,
+        memoryMiB: config.memory,
         gpu: config.gpu,
         timeoutMs: config.timeout ? config.timeout * 1000 : undefined,
         idleTimeoutMs: config.idleTimeoutMs,

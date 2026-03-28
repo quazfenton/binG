@@ -2000,7 +2000,7 @@ export class ResponseRouter {
               : JSON.stringify(lastUser?.content || '');
           })()
         ),
-        maxTokens: 2000,
+        maxTokens: 4000,
         stream: false,
         requestId: specRequestId
       })
@@ -2111,6 +2111,16 @@ export class ResponseRouter {
         return
       }
 
+      // Emit spec as thinking/reasoning so it shows in the expandable thinking UI
+      if (request.emit) {
+        const specSummary = formatSpecForThinking(parsed, specScore);
+        request.emit('thinking', {
+          type: 'thinking',
+          content: specSummary,
+          timestamp: Date.now(),
+        });
+      }
+
       // Chunk spec
       let chunks = chunkSpec(parsed)
       if (request.mode === 'max') {
@@ -2131,6 +2141,7 @@ export class ResponseRouter {
         userId: request.userId,
         conversationId: request.conversationId,
         maxConcurrency: request.mode === 'max' ? 3 : 2,
+        timeBudgetMs: request.mode === 'max' ? 180_000 : 120_000,
         emit: request.emit
       })
 
@@ -2180,9 +2191,12 @@ export class ResponseRouter {
 
       // Send refined content via SSE
       if (request.emit) {
+        // Format improvements as a properly spaced list
+        const improvements = formatRefinementsAsList(parsed, refinedOutput, chunks, fileWriteEdits);
+
         const eventData: any = {
           stage: 'complete',
-          refinedContent: refinedOutput,
+          refinedContent: improvements,
           specScore,
           sectionsProcessed: chunks.length,
           hasFileWrites: fileWriteEdits.length > 0,
@@ -2263,6 +2277,80 @@ export class ResponseRouter {
       endpoints: this.getAllEndpointStats(),
     }
   }
+}
+
+/**
+ * Format a parsed spec into a readable thinking/reasoning block
+ * for display in the expandable thinking UI.
+ */
+function formatSpecForThinking(spec: any, score: number): string {
+  const lines: string[] = [];
+  lines.push('## Spec Generation Plan');
+  lines.push('');
+  if (spec.goal) {
+    lines.push(`**Goal:** ${spec.goal}`);
+    lines.push('');
+  }
+  if (spec.sections && spec.sections.length > 0) {
+    lines.push(`**${spec.sections.length} sections planned:**`);
+    lines.push('');
+    for (const section of spec.sections) {
+      lines.push(`### ${section.title || section.name || 'Section'}`);
+      if (section.priority != null) {
+        lines.push(`Priority: ${section.priority}`);
+      }
+      if (section.tasks && section.tasks.length > 0) {
+        for (const task of section.tasks) {
+          const taskStr = typeof task === 'string' ? task : task.description || task.title || JSON.stringify(task);
+          lines.push(`- ${taskStr}`);
+        }
+      }
+      lines.push('');
+    }
+  }
+  if (spec.executionStrategy) {
+    lines.push(`**Strategy:** ${spec.executionStrategy}`);
+  }
+  lines.push(`**Quality score:** ${score}/10`);
+  return lines.join('\n');
+}
+
+/**
+ * Format refinement results as a clean, spaced list of improvements.
+ * Replaces the raw "spec completed" message with actual improvement details.
+ */
+function formatRefinementsAsList(spec: any, refinedOutput: string, chunks: any[], fileWrites: any[]): string {
+  const lines: string[] = [];
+
+  if (spec.sections && spec.sections.length > 0) {
+    lines.push('### Improvements Applied');
+    lines.push('');
+
+    for (const section of spec.sections) {
+      const sectionTitle = section.title || section.name || 'General';
+      const tasks = section.tasks || [];
+      if (tasks.length > 0) {
+        lines.push(`**${sectionTitle}:**`);
+        for (const task of tasks) {
+          const taskStr = typeof task === 'string' ? task : task.description || task.title || JSON.stringify(task);
+          lines.push(`- ${taskStr}`);
+        }
+        lines.push('');
+      }
+    }
+  }
+
+  if (fileWrites.length > 0) {
+    lines.push('**Files modified:**');
+    for (const fw of fileWrites) {
+      lines.push(`- \`${fw.path}\``);
+    }
+    lines.push('');
+  }
+
+  lines.push('Let me know if you want anything else!');
+
+  return lines.join('\n');
 }
 
 // ============================================================================

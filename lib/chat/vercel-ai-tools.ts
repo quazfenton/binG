@@ -389,15 +389,20 @@ export function createSearchTools(context: ToolExecutionContext): Record<string,
     }) as Tool,
 
     web_fetch: tool({
-      description: 'Fetch content from a validated HTTPS URL. Returns cleaned text content. Blocks private IPs and internal hostnames.',
+      description: `Fetch and read the content of a web page by URL. 
+USE THIS TOOL whenever:
+- The user sends a URL/link in their message (e.g. "https://example.com/article")
+- The user asks to read, fetch, scrape, or summarize a web page
+- The user references a web page they want you to look at
+Returns cleaned article body text with navigation, ads, footers, and boilerplate automatically removed. Prioritizes main content.`,
       parameters: z.object({
-        url: z.string().describe('HTTPS URL to fetch'),
-        maxChars: z.number().optional().default(8000).describe('Max characters to return'),
+        url: z.string().describe('The HTTPS URL to fetch and read'),
+        maxChars: z.number().optional().default(12000).describe('Max characters of content to return'),
       }),
       execute: async (args: { url: string; maxChars?: number }) => {
         const { isHostnameBlocked } = await import('@/lib/utils/url-validation');
         const fetch = (await import('node-fetch')).default;
-        const maxChars = args.maxChars || 8000;
+        const maxChars = args.maxChars || 12000;
 
         try {
           // Validate URL before fetching
@@ -421,8 +426,9 @@ export function createSearchTools(context: ToolExecutionContext): Record<string,
 
           const response = await fetch(args.url, {
             headers: {
-              'User-Agent': 'Mozilla/5.0 (compatible; binG/1.0)',
+              'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/122.0.0.0 Safari/537.36',
               'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,text/plain;q=0.8,*/*;q=0.5',
+              'Accept-Language': 'en-US,en;q=0.9',
             },
             signal: AbortSignal.timeout(15000),
             redirect: 'follow',
@@ -436,21 +442,82 @@ export function createSearchTools(context: ToolExecutionContext): Record<string,
 
           const contentType = response.headers.get('content-type') || '';
           let content: string;
+          let extractedTitle = '';
 
           if (contentType.includes('application/json')) {
             const json = await response.json();
             content = JSON.stringify(json, null, 2).slice(0, maxChars);
           } else {
             const raw = await response.text();
-            content = raw
+
+            // Extract title before stripping
+            const titleMatch = raw.match(/<title[^>]*>([\s\S]*?)<\/title>/i);
+            if (titleMatch) {
+              extractedTitle = titleMatch[1].replace(/<[^>]+>/g, '').replace(/\s+/g, ' ').trim();
+            }
+
+            // ---- Noise removal: strip nav, ads, footers, sidebars, etc. ----
+            let cleaned = raw
+              // Remove script/style blocks
               .replace(/<script[\s\S]*?<\/script>/gi, '')
               .replace(/<style[\s\S]*?<\/style>/gi, '')
+              // Remove SVG icons (often decorative)
+              .replace(/<svg[\s\S]*?<\/svg>/gi, '')
+              // Remove nav, header, footer, aside (boilerplate)
+              .replace(/<nav[\s\S]*?<\/nav>/gi, '')
+              .replace(/<header[\s\S]*?<\/header>/gi, '')
+              .replace(/<footer[\s\S]*?<\/footer>/gi, '')
+              .replace(/<aside[\s\S]*?<\/aside>/gi, '')
+              // Remove iframes, embeds, objects (ads, trackers)
+              .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+              .replace(/<embed[^>]*>/gi, '')
+              .replace(/<object[\s\S]*?<\/object>/gi, '')
+              // Remove noscript fallbacks
+              .replace(/<noscript[\s\S]*?<\/noscript>/gi, '')
+              // Remove form elements (login boxes, search bars)
+              .replace(/<form[\s\S]*?<\/form>/gi, '')
+              // Remove elements with common ad/noise class/id patterns
+              .replace(/<(div|section|span)[^>]*class="[^"]*(?:ad[s_-]|advert|banner|cookie|consent|modal|popup|sidebar|nav-|breadcrumb|social-|share-|comment|related|recommended|newsletter|signup|login|footer|header|copyright|legal|disclaimer|sponsor|promo|cta-?box|subscribe|paywall|gate|interstitial|overlay|toast|notification|alert)[^"]*"[^>]*>[\s\S]*?<\/\1>/gi, '')
+              .replace(/<(div|section|span)[^>]*id="[^"]*(?:ad[s_-]|advert|banner|cookie|consent|modal|popup|sidebar|nav-|breadcrumb|social-|share-|comment|related|recommended|newsletter|signup|login|footer|header|copyright|legal|disclaimer|sponsor|promo|subscribe|paywall|overlay|toast|notification)[^"]*"[^>]*>[\s\S]*?<\/\1>/gi, '');
+
+            // ---- Extract main content: try <main>, <article>, then <body> ----
+            let bodyContent = '';
+
+            // Try <article> first (most specific)
+            const articleMatch = cleaned.match(/<article[^>]*>([\s\S]*?)<\/article>/i);
+            if (articleMatch && articleMatch[1].length > 200) {
+              bodyContent = articleMatch[1];
+            } else {
+              // Try <main>
+              const mainMatch = cleaned.match(/<main[^>]*>([\s\S]*?)<\/main>/i);
+              if (mainMatch && mainMatch[1].length > 200) {
+                bodyContent = mainMatch[1];
+              } else {
+                // Try role="main"
+                const roleMainMatch = cleaned.match(/<[^>]+role="main"[^>]*>([\s\S]*?)<\/(?:div|section)>/i);
+                if (roleMainMatch && roleMainMatch[1].length > 200) {
+                  bodyContent = roleMainMatch[1];
+                } else {
+                  // Fall back to <body>
+                  const bodyMatch = cleaned.match(/<body[^>]*>([\s\S]*)<\/body>/i);
+                  bodyContent = bodyMatch ? bodyMatch[1] : cleaned;
+                }
+              }
+            }
+
+            // Strip remaining HTML tags and decode entities
+            content = bodyContent
               .replace(/<[^>]+>/g, ' ')
               .replace(/&nbsp;/g, ' ')
               .replace(/&amp;/g, '&')
               .replace(/&lt;/g, '<')
               .replace(/&gt;/g, '>')
               .replace(/&quot;/g, '"')
+              .replace(/&#x27;/g, "'")
+              .replace(/&#x2F;/g, '/')
+              .replace(/&hellip;/g, '...')
+              .replace(/&mdash;/g, '—')
+              .replace(/&ndash;/g, '–')
               .replace(/\s+/g, ' ')
               .trim()
               .slice(0, maxChars);
@@ -458,6 +525,7 @@ export function createSearchTools(context: ToolExecutionContext): Record<string,
 
           return {
             success: true,
+            title: extractedTitle,
             content,
             url: args.url,
             statusCode: response.status,
@@ -512,4 +580,33 @@ export async function getToolsByCategory(
     default:
       return getAllTools(context);
   }
+}
+
+/**
+ * Extract public HTTPS URLs from user text.
+ * Useful for pre-detecting URLs in prompts to auto-trigger web_fetch.
+ */
+export function extractPublicUrls(text: string): string[] {
+  const urlRegex = /https:\/\/[^\s<>"{}|\\^`\[\]]+/g;
+  const matches = text.match(urlRegex) || [];
+
+  // Deduplicate and filter to well-formed URLs
+  const seen = new Set<string>();
+  const urls: string[] = [];
+
+  for (const raw of matches) {
+    // Strip trailing punctuation that's often part of prose
+    const cleaned = raw.replace(/[.,;:!?)\]>]+$/, '');
+    try {
+      const parsed = new URL(cleaned);
+      if (parsed.protocol === 'https:' && !seen.has(cleaned)) {
+        seen.add(cleaned);
+        urls.push(cleaned);
+      }
+    } catch {
+      // Skip malformed
+    }
+  }
+
+  return urls;
 }
