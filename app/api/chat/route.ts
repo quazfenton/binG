@@ -1176,7 +1176,7 @@ export async function POST(request: NextRequest) {
 
               // Send metadata events first (quick succession)
               for (const event of metadataEvents) {
-                if (request.signal?.aborted) {
+                if (request.signal?.aborted || streamClosed) {
                   cleanup();
                   return;
                 }
@@ -1187,7 +1187,7 @@ export async function POST(request: NextRequest) {
 
               // Send FILE_EDIT events for VFS sync (before content tokens)
               for (const fileEditEvent of fileEditEvents) {
-                if (request.signal?.aborted) {
+                if (request.signal?.aborted || streamClosed) {
                   cleanup();
                   return;
                 }
@@ -1204,12 +1204,16 @@ export async function POST(request: NextRequest) {
               const baseDelay = totalTokens > 200 ? 25 : totalTokens > 100 ? 35 : 50;
 
               for (let i = 0; i < totalTokens; i++) {
-                if (request.signal?.aborted) {
+                if (request.signal?.aborted || streamClosed) {
                   cleanup();
                   return;
                 }
 
                 const event = tokenEvents[i];
+                // Skip enqueue if stream was closed by spec_amplification event
+                if (streamClosed) {
+                  return;
+                }
                 controller.enqueue(encoderRef.encode(event));
                 chunkCount++;
 

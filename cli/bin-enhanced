@@ -26,6 +26,7 @@ import axios from 'axios';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
 import { WebSocket } from 'ws';
+import FormData from 'form-data';
 
 // Load environment variables
 dotenv.config();
@@ -151,16 +152,34 @@ async function apiRequest(endpoint: string, options: any = {}): Promise<any> {
 }
 
 /**
- * Create readline interface
+ * Create readline interface lazily to avoid keeping event loop alive
  */
-const rl = createInterface({ input, output });
+let _rl: ReturnType<typeof createInterface> | null = null;
+
+function getReadline(): ReturnType<typeof createInterface> {
+  if (!_rl) {
+    _rl = createInterface({ input, output });
+  }
+  return _rl;
+}
 
 function prompt(question: string): Promise<string> {
   return new Promise((resolve) => {
+    const rl = getReadline();
     rl.question(question, (answer) => {
       resolve(answer);
     });
   });
+}
+
+/**
+ * Close readline interface to allow clean exit
+ */
+function closeReadline(): void {
+  if (_rl) {
+    _rl.close();
+    _rl = null;
+  }
 }
 
 /**
@@ -433,6 +452,7 @@ program
       
       spinner.stop();
       console.log(COLORS.success('\nAnswer:'), response.response || response.content);
+      closeReadline();
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -469,17 +489,18 @@ program
       });
       
       spinner.stop();
-      
+
       if (result.success) {
         console.log(COLORS.success('\nWorkflow completed!'));
         console.log(`  Run ID: ${COLORS.info(result.runId)}`);
         console.log('\nResult:');
         console.log(JSON.stringify(result.result, null, 2));
+        closeReadline();
       } else {
         console.log(COLORS.error(`Error: ${result.error}`));
         process.exit(1);
       }
-      
+
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -505,10 +526,11 @@ program
           Type: w.type,
           Status: w.status,
         })));
+        closeReadline();
       } else {
         console.log(COLORS.info('\nNo workflows available'));
       }
-      
+
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -545,14 +567,15 @@ program
       });
       
       spinner.stop();
-      
+
       if (result.success) {
         console.log(COLORS.primary('\nGit Status:'));
         console.log(result.output || 'Working tree clean');
+        closeReadline();
       } else {
         console.log(COLORS.error(`Error: ${result.error}`));
       }
-      
+
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -594,14 +617,15 @@ program
       });
       
       spinner.stop();
-      
+
       if (result.success) {
         console.log(COLORS.success('\nChanges committed!'));
         console.log(result.output);
+        closeReadline();
       } else {
         console.log(COLORS.error(`Error: ${result.error}`));
       }
-      
+
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -626,6 +650,7 @@ program
     
     if (!await confirm('Are you sure you want to push changes?')) {
       console.log(COLORS.info('Cancelled'));
+      closeReadline();
       return;
     }
     
@@ -644,14 +669,15 @@ program
       });
       
       spinner.stop();
-      
+
       if (result.success) {
         console.log(COLORS.success('\nChanges pushed!'));
         console.log(result.output);
+        closeReadline();
       } else {
         console.log(COLORS.error(`Error: ${result.error}`));
       }
-      
+
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -673,37 +699,39 @@ program
     }
     
     const spinner = ora('Uploading file...').start();
-    
+
     try {
       const formData = new FormData();
       formData.append('file', fs.createReadStream(localPath));
       formData.append('path', remotePath);
-      
+
       const config = loadConfig();
       const auth = loadAuth();
-      
+
       const response = await axios.post(
         `${config.apiBase}/storage/upload`,
         formData,
         {
           headers: {
             ...formData.getHeaders(),
+            'Content-Length': formData.getLengthSync(),
             'Authorization': auth.token ? `Bearer ${auth.token}` : '',
           },
         }
       );
       
       spinner.stop();
-      
+
       if (response.data.success) {
         console.log(COLORS.success('\nFile uploaded!'));
         console.log(`  URL: ${COLORS.info(response.data.data.url)}`);
         console.log(`  Size: ${COLORS.info(response.data.data.size)} bytes`);
+        closeReadline();
       } else {
         console.log(COLORS.error(`Error: ${response.data.error}`));
         process.exit(1);
       }
-      
+
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -730,10 +758,11 @@ program
         result.data.forEach((file: string) => {
           console.log(`  📄 ${file}`);
         });
+        closeReadline();
       } else {
         console.log(COLORS.info('\nNo files found'));
       }
-      
+
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -751,25 +780,26 @@ program
       const result = await apiRequest('/storage/usage', { method: 'GET' });
       
       spinner.stop();
-      
+
       if (result.success) {
         const used = Math.round(result.data.used / 1024 / 1024);
         const limit = Math.round(result.data.limit / 1024 / 1024);
         const percentage = Math.round((result.data.used / result.data.limit) * 100);
-        
+
         console.log(COLORS.primary('\nStorage Usage:'));
         console.log(`  Used: ${COLORS.info(`${used} MB`)} / ${COLORS.info(`${limit} MB`)}`);
         console.log(`  Percentage: ${COLORS.info(`${percentage}%`)}`);
-        
+
         // Visual bar
         const barLength = 30;
         const filled = Math.max(0, Math.min(barLength, Math.round((percentage / 100) * barLength)));
         const bar = '█'.repeat(filled) + '░'.repeat(barLength - filled);
         console.log(`  [${bar}]`);
+        closeReadline();
       } else {
         console.log(COLORS.error(`Error: ${result.error}`));
       }
-      
+
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -820,10 +850,11 @@ program
             console.log(`  ${alert.type.toUpperCase()}: ${alert.message}`);
           });
         }
+        closeReadline();
       } else {
         console.log(COLORS.info('\nNo quota information available'));
       }
-      
+
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -855,10 +886,11 @@ program
             Account: i.account || '-',
           }))
         );
+        closeReadline();
       } else {
         console.log(COLORS.info('\nNo integrations configured'));
       }
-      
+
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -874,12 +906,13 @@ program
       const result = await apiRequest(`/integrations/${provider}/oauth/authorize`, {
         method: 'GET',
       });
-      
+
       console.log(COLORS.primary('\nOAuth Authorization:'));
       console.log(`\nPlease visit the following URL to connect your ${provider} account:`);
       console.log(COLORS.info(result.authUrl));
       console.log('\nAfter authorization, you will be redirected back.');
-      
+      closeReadline();
+
     } catch (error: any) {
       console.log(COLORS.error(`Error: ${error.message}`));
       process.exit(1);
