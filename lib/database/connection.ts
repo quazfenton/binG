@@ -105,7 +105,11 @@ function getMockDatabase() {
     },
     exec: function() { return this; },
     pragma: () => {},
-    transaction: (fn: any) => fn,
+    transaction: (fn: any) => {
+      // Mock transaction - returns a function that executes the transaction
+      // Matches better-sqlite3 behavior where transaction() returns a callable
+      return () => fn();
+    },
     close: function() { return this; },
     backup: () => Promise.resolve({ totalPages: 0, remainingPages: 0 }),
     defaultSafeIntegers: function() { return this; },

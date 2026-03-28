@@ -56,7 +56,8 @@ export function extractHtmlCommentFileEdits(content: string): FileEdit[] {
   // Match: <!-- path/to/file -->content (stops at next <!-- or end)
   // Path must look like a file path: contains / OR . OR common file patterns
   // This avoids matching comments like <!-- TODO: fix this -->
-  const regex = /<!--\s*([^\s\-]+(?:[\/\.][^\s\-]+)*|[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)\s*-->\s*([\s\S]*?)(?=<!--|$)/gi;
+  // FIX: Limit match scope to prevent catastrophic backtracking
+  const regex = /<!--\s*([^\s\-]+(?:[\/\.][^\s\-]+)*|[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)\s*-->\s*([\s\S]{0,5000}?)(?=<!--|$)/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
@@ -76,7 +77,8 @@ export function extractHtmlCommentFileEdits(content: string): FileEdit[] {
 export function extractCompactFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
   // Use \s* to handle both spaced and non-spaced variants
-  const regex = /<file_edit\s*path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_edit>/gi;
+  // FIX: Limit match scope to prevent catastrophic backtracking
+  const regex = /<file_edit\s*path=["']([^"']+)["']\s*>([\s\S]{0,10000}?)<\/file_edit>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
@@ -651,12 +653,14 @@ export function sanitizeFileEditTags(content: string): string {
 
   if (sanitized.includes('ws_action')) {
     // Remove ws_action JSON format (with proper escaped string handling)
-    sanitized = sanitized.replace(/\{[\s\S]*?"ws_action"\s*:\s*"CREATE"[\s\S]*?"path"\s*:\s*"(?:\\.|[^"\\])+"[\s\S]*?"content"\s*:\s*"(?:\\.|[^"\\])*"\s*\}/gi, '');
+    // FIX: Limit match scope to prevent catastrophic backtracking
+    sanitized = sanitized.replace(/\{[\s\S]{0,10000}?"ws_action"\s*:\s*"CREATE"[\s\S]{0,10000}?"path"\s*:\s*"(?:\\.|[^"\\])+"[\s\S]{0,10000}?"content"\s*:\s*"(?:\\.|[^"\\])*"\s*\}/gi, '');
   }
 
   if (sanitized.includes('"file_edit"')) {
     // Remove simple JSON format: { "file_edit": "path", "content": "..." }
-    sanitized = sanitized.replace(/\{[\s\S]*?"file_edit"\s*:\s*"(?:\\.|[^"\\])+"[\s\S]*?"content"\s*:\s*"(?:\\.|[^"\\])*"\s*\}/gi, '');
+    // FIX: Limit match scope to prevent catastrophic backtracking
+    sanitized = sanitized.replace(/\{[\s\S]{0,10000}?"file_edit"\s*:\s*"(?:\\.|[^"\\])+"[\s\S]{0,10000}?"content"\s*:\s*"(?:\\.|[^"\\])*"\s*\}/gi, '');
   }
 
   if (sanitized.includes('<folder_create')) {
@@ -668,13 +672,15 @@ export function sanitizeFileEditTags(content: string): string {
     // Remove HTML comment file paths AND their associated content blocks
     // Only match comments that look like file paths (contain / or . or file.ext pattern)
     // This avoids stripping legitimate comments like <!-- TODO: fix this -->
-    sanitized = sanitized.replace(/<!--\s*[^\s<]*(?:[\/\.][^\s<]*|[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)\s*-->\s*[\s\S]*?(?=<!--|$)/gi, '');
+    // FIX: Use non-greedy match with limited scope to prevent catastrophic backtracking
+    sanitized = sanitized.replace(/<!--\s*[^\s<]*(?:[\/\.][^\s<]*|[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)\s*-->\s*(?:[\s\S]{0,5000}?)(?=<!--|$)/gi, '');
   }
 
   if (sanitized.includes('<path>')) {
     // Remove malformed format: <path>...</path> content <file Edit>
     // This handles cases where LLM outputs path tags without proper file_edit wrapping
-    sanitized = sanitized.replace(/<path>\s*[^\s<]+\s*<\/path>\s*[\s\S]*?(?=<path>|<file\s*edit>|$)/gi, '');
+    // FIX: Limit match scope to prevent catastrophic backtracking
+    sanitized = sanitized.replace(/<path>\s*[^\s<]+\s*<\/path>\s*(?:[\s\S]{0,5000}?)(?=<path>|<file\s*edit>|$)/gi, '');
     // Remove any remaining <file Edit> markers
     sanitized = sanitized.replace(/<file\s*edit\s*>?\s*/gi, '');
   }
