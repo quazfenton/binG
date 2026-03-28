@@ -358,6 +358,30 @@ export const WEB_SEARCH_CAPABILITY: CapabilityDefinition = {
   tags: ['web', 'search', 'google', 'find'],
 };
 
+export const WEB_FETCH_CAPABILITY: CapabilityDefinition = {
+  id: 'web.fetch',
+  name: 'Web Fetch',
+  category: 'web',
+  description: 'Fetch content from a URL. Lightweight alternative to web.browse — no JS rendering, just raw content extraction.',
+  inputSchema: z.object({
+    url: z.string().describe('URL to fetch'),
+    maxChars: z.number().optional().default(8000).describe('Max characters to return'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    content: z.string().optional(),
+    url: z.string(),
+    statusCode: z.number().optional(),
+    contentType: z.string().optional(),
+  }),
+  providerPriority: ['native', 'nullclaw'],
+  tags: ['web', 'fetch', 'http', 'url', 'content'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+  },
+};
+
 // ============================================================================
 // Repo Capabilities
 // ============================================================================
@@ -945,6 +969,7 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   // Web
   WEB_BROWSE_CAPABILITY,
   WEB_SEARCH_CAPABILITY,
+  WEB_FETCH_CAPABILITY,
   // Repo
   REPO_SEARCH_CAPABILITY,
   REPO_GIT_CAPABILITY,

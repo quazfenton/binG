@@ -19,8 +19,6 @@ import {
 } from './bash-event-schema';
 import { executeWithHealing, isCommandSafe } from './self-healing';
 
-export { isCommandSafe };
-
 const logger = createLogger('Bash:Tool');
 
 // ============================================================================

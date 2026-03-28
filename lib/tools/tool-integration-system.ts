@@ -319,6 +319,27 @@ export const TOOL_REGISTRY: Record<string, ToolConfig> = {
   },
 
   // ==================== SEARCH TOOLS ====================
+  "web.search": {
+    provider: "builtin",
+    toolName: "web_search",
+    description: "Search the web for information using DuckDuckGo",
+    category: "search",
+    requiresAuth: false,
+  },
+  "web.fetch": {
+    provider: "builtin",
+    toolName: "web_fetch",
+    description: "Fetch content from a URL — lightweight, no JS rendering",
+    category: "web",
+    requiresAuth: false,
+  },
+  "web.browse": {
+    provider: "builtin",
+    toolName: "browse_url",
+    description: "Full web page browsing with JS rendering and extraction",
+    category: "web",
+    requiresAuth: false,
+  },
   "exa.search": {
     provider: "arcade",
     toolName: "Exa.Search",

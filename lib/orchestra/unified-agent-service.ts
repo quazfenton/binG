@@ -656,7 +656,9 @@ async function runV1ApiWithTools(
   const options = {
     userMessage: config.userMessage,
     sandboxId: config.sandboxId || 'default',
-    systemPrompt: config.systemPrompt || 'You are a helpful AI assistant.',
+    systemPrompt:
+      config.systemPrompt ||
+      'You are a helpful software engineering assistant. Prefer exact, minimal edits; inspect files before changing them; use diff-style self-healing by re-reading stale files and correcting only the smallest failing region.',
     tools: config.tools || [],
     maxSteps: config.maxSteps || 15,
     executeTool: config.executeTool!,
