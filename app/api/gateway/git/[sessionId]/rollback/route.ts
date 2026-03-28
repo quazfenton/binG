@@ -4,7 +4,7 @@ import { resolveFilesystemOwnerWithFallback } from '@/app/api/filesystem/utils';
 import { withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { getGitBackedVFSForOwner } from '@/lib/virtual-filesystem/git-backed-vfs';
-import { virtualFilesystem } from '@/lib/virtual-filesystem/index';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:GitRollback');
@@ -130,7 +130,7 @@ export async function POST(
 
     switch (mode) {
       case 'shadow':
-        rollbackResult = await executeShadowRollback(scopedSessionId, version, targetFiles);
+        rollbackResult = await executeShadowRollback(scopedSessionId, ownerId, version, targetFiles);
         break;
 
       case 'vfs-snapshot':
@@ -202,11 +202,12 @@ export async function POST(
  * Shadow commits track all file changes with full history and diffs.
  * This is the recommended rollback mode.
  * 
- * @param sessionId - Session ID
+ * @param sessionId - Session ID (scoped as ownerId:sessionId)
+ * @param ownerId - Owner ID for VFS operations
  * @param version - Version to rollback to
  * @param targetFiles - Optional array of specific files to rollback (partial rollback)
  */
-async function executeShadowRollback(sessionId: string, version: number, targetFiles?: string[]) {
+async function executeShadowRollback(sessionId: string, ownerId: string, version: number, targetFiles?: string[]) {
   try {
     const shadowCommitManager = new ShadowCommitManager();
 
@@ -255,7 +256,6 @@ async function executeShadowRollback(sessionId: string, version: number, targetF
 
       // Restore filtered files directly
       const vfs = virtualFilesystem;
-      const ownerId = sessionId; // Use sessionId as ownerId for shadow commits
       let restoredCount = 0;
 
       for (const [filePath, content] of Object.entries(filesToRestore)) {

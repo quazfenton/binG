@@ -481,50 +481,30 @@ Current workspace: ${this.context.workspacePath}
 Available Tools:
 ${this.tools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
 
-FILE WRITING FORMAT (USE BASH HEREDOC SYNTAX):
-When you need to create or modify files, use bash heredoc syntax:
-
-cat > path/to/file.ext << 'EOF'
-file content here
-EOF
-
-To append to a file:
-cat >> path/to/file.ext << 'EOF'
-additional content
-EOF
-
-To read a file, use the READ tool:
-READ path/to/file.ext
-
-To create directories:
-mkdir -p path/to/directory
-
-To delete files:
-rm path/to/file.ext
+FILE OPERATIONS:
+- To read files: use the read_file tool
+- To write files: use the write_file tool
+- To list directories: use the list_directory tool
+- To create directories: use the create_directory tool
+- To delete files: use the delete_file tool
 
 Examples:
-cat > package.json << 'EOF'
-{
-  "name": "my-app",
-  "version": "1.0.0"
-}
-EOF
+write_file({ "path": "package.json", "content": "{\n  \"name\": \"my-app\",\n  \"version\": \"1.0.0\"\n}" })
 
-cat > src/index.js << 'EOF'
-console.log('Hello World');
-EOF
+read_file({ "path": "src/index.js" })
+
+create_directory({ "path": "src/components" })
+
+delete_file({ "path": "old-file.txt" })
 
 Best Practices:
-1. Always check if a file exists before editing (use READ or list_directory)
+1. Always check if a file exists before editing (use read_file or list_directory)
 2. Use relative paths from workspace root (e.g., "toDoApp/src/app.js")
-3. Use mkdir -p to create directories before writing files in them
+3. Use create_directory to create directories before writing files in them
 4. After creating files, suggest running commands
-5. Use bash heredoc syntax (cat > file << 'EOF') for all file writes
-
-DO NOT use: WRITE <<<, <file_write>, <file_edit>, or XML-like tags
 
 Response Format:
-- Use bash heredoc syntax to create/write files
+- Use the structured tool calls shown above
 - When task is complete, respond with { "done": true, "message": "..." }
 - Provide clear explanations of what you're doing
 

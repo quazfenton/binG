@@ -22,9 +22,9 @@ export const BashExecutionEvent = z.object({
   persist: z.boolean().default(true).describe('Persist to VFS'),
   workingDir: z.string().optional().describe('Working directory'),
   env: z.record(z.string()).optional().describe('Environment variables'),
-  timeout: z.number().optional().describe('Timeout in ms'),
+  timeout: z.number().int().min(0).optional().describe('Timeout in ms'),
   selfHeal: z.boolean().optional().default(true).describe('Enable self-healing on failure'),
-  maxRetries: z.number().optional().default(3).describe('Max retry attempts'),
+  maxRetries: z.number().int().min(0).max(10).optional().default(3).describe('Max retry attempts'),
 });
 
 export type BashExecutionEvent = z.infer<typeof BashExecutionEvent>;
@@ -100,14 +100,10 @@ export const DAGNodeType = z.enum(['bash', 'tool', 'container']);
 export type DAGNodeType = z.infer<typeof DAGNodeType>;
 
 /**
- * DAG node for pipeline execution
+ * Base DAG node fields
  */
-export const DAGNode = z.object({
+export const BaseDAGNode = z.object({
   id: z.string(),
-  type: DAGNodeType,
-  command: z.string().optional(),
-  tool: z.string().optional(),
-  args: z.any().optional(),
   dependsOn: z.array(z.string()).default([]),
   outputs: z.array(z.string()).optional().describe('Output file paths'),
   stdin: z.string().optional().describe('Stdin from previous node'),
@@ -116,8 +112,42 @@ export const DAGNode = z.object({
     cost: z.enum(['low', 'medium', 'high']).optional(),
     reliability: z.number().min(0).max(1).optional(),
     retryCount: z.number().optional().default(0),
+    inputFile: z.string().optional(),
+    mergedFrom: z.array(z.string()).optional(),
   }).optional(),
 });
+
+/**
+ * Bash node - requires command field
+ */
+export const BashDAGNode = BaseDAGNode.extend({
+  type: z.literal('bash'),
+  command: z.string().describe('Bash command to execute'),
+});
+
+/**
+ * Tool node - uses tool name and args
+ */
+export const ToolDAGNode = BaseDAGNode.extend({
+  type: z.literal('tool'),
+  tool: z.string().describe('Tool name to invoke'),
+  args: z.any().optional().describe('Tool arguments'),
+  command: z.string().optional(), // Fallback command if tool not available
+});
+
+/**
+ * Container node - uses command for container execution
+ */
+export const ContainerDAGNode = BaseDAGNode.extend({
+  type: z.literal('container'),
+  command: z.string().describe('Command to run in container'),
+  args: z.any().optional().describe('Container configuration'),
+});
+
+/**
+ * Union type for all DAG node variants
+ */
+export const DAGNode = z.union([BashDAGNode, ToolDAGNode, ContainerDAGNode]);
 
 export type DAGNode = z.infer<typeof DAGNode>;
 
@@ -186,7 +216,7 @@ export function createBashExecutionEvent(
   agentId: string,
   options?: Partial<Omit<BashExecutionEvent, 'type' | 'command' | 'agentId'>>
 ): BashExecutionEvent {
-  return {
+  return BashExecutionEvent.parse({
     type: 'BASH_EXECUTION',
     command,
     agentId,
@@ -194,7 +224,7 @@ export function createBashExecutionEvent(
     selfHeal: true,
     maxRetries: 3,
     ...options,
-  };
+  });
 }
 
 /**

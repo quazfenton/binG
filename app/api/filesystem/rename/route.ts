@@ -19,7 +19,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
+import { createLogger } from '@/lib/utils/logger';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+
+const logger = createLogger('API:Filesystem:Rename');
 
 export const runtime = 'nodejs';
 
@@ -149,7 +152,7 @@ export async function POST(req: NextRequest) {
       try {
         await virtualFilesystem.readFile(ownerId, newPath);
         // File exists at newPath - rename is complete, no rollback needed
-        chatLogger.warn('Rename operation: source already deleted, keeping target', {
+        logger.warn('Rename operation: source already deleted, keeping target', {
           oldPath,
           newPath,
           ownerId,

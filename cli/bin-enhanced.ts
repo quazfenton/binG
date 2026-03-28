@@ -20,7 +20,6 @@ import { createInterface } from 'readline';
 import { stdin as input, stdout as output } from 'process';
 import chalk from 'chalk';
 import ora from 'ora';
-import gradient from 'gradient-string';
 import fs from 'fs-extra';
 import axios from 'axios';
 import * as dotenv from 'dotenv';
@@ -48,7 +47,6 @@ const COLORS = {
   warning: chalk.yellow,
   error: chalk.red,
   info: chalk.blue,
-  gradient: gradient(['#00c6ff', '#0072ff']),
 };
 
 /**
@@ -207,7 +205,7 @@ async function chatLoop(options: {
   const provider = options.provider || config.provider;
   const model = options.model || config.model;
 
-  console.log(COLORS.gradient(`
+  console.log(chalk.cyanBright(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                    binG Chat Interface                     ║
 ║                                                           ║
@@ -339,7 +337,7 @@ async function websocketTerminal(sandboxId: string): Promise<void> {
     process.exit(1);
   }
 
-  console.log(COLORS.gradient('\n=== binG WebSocket Terminal ===\n'));
+  console.log(chalk.cyanBright('\n=== binG WebSocket Terminal ===\n'));
   console.log(COLORS.info(`Connecting to sandbox: ${sandboxId}`));
 
   try {
@@ -901,11 +899,11 @@ program
     
     try {
       const result = await apiRequest('/quota', { method: 'GET' });
-      
+
       spinner.stop();
-      
+
       if (result.success && result.quotas) {
-        console.log(COLORS.gradient('\n=== Provider Quotas ===\n'));
+        console.log(chalk.cyanBright('\n=== Provider Quotas ===\n'));
         
         result.quotas.forEach((q: any) => {
           const percentage = q.percentageUsed.toFixed(1);

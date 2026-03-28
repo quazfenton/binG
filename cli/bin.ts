@@ -21,7 +21,6 @@ import { createInterface } from 'readline';
 import { stdin as input, stdout as output } from 'process';
 import chalk from 'chalk';
 import ora from 'ora';
-import gradient from 'gradient-string';
 import fs from 'fs-extra';
 import axios from 'axios';
 import * as dotenv from 'dotenv';
@@ -47,7 +46,6 @@ const COLORS = {
   warning: chalk.yellow,
   error: chalk.red,
   info: chalk.blue,
-  gradient: gradient(['#00c6ff', '#0072ff']),
 };
 
 /**
@@ -154,8 +152,8 @@ function prompt(question: string): Promise<string> {
  */
 async function chatLoop(options: { agent?: string; stream?: boolean }): Promise<void> {
   const config = loadConfig();
-  
-  console.log(COLORS.gradient(`
+
+  console.log(chalk.cyanBright(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                    binG Chat Interface                     ║
 ║                                                           ║
@@ -857,7 +855,7 @@ program
   .option('--email <email>', 'Email address')
   .option('--password <password>', 'Password')
   .action(async (options) => {
-    console.log(COLORS.gradient('\n=== binG Authentication ===\n'));
+    console.log(chalk.cyanBright('\n=== binG Authentication ===\n'));
     
     let email = options.email;
     let password = options.password;
@@ -918,7 +916,7 @@ program
   .command('status')
   .description('Show system status')
   .action(async () => {
-    console.log(COLORS.gradient('\n=== binG System Status ===\n'));
+    console.log(chalk.cyanBright('\n=== binG System Status ===\n'));
     
     try {
       const [health, providers] = await Promise.all([
@@ -974,7 +972,7 @@ program
   .option('-p, --port <port>', 'Port number (default: 3000)')
   .option('--ws-port <port>', 'WebSocket port (default: 8080)')
   .action((options) => {
-    console.log(COLORS.gradient(`
+    console.log(chalk.cyanBright(`
 ╔═══════════════════════════════════════════════════════════╗
 ║              Starting binG Development Server              ║
 ║                                                           ║

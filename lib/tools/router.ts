@@ -59,7 +59,7 @@ export interface CapabilityProvider {
 class VFSProvider implements CapabilityProvider {
   readonly id = 'vfs';
   readonly name = 'Virtual Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.delete', 'file.list', 'file.search', 'memory.context', 'workspace.getChanges'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'memory.context', 'workspace.getChanges'];
 
   isAvailable(): boolean {
     // VFS is available by default (works with default config)
@@ -98,6 +98,36 @@ class VFSProvider implements CapabilityProvider {
         }
 
         case 'file.write': {
+          // If append is true, use file.append logic instead
+          if (input.append) {
+            // Read existing content first
+            let existingContent = '';
+            try {
+              const existingFile = await virtualFilesystem.readFile(ownerId, input.path);
+              existingContent = existingFile.content || '';
+            } catch {
+              // File doesn't exist, will create it
+              existingContent = '';
+            }
+
+            // Append new content
+            const file = await virtualFilesystem.writeFile(
+              ownerId,
+              input.path,
+              existingContent + input.content,
+              input.language,
+              { failIfExists: false }
+            );
+            return {
+              success: true,
+              output: {
+                success: true,
+                path: file.path,
+                bytesWritten: file.size,
+              },
+            };
+          }
+
           const file = await virtualFilesystem.writeFile(
             ownerId,
             input.path,
@@ -108,10 +138,38 @@ class VFSProvider implements CapabilityProvider {
           return {
             success: true,
             output: {
+              success: true,
               path: file.path,
-              version: file.version,
-              size: file.size,
-              lastModified: file.lastModified,
+              bytesWritten: file.size,
+            },
+          };
+        }
+
+        case 'file.append': {
+          // Read existing content first
+          let existingContent = '';
+          try {
+            const existingFile = await virtualFilesystem.readFile(ownerId, input.path);
+            existingContent = existingFile.content || '';
+          } catch {
+            // File doesn't exist, will create it
+            existingContent = '';
+          }
+
+          // Append new content
+          const file = await virtualFilesystem.writeFile(
+            ownerId,
+            input.path,
+            existingContent + input.content,
+            input.language,
+            { failIfExists: false }
+          );
+          return {
+            success: true,
+            output: {
+              success: true,
+              path: file.path,
+              bytesWritten: file.size,
             },
           };
         }
@@ -218,7 +276,7 @@ class VFSProvider implements CapabilityProvider {
 class MCPFilesystemProvider implements CapabilityProvider {
   readonly id = 'mcp-filesystem';
   readonly name = 'MCP Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.delete', 'file.list', 'file.search'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search'];
 
   isAvailable(): boolean {
     // Check if MCP server is configured
@@ -236,6 +294,7 @@ class MCPFilesystemProvider implements CapabilityProvider {
     const toolMap: Record<string, string> = {
       'file.read': 'read_file',
       'file.write': 'write_file',
+      'file.append': 'append_file',
       'file.delete': 'delete_file',
       'file.list': 'list_directory',
       'file.search': 'search_files',
@@ -266,7 +325,7 @@ class MCPFilesystemProvider implements CapabilityProvider {
 class LocalFilesystemProvider implements CapabilityProvider {
   readonly id = 'local-fs';
   readonly name = 'Local Filesystem';
-  readonly capabilities = ['file.read', 'file.write', 'file.delete', 'file.list', 'file.search'];
+  readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search'];
   
   // SECURITY: Base directory restriction for file operations
   private readonly workspaceRoot: string;
@@ -353,7 +412,44 @@ class LocalFilesystemProvider implements CapabilityProvider {
             const dir = path.dirname(safePath);
             await fs.mkdir(dir, { recursive: true });
           }
+
+          // Support append parameter
+          if (input.append) {
+            const bytesWritten = await fs.appendFile(safePath, input.content, input.encoding || 'utf-8');
+            return {
+              success: true,
+              output: {
+                success: true,
+                path: safePath,
+                bytesWritten: typeof bytesWritten === 'number' ? bytesWritten : input.content.length,
+              },
+            };
+          }
+
           const bytesWritten = await fs.writeFile(safePath, input.content, input.encoding || 'utf-8');
+          return {
+            success: true,
+            output: {
+              success: true,
+              path: safePath,
+              bytesWritten: typeof bytesWritten === 'number' ? bytesWritten : input.content.length,
+            },
+          };
+        }
+
+        case 'file.append': {
+          // SECURITY: Validate path
+          const pathValidation = this.validatePath(input.path);
+          if (!pathValidation.valid) {
+            return { success: false, error: pathValidation.error };
+          }
+          const safePath = pathValidation.resolvedPath!;
+
+          if (input.createDirs) {
+            const dir = path.dirname(safePath);
+            await fs.mkdir(dir, { recursive: true });
+          }
+          const bytesWritten = await fs.appendFile(safePath, input.content, input.encoding || 'utf-8');
           return {
             success: true,
             output: {
