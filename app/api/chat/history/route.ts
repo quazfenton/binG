@@ -1,6 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
-import { DatabaseOperations } from '@/lib/database/connection';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { checkRateLimit } from '@/lib/middleware/rate-limit';
 
@@ -10,6 +9,27 @@ const SERVER_CHAT_STORAGE_ENABLED = process.env.ENABLE_SERVER_CHAT_STORAGE === '
 // Rate limiting configuration
 const RATE_LIMIT_MAX_REQUESTS = 100; // requests per window
 const RATE_LIMIT_WINDOW_MS = 60 * 60 * 1000; // 1 hour
+
+/**
+ * Validate and parse user ID to a safe integer
+ * Database stores user_id as INTEGER, but auth returns string
+ * Uses strict validation to prevent partial parsing (e.g., "123abc" → 123)
+ */
+function validateAndParseUserId(userId: string): number | null {
+  // Must be all digits, no trailing characters
+  if (!/^\d+$/.test(userId)) {
+    return null;
+  }
+  
+  const numericId = Number(userId);
+  
+  // Must be a safe integer (prevents precision loss)
+  if (!Number.isSafeInteger(numericId)) {
+    return null;
+  }
+  
+  return numericId;
+}
 
 /**
  * GET /api/chat/history
@@ -35,17 +55,14 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Convert string userId to number for database operations
-    // Database stores user_id as INTEGER, but auth returns string
-    const numericUserId = parseInt(authResult.userId, 10);
-    if (Number.isNaN(numericUserId)) {
+    // Validate and parse user ID to safe integer
+    const numericUserId = validateAndParseUserId(authResult.userId);
+    if (numericUserId === null) {
       return NextResponse.json(
         { error: 'Invalid user ID format' },
         { status: 400 }
       );
     }
-
-    const dbOps = new DatabaseOperations();
 
     // Check rate limit using shared rate limiting infrastructure
     const rateLimitResult = checkRateLimit(authResult.userId, RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS);
@@ -68,6 +85,8 @@ export async function GET(request: NextRequest) {
         }
       );
     }
+
+    const dbOps = new DatabaseOperations();
 
     // Get all conversations for user
     // Note: DatabaseOperations methods are synchronous (better-sqlite3)
@@ -126,28 +145,26 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Convert string userId to number for database operations
-    const numericUserId = parseInt(authResult.userId, 10);
-    if (Number.isNaN(numericUserId)) {
+    // Validate and parse user ID to safe integer
+    const numericUserId = validateAndParseUserId(authResult.userId);
+    if (numericUserId === null) {
       return NextResponse.json(
         { error: 'Invalid user ID format' },
         { status: 400 }
       );
     }
 
-    const dbOps = new DatabaseOperations();
-
     // Check rate limit using shared rate limiting infrastructure
     const rateLimitResult = checkRateLimit(authResult.userId, RATE_LIMIT_MAX_REQUESTS, RATE_LIMIT_WINDOW_MS);
-    
+
     if (!rateLimitResult.allowed) {
       return NextResponse.json(
-        { 
+        {
           error: 'Rate limit exceeded',
           message: 'Too many requests. Please try again later.',
           retryAfter: rateLimitResult.retryAfter,
         },
-        { 
+        {
           status: 429,
           headers: {
             'X-RateLimit-Limit': String(RATE_LIMIT_MAX_REQUESTS),
@@ -159,40 +176,45 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Create or update conversation
-    // SECURITY: Check if conversation exists at all before creating
-    const anyConversation = dbOps.getConversation(id) as any;
-    if (anyConversation && anyConversation.user_id !== numericUserId) {
-      return NextResponse.json(
-        { error: 'Access denied: conversation belongs to another user' },
-        { status: 403 }
-      );
-    }
-
-    const existingConversation = dbOps.getConversationById(id, numericUserId) as any;
-
-    if (!existingConversation) {
-      dbOps.createConversation(id, numericUserId, title || 'Untitled Chat');
-    }
-
-    // Save messages (clear old ones first to avoid duplicates)
-    // SECURITY: Delete messages only if they belong to a conversation owned by this user
-    // WRAPPED IN TRANSACTION: Ensures atomicity - either all operations succeed or none do
+    // Save conversation and messages atomically in a single transaction
+    // This prevents race conditions where concurrent saves create duplicate conversations
+    // or leave orphan conversations if message insertion fails
     const db = getDatabase();
-    const transaction = db.transaction(() => {
-      // Delete existing messages
+    
+    const saveConversationTransaction = db.transaction(() => {
+      // Check if conversation exists and verify ownership
+      const existingConversation = db.prepare(`
+        SELECT * FROM conversations 
+        WHERE id = ? AND is_archived = FALSE
+      `).get(id) as any;
+
+      if (existingConversation && existingConversation.user_id !== numericUserId) {
+        // Conversation belongs to another user - this is a true access denied
+        const error: any = new Error('Access denied: conversation belongs to another user');
+        error.code = 'ACCESS_DENIED';
+        throw error;
+      }
+
+      // Create conversation if it doesn't exist
+      if (!existingConversation) {
+        db.prepare(`
+          INSERT INTO conversations (id, user_id, title)
+          VALUES (?, ?, ?)
+        `).run(id, numericUserId, title || 'Untitled Chat');
+      }
+
+      // Delete existing messages for this conversation
       db.prepare(`
         DELETE FROM messages
         WHERE conversation_id = ?
-        AND conversation_id IN (SELECT id FROM conversations WHERE user_id = ?)
-      `).run(id, numericUserId);
+      `).run(id);
 
       // Insert new messages
       const insertStmt = db.prepare(`
         INSERT INTO messages (id, conversation_id, role, content, provider, model)
         VALUES (?, ?, ?, ?, ?, ?)
       `);
-      
+
       for (const message of messages) {
         insertStmt.run(
           message.id || `${id}-${Date.now()}-${Math.random()}`,
@@ -206,9 +228,21 @@ export async function POST(request: NextRequest) {
     });
 
     try {
-      transaction();
+      saveConversationTransaction();
     } catch (transactionError: any) {
-      console.error('Transaction failed:', transactionError);
+      // Re-throw access denied errors
+      if (transactionError.code === 'ACCESS_DENIED') {
+        throw transactionError;
+      }
+      
+      // Handle constraint errors (concurrent saves)
+      if (transactionError.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+        const conflictError: any = new Error('Concurrent save conflict. Please retry.');
+        conflictError.code = 'CONCURRENT_SAVE';
+        throw conflictError;
+      }
+      
+      // Re-throw other errors
       throw transactionError;
     }
 
@@ -216,12 +250,23 @@ export async function POST(request: NextRequest) {
 
   } catch (error: any) {
     console.error('Error saving chat history:', error);
-    if (error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+    
+    // Handle access denied (conversation belongs to another user)
+    if (error.code === 'ACCESS_DENIED') {
       return NextResponse.json(
-        { error: 'Access denied: conversation belongs to another user' },
+        { error: error.message },
         { status: 403 }
       );
     }
+    
+    // Handle concurrent save conflicts
+    if (error.code === 'CONCURRENT_SAVE' || error.code === 'SQLITE_CONSTRAINT_PRIMARYKEY') {
+      return NextResponse.json(
+        { error: 'Concurrent save conflict. Please retry.' },
+        { status: 409 }
+      );
+    }
+    
     return NextResponse.json(
       { error: 'Failed to save chat history' },
       { status: 500 }
@@ -263,9 +308,9 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    // Convert string userId to number for database operations
-    const numericUserId = parseInt(authResult.userId, 10);
-    if (Number.isNaN(numericUserId)) {
+    // Validate and parse user ID to safe integer
+    const numericUserId = validateAndParseUserId(authResult.userId);
+    if (numericUserId === null) {
       return NextResponse.json(
         { error: 'Invalid user ID format' },
         { status: 400 }
