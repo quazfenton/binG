@@ -420,12 +420,29 @@ export class EnhancedLLMService {
         let vercelTools: Record<string, any> | undefined;
         if (request.enableTools && request.userId) {
           try {
-            const { getAllTools } = await import('./vercel-ai-tools');
+            const { getAllTools, extractPublicUrls } = await import('./vercel-ai-tools');
             vercelTools = await getAllTools({
               userId: request.userId,
               conversationId: request.conversationId,
               requestId,
             });
+
+            // Pre-detect URLs in the last user message and inject a hint
+            const lastUserMsg = [...llmRequest.messages].reverse().find(m => m.role === 'user');
+            const lastText = typeof lastUserMsg?.content === 'string'
+              ? lastUserMsg.content
+              : (lastUserMsg?.content as any[])?.find?.((c: any) => c.type === 'text')?.text || '';
+            const detectedUrls = extractPublicUrls(lastText);
+            if (detectedUrls.length > 0 && vercelTools['web_fetch']) {
+              llmRequest.messages = [
+                ...llmRequest.messages,
+                {
+                  role: 'system' as const,
+                  content: `[Tool hint: URLs detected in user message. Use the web_fetch tool to read: ${detectedUrls.join(', ')}]`,
+                },
+              ];
+              chatLogger.info('URL detected in prompt, injected web_fetch hint', { requestId, urls: detectedUrls });
+            }
           } catch (toolErr: any) {
             chatLogger.warn('Failed to build Vercel AI tools, proceeding without', { requestId, error: toolErr.message });
           }

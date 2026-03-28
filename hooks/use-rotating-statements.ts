@@ -406,22 +406,42 @@ export function useRotatingStatements(options: UseRotatingStatementsOptions = {}
 
 export function useMultiRotatingStatements(types: StatementType[] = ['interesting', 'funny', 'task'], intervalMs = 3000) {
   const [typeIndex, setTypeIndex] = useState(0);
-  const [statement, setStatement] = useState('');
-  
+
   const currentType = types[typeIndex];
   const rotatingStatement = useRotatingStatements({ statementType: currentType, intervalMs });
-  
+
+  // Pre-populate statement to avoid blank moments during type switches
+  const [statement, setStatement] = useState(() => {
+    const initialType = types[0];
+    let statements: string[] = [];
+    switch (initialType) {
+      case 'funny':
+        statements = FUNNY_STATEMENTS;
+        break;
+      case 'task':
+        statements = TASK_STATEMENTS;
+        break;
+      case 'interesting':
+      default:
+        statements = INTERESTING_STATEMENTS;
+    }
+    return statements[Math.floor(Math.random() * statements.length)] || '';
+  });
+
   useEffect(() => {
-    setStatement(rotatingStatement);
+    // Only update if we have a valid statement (prevents blanks during type switches)
+    if (rotatingStatement) {
+      setStatement(rotatingStatement);
+    }
   }, [rotatingStatement]);
-  
+
   useEffect(() => {
     const typeInterval = setInterval(() => {
       setTypeIndex((prev) => (prev + 1) % types.length);
     }, intervalMs * 2);
-    
+
     return () => clearInterval(typeInterval);
   }, [types.length, intervalMs]);
-  
+
   return statement;
 }

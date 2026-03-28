@@ -24,6 +24,7 @@ import { workforceManager } from '@/lib/agent/workforce-manager';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
+import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@/lib/agent/orchestration-mode-handler';
 import {
   sanitizeAssistantDisplayContent,
   extractFileWriteEdits,
@@ -675,6 +676,78 @@ export async function POST(request: NextRequest) {
         return new Response(streamBody, { headers: SSE_RESPONSE_HEADERS });
       }
 
+      // Check if custom orchestration mode is selected via header
+      const orchestrationMode = getOrchestrationModeFromRequest(request);
+      
+      if (orchestrationMode !== 'task-router') {
+        // User has selected a custom orchestration mode
+        chatLogger.info('Custom orchestration mode selected', { 
+          mode: orchestrationMode,
+          requestId,
+        });
+        
+        const orchestrationResult = await executeWithOrchestrationMode(orchestrationMode, {
+          task: context ? `${context}\n\nTASK:\n${task}` : task,
+          sessionId: resolvedConversationId,
+          ownerId: authenticatedUserId,
+          stream: stream === true,
+        });
+
+        if (stream === true) {
+          // Return streaming response for custom orchestration modes
+          const encoder = new TextEncoder();
+          const streamBody = new ReadableStream({
+            async start(controller) {
+              try {
+                // Send initial metadata
+                controller.enqueue(encoder.encode(
+                  `event: metadata\ndata: ${JSON.stringify({
+                    mode: orchestrationMode,
+                    agentType: orchestrationResult.metadata?.agentType,
+                  })}\n\n`
+                ));
+                
+                // Send response content
+                if (orchestrationResult.response) {
+                  controller.enqueue(encoder.encode(
+                    `event: content\ndata: ${JSON.stringify({
+                      content: orchestrationResult.response,
+                    })}\n\n`
+                  ));
+                }
+                
+                // Send completion
+                controller.enqueue(encoder.encode(
+                  `event: done\ndata: ${JSON.stringify({
+                    success: orchestrationResult.success,
+                    metadata: orchestrationResult.metadata,
+                  })}\n\n`
+                ));
+                
+                controller.close();
+              } catch (error: any) {
+                controller.enqueue(encoder.encode(
+                  `event: error\ndata: ${JSON.stringify({
+                    message: error.message,
+                  })}\n\n`
+                ));
+                controller.close();
+              }
+            },
+          });
+          
+          return new Response(streamBody, { headers: SSE_RESPONSE_HEADERS });
+        }
+        
+        // Non-streaming response
+        return NextResponse.json({
+          success: orchestrationResult.success,
+          content: orchestrationResult.response,
+          data: orchestrationResult,
+        });
+      }
+      
+      // Default: Use existing unified agent flow (task-router mode)
       const result = await processUnifiedAgentRequest(config);
       return NextResponse.json({
         success: result.success,
@@ -1650,7 +1723,7 @@ export async function POST(request: NextRequest) {
                   controller.close();
                   cleanup();
                 }
-              }, 30000); // 30 second timeout for refinement
+              }, 180000); // 180 second timeout for refinement (matches DAG time budget)
 
             } catch (error) {
               const streamDuration = Date.now() - streamStartTime;

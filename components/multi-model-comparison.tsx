@@ -47,7 +47,7 @@ function StreamingIndicator() {
   const statement = useMultiRotatingStatements(['task', 'interesting'], 1500);
   return (
     <div className="flex items-center gap-2 text-purple-400 text-sm">
-      <Loader2 className="h-4 w-4 thinking-spinner" />
+      <Loader2 key="streaming-spinner" className="h-4 w-4 thinking-spinner" />
       {statement}
     </div>
   );
@@ -563,7 +563,7 @@ export default function MultiModelComparison({
               >
                 {isComparing ? (
                   <>
-                    <Loader2 className="h-4 w-4 thinking-spinner" />
+                    <Loader2 key="comparing-spinner" className="h-4 w-4 thinking-spinner" />
                     <RunningButton />
                   </>
                 ) : (
@@ -724,7 +724,7 @@ export default function MultiModelComparison({
                         </div>
                       ) : response.status === 'pending' ? (
                         <div className="flex items-center gap-2 text-white/40 text-sm">
-                          <Loader2 className="h-4 w-4 thinking-spinner" />
+                          <Loader2 key={`pending-spinner-${response.provider}-${response.model}`} className="h-4 w-4 thinking-spinner" />
                           Waiting...
                         </div>
                       ) : response.status === 'streaming' ? (
