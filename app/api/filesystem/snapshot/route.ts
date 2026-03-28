@@ -266,7 +266,7 @@ export async function GET(req: NextRequest) {
       logError(`[${requestId}] exportWorkspace failed:`, error instanceof Error ? error.message : error);
       throw error;
     }
-    
+
     const prefix = `${pathFilter}/`;
     const files = snapshot.files.filter(
       (file) => file.path === pathFilter || file.path.startsWith(prefix),
@@ -275,6 +275,14 @@ export async function GET(req: NextRequest) {
     const duration = Date.now() - startTime;
 
     log(`[${requestId}] Snapshot: ${files.length} files in ${duration}ms (total workspace: ${snapshot.files.length} files)`);
+    
+    // Log if we're getting empty results - helps debug session ID mismatches
+    if (files.length === 0 && snapshot.files.length === 0) {
+      logWarn(`[${requestId}] EMPTY WORKSPACE: ownerId="${owner.ownerId}", source="${owner.source}", path="${pathFilter}"`);
+    } else if (files.length === 0 && snapshot.files.length > 0) {
+      logWarn(`[${requestId}] PATH MISMATCH: workspace has ${snapshot.files.length} files but none match path="${pathFilter}"`);
+      log(`[${requestId}] Workspace file paths:`, snapshot.files.slice(0, 10).map(f => f.path));
+    }
 
     if (duration > 200) {
       logWarn(`[${requestId}] SLOW OPERATION: exportWorkspace took ${duration}ms for "${pathFilter}"`);

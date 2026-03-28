@@ -32,7 +32,6 @@ import { useAuth } from "@/contexts/auth-context";
 import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from "@/lib/utils";
 import { generateSessionName, checkFileConflicts } from "@/lib/session-naming";
 import type { AttachedVirtualFile } from "@/hooks/use-virtual-filesystem";
-import { parsePatch, applyPatch } from "diff";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 
@@ -267,6 +266,8 @@ export default function ConversationInterface() {
   const persistedUiStateUpdatedAtRef = useRef(0);
   const continueProcessedRef = useRef<string | null>(null);
   const chatHistorySavedRef = useRef<string | null>(null);
+  const lastProcessedAssistantDiffSignatureRef = useRef<string>('');
+  const diffApplyQueueRef = useRef<Promise<void>>(Promise.resolve());
 
   useEffect(() => {
     providerRef.current = currentProvider;
@@ -398,6 +399,25 @@ export default function ConversationInterface() {
       }
     },
   });
+
+  const queueCommandDiffs = useCallback((entries: Array<{ path: string; diff: string }>) => {
+    if (entries.length === 0) {
+      return;
+    }
+
+    setCommandsByFile((prev) => {
+      const next: Record<string, string[]> = { ...prev };
+      for (const { path, diff } of entries) {
+        if (!path) continue;
+        const list = next[path] ? [...next[path]] : [];
+        if (list.length === 0 || list[list.length - 1] !== diff) {
+          list.push(diff);
+          next[path] = list;
+        }
+      }
+      return next;
+    });
+  }, []);
 
 
 
@@ -610,6 +630,11 @@ export default function ConversationInterface() {
       .reverse()
       .find((m) => m.role === "assistant");
     if (!lastAssistant || typeof lastAssistant.content !== "string") return;
+    const assistantSignature = `${lastAssistant.id}:${lastAssistant.content}`;
+    if (lastProcessedAssistantDiffSignatureRef.current === assistantSignature) {
+      return;
+    }
+    lastProcessedAssistantDiffSignatureRef.current = assistantSignature;
     
     // Create context for API response processing
     const responseContext = createInputContext('assistant');
@@ -693,6 +718,7 @@ export default function ConversationInterface() {
         // This allows AI to fix bugs, update code, etc. in existing sessions
         if (allFilesExist && newFilePaths.length > 0) {
           console.log('[ConflictCheck] All files exist - this is an edit operation, auto-applying');
+          queueCommandDiffs(newEntries);
           // Auto-apply the detected diffs immediately
           if (applyDiffsRef.current) {
             void applyDiffsRef.current(newEntries);
@@ -710,39 +736,16 @@ export default function ConversationInterface() {
           toast.info(`${conflictCheck.existingFiles.length} file(s) would be overwritten. Review required.`);
 
           // Still store in commandsByFile for manual review
-          setCommandsByFile((prev) => {
-            const next: Record<string, string[]> = { ...prev };
-            for (const { path, diff } of newEntries) {
-              if (!path) continue;
-              const list = next[path] ? [...next[path]] : [];
-              if (list.length === 0 || list[list.length - 1] !== diff) {
-                list.push(diff);
-                next[path] = list;
-              }
-            }
-            return next;
-          });
+          queueCommandDiffs(newEntries);
           return; // Don't auto-apply - require approval
         }
 
         // Auto-apply the detected diffs immediately to trigger filesystem event for MessageBubble UI
         // The diffs will also be stored in commandsByFile for manual review/revert
+        queueCommandDiffs(newEntries);
         if (applyDiffsRef.current) {
           void applyDiffsRef.current(newEntries);
         }
-
-        setCommandsByFile((prev) => {
-          const next: Record<string, string[]> = { ...prev };
-          for (const { path, diff } of newEntries) {
-            if (!path) continue;
-            const list = next[path] ? [...next[path]] : [];
-            if (list.length === 0 || list[list.length - 1] !== diff) {
-              list.push(diff);
-              next[path] = list;
-            }
-          }
-          return next;
-        });
       };
       
       void checkConflicts();
@@ -751,24 +754,11 @@ export default function ConversationInterface() {
 
     // Auto-apply the detected diffs immediately to trigger filesystem event for MessageBubble UI
     // The diffs will also be stored in commandsByFile for manual review/revert
+    queueCommandDiffs(newEntries);
     if (applyDiffsRef.current) {
       void applyDiffsRef.current(newEntries);
     }
-
-    setCommandsByFile((prev) => {
-      const next: Record<string, string[]> = { ...prev };
-      for (const { path, diff } of newEntries) {
-        if (!path) continue;
-        const list = next[path] ? [...next[path]] : [];
-        // avoid duplicate consecutive identical patches
-        if (list.length === 0 || list[list.length - 1] !== diff) {
-          list.push(diff);
-          next[path] = list;
-        }
-      }
-      return next;
-    });
-  }, [messages]);
+  }, [messages, attachedFilesystemFiles, currentConversationId, filesystemScopePath, queueCommandDiffs]);
 
   // Persist commands map by conversation id
   useEffect(() => {
@@ -793,6 +783,10 @@ export default function ConversationInterface() {
     } catch {
       setCommandsByFile({});
     }
+  }, [currentConversationId]);
+
+  useEffect(() => {
+    lastProcessedAssistantDiffSignatureRef.current = '';
   }, [currentConversationId]);
 
   // Fetch available providers on mount and align defaults with server config
@@ -1115,14 +1109,14 @@ export default function ConversationInterface() {
       toast.info("No pending command diffs to apply.");
       return;
     }
-    void applyDiffsToFilesystem(entries);
+    void applyDiffsToFilesystemQueued(entries);
   };
 
   const applyDiffsForFile = (path: string) => {
     const diffs = commandsByFile[path] || [];
     if (diffs.length === 0) return;
     const entries = diffs.map((diff) => ({ path, diff }));
-    void applyDiffsToFilesystem(entries);
+    void applyDiffsToFilesystemQueued(entries);
   };
 
   const clearAllCommandDiffs = () => {
@@ -1267,6 +1261,7 @@ export default function ConversationInterface() {
     if (appliedCount > 0) {
       emitFilesystemUpdated({
         scopePath: filesystemScopePath || "project",
+        paths: entries.map((entry) => resolveScopedPath(entry.path, scopePath)),
         source: "command-diff",
         workspaceVersion: lastWriteMetadata?.workspaceVersion,
         commitId: lastWriteMetadata?.commitId,
@@ -1314,11 +1309,25 @@ export default function ConversationInterface() {
     }
   }, [filesystemScopePath, filesystemSessionId]);
 
-  // Ref to hold applyDiffsToFilesystem for use in useEffect (before callback definition)
-  const applyDiffsRef = useRef(applyDiffsToFilesystem);
-  useEffect(() => {
-    applyDiffsRef.current = applyDiffsToFilesystem;
+  const applyDiffsToFilesystemQueued = useCallback((entries: Array<{ path: string; diff: string }>) => {
+    if (!entries.length) {
+      return Promise.resolve();
+    }
+
+    const run = async () => {
+      await applyDiffsToFilesystem(entries);
+    };
+
+    const queued = diffApplyQueueRef.current.then(run, run);
+    diffApplyQueueRef.current = queued.catch(() => {});
+    return queued;
   }, [applyDiffsToFilesystem]);
+
+  // Ref to hold applyDiffsToFilesystem for use in useEffect (before callback definition)
+  const applyDiffsRef = useRef(applyDiffsToFilesystemQueued);
+  useEffect(() => {
+    applyDiffsRef.current = applyDiffsToFilesystemQueued;
+  }, [applyDiffsToFilesystemQueued]);
 
   // Apply polled diffs to filesystem (defined after applyDiffsToFilesystem)
   const applyPolledDiffs = useCallback(async (pathsToApply?: string[]) => {
@@ -1333,12 +1342,12 @@ export default function ConversationInterface() {
 
     const entries = diffsToApply.map(d => ({ path: d.path, diff: d.diff }));
     try {
-      await applyDiffsToFilesystem(entries);
+      await applyDiffsToFilesystemQueued(entries);
     } finally {
       // Clear the applied diffs from the poller after apply completes
       diffsPoller.clearDiffs();
     }
-  }, [diffsPoller.diffs, applyDiffsToFilesystem, diffsPoller.clearDiffs]);
+  }, [diffsPoller.diffs, applyDiffsToFilesystemQueued, diffsPoller.clearDiffs]);
 
   // Handle chat submission - no login restrictions
   const refreshAttachedFiles = useCallback(async (

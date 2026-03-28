@@ -75,10 +75,16 @@ let _sandboxProviderPromise: Promise<SandboxProvider> | null = null;
 async function getProvider(): Promise<SandboxProvider> {
   if (_sandboxProvider) return _sandboxProvider;
   if (!_sandboxProviderPromise) {
-    _sandboxProviderPromise = getSandboxProvider().then(provider => {
-      _sandboxProvider = provider;
-      return provider;
-    });
+    _sandboxProviderPromise = getSandboxProvider()
+      .then(provider => {
+        _sandboxProvider = provider;
+        return provider;
+      })
+      .catch(error => {
+        // Reset the promise on failure so retries can work
+        _sandboxProviderPromise = null;
+        throw error;
+      });
   }
   return _sandboxProviderPromise;
 }

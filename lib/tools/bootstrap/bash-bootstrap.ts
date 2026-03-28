@@ -77,7 +77,7 @@ export async function registerBashTool(
     return 1;
   } catch (error: any) {
     logger.error('Failed to register bash tool', error);
-    return 0;
+    throw error; // Re-throw to signal bootstrap failure
   }
 }
 
