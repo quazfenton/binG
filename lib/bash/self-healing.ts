@@ -163,12 +163,49 @@ export function isMinimalChange(original: string, updated: string): boolean {
 // ============================================================================
 
 /**
+ * Configuration for self-healing behavior
+ */
+export interface SelfHealingConfig {
+  /** Allow automatic sudo escalation for permission errors (default: false) */
+  allowSudoEscalation?: boolean;
+  /** Whitelist of commands safe to run with sudo (used when allowSudoEscalation is true) */
+  safeSudoCommands?: string[];
+}
+
+// Safe commands that can be auto-escalated with sudo
+const DEFAULT_SAFE_SUDO_COMMANDS = [
+  'chmod',
+  'chown',
+  'mkdir',
+  'touch',
+  'apt-get',
+  'apt',
+  'yum',
+  'dnf',
+  'brew',
+  'pip',
+  'pip3',
+  'npm',
+  'pnpm',
+  'yarn',
+];
+
+/**
+ * Check if a command is safe to run with sudo
+ */
+function isSafeSudoCommand(command: string, safeCommands: string[] = DEFAULT_SAFE_SUDO_COMMANDS): boolean {
+  const baseCommand = command.split(/\s+/)[0].toLowerCase();
+  return safeCommands.some(safe => baseCommand === safe || baseCommand.endsWith(`/${safe}`));
+}
+
+/**
  * Apply targeted fix based on error type
  */
 export function applyTargetedFix(
   command: string,
   errorType: BashFailureContext['errorType'],
-  stderr: string
+  stderr: string,
+  config?: SelfHealingConfig
 ): string | null {
   switch (errorType) {
     case 'missing_binary': {
@@ -176,7 +213,7 @@ export function applyTargetedFix(
       const match = stderr.match(/command not found:\s*(\S+)/);
       if (match) {
         const binary = match[1];
-        
+
         // Suggest common alternatives
         const alternatives: Record<string, string> = {
           'jqq': 'jq',
@@ -208,9 +245,25 @@ export function applyTargetedFix(
     }
 
     case 'permissions': {
-      // Suggest adding sudo or fixing permissions
+      // SECURITY: Only auto-escalate with sudo if explicitly allowed and command is safe
+      const allowSudo = config?.allowSudoEscalation ?? false;
+      const safeCommands = config?.safeSudoCommands || DEFAULT_SAFE_SUDO_COMMANDS;
+      
       if (!command.startsWith('sudo ')) {
-        return `sudo ${command}`;
+        if (allowSudo && isSafeSudoCommand(command, safeCommands)) {
+          // Safe to auto-escalate
+          return `sudo ${command}`;
+        } else {
+          // Don't auto-escalate - provide user guidance instead
+          // Return null to indicate no automatic fix available
+          // The error will be reported to the user with suggestions
+          logger.warn('Permission error requires manual intervention', {
+            command,
+            suggestion: 'Try running with sudo or fix file permissions',
+            safeSudoCommands: safeCommands,
+          });
+          return null;
+        }
       }
       break;
     }
@@ -367,6 +420,8 @@ export async function executeWithHealing(
     maxRetries?: number;
     env?: Record<string, string>;
     timeout?: number;
+    /** Self-healing configuration for security controls */
+    healingConfig?: SelfHealingConfig;
   } = {}
 ): Promise<any> {
   const maxRetries = options.maxRetries || 3;
@@ -377,6 +432,7 @@ export async function executeWithHealing(
   logger.info('Starting self-healing execution', {
     command,
     maxRetries,
+    allowSudoEscalation: options.healingConfig?.allowSudoEscalation ?? false,
   });
 
   while (attempt < maxRetries) {
@@ -460,7 +516,8 @@ export async function executeWithHealing(
       const targetedFix = applyTargetedFix(
         currentCommand,
         failure.errorType,
-        failure.stderr
+        failure.stderr,
+        options.healingConfig
       );
 
       if (targetedFix && isCommandSafe(targetedFix)) {

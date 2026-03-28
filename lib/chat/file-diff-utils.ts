@@ -195,8 +195,8 @@ export function applyDiffMatchPatch(currentContent: string, diffBody: string): s
 /**
  * Apply a diff/edit to content, trying multiple strategies with robust error handling
  * Returns the new content, or null if all strategies fail
- * 
- * SAFETY: Never falls back to full file replacement - only applies verified diffs
+ *
+ * IMPROVED: Now handles both diff format AND full file content from LLM responses
  */
 export function applyDiffToContent(currentContent: string, path: string, diffBody: string): string | null {
   if (!diffBody || diffBody.trim().length === 0) {
@@ -204,23 +204,31 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
     return null;
   }
 
-  // SAFETY CHECK 1: Reject if diffBody looks like it might be full file content
-  // (has no diff markers at all - could accidentally overwrite file)
-  // Only count lines starting with + or - as valid diff markers (not space-prefixed lines)
+  // Check if this looks like full file content (not a diff)
   const lines = diffBody.split('\n');
-  const hasRealDiffMarkers = lines.some(line => 
+  const hasRealDiffMarkers = lines.some(line =>
     line.startsWith('+') || line.startsWith('-')
   );
-  
-  // Also check for unified diff header format
-  const hasUnifiedDiffHeader = lines.some(line => 
+  const hasUnifiedDiffHeader = lines.some(line =>
     line.startsWith('--- ') || line.startsWith('+++ ') || line.startsWith('@@ ')
   );
+  const isLikelyFullFileContent = !hasRealDiffMarkers && !hasUnifiedDiffHeader;
 
-  if (!hasRealDiffMarkers && !hasUnifiedDiffHeader && diffBody.length > 100) {
-    // Long content with no diff markers - likely full file, not a diff
-    // DO NOT apply as diff - this could corrupt the file
-    console.warn('[applyDiffToContent] Content appears to be full file (no diff markers), rejecting for safety');
+  // STRATEGY 0: If content looks like a complete file, use it directly
+  // This handles LLM responses that send full file content instead of diffs
+  if (isLikelyFullFileContent && looksLikeCompleteFile(diffBody)) {
+    console.log('[applyDiffToContent] Content appears to be full file, using directly', {
+      path,
+      contentLength: diffBody.length,
+    });
+    return diffBody;
+  }
+
+  // SAFETY CHECK: Reject if diffBody has no diff markers AND doesn't look like a complete file
+  // This prevents accidental overwrites from malformed content
+  if (!hasRealDiffMarkers && !hasUnifiedDiffHeader && diffBody.length > 100 && !looksLikeCompleteFile(diffBody)) {
+    // Long content with no diff markers and no file structure - likely malformed
+    console.warn('[applyDiffToContent] Content appears malformed (no diff markers, not recognizable file), rejecting for safety');
     return null;
   }
 

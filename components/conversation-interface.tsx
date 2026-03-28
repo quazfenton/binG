@@ -1181,6 +1181,11 @@ export default function ConversationInterface() {
           if (payload?.success && payload?.data?.content != null) {
             currentContent = payload.data.content;
           }
+        } else if (readResponse.status === 404) {
+          // File doesn't exist yet - this is OK for new file creation
+          // Set empty content and let diff/create logic handle it
+          currentContent = "";
+          readErrorMsg = null; // Clear error for 404 - it's expected for new files
         } else {
           readErrorMsg = `Read failed with status ${readResponse.status}`;
         }
@@ -1200,7 +1205,10 @@ export default function ConversationInterface() {
           currentContentPreview: currentContent.slice(0, 300),
           diffPreview: entry.diff.slice(0, 500),
           readError: readErrorMsg,
-          suggestion: 'This usually means the file content has changed since the diff was generated, or the diff targets text that no longer exists in the file.',
+          isNewFile: currentContent === "" && !readErrorMsg,
+          suggestion: readErrorMsg
+            ? 'File may not exist or read error occurred'
+            : 'Diff may not match current content or is malformed',
         });
         continue;
       }

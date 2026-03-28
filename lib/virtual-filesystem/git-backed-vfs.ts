@@ -109,19 +109,25 @@ export class GitBackedVFS {
 
   /**
    * Flush batch mode - commit all pending changes and re-enable auto-commit
+   * 
+   * IMPORTANT: Only exits batch mode on success. If commit fails, batch mode
+   * remains active so callers can retry or handle the error appropriately.
    */
   async flushBatch(): Promise<CommitResult> {
     if (!this.batchModeEnabled || !this.batchModeOwnerId) {
       return { success: true, committedFiles: 0 };
     }
-    
+
     const result = await this.commitChanges(this.batchModeOwnerId, 'Batch write (refinement)');
-    
-    // Restore original auto-commit state (not just force to true)
-    this.options.autoCommit = this.originalAutoCommit;
-    this.batchModeEnabled = false;
-    this.batchModeOwnerId = null;
-    
+
+    // Only restore auto-commit state after a successful flush
+    // On failure, keep batch mode active so callers can retry or handle the error
+    if (result.success) {
+      this.options.autoCommit = this.originalAutoCommit;
+      this.batchModeEnabled = false;
+      this.batchModeOwnerId = null;
+    }
+
     return result;
   }
 
@@ -587,18 +593,19 @@ export function getGitBackedVFSForOwner(
   // Determine the correct sessionId to use:
   // - If options.sessionId is already scoped (contains ':'), use it as-is
   // - Otherwise, create composite key as ownerId:sessionId
+  // - If no sessionId provided, use ownerId directly (for backward compatibility)
   const sessionId = options?.sessionId;
   const compositeKey = sessionId && sessionId.includes(':')
     ? sessionId  // Already scoped (e.g., from rollback route)
     : sessionId
       ? `${ownerId}:${sessionId}`  // Needs scoping
-      : ownerId;  // No sessionId provided
+      : ownerId;  // No sessionId provided - use ownerId as sessionId
 
   if (!gitVFSInstances.has(compositeKey)) {
     // Pass the composite sessionId so ShadowCommit uses correct format for rollback queries
     gitVFSInstances.set(compositeKey, createGitBackedVFS(vfs, {
       ...options,
-      // Use the sessionId that matches the map key for consistent shadow commit scoping
+      // Always use compositeKey as sessionId to ensure consistent ShadowCommit queries
       sessionId: compositeKey,
     }));
   }

@@ -111,6 +111,15 @@ export async function GET(req: NextRequest) {
     // Track request frequency
     const tracking = trackRequest(path);
 
+    // Rate limit aggressive polling — return 429 after threshold
+    if (tracking.isPolling && tracking.requestCount > 6) {
+      logWarn(`${COLORS.yellow}RATE LIMITED:${COLORS.reset} ${tracking.requestCount} requests in ${tracking.windowMs}ms for path "${COLORS.blue}${path}${COLORS.reset}"`);
+      return NextResponse.json(
+        { success: false, error: 'Too many requests — slow down' },
+        { status: 429, headers: { 'Retry-After': '2' } },
+      );
+    }
+
     // Log polling detection
     if (tracking.isPolling) {
       logWarn(`${COLORS.yellow}POLLING DETECTED:${COLORS.reset} ${tracking.requestCount} requests in ${tracking.windowMs}ms for path "${COLORS.blue}${path}${COLORS.reset}"`);

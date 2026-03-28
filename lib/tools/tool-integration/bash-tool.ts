@@ -114,7 +114,10 @@ export class BashToolExecutor {
 
     try {
       // Get sandbox handle
-      const sandbox = await getSandboxProvider(context.sandboxProvider || 'daytona');
+      if (!context.sandboxId) {
+        throw new Error('bash.execute requires a sandboxId in context');
+      }
+      const sandbox = await getSandboxProvider(context.sandboxProvider);
       const handle = await sandbox.getSandbox(context.sandboxId);
 
       // Create execute function for healing wrapper

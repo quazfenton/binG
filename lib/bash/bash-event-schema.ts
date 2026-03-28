@@ -233,7 +233,8 @@ export function createBashExecutionEvent(
 export function createBashFailureContext(
   result: BashExecutionResult,
   files: string[],
-  attempt: number
+  attempt: number,
+  errorType?: BashFailureContext['errorType']
 ): BashFailureContext {
   return {
     command: result.command,
@@ -243,6 +244,7 @@ export function createBashFailureContext(
     workingDir: result.workingDir,
     files,
     attempt,
+    errorType,
   };
 }
 
@@ -255,10 +257,8 @@ export function createDAGNode(
   command: string,
   dependsOn: string[] = []
 ): DAGNode {
-  return {
+  const base = {
     id,
-    type,
-    command,
     dependsOn,
     metadata: {
       latency: 'medium',
@@ -266,6 +266,25 @@ export function createDAGNode(
       reliability: 0.95,
     },
   };
+
+  switch (type) {
+    case 'tool':
+      // Extract tool name from command (first word)
+      const toolName = command.trim().split(/\s+/, 1)[0];
+      return {
+        ...base,
+        type,
+        tool: toolName,
+        command,
+      } as DAGNode;
+    case 'bash':
+    case 'container':
+      return {
+        ...base,
+        type,
+        command,
+      } as DAGNode;
+  }
 }
 
 /**
