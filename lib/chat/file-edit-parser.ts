@@ -648,7 +648,7 @@ export function sanitizeFileEditTags(content: string): string {
   }
 
   if (sanitized.includes('<file_write')) {
-    if (sanitized.includes('</file_write>')) {
+    if (sanitized.includes('</file_write>') || sanitized.includes('</file_writepath>')) {
       // Remove file_write format (handle both <file_write path="..."> and <file_writepath="...">)
       sanitized = sanitized.replace(/<file_write\s*path=["'][^"']+["']\s*>[\s\S]*?<\/file_write>/gi, '');
       sanitized = sanitized.replace(/<file_writepath=["'][^"']+["']\s*>[\s\S]*?<\/file_writepath>/gi, '');
