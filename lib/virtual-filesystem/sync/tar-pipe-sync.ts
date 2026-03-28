@@ -17,12 +17,25 @@
 import { createWriteStream, createReadStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import { pack, unpack } from 'tar-stream';
-import { virtualFilesystem } from '../index';
+import { virtualFilesystem } from '../index.server';
 import type { SandboxHandle } from '../../sandbox/providers/sandbox-provider';
 import { emitFilesystemUpdated } from './sync-events';
 
 // Use shared VFS singleton for consistent state across all routes
 const vfs = virtualFilesystem;
+
+const ownerWriteQueues = new Map<string, Promise<void>>();
+
+async function queueWriteFile(ownerId: string, filePath: string, content: string): Promise<void> {
+  const previous = ownerWriteQueues.get(ownerId) || Promise.resolve();
+  const next = previous
+    .catch(() => undefined)
+    .then(async () => {
+      await vfs.writeFile(ownerId, filePath, content);
+    });
+  ownerWriteQueues.set(ownerId, next);
+  await next;
+}
 
 export interface TarPipeSyncOptions {
   /** Minimum files to use tar-pipe (default: 10) */
@@ -251,7 +264,7 @@ export async function syncSandboxToVFS(
       stream.on('data', chunk => chunks.push(chunk));
       stream.on('end', async () => {
         const content = Buffer.concat(chunks).toString('utf8');
-        await vfs.writeFile(ownerId, header.name, content);
+        await queueWriteFile(ownerId, header.name, content);
         filesSynced++;
         bytesTransferred += content.length;
 

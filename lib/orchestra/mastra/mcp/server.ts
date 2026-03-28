@@ -21,7 +21,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { virtualFilesystem } from '@/lib/virtual-filesystem/index';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { getSandboxProvider, type SandboxProvider } from '@/lib/sandbox/providers';
 
 // Use shared VFS singleton for consistent state across all routes

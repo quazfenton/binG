@@ -7,9 +7,9 @@
  */
 
 import { BashFailureContext, CommandRepair, FixMemory } from './bash-event-schema';
-import { executeBashCommand, isCommandSafe } from './bash-tool';
+import { executeBashCommand } from './bash-tool';
 import { createLogger } from '@/lib/utils/logger';
-import { virtualFilesystem } from '@/lib/virtual-filesystem';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 
 const logger = createLogger('Bash:SelfHealing');
 
@@ -372,6 +372,7 @@ export async function executeWithHealing(
   const maxRetries = options.maxRetries || 3;
   let attempt = 0;
   let currentCommand = command;
+  let lastError: string | null = null; // Track the last error for fix memory
 
   logger.info('Starting self-healing execution', {
     command,
@@ -380,8 +381,8 @@ export async function executeWithHealing(
 
   while (attempt < maxRetries) {
     try {
-      logger.info('Executing command', { 
-        command: currentCommand, 
+      logger.info('Executing command', {
+        command: currentCommand,
         attempt: attempt + 1,
       });
 
@@ -397,9 +398,9 @@ export async function executeWithHealing(
           duration: result.duration,
         });
 
-        // Store success in memory
-        if (attempt > 0) {
-          await storeFix(command, currentCommand, '', true);
+        // Store success in memory - use the error that was fixed
+        if (attempt > 0 && lastError) {
+          await storeFix(command, currentCommand, lastError, true);
         }
 
         return result;
@@ -409,29 +410,31 @@ export async function executeWithHealing(
       throw new Error(result.stderr);
     } catch (error: any) {
       attempt++;
+      lastError = error.stderr || error.message; // Track error for potential future fix
 
       if (attempt >= maxRetries) {
-        logger.error('Max retries exceeded', { 
+        logger.error('Max retries exceeded', {
           command: currentCommand,
           attempts: attempt,
         });
-        
+
         // Store failure in memory
-        await storeFix(command, currentCommand, error.message, false);
-        
+        await storeFix(command, currentCommand, lastError, false);
+
         throw error;
       }
 
       // Build failure context
+      const stderrMsg = error.stderr || error.message;
       const failure: BashFailureContext = {
         command: currentCommand,
-        stderr: error.stderr || error.message,
+        stderr: stderrMsg,
         stdout: error.stdout || '',
         exitCode: error.exitCode || -1,
         workingDir: options.workingDir || '/workspace',
         files: [], // TODO: Get VFS snapshot
         attempt,
-        errorType: classifyError(failure.stderr),
+        errorType: classifyError(stderrMsg),
       };
 
       logger.info('Command failed', { 
@@ -498,20 +501,3 @@ export async function executeWithHealing(
 
   throw new Error('Unexpected: loop exited without result or error');
 }
-
-// ============================================================================
-// Exports
-// ============================================================================
-
-export {
-  classifyError,
-  isCommandSafe,
-  validateRepair,
-  generateDiffRepair,
-  applyDiff,
-  isMinimalChange,
-  applyTargetedFix,
-  normalizeCommand,
-  findKnownFix,
-  storeFix,
-};

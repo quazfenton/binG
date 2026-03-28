@@ -36,10 +36,16 @@ export const tamboLocalTools = {
 
   /**
    * SECURITY: ownerId parameter is IGNORED - owner derived from auth context
+   * 
+   * Supports append mode for cat >> heredoc syntax
    */
-  writeFile: async ({ path, content, ownerId }: { path: string; content: string; ownerId?: string }, authContextUserId?: string) => {
+  writeFile: async ({ path, content, ownerId, append }: { path: string; content: string; ownerId?: string; append?: boolean }, authContextUserId?: string) => {
     const owner = getSecureOwner(ownerId, authContextUserId);
-    const file = await virtualFilesystem.writeFile(owner, path, content);
+    const writeOptions: { failIfExists?: boolean; append?: boolean } = {};
+    if (append !== undefined) {
+      writeOptions.append = append;
+    }
+    const file = await virtualFilesystem.writeFile(owner, path, content, undefined, writeOptions);
     return { path: file.path, version: file.version, language: file.language, size: file.size };
   },
 

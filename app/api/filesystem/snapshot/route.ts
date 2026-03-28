@@ -13,15 +13,58 @@ const snapshotCache = new Map<string, {
   version: number;
 }>();
 const CACHE_TTL_MS = 30000; // 30 seconds server-side cache
+const MAX_CACHE_SIZE = 50; // Max entries before proactive cleanup
 
-// FIX: Invalidate snapshot cache when VFS changes (listen to snapshotChange events)
-// This ensures the cache is invalidated when files are written, preventing stale data
+// Periodic cache cleanup interval
+let cleanupInterval: NodeJS.Timeout | null = null;
+function startPeriodicCleanup() {
+  if (cleanupInterval) return;
+  cleanupInterval = setInterval(() => {
+    const now = Date.now();
+    const cacheThreshold = CACHE_TTL_MS * 2;
+    let deleted = 0;
+    
+    for (const [key, value] of snapshotCache.entries()) {
+      if (now - value.timestamp > cacheThreshold) {
+        snapshotCache.delete(key);
+        deleted++;
+      }
+    }
+    
+    if (deleted > 0) {
+      console.log('[VFS SNAPSHOT] Periodic cache cleanup:', deleted, 'entries removed');
+    }
+    
+    // Also enforce max size - remove oldest entries if over limit
+    if (snapshotCache.size > MAX_CACHE_SIZE) {
+      const entries = Array.from(snapshotCache.entries())
+        .sort((a, b) => a[1].timestamp - b[1].timestamp);
+      const toDelete = entries.slice(0, entries.length - MAX_CACHE_SIZE);
+      for (const [key] of toDelete) {
+        snapshotCache.delete(key);
+      }
+      console.log('[VFS SNAPSHOT] Size limit cleanup:', toDelete.length, 'entries removed');
+    }
+  }, 60000); // Run every 60 seconds
+  
+  // Clean up interval on process exit
+  process.on('beforeExit', () => {
+    if (cleanupInterval) clearInterval(cleanupInterval);
+  });
+}
+
+// Start periodic cleanup
+startPeriodicCleanup();
+
+const latestSeenVersion = new Map<string, number>();
+
 virtualFilesystem.onSnapshotChange((ownerId: string, version: number) => {
-  // Invalidate all cache entries for this ownerId
+  const currentMax = latestSeenVersion.get(ownerId) || 0;
+  latestSeenVersion.set(ownerId, Math.max(currentMax, version));
+
   for (const key of snapshotCache.keys()) {
     if (key.startsWith(`${ownerId}:`)) {
       const cached = snapshotCache.get(key);
-      // Invalidate if the cached version is older than the current version
       if (cached && cached.version < version) {
         snapshotCache.delete(key);
         console.log('[VFS SNAPSHOT] Cache invalidated for owner:', ownerId, 'version:', version);
@@ -33,6 +76,36 @@ virtualFilesystem.onSnapshotChange((ownerId: string, version: number) => {
 // Request tracking for detecting polling loops
 const requestTracker = new Map<string, { count: number; lastRequest: number; firstRequest: number }>();
 const REQUEST_WINDOW_MS = 5000; // 5 second window for tracking
+const MAX_TRACKER_SIZE = 100; // Max entries before cleanup
+
+// Periodic request tracker cleanup
+setInterval(() => {
+  const now = Date.now();
+  let deleted = 0;
+  
+  for (const [key, tracker] of requestTracker.entries()) {
+    // Remove entries older than 2x the request window
+    if (now - tracker.lastRequest > REQUEST_WINDOW_MS * 2) {
+      requestTracker.delete(key);
+      deleted++;
+    }
+  }
+  
+  // Also enforce max size - remove oldest entries if over limit
+  if (requestTracker.size > MAX_TRACKER_SIZE) {
+    const entries = Array.from(requestTracker.entries())
+      .sort((a, b) => a[1].lastRequest - b[1].lastRequest);
+    const toDelete = entries.slice(0, entries.length - MAX_TRACKER_SIZE);
+    for (const [key] of toDelete) {
+      requestTracker.delete(key);
+    }
+    deleted += toDelete.length;
+  }
+  
+  if (deleted > 0 && DEBUG) {
+    console.log('[VFS SNAPSHOT] Request tracker cleanup:', deleted, 'entries removed');
+  }
+}, 120000); // Run every 2 minutes
 
 // Debug flag
 const DEBUG = process.env.DEBUG_VFS === 'true' || process.env.NODE_ENV === 'development';
@@ -128,15 +201,32 @@ export async function GET(req: NextRequest) {
     const cacheKey = `${owner.ownerId}:${pathFilter}:${authHeader ? 'auth' : 'anon'}`;
     const cached = snapshotCache.get(cacheKey);
     const now = Date.now();
+    const latestVersion = latestSeenVersion.get(owner.ownerId);
 
     if (cached && now - cached.timestamp < CACHE_TTL_MS) {
-      // Check If-None-Match header for conditional request
-      const ifNoneMatch = req.headers.get('if-none-match');
-      if (ifNoneMatch === cached.etag) {
-        log(`[${requestId}] Cache hit with matching ETag, returning 304`);
-        // SECURITY: Use private cache headers to prevent shared caching
-        const response = new NextResponse(null, {
-          status: 304,
+      if (latestVersion !== undefined && cached.version < latestVersion) {
+        snapshotCache.delete(cacheKey);
+      } else {
+        const ifNoneMatch = req.headers.get('if-none-match');
+        if (ifNoneMatch === cached.etag) {
+          log(`[${requestId}] Cache hit with matching ETag, returning 304`);
+          const response = new NextResponse(null, {
+            status: 304,
+            headers: {
+              'cache-control': 'private, no-store',
+              'vary': 'Authorization, Cookie',
+              etag: cached.etag,
+            }
+          });
+          return withAnonSessionCookie(response, owner);
+        }
+
+        log(`[${requestId}] Cache hit (age: ${Math.round((now - cached.timestamp) / 1000)}s)`);
+        const response = NextResponse.json({
+          success: true,
+          data: cached.data,
+          cached: true,
+        }, {
           headers: {
             'cache-control': 'private, no-store',
             'vary': 'Authorization, Cookie',
@@ -145,21 +235,6 @@ export async function GET(req: NextRequest) {
         });
         return withAnonSessionCookie(response, owner);
       }
-
-      log(`[${requestId}] Cache hit (age: ${Math.round((now - cached.timestamp) / 1000)}s)`);
-      // SECURITY: Use private cache headers to prevent shared caching
-      const response = NextResponse.json({
-        success: true,
-        data: cached.data,
-        cached: true,
-      }, {
-        headers: {
-          'cache-control': 'private, no-store',
-          'vary': 'Authorization, Cookie',
-          etag: cached.etag,
-        }
-      });
-      return withAnonSessionCookie(response, owner);
     }
 
     // Generate new snapshot
@@ -201,29 +276,13 @@ export async function GET(req: NextRequest) {
       files,
     };
 
-    snapshotCache.set(cacheKey, {
-      data: responseData,
-      timestamp: now,
-      etag,
-      version: snapshot.version,
-    });
-
-    // Clean up old cache entries asynchronously to avoid blocking request
-    if (snapshotCache.size > 100) {
-      // Use setImmediate to defer cleanup to next event loop
-      setImmediate(() => {
-        let deleted = 0;
-        const cacheThreshold = CACHE_TTL_MS * 2;
-        for (const [key, value] of snapshotCache.entries()) {
-          if (deleted >= 20) break; // Delete max 20 old entries at a time
-          if (now - value.timestamp > cacheThreshold) {
-            snapshotCache.delete(key);
-            deleted++;
-          }
-        }
-        if (deleted > 0) {
-          log(`Cache cleanup: deleted ${deleted} old entries`);
-        }
+    const latestVersionBeforeSet = latestSeenVersion.get(owner.ownerId) || 0;
+    if (snapshot.version >= latestVersionBeforeSet) {
+      snapshotCache.set(cacheKey, {
+        data: responseData,
+        timestamp: now,
+        etag,
+        version: snapshot.version,
       });
     }
 

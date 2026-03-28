@@ -897,6 +897,34 @@ export const INTEGRATION_PROXY_CAPABILITY: CapabilityDefinition = {
   tags: ['integration', 'proxy', 'api', 'http', 'nango', 'arcade', 'deprecated'],
 };
 
+export const BASH_CAPABILITY: CapabilityDefinition = {
+  id: 'bash.execute',
+  name: 'Bash Command Execution',
+  category: 'sandbox',
+  description: 'Execute bash commands in sandboxed environment with automatic error recovery (self-healing)',
+  inputSchema: z.object({
+    command: z.string().describe('Bash command to execute (e.g., "cat file.txt | grep pattern")'),
+    cwd: z.string().optional().describe('Working directory (relative to workspace root)'),
+    timeout: z.number().optional().default(30000).describe('Timeout in milliseconds'),
+    enableHealing: z.boolean().optional().default(true).describe('Enable automatic error recovery'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    stdout: z.string(),
+    stderr: z.string(),
+    exitCode: z.number(),
+    duration: z.number(),
+    attempts: z.number().optional(),
+    fixesApplied: z.array(z.object({
+      attempt: z.number(),
+      original: z.string(),
+      fixed: z.string(),
+    })).optional(),
+  }),
+  providerPriority: ['bash', 'sandbox'],
+  tags: ['bash', 'shell', 'command', 'execute', 'self-healing'],
+};
+
 // ============================================================================
 // Export All Capabilities
 // ============================================================================

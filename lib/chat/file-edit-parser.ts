@@ -26,6 +26,177 @@
 
 export { isFullFileContent } from './file-diff-utils';
 
+/**
+ * Bash heredoc file edit extraction (inline to avoid module init issues)
+ * Parses: cat > file << 'EOF' ... EOF
+ */
+interface BashFileEdit {
+  path: string;
+  content: string;
+  mode: 'write' | 'append';
+}
+
+interface BashDirectoryEdit {
+  path: string;
+}
+
+interface BashDeleteEdit {
+  path: string;
+}
+
+interface BashPatchEdit {
+  path: string;
+  pattern: string;
+  replacement: string;
+}
+
+function extractCatHeredocEdits(content: string): BashFileEdit[] {
+  const edits: BashFileEdit[] = [];
+
+  // Fast-path: check for heredoc signature
+  if (!content.includes('<<') || !content.includes('cat')) {
+    return edits;
+  }
+
+  // Match: cat > path << 'EOF' ... EOF  OR  cat >> path << 'EOF' ... EOF
+  // Groups: 1=mode (> or >>), 2=path, 3=delimiter, 4=content
+  const regex = /cat\s*(>>?)\s*([^\s<>&|]+)\s*<<\s*['"]?(\w+)['"]?\s*\n([\s\S]*?)\n?\3(?:\s|$)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    try {
+      const mode = match[1] === '>>' ? 'append' : 'write';
+      const path = match[2]?.trim();
+      const fileContent = match[4] ?? '';
+
+      if (!path || path.startsWith('-')) {
+        continue;
+      }
+
+      edits.push({
+        path,
+        content: fileContent.trimEnd(),
+        mode
+      });
+    } catch {
+      // Skip invalid matches
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Extract mkdir commands: mkdir -p path
+ */
+function extractMkdirEdits(content: string): BashDirectoryEdit[] {
+  const edits: BashDirectoryEdit[] = [];
+
+  if (!content.includes('mkdir')) {
+    return edits;
+  }
+
+  // Match: mkdir [-p] path
+  const regex = /mkdir\s+(-p\s+)?([^\s&|;<>]+)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    try {
+      const path = match[2]?.trim();
+
+      // Skip if path looks like a flag or is empty
+      if (!path || path.startsWith('-')) {
+        continue;
+      }
+
+      edits.push({ path });
+    } catch {
+      // Skip invalid matches
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Extract rm commands: rm -rf path
+ */
+function extractRmEdits(content: string): BashDeleteEdit[] {
+  const edits: BashDeleteEdit[] = [];
+
+  if (!content.includes('rm ')) {
+    return edits;
+  }
+
+  // Match: rm [-rf] path
+  const regex = /rm\s+(-[rf]+\s+)?([^\s&|;<>]+)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    try {
+      const path = match[2]?.trim();
+
+      // Skip if path looks like a flag or is empty
+      if (!path || path.startsWith('-')) {
+        continue;
+      }
+
+      edits.push({ path });
+    } catch {
+      // Skip invalid matches
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Extract sed -i commands: sed -i 's/pattern/replacement/' path
+ */
+function extractSedEdits(content: string): BashPatchEdit[] {
+  const edits: BashPatchEdit[] = [];
+
+  if (!content.includes('sed')) {
+    return edits;
+  }
+
+  // Match: sed -i 's/pattern/replacement/' path
+  const regex = /sed\s+-i\s+['"]s\/([^\/]+)\/([^\/]*)\/['"]\s+([^\s&|;<>]+)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    try {
+      const pattern = match[1] ?? '';
+      const replacement = match[2] ?? '';
+      const path = match[3]?.trim();
+
+      if (!path || path.startsWith('-')) {
+        continue;
+      }
+
+      edits.push({ path, pattern, replacement });
+    } catch {
+      // Skip invalid matches
+    }
+  }
+
+  return edits;
+}
+
+function extractBashFileEdits(content: string): {
+  writes: BashFileEdit[];
+  directories: BashDirectoryEdit[];
+  deletes: BashDeleteEdit[];
+  patches: BashPatchEdit[];
+} {
+  return {
+    writes: extractCatHeredocEdits(content),
+    directories: extractMkdirEdits(content),
+    deletes: extractRmEdits(content),
+    patches: extractSedEdits(content),
+  };
+}
+
 export interface FileEdit {
   path: string;
   content: string;
@@ -403,10 +574,27 @@ export function extractFileEdits(content: string): FileEdit[] {
   const allEdits: FileEdit[] = [];
 
   // NEW: Try bash heredoc syntax first (preferred, more natural for LLMs)
+  // Now handles writes, mkdir, deletes, and patches
   const bashEdits = extractBashFileEdits(content);
+  
+  // Process writes
   for (const write of bashEdits.writes) {
     allEdits.push({ path: write.path, content: write.content });
   }
+  
+  // Process deletes (empty content signals deletion)
+  for (const del of bashEdits.deletes) {
+    allEdits.push({ path: del.path, content: '' });
+  }
+  
+  // Process patches (convert sed pattern/replacement to diff-like content)
+  for (const patch of bashEdits.patches) {
+    const patchContent = `s/${patch.pattern}/${patch.replacement}/`;
+    allEdits.push({ path: patch.path, content: patchContent });
+  }
+  
+  // Note: directories (mkdir) are not converted to FileEdit since they represent
+  // directory creation, not file content. They could be handled separately if needed.
 
   // Existing parsers (keep for backward compatibility)
   if (content.includes('<file_edit')) {
@@ -440,11 +628,6 @@ export function extractFileEdits(content: string): FileEdit[] {
       dedupedEdits.set(edit.path, edit);
     }
   }
-
-  logger.debug('File edits extracted', {
-    total: dedupedEdits.size,
-    bashEdits: bashEdits.writes.length,
-  });
 
   return Array.from(dedupedEdits.values());
 }

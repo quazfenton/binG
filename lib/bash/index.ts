@@ -1,8 +1,8 @@
 /**
  * Bash-Native Execution Module
- * 
+ *
  * Provides shell-native execution primitives for LLM agents
- * 
+ *
  * @see bash.md - Bash-native agent execution patterns
  */
 
@@ -16,5 +16,15 @@ export * from './bash-tool';
 export * from './dag-compiler';
 export * from './dag-executor';
 
-// Self-healing layer
-export * from './self-healing';
+// Self-healing layer (explicit exports to avoid conflicts)
+export {
+  classifyError,
+  validateRepair,
+  generateDiffRepair,
+  applyDiff,
+  isMinimalChange,
+  applyTargetedFix,
+  normalizeCommand,
+  findKnownFix,
+  storeFix,
+} from './self-healing';

@@ -20,7 +20,10 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
+import { createLogger } from '@/lib/utils/logger';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
+
+const logger = createLogger('API:Filesystem:Move');
 
 export const runtime = 'nodejs';
 
@@ -162,7 +165,7 @@ export async function POST(req: NextRequest) {
     if (deletedCount === 0) {
       // Source already deleted - move is effectively complete, don't rollback
       // Rolling back would delete the newly created file at targetPath
-      chatLogger.warn('Move operation: source already deleted, keeping target', {
+      logger.warn('Move operation: source already deleted, keeping target', {
         sourcePath,
         targetPath,
         ownerId,

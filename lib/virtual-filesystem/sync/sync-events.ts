@@ -86,9 +86,21 @@ export function emitFilesystemUpdated(detail: FilesystemUpdatedDetail = {}): voi
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(normalizedDetail),
       credentials: 'include', // Include cookies for auth
-    }).catch(() => {
-      // Silently fail - local events are sufficient for single-session scenarios
-    });
+    })
+      .then((response) => {
+        if (!response.ok) {
+          console.warn('[sync-events] Failed to push filesystem update', {
+            status: response.status,
+            eventId: normalizedDetail.eventId,
+          });
+        }
+      })
+      .catch((error) => {
+        console.warn('[sync-events] Failed to push filesystem update', {
+          eventId: normalizedDetail.eventId,
+          error,
+        });
+      });
   } catch (err) {
     console.warn('[sync-events] Failed to dispatch filesystem-updated event:', err);
   }
@@ -113,8 +125,8 @@ export function onFilesystemUpdated(
   const channel = getBroadcastChannel();
   const broadcastListener = (event: MessageEvent) => {
     if (event.data?.type === FILESYSTEM_UPDATED_EVENT && event.data?.detail) {
-      // Re-emit as a CustomEvent for consistency
-      window.dispatchEvent(new CustomEvent(FILESYSTEM_UPDATED_EVENT, { detail: event.data.detail }));
+      // Call handler directly to avoid N×N re-dispatch via window
+      handler(new CustomEvent(FILESYSTEM_UPDATED_EVENT, { detail: event.data.detail }));
     }
   };
   
