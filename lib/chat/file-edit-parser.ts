@@ -639,16 +639,20 @@ export function sanitizeFileEditTags(content: string): string {
 
   // Only run sanitizers if their signature is detected (O(1) string check)
   if (sanitized.includes('<file_edit')) {
-    // Remove compact format (handles both spaced and non-spaced variants)
-    sanitized = sanitized.replace(/<file_edit\s*path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
-    // Remove multi-line format
-    sanitized = sanitized.replace(/<file_edit>\s*<path>\s*[^\s<]+\s*<\/path>\s*[\s\S]*?\s*<\/file_edit>/gi, '');
+    if (sanitized.includes('</file_edit>')) {
+      // Remove compact format (handles both spaced and non-spaced variants)
+      sanitized = sanitized.replace(/<file_edit\s*path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
+      // Remove multi-line format
+      sanitized = sanitized.replace(/<file_edit>\s*<path>\s*[^\s<]+\s*<\/path>\s*[\s\S]*?\s*<\/file_edit>/gi, '');
+    }
   }
 
   if (sanitized.includes('<file_write')) {
-    // Remove file_write format (handle both <file_write path="..."> and <file_writepath="...">)
-    sanitized = sanitized.replace(/<file_write\s*path=["'][^"']+["']\s*>[\s\S]*?<\/file_write>/gi, '');
-    sanitized = sanitized.replace(/<file_writepath=["'][^"']+["']\s*>[\s\S]*?<\/file_writepath>/gi, '');
+    if (sanitized.includes('</file_write>')) {
+      // Remove file_write format (handle both <file_write path="..."> and <file_writepath="...">)
+      sanitized = sanitized.replace(/<file_write\s*path=["'][^"']+["']\s*>[\s\S]*?<\/file_write>/gi, '');
+      sanitized = sanitized.replace(/<file_writepath=["'][^"']+["']\s*>[\s\S]*?<\/file_writepath>/gi, '');
+    }
   }
 
   if (sanitized.includes('ws_action')) {
@@ -687,29 +691,35 @@ export function sanitizeFileEditTags(content: string): string {
 
   // Additional formats from api/chat/route.ts
   if (sanitized.includes('fs-actions')) {
-    // Remove ```fs-actions ... ``` blocks
+    // Remove ```fs-actions ... ``` blocks — guard: only if closing ``` exists after opening
     sanitized = sanitized.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
-    // Remove <fs-actions>...</fs-actions> XML blocks
-    sanitized = sanitized.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
+    // Remove <fs-actions>...</fs-actions> XML blocks — guard on close tag
+    if (sanitized.includes('</fs-actions>')) {
+      sanitized = sanitized.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
+    }
   }
 
   if (sanitized.includes('WRITE') || sanitized.includes('PATCH') || sanitized.includes('DELETE')) {
-    // Remove heredoc command blocks - standard format with optional newlines
-    sanitized = sanitized.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){0,3}<<<[\s\S]*?>>>(?=\n|$)/gim, '\n');
-    // Handle cases where <<< is on same line as path
-    sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+<<<[\s\S]*?>>>/gim, '');
-    // Remove DELETE commands
+    if (sanitized.includes('>>>')) {
+      // Remove heredoc command blocks - standard format with optional newlines
+      sanitized = sanitized.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){0,3}<<<[\s\S]*?>>>(?=\n|$)/gim, '\n');
+      // Handle cases where <<< is on same line as path
+      sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+<<<[\s\S]*?>>>/gim, '');
+    }
+    // Remove DELETE commands (no close marker needed — single line)
     sanitized = sanitized.replace(/^\s*DELETE\s+[^\n]+(?=\n|$)/gim, '\n');
   }
 
-  if (sanitized.includes('apply_diff')) {
-    // Remove apply_diff command blocks
+  if (sanitized.includes('apply_diff') && sanitized.includes('</apply_diff>')) {
+    // Remove apply_diff command blocks — guard on close tag
     sanitized = sanitized.replace(/<apply_diff\b[\s\S]*?<\/apply_diff>/gi, '');
   }
 
   if (sanitized.includes('tool_call')) {
     // Remove LLM-generated tool_call XML tags that leak into visible output
-    sanitized = sanitized.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '');
+    if (sanitized.includes('</tool_call>')) {
+      sanitized = sanitized.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '');
+    }
     // Remove orphaned closing tags
     sanitized = sanitized.replace(/<\/tool_call>/gi, '');
   }
