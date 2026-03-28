@@ -275,13 +275,18 @@ ${COLORS.primary('Tips:')}
     const spinner = ora('Thinking...').start();
     
     try {
+      const useStream = options.stream !== false;
+      if (useStream) {
+        console.log(COLORS.info('Note: Streaming response display is not yet supported; waiting for full response.'));
+      }
+
       const response = await apiRequest('/chat', {
         method: 'POST',
         data: {
           messages,
           provider: config.provider,
           model: config.model,
-          stream: false, // Stream parsing is not yet supported by apiRequest
+          stream: false,
           agentMode: options.agent === 'auto' ? 'auto' : options.agent,
         },
       });
@@ -309,7 +314,7 @@ ${COLORS.primary('Tips:')}
     }
   }
   
-  rl.close();
+  closeReadline();
 }
 
 /**
@@ -471,30 +476,36 @@ program
   .option('--wait', 'Wait for completion (default: stream)')
   .action(async (workflowType, options) => {
     const spinner = ora(`Running workflow: ${workflowType}`).start();
-    
+
     try {
       let inputData = {};
       if (options.input) {
         inputData = JSON.parse(options.input);
       }
-      
+
       const result = await apiRequest('/mastra/workflow', {
         method: 'POST',
         data: {
           workflowType,
           inputData,
           userId: loadAuth().userId,
+          stream: !options.wait,
         },
-        timeout: 300000, // 5 minutes for workflows
+        timeout: options.wait ? 300000 : 30000,
       });
-      
+
       spinner.stop();
 
       if (result.success) {
-        console.log(COLORS.success('\nWorkflow completed!'));
+        console.log(COLORS.success(`\nWorkflow ${options.wait ? 'completed' : 'started'}!`));
         console.log(`  Run ID: ${COLORS.info(result.runId)}`);
-        console.log('\nResult:');
-        console.log(JSON.stringify(result.result, null, 2));
+        if (options.wait) {
+          console.log('\nResult:');
+          console.log(JSON.stringify(result.result, null, 2));
+        } else {
+          console.log(`  Status: ${COLORS.info('Running in background')}`);
+          console.log(`  Use ${COLORS.info('workflow:status ' + result.runId)} to check progress`);
+        }
         closeReadline();
       } else {
         console.log(COLORS.error(`Error: ${result.error}`));
@@ -658,13 +669,13 @@ program
     
     try {
       const remote = options.remote || 'origin';
-      const branch = options.branch ? ` ${remote} ${options.branch}` : '';
-      
+      const target = [remote, options.branch].filter(Boolean).join(' ');
+
       const result = await apiRequest('/sandbox/execute', {
         method: 'POST',
         data: {
           sandboxId,
-          command: `git push${branch}`,
+          command: `git push ${target}`.trim(),
         },
       });
       
@@ -708,14 +719,21 @@ program
       const config = loadConfig();
       const auth = loadAuth();
 
+      const contentLength = await new Promise<number>((resolve, reject) => {
+        formData.getLength((err: Error | null, length: number) => {
+          if (err) reject(err);
+          else resolve(length);
+        });
+      });
+
       const response = await axios.post(
         `${config.apiBase}/storage/upload`,
         formData,
         {
           headers: {
             ...formData.getHeaders(),
-            'Content-Length': formData.getLengthSync(),
-            'Authorization': auth.token ? `Bearer ${auth.token}` : '',
+            'Content-Length': contentLength,
+            ...(auth.token ? { Authorization: `Bearer ${auth.token}` } : {}),
           },
         }
       );
@@ -932,14 +950,44 @@ program
 program
   .command('sandbox:create')
   .description('Create a new sandbox workspace')
-  .option('-p, --provider <provider>', 'Sandbox provider')
-  .option('-i, --image <image>', 'Base image')
-  .option('--gpu <type>', 'GPU type')
-  .option('--cpu <count>', 'CPU count')
+  .option('-p, --provider <provider>', 'Sandbox provider (daytona, e2b, modal-com, etc.)')
+  .option('-i, --image <image>', 'Base image (default: python:3.13)')
+  .option('--gpu <type>', 'GPU type (H100, A100, etc.)')
+  .option('--cpu <count>', 'Number of CPUs')
   .option('--memory <MB>', 'Memory in MB')
   .action(async (options) => {
-    // Implementation from original CLI
-    console.log(COLORS.info('sandbox:create - See full CLI implementation for complete code'));
+    const config = loadConfig();
+    const provider = options.provider || config.sandboxProvider;
+
+    const spinner = ora(`Creating ${provider} sandbox...`).start();
+
+    try {
+      const result = await apiRequest('/sandbox', {
+        method: 'POST',
+        data: {
+          provider,
+          image: options.image || 'python:3.13',
+          gpu: options.gpu,
+          cpu: options.cpu ? parseInt(options.cpu) : undefined,
+          memory: options.memory ? parseInt(options.memory) : undefined,
+        },
+      });
+
+      spinner.stop();
+      console.log(COLORS.success('\nSandbox created successfully!'));
+      console.log(`  ID: ${COLORS.info(result.sessionId)}`);
+      console.log(`  Sandbox ID: ${COLORS.info(result.sandboxId)}`);
+      console.log(`  Provider: ${COLORS.info(result.provider)}`);
+      console.log(`  Workspace: ${COLORS.info(result.workspacePath || '/workspace')}`);
+
+      // Save sandbox ID for subsequent commands
+      saveConfig({ ...config, currentSandbox: result.sandboxId });
+
+    } catch (error: any) {
+      spinner.stop();
+      console.log(COLORS.error(`\nError: ${error.message}`));
+      process.exit(1);
+    }
   });
 
 program

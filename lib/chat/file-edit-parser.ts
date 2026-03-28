@@ -701,6 +701,13 @@ export function sanitizeFileEditTags(content: string): string {
     sanitized = sanitized.replace(/<apply_diff\b[\s\S]*?<\/apply_diff>/gi, '');
   }
 
+  if (sanitized.includes('tool_call')) {
+    // Remove LLM-generated tool_call XML tags that leak into visible output
+    sanitized = sanitized.replace(/<tool_call>[\s\S]*?<\/tool_call>/gi, '');
+    // Remove orphaned closing tags
+    sanitized = sanitized.replace(/<\/tool_call>/gi, '');
+  }
+
   // Clean up leftover <<< and >>> markers
   sanitized = sanitized.replace(/^\s*<<<\s*$/gm, '');
   sanitized = sanitized.replace(/^\s*>>>\s*$/gm, '');

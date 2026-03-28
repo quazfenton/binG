@@ -2088,7 +2088,8 @@ export class ResponseRouter {
       // SECURITY: Only apply filesystem edits when we have a concrete owner and conversation context
       // Use filesystemOwnerId if available (handles anonymous users correctly), otherwise fall back to userId
       const ownerIdForEdits = (request as any).filesystemOwnerId || request.userId;
-      const conversationIdForEdits = request.conversationId;
+      // Fallback: derive conversationId from requestId if missing (prevents refinement edits from being silently dropped)
+      const conversationIdForEdits = request.conversationId || request.requestId;
       
       if (ownerIdForEdits && conversationIdForEdits) {
         try {

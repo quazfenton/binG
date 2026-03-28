@@ -40,7 +40,7 @@ export async function POST(req: NextRequest) {
       requestId: Math.random().toString(36).slice(2, 8),
     });
 
-    if (!filesystemOwnerResolution.ownerId) {
+    if (!filesystemOwnerResolution.isAuthenticated) {
       const errorResponse = NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
@@ -91,24 +91,30 @@ export async function POST(req: NextRequest) {
       const file = await virtualFilesystem.readFile(ownerId, sourcePath);
       content = file.content;
     } catch {
-      const listing = await virtualFilesystem.listDirectory(ownerId, sourcePath);
-      if (listing.nodes.length === 0) {
+      // File read failed - check if it's a directory
+      try {
+        const listing = await virtualFilesystem.listDirectory(ownerId, sourcePath);
+        // Directory exists (even if empty) - directories are valid paths
+        isDirectory = true;
+      } catch {
+        // Neither file nor directory exists
         return NextResponse.json(
           { error: 'Source path does not exist' },
           { status: 404 }
         );
       }
-      isDirectory = true;
     }
 
     // Check if target exists (conflict detection)
     let targetExists = false;
+    let targetIsDirectory = false;
     try {
       await virtualFilesystem.readFile(ownerId, targetPath);
       targetExists = true;
     } catch {
       const listing = await virtualFilesystem.listDirectory(ownerId, targetPath);
       targetExists = listing.nodes.length > 0;
+      targetIsDirectory = true; // If listDirectory succeeds, it's a directory
     }
 
     // Handle conflict
@@ -119,10 +125,18 @@ export async function POST(req: NextRequest) {
           conflict: {
             path: targetPath,
             exists: true,
-            canOverwrite: true,
+            canOverwrite: !targetIsDirectory, // Can only overwrite files, not directories
           },
         },
         { status: 409 }
+      );
+    }
+
+    // Prevent overwriting a directory with a file (would corrupt filesystem structure)
+    if (targetIsDirectory && overwrite) {
+      return NextResponse.json(
+        { error: 'Cannot overwrite a directory with a file' },
+        { status: 400 }
       );
     }
 
@@ -142,11 +156,14 @@ export async function POST(req: NextRequest) {
     await virtualFilesystem.writeFile(ownerId, targetPath, file.content, file.language);
 
     // Delete source with rollback on failure
-    try {
-      await virtualFilesystem.deletePath(ownerId, sourcePath);
-    } catch (deleteError) {
-      await virtualFilesystem.deletePath(ownerId, targetPath);
-      throw deleteError;
+    const { deletedCount } = await virtualFilesystem.deletePath(ownerId, sourcePath);
+    if (deletedCount === 0) {
+      try {
+        await virtualFilesystem.deletePath(ownerId, targetPath);
+      } catch {
+        // Log but don't throw - primary error is the source deletion failure
+      }
+      throw new Error(`Failed to delete source path: ${sourcePath}`);
     }
 
     return NextResponse.json({

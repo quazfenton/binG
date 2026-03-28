@@ -154,10 +154,10 @@ export default function MessageBubble({
       // Spec enhancement edits are already applied server-side, just for display
       return {
         transactionId: undefined, // No transaction for spec enhancement
-        applied: metadataFileEdits.map((edit: any) => ({
+        applied: metadataFileEdits.map((edit: any, index: number) => ({
           path: edit.path,
           operation: 'write',
-          version: 1,
+          version: typeof edit.version === 'number' ? edit.version : index + 1,
           existedBefore: false,
           content: edit.content, // Store full content for diff viewer
         })),

@@ -39,7 +39,7 @@ export async function POST(req: NextRequest) {
       requestId: Math.random().toString(36).slice(2, 8),
     });
 
-    if (!filesystemOwnerResolution.ownerId) {
+    if (!filesystemOwnerResolution.isAuthenticated) {
       const errorResponse = NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
@@ -141,11 +141,14 @@ export async function POST(req: NextRequest) {
     await virtualFilesystem.writeFile(ownerId, newPath, file.content, file.language);
 
     // Delete old path with rollback on failure
-    try {
-      await virtualFilesystem.deletePath(ownerId, oldPath);
-    } catch (deleteError) {
-      await virtualFilesystem.deletePath(ownerId, newPath);
-      throw deleteError;
+    const { deletedCount } = await virtualFilesystem.deletePath(ownerId, oldPath);
+    if (deletedCount === 0) {
+      try {
+        await virtualFilesystem.deletePath(ownerId, newPath);
+      } catch {
+        // Log but don't throw - primary error is the source deletion failure
+      }
+      throw new Error(`Failed to delete source path: ${oldPath}`);
     }
 
     return NextResponse.json({

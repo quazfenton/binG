@@ -15,7 +15,6 @@ export default tseslint.config(
       "**/.next/**",
       "**/coverage/**",
       "deprecated/**",
-      "__tests__/shell-command-injection.test.ts",
       "**/*.config.js",
       "**/*.config.mjs",
       "**/*.config.ts",
