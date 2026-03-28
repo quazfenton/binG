@@ -75,18 +75,27 @@ export async function POST(request: NextRequest) {
     
     const treeSha = commitResponse.tree.sha;
     
+    // Validate all non-deleted changes have content
+    const missingContentChanges = changes.filter(
+      change => change.status !== 'deleted' && 
+               (change.content === undefined || change.content === null)
+    );
+    if (missingContentChanges.length > 0) {
+      return NextResponse.json(
+        { 
+          error: 'Missing file content',
+          details: `Non-deleted files must have content: ${missingContentChanges.map(c => c.path).join(', ')}`
+        }, 
+        { status: 400 }
+      );
+    }
+
     // Create blobs for each file
     const blobs = await Promise.all(
       changes.map(async (change: any) => {
-        // Skip deleted files - they need tree manipulation, not blob creation
+        // Deleted files need tree manipulation, not blob creation
         if (change.status === 'deleted') {
           return { path: change.path, sha: null, status: 'deleted' };
-        }
-
-        // Skip files without content (but allow empty files with content === "")
-        if (change.content === undefined || change.content === null) {
-          console.warn(`[GitHub Commit] File ${change.path} has no content, skipping`);
-          return null;
         }
 
         const blobResponse = await githubApi<any>(
