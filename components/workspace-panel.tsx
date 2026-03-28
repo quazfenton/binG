@@ -89,6 +89,7 @@ import { VersionHistoryPanel } from "@/components/version-history-panel";
 import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { useMultiRotatingStatements } from "@/hooks/use-rotating-statements";
+import { useReasoningUI } from "@/lib/chat/use-chat-hooks";
 
 function ChatLoadingIndicator({ provider, model }: { provider: string; model: string }) {
   const statement = useMultiRotatingStatements(['interesting', 'funny', 'task'], 2500);
@@ -960,15 +961,30 @@ export function ExperimentalWorkspacePanel() {
                   break;
 
                 case SSE_EVENT_TYPES.REASONING:
-                  // Handle reasoning/thinking
+                  // Handle reasoning/thinking from Vercel AI SDK extractReasoningMiddleware
+                  // Supports Anthropic (<thinking>), Google (<thought>), and DeepSeek reasoning
                   if (data.data?.content) {
                     setAgentActivity((prev) => ({
                       ...prev,
                       status: 'thinking',
                       reasoningChunks: [...prev.reasoningChunks, {
-                        id: `reason-${Date.now()}`,
-                        type: 'thought',
+                        id: `reason-${Date.now()}-${prev.reasoningChunks.length}`,
+                        type: data.data.type || 'thought',
                         content: data.data.content,
+                        timestamp: Date.now(),
+                      }],
+                    }));
+                  }
+                  // Also handle message.metadata.reasoning if present
+                  if (data.data?.metadata?.reasoning) {
+                    const reasoningText = data.data.metadata.reasoning;
+                    setAgentActivity((prev) => ({
+                      ...prev,
+                      status: 'thinking',
+                      reasoningChunks: [...prev.reasoningChunks, {
+                        id: `reason-${Date.now()}-${prev.reasoningChunks.length}`,
+                        type: 'reasoning',
+                        content: reasoningText,
                         timestamp: Date.now(),
                       }],
                     }));
@@ -2588,6 +2604,54 @@ export function ExperimentalWorkspacePanel() {
                           {agentActivity.status === 'executing' && <Loader2 className="h-4 w-4 animate-spin text-blue-400" />}
                         </div>
                       </div>
+                    )}
+
+                    {/* Reasoning Display - Shows agent's thinking process from Vercel AI SDK */}
+                    {agentActivity.reasoningChunks.length > 0 && showReasoning && (
+                      <Card className="bg-purple-500/10 border-purple-500/30">
+                        <CardHeader className="pb-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Brain className="h-4 w-4 text-purple-400" />
+                              <span className="text-sm font-medium text-white/90">Agent Reasoning</span>
+                              <Badge variant="secondary" className="text-[10px] bg-purple-500/20">
+                                {agentActivity.reasoningChunks.length} thoughts
+                              </Badge>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setShowReasoning(false)}
+                              className="h-6 w-6 p-0 hover:bg-purple-500/20"
+                            >
+                              <X className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-2">
+                          {agentActivity.reasoningChunks.slice(-5).map((chunk, i) => (
+                            <div
+                              key={chunk.id}
+                              className="p-2 rounded bg-black/30 border border-purple-500/20 text-xs text-white/80"
+                            >
+                              <div className="flex items-center gap-2 mb-1">
+                                <Badge variant="outline" className="text-[8px] bg-purple-500/20 border-purple-500/30">
+                                  {chunk.type}
+                                </Badge>
+                                <span className="text-[9px] text-white/40">
+                                  {new Date(chunk.timestamp).toLocaleTimeString()}
+                                </span>
+                              </div>
+                              <div className="whitespace-pre-wrap">{chunk.content}</div>
+                            </div>
+                          ))}
+                          {agentActivity.reasoningChunks.length > 5 && (
+                            <p className="text-xs text-white/50 text-center">
+                              +{agentActivity.reasoningChunks.length - 5} more thoughts
+                            </p>
+                          )}
+                        </CardContent>
+                      </Card>
                     )}
 
                     {/* Processing Steps */}

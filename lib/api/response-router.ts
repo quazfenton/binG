@@ -107,11 +107,14 @@ export interface RouterRequest {
   enableSandbox?: boolean
   enableComposio?: boolean
   conversationId?: string
+  /** When true, the Vercel AI SDK handles tool calling natively — skip regex intent parsing */
+  nativeToolCalling?: boolean
 }
 
 export interface RouterResponse {
   success: boolean
   content?: string
+  stream?: AsyncGenerator<any> // For real-time streaming responses
   data?: any
   source: string
   priority: number
@@ -122,6 +125,7 @@ export interface RouterResponse {
 export interface UnifiedResponse {
   success: boolean
   content: string
+  stream?: AsyncGenerator<any> // For real-time streaming responses
   source: string
   priority: number
   data: {
@@ -170,6 +174,7 @@ export interface UnifiedResponse {
     actualModel?: string
     messageMetadata?: Record<string, any>
     timestamp: string
+    streaming?: boolean // For real-time streaming responses
     specAmplification?: {
       enabled: boolean
       mode: 'normal' | 'enhanced' | 'max'
@@ -471,7 +476,28 @@ export class ResponseRouter {
       // Route request
       const routerResponse = await this.routeRequest(request, span)
 
-      // Format response
+      // NEW: Handle streaming responses (return stream generator for real-time parsing)
+      if (routerResponse.stream && typeof routerResponse.stream === 'object' && Symbol.asyncIterator in routerResponse.stream) {
+        // This is a streaming response - return it with the stream generator
+        // The caller will consume chunks as they arrive
+        return {
+          success: true,
+          content: '', // Will be populated by streaming chunks
+          stream: routerResponse.stream, // Pass through the async generator
+          data: {
+            ...routerResponse.data,
+            streaming: true,
+          },
+          source: routerResponse.source,
+          priority: routerResponse.priority,
+          metadata: {
+            streaming: true,
+            timestamp: new Date().toISOString(),
+          },
+        }
+      }
+
+      // Format response (non-streaming path)
       const unifiedResponse = this.formatResponse(routerResponse, requestId)
 
       // Record metrics
@@ -554,9 +580,9 @@ export class ResponseRouter {
         // Sandbox requests need actual sandbox execution, not just LLM responses
         canHandle: (req: RouterRequest) => {
           const detectedType = detectRequestType(req.messages)
-          // Skip if this is a tool request and tools are enabled
-          // Tool requests should go to tool-execution (priority 4) or composio-tools (priority 5)
-          if (detectedType === 'tool' && req.enableTools !== false) {
+          // When native tool calling is enabled (Vercel AI SDK), handle tool requests here
+          // instead of routing to regex-based intent parsing
+          if (detectedType === 'tool' && req.enableTools !== false && !req.nativeToolCalling) {
             return false
           }
           // Skip if this is a sandbox request and sandbox is enabled
@@ -569,6 +595,39 @@ export class ResponseRouter {
         processRequest: async (req: RouterRequest) => {
           // Pass all required fields including tool/sandbox flags
           const detectedType = detectRequestType(req.messages)
+          
+          // NEW: Use streaming method when stream=true for real-time token streaming
+          if (req.stream === true) {
+            // For streaming, we return an async generator that yields tokens as they arrive
+            // The caller (routeWithSpecAmplification or routeAndFormat) handles the streaming
+            const streamGenerator = enhancedLLMService.generateStreamingResponse({
+              messages: req.messages,
+              provider: req.provider,
+              model: req.model,
+              temperature: req.temperature,
+              maxTokens: req.maxTokens,
+              stream: true,
+              userId: req.userId,
+              requestId: req.requestId,
+              conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
+              enableTools: req.enableTools ?? (detectedType === 'tool' && !!req.userId),
+              enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
+              isSandboxCommand: detectedType === 'sandbox',
+            } as EnhancedLLMRequest)
+            
+            return {
+              success: true,
+              content: '', // Will be filled by streaming chunks
+              stream: streamGenerator, // Pass stream generator to caller
+              data: {
+                source: 'original-system',
+                type: 'streaming',
+                streaming: true,
+              },
+            }
+          }
+          
+          // Non-streaming: use standard generateResponse
           const response = await enhancedLLMService.generateResponse({
             messages: req.messages,
             provider: req.provider,

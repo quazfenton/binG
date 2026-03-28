@@ -126,14 +126,23 @@ export class EnhancedLLMService {
   }
 
   private setupFallbackChains(): void {
-    this.fallbackChains.set('openrouter', ['mistral', 'google', 'github', 'zen']);
-    this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google', 'mistral', 'github']);
-    this.fallbackChains.set('anthropic', ['openrouter', 'mistral', 'google', 'github']);
-    this.fallbackChains.set('google', ['openrouter', 'mistral', 'github', 'zen']);
-    this.fallbackChains.set('mistral', ['openrouter', 'chutes', 'anthropic', 'google', 'github']);
-    this.fallbackChains.set('github', ['openrouter', 'mistral', 'google', 'zen']);
-    this.fallbackChains.set('portkey', ['openrouter', 'google', 'mistral', 'github']);
-    this.fallbackChains.set('zen', ['mistral', 'google', 'openrouter', 'github']);
+    this.fallbackChains.set('openrouter', ['nvidia', 'mistral', 'google', 'github', 'groq', 'zen']);
+    this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google', 'mistral', 'github', 'nvidia']);
+    this.fallbackChains.set('anthropic', ['nvidia', 'github','openrouter', 'mistral', 'google']);
+    this.fallbackChains.set('google', ['nvidia', 'mistral', 'openrouter', 'github', 'groq', 'zen']);
+    this.fallbackChains.set('mistral', ['openrouter', 'chutes', 'anthropic', 'google', 'github', 'nvidia']);
+    this.fallbackChains.set('github', ['nvidia', 'openrouter', 'mistral', 'google', 'groq', 'zen']);
+    this.fallbackChains.set('portkey', ['openrouter', 'google', 'mistral', 'github', 'nvidia']);
+    this.fallbackChains.set('zen', ['mistral', 'google', 'openrouter', 'github', 'nvidia', 'groq']);
+    this.fallbackChains.set('nvidia', ['openrouter', 'google', 'mistral', 'groq', 'together', 'deepinfra', 'fireworks']);
+    this.fallbackChains.set('groq', ['nvidia', 'openrouter', 'together', 'fireworks', 'deepinfra', 'mistral']);
+    this.fallbackChains.set('together', ['nvidia', 'groq', 'openrouter', 'fireworks', 'deepinfra', 'mistral']);
+    this.fallbackChains.set('fireworks', ['nvidia', 'groq', 'together', 'openrouter', 'deepinfra', 'mistral']);
+    this.fallbackChains.set('deepinfra', ['nvidia', 'groq', 'together', 'fireworks', 'openrouter', 'mistral']);
+    this.fallbackChains.set('anyscale', ['nvidia', 'groq', 'together', 'openrouter', 'mistral', 'google']);
+    this.fallbackChains.set('lepton', ['nvidia', 'groq', 'openrouter', 'together', 'mistral', 'google']);
+    this.fallbackChains.set('openai', ['google', 'mistral',  'openrouter', 'github', 'nvidia', 'groq']);
+
   }
 
   private startHealthMonitoring(): void {
@@ -373,10 +382,82 @@ export class EnhancedLLMService {
     chatLogger.debug('Starting streaming request', { requestId, provider: primaryProvider, model: llmRequest.model });
 
     try {
+      // NEW: Use Vercel AI SDK for unified streaming across all providers
+      const { streamWithVercelAI } = await import('./vercel-ai-streaming');
+
+      // Map provider names to Vercel AI SDK providers
+      // Supports both direct Vercel providers and OpenAI-compatible providers
+      const vercelProviderMap: Record<string, import('./vercel-ai-streaming').VercelProvider | string> = {
+        // Direct Vercel AI SDK providers
+        'openai': 'openai',
+        'anthropic': 'anthropic',
+        'google': 'google',
+        'mistral': 'mistral',
+        'openrouter': 'openrouter',
+        // OpenAI-compatible providers (via createOpenAI)
+        'chutes': 'openai', // Chutes AI
+        'github': 'openai', // GitHub Models (Azure OpenAI)
+        'zen': 'openai', // Zen AI
+        'nvidia': 'openai', // NVIDIA NIM (OpenAI-compatible API)
+        'together': 'openai', // Together AI (OpenAI-compatible)
+        'groq': 'openai', // Groq (OpenAI-compatible)
+        'fireworks': 'openai', // Fireworks AI (OpenAI-compatible)
+        'anyscale': 'openai', // Anyscale (OpenAI-compatible)
+        'deepinfra': 'openai', // DeepInfra (OpenAI-compatible)
+        'lepton': 'openai', // Lepton AI (OpenAI-compatible)
+        // Custom providers (via compatibility wrapper)
+        'zo': 'zo', // Zo AI (requires custom wrapper)
+      };
+
+      const vercelProvider = vercelProviderMap[primaryProvider];
+
+      if (vercelProvider) {
+        // Use Vercel AI SDK for streaming
+        // maxRetries=0: let the fallback system handle retries, not the SDK
+        chatLogger.info('Using Vercel AI SDK for streaming', { requestId, provider: primaryProvider, model: llmRequest.model });
+
+        // Build tools if enabled — Vercel AI SDK handles tool calling natively
+        let vercelTools: Record<string, any> | undefined;
+        if (request.enableTools && request.userId) {
+          try {
+            const { getAllTools } = await import('./vercel-ai-tools');
+            vercelTools = await getAllTools({
+              userId: request.userId,
+              conversationId: request.conversationId,
+              requestId,
+            });
+          } catch (toolErr: any) {
+            chatLogger.warn('Failed to build Vercel AI tools, proceeding without', { requestId, error: toolErr.message });
+          }
+        }
+
+        yield* streamWithVercelAI({
+          provider: vercelProvider,
+          model: llmRequest.model || 'default',
+          messages: llmRequest.messages,
+          temperature: llmRequest.temperature || 0.7,
+          maxTokens: llmRequest.maxTokens || 4096,
+          apiKey: llmRequest.apiKey,
+          maxRetries: 0,
+          tools: vercelTools,
+          toolCallStreaming: !!vercelTools,
+          smoothStreaming: true,
+        });
+
+        const streamLatency = Date.now() - streamStartTime;
+        chatLogger.info('Vercel AI SDK streaming completed', { requestId, provider: primaryProvider, model: llmRequest.model }, {
+          latencyMs: streamLatency,
+        });
+        return;
+      }
+
+      // Fallback to legacy streaming for unsupported providers
+      chatLogger.warn('Provider not supported by Vercel AI SDK, using legacy streaming', { provider: primaryProvider });
+      
       const fullRequest = { ...llmRequest, provider: primaryProvider };
       yield* llmService.generateStreamingResponse(fullRequest);
       const streamLatency = Date.now() - streamStartTime;
-      chatLogger.info('Streaming completed successfully', { requestId, provider: primaryProvider, model: llmRequest.model }, {
+      chatLogger.info('Legacy streaming completed successfully', { requestId, provider: primaryProvider, model: llmRequest.model }, {
         latencyMs: streamLatency,
       });
     } catch (error) {
@@ -385,10 +466,10 @@ export class EnhancedLLMService {
         latencyMs: streamLatency,
         error: error instanceof Error ? error.message : String(error),
       });
-      
+
       const fallbacks = fallbackProviders || this.fallbackChains.get(primaryProvider) || [];
-      const availableFallbacks = fallbacks.filter(fallbackProvider => 
-        this.endpointConfigs.has(fallbackProvider) && 
+      const availableFallbacks = fallbacks.filter(fallbackProvider =>
+        this.endpointConfigs.has(fallbackProvider) &&
         this.isProviderHealthy(fallbackProvider) &&
         PROVIDERS[fallbackProvider]?.supportsStreaming
       );
@@ -590,20 +671,20 @@ export class EnhancedLLMService {
 
   private enhanceError(error: Error, provider: string): Error {
     const enhancedError = new Error(error.message);
-    const errorMessage = error.message.toLowerCase();
+    const msg = error.message.toLowerCase();
 
     // Check for HTTP status codes first (more specific than text patterns)
-    if (error.message.includes('401') || error.message.includes('403')) {
+    if (msg.includes('401') || msg.includes('403')) {
       enhancedError.message = `Authentication failed for ${provider}. Please check your API key configuration.`;
-    } else if (error.message.includes('429') || error.message.includes('rate limit')) {
+    } else if (msg.includes('429') || msg.includes('rate limit')) {
       enhancedError.message = `Rate limit exceeded for ${provider}. The system will automatically try alternative providers.`;
-    } else if (error.message.includes('402') || error.message.includes('quota') || error.message.includes('billing')) {
+    } else if (msg.includes('402') || msg.includes('quota') || msg.includes('billing')) {
       enhancedError.message = `API quota exceeded for ${provider}. Switching to alternative provider.`;
-    } else if (error.message.includes('408') || error.message.includes('504') || error.message.includes('timeout')) {
+    } else if (msg.includes('408') || msg.includes('504') || msg.includes('timeout')) {
       enhancedError.message = `Request timeout for ${provider}. The system will retry with exponential backoff.`;
-    } else if (error.message.includes('network') || error.message.includes('fetch') || error.message.includes('connection')) {
+    } else if (msg.includes('network') || msg.includes('fetch') || msg.includes('connection')) {
       enhancedError.message = `Network error connecting to ${provider}. Checking alternative providers.`;
-    } else if (error.message.includes('500') || error.message.includes('502') || error.message.includes('503')) {
+    } else if (msg.includes('500') || msg.includes('502') || msg.includes('503')) {
       enhancedError.message = `Service error from ${provider}: ${error.message}`;
     } else {
       enhancedError.message = `Service error from ${provider}: ${error.message}`;

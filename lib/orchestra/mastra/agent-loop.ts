@@ -497,6 +497,25 @@ FILE OPERATIONS:
 - To delete files/directories: use the delete_file tool
 - To run installs/tests/builds when available: use the execute_bash tool
 
+CAPABILITY USAGE RULES:
+1. Inspect before editing: use read_file, list_directory, file_exists, or context_pack before changing unfamiliar files.
+2. Prefer surgical changes to existing files. Read the target file, then write the smallest correct update.
+3. Use write_file freely for new files, generated files, and deliberate full rewrites.
+4. Use execute_bash only for real workspace commands such as installs, tests, builds, formatting, or grep/find style inspection.
+5. Do not use execute_bash if a filesystem capability can answer the question more directly.
+
+DIFF-BASED SELF-HEALING:
+1. If an edit or follow-up write seems likely to be stale, read the latest file again before applying the fix.
+2. When repairing a failed change, preserve unaffected code and change only the smallest necessary region.
+3. Do not repeat the same failing broad rewrite. Narrow the target after re-reading the file.
+4. After a fix, validate with read_file or execute_bash when appropriate.
+
+BASH RULES:
+- Keep commands scoped to the workspace.
+- Prefer deterministic commands such as pnpm, npm, yarn, node, python, git status, rg, ls, cat.
+- Avoid destructive commands unless the task explicitly requires them and the impact is clear.
+- If a command fails, use the stderr/stdout to choose the next minimal repair step.
+
 Examples:
 write_file({ "path": "package.json", "content": "{\\n  \\"name\\": \\"my-app\\",\\n  \\"version\\": \\"1.0.0\\"\\n}" })
 
@@ -512,7 +531,8 @@ Best Practices:
 1. Always check if a file exists before editing (use read_file or list_directory)
 2. Use relative paths from workspace root (e.g., "toDoApp/src/app.js")
 3. Use create_directory to create directories before writing files in them
-4. After creating files, suggest running commands
+4. After creating files, suggest or run validation commands when available
+5. Prefer minimal edits and preserve user-authored code outside the target change
 
 Response Format:
 - Use structured tool calls: [Tool: tool_name] { "arg": "value" }

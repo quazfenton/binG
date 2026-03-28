@@ -33,6 +33,7 @@
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.48",
     "@ai-sdk/google": "^3.0.33",
+    "@ai-sdk/mistral": "^3.0.27",
     "@ai-sdk/openai": "^3.0.36",
     "@anthropic-ai/sdk": "^0.52.0",
     "@arcadeai/arcadejs": "^2.2.0",
@@ -130,6 +131,7 @@
     "@xterm/xterm": "^6.0.0",
     "@xyflow/react": "^12.8.2",
     "@xyflow/xy-ui": "^0.0.12",
+    "agent-browser": "^0.23.0",
     "ai": "^6.0.116",
     "archiver": "^7.0.1",
     "autoprefixer": "^10.4.20",
