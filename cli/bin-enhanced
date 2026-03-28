@@ -281,7 +281,7 @@ ${COLORS.primary('Tips:')}
           messages,
           provider: config.provider,
           model: config.model,
-          stream: options.stream !== false,
+          stream: false, // Stream parsing is not yet supported by apiRequest
           agentMode: options.agent === 'auto' ? 'auto' : options.agent,
         },
       });

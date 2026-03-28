@@ -75,21 +75,32 @@ export function useFileExplorer() {
    */
   const checkPathExists = useCallback(async (path: string): Promise<ConflictInfo> => {
     try {
-      const response = await fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
+      // First, check if the path is an existing file via the read endpoint
+      // (returns 404 for non-existent files)
+      const readResponse = await fetch(`/api/filesystem/read?path=${encodeURIComponent(path)}`, {
         method: 'GET',
         headers: buildApiHeaders(),
       });
 
-      if (response.ok) {
-        const payload = await response.json().catch(() => null);
-        // Path exists if API returns success with data (even if nodes array is empty)
-        // Empty directory = exists with 0 entries
-        // Non-existent path = API returns error or no data
-        const exists = payload?.success === true && payload?.data !== undefined;
+      if (readResponse.ok) {
+        return { exists: true, path, canOverwrite: true };
+      }
+
+      // Not a file — check if it's a non-empty directory via list endpoint
+      const listResponse = await fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
+        method: 'GET',
+        headers: buildApiHeaders(),
+      });
+
+      if (listResponse.ok) {
+        const payload = await listResponse.json().catch(() => null);
+        // Only treat as existing if the directory has contents
+        // (listDirectory always returns success:true even for non-existent paths)
+        const exists = payload?.success === true && payload?.data?.nodes?.length > 0;
         return { exists, path, canOverwrite: true };
       }
 
-      // Non-OK response means path doesn't exist
+      // Neither file nor directory — path doesn't exist
       return { exists: false, path, canOverwrite: false };
     } catch (error) {
       console.error('Failed to check path:', error);

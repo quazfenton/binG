@@ -2,7 +2,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
-import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 import { absolutePathSchema } from '@/lib/validation/schemas';
 
@@ -55,21 +54,7 @@ export async function POST(req: NextRequest) {
     const ownerId = authResolution.ownerId;
 
     const result = await virtualFilesystem.deletePath(ownerId, targetPath);
-    
-    // Emit filesystem updated event for UI panels
-    const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(ownerId);
-    emitFilesystemUpdated({
-      path: targetPath,
-      type: 'delete',
-      workspaceVersion,
-      applied: [{
-        path: targetPath,
-        operation: 'delete',
-        timestamp: Date.now(),
-      }],
-      source: 'api-delete',
-    });
-    
+
     const response = NextResponse.json({
       success: true,
       data: result,

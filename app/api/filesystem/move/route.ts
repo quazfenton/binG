@@ -20,7 +20,6 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
-import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 
 export const runtime = 'nodejs';
@@ -142,24 +141,13 @@ export async function POST(req: NextRequest) {
     // Write to target
     await virtualFilesystem.writeFile(ownerId, targetPath, file.content, file.language);
 
-    // Delete source
-    await virtualFilesystem.deletePath(ownerId, sourcePath);
-
-    // Get workspace version for event
-    const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(ownerId);
-
-    // Emit filesystem updated event
-    emitFilesystemUpdated({
-      type: 'create',
-      path: targetPath,
-      workspaceVersion,
-      applied: [{
-        path: targetPath,
-        operation: 'write',
-        timestamp: Date.now(),
-      }],
-      source: 'api-move',
-    });
+    // Delete source with rollback on failure
+    try {
+      await virtualFilesystem.deletePath(ownerId, sourcePath);
+    } catch (deleteError) {
+      await virtualFilesystem.deletePath(ownerId, targetPath);
+      throw deleteError;
+    }
 
     return NextResponse.json({
       success: true,
