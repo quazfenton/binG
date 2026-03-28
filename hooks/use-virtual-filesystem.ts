@@ -1,7 +1,7 @@
 'use client';
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { getOrCreateAnonymousSessionId, buildApiHeaders } from '@/lib/utils';
+import { getOrCreateAnonymousSessionId, buildApiHeaders, syncAnonymousSessionId } from '@/lib/utils';
 import { createDebugLogger } from '@/config/features';
 import type {
   VirtualFile,
@@ -363,7 +363,11 @@ export function useVirtualFilesystem(
             headers: buildApiHeaders({ json: false }),
             credentials: 'include',
           })
-          .then(res => res.json())
+          .then(res => {
+            // Sync session ID with server to prevent fragmentation
+            syncAnonymousSessionId(res);
+            return res.json();
+          })
           .then((payload: any) => {
             if (payload?.success && payload?.data) {
               const data = payload.data;
@@ -449,6 +453,9 @@ export function useVirtualFilesystem(
       },
       credentials: 'include',
     });
+
+    // Sync session ID with server to prevent fragmentation
+    syncAnonymousSessionId(response);
 
     log(`request: response status=${response.status} (${Date.now() - fetchStartTime}ms)`);
 

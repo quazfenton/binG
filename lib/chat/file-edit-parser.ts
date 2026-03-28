@@ -709,8 +709,10 @@ export function sanitizeFileEditTags(content: string): string {
   }
 
   // Remove leaked project/artifact XML tags and continuation markers
-  sanitized = sanitized.replace(/<\/?project\b[^>]*>/gi, '');
-  sanitized = sanitized.replace(/<\/?artifact\b[^>]*>/gi, '');
+  // Use lookahead (?=[\s/>]) to avoid matching hyphenated tag names like <artifact-link>
+  // This preserves legitimate XML/code snippets in assistant responses
+  sanitized = sanitized.replace(/<\/?project(?=[\s/>])[^>]*>/gi, '');
+  sanitized = sanitized.replace(/<\/?artifact(?=[\s/>])[^>]*>/gi, '');
   sanitized = sanitized.replace(/\[CONTINUE_REQUESTED\]/gi, '');
 
   // Clean up leftover <<< and >>> markers

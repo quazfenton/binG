@@ -241,10 +241,17 @@ export class OPFSCore extends SimpleEventEmitter<OPFSEventMap> {
         // Get root directory handle from OPFS (getDirectory() takes no arguments)
         // eslint-disable-next-line @typescript-eslint/no-explicit-any
         const rootDir = await (navigator as any).storage.getDirectory();
-        
+
         // Navigate to workspace-specific subdirectory using sanitized ID
-        this.rootHandle = await rootDir.getDirectoryHandle(
-          `${this.options.rootName}/${sanitizedWorkspaceId}`,
+        // IMPORTANT: getDirectoryHandle doesn't accept paths with slashes.
+        // We need to navigate step by step: first to rootName, then to workspace.
+        const rootNameHandle = await rootDir.getDirectoryHandle(
+          this.options.rootName || 'bing-workspace',
+          { create: true }
+        );
+
+        this.rootHandle = await rootNameHandle.getDirectoryHandle(
+          sanitizedWorkspaceId,
           { create: true }
         );
 

@@ -83,8 +83,8 @@ export async function POST(request: NextRequest) {
           return { path: change.path, sha: null, status: 'deleted' };
         }
 
-        // Skip files without content
-        if (!change.content) {
+        // Skip files without content (but allow empty files with content === "")
+        if (change.content === undefined || change.content === null) {
           console.warn(`[GitHub Commit] File ${change.path} has no content, skipping`);
           return null;
         }

@@ -98,11 +98,44 @@ export function getOrCreateAnonymousSessionId(): string {
 }
 
 /**
+ * Sync anonymous session ID with server's ID from response header
+ *
+ * This ensures client localStorage matches the server's session ID,
+ * preventing session fragmentation when they don't match.
+ *
+ * Call this after fetching from any API that uses resolveFilesystemOwner.
+ *
+ * @example
+ * const response = await fetch('/api/filesystem/list');
+ * await syncAnonymousSessionId(response);
+ */
+export async function syncAnonymousSessionId(response: Response): Promise<void> {
+  if (typeof window === 'undefined') return;
+
+  try {
+    const serverSessionId = response.headers.get('x-anonymous-session-id');
+    if (serverSessionId) {
+      const currentSessionId = localStorage.getItem(ANONYMOUS_SESSION_KEY);
+      if (currentSessionId !== serverSessionId) {
+        // Server has a different session ID - sync to prevent fragmentation
+        console.log('[Session] Syncing localStorage session ID with server:', {
+          old: currentSessionId?.substring(0, 20) + '...',
+          new: serverSessionId.substring(0, 20) + '...',
+        });
+        localStorage.setItem(ANONYMOUS_SESSION_KEY, serverSessionId);
+      }
+    }
+  } catch {
+    // Ignore errors - localStorage unavailable or header not present
+  }
+}
+
+/**
  * Build standard request headers for API calls.
  *
  * Includes:
  * - `Authorization: Bearer <token>` when the user is authenticated
- * - `x-anonymous-session-id` for unauthenticated requests
+ * - `x-anonymous-session-id` for unauthenticated requests (to prevent session fragmentation)
  * - `Content-Type: application/json` when `json` is true (default)
  */
 export function buildApiHeaders(options?: { json?: boolean }): Record<string, string> {
@@ -114,7 +147,9 @@ export function buildApiHeaders(options?: { json?: boolean }): Record<string, st
   }
 
   // Authentication is handled via HttpOnly cookies sent automatically with credentials: 'include'
-  // We no longer send x-anonymous-session-id header - the server trusts only cookies for identity
+  // For anonymous users, we send the session ID in a header to prevent session fragmentation
+  // during initial page load when multiple components mount before the cookie is set.
+  // The server will use this header to set the cookie consistently.
   if (typeof window !== 'undefined') {
     // Guard token lookup with try/catch to handle restricted browser storage contexts
     try {
@@ -122,11 +157,16 @@ export function buildApiHeaders(options?: { json?: boolean }): Record<string, st
       if (token) {
         headers.Authorization = `Bearer ${token}`;
       }
+      
+      // Send anonymous session ID to prevent server from generating different IDs
+      // for concurrent requests during initial page load
+      const anonSessionId = localStorage.getItem(ANONYMOUS_SESSION_KEY);
+      if (anonSessionId) {
+        headers['x-anonymous-session-id'] = anonSessionId;
+      }
     } catch {
       // localStorage unavailable; continue without auth token
     }
-    // Note: Anonymous session ID is now only managed via HttpOnly cookies
-    // The server sets anon-session-id cookie and we rely on credentials: 'include' to send it
   }
 
   return headers;

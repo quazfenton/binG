@@ -13,6 +13,9 @@ import { secureRandomId } from '@/lib/utils/crypto-random';
  *
  * On first server start or when auth system isn't initialized,
  * returns a fallback anonymous owner instead of throwing.
+ *
+ * SESSION FRAGMENTATION FIX: Uses client-provided x-anonymous-session-id header
+ * to prevent generating duplicate session IDs for concurrent requests.
  */
 export async function resolveFilesystemOwnerWithFallback(
   req: NextRequest,
@@ -45,7 +48,24 @@ export async function resolveFilesystemOwnerWithFallback(
       };
     }
 
-    // PRIORITY 2: Generate new anonymous session ID for first-time visitors (fallback case)
+    // PRIORITY 2: Use client-provided session ID from header (if available)
+    // This prevents session fragmentation during initial page load
+    const clientSessionId = req.headers.get('x-anonymous-session-id');
+    if (clientSessionId) {
+      const sanitizeSessionId = (id: string): string => {
+        return id.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+      };
+      const sanitizedClientId = sanitizeSessionId(clientSessionId);
+      const clientId = sanitizedClientId.startsWith('anon_') ? sanitizedClientId.slice(5) : sanitizedClientId;
+      return {
+        ownerId: `anon:${clientId}`,
+        source: 'anonymous' as const,
+        isAuthenticated: false,
+        anonSessionId: sanitizedClientId,
+      };
+    }
+
+    // PRIORITY 3: Generate new anonymous session ID for first-time visitors (fallback case)
     // This prevents cross-user collisions that would occur with shared 'anon:public'
     const newAnonId = secureRandomId() + Date.now().toString(36);
     return {

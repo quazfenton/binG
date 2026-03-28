@@ -56,6 +56,37 @@ export async function POST(request: NextRequest) {
 
     const targetBranch = branch || 'main';
 
+    // Validate GitHub identifiers to prevent URL injection
+    const validateGitHubIdentifier = (value: string, name: string): boolean => {
+      // GitHub allows: alphanumeric, hyphens, underscores, periods
+      // See: https://docs.github.com/en/rest/overview/resources-in-the-rest-api
+      if (!/^[\w.\-]+$/.test(value)) {
+        return false;
+      }
+      return true;
+    };
+
+    if (!validateGitHubIdentifier(targetOwner, 'owner')) {
+      return NextResponse.json(
+        { error: 'Invalid owner: contains disallowed characters' },
+        { status: 400 }
+      );
+    }
+    
+    if (!validateGitHubIdentifier(targetRepo, 'repo')) {
+      return NextResponse.json(
+        { error: 'Invalid repo: contains disallowed characters' },
+        { status: 400 }
+      );
+    }
+    
+    if (!validateGitHubIdentifier(targetBranch, 'branch')) {
+      return NextResponse.json(
+        { error: 'Invalid branch: contains disallowed characters' },
+        { status: 400 }
+      );
+    }
+
     // Check if branch exists
     try {
       await githubApi(

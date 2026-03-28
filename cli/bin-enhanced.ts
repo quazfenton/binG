@@ -96,8 +96,9 @@ function loadAuth(): any {
  */
 // @ts-ignore - Reserved for future use
 function saveAuth(auth: any): void {
-  fs.writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2));
-  fs.chmodSync(AUTH_FILE, 0o600); // Secure file permissions
+  // Use mode option to set secure permissions atomically on file creation
+  // This prevents a brief window where the file has insecure default permissions (0644)
+  fs.writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2), { mode: 0o600 });
 }
 
 /**
@@ -322,10 +323,8 @@ ${COLORS.primary('Tips:')}
  * WebSocket Terminal
  */
 async function websocketTerminal(sandboxId: string): Promise<void> {
-  // @ts-ignore - Config loaded for future use
-  const config = loadConfig();
   const auth = loadAuth();
-  
+
   if (!sandboxId) {
     console.log(COLORS.error('Sandbox ID required'));
     process.exit(1);
@@ -351,12 +350,24 @@ async function websocketTerminal(sandboxId: string): Promise<void> {
     ws.on('open', () => {
       console.log(COLORS.success('✓ Connected to terminal'));
       console.log(COLORS.info('Type commands and press Enter\n'));
+
+      // Track original stdin state for cleanup
+      const wasRaw = process.stdin.isRaw;
       
+      // Cleanup function to restore terminal state
+      const cleanupTerminal = () => {
+        if (process.stdin.isTTY && process.stdin.isRaw) {
+          process.stdin.setRawMode(false);
+        }
+        process.stdin.removeAllListeners('data');
+        process.stdin.pause();
+      };
+
       // Enable raw mode for interactive terminal
       if (process.stdin.isTTY) {
         process.stdin.setRawMode(true);
       }
-      
+
       // Handle user input
       process.stdin.on('data', (data) => {
         const command = data.toString();
@@ -365,39 +376,68 @@ async function websocketTerminal(sandboxId: string): Promise<void> {
           data: command,
         }));
       });
-    });
-    
-    ws.on('message', (data) => {
-      try {
-        const message = JSON.parse(data.toString());
-        
-        if (message.type === 'output' || message.type === 'data') {
-          process.stdout.write(message.data);
-        } else if (message.type === 'error') {
-          console.log(COLORS.error(message.data));
+
+      ws.on('message', (data) => {
+        try {
+          const message = JSON.parse(data.toString());
+          
+          if (message.type === 'pty') {
+            // Primary terminal output type
+            process.stdout.write(message.data);
+          } else if (message.type === 'connected') {
+            // Connection acknowledgment from server
+            console.log(COLORS.success(`Connected: session=${message.data?.sessionId}`));
+          } else if (message.type === 'output' || message.type === 'data') {
+            // Legacy compatibility
+            process.stdout.write(message.data);
+          } else if (message.type === 'error') {
+            console.log(COLORS.error(message.data));
+          } else if (message.type === 'ping') {
+            // Keep-alive - respond with pong
+            ws.send(JSON.stringify({ type: 'pong' }));
+          }
+        } catch (error) {
+          // Non-JSON data, write directly to stdout
+          process.stdout.write(data.toString());
         }
-      } catch (error) {
-        process.stdout.write(data.toString());
-      }
-    });
-    
-    ws.on('error', (error) => {
-      console.log(COLORS.error(`WebSocket error: ${error.message}`));
-      process.exit(1);
-    });
-    
-    ws.on('close', () => {
-      console.log(COLORS.info('\nDisconnected from terminal'));
-      process.exit(0);
-    });
-    
-    // Handle Ctrl+C
-    process.on('SIGINT', () => {
-      ws.close();
-      process.exit(0);
+      });
+
+      ws.on('close', () => {
+        cleanupTerminal();
+        console.log(COLORS.info('\nDisconnected from terminal'));
+        process.exit(0);
+      });
+
+      ws.on('error', (error) => {
+        cleanupTerminal();
+        console.log(COLORS.error(`WebSocket error: ${error.message}`));
+        process.exit(1);
+      });
+
+      // Handle Ctrl+C
+      process.on('SIGINT', () => {
+        cleanupTerminal();
+        ws.close();
+        process.exit(0);
+      });
+
+      // Handle unexpected exits
+      process.on('exit', cleanupTerminal);
+      process.on('uncaughtException', () => {
+        cleanupTerminal();
+      });
+      process.on('unhandledRejection', () => {
+        cleanupTerminal();
+      });
     });
     
   } catch (error: any) {
+    // Restore terminal state if we enabled raw mode before the error
+    if (process.stdin.isTTY && process.stdin.isRaw) {
+      process.stdin.setRawMode(false);
+      process.stdin.removeAllListeners('data');
+      process.stdin.pause();
+    }
     console.log(COLORS.error(`Failed to connect: ${error.message}`));
     process.exit(1);
   }
@@ -493,7 +533,7 @@ program
           userId: loadAuth().userId,
           stream: !options.wait,
         },
-        timeout: options.wait ? 300000 : 30000,
+        timeout: 300000, // 5 minutes for workflows
       });
 
       spinner.stop();
@@ -506,7 +546,7 @@ program
           console.log(JSON.stringify(result.result, null, 2));
         } else {
           console.log(`  Status: ${COLORS.info('Running in background')}`);
-          console.log(`  Use ${COLORS.info('workflow:status ' + result.runId)} to check progress`);
+          console.log(COLORS.info('  Workflow is running in background.'));
         }
         closeReadline();
       } else {

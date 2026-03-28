@@ -2089,8 +2089,11 @@ export class ResponseRouter {
       // Use filesystemOwnerId if available (handles anonymous users correctly), otherwise fall back to userId
       const ownerIdForEdits = (request as any).filesystemOwnerId || request.userId;
       // Fallback: derive conversationId from requestId if missing (prevents refinement edits from being silently dropped)
-      const conversationIdForEdits = request.conversationId || request.requestId;
-      
+      // SECURITY: Validate requestId to prevent path traversal attacks - only allow safe alphanumeric characters
+      const conversationIdForEdits =
+        request.conversationId ||
+        (request.requestId && /^[a-zA-Z0-9_-]+$/.test(request.requestId) ? request.requestId : undefined);
+
       if (ownerIdForEdits && conversationIdForEdits) {
         try {
           const { applyFilesystemEditsFromResponse } = await import('@/app/api/chat/route')

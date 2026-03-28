@@ -94,9 +94,10 @@ export async function POST(request: NextRequest) {
   // Helper to add anon session cookie to responses (for new anonymous sessions)
   const addAnonSessionCookie = <T extends NextResponse>(response: T): T => {
     if (anonSessionIdToSet) {
+      const isSecure = process.env.NODE_ENV === 'production';
       response.headers.set(
         'set-cookie',
-        `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`
+        `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${isSecure ? '; Secure' : ''}`
       );
     }
     return response;
@@ -1043,7 +1044,7 @@ export async function POST(request: NextRequest) {
               "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
               "Vary": "Origin",
               ...(anonSessionIdToSet ? {
-                "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`,
+                "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
               } : {}),
             },
           });
@@ -1106,11 +1107,16 @@ export async function POST(request: NextRequest) {
         const encoder = new TextEncoder();
         let encoderRef = encoder;  // Reference for cleanup
         let streamClosed = false;  // Track stream state for cancel callback
+        let refinementTimeoutId: NodeJS.Timeout | null = null;  // Timeout for background refinement
 
         // Cleanup function for resource management (defined here for cancel callback access)
         const cleanup = () => {
           encoderRef = null;
           emitRef.current = null;
+          if (refinementTimeoutId) {
+            clearTimeout(refinementTimeoutId);
+            refinementTimeoutId = null;
+          }
         };
 
         const readableStream = new ReadableStream({
@@ -1137,6 +1143,11 @@ export async function POST(request: NextRequest) {
 
                 if (isTerminal) {
                   streamClosed = true;
+                  // Clear the timeout since we completed normally
+                  if (refinementTimeoutId) {
+                    clearTimeout(refinementTimeoutId);
+                    refinementTimeoutId = null;
+                  }
                   controller.close();
                   cleanup();
                 }
@@ -1280,10 +1291,10 @@ export async function POST(request: NextRequest) {
               // Stream stays open for background refinement events
               // The emit function will close the stream when refinement completes
               // Add timeout fallback in case refinement never completes
-              setTimeout(() => {
+              refinementTimeoutId = setTimeout(() => {
                 if (!streamClosed) {
-                  chatLogger.warn('Background refinement timeout, closing stream', { 
-                    requestId: streamRequestId 
+                  chatLogger.warn('Background refinement timeout, closing stream', {
+                    requestId: streamRequestId
                   });
                   streamClosed = true;
                   controller.close();
@@ -1350,7 +1361,7 @@ export async function POST(request: NextRequest) {
             "Access-Control-Allow-Headers": "Content-Type, Authorization, x-anonymous-session-id",
             "Vary": "Origin",
             ...(anonSessionIdToSet ? {
-              "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`,
+              "Set-Cookie": `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
             } : {}),
           },
         });
@@ -1543,8 +1554,9 @@ function sanitizeAssistantDisplayContent(content: string): string {
   }
 
   // Pattern 5.6: Remove leaked project/artifact XML tags and continuation markers
-  next = next.replace(/<\/?project\b[^>]*>/gi, '');
-  next = next.replace(/<\/?artifact\b[^>]*>/gi, '');
+  // Use lookahead (?=[\s/>]) to avoid matching hyphenated tag names like <artifact-link>
+  next = next.replace(/<\/?project(?=[\s/>])[^>]*>/gi, '');
+  next = next.replace(/<\/?artifact(?=[\s/>])[^>]*>/gi, '');
   next = next.replace(/\[CONTINUE_REQUESTED\]/gi, '');
 
   // Pattern 6: Clean up leftover <<< and >>> markers that weren't properly paired
@@ -1875,7 +1887,7 @@ async function handleGatewayStreaming(params: {
       'Connection': 'keep-alive',
       'X-Accel-Buffering': 'no',
       ...(anonSessionIdToSet ? {
-        'Set-Cookie': `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly`,
+        'Set-Cookie': `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
       } : {}),
     },
   });
