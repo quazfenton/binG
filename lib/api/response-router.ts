@@ -2084,20 +2084,34 @@ export class ResponseRouter {
       // Import the exported function from route.ts - ensures consistent handling
       const fileWriteEdits = extractFsActionWrites(refinedOutput);
       let filesystemEdits: Awaited<ReturnType<typeof import('@/app/api/chat/route').applyFilesystemEditsFromResponse>> | null = null;
-      try {
-        const { applyFilesystemEditsFromResponse } = await import('@/app/api/chat/route')
-        
-        filesystemEdits = await applyFilesystemEditsFromResponse({
-          ownerId: request.userId?.toString() || '',
-          conversationId: request.conversationId || '',
-          requestId: `refinement-${Date.now()}`,
-          scopePath: `project/sessions/${request.conversationId || request.userId}`,
-          lastUserMessage: '',
-          attachedPaths: [],
-          responseContent: refinedOutput,
+      
+      // SECURITY: Only apply filesystem edits when we have a concrete owner and conversation context
+      // Use filesystemOwnerId if available (handles anonymous users correctly), otherwise fall back to userId
+      const ownerIdForEdits = (request as any).filesystemOwnerId || request.userId;
+      const conversationIdForEdits = request.conversationId;
+      
+      if (ownerIdForEdits && conversationIdForEdits) {
+        try {
+          const { applyFilesystemEditsFromResponse } = await import('@/app/api/chat/route')
+
+          filesystemEdits = await applyFilesystemEditsFromResponse({
+            ownerId: ownerIdForEdits.toString(),
+            conversationId: conversationIdForEdits,
+            requestId: `refinement-${Date.now()}`,
+            scopePath: `project/sessions/${conversationIdForEdits}`,
+            lastUserMessage: '',
+            attachedPaths: [],
+            responseContent: refinedOutput,
+          })
+        } catch (fsError) {
+          logger.error('Refinement filesystem edit application failed', fsError)
+        }
+      } else {
+        logger.warn('Skipping filesystem edits for spec enhancement: missing ownerId or conversationId', {
+          hasOwnerId: !!ownerIdForEdits,
+          hasConversationId: !!conversationIdForEdits,
+          source: (request as any).filesystemOwnerId ? 'filesystemOwnerId' : 'userId',
         })
-      } catch (fsError) {
-        logger.error('Refinement filesystem edit application failed', fsError)
       }
 
       // Send refined content via SSE

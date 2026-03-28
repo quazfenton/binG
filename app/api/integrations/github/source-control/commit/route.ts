@@ -117,6 +117,9 @@ export async function POST(request: NextRequest) {
         }];
       }
       // Modified/added files: include with actual sha
+      if (!blob.sha) {
+        throw new Error(`Missing blob SHA for ${blob.path}`);
+      }
       return [{
         path: blob.path,
         mode: '100644',

@@ -17,6 +17,7 @@ export function SandboxFallbackModal({ modalState, onAction, onClose }: SandboxF
   const [isProcessing, setIsProcessing] = useState<string | null>(null)
 
   const handleAction = async (action: string) => {
+    if (isProcessing) return
     setIsProcessing(action)
     try {
       await onAction?.(action)
