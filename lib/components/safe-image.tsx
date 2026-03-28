@@ -26,8 +26,6 @@ interface SafeImageProps extends Omit<ImageProps, 'src' | 'onError'> {
   src: string;
   /** Fallback image URL if validation fails or image errors */
   fallbackSrc?: string;
-  /** Enable strict validation (default: true) */
-  strict?: boolean;
   /** Callback when image is blocked */
   onBlocked?: (url: string, reason: string) => void;
 }
@@ -40,7 +38,6 @@ const DEFAULT_PLACEHOLDER = 'data:image/svg+xml;base64,PHN2ZyB3aWR0aD0iNDAwIiBoZ
 export function SafeImage({
   src,
   fallbackSrc = DEFAULT_PLACEHOLDER,
-  strict = true,
   onBlocked,
   alt,
   ...props
@@ -71,8 +68,10 @@ export function SafeImage({
   }, [src, fallbackSrc, onBlocked]);
 
   const handleError = () => {
-    // If the current src is not the fallback, switch to fallback
-    if (imageSrc !== fallbackSrc && imageSrc !== src) {
+    // If currently showing the real src (not fallback), switch to fallback
+    // This handles network errors, 404s, invalid image formats, etc.
+    if (imageSrc !== fallbackSrc) {
+      console.warn(`[SafeImage] Image failed to load, using fallback: ${imageSrc}`);
       setImageSrc(fallbackSrc);
     }
   };

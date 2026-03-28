@@ -229,10 +229,11 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     setIsCloning(true);
     setCloneResult(null);
     try {
-      const response = await fetch('/api/github/clone', {
+      const response = await fetch('/api/integrations/github', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
+          action: 'clone',
           repoUrl: source.trim(),
           destinationPath: clonePath.trim() || 'repos',
         }),

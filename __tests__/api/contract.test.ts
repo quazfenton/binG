@@ -317,6 +317,10 @@ describe('API Contract Tests', () => {
   });
 
   describe('Performance Contracts', () => {
+    beforeEach(() => {
+      vi.useRealTimers();
+    });
+
     it('should respond within SLA for chat API', async () => {
       const SLA_MS = 5000; // 5 second SLA
       

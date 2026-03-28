@@ -276,7 +276,7 @@ export class VFSyncBackService {
     let failedFiles = 0;
     
     // Get VFS write function
-    const { virtualFilesystem } = await import('..');
+    const { virtualFilesystem } = await import('../virtual-filesystem-service');
     const vfs = virtualFilesystem;
     
     for (const file of files) {

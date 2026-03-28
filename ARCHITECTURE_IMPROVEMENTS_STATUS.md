@@ -1,3 +1,9 @@
+Corrected the status doc — 4 features were marked ❌ but already existed:
+
+Security Failpoints — comprehensive command/path filtering in lib/sandbox/security.ts + security-manager.ts
+Observability/Tracing — full span/trace/metrics system in lib/observability/index.ts
+
+
 # Architecture Improvements - Implementation Status
 
 ## Overview

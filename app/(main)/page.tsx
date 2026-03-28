@@ -49,7 +49,34 @@ export default function ChatBox() {
     const mediaUrl = (saved || fallback || "").trim()
 
     if (mediaUrl) {
+      // SECURITY: Validate URL before applying (client-side check)
+      try {
+        const url = new URL(mediaUrl)
+        if (url.protocol !== 'https:') {
+          console.warn('[Page] Blocked non-HTTPS background URL')
+          return
+        }
+        
+        // Block obvious SSRF attempts
+        const hostname = url.hostname.toLowerCase()
+        const blockedPatterns = [
+          'localhost', '127.', '10.', '192.168.', '172.16.', '172.17.', '172.18.',
+          '172.19.', '172.20.', '172.21.', '172.22.', '172.23.', '172.24.', '172.25.',
+          '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.',
+          '169.254.', '0.0.0.0', '.local', '.internal', 'metadata'
+        ]
+        
+        if (blockedPatterns.some(pattern => hostname.includes(pattern))) {
+          console.warn('[Page] Blocked unsafe background URL:', mediaUrl)
+          return
+        }
+      } catch (e) {
+        console.warn('[Page] Invalid background URL:', mediaUrl)
+        return
+      }
+
       // Use image proxy to bypass CORS/hotlinking restrictions
+      // The proxy will perform additional server-side SSRF validation
       const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(mediaUrl)}`
       root.style.setProperty("--app-bg-media", `url("${proxiedUrl}")`)
       root.style.setProperty("--app-bg-media-opacity", "0.12")

@@ -39,7 +39,7 @@ export interface HealthCheckerConfig {
 
 const DEFAULT_CONFIG: HealthCheckerConfig = {
   checkInterval: 30000, // 30 seconds
-  failureThreshold: 3,
+  failureThreshold: 8,
   checkTimeout: 10000, // 10 seconds
 }
 

@@ -33,6 +33,7 @@ import { createLogger } from '@/lib/utils/logger'
 import { normalizeToolInvocations, type ToolInvocation } from '@/lib/types/tool-invocation'
 import { quotaManager } from '@/lib/management/quota-manager'
 import { detectRequestType } from '@/lib/utils/request-type-detector'
+import { extractFsActionWrites } from '@/lib/chat/file-edit-parser'
 
 // Import router services
 import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from '@/lib/chat/fast-agent-service'
@@ -169,6 +170,16 @@ export interface UnifiedResponse {
     actualModel?: string
     messageMetadata?: Record<string, any>
     timestamp: string
+    specAmplification?: {
+      enabled: boolean
+      mode: 'normal' | 'enhanced' | 'max'
+      fastModel: string
+      sectionsGenerated: number
+      refinementIterations: number
+      duration: number
+      timedOut: boolean
+      specScore: number
+    }
   }
 }
 
@@ -202,11 +213,21 @@ interface CircuitBreakerState {
 }
 
 const DEFAULT_CIRCUIT_BREAKER_CONFIG: CircuitBreakerConfig = {
-  failureThreshold: 5,
-  recoveryTimeoutMs: 30000,
-  failureWindowMs: 60000,
+  failureThreshold: 12,
+  recoveryTimeoutMs: 15000,  // 15s — recover quickly
+  failureWindowMs: 120000,   // 2 min window — old failures expire
 }
 
+/**
+ * Smart per-endpoint circuit breaker.
+ *
+ * Key differences from naive implementation:
+ * - Failures decay over time (failureWindowMs) so transient bursts don't accumulate
+ * - Rate-limit errors (429) count less than hard failures (weighted scoring)
+ * - NEVER blocks the 'original-system' endpoint — it's the last-resort fallback
+ * - If ALL endpoints would be blocked, forces the least-failed one back to closed
+ * - Higher thresholds (12 vs old 5) because different providers share the router
+ */
 class CircuitBreaker {
   private states = new Map<string, CircuitBreakerState>()
   private readonly config: CircuitBreakerConfig
@@ -230,6 +251,11 @@ class CircuitBreaker {
   }
 
   shouldSkip(endpoint: string): boolean {
+    // SAFETY: Never skip original-system — it's the last-resort LLM route
+    if (endpoint === 'original-system') {
+      return false
+    }
+
     const state = this.getState(endpoint)
     const now = Date.now()
 
@@ -240,15 +266,15 @@ class CircuitBreaker {
     if (state.state === 'open') {
       if (now - state.lastFailureTime >= this.config.recoveryTimeoutMs) {
         state.state = 'half-open'
-        return false  // Allow one test request
+        console.log(`[CircuitBreaker] ${endpoint}: half-open — allowing probe request`)
+        return false
       }
-      return true  // Circuit is open, skip
+      return true
     }
 
-    // CRITICAL: If already half-open, a probe is running; skip additional requests
-    // This prevents race condition where multiple concurrent requests all get through during half-open
+    // half-open: allow one test request then block additional concurrent ones
     if (state.state === 'half-open') {
-      return true  // Skip - probe already in progress
+      return true
     }
 
     return false
@@ -256,31 +282,83 @@ class CircuitBreaker {
 
   recordSuccess(endpoint: string): void {
     const state = this.getState(endpoint)
-    const now = Date.now()
-
     state.successes++
-    state.lastSuccessTime = now
+    state.lastSuccessTime = Date.now()
+    // A success clears all failure history — the provider is working
     state.failures = 0
     state.failureTimestamps = []
 
-    if (state.state === 'half-open') {
+    if (state.state === 'half-open' || state.state === 'open') {
       state.state = 'closed'
+      console.log(`[CircuitBreaker] ${endpoint}: closed (recovered)`)
     }
   }
 
-  recordFailure(endpoint: string): void {
+  recordFailure(endpoint: string, error?: any): void {
     const state = this.getState(endpoint)
     const now = Date.now()
 
+    // Classify the error — rate-limits are less severe
+    const isRateLimit = error?.status === 429 ||
+      (error?.message || '').toLowerCase().includes('rate limit') ||
+      (error?.message || '').toLowerCase().includes('quota')
+    const isTransient = [502, 503, 504].includes(error?.status) ||
+      (error?.message || '').toLowerCase().includes('overloaded')
+
+    // Rate-limits and transient errors add fewer "virtual" failure timestamps
+    // A single rate-limit adds 0 extra timestamps (just 1 real one)
+    // A hard failure adds 2 timestamps (counts triple towards threshold)
+    const weight = isRateLimit ? 1 : isTransient ? 1 : 2
+
     state.failures++
     state.lastFailureTime = now
-    state.failureTimestamps.push(now)
+
+    for (let i = 0; i < weight; i++) {
+      state.failureTimestamps.push(now)
+    }
+
+    // Prune timestamps outside the window
     state.failureTimestamps = state.failureTimestamps.filter(
-      t => t > now - this.config.failureWindowMs
+      t => t > now - this.config.failureWindowMs,
     )
 
     if (state.failureTimestamps.length >= this.config.failureThreshold) {
       state.state = 'open'
+      console.log(
+        `[CircuitBreaker] ${endpoint}: OPEN (${state.failureTimestamps.length}/${this.config.failureThreshold} weighted failures in window)`,
+      )
+
+      // SAFETY: check if this leaves zero available endpoints
+      this.enforceLastRouteSafety()
+    }
+  }
+
+  /**
+   * If ALL endpoints are open, force the one with the fewest recent failures
+   * back to closed. We NEVER fully block all LLM routes.
+   */
+  private enforceLastRouteSafety(): void {
+    if (this.states.size === 0) return
+
+    const allOpen = Array.from(this.states.values()).every(s => s.state === 'open')
+    if (!allOpen) return
+
+    // Find endpoint with fewest recent failures
+    let bestEndpoint: string | null = null
+    let bestFailures = Infinity
+
+    for (const [ep, s] of this.states) {
+      if (s.failureTimestamps.length < bestFailures) {
+        bestFailures = s.failureTimestamps.length
+        bestEndpoint = ep
+      }
+    }
+
+    if (bestEndpoint) {
+      this.reset(bestEndpoint)
+      console.warn(
+        `[CircuitBreaker] SAFETY: All endpoints OPEN — forced ${bestEndpoint} back to CLOSED`,
+      )
     }
   }
 
@@ -289,15 +367,21 @@ class CircuitBreaker {
     failures: number
     successes: number
     failureRate: number
+    recentFailures: number
   } {
     const state = this.getState(endpoint)
     const total = state.failures + state.successes
+    const now = Date.now()
+    const recentFailures = state.failureTimestamps.filter(
+      t => t > now - this.config.failureWindowMs,
+    ).length
 
     return {
       state: state.state,
       failures: state.failures,
       successes: state.successes,
       failureRate: total > 0 ? state.failures / total : 0,
+      recentFailures,
     }
   }
 
@@ -742,7 +826,7 @@ export class ResponseRouter {
         endpointSpan?.end()
 
         // Record failure
-        this.circuitBreaker.recordFailure(endpoint.name)
+        this.circuitBreaker.recordFailure(endpoint.name, error)
         this.updateStats(endpoint.name, false)
         recordEndpointUsage(endpoint.name, Date.now() - endpointStartTime, false)
 
@@ -751,7 +835,8 @@ export class ResponseRouter {
         recordCircuitBreakerState(endpoint.name, cbStats.state)
 
         errors.push({ endpoint: endpoint.name, error })
-        fallbackChain.push(`${endpoint.name} (error: ${error.message.substring(0, 50)})`)
+        // Don't truncate error messages - they contain important provider/model info
+        fallbackChain.push(`${endpoint.name} (error: ${error.message})`)
       }
     }
 
@@ -828,8 +913,8 @@ export class ResponseRouter {
       data: {
         content: finalContent,
         usage: this.calculateUsage(response),
-        model: response.metadata?.actualModel || (response.data as any)?.model || (response as any).model,
-        provider: response.metadata?.actualProvider || (response.data as any)?.provider || (response as any).provider,
+        model: (response.metadata as any)?.actualModel || (response.data as any)?.model || (response as any)?.model,
+        provider: (response.metadata as any)?.actualProvider || (response.data as any)?.provider || (response as any)?.provider,
         toolCalls: (response.data as any)?.toolCalls,
         toolInvocations,
         files: (response.data as any)?.files,
@@ -1195,16 +1280,25 @@ export class ResponseRouter {
    * Normalize original system response
    */
   private normalizeOriginalResponse(response: any): RouterResponse {
+    // Preserve actual LLM provider/model from response metadata if available
+    // This prevents showing 'original-system' as the provider when a real LLM provider was used
+    const actualProvider = response.metadata?.actualProvider || response.provider || 'original-system';
+    const actualModel = response.metadata?.actualModel || response.model;
+    
     return {
       success: true,
       content: response.content || response.choices?.[0]?.message?.content,
       data: {
         usage: response.usage,
-        model: response.model,
-        provider: 'original-system',
+        model: actualModel,
+        provider: actualProvider,
       },
       source: 'original-system',
       priority: 1,
+      metadata: {
+        actualProvider,
+        actualModel,
+      },
     }
   }
 
@@ -1767,6 +1861,305 @@ export class ResponseRouter {
   }
 
   /**
+   * Dual-path inference with spec amplification
+   * 
+   * V1 MODE ONLY - Regular LLM calls with spec amplification
+   * Does NOT work with V2 agent mode
+   * 
+   * Runs parallel execution:
+   * 1. Primary: Normal LLM response
+   * 2. Secondary: Fast model generates improvement spec
+   * 
+   * Then refines primary response based on spec
+   * 
+   * @param request - Router request with mode
+   * @returns Unified response with refinements
+   */
+  async routeWithSpecAmplification(
+    request: RouterRequest & {
+      mode?: 'normal' | 'enhanced' | 'max'
+      agentMode?: 'v1' | 'v2' | 'auto'
+      emit?: (event: string, data: any) => void
+    }
+  ): Promise<UnifiedResponse> {
+    const startTime = Date.now()
+    const span = startSpan('response-router.spec-amplification')
+    
+    try {
+      // V2 AGENT MODE: Skip spec amplification entirely
+      // V2 has its own planning/execution system
+      if (request.agentMode === 'v2') {
+        logger.debug('V2 agent mode detected, skipping spec amplification')
+        return await this.routeAndFormat(request)
+      }
+      
+      // Normal mode = skip spec amplification
+      if (request.mode === 'normal' || !request.mode) {
+        return await this.routeAndFormat(request)
+      }
+      
+      // Get fastest model from telemetry
+      const { getModelStatsFromTelemetry, getSpecGenerationModel } = await import('@/lib/models/model-ranker')
+      const modelStats = await getModelStatsFromTelemetry()
+      let fastModel = await getSpecGenerationModel()
+
+      // Fallback: If no telemetry data available, use Mistral Small (fast & cheap)
+      if (!fastModel) {
+        logger.info('No telemetry data available, using Mistral Small as fallback for spec generation')
+        fastModel = {
+          provider: 'mistral',
+          model: 'mistral-small-latest',
+          avgLatency: 500,
+          failureRate: 0.01,
+          lastUpdated: Date.now(),
+          totalCalls: 0,
+          successRate: 0.99,
+          score: 0.5,
+          rank: 1
+        }
+      }
+
+      logger.info('Spec amplification enabled', {
+        fastModel: fastModel.model,
+        mode: request.mode,
+        provider: fastModel.provider,
+        fromTelemetry: !!getSpecGenerationModel()  // true if telemetry returned model, false if fallback
+      })
+
+      // PARALLEL EXECUTION
+      const primaryPromise = this.routeAndFormat(request)
+
+      const { buildSpecPrompt } = await import('@/lib/prompts/spec-generator')
+      const { enhancedLLMService } = await import('@/lib/chat/enhanced-llm-service')
+      
+      // Generate unique request ID for spec generation to avoid duplicate key error
+      const specRequestId = `spec-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
+
+      const specPromise = enhancedLLMService.generateResponse({
+        provider: fastModel.provider,
+        model: fastModel.model,
+        messages: buildSpecPrompt(
+          (() => {
+            const lastUser = [...request.messages].reverse().find(m => m.role === 'user');
+            return typeof lastUser?.content === 'string'
+              ? lastUser.content
+              : JSON.stringify(lastUser?.content || '');
+          })()
+        ),
+        maxTokens: 2000,
+        stream: false,
+        requestId: specRequestId
+      })
+
+      // Wait for primary response (needed for content)
+      const primaryResult = await primaryPromise.catch(err => ({ success: false, error: err }))
+      
+      // Always return primary response immediately
+      if (!(primaryResult as any).success) {
+        const err = (primaryResult as any).error
+        logger.error('Primary routing failed', { error: err })
+        throw err
+      }
+
+      const primaryData = (primaryResult as any).data
+      
+      // Emit primary response immediately if emit is provided
+      if (request.emit) {
+        request.emit('primary_response', { content: primaryData.content, timestamp: Date.now() })
+      }
+
+      // Start spec generation in background (don't await - run in parallel)
+      const specGenerationPromise = specPromise
+        .then(res => ({ success: true, data: res }))
+        .catch(err => ({ success: false, error: err }))
+
+      // Return primary response immediately, start background refinement
+      // Background refinement will emit events that appear as new chat messages
+      this.runBackgroundRefinement({
+        primaryData,
+        specGenerationPromise,
+        request,
+        fastModel,
+        startTime
+      }).catch(err => {
+        logger.error('Background refinement failed', { error: err })
+      })
+
+      // Return primary response immediately
+      return primaryData
+
+    } catch (error) {
+      logger.error('Spec amplification failed', error)
+      recordEndpointUsage('spec-generation', Date.now() - startTime, false)
+      
+      // Fallback to normal routing
+      return await this.routeAndFormat(request)
+    } finally {
+      span.end()
+    }
+  }
+
+  /**
+   * Run refinement in background, sending updates via SSE
+   * Creates new chat messages for each refinement improvement
+   */
+  private async runBackgroundRefinement(params: {
+    primaryData: UnifiedResponse
+    specGenerationPromise: Promise<{ success: boolean; data?: any; error?: any }>
+    request: RouterRequest & { mode?: 'normal' | 'enhanced' | 'max'; emit?: (event: string, data: any) => void }
+    fastModel: any
+    startTime: number
+  }): Promise<void> {
+    const { primaryData, specGenerationPromise, request, fastModel, startTime } = params
+    const { safeParseSpec, chunkSpec, explodeChunks } = await import('@/lib/chat/spec-parser')
+    const { validateSpec, scoreSpec } = await import('@/lib/prompts/spec-generator')
+
+    try {
+      // Wait for spec generation
+      const specResult = await specGenerationPromise
+
+      if (!specResult.success) {
+        logger.warn('Spec generation failed in background', { error: specResult.error })
+        if (request.emit) {
+          request.emit('spec_amplification', { stage: 'spec_failed', error: specResult.error?.message })
+        }
+        return
+      }
+
+      const specResponse = specResult.data
+      const rawSpec = specResponse.content || ''
+
+      // Parse spec
+      const parsed = safeParseSpec(rawSpec)
+      if (!parsed) {
+        logger.warn('Spec parsing failed in background')
+        if (request.emit) {
+          request.emit('spec_amplification', { stage: 'parse_failed' })
+        }
+        return
+      }
+
+      // Validate spec quality
+      if (!validateSpec(parsed)) {
+        logger.warn('Spec validation failed in background')
+        if (request.emit) {
+          request.emit('spec_amplification', { stage: 'validation_failed' })
+        }
+        return
+      }
+
+      const specScore = scoreSpec(parsed)
+      if (specScore < 4) {
+        logger.warn('Spec quality too low in background', { score: specScore })
+        if (request.emit) {
+          request.emit('spec_amplification', { stage: 'low_quality', score: specScore })
+        }
+        return
+      }
+
+      // Chunk spec
+      let chunks = chunkSpec(parsed)
+      if (request.mode === 'max') {
+        chunks = explodeChunks(chunks)
+      }
+
+      const primaryProvider = primaryData.data?.provider || fastModel?.provider || 'openrouter'
+      const primaryModel = primaryData.data?.model || fastModel?.model || request.model
+
+      // Run refinement with emit
+      const { executeRefinementWithDAG } = await import('@/lib/chat/dag-refinement-engine')
+      const refinedOutput = await executeRefinementWithDAG({
+        model: primaryModel,
+        provider: primaryProvider,
+        baseResponse: primaryData.content || '',
+        chunks,
+        mode: request.mode as 'enhanced' | 'max',
+        userId: request.userId,
+        conversationId: request.conversationId,
+        maxConcurrency: request.mode === 'max' ? 3 : 2,
+        emit: request.emit
+      })
+
+      // Apply filesystem edits from refined output using the same pipeline as main chat
+      // Import the exported function from route.ts - ensures consistent handling
+      const fileWriteEdits = extractFsActionWrites(refinedOutput);
+      let filesystemEdits: Awaited<ReturnType<typeof import('@/app/api/chat/route').applyFilesystemEditsFromResponse>> | null = null;
+      
+      // SECURITY: Only apply filesystem edits when we have a concrete owner and conversation context
+      // Use filesystemOwnerId if available (handles anonymous users correctly), otherwise fall back to userId
+      const ownerIdForEdits = (request as any).filesystemOwnerId || request.userId;
+      // Fallback: derive conversationId from requestId if missing (prevents refinement edits from being silently dropped)
+      // SECURITY: Validate requestId to prevent path traversal attacks - only allow safe alphanumeric characters
+      const conversationIdForEdits =
+        request.conversationId ||
+        (request.requestId && /^[a-zA-Z0-9_-]+$/.test(request.requestId) ? request.requestId : undefined);
+
+      if (ownerIdForEdits && conversationIdForEdits) {
+        try {
+          const { applyFilesystemEditsFromResponse } = await import('@/app/api/chat/route')
+
+          filesystemEdits = await applyFilesystemEditsFromResponse({
+            ownerId: ownerIdForEdits.toString(),
+            conversationId: conversationIdForEdits,
+            requestId: `refinement-${Date.now()}`,
+            scopePath: `project/sessions/${conversationIdForEdits}`,
+            lastUserMessage: '',
+            attachedPaths: [],
+            responseContent: refinedOutput,
+          })
+        } catch (fsError) {
+          logger.error('Refinement filesystem edit application failed', fsError)
+        }
+      } else {
+        logger.warn('Skipping filesystem edits for spec enhancement: missing ownerId or conversationId', {
+          hasOwnerId: !!ownerIdForEdits,
+          hasConversationId: !!conversationIdForEdits,
+          source: (request as any).filesystemOwnerId ? 'filesystemOwnerId' : 'userId',
+        })
+      }
+
+      // Send refined content via SSE
+      if (request.emit) {
+        const eventData: any = {
+          stage: 'complete',
+          refinedContent: refinedOutput,
+          specScore,
+          sectionsProcessed: chunks.length,
+          hasFileWrites: fileWriteEdits.length > 0,
+          fileWrites: fileWriteEdits.map(w => ({ path: w.path, operation: 'write' }))
+        }
+
+        // Include filesystem metadata if edits were applied
+        // Frontend will display file edit UI with accept/deny options
+        if (filesystemEdits && filesystemEdits.transactionId) {
+          eventData.filesystem = {
+            status: filesystemEdits.status,
+            transactionId: filesystemEdits.transactionId,
+            applied: filesystemEdits.applied,
+            errors: filesystemEdits.errors,
+            requestedFiles: filesystemEdits.requestedFiles,
+            scopePath: filesystemEdits.scopePath,
+            sessionId: filesystemEdits.sessionId,
+          }
+        }
+
+        request.emit('spec_amplification', eventData)
+      }
+
+      logger.info('Background refinement complete', { specScore, sectionsProcessed: chunks.length })
+
+    } catch (error) {
+      logger.error('Background refinement error', error)
+      if (request.emit) {
+        request.emit('spec_amplification', { 
+          stage: 'error', 
+          error: error instanceof Error ? error.message : 'Unknown error' 
+        })
+      }
+    }
+  }
+
+  /**
    * Create streaming events from unified response
    */
   createStreamingEvents(response: UnifiedResponse, requestId: string): string[] {
@@ -1827,6 +2220,15 @@ export const responseRouter = new ResponseRouter()
  */
 export async function routeAndFormatRequest(request: RouterRequest): Promise<UnifiedResponse> {
   return responseRouter.routeAndFormat(request)
+}
+
+/**
+ * @deprecated Use responseRouter.routeWithSpecAmplification()
+ */
+export async function routeWithSpecAmplification(
+  request: RouterRequest & { mode?: 'normal' | 'enhanced' | 'max' }
+): Promise<UnifiedResponse> {
+  return responseRouter.routeWithSpecAmplification(request)
 }
 
 /**

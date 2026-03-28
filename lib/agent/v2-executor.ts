@@ -23,6 +23,11 @@ function sanitizeV2ResponseContent(content: string): string {
   // Remove explicit command envelopes — these are safe because the sentinel
   // strings are unique enough that there's no backtracking risk.
   sanitized = sanitized.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
+  
+  // Remove bash heredoc blocks (NEW - preferred syntax)
+  sanitized = removeBashHeredocBlocks(sanitized);
+  
+  // Remove old fs-actions blocks (deprecated)
   sanitized = sanitized.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
   sanitized = sanitized.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
   sanitized = sanitized.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
@@ -37,6 +42,42 @@ function sanitizeV2ResponseContent(content: string): string {
   sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
 
   return sanitized;
+}
+
+/**
+ * Remove bash heredoc blocks (cat > file << 'EOF' ... EOF) in a single O(n) pass.
+ */
+function removeBashHeredocBlocks(content: string): string {
+  const lines = content.split('\n');
+  const output: string[] = [];
+  let insideHeredoc = false;
+  let heredocDelimiter: string | null = null;
+
+  for (const line of lines) {
+    if (!insideHeredoc) {
+      // Detect start of bash heredoc: cat > file << 'EOF' or cat >> file << EOF
+      const trimmed = line.trim();
+      const heredocMatch = trimmed.match(/^cat\s*(?:>>?)\s*[^\s<>&|]+\s*<<\s*['"]?(\w+)['"]?\s*$/i);
+      
+      if (heredocMatch) {
+        insideHeredoc = true;
+        heredocDelimiter = heredocMatch[1];
+        continue; // Skip the heredoc start line
+      }
+      
+      output.push(line);
+    } else {
+      // Inside heredoc — look for closing delimiter
+      const trimmed = line.trim();
+      if (heredocDelimiter && trimmed === heredocDelimiter) {
+        insideHeredoc = false;
+        heredocDelimiter = null;
+      }
+      // Drop all lines inside the heredoc block
+    }
+  }
+
+  return output.join('\n');
 }
 
 /**

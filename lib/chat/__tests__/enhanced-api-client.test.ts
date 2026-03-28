@@ -31,6 +31,10 @@ describe('EnhancedAPIClient', () => {
   });
 
   describe('Basic Request Functionality', () => {
+    beforeEach(() => {
+      vi.useRealTimers();
+    });
+
     it('should make a successful GET request', async () => {
       const mockResponse = createMockResponse({
         status: 200,
@@ -78,6 +82,7 @@ describe('EnhancedAPIClient', () => {
     });
 
     it('should handle timeout', async () => {
+      vi.useRealTimers(); // Use real timers for timeout test
       (global.fetch as any).mockImplementation(() => {
         return new Promise((_, reject) => {
           setTimeout(() => reject(new Error('Timeout')), 1000);
@@ -95,6 +100,10 @@ describe('EnhancedAPIClient', () => {
   });
 
   describe('Retry Logic', () => {
+    beforeEach(() => {
+      vi.useRealTimers(); // Need real timers for retry delays
+    });
+
     it('should retry on failure', async () => {
       const mockResponse = createMockResponse({
         status: 200,

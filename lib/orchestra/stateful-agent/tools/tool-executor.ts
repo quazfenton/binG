@@ -30,6 +30,10 @@ export class ToolExecutor {
   private context: ToolContext;
   private executionLog: ToolExecution[] = [];
   private config: ToolExecutorConfig;
+  
+  // Health check cache to avoid redundant checks
+  private healthCheckCache = new Map<string, { healthy: boolean; error?: string; timestamp: number }>();
+  private readonly HEALTH_CHECK_TTL = 5000; // 5 seconds
 
   constructor(config: ToolExecutorConfig) {
     this.config = {
@@ -42,6 +46,45 @@ export class ToolExecutor {
       vfs: config.vfs || {},
       transactionLog: config.transactionLog || [],
     };
+  }
+
+  /**
+   * Check sandbox health with caching to avoid redundant checks
+   */
+  private async checkSandboxHealth(): Promise<{ healthy: boolean; error?: string }> {
+    const sandboxId = this.context.sandboxHandle?.id || 'default';
+    const cached = this.healthCheckCache.get(sandboxId);
+    
+    if (cached && Date.now() - cached.timestamp < this.HEALTH_CHECK_TTL) {
+      return { healthy: cached.healthy, error: cached.error };
+    }
+
+    // Perform actual health check
+    if (!this.context.sandboxHandle) {
+      const result = { healthy: true };
+      this.healthCheckCache.set(sandboxId, { ...result, timestamp: Date.now() });
+      return result;
+    }
+
+    try {
+      const { checkSandboxHealth: checkHealth } = await import('@/lib/management/sandbox-health');
+      const result = await checkHealth(this.context.sandboxHandle);
+      const healthResult = { healthy: result.healthy, error: result.error };
+      this.healthCheckCache.set(sandboxId, { ...healthResult, timestamp: Date.now() });
+      return healthResult;
+    } catch (error: any) {
+      const healthResult = { healthy: false, error: error.message };
+      this.healthCheckCache.set(sandboxId, { ...healthResult, timestamp: Date.now() });
+      return healthResult;
+    }
+  }
+
+  /**
+   * Clear health cache (e.g., after sandbox restart)
+   */
+  clearHealthCache(): void {
+    const sandboxId = this.context.sandboxHandle?.id || 'default';
+    this.healthCheckCache.delete(sandboxId);
   }
 
   updateContext(updates: Partial<ToolContext>): void {
@@ -67,29 +110,6 @@ export class ToolExecutor {
       default: 60000, // 1 minute default
     };
     return timeouts[toolName] || timeouts.default;
-  }
-
-  /**
-   * Check sandbox health before execution
-   */
-  private async checkSandboxHealth(): Promise<{ healthy: boolean; error?: string }> {
-    if (!this.context.sandboxHandle) {
-      return { healthy: true }; // No sandbox, skip health check
-    }
-
-    try {
-      const result = await this.context.sandboxHandle.executeCommand(
-        'echo health',
-        this.context.sandboxHandle.workspaceDir || '/workspace',
-        2000
-      );
-      return { healthy: result.success };
-    } catch (error: any) {
-      return { 
-        healthy: false, 
-        error: `Sandbox health check failed: ${error.message}` 
-      };
-    }
   }
 
   async execute(toolName: string, params: Record<string, any>): Promise<ToolResult> {

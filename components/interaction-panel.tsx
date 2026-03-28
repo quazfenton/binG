@@ -4,7 +4,7 @@ import React from "react";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
 
 // Tabs that need taller height when opened
-const TALL_TABS = ['images', 'extras', 'shell', 'vnc'];
+const TALL_TABS = ['images', 'extras', 'shell'];
 const DEFAULT_TAB_HEIGHT = 'min-h-[200px]';
 const TALL_TAB_HEIGHT = 'min-h-[400px]';
 const EXPAND_TRANSITION = 'transition-all duration-300 ease-out';
@@ -49,6 +49,8 @@ import Brain from "lucide-react/dist/esm/icons/brain";
 import FileText from "lucide-react/dist/esm/icons/file-text";
 import Calculator from "lucide-react/dist/esm/icons/calculator";
 import Globe from "lucide-react/dist/esm/icons/globe";
+import Upload from "lucide-react/dist/esm/icons/upload";
+import FolderSync from "lucide-react/dist/esm/icons/folder-sync";
 import Palette from "lucide-react/dist/esm/icons/palette";
 import Music from "lucide-react/dist/esm/icons/music";
 import Zap from "lucide-react/dist/esm/icons/zap";
@@ -128,6 +130,8 @@ import UrlUtilitiesPlugin from "./plugins/url-utilities-plugin";
 import WikiKnowledgeBasePlugin from "./plugins/wiki-knowledge-base-plugin";
 import ImageGenerationTab from "./image-generation-tab";
 import SquareSplitHorizontal from "lucide-react/dist/esm/icons/square-split-horizontal";
+import Bell from "lucide-react/dist/esm/icons/bell";
+import { ImportDialog } from "./file-import/import-dialog";
 
 // Pop-out plugin windows for Plugins tab
 const popOutPlugins: Plugin[] = [
@@ -297,10 +301,12 @@ interface InteractionPanelProps {
   onSubmit: (content: string) => void;
   onNewChat: () => void;
   isProcessing: boolean;
+  allowInputWhileProcessing?: boolean; // Allow typing even when processing
   toggleAccessibility: () => void;
   toggleHistory: () => void;
   toggleCodePreview: () => void;
   onStopGeneration?: () => void;
+  onClearPendingInput?: () => void; // Callback to clear any pending queued input
   onRetry?: () => void;
   currentProvider?: string;
   currentModel?: string;
@@ -374,10 +380,12 @@ export default function InteractionPanel({
   onSubmit,
   onNewChat,
   isProcessing,
+  allowInputWhileProcessing = false,
   toggleAccessibility,
   toggleHistory,
   toggleCodePreview,
   onStopGeneration,
+  onClearPendingInput,
   onRetry: _onRetry,
   currentProvider = "openrouter",
   currentModel = "nvidia/nemotron-3-nano-30b-a3b:free",
@@ -415,6 +423,13 @@ export default function InteractionPanel({
   const [isMinimized, setIsMinimized] = useState(false);
   const [isExpanded, setIsExpanded] = useState(false);
 
+  // First-visit notification for workspace panel
+  const [showWorkspaceNotification, setShowWorkspaceNotification] = useState(() => {
+    if (typeof window === "undefined") return false;
+    const hasSeenNotification = localStorage.getItem("bing_workspace_panel_notification");
+    return !hasSeenNotification;
+  });
+
   // Refs for touch event handlers (needed for proper cleanup)
   const touchMoveHandler = useRef<((e: TouchEvent) => void) | null>(null);
   const touchEndHandler = useRef<(() => void) | null>(null);
@@ -427,6 +442,15 @@ export default function InteractionPanel({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const prevPanelHeightRef = useRef<number | null>(null);
 
+  // Import dialog state
+  const [isImportDialogOpen, setIsImportDialogOpen] = useState(false);
+
+  // Queue for input while processing
+  const [pendingInput, setPendingInput] = useState<string | null>(null);
+
+  // Compute whether input should be disabled
+  const isInputDisabled = isProcessing && !allowInputWhileProcessing;
+
   // Memoize select value to prevent infinite loop
   const selectValue = useMemo(() => {
     if (availableProviders.length === 0) return "";
@@ -436,6 +460,25 @@ export default function InteractionPanel({
       .flatMap((p: any) => p.models.map((m: string) => `${p.id}:${m}`));
     return validValues.includes(currentValue) ? currentValue : "";
   }, [currentProvider, currentModel, availableProviders]);
+
+  // Effect to restore pending input when processing completes
+  // Don't auto-submit - user may have clicked Stop, so restore as draft for user to decide
+  useEffect(() => {
+    if (!isProcessing && pendingInput) {
+      // Restore pending input to the input field instead of auto-submitting
+      // This allows users to review/edit before manually sending after a Stop
+      if (!input.trim()) {
+        setInput(pendingInput);
+      }
+      setPendingInput(null);
+    }
+  }, [isProcessing, pendingInput, input, setInput]);
+
+  // Expose a way to clear pending input from parent (e.g., when user manually sends)
+  const clearPendingInput = useCallback(() => {
+    setPendingInput(null);
+    onClearPendingInput?.();
+  }, [onClearPendingInput]);
 
   // Memoized handler for ProviderSelector
   const handleProviderSelect = useCallback((provider: string, model: string) => {
@@ -450,8 +493,8 @@ export default function InteractionPanel({
   }, []);
 
   const getPanelMinHeight = useCallback(() => {
-    if (typeof window === "undefined") return 240;
-    return window.innerWidth <= 768 ? 320 : 240;
+    if (typeof window === "undefined") return 80;
+    return window.innerWidth <= 768 ? 120 : 80; // Reduced from 320/240 to allow dragging down to match minimize button behavior
   }, []);
 
   const toggleMinimized = useCallback(() => {
@@ -602,6 +645,25 @@ export default function InteractionPanel({
       console.warn('Plugin tab structure validation failed');
     }
   }, []);
+
+  // Gradual fade-out workspace notification
+  const [workspaceNotifFading, setWorkspaceNotifFading] = useState(false);
+  useEffect(() => {
+    if (showWorkspaceNotification) {
+      const fadeTimer = setTimeout(() => {
+        setWorkspaceNotifFading(true);
+      }, 5000);
+      const removeTimer = setTimeout(() => {
+        setShowWorkspaceNotification(false);
+        setWorkspaceNotifFading(false);
+        localStorage.setItem("bing_workspace_panel_notification", "seen");
+      }, 9000);
+      return () => {
+        clearTimeout(fadeTimer);
+        clearTimeout(removeTimer);
+      };
+    }
+  }, [showWorkspaceNotification]);
 
   // Plugin System
   const availablePlugins: Plugin[] = [
@@ -1563,22 +1625,75 @@ export default function InteractionPanel({
             variant="ghost"
             size="sm"
             onClick={togglePanel}
-            className={`absolute top-2 left-2 w-8 h-8 p-0 z-[70] transition-all duration-300 sm:w-6 sm:h-6 ${
+            className={`absolute top-2 left-2 w-9 h-9 p-0 z-[70] transition-all duration-300 ${
               isPanelOpen
                 ? "text-yellow-400 hover:bg-yellow-500/20 hover:text-yellow-300"
                 : "text-gray-400 hover:text-white hover:bg-white/10"
             }`}
             title="Toggle experimental workspace panel"
           >
-            <SquareSplitHorizontal className="w-4 h-4 sm:w-3 sm:h-3" />
+            <SquareSplitHorizontal className="w-5 h-5" />
           </Button>
+
+          {/* First-Visit Notification for Workspace Panel */}
+          {showWorkspaceNotification && (
+            <div
+              className="absolute bottom-full mb-2 left-2 z-[71] transition-opacity duration-[3500ms] ease-out"
+              style={{
+                opacity: workspaceNotifFading ? 0 : 1,
+                animation: 'fade-in-slide-up 0.5s ease-out',
+              }}
+            >
+              <div className="relative bg-gradient-to-r from-yellow-500/30 to-amber-500/30 backdrop-blur-sm rounded-lg p-3 shadow-md shadow-yellow-500/10 border border-yellow-400/15 max-w-[280px]">
+                {/* Downward-pointing arrow toward the icon */}
+                <div
+                  className="absolute -bottom-1.5 left-3 w-3 h-3 rotate-45"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(234,179,8,0.3), rgba(245,158,11,0.3))',
+                    borderRight: '1px solid rgba(250,204,21,0.15)',
+                    borderBottom: '1px solid rgba(250,204,21,0.15)',
+                  }}
+                />
+                <div className="flex items-start gap-2">
+                  <Bell className="w-4 h-4 text-yellow-300/80 mt-0.5 flex-shrink-0" />
+                  <div className="flex-1">
+                    <p className="text-white/90 text-xs font-semibold">Workspace Panel</p>
+                    <p className="text-yellow-200/70 text-[11px] mt-0.5 leading-relaxed">
+                      Click the <SquareSplitHorizontal className="w-3 h-3 inline -mt-0.5 mx-0.5" /> icon to open the experimental workspace panel with file explorer, agent status, and more!
+                    </p>
+                  </div>
+                  <button
+                    onClick={() => {
+                      setShowWorkspaceNotification(false);
+                      setWorkspaceNotifFading(false);
+                      localStorage.setItem("bing_workspace_panel_notification", "seen");
+                    }}
+                    className="text-yellow-300/60 hover:text-white/90 transition-colors flex-shrink-0"
+                    title="Dismiss"
+                  >
+                    <X className="w-3.5 h-3.5" />
+                  </button>
+                </div>
+                {/* Progress bar showing time remaining */}
+                <div className="mt-2 h-0.5 bg-yellow-400/15 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-yellow-300/50 rounded-full"
+                    style={{
+                      animation: 'shrink-width 8s linear',
+                      width: '100%'
+                    }}
+                  />
+                </div>
+              </div>
+            </div>
+          )}
 
           {/* Minimize Button */}
           <Button
             variant="ghost"
             size="sm"
             onClick={toggleMinimized}
-            className="absolute top-1 right-8 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
+            className="absolute top-1 right-1 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
             title={isMinimized ? "Reopen panel" : "Hide panel"}
           >
             {isMinimized ? (
@@ -1588,12 +1703,12 @@ export default function InteractionPanel({
             )}
           </Button>
 
-          {/* Expand/Minimize Button - Far Top Right Corner */}
+          {/* Expand/Collapse Button - Bottom Right */}
           <Button
             variant="ghost"
             size="sm"
             onClick={() => setIsExpanded(!isExpanded)}
-            className="absolute top-1 right-1 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
+            className="absolute bottom-1 right-1 w-6 h-6 p-0 text-gray-400 hover:text-white hover:bg-white/10 z-[60]"
             title={isExpanded ? "Collapse height" : "Expand height"}
             disabled={isMinimized}
           >
@@ -1605,7 +1720,7 @@ export default function InteractionPanel({
           </Button>
 
           {/* Header - Compact layout */}
-          <div className="flex justify-between items-center mb-1 mt-3 sm:mt-5 px-1" onDoubleClick={toggleMinimized}>
+          <div className="flex justify-between items-center mb-1 mt-3 sm:mt-5 px-1 ml-10" onDoubleClick={toggleMinimized}>
             <div className="flex items-center gap-2">
               <div className="">
                 <Sparkles className="h-3 w-3 text-white" />
@@ -1704,10 +1819,6 @@ export default function InteractionPanel({
                       <Terminal className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
                       <span className="hidden sm:inline">Shell</span>
                     </TabsTrigger>
-                    <TabsTrigger value="vnc" className="text-xs sm:text-sm">
-                      <Monitor className="h-3 w-3 sm:h-4 sm:w-4 mr-1 sm:mr-2" />
-                      <span className="hidden sm:inline">Remote</span>
-                    </TabsTrigger>
                   </TabsList>
                 </div>
 
@@ -1730,6 +1841,17 @@ export default function InteractionPanel({
                   >
                     <History className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
+                  {onPollDiffsNow && (
+                    <Button
+                      variant="outline"
+                      size="sm"
+                      onClick={onPollDiffsNow}
+                      title={`Refresh file changes (${pollCount || 0} polls)`}
+                      className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
+                    >
+                      <RefreshCw className="h-3 w-3 sm:h-4 sm:w-4" />
+                    </Button>
+                  )}
                   <Button
                     variant="outline"
                     size="sm"
@@ -1756,17 +1878,6 @@ export default function InteractionPanel({
                       }`}
                     />
                   </Button>
-                  {onPollDiffsNow && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={onPollDiffsNow}
-                      title={`Refresh file changes (${pollCount || 0} polls)`}
-                      className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
-                    >
-                      <RefreshCw className="h-3 w-3 sm:h-4 sm:w-4" />
-                    </Button>
-                  )}
                 </div>
               </div>
 
@@ -1811,6 +1922,14 @@ export default function InteractionPanel({
                     e.preventDefault();
                     const trimmed = input.trim();
                     if (!trimmed) return;
+                    // If processing and queuing allowed, queue instead of submitting
+                    if (isProcessing && allowInputWhileProcessing) {
+                      setPendingInput(trimmed);
+                      setInput("");
+                      return;
+                    }
+                    // Clear any pending input before submitting new one
+                    setPendingInput(null);
                     onSubmit(trimmed);
                     setInput("");
                   }}
@@ -1829,6 +1948,12 @@ export default function InteractionPanel({
                           e.preventDefault();
                           const trimmed = input.trim();
                           if (!trimmed) return;
+                          // If processing and queuing allowed, queue instead of submitting
+                          if (isProcessing && allowInputWhileProcessing) {
+                            setPendingInput(trimmed);
+                            setInput("");
+                            return;
+                          }
                           onSubmit(trimmed);
                           setInput("");
                         }
@@ -1844,7 +1969,7 @@ export default function InteractionPanel({
                           }, 300);
                         }
                       }}
-                      disabled={isProcessing}
+                      disabled={isInputDisabled}
                     />
                     <div className="absolute right-3 top-3 flex gap-1" style={{ zIndex: 10 }}>
                       <button
@@ -1891,7 +2016,7 @@ export default function InteractionPanel({
                             {selectedFilePaths.length > 0 && (
                               <button
                                 type="button"
-                                onClick={() => virtualFilesystem.clearAttachedFiles()}
+                                onClick={() => { virtualFilesystem.clearAttachedFiles(); }}
                                 className="text-[10px] text-red-400 hover:text-red-300 transition-colors mr-2"
                               >
                                 Clear All
@@ -1899,7 +2024,7 @@ export default function InteractionPanel({
                             )}
                             <button
                               type="button"
-                              onClick={() => setShowFileSelector(false)}
+                              onClick={() => { setShowFileSelector(false); }}
                               className="text-white/50 hover:text-white/80"
                             >
                               <X className="w-4 h-4" />
@@ -1908,7 +2033,7 @@ export default function InteractionPanel({
                         </div>
 
                         {/* Quick Upload Section */}
-                        <div className="mb-3 pb-3 border-b border-white/10">
+                        <div className="mb-3 pb-3 border-b border-white/10 space-y-2">
                           <button
                             type="button"
                             className="w-full px-3 py-2 bg-blue-600/20 hover:bg-blue-600/30 border border-blue-400/30 rounded text-xs text-blue-300 flex items-center justify-center gap-2 transition-colors"
@@ -1916,6 +2041,14 @@ export default function InteractionPanel({
                           >
                             <Plus className="w-3 h-3" />
                             Upload from Computer
+                          </button>
+                          <button
+                            type="button"
+                            className="w-full px-3 py-2 bg-purple-600/20 hover:bg-purple-600/30 border border-purple-400/30 rounded text-xs text-purple-300 flex items-center justify-center gap-2 transition-colors"
+                            onClick={() => setIsImportDialogOpen(true)}
+                          >
+                            <Upload className="w-3 h-3" />
+                            Import Files/Folders
                           </button>
                         </div>
 
@@ -2208,21 +2341,20 @@ export default function InteractionPanel({
                   </CardContent>
                 </Card>
               </TabsContent>
-
-              {/* VNC/Remote Tab Content - Taller height for remote desktop */}
-              <TabsContent
-                value="vnc"
-                className={`m-0 flex-1 min-h-0 flex flex-col overflow-hidden ${activeTab === 'vnc' ? TALL_TAB_HEIGHT : DEFAULT_TAB_HEIGHT} ${EXPAND_TRANSITION}`}
-              >
-                <Card className="bg-black/40 border-white/10 flex-1 min-h-0">
-                  <CardContent className="pt-0 h-full flex flex-col min-h-0 overflow-hidden">
-                    <VNCConnectionTab />
-                  </CardContent>
-                </Card>
-              </TabsContent>
             </Tabs>
           )}
         </div>
+
+        {/* Import Files Dialog */}
+        <ImportDialog
+          open={isImportDialogOpen}
+          onOpenChange={setIsImportDialogOpen}
+          sessionId={filesystemScopePath?.split('/').pop()}
+          scopePath={filesystemScopePath}
+          onImportComplete={(result) => {
+            console.log('Import completed:', result);
+          }}
+        />
       </div>
     </>
   );
