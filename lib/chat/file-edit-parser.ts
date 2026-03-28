@@ -708,6 +708,11 @@ export function sanitizeFileEditTags(content: string): string {
     sanitized = sanitized.replace(/<\/tool_call>/gi, '');
   }
 
+  // Remove leaked project/artifact XML tags and continuation markers
+  sanitized = sanitized.replace(/<\/?project\b[^>]*>/gi, '');
+  sanitized = sanitized.replace(/<\/?artifact\b[^>]*>/gi, '');
+  sanitized = sanitized.replace(/\[CONTINUE_REQUESTED\]/gi, '');
+
   // Clean up leftover <<< and >>> markers
   sanitized = sanitized.replace(/^\s*<<<\s*$/gm, '');
   sanitized = sanitized.replace(/^\s*>>>\s*$/gm, '');

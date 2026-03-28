@@ -173,7 +173,7 @@ function DiffHunk({ hunk, showLineNumbers = true, language }: { hunk: DiffSectio
             {section.type === 'context' && ' '}
           </span>
           <span className="flex-1 min-w-0">
-            {language && section.type !== 'remove' ? (
+            {language ? (
               <SyntaxHighlighter
                 language={language}
                 style={oneDark}
@@ -567,10 +567,28 @@ export function EnhancedDiffViewer({
           </div>
         ) : (
           /* Show full content when not in diff format */
-          <div className="p-4 font-mono text-sm">
-            <pre className="whitespace-pre-wrap break-all text-gray-300">
-              {serverContent.slice(0, maxLines * 100)}
-            </pre>
+          <div className="p-4 text-sm">
+            {detectedLanguage ? (
+              <SyntaxHighlighter
+                language={detectedLanguage}
+                style={oneDark}
+                customStyle={{
+                  background: 'transparent',
+                  padding: '0',
+                  margin: '0',
+                  fontSize: '0.875rem',
+                }}
+                showLineNumbers={true}
+                wrapLines={true}
+                wrapLongLines={true}
+              >
+                {serverContent.slice(0, maxLines * 100)}
+              </SyntaxHighlighter>
+            ) : (
+              <pre className="whitespace-pre-wrap break-all text-gray-300 font-mono">
+                {serverContent.slice(0, maxLines * 100)}
+              </pre>
+            )}
             {serverContent.length > maxLines * 100 && (
               <div className="text-xs text-gray-500 text-center py-2">
                 ... {serverContent.length - maxLines * 100} more characters

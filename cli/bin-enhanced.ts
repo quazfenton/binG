@@ -94,6 +94,7 @@ function loadAuth(): any {
 /**
  * Save authentication tokens
  */
+// @ts-ignore - Reserved for future use
 function saveAuth(auth: any): void {
   fs.writeFileSync(AUTH_FILE, JSON.stringify(auth, null, 2));
   fs.chmodSync(AUTH_FILE, 0o600); // Secure file permissions
@@ -321,6 +322,7 @@ ${COLORS.primary('Tips:')}
  * WebSocket Terminal
  */
 async function websocketTerminal(sandboxId: string): Promise<void> {
+  // @ts-ignore - Config loaded for future use
   const config = loadConfig();
   const auth = loadAuth();
   

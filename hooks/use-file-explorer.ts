@@ -77,9 +77,10 @@ export function useFileExplorer() {
     try {
       // First, check if the path is an existing file via the read endpoint
       // (returns 404 for non-existent files)
-      const readResponse = await fetch(`/api/filesystem/read?path=${encodeURIComponent(path)}`, {
-        method: 'GET',
+      const readResponse = await fetch('/api/filesystem/read', {
+        method: 'POST',
         headers: buildApiHeaders(),
+        body: JSON.stringify({ path }),
       });
 
       if (readResponse.ok) {

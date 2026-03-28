@@ -1542,6 +1542,11 @@ function sanitizeAssistantDisplayContent(content: string): string {
     next = next.replace(/<\/tool_call>/gi, '');
   }
 
+  // Pattern 5.6: Remove leaked project/artifact XML tags and continuation markers
+  next = next.replace(/<\/?project\b[^>]*>/gi, '');
+  next = next.replace(/<\/?artifact\b[^>]*>/gi, '');
+  next = next.replace(/\[CONTINUE_REQUESTED\]/gi, '');
+
   // Pattern 6: Clean up leftover <<< and >>> markers that weren't properly paired
   next = next.replace(/^\s*<<<\s*$/gm, '');
   next = next.replace(/^\s*>>>\s*$/gm, '');
