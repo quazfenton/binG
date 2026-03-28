@@ -1641,7 +1641,7 @@ export default function InteractionPanel({
               className="absolute bottom-full mb-2 left-2 z-[71] transition-opacity duration-[3500ms] ease-out"
               style={{
                 opacity: workspaceNotifFading ? 0 : 1,
-                animation: 'fadeInSlideUp 0.5s ease-out',
+                animation: 'fade-in-slide-up 0.5s ease-out',
               }}
             >
               <div className="relative bg-gradient-to-r from-yellow-500/30 to-amber-500/30 backdrop-blur-sm rounded-lg p-3 shadow-md shadow-yellow-500/10 border border-yellow-400/15 max-w-[280px]">
@@ -1679,7 +1679,7 @@ export default function InteractionPanel({
                   <div
                     className="h-full bg-yellow-300/50 rounded-full"
                     style={{
-                      animation: 'shrinkWidth 8s linear',
+                      animation: 'shrink-width 8s linear',
                       width: '100%'
                     }}
                   />

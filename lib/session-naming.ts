@@ -59,14 +59,7 @@ async function initializeSessionNaming(): Promise<void> {
     let nodes: any[] = [];
     
     while (attempts < 3) {
-      const response = await fetch('/api/filesystem/list', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          path: 'project/sessions',
-          recursive: false,
-        }),
-      });
+      const response = await fetch(`/api/filesystem/list?path=${encodeURIComponent('project/sessions')}`);
 
       if (response.ok) {
         const payload = await response.json().catch(() => null);
@@ -210,14 +203,7 @@ async function getNextStockName(): Promise<string> {
  */
 async function checkNameExistsInFilesystem(name: string): Promise<boolean> {
   try {
-    const response = await fetch('/api/filesystem/list', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        path: `project/sessions/${name}`,
-        recursive: false,
-      }),
-    });
+    const response = await fetch(`/api/filesystem/list?path=${encodeURIComponent(`project/sessions/${name}`)}`);
 
     if (response.ok) {
       const payload = await response.json().catch(() => null);
@@ -364,14 +350,7 @@ export async function sessionNameExists(name: string): Promise<boolean> {
   
   // Level 3: Query filesystem (expensive, but cached for 5 seconds)
   try {
-    const response = await fetch('/api/filesystem/list', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        path: `project/sessions/${name}`,
-        recursive: false,
-      }),
-    });
+    const response = await fetch(`/api/filesystem/list?path=${encodeURIComponent(`project/sessions/${name}`)}`);
 
     if (response.ok) {
       const payload = await response.json().catch(() => null);

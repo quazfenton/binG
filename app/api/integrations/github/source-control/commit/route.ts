@@ -82,13 +82,13 @@ export async function POST(request: NextRequest) {
         if (change.status === 'deleted') {
           return { path: change.path, sha: null, status: 'deleted' };
         }
-        
-        // Validate content exists for non-deleted files
-        if (!change.content && change.status !== 'deleted') {
+
+        // Skip files without content
+        if (!change.content) {
           console.warn(`[GitHub Commit] File ${change.path} has no content, skipping`);
-          return { path: change.path, sha: null, status: change.status };
+          return null;
         }
-        
+
         const blobResponse = await githubApi<any>(
           `/repos/${targetOwner}/${targetRepo}/git/blobs`,
           token,
@@ -104,9 +104,24 @@ export async function POST(request: NextRequest) {
       })
     );
 
+    // Filter out skipped entries (files without content)
+    const validBlobs = blobs.filter((blob): blob is NonNullable<typeof blob> => blob !== null);
+
+    // Validate all blobs have SHA before creating tree
+    const missingShaBlobs = validBlobs.filter(blob => blob.status !== 'deleted' && !blob.sha);
+    if (missingShaBlobs.length > 0) {
+      return NextResponse.json(
+        { 
+          error: 'Invalid file data',
+          details: `Missing file content for: ${missingShaBlobs.map(b => b.path).join(', ')}`
+        }, 
+        { status: 400 }
+      );
+    }
+
     // Create new tree with proper handling for deleted files
     // GitHub API supports file deletion by including tree entries with sha: null
-    const tree = blobs.flatMap((blob: any) => {
+    const tree = validBlobs.flatMap((blob: any) => {
       if (blob.status === 'deleted') {
         // Deleted files: include with sha: null to remove from repo
         return [{
@@ -117,9 +132,6 @@ export async function POST(request: NextRequest) {
         }];
       }
       // Modified/added files: include with actual sha
-      if (!blob.sha) {
-        throw new Error(`Missing blob SHA for ${blob.path}`);
-      }
       return [{
         path: blob.path,
         mode: '100644',
