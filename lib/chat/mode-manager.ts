@@ -239,11 +239,24 @@ export class ModeManager {
 
     // <file_edit> tags (both compact and multi-line)
     for (const edit of extractFileEdits(content)) {
-      addDiff(
-        edit.path,
-        edit.content,
-        isFullFileContent(edit.content) ? 'create' : 'modify',
-      )
+      // Handle explicit action types from bash commands
+      if (edit.action === 'delete') {
+        addDiff(edit.path, '', 'delete');
+      } else if (edit.action === 'patch') {
+        // For patches, create a diff-like format
+        const patchDiff = `--- a/${edit.path}\n+++ b/${edit.path}\n@@ -1 +1 @@\n-${edit.flags ? `s/${edit.content.split('/')[1]}/${edit.content.split('/')[2]}/` : edit.content}`;
+        addDiff(edit.path, patchDiff, 'modify');
+      } else if (edit.action === 'mkdir') {
+        // Skip mkdir - it's a directory operation, not a file diff
+        continue;
+      } else {
+        // Default: treat as write/modify
+        addDiff(
+          edit.path,
+          edit.content,
+          isFullFileContent(edit.content) ? 'create' : 'modify',
+        );
+      }
     }
 
     // Fenced diff blocks

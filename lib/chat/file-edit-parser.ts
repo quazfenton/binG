@@ -25,6 +25,10 @@
  */
 
 export { isFullFileContent } from './file-diff-utils';
+export { stripHeredocBodies } from './bash-file-commands';
+
+// Import for local use
+import { stripHeredocBodies as maskHeredocs } from './bash-file-commands';
 
 /**
  * Bash heredoc file edit extraction (inline to avoid module init issues)
@@ -96,11 +100,14 @@ function extractMkdirEdits(content: string): BashDirectoryEdit[] {
     return edits;
   }
 
+  // SECURITY: Strip heredoc bodies to avoid false positives from commands inside heredocs
+  const masked = maskHeredocs(content);
+
   // Match: mkdir [-p] path
   const regex = /mkdir\s+(-p\s+)?([^\s&|;<>]+)/gi;
   let match: RegExpExecArray | null;
 
-  while ((match = regex.exec(content)) !== null) {
+  while ((match = regex.exec(masked)) !== null) {
     try {
       const path = match[2]?.trim();
 
@@ -128,11 +135,14 @@ function extractRmEdits(content: string): BashDeleteEdit[] {
     return edits;
   }
 
+  // SECURITY: Strip heredoc bodies to avoid false positives from commands inside heredocs
+  const masked = maskHeredocs(content);
+
   // Match: rm [-rf] path
   const regex = /rm\s+(-[rf]+\s+)?([^\s&|;<>]+)/gi;
   let match: RegExpExecArray | null;
 
-  while ((match = regex.exec(content)) !== null) {
+  while ((match = regex.exec(masked)) !== null) {
     try {
       const path = match[2]?.trim();
 
@@ -160,11 +170,14 @@ function extractSedEdits(content: string): BashPatchEdit[] {
     return edits;
   }
 
+  // SECURITY: Strip heredoc bodies to avoid false positives from commands inside heredocs
+  const masked = maskHeredocs(content);
+
   // Match: sed -i 's/pattern/replacement/' path
   const regex = /sed\s+-i\s+['"]s\/([^\/]+)\/([^\/]*)\/['"]\s+([^\s&|;<>]+)/gi;
   let match: RegExpExecArray | null;
 
-  while ((match = regex.exec(content)) !== null) {
+  while ((match = regex.exec(masked)) !== null) {
     try {
       const pattern = match[1] ?? '';
       const replacement = match[2] ?? '';
@@ -200,6 +213,8 @@ function extractBashFileEdits(content: string): {
 export interface FileEdit {
   path: string;
   content: string;
+  action?: 'write' | 'delete' | 'patch' | 'mkdir'; // Optional action type for bash commands
+  flags?: string; // For sed patches with flags (g, i, m)
 }
 
 export interface DiffEdit {
@@ -576,25 +591,44 @@ export function extractFileEdits(content: string): FileEdit[] {
   // NEW: Try bash heredoc syntax first (preferred, more natural for LLMs)
   // Now handles writes, mkdir, deletes, and patches
   const bashEdits = extractBashFileEdits(content);
-  
-  // Process writes
+
+  // Process writes (default action is 'write')
   for (const write of bashEdits.writes) {
-    allEdits.push({ path: write.path, content: write.content });
+    allEdits.push({ 
+      path: write.path, 
+      content: write.content,
+      action: 'write',
+    });
   }
-  
-  // Process deletes (empty content signals deletion)
+
+  // Process deletes with explicit action
   for (const del of bashEdits.deletes) {
-    allEdits.push({ path: del.path, content: '' });
+    allEdits.push({ 
+      path: del.path, 
+      content: '',
+      action: 'delete',
+    });
   }
-  
-  // Process patches (convert sed pattern/replacement to diff-like content)
+
+  // Process patches with explicit action and flags
   for (const patch of bashEdits.patches) {
-    const patchContent = `s/${patch.pattern}/${patch.replacement}/`;
-    allEdits.push({ path: patch.path, content: patchContent });
+    const flags = patch.flags || '';
+    allEdits.push({ 
+      path: patch.path, 
+      content: `s/${patch.pattern}/${patch.replacement}/${flags}`,
+      action: 'patch',
+      flags,
+    });
   }
-  
-  // Note: directories (mkdir) are not converted to FileEdit since they represent
-  // directory creation, not file content. They could be handled separately if needed.
+
+  // Process directories (mkdir) with explicit action
+  for (const dir of bashEdits.directories) {
+    allEdits.push({
+      path: dir.path,
+      content: '',
+      action: 'mkdir',
+    });
+  }
 
   // Existing parsers (keep for backward compatibility)
   if (content.includes('<file_edit')) {

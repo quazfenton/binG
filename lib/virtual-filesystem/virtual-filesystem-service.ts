@@ -948,7 +948,7 @@ class GitBackedVFSProxy {
     filePath: string,
     content: string,
     language?: string,
-    options?: { failIfExists?: boolean }
+    options?: { failIfExists?: boolean; append?: boolean }
   ): Promise<VirtualFile> {
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
     return gitVFS.writeFile(ownerId, filePath, content, language, options);

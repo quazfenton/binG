@@ -323,6 +323,8 @@ export function compileBashToDAG(command: string, agentId: string = 'default'): 
 
 /**
  * Optimize DAG by merging consecutive bash nodes
+ * 
+ * FIX: Creates new unique IDs and filters internal dependencies to avoid self-references
  */
 export function mergeConsecutiveNodes(dag: DAG): DAG {
   if (dag.nodes.length <= 1) {
@@ -331,63 +333,39 @@ export function mergeConsecutiveNodes(dag: DAG): DAG {
 
   const mergedNodes: DAGNode[] = [];
   let currentGroup: DAGNode[] = [];
+  // Track mapping from old node IDs to new merged node IDs for downstream reference updates
+  const idMapping = new Map<string, string>();
 
-  for (const node of dag.nodes) {
-    if (node.type === 'bash' && 
-        currentGroup.length > 0 && 
-        currentGroup[currentGroup.length - 1].type === 'bash') {
-      // Group consecutive bash nodes
-      currentGroup.push(node);
-    } else {
-      // Flush current group
-      if (currentGroup.length > 0) {
-        if (currentGroup.length === 1) {
-          mergedNodes.push(currentGroup[0]);
-        } else {
-          // Merge into single node
-          const mergedCommand = currentGroup.map(n => n.command).join(' | ');
-          const allDeps = new Set<string>();
-          for (const n of currentGroup) {
-            if (n.dependsOn) {
-              for (const dep of n.dependsOn) {
-                allDeps.add(dep);
-              }
-            }
-          }
-          const mergedNode = createDAGNode(
-            currentGroup[0].id,
-            'bash',
-            mergedCommand,
-            Array.from(allDeps)
-          );
-          mergedNode.outputs = currentGroup[currentGroup.length - 1].outputs;
-          mergedNode.metadata = {
-            ...currentGroup[0].metadata,
-            mergedFrom: currentGroup.map(n => n.id),
-          };
-          mergedNodes.push(mergedNode);
-        }
-      }
-      currentGroup = [node];
-    }
-  }
-
-  // Flush last group
-  if (currentGroup.length > 0) {
+  const flushGroup = () => {
+    if (currentGroup.length === 0) return;
+    
     if (currentGroup.length === 1) {
-      mergedNodes.push(currentGroup[0]);
+      // No merging needed
+      const node = currentGroup[0];
+      idMapping.set(node.id, node.id);
+      mergedNodes.push(node);
     } else {
+      // Merge into single node with NEW unique ID
       const mergedCommand = currentGroup.map(n => n.command).join(' | ');
+      const mergedNodeId = `merged-${currentGroup[0].id}`;
+      
+      // Build dependency set, filtering out internal dependencies
       const allDeps = new Set<string>();
+      const internalIds = new Set(currentGroup.map(n => n.id));
+      
       for (const n of currentGroup) {
         if (n.dependsOn) {
           for (const dep of n.dependsOn) {
-            allDeps.add(dep);
+            // Only add external dependencies (not from nodes being merged)
+            if (!internalIds.has(dep)) {
+              allDeps.add(dep);
+            }
           }
         }
       }
+      
       const mergedNode = createDAGNode(
-        currentGroup[0].id,
+        mergedNodeId,
         'bash',
         mergedCommand,
         Array.from(allDeps)
@@ -397,18 +375,62 @@ export function mergeConsecutiveNodes(dag: DAG): DAG {
         ...currentGroup[0].metadata,
         mergedFrom: currentGroup.map(n => n.id),
       };
+      
+      // Map all old IDs to new merged ID
+      for (const n of currentGroup) {
+        idMapping.set(n.id, mergedNodeId);
+      }
+      
       mergedNodes.push(mergedNode);
+    }
+    currentGroup = [];
+  };
+
+  for (const node of dag.nodes) {
+    if (node.type === 'bash' &&
+        currentGroup.length > 0 &&
+        currentGroup[currentGroup.length - 1].type === 'bash') {
+      // Group consecutive bash nodes
+      currentGroup.push(node);
+    } else {
+      // Flush current group before processing non-bash node
+      flushGroup();
+      currentGroup = [node];
     }
   }
 
+  // Flush last group
+  flushGroup();
+
+  // Update downstream nodes to reference new merged node IDs
+  const updatedNodes = mergedNodes.map(node => {
+    if (!node.dependsOn || node.dependsOn.length === 0) {
+      return node;
+    }
+    
+    // Update dependsOn array with mapped IDs
+    const updatedDeps = node.dependsOn.map(depId => idMapping.get(depId) || depId);
+    
+    // Only create new object if dependencies changed
+    if (updatedDeps.every((dep, i) => dep === node.dependsOn[i])) {
+      return node;
+    }
+    
+    return {
+      ...node,
+      dependsOn: updatedDeps,
+    };
+  });
+
   logger.debug('DAG optimized - merged nodes', {
     before: dag.nodes.length,
-    after: mergedNodes.length,
+    after: updatedNodes.length,
+    mergedGroups: mergedNodes.filter(n => n.metadata?.mergedFrom).length,
   });
 
   return {
     ...dag,
-    nodes: mergedNodes,
+    nodes: updatedNodes,
     metadata: {
       ...dag.metadata,
       optimized: true,

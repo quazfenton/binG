@@ -42,6 +42,11 @@ export interface DAGConfig {
   userId?: string
   conversationId?: string
   maxConcurrency?: number
+  /**
+   * Time budget for DAG execution in milliseconds.
+   * Default: 60 seconds (increased from 10s to handle complex refinements)
+   * Each LLM task can take 7-18 seconds, so 60s allows for ~3-8 tasks to complete
+   */
   timeBudgetMs?: number
   /** Callback for emitting SSE events during refinement */
   emit?: (event: string, data: unknown) => void
@@ -84,7 +89,7 @@ export class DAGExecutor {
   constructor(config: DAGConfig) {
     this.tasks = new Map()
     this.startTime = Date.now()
-    this.timeBudgetMs = config.timeBudgetMs ?? 10_000
+    this.timeBudgetMs = config.timeBudgetMs ?? 60_000 // Increased from 10s to 60s for complex refinements
     this.maxConcurrency = config.maxConcurrency ?? 3
     this.abortController = new AbortController()
     this.config = config

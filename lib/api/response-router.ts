@@ -2100,7 +2100,7 @@ export class ResponseRouter {
 
           filesystemEdits = await applyFilesystemEditsFromResponse({
             ownerId: ownerIdForEdits.toString(),
-            conversationId: conversationIdForEdits,
+            conversationId: `${ownerIdForEdits}:${conversationIdForEdits}`,
             requestId: `refinement-${Date.now()}`,
             scopePath: `project/sessions/${conversationIdForEdits}`,
             lastUserMessage: '',

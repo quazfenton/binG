@@ -268,12 +268,18 @@ export class OPFSAdapter {
    * Uses reference counting - only truly disables when all components have called disable()
    */
   async disable(): Promise<void> {
-    // Guard against negative reference count - allow graceful handling in React strict mode
+    // Guard against negative reference count and disable during pending enable
     if (this.enableCount <= 0) {
-      // Don't warn in production or if already disabled - this is expected in React strict mode
       if (this.enabled) {
         console.log('[OPFS] disable() called with non-positive ref count while still enabled, ignoring');
       }
+      return;
+    }
+
+    // If enable() is still in progress, decrement but don't disable yet
+    if (this.pendingEnableResolve) {
+      this.enableCount--;
+      console.log('[OPFS] disable() called during pending enable, decrementing ref count to:', this.enableCount);
       return;
     }
     

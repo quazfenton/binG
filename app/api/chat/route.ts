@@ -13,7 +13,7 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-s
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
-import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil } from '@/lib/virtual-filesystem/scope-utils';
+import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath } from '@/lib/virtual-filesystem/scope-utils';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import type { LLMMessage } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
@@ -392,7 +392,7 @@ export async function POST(request: NextRequest) {
       ),
       // Build workspace session context (only if filesystem edits are enabled)
       enableFilesystemEdits
-        ? buildWorkspaceSessionContext(filesystemOwnerId, requestedScopePath, {
+        ? buildWorkspaceSessionContext(filesystemOwnerId, sanitizeScopePath(requestedScopePath), {
             useContextPack: shouldUseContextPackFinal,
             maxTokens: body.maxTokens,
           })

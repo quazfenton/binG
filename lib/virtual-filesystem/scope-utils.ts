@@ -92,5 +92,46 @@ export function resolveScopedPath(requestedPath: string, scopePath?: string): st
 export function extractSessionIdFromPath(scopePath?: string): string | null {
   const normalizedPath = normalizeScopePath(scopePath);
   const match = normalizedPath.match(/^project\/sessions\/([^/]+)/i);
-  return match?.[1] || null;
+  if (!match) return null;
+
+  const sessionIdSegment = match[1];
+
+  // CRITICAL FIX: Handle composite ownerId:sessionId format
+  // If the segment contains a colon (e.g., "anon:1774698249190_p37DQ6WwX:005-1"),
+  // extract only the actual session ID part after the last colon
+  if (sessionIdSegment.includes(':')) {
+    const parts = sessionIdSegment.split(':');
+    return parts[parts.length - 1]; // Return the last part (actual session ID)
+  }
+
+  return sessionIdSegment;
+}
+
+/**
+ * Sanitize scope path to remove any ownerId prefix from composite IDs
+ * 
+ * Converts: project/sessions/anon:1774698249190_p37DQ6WwX:005-1
+ * To:       project/sessions/005-1
+ * 
+ * This prevents composite IDs from leaking into file paths during LLM refinement
+ */
+export function sanitizeScopePath(scopePath?: string): string {
+  if (!scopePath) return 'project';
+  
+  const normalizedPath = normalizeScopePath(scopePath);
+  const match = normalizedPath.match(/^project\/sessions\/([^/]+)(\/.*)?$/i);
+  
+  if (!match) return normalizedPath;
+  
+  const sessionIdSegment = match[1];
+  const remainingPath = match[2] || '';
+  
+  // If segment contains composite ID (ownerId:sessionId), extract only sessionId
+  if (sessionIdSegment.includes(':')) {
+    const parts = sessionIdSegment.split(':');
+    const actualSessionId = parts[parts.length - 1];
+    return `project/sessions/${actualSessionId}${remainingPath}`;
+  }
+  
+  return normalizedPath;
 }

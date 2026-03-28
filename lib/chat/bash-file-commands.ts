@@ -131,25 +131,25 @@ export function extractCatHeredocEdits(content: string): BashFileEdit[] {
 /**
  * Strip heredoc bodies from content to prevent false positives
  * in secondary scanners (mkdir, rm, sed).
- * 
+ *
  * Handles:
  * - <<'DELIM' ... DELIM (quoted - no variable expansion)
  * - <<DELIM ... DELIM (unquoted)
  * - <<-DELIM ... DELIM (indented)
  */
-function stripHeredocBodies(content: string): string {
+export function stripHeredocBodies(content: string): string {
   let result = content;
-  
+
   // Match heredocs: <<['"]?DELIM['"]? ... DELIM
   // Handles: <<'EOF', <<EOF, <<-'EOF', <<-EOF
   const heredocRegex = /<<-?['"]?(\w+)['"]?([\s\S]*?)\n?\1(?:\s|$)/gi;
-  
+
   result = result.replace(heredocRegex, (match, delimiter, body) => {
     // Replace heredoc body with placeholder to preserve line structure
     const placeholder = `[HEREDOC:${delimiter}:${body.split('\n').length} lines]`;
     return match.replace(body, placeholder);
   });
-  
+
   return result;
 }
 
@@ -352,7 +352,7 @@ export function toStandardFileEdits(bashEdits: {
     edits.push({
       path: dir.path,
       content: '',
-      action: 'write', // mkdir creates the directory
+      action: 'mkdir',
     });
   }
 
@@ -365,12 +365,14 @@ export function toStandardFileEdits(bashEdits: {
     });
   }
 
-  // Convert patches (sed commands)
+  // Convert patches (sed commands) - preserve flags
   for (const patch of bashEdits.patches) {
+    const flags = patch.flags || '';
     edits.push({
       path: patch.path,
-      content: `s/${patch.pattern}/${patch.replacement}/`,
+      content: `s/${patch.pattern}/${patch.replacement}/${flags}`,
       action: 'patch',
+      flags, // Preserve flags for downstream consumers
     });
   }
 
