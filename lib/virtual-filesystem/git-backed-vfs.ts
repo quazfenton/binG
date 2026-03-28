@@ -90,8 +90,51 @@ export class GitBackedVFS {
     logger.debug(`[GitVFS] Buffered change: ${event.type} ${event.path} v${event.version}`);
   }
 
+  // Batch mode: temporarily disable auto-commit for bulk operations
+  private batchModeEnabled = false;
+  private batchModeOwnerId: string | null = null;
+  private originalAutoCommit: boolean = true; // Store original state for restore
+
+  /**
+   * Enable batch mode - disables auto-commit until flushBatch is called
+   * Use this for bulk operations like refinement file writes
+   */
+  enableBatchMode(ownerId: string): void {
+    // Store original state to restore after flush
+    this.originalAutoCommit = this.options.autoCommit;
+    this.batchModeEnabled = true;
+    this.batchModeOwnerId = ownerId;
+    this.options.autoCommit = false;
+  }
+
+  /**
+   * Flush batch mode - commit all pending changes and re-enable auto-commit
+   */
+  async flushBatch(): Promise<CommitResult> {
+    if (!this.batchModeEnabled || !this.batchModeOwnerId) {
+      return { success: true, committedFiles: 0 };
+    }
+    
+    const result = await this.commitChanges(this.batchModeOwnerId, 'Batch write (refinement)');
+    
+    // Restore original auto-commit state (not just force to true)
+    this.options.autoCommit = this.originalAutoCommit;
+    this.batchModeEnabled = false;
+    this.batchModeOwnerId = null;
+    
+    return result;
+  }
+
+  /**
+   * Check if batch mode is active
+   */
+  isBatchMode(): boolean {
+    return this.batchModeEnabled;
+  }
+
   /**
    * Write file with automatic git commit
+   * In batch mode, only tracks changes without committing
    */
   async writeFile(
     ownerId: string,
@@ -121,8 +164,9 @@ export class GitBackedVFS {
       newContent: content,
     });
 
-    // Auto-commit if enabled
-    if (this.options.autoCommit) {
+    // Auto-commit if enabled AND NOT in batch mode
+    // FIX: In batch mode, skip individual commits - will commit all at once via flushBatch()
+    if (this.options.autoCommit && !this.batchModeEnabled) {
       await this.commitChanges(ownerId, `Write ${filePath}`);
     }
 
@@ -131,6 +175,7 @@ export class GitBackedVFS {
 
   /**
    * Delete file with automatic git commit
+   * In batch mode, only tracks changes without committing
    */
   async deleteFile(ownerId: string, filePath: string): Promise<void> {
     // Get content before deletion for rollback
@@ -153,8 +198,8 @@ export class GitBackedVFS {
       originalContent: previousContent,
     });
 
-    // Auto-commit if enabled
-    if (this.options.autoCommit) {
+    // Auto-commit if enabled AND NOT in batch mode
+    if (this.options.autoCommit && !this.batchModeEnabled) {
       await this.commitChanges(ownerId, `Delete ${filePath}`);
     }
   }
@@ -245,15 +290,18 @@ export class GitBackedVFS {
         integration: 'vfs-auto-commit',
       });
 
-      // Clear buffers after successful commit
-      this.changeBuffer = [];
-      if (transactionId) {
-        this.transactionLog.delete(transactionId);
+      // FIX: Only clear buffers on SUCCESS to prevent data loss on commit failure
+      if (result.success) {
+        this.changeBuffer = [];
+        if (transactionId) {
+          this.transactionLog.delete(transactionId);
+        } else {
+          this.transactionLog.delete(ownerId);
+        }
+        logger.info(`[GitVFS] Committed ${result.committedFiles} files: ${message}`);
       } else {
-        this.transactionLog.delete(ownerId);
+        logger.warn(`[GitVFS] Commit failed, preserving pending changes: ${result.error}`);
       }
-
-      logger.info(`[GitVFS] Committed ${result.committedFiles} files: ${message}`);
 
       return result;
     } catch (error: any) {
@@ -515,22 +563,39 @@ export function createGitBackedVFS(
   return new GitBackedVFS(vfs, options);
 }
 
-// Singleton instances per owner
+// Singleton instances per owner+session composite key
+// Key format: ownerId:sessionId for proper commit tracking
 const gitVFSInstances = new Map<string, GitBackedVFS>();
 
 /**
  * Get or create Git-backed VFS for owner
+ * 
+ * CRITICAL FIX: Now properly handles composite ownerId:sessionId format.
+ * The sessionId passed to GitVFS must include the full composite format
+ * so that ShadowCommit queries work correctly (rollback uses scopedSessionId).
+ * 
+ * @param ownerId - The owner ID (e.g., "1" for authenticated, "anon:timestamp_random" for anonymous)
+ * @param vfs - The VFS service instance (should be the singleton)
+ * @param options - Optional configuration, including optional sessionId for composite format
  */
 export function getGitBackedVFSForOwner(
   ownerId: string,
   vfs: VirtualFilesystemService,
   options?: GitVFSOptions
 ): GitBackedVFS {
-  if (!gitVFSInstances.has(ownerId)) {
-    gitVFSInstances.set(ownerId, createGitBackedVFS(vfs, {
+  // CRITICAL FIX: Use composite key (ownerId:sessionId) for proper commit tracking
+  // If options.sessionId is provided, use ownerId:sessionId; otherwise use ownerId alone
+  const compositeKey = options?.sessionId 
+    ? `${ownerId}:${options.sessionId}` 
+    : ownerId;
+  
+  if (!gitVFSInstances.has(compositeKey)) {
+    // Pass the composite sessionId so ShadowCommit uses correct format for rollback queries
+    gitVFSInstances.set(compositeKey, createGitBackedVFS(vfs, {
       ...options,
-      sessionId: ownerId,
+      // Use composite sessionId: ownerId:sessionId or just ownerId
+      sessionId: options?.sessionId || ownerId,
     }));
   }
-  return gitVFSInstances.get(ownerId)!;
+  return gitVFSInstances.get(compositeKey)!;
 }

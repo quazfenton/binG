@@ -1,0 +1,10 @@
+{
+  "version": 1,
+  "skills": {
+    "terminaluse": {
+      "source": "terminaluse/agent-skills",
+      "sourceType": "github",
+      "computedHash": "3e0be0c8ee14ef904ada3e2b751f44cc9909a7b17cadf158610e7987ad17badc"
+    }
+  }
+}

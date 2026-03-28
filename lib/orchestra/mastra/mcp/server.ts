@@ -21,10 +21,11 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { VirtualFilesystemService } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/index';
 import { getSandboxProvider, type SandboxProvider } from '@/lib/sandbox/providers';
 
-const vfs = new VirtualFilesystemService();
+// Use shared VFS singleton for consistent state across all routes
+const vfs = virtualFilesystem;
 
 let _sandboxProvider: SandboxProvider | null = null;
 async function getProvider(): Promise<SandboxProvider> {
