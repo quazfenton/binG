@@ -9,7 +9,7 @@
   },
   "scripts": {
     "start": "node dist/bin.js",
-    "dev": "node bin",
+    "dev": "node bin.ts",
     "build": "tsc",
     "test": "vitest run",
     "lint": "eslint .",

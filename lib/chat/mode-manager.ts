@@ -111,6 +111,14 @@ export class ModeManager {
     codeBlocks: CodeBlock[], 
     fileDiffs: FileDiff[]
   ): ProcessedResponse {
+    // Auto-escalate to code mode processing when file edits are detected,
+    // even if the UI tab is set to "chat". This ensures diffs are shown
+    // when the LLM writes files regardless of which tab is active.
+    const hasFileEdits = fileDiffs.length > 0 || codeBlocks.some(block => this.isFileEdit(block));
+    if (hasFileEdits) {
+      return this.processCodeResponse(response, codeBlocks, fileDiffs);
+    }
+
     // In Chat mode, code blocks are for display only, not file edits
     const displayCodeBlocks = codeBlocks.map(block => ({
       ...block,
