@@ -5,7 +5,8 @@
       "Bash(findstr *)",
       "Bash(pnpm exec *)",
       "Bash(node *)",
-      "Bash(dir *)"
+      "Bash(dir *)",
+      "Bash(powershell *)"
     ]
   },
   "$version": 3

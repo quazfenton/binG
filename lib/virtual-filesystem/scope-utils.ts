@@ -127,11 +127,29 @@ export function sanitizeScopePath(scopePath?: string): string {
   const remainingPath = match[2] || '';
   
   // If segment contains composite ID (ownerId:sessionId), extract only sessionId
+  // This ensures folder names like "002" are not corrupted with ownerId prefix
+  // e.g., "anon:1774710784761_6TB03h8Ow:002" -> "002"
   if (sessionIdSegment.includes(':')) {
     const parts = sessionIdSegment.split(':');
-    const actualSessionId = parts[parts.length - 1];
+    const actualSessionId = parts[parts.length - 1]; // Get the last part (folder name)
     return `project/sessions/${actualSessionId}${remainingPath}`;
   }
   
   return normalizedPath;
+}
+
+/**
+ * Extracts the scope path (parent directory) from a file path.
+ * Used for cache invalidation to notify the correct directory after file operations.
+ * 
+ * Examples:
+ *   "project/sessions/002/src/App.tsx" -> "project/sessions/002"
+ *   "project/sessions/002/package.json" -> "project/sessions/002"
+ *   "project/package.json" -> "project"
+ */
+export function extractScopePath(filePath: string): string {
+  const parts = filePath.split('/');
+  return parts.length > 1 
+    ? parts.slice(0, parts.length - 1).join('/')
+    : parts[0] || 'project';
 }

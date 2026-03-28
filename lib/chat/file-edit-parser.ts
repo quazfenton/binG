@@ -52,6 +52,7 @@ interface BashPatchEdit {
   path: string;
   pattern: string;
   replacement: string;
+  flags?: string;
 }
 
 function extractCatHeredocEdits(content: string): BashFileEdit[] {
@@ -231,6 +232,69 @@ export interface PatchEdit {
   diff: string;
 }
 
+export interface ApplyDiffOperation {
+  path: string;
+  search: string;
+  replace: string;
+  thought?: string;
+}
+
+export interface ReasoningParseResult {
+  reasoning: string;
+  mainContent: string;
+}
+
+export interface ParsedFilesystemResponse {
+  writes: FileEdit[];
+  diffs: PatchEdit[];
+  applyDiffs: ApplyDiffOperation[];
+  deletes: string[];
+  folders: string[];
+}
+
+function extractFencedBlocks(content: string, fenceName: string): string[] {
+  const blocks: string[] = [];
+  const opener = `\`\`\`${fenceName}`;
+  let searchFrom = 0;
+
+  while (searchFrom < content.length) {
+    const openIndex = content.indexOf(opener, searchFrom);
+    if (openIndex === -1) break;
+
+    const bodyStart = content.indexOf('\n', openIndex + opener.length);
+    if (bodyStart === -1) break;
+
+    const closeIndex = content.indexOf('```', bodyStart + 1);
+    if (closeIndex === -1) break;
+
+    blocks.push(content.slice(bodyStart + 1, closeIndex));
+    searchFrom = closeIndex + 3;
+  }
+
+  return blocks;
+}
+
+function extractXmlBlocks(content: string, tagName: string): string[] {
+  const blocks: string[] = [];
+  const openTag = `<${tagName}>`;
+  const closeTag = `</${tagName}>`;
+  let searchFrom = 0;
+
+  while (searchFrom < content.length) {
+    const openIndex = content.indexOf(openTag, searchFrom);
+    if (openIndex === -1) break;
+
+    const bodyStart = openIndex + openTag.length;
+    const closeIndex = content.indexOf(closeTag, bodyStart);
+    if (closeIndex === -1) break;
+
+    blocks.push(content.slice(bodyStart, closeIndex));
+    searchFrom = closeIndex + closeTag.length;
+  }
+
+  return blocks;
+}
+
 /**
  * Extract HTML comment format: <!-- path -->content
  * Example: <!-- src/components/Card.vue --> ...content...
@@ -243,7 +307,7 @@ export function extractHtmlCommentFileEdits(content: string): FileEdit[] {
   // Path must look like a file path: contains / OR . OR common file patterns
   // This avoids matching comments like <!-- TODO: fix this -->
   // FIX: Limit match scope to prevent catastrophic backtracking
-  const regex = /<!--\s*([^\s\-]+(?:[\/\.][^\s\-]+)*|[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)\s*-->\s*([\s\S]{0,5000}?)(?=<!--|$)/gi;
+  const regex = /<!--\s*([^\s\-]+(?:[\/\.][^\s\-]+)*|[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)\s*-->\s*([\s\S]*?)(?=<!--|$)/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
@@ -264,7 +328,7 @@ export function extractCompactFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
   // Use \s* to handle both spaced and non-spaced variants
   // FIX: Limit match scope to prevent catastrophic backtracking
-  const regex = /<file_edit\s*path=["']([^"']+)["']\s*>([\s\S]{0,10000}?)<\/file_edit>/gi;
+  const regex = /<file_edit\s*path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_edit>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
@@ -610,23 +674,21 @@ export function extractFileEdits(content: string): FileEdit[] {
     });
   }
 
-  // Process patches with explicit action and flags
+  // Process patches with explicit action
   for (const patch of bashEdits.patches) {
-    const flags = patch.flags || '';
-    allEdits.push({ 
-      path: patch.path, 
-      content: `s/${patch.pattern}/${patch.replacement}/${flags}`,
+    allEdits.push({
+      path: patch.path,
+      content: `s/${patch.pattern}/${patch.replacement}/${patch.flags || ''}`,
       action: 'patch',
-      flags,
     });
   }
 
-  // Process directories (mkdir) with explicit action
+  // Process directories (mkdir) as write actions
   for (const dir of bashEdits.directories) {
     allEdits.push({
       path: dir.path,
       content: '',
-      action: 'mkdir',
+      action: 'write',
     });
   }
 
@@ -847,6 +909,230 @@ export function extractPatchEdits(content: string): PatchEdit[] {
 }
 
 /**
+ * Extract DELETE commands from fs-actions blocks
+ */
+export function extractFsActionDeletes(content: string): string[] {
+  const deletes: string[] = [];
+
+  if (!content.includes('DELETE')) return deletes;
+
+  for (const blockContent of extractFencedBlocks(content, 'fs-actions')) {
+    const deleteRegex = /DELETE\s+([^\n]+)/gi;
+    let deleteMatch: RegExpExecArray | null;
+    while ((deleteMatch = deleteRegex.exec(blockContent)) !== null) {
+      const path = deleteMatch[1]?.trim();
+      if (path) deletes.push(path);
+    }
+  }
+
+  for (const blockContent of extractXmlBlocks(content, 'fs-actions')) {
+    const deleteRegex = /DELETE\s+([^\n]+)/gi;
+    let deleteMatch: RegExpExecArray | null;
+    while ((deleteMatch = deleteRegex.exec(blockContent)) !== null) {
+      const path = deleteMatch[1]?.trim();
+      if (path) deletes.push(path);
+    }
+  }
+
+  return deletes;
+}
+
+/**
+ * Extract PATCH commands from fs-actions blocks
+ */
+export function extractFsActionPatches(content: string): PatchEdit[] {
+  const patches: PatchEdit[] = [];
+
+  if (!content.includes('PATCH')) return patches;
+
+  for (const blockContent of extractFencedBlocks(content, 'fs-actions')) {
+    const patchRegex = /PATCH\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    let patchMatch: RegExpExecArray | null;
+    while ((patchMatch = patchRegex.exec(blockContent)) !== null) {
+      const path = patchMatch[1]?.trim();
+      const diff = patchMatch[2] ?? '';
+      if (!path) continue;
+      patches.push({ path, diff });
+    }
+  }
+
+  for (const blockContent of extractXmlBlocks(content, 'fs-actions')) {
+    const patchRegex = /PATCH\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    let patchMatch: RegExpExecArray | null;
+    while ((patchMatch = patchRegex.exec(blockContent)) !== null) {
+      const path = patchMatch[1]?.trim();
+      const diff = patchMatch[2] ?? '';
+      if (!path) continue;
+      patches.push({ path, diff });
+    }
+  }
+
+  return patches;
+}
+
+/**
+ * Extract apply_diff operations across supported formats.
+ */
+export function extractApplyDiffOperations(content: string): ApplyDiffOperation[] {
+  const diffs: ApplyDiffOperation[] = [];
+
+  if (!content.includes('APPLY_DIFF') && !content.includes('<apply_diff')) {
+    return diffs;
+  }
+
+  for (const blockContent of extractFencedBlocks(content, 'fs-actions')) {
+    const diffRegex = /APPLY_DIFF\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*===\s*([\s\S]*?)\s*>>>/gi;
+    let diffMatch: RegExpExecArray | null;
+    while ((diffMatch = diffRegex.exec(blockContent)) !== null) {
+      const path = diffMatch[1]?.trim();
+      const search = diffMatch[2] ?? '';
+      const replace = diffMatch[3] ?? '';
+      if (!path || !search) continue;
+      diffs.push({ path, search, replace });
+    }
+  }
+
+  for (const blockContent of extractXmlBlocks(content, 'fs-actions')) {
+    const diffRegex = /APPLY_DIFF\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*===\s*([\s\S]*?)\s*>>>/gi;
+    let diffMatch: RegExpExecArray | null;
+    while ((diffMatch = diffRegex.exec(blockContent)) !== null) {
+      const path = diffMatch[1]?.trim();
+      const search = diffMatch[2] ?? '';
+      const replace = diffMatch[3] ?? '';
+      if (!path || !search) continue;
+      diffs.push({ path, search, replace });
+    }
+  }
+
+  const xmlDiffRegex = /<apply_diff\s+path=["']([^"']+)["']\s*>\s*<search>([\s\S]*?)<\/search>\s*<replace>([\s\S]*?)<\/replace>\s*(?:<thought>([\s\S]*?)<\/thought>\s*)?<\/apply_diff>/gi;
+  let xmlDiffMatch: RegExpExecArray | null;
+
+  while ((xmlDiffMatch = xmlDiffRegex.exec(content)) !== null) {
+    const path = xmlDiffMatch[1]?.trim();
+    const search = xmlDiffMatch[2] ?? '';
+    const replace = xmlDiffMatch[3] ?? '';
+    const thought = xmlDiffMatch[4]?.trim();
+    if (!path || !search) continue;
+    diffs.push({ path, search, replace, thought });
+  }
+
+  const topLevelDiffRegex = /^\s*APPLY_DIFF\s+([^\s<]+)\s*(?:\n\s*)?<<<\s*\n([\s\S]*?)\n===\s*\n([\s\S]*?)\n>>>/gim;
+  let topLevelMatch: RegExpExecArray | null;
+  while ((topLevelMatch = topLevelDiffRegex.exec(content)) !== null) {
+    const path = topLevelMatch[1]?.trim();
+    const search = topLevelMatch[2] ?? '';
+    const replace = topLevelMatch[3] ?? '';
+    if (!path || !search) continue;
+    if (!diffs.some(d => d.path === path && d.search === search && d.replace === replace)) {
+      diffs.push({ path, search, replace });
+    }
+  }
+
+  return diffs;
+}
+
+/**
+ * Extract bash heredoc file writes from fenced bash blocks.
+ */
+export function extractBashHereDocWrites(content: string): FileEdit[] {
+  const writes: FileEdit[] = [];
+
+  if (!content.includes('```bash') && !content.includes('cat')) return writes;
+
+  for (const block of extractFencedBlocks(content, 'bash')) {
+    const hereDocRegex = /cat\s*>\s*([^\s]+)\s*<<['"]?EOF['"]?\n([\s\S]*?)\nEOF/g;
+    let hereDocMatch: RegExpExecArray | null;
+    while ((hereDocMatch = hereDocRegex.exec(block)) !== null) {
+      const path = hereDocMatch[1]?.trim();
+      const fileContent = hereDocMatch[2] ?? '';
+      if (!path) continue;
+      writes.push({ path, content: fileContent });
+    }
+  }
+
+  return writes;
+}
+
+/**
+ * Extract code blocks with filename hints.
+ */
+export function extractFilenameHintCodeBlocks(content: string): FileEdit[] {
+  const writes: FileEdit[] = [];
+
+  if (!content.includes('```')) return writes;
+
+  const regex = /```[^\n`]*\b(?:file|path|filename)\s*[:=]\s*([^\n]+)\n([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    let fileContent = match[2] ?? '';
+    if (!path) continue;
+    fileContent = stripHeredocMarkers(fileContent);
+    writes.push({ path, content: fileContent });
+  }
+
+  return writes;
+}
+
+function extractFolderCreateEdits(content: string): string[] {
+  const folders: string[] = [];
+
+  if (!content.includes('<folder_create')) return folders;
+
+  const folderCreateRegex = /<folder_create\s+path\s*=\s*["']([^"']+)["']\s*\/?>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = folderCreateRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (path) folders.push(path);
+  }
+
+  return folders;
+}
+
+export function parseFilesystemResponse(content: string): ParsedFilesystemResponse {
+  const writes = new Map<string, FileEdit>();
+  const diffs = new Map<string, PatchEdit>();
+  const applyDiffs = new Map<string, ApplyDiffOperation>();
+  const deletes = new Set<string>();
+  const folders = new Set<string>();
+
+  const addWrite = (edit: FileEdit) => {
+    const key = `${edit.path}::${edit.content}`;
+    if (!writes.has(key)) writes.set(key, edit);
+  };
+  const addDiff = (edit: PatchEdit) => {
+    const key = `${edit.path}::${edit.diff}`;
+    if (!diffs.has(key)) diffs.set(key, edit);
+  };
+  const addApplyDiff = (edit: ApplyDiffOperation) => {
+    const key = `${edit.path}::${edit.search}::${edit.replace}`;
+    if (!applyDiffs.has(key)) applyDiffs.set(key, edit);
+  };
+
+  for (const edit of extractFileEdits(content)) addWrite(edit);
+  for (const edit of extractFsActionWrites(content)) addWrite(edit);
+  for (const edit of extractTopLevelWrites(content)) addWrite(edit);
+  for (const edit of extractBashHereDocWrites(content)) addWrite(edit);
+  for (const edit of extractFilenameHintCodeBlocks(content)) addWrite(edit);
+  for (const edit of extractFencedDiffEdits(content)) addDiff(edit);
+  for (const edit of extractFsActionPatches(content)) addDiff(edit);
+  for (const edit of extractPatchEdits(content)) addDiff(edit);
+  for (const edit of extractApplyDiffOperations(content)) addApplyDiff(edit);
+  for (const edit of extractFsActionDeletes(content)) deletes.add(edit);
+  for (const edit of extractDeleteEdits(content)) deletes.add(edit.path);
+  for (const folder of extractFolderCreateEdits(content)) folders.add(folder);
+
+  return {
+    writes: Array.from(writes.values()),
+    diffs: Array.from(diffs.values()),
+    applyDiffs: Array.from(applyDiffs.values()),
+    deletes: Array.from(deletes.values()),
+    folders: Array.from(folders.values()),
+  };
+}
+
+/**
  * Extract apply_diff blocks
  * Format: <apply_diff>...</apply_diff>
  */
@@ -995,6 +1281,65 @@ export function sanitizeFileEditTags(content: string): string {
   return sanitized;
 }
 
+/**
+ * Sanitize assistant display content while preserving visible prose and reasoning.
+ */
+export function sanitizeAssistantDisplayContent(content: string): string {
+  if (!content) return '';
+
+  let next = sanitizeFileEditTags(content);
+
+  if (next.includes('<thought>') && next.includes('</thought>')) {
+    next = next.replace(/<thought>[\s\S]{0,5000}?<\/thought>/gi, '');
+  }
+
+  next = next.replace(/(?:^|\n)\s*<<<[\s\S]{0,5000}?>>>\s*(?=\n|$)/gim, '\n');
+  next = next.replace(/\n{3,}/g, '\n\n').trim();
+
+  return next;
+}
+
+/**
+ * Split reasoning sections from visible assistant content.
+ */
+export function extractReasoningContent(content: string): ReasoningParseResult {
+  if (!content) {
+    return { reasoning: '', mainContent: '' };
+  }
+
+  const patterns = [
+    { regex: /<think>([\s\S]*?)<\/think>/gi, label: '' },
+    { regex: /\*\*Reasoning:\*\*([\s\S]*?)(?=\n\s*\n(?!\*\*)|\*\*|$)/gi, label: '**Reasoning:**' },
+    { regex: /\*\*Thought:\*\*([\s\S]*?)(?=\n\s*\n(?!\*\*)|\*\*|$)/gi, label: '**Thought:**' },
+  ] as const;
+
+  let reasoning = '';
+  let mainContent = content;
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.regex.exec(content)) !== null) {
+      const body = match[1]?.trim();
+      if (!body) continue;
+      reasoning += `${pattern.label}${body}\n\n`;
+      mainContent = mainContent.replace(match[0], '');
+    }
+  }
+
+  return {
+    reasoning: reasoning.trim(),
+    mainContent: mainContent.trim(),
+  };
+}
+
+function stripHeredocMarkers(content: string): string {
+  let cleaned = content;
+  cleaned = cleaned.replace(/^\s*(?:WRITE|PATCH)\s+\S+\s*\n/, '');
+  cleaned = cleaned.replace(/^\s*<<<\s*\n?/, '');
+  cleaned = cleaned.replace(/\n?\s*>>>\s*$/, '');
+  return cleaned;
+}
+
 // ---------------------------------------------------------------------------
 // Incremental Parser - for progressive streaming
 // ---------------------------------------------------------------------------
@@ -1005,6 +1350,10 @@ interface IncrementalParseState {
   /** Last processed position in buffer (for future optimization) */
   lastPosition: number;
 }
+
+// Re-scan a bounded suffix so tags that span chunk boundaries still match
+// without reparsing the full accumulated buffer on every streamed token.
+const INCREMENTAL_PARSE_OVERLAP_CHARS = 12000;
 
 /**
  * Create a new incremental parser state
@@ -1030,8 +1379,17 @@ export function extractIncrementalFileEdits(
 ): FileEdit[] {
   const newEdits: FileEdit[] = [];
 
-  // Use the existing extractFileEdits to find all edits in the buffer
-  const allEdits = extractFileEdits(buffer);
+  if (buffer.length === state.lastPosition) {
+    return newEdits;
+  }
+
+  const parseStart = Math.max(0, state.lastPosition - INCREMENTAL_PARSE_OVERLAP_CHARS);
+  const parseWindow = buffer.slice(parseStart);
+
+  // Parse only the recent suffix plus overlap. Individual extractors already
+  // bound block sizes, so a fixed overlap preserves cross-chunk matches while
+  // avoiding O(n^2) full-buffer rescans during streaming.
+  const allEdits = extractFileEdits(parseWindow);
 
   // Filter to only new edits we haven't emitted yet
   // Use path + content hash to handle same-file multiple edits
@@ -1052,10 +1410,6 @@ export function extractIncrementalFileEdits(
     }
   }
 
-  // Update position to end of buffer
-  // TODO Note: lastPosition tracking is available for future optimization
-  // Currently we re-parse from 0 to handle cases where earlier content
-  // changes affect later parsing (e.g., tag modifications mid-stream)
   state.lastPosition = buffer.length;
 
   return newEdits;

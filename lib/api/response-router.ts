@@ -33,7 +33,7 @@ import { createLogger } from '@/lib/utils/logger'
 import { normalizeToolInvocations, type ToolInvocation } from '@/lib/types/tool-invocation'
 import { quotaManager } from '@/lib/management/quota-manager'
 import { detectRequestType } from '@/lib/utils/request-type-detector'
-import { extractFsActionWrites } from '@/lib/chat/file-edit-parser'
+import { extractFsActionWrites, extractReasoningContent } from '@/lib/chat/file-edit-parser'
 
 // Import router services
 import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from '@/lib/chat/fast-agent-service'
@@ -862,6 +862,8 @@ export class ResponseRouter {
     const content = this.extractContent(response)
     const commands = this.extractCommands(content)
     const toolInvocations = this.extractToolInvocations(response)
+    const reasoning = this.extractReasoning(response, content)
+    const usage = this.calculateUsage(response, content)
     const toolName = response.data?.toolName
     const authProvider = this.inferProviderFromToolName(toolName)
     const requiresAuth = !!response.data?.requiresAuth
@@ -912,7 +914,7 @@ export class ResponseRouter {
       priority: response.priority || 999,
       data: {
         content: finalContent,
-        usage: this.calculateUsage(response),
+        usage,
         model: (response.metadata as any)?.actualModel || (response.data as any)?.model || (response as any)?.model,
         provider: (response.metadata as any)?.actualProvider || (response.data as any)?.provider || (response as any)?.provider,
         toolCalls: (response.data as any)?.toolCalls,
@@ -934,7 +936,7 @@ export class ResponseRouter {
         authProvider,
         composioMcp: (response.data as any)?.composioMcp || response.metadata?.composioMcp,
         messageMetadata: (response.data as any)?.messageMetadata,
-        reasoning: this.extractReasoning(response),
+        reasoning,
       },
       commands,
       metadata: {
@@ -1167,7 +1169,7 @@ export class ResponseRouter {
   /**
    * Extract reasoning from response
    */
-  private extractReasoning(response: any): string | undefined {
+  private extractReasoning(response: any, content?: string): string | undefined {
     const explicitReasoning =
       response.data?.reasoning ||
       response.data?.reasoningTrace ||
@@ -1182,20 +1184,14 @@ export class ResponseRouter {
       return explicitReasoning.trim()
     }
 
-    const content = this.extractContent(response)
-    const thinkRegex = /<think>([\s\S]*?)<\/think>/gi
-    const captures: string[] = []
-    let match: RegExpExecArray | null
-    while ((match = thinkRegex.exec(content)) !== null) {
-      if (match[1]?.trim()) captures.push(match[1].trim())
-    }
-    return captures.length > 0 ? captures.join('\n') : undefined
+    const parsed = extractReasoningContent(content ?? this.extractContent(response))
+    return parsed.reasoning || undefined
   }
 
   /**
    * Calculate usage statistics
    */
-  private calculateUsage(response: any): { promptTokens: number; completionTokens: number; totalTokens: number } {
+  private calculateUsage(response: any, content?: string): { promptTokens: number; completionTokens: number; totalTokens: number } {
     if (response.usage || response.data?.usage) {
       const usage = response.usage || response.data.usage
       return {
@@ -1205,8 +1201,7 @@ export class ResponseRouter {
       }
     }
 
-    const content = this.extractContent(response)
-    const estimatedTokens = Math.ceil(content.length / 4)
+    const estimatedTokens = Math.ceil((content ?? this.extractContent(response)).length / 4)
 
     return {
       promptTokens: 0,
@@ -2090,19 +2085,25 @@ export class ResponseRouter {
       const ownerIdForEdits = (request as any).filesystemOwnerId || request.userId;
       // Fallback: derive conversationId from requestId if missing (prevents refinement edits from being silently dropped)
       // SECURITY: Validate requestId to prevent path traversal attacks - only allow safe alphanumeric characters
-      const conversationIdForEdits =
+      const rawConversationId =
         request.conversationId ||
         (request.requestId && /^[a-zA-Z0-9_-]+$/.test(request.requestId) ? request.requestId : undefined);
 
-      if (ownerIdForEdits && conversationIdForEdits) {
+      if (ownerIdForEdits && rawConversationId) {
+        // Extract just the session part for scopePath (not the composite ownerId:session)
+        const sessionPart = rawConversationId.includes(':')
+          ? rawConversationId.split(':').slice(1).join(':')
+          : rawConversationId;
+        const compositeConversationId = `${ownerIdForEdits}:${rawConversationId}`;
+
         try {
           const { applyFilesystemEditsFromResponse } = await import('@/app/api/chat/route')
 
           filesystemEdits = await applyFilesystemEditsFromResponse({
             ownerId: ownerIdForEdits.toString(),
-            conversationId: `${ownerIdForEdits}:${conversationIdForEdits}`,
+            conversationId: compositeConversationId,
             requestId: `refinement-${Date.now()}`,
-            scopePath: `project/sessions/${conversationIdForEdits}`,
+            scopePath: `project/sessions/${sessionPart}`,
             lastUserMessage: '',
             attachedPaths: [],
             responseContent: refinedOutput,
@@ -2113,7 +2114,7 @@ export class ResponseRouter {
       } else {
         logger.warn('Skipping filesystem edits for spec enhancement: missing ownerId or conversationId', {
           hasOwnerId: !!ownerIdForEdits,
-          hasConversationId: !!conversationIdForEdits,
+          hasConversationId: !!rawConversationId,
           source: (request as any).filesystemOwnerId ? 'filesystemOwnerId' : 'userId',
         })
       }

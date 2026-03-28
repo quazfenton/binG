@@ -332,6 +332,43 @@ export function useVirtualFilesystem(
         detail.paths.forEach(p => pendingPathsToRefresh.add(p));
       }
 
+      // CRITICAL FIX: Sync session ID from event detail to prevent fragmentation
+      // When files are written, the server may have used a different session ID than
+      // what the client currently has in localStorage. This causes reads to return
+      // empty results while writes went to a different workspace.
+      
+      // Extract the session part from ownerId (format: "anon:sessionId" or just "sessionId")
+      const extractSessionPart = (id: string): string => {
+        if (id.startsWith('anon:')) return id.slice(5); // "anon:abc123" -> "abc123"
+        if (id.includes(':')) return id.split(':').slice(1).join(':'); // Handle composite IDs
+        return id;
+      };
+      
+      // If event has a sessionId, sync with local session to prevent reading from wrong workspace
+      if (detail.sessionId) {
+        const eventSessionId = detail.sessionId;
+        const ownerId = getSessionId();
+        const currentSessionPart = extractSessionPart(ownerId);
+        
+        // If the session parts differ, sync to the server's session to ensure reads
+        // hit the same workspace where the writes occurred
+        if (eventSessionId !== currentSessionPart) {
+          log(`[filesystem-updated] Session mismatch - syncing to server session: event=${eventSessionId}, current=${currentSessionPart}`);
+          
+          // Update localStorage to match the server's session ID format
+          if (typeof window !== 'undefined') {
+            try {
+              // Store the full session ID (with anon_ prefix for consistency with getOrCreateAnonymousSessionId)
+              const fullSessionId = eventSessionId.startsWith('anon_') ? eventSessionId : `anon_${eventSessionId}`;
+              localStorage.setItem('anonymous_session_id', fullSessionId);
+            } catch {}
+          }
+          
+          // Clear ALL caches to force fresh reads with the correct session
+          invalidateSnapshotCache(undefined, undefined);
+        }
+      }
+
       // Invalidate cache immediately (don't debounce this)
       for (const path of pendingPathsToRefresh) {
         invalidateSnapshotCache(path, ownerId);

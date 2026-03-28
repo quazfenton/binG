@@ -23,7 +23,10 @@ import { normalizeToolInvocations } from "@/lib/types/tool-invocation"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 import { toast } from "sonner"
 import { buildApiHeaders } from "@/lib/utils"
-import { sanitizeFileEditTags } from "@/lib/chat/file-edit-parser"
+import {
+  extractReasoningContent,
+  sanitizeAssistantDisplayContent,
+} from "@/lib/chat/file-edit-parser"
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer"
 import { useMultiRotatingStatements } from "@/hooks/use-rotating-statements"
 
@@ -44,9 +47,8 @@ function LoadingIndicator() {
  */
 function sanitizeMessageContent(content: string): string {
   if (!content || typeof content !== 'string') return '';
-  
-  // Use centralized parser for all file edit formats
-  return sanitizeFileEditTags(content);
+
+  return sanitizeAssistantDisplayContent(content);
 }
 
 interface MessageBubbleProps {
@@ -355,36 +357,6 @@ export default function MessageBubble({
   
   const { handleKeyDown } = useKeyboardHandler()
 
-  const parseReasoningContent = (content: string) => {
-    const thinkingRegex = /<think>([\s\S]*?)<\/think>/g
-    const reasoningRegex = /\*\*Reasoning:\*\*([\s\S]*?)(?=\*\*|$)/g
-    const thoughtRegex = /\*\*Thought:\*\*([\s\S]*?)(?=\*\*|$)/g
-
-    let reasoning = ""
-    let mainContent = content
-
-    let match
-    while ((match = thinkingRegex.exec(content)) !== null) {
-      reasoning += match[1].trim() + "\n\n"
-      mainContent = mainContent.replace(match[0], "")
-    }
-
-    while ((match = reasoningRegex.exec(content)) !== null) {
-      reasoning += "**Reasoning:**" + match[1].trim() + "\n\n"
-      mainContent = mainContent.replace(match[0], "")
-    }
-
-    while ((match = thoughtRegex.exec(content)) !== null) {
-      reasoning += "**Thought:**" + match[1].trim() + "\n\n"
-      mainContent = mainContent.replace(match[0], "")
-    }
-
-    return {
-      reasoning: reasoning.trim(),
-      mainContent: mainContent.trim()
-    }
-  }
-
   // Check for integration OAuth auth_required in message metadata
   // Only show IntegrationAuthPrompt for real 3rd-party integrations (Arcade/Composio/Nango),
   // NOT for generic site login auth (which has requiresAuth=false, loginRequired=true)
@@ -414,17 +386,18 @@ export default function MessageBubble({
     return sanitizeMessageContent(rawContent);
   }, [message.content, streamingDisplay.displayContent, isUser]);
 
-  const getContentToDisplay = () => {
-    if (isUser) return message.content
-    // Use displayContent if auth was dismissed (strips AUTH_REQUIRED sentinel)
-    // Also apply sanitization to handle edge cases
+  const contentToDisplay = useMemo(() => {
+    if (isUser) return message.content;
     if (authInfo && authDismissed) {
       return sanitizeMessageContent(displayContent);
     }
     return sanitizedContent;
-  }
+  }, [authDismissed, authInfo, displayContent, isUser, message.content, sanitizedContent]);
 
-  const { reasoning, mainContent } = parseReasoningContent(getContentToDisplay())
+  const { reasoning, mainContent } = useMemo(
+    () => extractReasoningContent(contentToDisplay),
+    [contentToDisplay],
+  )
   const metadataReasoning = typeof (message as any).metadata?.reasoning === 'string'
     ? (message as any).metadata.reasoning
     : ''

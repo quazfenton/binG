@@ -27,7 +27,8 @@ export class GrammarToolCallParser {
     }
 
     // Also parse mkdir commands (supports multiple paths: mkdir -p path1 path2)
-    const mkdirRegex = /mkdir\s+(-p\s+)?((?:[^\s&|;<>]+\s*)+)/gi;
+    // FIX: Don't capture across newlines to avoid parsing subsequent commands as paths
+    const mkdirRegex = /mkdir\s+(-p\s+)?([^\n&|;<>]+)/gi;
     let mkdirMatch: RegExpExecArray | null;
     
     while ((mkdirMatch = mkdirRegex.exec(content)) !== null) {

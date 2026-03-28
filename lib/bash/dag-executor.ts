@@ -94,7 +94,10 @@ export async function executeNode(
       };
       // TODO: Route to structured tool
       logger.warn('Tool execution not yet implemented, falling back to bash');
-      result = await executeBashCommand(toolNode.command || '', {
+      if (!toolNode.command) {
+        throw new Error(`Tool node ${node.id} is missing a fallback command`);
+      }
+      result = await executeBashCommand(toolNode.command, {
         workingDir: ctx.workingDir,
         env: ctx.env,
       });

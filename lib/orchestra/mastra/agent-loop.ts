@@ -10,7 +10,7 @@
  * @see lib/mastra/tools/filesystem-tools.ts
  */
 
-import { createFilesystemTools, type FilesystemTool } from './tools/filesystem-tools';
+import { createFilesystemTools, type FilesystemTool, type FilesystemToolOptions } from './tools/filesystem-tools';
 import { normalizeToolInvocation, type ToolInvocation } from '@/lib/types/tool-invocation';
 import { createLogger } from '@/lib/utils/logger';
 import { openai } from '@ai-sdk/openai';
@@ -87,14 +87,22 @@ export class AgentLoop {
   private toolLoopAgent: any | null = null;
   private useToolLoopAgent: boolean = false;
 
-  constructor(userId: string, workspacePath: string, maxIterations: number = 10) {
+  constructor(
+    userId: string,
+    workspacePath: string,
+    maxIterations: number = 10,
+    toolOptions: FilesystemToolOptions = {},
+  ) {
     this.context = {
       userId,
       workspacePath,
       conversationHistory: [],
     };
     this.maxIterations = maxIterations;
-    this.tools = createFilesystemTools(userId);
+    this.tools = createFilesystemTools(userId, {
+      ...toolOptions,
+      workspacePath,
+    });
     
     // Initialize ToolLoopAgent if available
     if (ToolLoopAgent) {
@@ -474,7 +482,7 @@ export class AgentLoop {
    */
   private buildSystemPrompt(): string {
     return `You are an AI assistant working in a code workspace.
-You have access to filesystem tools to read, write, and edit files.
+You have access to workspace tools to read, write, edit files, and optionally run bash commands.
 
 Current workspace: ${this.context.workspacePath}
 
@@ -483,15 +491,18 @@ ${this.tools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
 
 FILE OPERATIONS:
 - To read files: use the read_file tool
-- To write files: use the write_file tool
+- To write files: use the write_file tool  
 - To list directories: use the list_directory tool
 - To create directories: use the create_directory tool
-- To delete files: use the delete_file tool
+- To delete files/directories: use the delete_file tool
+- To run installs/tests/builds when available: use the execute_bash tool
 
 Examples:
-write_file({ "path": "package.json", "content": "{\n  \"name\": \"my-app\",\n  \"version\": \"1.0.0\"\n}" })
+write_file({ "path": "package.json", "content": "{\\n  \\"name\\": \\"my-app\\",\\n  \\"version\\": \\"1.0.0\\"\\n}" })
 
 read_file({ "path": "src/index.js" })
+
+list_directory({ "path": "src" })
 
 create_directory({ "path": "src/components" })
 
@@ -504,7 +515,7 @@ Best Practices:
 4. After creating files, suggest running commands
 
 Response Format:
-- Use the structured tool calls shown above
+- Use structured tool calls: [Tool: tool_name] { "arg": "value" }
 - When task is complete, respond with { "done": true, "message": "..." }
 - Provide clear explanations of what you're doing
 
@@ -535,6 +546,11 @@ Assistant: { "done": true, "message": "Created a todo app with package.json and 
 /**
  * Create a new agent loop instance
  */
-export function createAgentLoop(userId: string, workspacePath: string, maxIterations?: number): AgentLoop {
-  return new AgentLoop(userId, workspacePath, maxIterations);
+export function createAgentLoop(
+  userId: string,
+  workspacePath: string,
+  maxIterations?: number,
+  toolOptions?: FilesystemToolOptions,
+): AgentLoop {
+  return new AgentLoop(userId, workspacePath, maxIterations, toolOptions);
 }
