@@ -332,8 +332,8 @@ export default function TerminalPanel({
         // Guard: xterm's RenderService may not be ready if terminal hasn't been fully opened
         try {
           term.terminal.clear();
-        } catch {
-          // Terminal renderer not yet initialized, skip clear
+        } catch (error) {
+          console.warn('[TerminalPanel] Failed to clear terminal:', error);
         }
         term.terminal.writeln('');
         term.terminal.writeln('\x1b[1;32m● Terminal Ready\x1b[0m');

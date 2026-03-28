@@ -151,19 +151,22 @@ export async function POST(req: NextRequest) {
     // Perform move: read → write → delete
     // Read source
     const file = await virtualFilesystem.readFile(ownerId, sourcePath);
-    
+
     // Write to target
     await virtualFilesystem.writeFile(ownerId, targetPath, file.content, file.language);
 
-    // Delete source with rollback on failure
+    // Delete source
+    // Note: If source was already deleted (deletedCount === 0), the move is still valid
+    // because the file exists at targetPath. This can happen with concurrent operations.
     const { deletedCount } = await virtualFilesystem.deletePath(ownerId, sourcePath);
     if (deletedCount === 0) {
-      try {
-        await virtualFilesystem.deletePath(ownerId, targetPath);
-      } catch {
-        // Log but don't throw - primary error is the source deletion failure
-      }
-      throw new Error(`Failed to delete source path: ${sourcePath}`);
+      // Source already deleted - move is effectively complete, don't rollback
+      // Rolling back would delete the newly created file at targetPath
+      chatLogger.warn('Move operation: source already deleted, keeping target', {
+        sourcePath,
+        targetPath,
+        ownerId,
+      });
     }
 
     return NextResponse.json({
