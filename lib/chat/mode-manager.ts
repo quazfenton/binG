@@ -269,7 +269,7 @@ export class ModeManager {
 
         for (const item of items) {
           const pathMatch = item.match(/path:\s*"([^"]+)"/)
-          const diffMatch = item.match(/diff:\s*"([\s\S]*?)"/)
+          const diffMatch = item.match(/diff:\s*"((?:\\.|[^"\\])*)"/)
           if (pathMatch && diffMatch) {
             const rawDiff = diffMatch[1].replace(/\\n/g, '\n')
             addDiff(pathMatch[1], rawDiff, this.determineDiffType(rawDiff))

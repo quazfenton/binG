@@ -393,7 +393,7 @@ export class ModeManager {
     
     // Determine if this looks like a new project
     // New project = single folder with multiple files inside OR files at root level
-    const isNewProject = isSingleFolder || (paths.length > 1 && filesOutsideAnyFolder.length === 0);
+    const isNewProject = isSingleFolder || (paths.length > 1 && filesOutsideAnyFolder.length > 0);
 
     // Count files inside the single folder
     let filesInFolder = 0;
