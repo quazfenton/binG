@@ -153,11 +153,12 @@ export async function POST(req: NextRequest) {
 
     // Emit filesystem updated event for UI panels
     if (result.files && result.files.length > 0) {
+      const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(ownerId);
       emitFilesystemUpdated({
         path: result.destinationPath,
         type: 'create',
         sessionId: optionsData.sessionId,
-        workspaceVersion: result.files.length,
+        workspaceVersion,
         applied: result.files.map(f => ({
           path: f.path,
           operation: 'write',

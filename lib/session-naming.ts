@@ -52,46 +52,61 @@ const CACHE_TTL_MS = 5000; // 5 second cache
  */
 async function initializeSessionNaming(): Promise<void> {
   if (initialized) return;
-  
-  try {
-    const response = await fetch('/api/filesystem/list', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        path: 'project/sessions',
-        recursive: false,
-      }),
-    });
 
-    if (response.ok) {
-      const payload = await response.json().catch(() => null);
-      const nodes = payload?.data?.nodes || [];
-      
-      // Find highest sequential number used
-      let maxNumber = 0;
-      for (const node of nodes) {
-        const name = node.name || '';
-        // Match 3-digit sequential names (001, 002, etc.)
-        const match = /^(\d{3})$/.exec(name);
-        if (match) {
-          const num = parseInt(match[1], 10);
-          if (num > maxNumber) maxNumber = num;
-          // Register as used
-          usedNames.add(name.toLowerCase());
-        } else if (name.length > 0) {
-          // Register non-sequential names too
-          usedNames.add(name.toLowerCase());
+  try {
+    // Retry logic: VFS might not be ready immediately on page load
+    let attempts = 0;
+    let nodes: any[] = [];
+    
+    while (attempts < 3) {
+      const response = await fetch('/api/filesystem/list', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          path: 'project/sessions',
+          recursive: false,
+        }),
+      });
+
+      if (response.ok) {
+        const payload = await response.json().catch(() => null);
+        nodes = payload?.data?.nodes || [];
+        
+        // If we got results, break out of retry loop
+        if (nodes.length > 0 || payload?.success !== false) {
+          break;
         }
       }
       
-      // Start after the highest used number
-      currentIndex = maxNumber;
-      logger.info(`Initialized session naming: ${maxNumber} existing sessions found`);
+      // Wait before retrying
+      await new Promise(resolve => setTimeout(resolve, 100 * (attempts + 1)));
+      attempts++;
     }
+
+    // Find highest sequential number used
+    let maxNumber = 0;
+    for (const node of nodes) {
+      const name = node.name || '';
+      // Match 3-digit sequential names (001, 002, etc.)
+      const match = /^(\d{3})$/.exec(name);
+      if (match) {
+        const num = parseInt(match[1], 10);
+        if (num > maxNumber) maxNumber = num;
+        // Register as used
+        usedNames.add(name.toLowerCase());
+      } else if (name.length > 0) {
+        // Register non-sequential names too (including suffixed versions like 001-1, 001a, alpha-2, etc.)
+        usedNames.add(name.toLowerCase());
+      }
+    }
+
+    // Start after the highest used number
+    currentIndex = maxNumber;
+    logger.info(`Initialized session naming: ${maxNumber} existing sessions found (from ${nodes.length} nodes)`);
   } catch (error) {
     logger.warn(`Failed to initialize session naming from filesystem: ${error}`);
   }
-  
+
   initialized = true;
 }
 
@@ -145,18 +160,31 @@ function generateSequentialNumber(index: number): string {
 async function getNextStockName(): Promise<string> {
   // Use sequential numbering: 001, 002, 003, ... 999
   if (currentIndex < 999) {
-    // Check filesystem to ensure name isn't taken by another tab
-    const candidateName = generateSequentialNumber(currentIndex);
+    // First check in-memory cache (fast, handles same-session conflicts)
+    let candidateName = generateSequentialNumber(currentIndex);
     
-    // Verify this name doesn't exist in filesystem (cross-tab safety)
-    const existsInFs = await checkNameExistsInFilesystem(candidateName);
-    
-    if (existsInFs) {
-      // Name taken by another tab - increment and try next
+    // If name is already used in this session, increment until we find an unused one
+    while (usedNames.has(candidateName.toLowerCase())) {
       currentIndex++;
-      return getNextStockName(); // Recursively try next number
+      if (currentIndex >= 999) {
+        // Fall through to stock words
+        break;
+      }
+      candidateName = generateSequentialNumber(currentIndex);
     }
     
+    // If we're still in sequential range, do a filesystem check for cross-tab safety
+    if (currentIndex < 999) {
+      // Verify this name doesn't exist in filesystem (cross-tab safety)
+      const existsInFs = await checkNameExistsInFilesystem(candidateName);
+
+      if (existsInFs) {
+        // Name taken by another tab - increment and try next
+        currentIndex++;
+        return getNextStockName(); // Recursively try next number
+      }
+    }
+
     currentIndex++;
     return candidateName;
   }
@@ -173,7 +201,7 @@ async function getNextStockName(): Promise<string> {
     return baseWord;
   }
 
-  return `${baseWord}${repeatCount}`;
+  return `${baseWord}-${repeatCount}`;
 }
 
 /**
@@ -203,58 +231,47 @@ async function checkNameExistsInFilesystem(name: string): Promise<boolean> {
 
 /**
  * Generate a unique session name with O(1) conflict detection
- * 
+ *
  * OPTIMIZATION: Uses Set for O(1) lookup instead of Array.includes() which is O(n)
  * Suffix strategy:
- * - Sequential names (001): 001a, 001b, ..., 001z, 0011, 0012, ...
- * - Stock words (alpha): alpha1, alpha2, alpha3, ...
- * 
+ * - Sequential names (001): 001-1, 001-2, ..., 001-9, 001-10, ... (numeric suffixes only)
+ * - Stock words (alpha): alpha-1, alpha-2, alpha-3, ...
+ *
+ * Note: We use numeric suffixes with dash separator (-) instead of letters (a, b, c)
+ * to avoid confusion and ensure names are clearly identifiable as suffixed versions.
+ * This also prevents issues with empty/invalid folders from ambiguous naming.
+ *
  * Time complexity: O(1) average case, O(k) worst case where k = number of conflicts
- * 
+ *
  * @param baseName - Base name to make unique
  * @returns Unique name with suffix if needed
  */
 function generateUniqueName(baseName: string): string {
   const normalizedName = baseName.toLowerCase();
-  
+
   // OPTIMIZATION: O(1) lookup with Set
   if (!usedNames.has(normalizedName)) {
     usedNames.add(normalizedName);
     return normalizedName;
   }
-  
+
   // Conflict detected - need suffix
   let attempt = 0;
   let candidate = '';
-  
-  // Determine suffix strategy based on name pattern
-  const isSequential = /^\d{3}$/.test(normalizedName);
-  
+
   while (true) {
     attempt++;
-    
-    // Generate suffix based on name type
-    if (isSequential) {
-      // Sequential names: 001a, 001b, ..., 001z, then 0011, 0012, ...
-      if (attempt <= 26) {
-        // Letter suffixes first (a-z)
-        const letter = String.fromCharCode(96 + attempt); // a=97, so 96+1=a
-        candidate = `${normalizedName}${letter}`;
-      } else {
-        // Then numeric suffixes
-        candidate = `${normalizedName}${attempt - 26}`;
-      }
-    } else {
-      // Stock words and LLM names: alpha1, alpha2, ...
-      candidate = `${normalizedName}${attempt}`;
-    }
-    
+
+    // Use consistent numeric suffix with dash separator for all name types
+    // This avoids ambiguous names like '001a' which can be confused with stock words
+    candidate = `${normalizedName}-${attempt}`;
+
     // O(1) conflict check
     if (!usedNames.has(candidate)) {
       usedNames.add(candidate);
       return candidate;
     }
-    
+
     // Safety limit to prevent infinite loop (should never reach with good suffix strategy)
     if (attempt > 100) {
       // Fall back to guaranteed unique name with timestamp
@@ -289,7 +306,7 @@ export async function generateSessionName(
 ): Promise<string> {
   // Ensure we've scanned existing sessions to avoid collisions
   await initializeSessionNaming();
-  
+
   // Rule 1: If it's a new project, has only 1 folder, and LLM suggested a name,
   // use the LLM-suggested folder name as the session ID (with conflict handling)
   if (isNewProject && hasOnlyOneFolder && suggestedFolderName) {
@@ -300,12 +317,18 @@ export async function generateSessionName(
 
     if (cleanName.length > 0) {
       // generateUniqueName will handle conflicts by appending suffix
-      return generateUniqueName(cleanName);
+      const name = generateUniqueName(cleanName);
+      // Register immediately to prevent duplicate generation in same session
+      registerSessionName(name);
+      return name;
     }
   }
 
   // Rule 2: Use sequential numbering (001, 002, 003, ...)
-  return generateUniqueName(await getNextStockName());
+  const name = generateUniqueName(await getNextStockName());
+  // Register immediately to prevent duplicate generation in same session
+  registerSessionName(name);
+  return name;
 }
 
 /**
@@ -390,13 +413,16 @@ export function unregisterSessionName(name: string): void {
   if (usedNames.has(lowerName)) {
     usedNames.delete(lowerName);
     filesystemCheckCache.delete(lowerName);
-    
+
     // Sequential names (001-999) and stock words can be reused safely
     const isSequential = /^\d{3}$/.test(lowerName);
     const isStockWord = STOCK_WORDS.some(w => w.toLowerCase() === lowerName);
-    
-    if (!isSequential && !isStockWord) {
-      // It's a generated name with suffix, safe to allow reuse
+
+    // Check if it's a suffixed name (e.g., 001-1, alpha-2) - these are safe to reuse
+    const isSuffixedName = /^(\d{3}|\w+)-\d+$/.test(lowerName);
+
+    if (isSuffixedName || (!isSequential && !isStockWord)) {
+      // It's a generated name with suffix or custom name, safe to allow reuse
       logger.debug(`Unregistered session name: ${lowerName}`);
     }
   }

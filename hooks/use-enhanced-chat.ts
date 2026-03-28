@@ -464,6 +464,27 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   setAgentStatus('executing'); // Still executing background tasks
                   break;
 
+                case 'primary_response':
+                  // Primary response content from spec enhancement routing
+                  // eventData contains: { content, timestamp }
+                  // Note: File edits in primary response are handled server-side via applyFilesystemEditsFromResponse
+                  // Client just displays the content - filesystem edits come via separate 'filesystem' event
+                  if (eventData.content) {
+                    accumulatedContent += eventData.content;
+
+                    // Update the assistant message in real-time
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
+                        ? { ...msg, content: accumulatedContent }
+                        : msg
+                    ));
+                  }
+                  // Update agent status to executing if we're receiving content
+                  if (agentStatus === 'thinking') {
+                    setAgentStatus('executing');
+                  }
+                  break;
+
                 case 'done':
                   if (eventData.messageMetadata) {
                     const metadata = eventData.messageMetadata;
@@ -695,6 +716,14 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // When a refinement task completes, create/update a message with the content
                   // Each task gets its own message to show progressive improvements
                   if (eventData.stage === 'task_complete' && eventData.content) {
+                    // Extract file edits from the content for enhanced-diff-viewer display
+                    // Note: Server already applied these edits via applyFilesystemEditsFromResponse
+                    // We just extract for UI display, not for re-applying
+                    const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
+                    const compactEdits = extractCompactFileEdits(eventData.content);
+                    const writeEdits = extractFileWriteEdits(eventData.content);
+                    const allEdits = [...compactEdits, ...writeEdits];
+
                     setMessages(prev => {
                       // Remove pending message if it exists
                       const withoutPending = prev.filter(m =>
@@ -717,6 +746,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           provider: eventData.fastModel,
                           timestamp: eventData.timestamp,
                           isTaskComplete: true,
+                          // Store extracted edits for enhanced-diff-viewer display
+                          fileEdits: allEdits.length > 0 ? allEdits : undefined,
                         },
                       };
 
@@ -735,6 +766,14 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // When refinement completes, create/update summary message
                   // This happens regardless of filesystem edits
                   if (eventData.stage === 'complete') {
+                    // Extract file edits from the refined content for enhanced-diff-viewer display
+                    // Note: Server already applied these edits via applyFilesystemEditsFromResponse
+                    // We just extract for UI display, not for re-applying
+                    const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
+                    const compactEdits = extractCompactFileEdits(eventData.refinedContent || '');
+                    const writeEdits = extractFileWriteEdits(eventData.refinedContent || '');
+                    const allEdits = [...compactEdits, ...writeEdits];
+
                     setMessages(prev => {
                       // Remove pending message if it exists
                       const withoutPending = prev.filter(m =>
@@ -756,6 +795,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           specScore: eventData.specScore,
                           isRefinementSummary: true,
                           sectionsProcessed: eventData.sectionsProcessed,
+                          // Store extracted edits for enhanced-diff-viewer display
+                          fileEdits: allEdits.length > 0 ? allEdits : undefined,
                         },
                       };
 

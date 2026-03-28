@@ -9,7 +9,7 @@ export default function GlobalError({
 }) {
   return (
     <html>
-      <body>
+      <body style={{ margin: 0 }}>
         <div style={{
           background: '#0a0a0a',
           color: '#fff',
