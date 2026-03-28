@@ -56,8 +56,9 @@ export async function POST(request: NextRequest) {
 
     // Validate owner/repo (branch is validated separately after getting default)
     const validateOwnerRepo = (value: string): boolean => {
-      // GitHub allows: alphanumeric, hyphens, underscores, periods, forward slashes
-      if (!/^[\w.\-/]+$/.test(value)) {
+      // GitHub allows: alphanumeric, hyphens, underscores, periods
+      // Forward slashes are NOT allowed here to prevent path-segment injection
+      if (!/^[\w.\-]+$/.test(value)) {
         return false;
       }
       return true;

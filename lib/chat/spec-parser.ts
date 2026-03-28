@@ -96,7 +96,7 @@ function extractFirstJsonObject(text: string): string | null {
       if (depth === 0) start = i
       depth++
     } else if (ch === '}') {
-      depth--
+      if (depth > 0) depth--
       if (depth === 0 && start !== -1) {
         return text.slice(start, i + 1)
       }

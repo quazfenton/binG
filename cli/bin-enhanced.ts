@@ -364,7 +364,7 @@ async function websocketTerminal(sandboxId: string): Promise<void> {
       { method: 'GET' }
     );
 
-    const wsUrl = wsInfo.url || wsInfo.sseUrl || 
+    const wsUrl = wsInfo.wsUrl || wsInfo.url || wsInfo.sseUrl ||
       `ws://localhost:3001/ws?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(actualSandboxId)}`;
     
     // Connect to WebSocket
