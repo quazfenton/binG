@@ -649,12 +649,26 @@ export class DatabaseOperations {
     return stmt.run(id, userId, title);
   }
   
-  getConversation(id: string) {
+  getConversation(id: string, userId?: number) {
     const stmt = this.db.prepare(`
       SELECT * FROM conversations WHERE id = ? AND is_archived = FALSE
+      ${userId ? 'AND user_id = ?' : ''}
     `);
-    
-    return stmt.get(id);
+
+    return userId ? stmt.get(id, userId) : stmt.get(id);
+  }
+
+  /**
+   * Get conversation with user ownership verification
+   * SECURITY: Always use this method when accessing conversations by ID
+   */
+  getConversationById(id: string, userId: number) {
+    const stmt = this.db.prepare(`
+      SELECT * FROM conversations 
+      WHERE id = ? AND user_id = ? AND is_archived = FALSE
+    `);
+
+    return stmt.get(id, userId);
   }
   
   getUserConversations(userId: number, limit: number = 50) {
@@ -669,23 +683,47 @@ export class DatabaseOperations {
   }
   
   // Message operations
+  /**
+   * Save a message to a conversation
+   * SECURITY: Caller should verify conversation ownership before calling
+   */
   saveMessage(id: string, conversationId: string, role: string, content: string, provider?: string, model?: string) {
     const stmt = this.db.prepare(`
       INSERT INTO messages (id, conversation_id, role, content, provider, model)
       VALUES (?, ?, ?, ?, ?, ?)
     `);
-    
+
     return stmt.run(id, conversationId, role, content, provider, model);
   }
-  
+
+  /**
+   * Get messages for a conversation without user verification
+   * SECURITY: Caller must verify conversation ownership before calling
+   * @deprecated Use getConversationMessagesWithAuth() instead
+   */
   getConversationMessages(conversationId: string) {
     const stmt = this.db.prepare(`
-      SELECT * FROM messages 
+      SELECT * FROM messages
       WHERE conversation_id = ?
       ORDER BY created_at ASC
     `);
-    
+
     return stmt.all(conversationId);
+  }
+
+  /**
+   * Get messages for a conversation with user ownership verification
+   * SECURITY: This is the preferred method - verifies conversation belongs to user
+   */
+  getConversationMessagesWithAuth(conversationId: string, userId: number) {
+    const stmt = this.db.prepare(`
+      SELECT m.* FROM messages m
+      INNER JOIN conversations c ON m.conversation_id = c.id
+      WHERE m.conversation_id = ? AND c.user_id = ?
+      ORDER BY m.created_at ASC
+    `);
+
+    return stmt.all(conversationId, userId);
   }
   
   // Usage tracking

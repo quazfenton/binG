@@ -646,14 +646,22 @@ export default function InteractionPanel({
     }
   }, []);
 
-  // Auto-dismiss workspace notification after 8 seconds and save to localStorage
+  // Gradual fade-out workspace notification
+  const [workspaceNotifFading, setWorkspaceNotifFading] = useState(false);
   useEffect(() => {
     if (showWorkspaceNotification) {
-      const timer = setTimeout(() => {
+      const fadeTimer = setTimeout(() => {
+        setWorkspaceNotifFading(true);
+      }, 5000);
+      const removeTimer = setTimeout(() => {
         setShowWorkspaceNotification(false);
+        setWorkspaceNotifFading(false);
         localStorage.setItem("bing_workspace_panel_notification", "seen");
-      }, 8000);
-      return () => clearTimeout(timer);
+      }, 9000);
+      return () => {
+        clearTimeout(fadeTimer);
+        clearTimeout(removeTimer);
+      };
     }
   }, [showWorkspaceNotification]);
 
@@ -1630,34 +1638,47 @@ export default function InteractionPanel({
           {/* First-Visit Notification for Workspace Panel */}
           {showWorkspaceNotification && (
             <div
-              className="absolute top-14 left-2 z-[71] animate-in fade-in slide-in-from-top-2 duration-500"
-              style={{ animation: 'fadeInSlide 0.5s ease-out, fadeOutSlide 0.5s ease-in 7.5s forwards' }}
+              className="absolute bottom-full mb-2 left-2 z-[71] transition-opacity duration-[3500ms] ease-out"
+              style={{
+                opacity: workspaceNotifFading ? 0 : 1,
+                animation: 'fadeInSlideUp 0.5s ease-out',
+              }}
             >
-              <div className="bg-gradient-to-r from-yellow-500/90 to-amber-500/90 backdrop-blur-md rounded-lg p-3 shadow-lg shadow-yellow-500/20 border border-yellow-400/30 max-w-[280px]">
+              <div className="relative bg-gradient-to-r from-yellow-500/30 to-amber-500/30 backdrop-blur-sm rounded-lg p-3 shadow-md shadow-yellow-500/10 border border-yellow-400/15 max-w-[280px]">
+                {/* Downward-pointing arrow toward the icon */}
+                <div
+                  className="absolute -bottom-1.5 left-3 w-3 h-3 rotate-45"
+                  style={{
+                    background: 'linear-gradient(135deg, rgba(234,179,8,0.3), rgba(245,158,11,0.3))',
+                    borderRight: '1px solid rgba(250,204,21,0.15)',
+                    borderBottom: '1px solid rgba(250,204,21,0.15)',
+                  }}
+                />
                 <div className="flex items-start gap-2">
-                  <Bell className="w-4 h-4 text-white mt-0.5 flex-shrink-0" />
+                  <Bell className="w-4 h-4 text-yellow-300/80 mt-0.5 flex-shrink-0" />
                   <div className="flex-1">
-                    <p className="text-white text-xs font-semibold">Workspace Panel</p>
-                    <p className="text-yellow-100 text-[11px] mt-0.5 leading-relaxed">
+                    <p className="text-white/90 text-xs font-semibold">Workspace Panel</p>
+                    <p className="text-yellow-200/70 text-[11px] mt-0.5 leading-relaxed">
                       Click the <SquareSplitHorizontal className="w-3 h-3 inline -mt-0.5 mx-0.5" /> icon to open the experimental workspace panel with file explorer, agent status, and more!
                     </p>
                   </div>
                   <button
                     onClick={() => {
                       setShowWorkspaceNotification(false);
+                      setWorkspaceNotifFading(false);
                       localStorage.setItem("bing_workspace_panel_notification", "seen");
                     }}
-                    className="text-yellow-200 hover:text-white transition-colors flex-shrink-0"
+                    className="text-yellow-300/60 hover:text-white/90 transition-colors flex-shrink-0"
                     title="Dismiss"
                   >
                     <X className="w-3.5 h-3.5" />
                   </button>
                 </div>
                 {/* Progress bar showing time remaining */}
-                <div className="mt-2 h-0.5 bg-yellow-400/30 rounded-full overflow-hidden">
-                  <div 
-                    className="h-full bg-yellow-300 rounded-full"
-                    style={{ 
+                <div className="mt-2 h-0.5 bg-yellow-400/15 rounded-full overflow-hidden">
+                  <div
+                    className="h-full bg-yellow-300/50 rounded-full"
+                    style={{
                       animation: 'shrinkWidth 8s linear',
                       width: '100%'
                     }}

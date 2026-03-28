@@ -133,16 +133,41 @@ export default function MessageBubble({
   }, [message.metadata?.reasoningChunks]);
 
   const fileEditInfo = useMemo(() => {
+    // First check for filesystem transaction (standard chat flow)
     const metadataFilesystem = (message.metadata as any)?.filesystem;
-    if (!metadataFilesystem || typeof metadataFilesystem !== "object") return null;
-    const txId = typeof metadataFilesystem.transactionId === "string" ? metadataFilesystem.transactionId : "";
-    if (!txId) return null;
-    return {
-      transactionId: txId,
-      applied: Array.isArray(metadataFilesystem.applied) ? metadataFilesystem.applied : [],
-      errors: Array.isArray(metadataFilesystem.errors) ? metadataFilesystem.errors : [],
-      status: typeof metadataFilesystem.status === "string" ? metadataFilesystem.status : "auto_applied",
-    };
+    if (metadataFilesystem && typeof metadataFilesystem === "object") {
+      const txId = typeof metadataFilesystem.transactionId === "string" ? metadataFilesystem.transactionId : "";
+      if (txId) {
+        return {
+          transactionId: txId,
+          applied: Array.isArray(metadataFilesystem.applied) ? metadataFilesystem.applied : [],
+          errors: Array.isArray(metadataFilesystem.errors) ? metadataFilesystem.errors : [],
+          status: typeof metadataFilesystem.status === "string" ? metadataFilesystem.status : "auto_applied",
+          isSpecEnhancement: false,
+        };
+      }
+    }
+    
+    // Check for spec enhancement file edits (stored directly in metadata.fileEdits)
+    const metadataFileEdits = (message.metadata as any)?.fileEdits;
+    if (metadataFileEdits && Array.isArray(metadataFileEdits) && metadataFileEdits.length > 0) {
+      // Spec enhancement edits are already applied server-side, just for display
+      return {
+        transactionId: undefined, // No transaction for spec enhancement
+        applied: metadataFileEdits.map((edit: any) => ({
+          path: edit.path,
+          operation: 'write',
+          version: 1,
+          existedBefore: false,
+          content: edit.content, // Store full content for diff viewer
+        })),
+        errors: [],
+        status: 'auto_applied', // Already applied server-side
+        isSpecEnhancement: true, // Flag for UI handling
+      };
+    }
+    
+    return null;
   }, [message.metadata]);
 
   useEffect(() => {
@@ -981,13 +1006,15 @@ export default function MessageBubble({
                 File edits: {fileEditInfo.applied.length} applied
               </span>
               <span className="text-white/60">
-                {fileEditDecision === "reverted_with_conflicts"
-                  ? "Reverted with conflicts"
-                  : fileEditDecision === "denied"
-                    ? "Denied and reverted"
-                    : fileEditDecision === "accepted" || fileEditDecision === "auto_applied"
-                      ? "Auto accepted"
-                      : "Pending"}
+                {fileEditInfo.isSpecEnhancement
+                  ? "Applied (spec enhancement)"
+                  : fileEditDecision === "reverted_with_conflicts"
+                    ? "Reverted with conflicts"
+                    : fileEditDecision === "denied"
+                      ? "Denied and reverted"
+                      : fileEditDecision === "accepted" || fileEditDecision === "auto_applied"
+                        ? "Auto accepted"
+                        : "Pending"}
               </span>
             </div>
             {fileEditInfo.applied.length > 0 && (
@@ -1007,36 +1034,39 @@ export default function MessageBubble({
                 )}
               </div>
             )}
-            <div className="mt-2 flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 px-2 text-[11px]"
-                onClick={handleAcceptEdits}
-                disabled={
-                  isApplyingEditAction ||
-                  fileEditDecision === "accepted" ||
-                  fileEditDecision === "auto_applied"
-                }
-                title="Accept the AI's file changes permanently"
-              >
-                Accept
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                className="h-7 px-2 text-[11px]"
-                onClick={handleDenyEdits}
-                disabled={
-                  isApplyingEditAction ||
-                  fileEditDecision === "denied" ||
-                  fileEditDecision === "reverted_with_conflicts"
-                }
-                title="Revert all file changes to their previous state using Git-backed rollback"
-              >
-                Deny + Revert
-              </Button>
-            </div>
+            {/* Only show Accept/Deny buttons for non-spec-enhancement edits */}
+            {!fileEditInfo.isSpecEnhancement && (
+              <div className="mt-2 flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={handleAcceptEdits}
+                  disabled={
+                    isApplyingEditAction ||
+                    fileEditDecision === "accepted" ||
+                    fileEditDecision === "auto_applied"
+                  }
+                  title="Accept the AI's file changes permanently"
+                >
+                  Accept
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={handleDenyEdits}
+                  disabled={
+                    isApplyingEditAction ||
+                    fileEditDecision === "denied" ||
+                    fileEditDecision === "reverted_with_conflicts"
+                  }
+                  title="Revert all file changes to their previous state using Git-backed rollback"
+                >
+                  Deny + Revert
+                </Button>
+              </div>
+            )}
             {/* Enhanced Diff Viewer */}
             {fileEditInfo.applied.length > 0 && (
               <div className="mt-3 pt-3 border-t border-white/10">
@@ -1061,10 +1091,11 @@ export default function MessageBubble({
                     <EnhancedDiffViewer
                       key={`${edit.path}-${edit.version}`}
                       path={edit.path}
-                      serverContent={edit.diff || edit.content || ''}
+                      serverContent={edit.content || edit.diff || ''}
                       compareWithLocal={false}
                       compareWithGit={false}
                       showUnsynced={false}
+                      isFullContent={!edit.diff} // If no diff, treat as full content
                     />
                   ))}
                 </div>
