@@ -60,6 +60,9 @@ interface AgentEvent {
 async function publishEvent(event: AgentEvent): Promise<void> {
   const message = JSON.stringify(event);
   await redisPub.publish(PUBSUB_CHANNEL, message);
+  if (event.sessionId) {
+    await redisPub.publish(`${PUBSUB_CHANNEL}:${event.sessionId}`, message);
+  }
   try {
     await redis.xadd(REDIS_STREAM_KEY, '*', 'event', message);
   } catch (e) {
@@ -69,13 +72,15 @@ async function publishEvent(event: AgentEvent): Promise<void> {
 
 async function subscribeToSession(sessionId: string, callback: (event: AgentEvent) => void): Promise<Redis> {
   const subscriber = new Redis(REDIS_URL);
-  await subscriber.psubscribe(`${PUBSUB_CHANNEL}:${sessionId}`, `${PUBSUB_CHANNEL}:*`);
-  subscriber.on('pmessage', (pattern: string, channel: string, message: string) => {
+  // Only subscribe to the session-specific channel to avoid processing unrelated events
+  const sessionChannel = `${PUBSUB_CHANNEL}:${sessionId}`;
+  await subscriber.subscribe(sessionChannel);
+  subscriber.on('message', (channel: string, message: string) => {
+    // Ignore messages from other channels
+    if (channel !== sessionChannel) return;
     try {
       const event: AgentEvent = JSON.parse(message);
-      if (event.sessionId === sessionId || channel === `${PUBSUB_CHANNEL}:*`) {
-        callback(event);
-      }
+      callback(event);
     } catch (e) {
       logger.error('Failed to parse event', { error: e });
     }
@@ -158,7 +163,7 @@ async function start() {
       request.raw.on('close', () => {
         isActive = false;
         clearInterval(heartbeat);
-        if (subscriber) { subscriber.punsubscribe(); subscriber.disconnect(); }
+        if (subscriber) { subscriber.unsubscribe(); subscriber.disconnect(); }
         logger.info('Session disconnected', { sessionId });
       });
     } catch (error: any) {

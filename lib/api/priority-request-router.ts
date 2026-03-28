@@ -64,9 +64,9 @@ interface CircuitBreakerState {
  * - Half-open allows 1 test request
  */
 const DEFAULT_CIRCUIT_BREAKER_CONFIG: CircuitBreakerConfig = {
-  failureThreshold: 5,
-  recoveryTimeoutMs: 30000,  // 30 seconds
-  failureWindowMs: 60000,    // 1 minute
+  failureThreshold: 10,
+  recoveryTimeoutMs: 15000,  // 15 seconds — recover faster
+  failureWindowMs: 90000,    // 90 seconds — wider window
 };
 
 /**

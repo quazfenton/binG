@@ -12,7 +12,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { createLogger } from '@/lib/utils/logger';
-import { withAnonSessionCookie } from '@/lib/virtual-filesystem';
+import { withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveFilesystemOwnerWithFallback } from '../../filesystem/utils';
 import { generateSecureId } from '@/lib/utils';
 

@@ -30,12 +30,22 @@ export const SSE_EVENT_TYPES = {
   REASONING: 'reasoning',
   /** Sandbox output (stdout/stderr) */
   SANDBOX_OUTPUT: 'sandbox_output',
-  /** Stream completed */
+  /** Progressive file edit detected during streaming */
+  FILE_EDIT: 'file_edit',
+  /** Primary response completed (stream still open for background tasks) */
+  PRIMARY_DONE: 'primary_done',
+  /** Stream completed (all background tasks finished) */
   DONE: 'done',
   /** Stream error */
   ERROR: 'error',
   /** Heartbeat / keep-alive */
   HEARTBEAT: 'heartbeat',
+  /** Spec amplification lifecycle event */
+  SPEC_AMPLIFICATION: 'spec_amplification',
+  /** Spec section refinement progress */
+  SPEC_REFINEMENT: 'spec_refinement',
+  /** DAG task execution status */
+  DAG_TASK_STATUS: 'dag_task_status',
 } as const;
 
 export type SSEEventTypeName = typeof SSE_EVENT_TYPES[keyof typeof SSE_EVENT_TYPES];
@@ -108,6 +118,100 @@ export interface SSESandboxOutputPayload {
   timestamp: number;
 }
 
+export interface SSEFileEditPayload {
+  /** File path */
+  path: string;
+  /** Status: detected = LLM generated edit, applied = saved to filesystem */
+  status: 'detected' | 'applied' | 'error';
+  /** File operation type */
+  operation?: 'write' | 'patch' | 'delete';
+  /** Error message if status is error */
+  error?: string;
+  /** Timestamp */
+  timestamp: number;
+}
+
+export interface SSESpecAmplificationPayload {
+  /** Amplification stage: started, spec_generated, refining, task_complete, complete, error */
+  stage: 'started' | 'spec_generated' | 'refining' | 'task_complete' | 'complete' | 'error' | 'complete_with_timeouts';
+  /** Fast model used for spec generation */
+  fastModel?: string;
+  /** Spec quality score (1-10) */
+  specScore?: number;
+  /** Number of sections generated */
+  sectionsGenerated?: number;
+  /** Current refinement iteration */
+  currentIteration?: number;
+  /** Total iterations planned */
+  totalIterations?: number;
+  /** Current section being refined */
+  currentSection?: string;
+  /** Task ID for task_complete stage */
+  taskId?: string;
+  /** Task title for task_complete stage */
+  taskTitle?: string;
+  /** Refined content for task_complete stage (to be displayed as assistant message) */
+  content?: string;
+  /** Error message if stage is error */
+  error?: string;
+  /** Timestamp */
+  timestamp: number;
+  /** Refined output (on complete stage) */
+  refinedContent?: string;
+  /** Filesystem edits detected */
+  filesystem?: {
+    status: 'detected' | 'applied';
+    applied?: Array<{ path: string; operation: string; timestamp: number }>;
+  };
+  /** File writes detected */
+  fileWrites?: Array<{ path: string; operation: string }>;
+  /** Has file writes */
+  hasFilewrites?: boolean;
+  /** Timed out tasks (for complete_with_timeouts stage) */
+  timedOutTasks?: string[];
+}
+
+export interface SSESpecRefinementPayload {
+  /** Section title being refined */
+  section: string;
+  /** Tasks in this section */
+  tasks: string[];
+  /** Refinement progress: 0-100 */
+  progress: number;
+  /** Refined content chunk (streaming) */
+  content?: string;
+  /** Timestamp */
+  timestamp: number;
+}
+
+export interface DAGTaskStatus {
+  /** Task ID */
+  taskId: string;
+  /** Task title/description */
+  title: string;
+  /** Status: pending, running, complete, error */
+  status: 'pending' | 'running' | 'complete' | 'error';
+  /** Dependencies (task IDs that must complete first) */
+  dependencies: string[];
+  /** Error message if status is error */
+  error?: string;
+  /** Start timestamp */
+  startedAt?: number;
+  /** Complete timestamp */
+  completedAt?: number;
+}
+
+export interface SSEDAGTaskStatusPayload {
+  /** All tasks with their status */
+  tasks: DAGTaskStatus[];
+  /** Overall DAG progress: 0-100 */
+  overallProgress: number;
+  /** Currently executing tasks */
+  activeTasks: string[];
+  /** Timestamp */
+  timestamp: number;
+}
+
 export interface SSEDonePayload {
   success: boolean;
   content: string;
@@ -133,6 +237,10 @@ export type SSEEvent =
   | { type: typeof SSE_EVENT_TYPES.DIFFS; data: SSEDiffsPayload }
   | { type: typeof SSE_EVENT_TYPES.REASONING; data: SSEReasoningPayload }
   | { type: typeof SSE_EVENT_TYPES.SANDBOX_OUTPUT; data: SSESandboxOutputPayload }
+  | { type: typeof SSE_EVENT_TYPES.FILE_EDIT; data: SSEFileEditPayload }
+  | { type: typeof SSE_EVENT_TYPES.SPEC_AMPLIFICATION; data: SSESpecAmplificationPayload }
+  | { type: typeof SSE_EVENT_TYPES.SPEC_REFINEMENT; data: SSESpecRefinementPayload }
+  | { type: typeof SSE_EVENT_TYPES.DAG_TASK_STATUS; data: SSEDAGTaskStatusPayload }
   | { type: typeof SSE_EVENT_TYPES.DONE; data: SSEDonePayload }
   | { type: typeof SSE_EVENT_TYPES.ERROR; data: SSEErrorPayload }
   | { type: typeof SSE_EVENT_TYPES.HEARTBEAT; data: Record<string, unknown> };

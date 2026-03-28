@@ -85,6 +85,10 @@ export const SmitheryConnectionSchema = z.object({
 export class SmitheryService {
   private apiKey: string;
   private baseUrl: string;
+  
+  // Cache for API responses
+  private cache = new Map<string, { data: any; timestamp: number }>();
+  private readonly CACHE_TTL = 5 * 60 * 1000; // 5 minutes
 
   constructor(apiKey?: string) {
     this.apiKey = apiKey || process.env.SMITHERY_API_KEY || '';
@@ -96,6 +100,37 @@ export class SmitheryService {
    */
   isConfigured(): boolean {
     return !!this.apiKey;
+  }
+
+  /**
+   * Get cached data if available and not expired
+   */
+  private getCached<T>(key: string): T | null {
+    const cached = this.cache.get(key);
+    if (cached && Date.now() - cached.timestamp < this.CACHE_TTL) {
+      return cached.data as T;
+    }
+    if (cached) {
+      this.cache.delete(key);
+    }
+    return null;
+  }
+
+  /**
+   * Set cached data
+   */
+  private setCached<T>(key: string, data: T): void {
+    this.cache.set(key, { data, timestamp: Date.now() });
+    
+    // Cleanup old entries if cache grows too large
+    if (this.cache.size > 100) {
+      const now = Date.now();
+      for (const [key, value] of this.cache.entries()) {
+        if (now - value.timestamp > this.CACHE_TTL) {
+          this.cache.delete(key);
+        }
+      }
+    }
   }
 
   private async request<T>(endpoint: string, options: RequestInit = {}): Promise<T> {
@@ -132,6 +167,12 @@ export class SmitheryService {
     namespace?: string;
     ownerId?: string;
   }): Promise<SmitheryServiceServer[]> {
+    const cacheKey = `search:${query}:${JSON.stringify(options || {})}`;
+    const cached = this.getCached<SmitheryServiceServer[]>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const params = new URLSearchParams({ q: query });
 
     if (options?.limit) params.set('limit', String(options.limit));
@@ -142,7 +183,10 @@ export class SmitheryService {
     if (options?.ownerId) params.set('ownerId', options.ownerId);
 
     const result = await this.request<any>(`/servers?${params.toString()}`);
-    return (result.servers || []).map((server: any) => SmitheryServerSchema.parse(server) as SmitheryServiceServer);
+    const servers = (result.servers || []).map((server: any) => SmitheryServerSchema.parse(server) as SmitheryServiceServer);
+    
+    this.setCached(cacheKey, servers);
+    return servers;
   }
 
   /**
@@ -150,8 +194,16 @@ export class SmitheryService {
    * @see https://smithery.ai/docs/api-reference/servers/get-a-server
    */
   async getServer(namespace: string, serverName: string): Promise<SmitheryServiceServer> {
+    const cacheKey = `server:${namespace}:${serverName}`;
+    const cached = this.getCached<SmitheryServiceServer>(cacheKey);
+    if (cached) {
+      return cached;
+    }
+
     const server = await this.request<any>(`/servers/${namespace}/${serverName}`);
-    return SmitheryServerSchema.parse(server) as SmitheryServiceServer;
+    const parsed = SmitheryServerSchema.parse(server) as SmitheryServiceServer;
+    this.setCached(cacheKey, parsed);
+    return parsed;
   }
 
   /**

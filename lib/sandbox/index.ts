@@ -315,3 +315,20 @@ export {
   type DownloadResult,
   type StoredFile,
 } from './phase3-integration';
+
+// Provider Health - Track failure rates for routing
+export {
+  providerHealthTracker,
+  ProviderHealthTracker,
+  type ProviderHealthScore,
+  type ProviderHealthConfig,
+  type ProviderCallRecord,
+} from './provider-health';
+
+// Snapshot Manager - Named environment snapshots
+export {
+  snapshotManager,
+  SnapshotManager,
+  type SnapshotInfo,
+  type SnapshotManagerConfig,
+} from './snapshot-manager';

@@ -1,6 +1,9 @@
+// Server-only module - do not import directly in Client Components
+export const runtime = 'nodejs';
+
 import { virtualFilesystem } from './virtual-filesystem-service';
-import { filesystemEditDatabase } from './filesystem-edit-database';
 import { getDatabase } from '@/lib/database/connection';
+import { filesystemEditDatabase } from './filesystem-edit-database';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('FilesystemEditSession');
@@ -58,9 +61,17 @@ class FilesystemEditSessionService {
    */
   private ensureInitialized(): void {
     if (this.initialized) return;
-    
+
     try {
       this.db = getDatabase();
+      
+      // Handle case where database is not yet initialized
+      if (!this.db) {
+        console.warn('[FilesystemEditSession] Database not ready, using in-memory only');
+        this.initialized = true;
+        return;
+      }
+      
       // Create table for persisting transactions
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS fs_edit_transactions (
@@ -120,17 +131,30 @@ class FilesystemEditSessionService {
    */
   private loadTransactionsFromDb(): void {
     if (!this.db) return;
-    
+
     try {
       const stmt = this.db.prepare(`
-        SELECT * FROM fs_edit_transactions 
-        WHERE status IN ('auto_applied', 'accepted') 
+        SELECT * FROM fs_edit_transactions
+        WHERE status IN ('auto_applied', 'accepted')
         AND datetime(created_at) > datetime('now', '-24 hours')
         ORDER BY created_at DESC
         LIMIT 100
       `);
-      
-      const rows = stmt.all() as any[];
+
+      // Type-safe database row interface
+      interface TransactionRow {
+        id: string;
+        owner_id: string;
+        conversation_id: string;
+        request_id: string;
+        created_at: string;
+        status: string;
+        operations_json: string;
+        errors_json: string;
+        denied_reason: string | null;
+      }
+
+      const rows = stmt.all() as TransactionRow[];
       for (const row of rows) {
         try {
           const tx: FilesystemEditTransaction = {
@@ -139,10 +163,10 @@ class FilesystemEditSessionService {
             conversationId: row.conversation_id,
             requestId: row.request_id,
             createdAt: row.created_at,
-            status: row.status,
+            status: row.status as FilesystemEditTransactionStatus,
             operations: JSON.parse(row.operations_json || '[]'),
             errors: JSON.parse(row.errors_json || '[]'),
-            deniedReason: row.denied_reason,
+            deniedReason: row.denied_reason || undefined,
           };
           this.transactions.set(tx.id, tx);
         } catch (parseError) {
@@ -231,22 +255,35 @@ class FilesystemEditSessionService {
 
   /**
    * Record operation with size validation
-   * 
+   *
    * SECURITY: Validates operation count and total transaction size
+   * 
+   * @param transactionId - Transaction to record operation in
+   * @param operation - Operation to record
+   * @returns true if operation was recorded, false if validation failed
    */
   recordOperation(
     transactionId: string,
     operation: FilesystemEditOperationRecord,
-  ): void {
+  ): boolean {
     const tx = this.transactions.get(transactionId);
-    if (!tx) return;
+    if (!tx) {
+      logger.warn(`[FilesystemEditSession] Cannot record operation: transaction ${transactionId} not found`);
+      return false;
+    }
+
+    // Validate transaction can still be modified
+    if (tx.status !== 'auto_applied') {
+      logger.warn(`[FilesystemEditSession] Cannot record operation: transaction ${transactionId} already finalized (${tx.status})`);
+      return false;
+    }
 
     // SECURITY: Validate operation count limit
     const MAX_OPERATIONS_PER_TRANSACTION = 50;
     if (tx.operations.length >= MAX_OPERATIONS_PER_TRANSACTION) {
       tx.errors.push(`Too many operations: ${tx.operations.length + 1} (max ${MAX_OPERATIONS_PER_TRANSACTION})`);
       console.warn(`[FilesystemEditSession] Operation limit exceeded for transaction ${transactionId}`);
-      return;
+      return false;
     }
 
     // SECURITY: Validate total transaction size (10MB limit)
@@ -257,42 +294,106 @@ class FilesystemEditSessionService {
         `Transaction too large: ${(currentSize / 1024).toFixed(2)}KB (max ${MAX_TRANSACTION_SIZE_BYTES / 1024}KB)`
       );
       console.warn(`[FilesystemEditSession] Transaction size limit exceeded for ${transactionId}`);
-      return;
+      return false;
     }
 
     tx.operations.push(operation);
+    return true;
   }
 
-  addError(transactionId: string, message: string): void {
+  /**
+   * Add error to transaction with validation
+   */
+  addError(transactionId: string, message: string): boolean {
     const tx = this.transactions.get(transactionId);
-    if (!tx) return;
+    if (!tx) {
+      logger.warn(`[FilesystemEditSession] Cannot add error: transaction ${transactionId} not found`);
+      return false;
+    }
     tx.errors.push(message);
+    return true;
   }
 
+  /**
+   * Accept a transaction (commit changes permanently)
+   * 
+   * RACE CONDITION PROTECTION: Checks if transaction is already finalized
+   * before accepting to prevent concurrent accept/deny issues.
+   * 
+   * MEMORY CLEANUP: Schedules transaction for removal after 1 hour.
+   */
   acceptTransaction(transactionId: string): FilesystemEditTransaction | null {
     const tx = this.transactions.get(transactionId);
-    if (!tx) return null;
+    if (!tx) {
+      logger.warn(`[FilesystemEditSession] Cannot accept: transaction ${transactionId} not found`);
+      return null;
+    }
+
+    // RACE CONDITION: Check if already finalized
     if (tx.status === 'denied' || tx.status === 'reverted_with_conflicts') {
+      logger.warn(`[FilesystemEditSession] Cannot accept: transaction ${transactionId} already finalized (${tx.status})`);
       return tx;
     }
+
+    // RACE CONDITION: Check if already accepted
+    if (tx.status === 'accepted') {
+      logger.debug(`[FilesystemEditSession] Transaction ${transactionId} already accepted`);
+      return tx;
+    }
+
     tx.status = 'accepted';
 
     // Persist to database
     filesystemEditDatabase.persistTransaction(tx);
 
-    // Remove from in-memory map to prevent memory leak (already persisted to DB)
-    this.transactions.delete(transactionId);
+    // MEMORY CLEANUP: Schedule removal from in-memory map after 1 hour
+    // (already persisted to DB, this prevents memory leaks)
+    setTimeout(() => {
+      this.transactions.delete(transactionId);
+      logger.debug(`[FilesystemEditSession] Cleaned up accepted transaction ${transactionId} from memory`);
+    }, 60 * 60 * 1000); // 1 hour
 
     return tx;
   }
 
+  /**
+   * Deny a transaction (rollback changes with conflict detection)
+   * 
+   * RACE CONDITION PROTECTION: Checks if transaction is already finalized
+   * before denying to prevent concurrent accept/deny issues.
+   * 
+   * MEMORY CLEANUP: Schedules transaction for removal after 1 hour.
+   */
   async denyTransaction(input: {
     transactionId: string;
     reason?: string;
   }): Promise<DenyFilesystemEditResult | null> {
     // Use getTransaction to support both in-memory and database-persisted transactions
     const tx = await this.getTransaction(input.transactionId);
-    if (!tx) return null;
+    if (!tx) {
+      logger.warn(`[FilesystemEditSession] Cannot deny: transaction ${input.transactionId} not found`);
+      return null;
+    }
+
+    // RACE CONDITION: Check if already finalized
+    if (tx.status === 'denied' || tx.status === 'reverted_with_conflicts') {
+      logger.warn(`[FilesystemEditSession] Cannot deny: transaction ${input.transactionId} already finalized (${tx.status})`);
+      return {
+        transaction: tx,
+        revertedPaths: [],
+        conflicts: [],
+      };
+    }
+
+    // RACE CONDITION: Check if already accepted
+    if (tx.status === 'accepted') {
+      logger.warn(`[FilesystemEditSession] Cannot deny: transaction ${input.transactionId} already accepted`);
+      return {
+        transaction: tx,
+        revertedPaths: [],
+        conflicts: ['Transaction already accepted, cannot deny'],
+      };
+    }
 
     const revertedPaths: string[] = [];
     const conflicts: string[] = [];
@@ -462,6 +563,13 @@ class FilesystemEditSessionService {
       denialList.slice(-20),
     );
 
+    // MEMORY CLEANUP: Schedule removal from in-memory map after 1 hour
+    // (already persisted to DB, this prevents memory leaks)
+    setTimeout(() => {
+      this.transactions.delete(tx.id);
+      logger.debug(`[FilesystemEditSession] Cleaned up denied transaction ${tx.id} from memory`);
+    }, 60 * 60 * 1000); // 1 hour
+
     return {
       transaction: tx,
       revertedPaths,
@@ -499,9 +607,38 @@ class FilesystemEditSessionService {
       this.transactions.set(transactionId, dbTx);
       return dbTx;
     }
-    
+
     // Fallback to in-memory
     return this.transactions.get(transactionId) || null;
+  }
+
+  /**
+   * Clean up old transactions from memory (not database)
+   * 
+   * Call this periodically to prevent memory leaks.
+   * Transactions older than maxAgeHours are removed from the in-memory Map.
+   * Database records are preserved for persistence.
+   * 
+   * @param maxAgeHours - Maximum age in hours (default: 24)
+   * @returns Number of transactions cleaned up
+   */
+  cleanupOldTransactions(maxAgeHours = 24): number {
+    const cutoff = Date.now() - (maxAgeHours * 60 * 60 * 1000);
+    let cleaned = 0;
+
+    for (const [id, tx] of this.transactions.entries()) {
+      const txTime = new Date(tx.createdAt).getTime();
+      if (txTime < cutoff) {
+        this.transactions.delete(id);
+        cleaned++;
+      }
+    }
+
+    if (cleaned > 0) {
+      logger.info(`[FilesystemEditSession] Cleaned up ${cleaned} old transactions (older than ${maxAgeHours}h)`);
+    }
+
+    return cleaned;
   }
 }
 

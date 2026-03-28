@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { virtualFilesystem } from '@/lib/virtual-filesystem';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { resolveScopedPath } from '@/lib/virtual-filesystem/scope-utils';
 import { parsePatch, applyPatch } from 'diff';
 import { verifyAuth } from '@/lib/auth/jwt';
@@ -106,6 +106,7 @@ export async function POST(request: NextRequest) {
         if (changeType === 'delete') {
           // Delete the file
           await virtualFilesystem.deletePath(userId, resolvedPath);
+
           results.push({
             path: resolvedPath,
             success: true,
@@ -146,6 +147,7 @@ export async function POST(request: NextRequest) {
 
           // Write the patched content
           await virtualFilesystem.writeFile(userId, resolvedPath, patched);
+
           results.push({
             path: resolvedPath,
             success: true,

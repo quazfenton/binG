@@ -5,6 +5,16 @@
  * Provides containerized agentic capabilities with per-user isolation.
  */
 
+// Task Classifier - Multi-Factor Complexity Detection
+export {
+  createTaskClassifier,
+  classifyTask,
+  TaskClassifier,
+  type TaskClassification,
+  type ClassificationContext,
+  type TaskClassifierConfig,
+} from './task-classifier';
+
 // Session Management
 export {
   agentSessionManager,
@@ -100,6 +110,18 @@ export {
   type LoopDetectionResult,
   type ToolCallRecord,
 } from './loop-detection';
+
+// Timeout Escalation - Staged timeout strategy
+export {
+  createTimeoutEscalation,
+  TimeoutEscalation,
+  ESCALATION_PROFILES,
+  type EscalationConfig,
+  type EscalationStage,
+  type EscalationContext,
+  type EscalationResult,
+  type EscalationAction,
+} from './timeout-escalation';
 
 // Capability Chain - Chain multiple capabilities
 export {

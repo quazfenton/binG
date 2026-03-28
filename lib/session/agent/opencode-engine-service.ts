@@ -399,7 +399,30 @@ export class OpenCodeEngineService {
 - Working directory: ${this.config.workingDir}
 - Always validate code after generation
 - Use bash for system operations
-- Use file operations for code changes`);
+- Use file operations for code changes
+
+FILE WRITING SYNTAX:
+Use bash heredoc syntax for writing files (NOT XML tags):
+
+  cat > path/to/file.ts << 'EOF'
+  // Your code here
+  export default function App() {
+    return <div>Hello</div>;
+  }
+  EOF
+
+For append mode:
+  cat >> path/to/file.ts << 'EOF'
+  // Additional code
+  EOF
+
+For directories:
+  mkdir -p path/to/directory
+
+For deletion:
+  rm path/to/old-file.ts
+
+DO NOT use: <file_write>, <file_edit>, WRITE <<<, or XML-like tags`);
 
     // Task
     parts.push(`TASK: ${task}`);

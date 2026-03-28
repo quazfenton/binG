@@ -81,6 +81,7 @@ export interface CircuitBreakerState {
   failureCount: number;
   lastFailureTime: number;
   nextAttemptTime: number;
+  failureTimestamps?: number[]; // Track timestamps for time-windowed failure counting
 }
 
 class CircuitBreaker {
@@ -93,7 +94,7 @@ class CircuitBreaker {
 
   canExecute(endpoint: string): boolean {
     const state = this.getState(endpoint);
-    
+
     switch (state.state) {
       case 'CLOSED':
         return true;
@@ -117,28 +118,43 @@ class CircuitBreaker {
       state: 'CLOSED',
       failureCount: 0,
       lastFailureTime: 0,
-      nextAttemptTime: 0
+      nextAttemptTime: 0,
+      failureTimestamps: []
     });
   }
 
   onFailure(endpoint: string): void {
     const state = this.getState(endpoint);
-    const newFailureCount = state.failureCount + 1;
     const now = Date.now();
 
-    if (newFailureCount >= this.config.failureThreshold) {
+    // Initialize failure timestamps if not present
+    const failureTimestamps = state.failureTimestamps || [];
+    
+    // Add current failure timestamp
+    failureTimestamps.push(now);
+    
+    // Prune timestamps older than monitoringWindow
+    const windowStart = now - this.config.monitoringWindow;
+    const recentTimestamps = failureTimestamps.filter(ts => ts > windowStart);
+    
+    // Update state with pruned timestamps
+    const failureCount = recentTimestamps.length;
+
+    if (failureCount >= this.config.failureThreshold) {
       this.setState(endpoint, {
         ...state,
         state: 'OPEN',
-        failureCount: newFailureCount,
+        failureCount,
         lastFailureTime: now,
-        nextAttemptTime: now + this.config.recoveryTimeout
+        nextAttemptTime: now + this.config.recoveryTimeout,
+        failureTimestamps: recentTimestamps
       });
     } else {
       this.setState(endpoint, {
         ...state,
-        failureCount: newFailureCount,
-        lastFailureTime: now
+        failureCount,
+        lastFailureTime: now,
+        failureTimestamps: recentTimestamps
       });
     }
   }
@@ -150,7 +166,8 @@ class CircuitBreaker {
         state: 'CLOSED',
         failureCount: 0,
         lastFailureTime: 0,
-        nextAttemptTime: 0
+        nextAttemptTime: 0,
+        failureTimestamps: []
       });
     }
     return this.states.get(endpoint)!;
@@ -180,9 +197,9 @@ export class EnhancedAPIClient {
   };
 
   private defaultCircuitBreakerConfig: CircuitBreakerConfig = {
-    failureThreshold: 5,
-    recoveryTimeout: 30000,
-    monitoringWindow: 60000
+    failureThreshold: 10,
+    recoveryTimeout: 15000,
+    monitoringWindow: 90000
   };
 
   constructor(circuitBreakerConfig?: Partial<CircuitBreakerConfig>) {

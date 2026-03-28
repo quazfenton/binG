@@ -16,7 +16,10 @@ import { z } from 'zod';
 import { GitManager, type GitStatusResult } from '@/lib/agent/git-manager';
 import type { SandboxHandle } from '@/lib/sandbox/providers';
 import { getGitVFSSync, type GitVFSStatus } from '@/lib/virtual-filesystem/opfs/git-vfs-sync';
-import { ShadowCommitManager, type CommitResult, type CommitHistoryEntry } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
+import { ShadowCommitManager, type CommitResult, type CommitHistoryEntry, type TransactionEntry } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
+import { createLogger } from '@/lib/utils/logger';
+
+const log = createLogger('GitTools');
 
 /**
  * Create git tools for a sandbox handle
@@ -160,17 +163,80 @@ export function createGitTools(handle: SandboxHandle) {
 
           await gitManager.commit(message);
 
-          // Create shadow commit for audit trail (placeholder - actual implementation requires vfs and transactions)
-          const shadowResult: CommitResult = {
-            success: true,
+          // Create shadow commit for audit trail
+          // Requires vfs state and transaction log from context
+          let shadowResult: CommitResult = {
+            success: false,
             committedFiles: 0,
-            error: 'Shadow commit requires vfs and transactions',
+            error: 'Shadow commit requires vfs and transactions context',
           };
+
+          try {
+            // Get VFS and transactions from tool context if available
+            const shadowCommitManager = new ShadowCommitManager();
+            
+            // Build VFS state from current files
+            const vfsState: Record<string, string> = {};
+            const transactions: TransactionEntry[] = [];
+            
+            // Get committed files (after commit, staged files are now empty)
+            // Use git show to get the list of files in the latest commit
+            const committed = await handle.executeCommand('git show --name-only --pretty="" HEAD');
+            const committedFiles = committed.output.split('\n').map(f => f.trim()).filter(Boolean);
+            
+            // Read each committed file and add to VFS state
+            for (const filePath of committedFiles) {
+              try {
+                const result = await handle.readFile(filePath);
+                if (result.success && result.content) {
+                  vfsState[filePath] = result.content;
+                  transactions.push({
+                    path: filePath,
+                    type: 'UPDATE',
+                    timestamp: Date.now(),
+                    newContent: result.content,
+                  });
+                } else if (result.success === false) {
+                  // File no longer exists at HEAD — this is a deletion
+                  // Sandbox providers return success: false for missing files (not throw)
+                  log.debug(`Committed file ${filePath} no longer readable (success=false), recording as DELETE`);
+                  delete vfsState[filePath];
+                  transactions.push({
+                    path: filePath,
+                    type: 'DELETE',
+                    timestamp: Date.now(),
+                  });
+                }
+              } catch (error: any) {
+                // Fallback for unexpected errors (should not happen with well-behaved providers)
+                log.debug(`Committed file ${filePath} threw error, recording as DELETE: ${error.message}`);
+                delete vfsState[filePath];
+                transactions.push({
+                  path: filePath,
+                  type: 'DELETE',
+                  timestamp: Date.now(),
+                });
+              }
+            }
+
+            // Create shadow commit with VFS state and transactions
+            if (Object.keys(vfsState).length > 0) {
+              shadowResult = await shadowCommitManager.commit(vfsState, transactions, {
+                sessionId: handle.id,
+                message,
+                author: 'git-tools',
+                source: 'git-commit',
+              });
+            }
+          } catch (shadowError: any) {
+            log.warn('Shadow commit failed (continuing without audit trail):', shadowError.message);
+          }
 
           return {
             success: true,
             message: `Committed: ${message}`,
             shadowCommitId: shadowResult.commitId,
+            shadowSuccess: shadowResult.success,
           };
         } catch (error: any) {
           return {
@@ -482,7 +548,7 @@ export function createGitTools(handle: SandboxHandle) {
     git_shadow_rollback: tool({
       description: 'Rollback workspace to a shadow commit',
       parameters: z.object({
-        sessionId: z.string().regex(/^[A-Za-z0-9_-]+$/).describe('Session ID for tracking'),
+        sessionId: z.string().regex(/^[A-Za-z0-9:_-]+$/).describe('Session ID for tracking'),
         commitId: z.string().regex(/^[A-Za-z0-9-]+$/).describe('Shadow commit ID to rollback to'),
       }),
       execute: async ({ sessionId, commitId }) => {

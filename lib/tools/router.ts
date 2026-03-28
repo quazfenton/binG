@@ -292,8 +292,8 @@ class LocalFilesystemProvider implements CapabilityProvider {
       return { valid: false, error: 'Invalid path: contains null bytes' };
     }
 
-    // Resolve the path to absolute
-    const resolvedPath = path.resolve(inputPath);
+    // Resolve the path against workspaceRoot (not process.cwd()) to support workspace-relative paths
+    const resolvedPath = path.resolve(this.workspaceRoot, inputPath);
 
     // Ensure path is within workspace root
     const normalizedWorkspace = path.resolve(this.workspaceRoot);

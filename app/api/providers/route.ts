@@ -1,47 +1,64 @@
 import { NextRequest, NextResponse } from "next/server";
-import { llmService, PROVIDERS } from "@/lib/chat/llm-providers";
-import { resolveRequestAuth } from "@/lib/auth/request-auth";
+import { PROVIDERS, llmService, type LLMProvider } from "@/lib/chat/llm-providers";
+
+// Cache provider list to avoid repeated computation on every request
+// Since provider availability is based on env vars which don't change during runtime
+let cachedProviders: any = null;
+let cacheTimestamp = 0;
+const CACHE_TTL_MS = 300000; // Cache for 5 minutes
 
 export async function GET(request: NextRequest) {
   try {
-    // Allow anonymous access - provider list is not sensitive (only shows which providers have keys configured)
-    const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
-    
-    // Get providers that have API keys configured
-    const availableProviders = llmService.getAvailableProviders();
-    const availableProviderIds = availableProviders.map(p => p.id);
+    const now = Date.now();
 
-    // Return all providers from the PROVIDERS constant, marking which ones are available
-    const allProviders = Object.values(PROVIDERS)
-      .map(provider => {
-        // Check if this provider has API keys configured (is available)
-        const isAvailable = availableProviderIds.includes(provider.id);
-
-        return {
-          id: provider.id,
-          name: provider.name,
-          models: provider.models,
-          supportsStreaming: provider.supportsStreaming,
-          maxTokens: provider.maxTokens,
-          description: provider.description,
-          isAvailable // Add availability status for UI
-        };
+    // Return cached result if available and not expired
+    const isStale = cachedProviders && (now - cacheTimestamp) >= CACHE_TTL_MS;
+    if (cachedProviders && !isStale) {
+      return NextResponse.json(cachedProviders, {
+        headers: {
+          'Cache-Control': 'public, max-age=300, stale-while-revalidate=600',
+        },
       });
+    }
 
-    // Sort: available providers first, then unavailable ones
+    // Cache is stale or empty - recompute below
+
+    // Use canonical llmService.getAvailableProviders() for availability checks
+    const availableProviderIds = new Set(llmService.getAvailableProviders().map(p => p.id));
+
+    // Build provider list from static PROVIDERS constant
+    const allProviders = (Object.values(PROVIDERS) as LLMProvider[])
+      .map((provider: LLMProvider) => ({
+        id: provider.id,
+        name: provider.name,
+        models: provider.models,
+        supportsStreaming: provider.supportsStreaming,
+        maxTokens: provider.maxTokens,
+        description: provider.description,
+        isAvailable: availableProviderIds.has(provider.id)
+      }));
+
+    // Sort: available providers first
     const sortedProviders = allProviders.sort((a, b) => {
       if (a.isAvailable && !b.isAvailable) return -1;
       if (!a.isAvailable && b.isAvailable) return 1;
       return 0;
     });
 
-    return NextResponse.json({
+    // Cache the result
+    cachedProviders = {
       success: true,
       data: {
         providers: sortedProviders,
         defaultProvider: process.env.DEFAULT_LLM_PROVIDER || "openrouter",
-        // Use a valid default model that works with OpenRouter
         defaultModel: process.env.DEFAULT_MODEL || "google/gemma-3-1b-it:free",
+      },
+    };
+    cacheTimestamp = now;
+
+    return NextResponse.json(cachedProviders, {
+      headers: {
+        'Cache-Control': 'public, max-age=300, stale-while-revalidate=600',
       },
     });
   } catch (error) {

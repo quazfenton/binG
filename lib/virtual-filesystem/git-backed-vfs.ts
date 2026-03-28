@@ -90,8 +90,51 @@ export class GitBackedVFS {
     logger.debug(`[GitVFS] Buffered change: ${event.type} ${event.path} v${event.version}`);
   }
 
+  // Batch mode: temporarily disable auto-commit for bulk operations
+  private batchModeEnabled = false;
+  private batchModeOwnerId: string | null = null;
+  private originalAutoCommit: boolean = true; // Store original state for restore
+
+  /**
+   * Enable batch mode - disables auto-commit until flushBatch is called
+   * Use this for bulk operations like refinement file writes
+   */
+  enableBatchMode(ownerId: string): void {
+    // Store original state to restore after flush
+    this.originalAutoCommit = this.options.autoCommit;
+    this.batchModeEnabled = true;
+    this.batchModeOwnerId = ownerId;
+    this.options.autoCommit = false;
+  }
+
+  /**
+   * Flush batch mode - commit all pending changes and re-enable auto-commit
+   */
+  async flushBatch(): Promise<CommitResult> {
+    if (!this.batchModeEnabled || !this.batchModeOwnerId) {
+      return { success: true, committedFiles: 0 };
+    }
+    
+    const result = await this.commitChanges(this.batchModeOwnerId, 'Batch write (refinement)');
+    
+    // Restore original auto-commit state (not just force to true)
+    this.options.autoCommit = this.originalAutoCommit;
+    this.batchModeEnabled = false;
+    this.batchModeOwnerId = null;
+    
+    return result;
+  }
+
+  /**
+   * Check if batch mode is active
+   */
+  isBatchMode(): boolean {
+    return this.batchModeEnabled;
+  }
+
   /**
    * Write file with automatic git commit
+   * In batch mode, only tracks changes without committing
    */
   async writeFile(
     ownerId: string,
@@ -121,8 +164,9 @@ export class GitBackedVFS {
       newContent: content,
     });
 
-    // Auto-commit if enabled
-    if (this.options.autoCommit) {
+    // Auto-commit if enabled AND NOT in batch mode
+    // FIX: In batch mode, skip individual commits - will commit all at once via flushBatch()
+    if (this.options.autoCommit && !this.batchModeEnabled) {
       await this.commitChanges(ownerId, `Write ${filePath}`);
     }
 
@@ -131,6 +175,7 @@ export class GitBackedVFS {
 
   /**
    * Delete file with automatic git commit
+   * In batch mode, only tracks changes without committing
    */
   async deleteFile(ownerId: string, filePath: string): Promise<void> {
     // Get content before deletion for rollback
@@ -153,8 +198,8 @@ export class GitBackedVFS {
       originalContent: previousContent,
     });
 
-    // Auto-commit if enabled
-    if (this.options.autoCommit) {
+    // Auto-commit if enabled AND NOT in batch mode
+    if (this.options.autoCommit && !this.batchModeEnabled) {
       await this.commitChanges(ownerId, `Delete ${filePath}`);
     }
   }
@@ -245,15 +290,18 @@ export class GitBackedVFS {
         integration: 'vfs-auto-commit',
       });
 
-      // Clear buffers after successful commit
-      this.changeBuffer = [];
-      if (transactionId) {
-        this.transactionLog.delete(transactionId);
+      // FIX: Only clear buffers on SUCCESS to prevent data loss on commit failure
+      if (result.success) {
+        this.changeBuffer = [];
+        if (transactionId) {
+          this.transactionLog.delete(transactionId);
+        } else {
+          this.transactionLog.delete(ownerId);
+        }
+        logger.info(`[GitVFS] Committed ${result.committedFiles} files: ${message}`);
       } else {
-        this.transactionLog.delete(ownerId);
+        logger.warn(`[GitVFS] Commit failed, preserving pending changes: ${result.error}`);
       }
-
-      logger.info(`[GitVFS] Committed ${result.committedFiles} files: ${message}`);
 
       return result;
     } catch (error: any) {
@@ -268,17 +316,22 @@ export class GitBackedVFS {
 
   /**
    * Rollback to specific version
+   * 
+   * @param ownerId - Owner ID
+   * @param targetVersion - Version to rollback to
+   * @param targetFiles - Optional array of specific files to rollback (partial rollback)
    */
   async rollback(
     ownerId: string,
-    targetVersion: number
+    targetVersion: number,
+    targetFiles?: string[]
   ): Promise<GitVFSRollbackResult> {
     try {
       // Get shadow commit history
       const history = await this.shadowCommitManager.getCommitHistory(this.options.sessionId, 100);
 
       // Find commit at target version - match by workspaceVersion or fall back to commit message
-      const targetCommit = history.find(c => 
+      const targetCommit = history.find(c =>
         c.workspaceVersion === targetVersion ||
         (c.workspaceVersion === null && new RegExp(`\\bv${targetVersion}\\b`).test(c.message ?? ''))
       );
@@ -292,7 +345,88 @@ export class GitBackedVFS {
         };
       }
 
-      // Rollback to commit (ShadowCommitManager.rollback takes sessionId and commitId)
+      // If partial rollback requested, filter files from commit
+      if (targetFiles && targetFiles.length > 0) {
+        // Fetch full commit data to get transactions array
+        // Note: getCommitHistory() only returns diff text, not full transaction data
+        const fullCommit = await this.shadowCommitManager.getCommit(this.options.sessionId, targetCommit.commitId);
+        const allTransactions = fullCommit?.transactions || [];
+
+        // Filter transactions to only include target files
+        const filteredTransactions = allTransactions.filter(tx => 
+          targetFiles.includes(tx.path)
+        );
+
+        if (filteredTransactions.length === 0) {
+          return {
+            success: false,
+            filesRestored: 0,
+            version: targetVersion,
+            error: `None of the specified files were found in version ${targetVersion}. Files in version: ${allTransactions.map(t => t.path).join(', ')}`,
+          };
+        }
+
+        // Build VFS state with only filtered files
+        const vfs: Record<string, string> = {};
+        for (const tx of filteredTransactions) {
+          if (tx.type !== 'DELETE' && tx.newContent) {
+            vfs[tx.path] = tx.newContent;
+          }
+        }
+
+        // Restore filtered files using existing VFS instance (not a new one)
+        let restoredCount = 0;
+
+        for (const [filePath, content] of Object.entries(vfs)) {
+          try {
+            await this.vfs.writeFile(ownerId, filePath, content);
+            restoredCount++;
+          } catch (error: any) {
+            return {
+              success: false,
+              filesRestored: restoredCount,
+              version: targetVersion,
+              error: `Failed to restore ${filePath}: ${error.message}`,
+            };
+          }
+        }
+
+        // Handle DELETE transactions for target files
+        // Deduplicate by path - only process the last transaction for each file
+        const lastTransactionByPath = new Map<string, TransactionEntry>();
+        for (const tx of filteredTransactions) {
+          lastTransactionByPath.set(tx.path, tx);
+        }
+        
+        for (const tx of lastTransactionByPath.values()) {
+          if (tx.type === 'DELETE') {
+            try {
+              await this.vfs.deletePath(ownerId, tx.path);
+              restoredCount++;
+            } catch (error: any) {
+              // Ignore errors for already-deleted files
+              if (!error.message?.includes('not found') && !error.message?.includes('ENOENT')) {
+                return {
+                  success: false,
+                  filesRestored: restoredCount,
+                  version: targetVersion,
+                  error: `Failed to delete ${tx.path}: ${error.message}`,
+                };
+              }
+              restoredCount++;
+            }
+          }
+        }
+
+        logger.info(`[GitVFS] Partial rollback successful: ${restoredCount}/${targetFiles.length} files`);
+        return {
+          success: true,
+          filesRestored: restoredCount,
+          version: targetVersion,
+        };
+      }
+
+      // Full rollback - use standard ShadowCommitManager.rollback
       const result = await this.shadowCommitManager.rollback(this.options.sessionId, targetCommit.commitId);
       if (!result.success) {
         logger.error(`[GitVFS] Rollback to version ${targetVersion} failed: ${result.error}`);
@@ -429,22 +563,39 @@ export function createGitBackedVFS(
   return new GitBackedVFS(vfs, options);
 }
 
-// Singleton instances per owner
+// Singleton instances per owner+session composite key
+// Key format: ownerId:sessionId for proper commit tracking
 const gitVFSInstances = new Map<string, GitBackedVFS>();
 
 /**
  * Get or create Git-backed VFS for owner
+ * 
+ * CRITICAL FIX: Now properly handles composite ownerId:sessionId format.
+ * The sessionId passed to GitVFS must include the full composite format
+ * so that ShadowCommit queries work correctly (rollback uses scopedSessionId).
+ * 
+ * @param ownerId - The owner ID (e.g., "1" for authenticated, "anon:timestamp_random" for anonymous)
+ * @param vfs - The VFS service instance (should be the singleton)
+ * @param options - Optional configuration, including optional sessionId for composite format
  */
 export function getGitBackedVFSForOwner(
   ownerId: string,
   vfs: VirtualFilesystemService,
   options?: GitVFSOptions
 ): GitBackedVFS {
-  if (!gitVFSInstances.has(ownerId)) {
-    gitVFSInstances.set(ownerId, createGitBackedVFS(vfs, {
+  // CRITICAL FIX: Use composite key (ownerId:sessionId) for proper commit tracking
+  // If options.sessionId is provided, use ownerId:sessionId; otherwise use ownerId alone
+  const compositeKey = options?.sessionId 
+    ? `${ownerId}:${options.sessionId}` 
+    : ownerId;
+  
+  if (!gitVFSInstances.has(compositeKey)) {
+    // Pass the composite sessionId so ShadowCommit uses correct format for rollback queries
+    gitVFSInstances.set(compositeKey, createGitBackedVFS(vfs, {
       ...options,
-      sessionId: ownerId,
+      // Use composite sessionId: ownerId:sessionId or just ownerId
+      sessionId: options?.sessionId || ownerId,
     }));
   }
-  return gitVFSInstances.get(ownerId)!;
+  return gitVFSInstances.get(compositeKey)!;
 }

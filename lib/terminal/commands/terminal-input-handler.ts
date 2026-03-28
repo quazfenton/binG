@@ -51,10 +51,12 @@ export class TerminalInputHandler {
     this.writeLine = config.writeLine
     this.getPrompt = config.getPrompt
     
-    // Initialize from refs (survives reconnects)
+    // Initialize from refs - get history length to position at end (ready for up arrow)
+    const history = this.getCommandHistory()
     this.lineBuffer = ''
     this.cursorPos = 0
-    this.historyIndex = 0
+    // Start at history length so up arrow goes to last command
+    this.historyIndex = history.length
   }
 
   /**
