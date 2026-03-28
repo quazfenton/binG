@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "updatedAt": "2026-03-18T02:57:43.217Z",
+  "updatedAt": "2026-03-28T04:53:07.092Z",
   "quotas": {
     "brevo": {
       "monthlyLimit": 9000,
-      "currentUsage": 6,
+      "currentUsage": 8,
       "resetDate": "2026-04-01",
       "isDisabled": true,
       "priority": 1
@@ -36,6 +36,13 @@
       "resetDate": "2026-04-01",
       "isDisabled": true,
       "priority": 4
+    },
+    "e2b": {
+      "monthlyLimit": 1000,
+      "currentUsage": 0,
+      "resetDate": "2026-04-01",
+      "isDisabled": false,
+      "priority": 5
     }
   }
 }

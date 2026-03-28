@@ -161,14 +161,30 @@ async function writeFileTo(serverId: string, filePath: string, content: string):
   // SECURITY: Normalize and validate path to prevent traversal attacks
   const normalizedPath = path.posix.normalize(filePath)
   const workspaceRoot = '/workspace'
-  
+
   // Ensure path stays within workspace
   if (!normalizedPath.startsWith(workspaceRoot + '/') && normalizedPath !== workspaceRoot) {
     throw new Error(`Invalid path: Path traversal detected. Path must be within ${workspaceRoot}`)
   }
-  
+
+  // SECURITY: Validate filename characters to prevent shell injection
+  // Block shell metacharacters that could enable command substitution
+  const filename = path.posix.basename(normalizedPath)
+  const dangerousChars = /[`$\\;"'|&<>(){}!*\[\]?#~]/
+  if (dangerousChars.test(filename)) {
+    throw new Error(`Invalid filename: contains shell metacharacters. Filename: ${filename}`)
+  }
+
+  // Also validate directory components
   const dir = normalizedPath.substring(0, normalizedPath.lastIndexOf('/'))
   if (dir) {
+    // Check each path component for dangerous characters
+    const pathComponents = dir.split('/').filter(Boolean)
+    for (const component of pathComponents) {
+      if (dangerousChars.test(component)) {
+        throw new Error(`Invalid path component: contains shell metacharacters. Component: ${component}`)
+      }
+    }
     await execCommand(serverId, `mkdir -p ${JSON.stringify(dir)}`)
   }
   const encoded = Buffer.from(content, 'utf-8').toString('base64')
@@ -236,19 +252,37 @@ export class OpenSandboxPreviewService {
 
       const sandboxId = `osb-preview-${serverId}`
 
-      // Write all project files with path traversal protection
+      // Write all project files with path traversal and shell injection protection
       let filesWritten = 0
       for (const [filePath, content] of Object.entries(req.files)) {
         // SECURITY: Sanitize file path to prevent traversal
         const sanitizedPath = filePath.replace(/^\/+/, '') // Remove leading slashes
         const targetPath = path.posix.join('/workspace', sanitizedPath)
-        
+
         // Double-check the resolved path stays within workspace
         if (!targetPath.startsWith('/workspace/')) {
-          logs.push(`Skipped malicious path: ${filePath}`)
+          logs.push(`Skipped malicious path (traversal): ${filePath}`)
+          continue
+        }
+
+        // SECURITY: Check for shell metacharacters in entire path (filename AND directory components)
+        // This prevents command substitution via paths like "/workspace/$(whoami).txt"
+        const dangerousChars = /[`$\\;"'|&<>(){}!*\[\]?#~]/
+        
+        // Check filename
+        const filename = path.posix.basename(targetPath)
+        if (dangerousChars.test(filename)) {
+          logs.push(`Skipped malicious filename (shell injection): ${filePath}`)
           continue
         }
         
+        // Check directory components
+        const dir = targetPath.substring('/workspace'.length)
+        if (dir && dangerousChars.test(dir)) {
+          logs.push(`Skipped malicious path component (shell injection): ${filePath}`)
+          continue
+        }
+
         await writeFileTo(serverId, targetPath, content)
         filesWritten++
       }
@@ -340,12 +374,20 @@ export class OpenSandboxPreviewService {
         // SECURITY: Sanitize file path to prevent traversal
         const sanitizedPath = filePath.replace(/^\/+/, '')
         const targetPath = path.posix.join('/workspace', sanitizedPath)
-        
+
         if (!targetPath.startsWith('/workspace/')) {
-          logs.push(`Skipped malicious path: ${filePath}`)
+          logs.push(`Skipped malicious path (traversal): ${filePath}`)
           continue
         }
-        
+
+        // SECURITY: Check for shell metacharacters in filename
+        const filename = path.posix.basename(targetPath)
+        const dangerousChars = /[`$\\;"'|&<>(){}!*\[\]?#~]/
+        if (dangerousChars.test(filename)) {
+          logs.push(`Skipped malicious filename (shell injection): ${filePath}`)
+          continue
+        }
+
         await writeFileTo(session.serverId, targetPath, content)
       }
       logs.push(`Updated ${Object.keys(files).length} files`)

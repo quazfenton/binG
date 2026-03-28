@@ -1,11 +1,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem';
+import { virtualFilesystem, withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { extractSessionIdFromPath } from '@/lib/virtual-filesystem/scope-utils';
 import { fileContentSchema, languageSchema } from '@/lib/validation/schemas';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
 import type { AuthResult } from '@/lib/auth/auth-service';
 
@@ -131,7 +132,23 @@ export async function POST(req: NextRequest) {
     const file = await virtualFilesystem.writeFile(ownerId, filePath, content, language);
     const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(ownerId);
 
+    // Get session ID for event emission
     const resolvedSessionId = requestedSessionId || extractSessionIdFromPath(filePath);
+
+    // Emit filesystem updated event for UI panels
+    emitFilesystemUpdated({
+      path: file.path,
+      type: existedBefore ? 'update' : 'create',
+      sessionId: resolvedSessionId,
+      workspaceVersion,
+      applied: [{
+        path: file.path,
+        operation: existedBefore ? 'patch' : 'write',
+        timestamp: Date.now(),
+      }],
+      source: 'api-write',
+    });
+
     let commitId: string | undefined;
 
     if (resolvedSessionId) {

@@ -12,7 +12,7 @@
  * Run with: pnpm vitest run __tests__/security-comprehensive.test.ts
  */
 
-import { describe, it, expect, beforeEach } from 'vitest'
+import { describe, it, expect, beforeEach, vi } from 'vitest'
 
 // ============================================
 // Auth Token Invalidation Tests
@@ -84,28 +84,29 @@ describe('Auth Token Invalidation', () => {
   it('should invalidate anonymous user cache', async () => {
     const { authCache } = await import('@/lib/auth/request-auth')
     
-    const anonId = 'anon-user-xyz'
+    // Use session ID without 'anon_' prefix (simulating cookie value format)
+    const sessionId = 'user-xyz'
     
     // Add anonymous entries
-    authCache.set(`auth::anon:${anonId}`, { 
+    authCache.set(`auth::anon:${sessionId}`, { 
       success: true, 
-      userId: `anon:${anonId}`, 
+      userId: `anon:${sessionId}`, 
       source: 'anonymous' as const 
     })
-    authCache.set(`auth::${anonId}`, { 
+    authCache.set(`auth::${sessionId}`, { 
       success: true, 
-      userId: anonId, 
+      userId: sessionId, 
       source: 'anonymous' as const 
     })
     
     // Invalidate anonymous
-    authCache.invalidateAnonymous(anonId)
+    authCache.invalidateAnonymous(sessionId)
     
     // Verify anonymous entries are removed
     const stats = authCache.getStats()
     for (const key of stats.keys) {
-      expect(key).not.toContain(`:anon:${anonId}`)
-      expect(key).not.toMatch(new RegExp(`:${anonId}$`))
+      expect(key).not.toContain(`:anon:${sessionId}`)
+      expect(key).not.toMatch(new RegExp(`:${sessionId}$`))
     }
   })
 
@@ -309,15 +310,32 @@ describe('Command Injection Protection', () => {
 describe('MCP Token Security', () => {
   it('should use headers instead of query params for MCP tokens', async () => {
     // This tests that MCP tokens are sent in headers, not query params
-    // The implementation should be verified manually
-    
-    const { e2bDesktopProvider } = await import('@/lib/sandbox/providers/e2b-desktop-provider-enhanced')
-    
-    // Verify the method exists
-    expect(e2bDesktopProvider).toBeDefined()
-    
-    // The actual token security is tested by verifying the implementation
-    // uses headers (Authorization: Bearer <token>) instead of query params
+    // Import the actual desktop provider module from the correct path
+    try {
+      const module = await import('@/lib/computer/e2b-desktop-provider-enhanced')
+      const { DesktopSandboxHandle } = module as any
+      
+      // Mock the sandbox commands to capture MCP setup
+      const run = vi.fn()
+        .mockResolvedValueOnce({ stdout: 'mcp-token' })
+        .mockResolvedValue({ stdout: '' })
+      
+      const handle = new DesktopSandboxHandle({ id: 'sandbox-1', commands: { run } } as any)
+      await handle.setupMCP({ github: {} })
+      
+      // Find the claude mcp add command
+      const addCommand = run.mock.calls.find(([cmd]: [string]) => cmd.includes('claude mcp add'))?.[0] as string
+      
+      // Verify token is passed via header, not query param
+      // Check both ?token= and &token= to catch leaks in URLs with existing params
+      expect(addCommand).toContain('--header "Authorization: Bearer mcp-token"')
+      expect(addCommand).not.toContain('?token=')
+      expect(addCommand).not.toContain('&token=')
+    } catch (error: any) {
+      // Re-throw to make test failures visible
+      // This ensures regressions in MCP token handling are caught
+      throw new Error(`MCP token security test failed: ${error.message}`)
+    }
   })
 })
 
@@ -446,6 +464,8 @@ describe('Circuit Breaker Security', () => {
 
 describe('Health Check Security', () => {
   it('should detect unhealthy providers', async () => {
+    vi.useRealTimers(); // Need real timers for setTimeout
+    
     const { healthCheckManager, createFunctionHealthCheck } = await import('@/lib/middleware/health-check')
     
     const providerId = 'unhealthy-test'

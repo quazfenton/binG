@@ -45,7 +45,7 @@ export function createStreamingEvents(
     includeToolState = true,
     includeFilesystem = true,
     includeDiffs = true,
-    chunkSize = 30,
+    chunkSize = 12, // Reduced from 30 for smoother, more gradual streaming
   } = options
 
   const events: string[] = []

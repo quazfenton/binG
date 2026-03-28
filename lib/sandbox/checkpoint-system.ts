@@ -63,15 +63,73 @@ export class CheckpointSystem {
    * (Advanced capability for Daytona/Sprites)
    */
   static async branch(
-    handle: SandboxHandle, 
-    checkpointId: string, 
+    handle: SandboxHandle,
+    checkpointId: string,
     newBranchName: string
   ): Promise<string> {
-    // This requires provider-specific branching logic
-    // Implementation varies by SDK
     console.log(`[CheckpointSystem] Branching '${newBranchName}' from '${checkpointId}'`);
-    
-    // Placeholder for real branching logic
-    return `branch_${newBranchName}_${Date.now()}`;
+
+    try {
+      // Try provider-specific branching if available
+      if (handle.createCheckpoint && handle.restoreCheckpoint) {
+        // Provider supports checkpoints - verify listing capability
+        if (!handle.listCheckpoints) {
+          throw new Error('Provider does not support listing checkpoints');
+        }
+        const checkpoints = await handle.listCheckpoints();
+        const checkpoint = checkpoints.find(c => c.id === checkpointId);
+        
+        if (!checkpoint) {
+          throw new Error(`Checkpoint ${checkpointId} not found`);
+        }
+
+        // Create new sandbox and restore checkpoint
+        // Get provider info from the source handle to maintain consistency
+        const providerInfo = await (handle as any).getProviderInfo?.();
+        if (!providerInfo?.provider) {
+          throw new Error('Cannot determine source provider for checkpoint branching');
+        }
+        const providerName = providerInfo.provider;
+        const { getSandboxProvider } = await import('./providers');
+        const provider = await getSandboxProvider(providerName as any);
+        
+        // Validate provider exists and supports required methods
+        if (!provider) {
+          throw new Error(`Sandbox provider '${providerName}' not available`);
+        }
+        if (!provider.createSandbox) {
+          throw new Error('Sandbox provider does not support sandbox creation');
+        }
+        
+        const newHandle = await provider.createSandbox({
+          // Note: SandboxCreateConfig doesn't support name, use labels instead
+          labels: { branchName: newBranchName, checkpointId },
+        });
+
+        // Restore checkpoint - required for branching
+        if (!newHandle.restoreCheckpoint) {
+          // Clean up the orphaned sandbox before failing
+          await provider.destroySandbox(newHandle.id);
+          throw new Error('New sandbox does not support checkpoint restoration');
+        }
+        
+        try {
+          await newHandle.restoreCheckpoint(checkpointId);
+        } catch (restoreError: any) {
+          // Clean up orphaned sandbox on restore failure
+          await provider.destroySandbox(newHandle.id);
+          throw new Error(`Failed to restore checkpoint: ${restoreError.message}`);
+        }
+
+        console.log(`[CheckpointSystem] Branch created: ${newHandle.id}`);
+        return newHandle.id;
+      }
+
+      // Fallback: Return error if branching not supported
+      throw new Error('Checkpoint branching not supported by this provider');
+    } catch (error: any) {
+      console.error(`[CheckpointSystem] Branching failed: ${error.message}`);
+      throw error;
+    }
   }
 }

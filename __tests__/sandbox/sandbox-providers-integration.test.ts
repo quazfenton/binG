@@ -11,15 +11,38 @@
  * - Provider-specific features
  * 
  * Note: These tests require valid API keys in .env file.
- * Set TEST_SANDBOX_SKIP=true to skip execution tests.
+ * Set ENABLE_LIVE_SANDBOX_TESTS=true to opt into live-provider execution tests.
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import type { SandboxProvider, SandboxHandle, SandboxCreateConfig } from '@/lib/sandbox/providers/sandbox-provider';
 import type { ToolResult, PreviewInfo } from '@/lib/sandbox/types';
 
-// Skip flag for CI environments without API keys
-const SKIP_TESTS = process.env.TEST_SANDBOX_SKIP === 'true';
+// These tests exercise live providers and are opt-in by default.
+const PLACEHOLDER_PATTERNS = [
+  'your_',
+  '_here',
+  'placeholder',
+  'example',
+  'test-',
+];
+
+function hasRealCredential(value: string | undefined): boolean {
+  if (!value) return false;
+  const normalized = value.trim().toLowerCase();
+  if (!normalized) return false;
+  return !PLACEHOLDER_PATTERNS.some((pattern) => normalized.includes(pattern));
+}
+
+const ENABLE_LIVE_SANDBOX_TESTS = process.env.ENABLE_LIVE_SANDBOX_TESTS === 'true';
+const HAS_ANY_PROVIDER_KEY = [
+  process.env.CSB_API_KEY,
+  process.env.E2B_API_KEY,
+  process.env.DAYTONA_API_KEY,
+  process.env.BLAXEL_API_KEY,
+  process.env.NEXT_PUBLIC_WEBCONTAINER_CLIENT_ID,
+].some(hasRealCredential);
+const SKIP_TESTS = process.env.TEST_SANDBOX_SKIP === 'true' || !ENABLE_LIVE_SANDBOX_TESTS || !HAS_ANY_PROVIDER_KEY;
 
 describe('Sandbox Provider Integration', () => {
   describe('Provider Interface Compliance', () => {

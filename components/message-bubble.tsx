@@ -18,55 +18,35 @@ import { ReasoningDisplay, ReasoningSummary } from "@/components/reasoning-displ
 import { ToolInvocationsList } from "@/components/tool-invocation-card"
 import { VersionHistoryPanel, VersionIndicator } from "@/components/version-history-panel"
 import { AgentStatusDisplay, MultiAgentStatusDisplay } from "@/components/agent-status-display"
+import { SpecAmplificationProgress, DAGProgressDisplay } from "@/components/spec-amplification-progress"
 import { normalizeToolInvocations } from "@/lib/types/tool-invocation"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 import { toast } from "sonner"
 import { buildApiHeaders } from "@/lib/utils"
 import { sanitizeFileEditTags } from "@/lib/chat/file-edit-parser"
+import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer"
+import { useMultiRotatingStatements } from "@/hooks/use-rotating-statements"
+
+function LoadingIndicator() {
+  const statement = useMultiRotatingStatements(['interesting', 'funny', 'task'], 2500);
+  return (
+    <div className="flex items-center gap-2 text-white/60 mb-2">
+      <Loader2 className="w-4 h-4 thinking-spinner" />
+      <span className="text-sm thinking-pulse">{statement}</span>
+    </div>
+  );
+}
 
 /**
  * Client-side sanitization for message content
- * Removes heredoc command blocks (WRITE/PATCH/APPLY_DIFF) that may have leaked through
+ * Uses centralized file-edit-parser for all formats
  * This is a safety net in case the backend sanitization missed any edge cases
  */
 function sanitizeMessageContent(content: string): string {
   if (!content || typeof content !== 'string') return '';
-  let sanitized = content;
-
-  // Use shared parser for file_edit tags
-  sanitized = sanitizeFileEditTags(sanitized);
-
-  // Remove explicit command envelopes
-  sanitized = sanitized.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
-  sanitized = sanitized.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
-
-  // Remove <fs-actions> XML tag blocks
-  sanitized = sanitized.replace(/<fs-actions>[\s\S]*?<\/fs-actions>/gi, '');
-
-  // Remove heredoc command blocks - line start patterns with /m flag
-  // Pattern 1: Standard format with optional newlines between path and <<<
-  sanitized = sanitized.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){0,3}<<<[\s\S]*?>>>(?=\n|$)/gim, '\n');
   
-  // Pattern 2: Handle cases where <<< is on same line as path
-  sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+<<<[\s\S]*?>>>/gim, '');
-  
-  // Pattern 3: Remove DELETE commands
-  sanitized = sanitized.replace(/^\s*DELETE\s+[^\n]+(?=\n|$)/gim, '\n');
-  
-  // Pattern 4: Remove <apply_diff> XML tags
-  sanitized = sanitized.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]*?<\/apply_diff>/gi, '');
-  
-  // Pattern 5: Handle remaining fs-actions style commands
-  sanitized = sanitized.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]*\n?\s*<<<[\s\S]*?>>>/gim, '');
-  
-  // Pattern 6: Clean up leftover <<< and >>> markers
-  sanitized = sanitized.replace(/^\s*<<<\s*$/gm, '');
-  sanitized = sanitized.replace(/^\s*>>>\s*$/gm, '');
-
-  // Normalize spacing
-  sanitized = sanitized.replace(/\n{3,}/g, '\n\n').trim();
-  
-  return sanitized;
+  // Use centralized parser for all file edit formats
+  return sanitizeFileEditTags(content);
 }
 
 interface MessageBubbleProps {
@@ -134,6 +114,7 @@ export default function MessageBubble({
   const [fileEditDecision, setFileEditDecision] = useState<"auto_applied" | "accepted" | "denied" | "reverted_with_conflicts" | null>(null)
   const [expandedArtifacts, setExpandedArtifacts] = useState<Set<string>>(new Set())
   const [applyingArtifact, setApplyingArtifact] = useState<string | null>(null)
+  const [showAllFiles, setShowAllFiles] = useState(false)
 
   const isUser = message.role === "user"
 
@@ -152,16 +133,41 @@ export default function MessageBubble({
   }, [message.metadata?.reasoningChunks]);
 
   const fileEditInfo = useMemo(() => {
+    // First check for filesystem transaction (standard chat flow)
     const metadataFilesystem = (message.metadata as any)?.filesystem;
-    if (!metadataFilesystem || typeof metadataFilesystem !== "object") return null;
-    const txId = typeof metadataFilesystem.transactionId === "string" ? metadataFilesystem.transactionId : "";
-    if (!txId) return null;
-    return {
-      transactionId: txId,
-      applied: Array.isArray(metadataFilesystem.applied) ? metadataFilesystem.applied : [],
-      errors: Array.isArray(metadataFilesystem.errors) ? metadataFilesystem.errors : [],
-      status: typeof metadataFilesystem.status === "string" ? metadataFilesystem.status : "auto_applied",
-    };
+    if (metadataFilesystem && typeof metadataFilesystem === "object") {
+      const txId = typeof metadataFilesystem.transactionId === "string" ? metadataFilesystem.transactionId : "";
+      if (txId) {
+        return {
+          transactionId: txId,
+          applied: Array.isArray(metadataFilesystem.applied) ? metadataFilesystem.applied : [],
+          errors: Array.isArray(metadataFilesystem.errors) ? metadataFilesystem.errors : [],
+          status: typeof metadataFilesystem.status === "string" ? metadataFilesystem.status : "auto_applied",
+          isSpecEnhancement: false,
+        };
+      }
+    }
+    
+    // Check for spec enhancement file edits (stored directly in metadata.fileEdits)
+    const metadataFileEdits = (message.metadata as any)?.fileEdits;
+    if (metadataFileEdits && Array.isArray(metadataFileEdits) && metadataFileEdits.length > 0) {
+      // Spec enhancement edits are already applied server-side, just for display
+      return {
+        transactionId: undefined, // No transaction for spec enhancement
+        applied: metadataFileEdits.map((edit: any, index: number) => ({
+          path: edit.path,
+          operation: 'write',
+          version: typeof edit.version === 'number' ? edit.version : index + 1,
+          existedBefore: false,
+          content: edit.content, // Store full content for diff viewer
+        })),
+        errors: [],
+        status: 'auto_applied', // Already applied server-side
+        isSpecEnhancement: true, // Flag for UI handling
+      };
+    }
+    
+    return null;
   }, [message.metadata]);
 
   useEffect(() => {
@@ -505,6 +511,12 @@ export default function MessageBubble({
     onAuthPromptDismiss?.()
   }
 
+  // Check if this is a pending refinement message (show loading with rotating statements)
+  const isPendingRefinement = message.metadata?.isRefinement && message.metadata?.isPending && message.metadata?.isLoading;
+
+  // Hook must be called unconditionally at top level
+  const rotatingStatement = useMultiRotatingStatements(['interesting', 'task', 'funny'], 2000);
+
   // If auth is required and not dismissed, show auth prompt
   if (authInfo && !authDismissed && !isUser) {
     return (
@@ -519,6 +531,31 @@ export default function MessageBubble({
         }}
       />
     )
+  }
+
+  if (isPendingRefinement) {
+    return (
+      <div className={`flex justify-start mb-6 group w-full px-1`}>
+        <div
+          className={`
+            message-bubble-responsive relative transition-all duration-200
+            border border-purple-500/50 shadow-lg shadow-purple-500/20
+            rounded-2xl p-4 bg-gray-800/50
+          `}
+          style={{
+            maxWidth: '600px',
+          }}
+        >
+          <div className="flex items-center gap-3">
+            <Loader2 className="w-5 h-5 text-purple-400 animate-spin" />
+            <div>
+              <p className="text-sm font-medium text-purple-300">AI is refining the response...</p>
+              <p className="text-xs text-gray-400 mt-1">{rotatingStatement}</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    );
   }
 
   return (
@@ -564,10 +601,7 @@ export default function MessageBubble({
       >
         {/* Thinking indicator - shown at start of streaming */}
         {isStreaming && streamingDisplay.showLoadingIndicator && (
-          <div className="flex items-center gap-2 text-white/60 mb-2">
-            <Loader2 className="w-4 h-4 thinking-spinner" />
-            <span className="text-sm thinking-pulse">Thinking...</span>
-          </div>
+          <LoadingIndicator />
         )}
 
         {/* Streaming cursor - shown while receiving content */}
@@ -681,9 +715,9 @@ export default function MessageBubble({
                   <hr className={`${useCompactLayout ? 'my-2' : 'my-4'} border-t border-white/20`} />
                 ),
                 blockquote: ({ children }) => (
-                  <blockquote className={`border-l-4 border-white/30 ${
+                  <blockquote className={`border-l-4 border-white/30 bg-white/5 ${
                     layout.isMobile ? 'pl-2' : 'pl-4'
-                  } italic ${useCompactLayout ? 'mb-2' : 'mb-4'}`}>
+                  } italic ${useCompactLayout ? 'mb-2' : 'mb-4'} py-1 rounded-r`}>
                     {children}
                   </blockquote>
                 ),
@@ -808,6 +842,35 @@ export default function MessageBubble({
               toolInvocations={toolInvocations}
               processingSteps={(message.metadata as any)?.processingSteps}
               isVisible={true}
+            />
+          </div>
+        )}
+
+        {/* Spec Amplification Progress */}
+        {!isUser && (message.metadata as any)?.specAmplification && (
+          <div className="mt-3">
+            <SpecAmplificationProgress
+              stage={(message.metadata as any).specAmplification.stage}
+              fastModel={(message.metadata as any).specAmplification.fastModel}
+              specScore={(message.metadata as any).specAmplification.specScore}
+              sectionsGenerated={(message.metadata as any).specAmplification.sectionsGenerated}
+              currentIteration={(message.metadata as any).specAmplification.currentIteration}
+              totalIterations={(message.metadata as any).specAmplification.totalIterations}
+              currentSection={(message.metadata as any).specAmplification.currentSection}
+              error={(message.metadata as any).specAmplification.error}
+              timestamp={(message.metadata as any).specAmplification.timestamp}
+            />
+          </div>
+        )}
+
+        {/* DAG Progress Display */}
+        {!isUser && (message.metadata as any)?.dagProgress && (
+          <div className="mt-3">
+            <DAGProgressDisplay
+              tasks={(message.metadata as any).dagProgress.tasks ?? []}
+              overallProgress={(message.metadata as any).dagProgress.overallProgress ?? 0}
+              activeTasks={(message.metadata as any).dagProgress.activeTasks ?? []}
+              timestamp={(message.metadata as any).dagProgress.timestamp}
             />
           </div>
         )}
@@ -943,57 +1006,101 @@ export default function MessageBubble({
                 File edits: {fileEditInfo.applied.length} applied
               </span>
               <span className="text-white/60">
-                {fileEditDecision === "reverted_with_conflicts"
-                  ? "Reverted with conflicts"
-                  : fileEditDecision === "denied"
-                    ? "Denied and reverted"
-                    : fileEditDecision === "accepted" || fileEditDecision === "auto_applied"
-                      ? "Auto accepted"
-                      : "Pending"}
+                {fileEditInfo.isSpecEnhancement
+                  ? "Applied (spec enhancement)"
+                  : fileEditDecision === "reverted_with_conflicts"
+                    ? "Reverted with conflicts"
+                    : fileEditDecision === "denied"
+                      ? "Denied and reverted"
+                      : fileEditDecision === "accepted" || fileEditDecision === "auto_applied"
+                        ? "Auto accepted"
+                        : "Pending"}
               </span>
             </div>
             {fileEditInfo.applied.length > 0 && (
               <div className="mt-1 text-white/55">
-                {fileEditInfo.applied.slice(0, 4).map((edit: any) => (
+                {(showAllFiles ? fileEditInfo.applied : fileEditInfo.applied.slice(0, 4)).map((edit: any) => (
                   <div key={`${edit.path}-${edit.version}`} className="truncate">
                     {edit.path}
                   </div>
                 ))}
                 {fileEditInfo.applied.length > 4 && (
-                  <div>+{fileEditInfo.applied.length - 4} more</div>
+                  <button
+                    onClick={() => setShowAllFiles(!showAllFiles)}
+                    className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors mt-0.5"
+                  >
+                    {showAllFiles ? `Show less` : `+${fileEditInfo.applied.length - 4} more`}
+                  </button>
                 )}
               </div>
             )}
-            <div className="mt-2 flex items-center gap-2">
-              <Button
-                size="sm"
-                variant="outline"
-                className="h-7 px-2 text-[11px]"
-                onClick={handleAcceptEdits}
-                disabled={
-                  isApplyingEditAction ||
-                  fileEditDecision === "accepted" ||
-                  fileEditDecision === "auto_applied"
-                }
-                title="Accept the AI's file changes permanently"
-              >
-                Accept
-              </Button>
-              <Button
-                size="sm"
-                variant="destructive"
-                className="h-7 px-2 text-[11px]"
-                onClick={handleDenyEdits}
-                disabled={
-                  isApplyingEditAction ||
-                  fileEditDecision === "denied" ||
-                  fileEditDecision === "reverted_with_conflicts"
-                }
-                title="Revert all file changes to their previous state using Git-backed rollback"
-              >
-                Deny + Revert
-              </Button>
-            </div>
+            {/* Only show Accept/Deny buttons for non-spec-enhancement edits */}
+            {!fileEditInfo.isSpecEnhancement && (
+              <div className="mt-2 flex items-center gap-2">
+                <Button
+                  size="sm"
+                  variant="outline"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={handleAcceptEdits}
+                  disabled={
+                    isApplyingEditAction ||
+                    fileEditDecision === "accepted" ||
+                    fileEditDecision === "auto_applied"
+                  }
+                  title="Accept the AI's file changes permanently"
+                >
+                  Accept
+                </Button>
+                <Button
+                  size="sm"
+                  variant="destructive"
+                  className="h-7 px-2 text-[11px]"
+                  onClick={handleDenyEdits}
+                  disabled={
+                    isApplyingEditAction ||
+                    fileEditDecision === "denied" ||
+                    fileEditDecision === "reverted_with_conflicts"
+                  }
+                  title="Revert all file changes to their previous state using Git-backed rollback"
+                >
+                  Deny + Revert
+                </Button>
+              </div>
+            )}
+            {/* Enhanced Diff Viewer */}
+            {fileEditInfo.applied.length > 0 && (
+              <div className="mt-3 pt-3 border-t border-white/10">
+                <div className="flex items-center justify-between mb-2">
+                  <div className="flex items-center gap-2">
+                    <FileCode className="w-4 h-4 text-white/60" />
+                    <span className="text-xs text-white/80 font-medium">Change Details</span>
+                    <span className="text-[10px] text-white/50">({fileEditInfo.applied.length} files)</span>
+                  </div>
+                  {fileEditInfo.applied.length > 3 && (
+                    <button
+                      onClick={() => setShowAllFiles(!showAllFiles)}
+                      className="text-xs text-cyan-400 hover:text-cyan-300 transition-colors flex items-center gap-1"
+                    >
+                      {showAllFiles ? 'Show less' : `Show all ${fileEditInfo.applied.length} files`}
+                      <ChevronDown className={`w-3 h-3 transition-transform ${showAllFiles ? 'rotate-180' : ''}`} />
+                    </button>
+                  )}
+                </div>
+                <div className="space-y-2 max-h-[600px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/5 scrollbar-track-transparent hover:scrollbar-thumb-white/20">
+                  {(showAllFiles ? fileEditInfo.applied : fileEditInfo.applied.slice(0, 3)).map((edit: any) => (
+                    <EnhancedDiffViewer
+                      key={`${edit.path}-${edit.version}`}
+                      path={edit.path}
+                      serverContent={edit.content || edit.diff || ''}
+                      compareWithLocal={false}
+                      compareWithGit={false}
+                      showUnsynced={false}
+                      isFullContent={!edit.diff} // If no diff, treat as full content
+                    />
+                  ))}
+                </div>
+              </div>
+            )}
           </div>
         )}
 

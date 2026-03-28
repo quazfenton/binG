@@ -39,7 +39,11 @@ export function VersionHistoryPanel({
   const [isRollingBack, setIsRollingBack] = useState(false);
 
   const fetchVersions = useCallback(async () => {
-    if (!sessionId) return;
+    // Don't fetch if sessionId is empty or "default" (not a real session)
+    if (!sessionId || sessionId === 'default' || sessionId === 'undefined') {
+      setVersions([]);
+      return;
+    }
     
     setIsLoading(true);
     try {
@@ -48,13 +52,24 @@ export function VersionHistoryPanel({
         credentials: 'include',
       });
       
+      // Handle auth/session errors gracefully
+      if (response.status === 401 || response.status === 403) {
+        setVersions([]);
+        return;
+      }
+      
+      if (response.status === 404) {
+        setVersions([]);
+        return;
+      }
+      
       if (!response.ok) throw new Error('Failed to fetch versions');
       
       const data = await response.json();
       setVersions(data.versions || []);
     } catch (error: any) {
       console.error('Failed to fetch version history:', error);
-      toast.error('Failed to load version history');
+      setVersions([]);
     } finally {
       setIsLoading(false);
     }
