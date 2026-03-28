@@ -70,6 +70,7 @@ export async function GET(request: NextRequest) {
     }
 
     // Get all conversations for user
+    // Note: DatabaseOperations methods are synchronous (better-sqlite3)
     const conversations = dbOps.getUserConversations(numericUserId, 50);
 
     // Format for frontend

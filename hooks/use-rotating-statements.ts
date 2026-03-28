@@ -371,7 +371,7 @@ interface UseRotatingStatementsOptions {
 
 export function useRotatingStatements(options: UseRotatingStatementsOptions = {}) {
   const { statementType = 'interesting', intervalMs = 2500 } = options;
-  
+
   const getStatements = useCallback(() => {
     switch (statementType) {
       case 'funny':
@@ -384,12 +384,18 @@ export function useRotatingStatements(options: UseRotatingStatementsOptions = {}
     }
   }, [statementType]);
 
-  const [currentIndex, setCurrentIndex] = useState(0);
   const statements = getStatements();
+  const [currentIndex, setCurrentIndex] = useState(() => Math.floor(Math.random() * statements.length));
 
   useEffect(() => {
     const interval = setInterval(() => {
-      setCurrentIndex((prev) => (prev + 1) % statements.length);
+      setCurrentIndex((prev) => {
+        let next: number;
+        do {
+          next = Math.floor(Math.random() * statements.length);
+        } while (next === prev && statements.length > 1);
+        return next;
+      });
     }, intervalMs);
 
     return () => clearInterval(interval);
