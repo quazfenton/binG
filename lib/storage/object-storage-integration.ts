@@ -34,6 +34,8 @@
 
 import { getSandboxProvider, type SandboxProviderType } from '../sandbox/providers';
 import { createLogger } from '../utils/logger';
+import { safeJoin } from '../security/security-utils';
+import * as path from 'path';
 
 const logger = createLogger('Phase3:ObjectStorage');
 
@@ -142,22 +144,30 @@ export class ObjectStorageIntegration {
     try {
       const provider = await getSandboxProvider(this.inferProviderType(sandboxId));
       const handle = await provider.getSandbox(sandboxId);
-      
+
       // Try Daytona Object Storage service
       const storageService = (handle as any).getObjectStorageService?.();
       if (storageService) {
         const result = await (storageService as any).download({
           key: options.storageKey,
         });
-        
-        if (result.success && result.data?.content) {
-          // Write content to localPath
-          const fs = require('fs');
-          const dir = require('path').dirname(options.localPath);
-          fs.mkdirSync(dir, { recursive: true });
-          fs.writeFileSync(options.localPath, result.data.content);
+
+        if (result.success && result.data?.content !== undefined) {
+          // SECURITY: Validate and constrain localPath to sandbox workspace
+          // Prevent path traversal attacks by using safeJoin
+          const workspaceDir = handle.workspaceDir || '/tmp/sandbox-workspace';
+          const safePath = safeJoin(workspaceDir, options.localPath.replace(/^[\\/]+/, ''));
+
+          // Write through sandbox handle to ensure proper sandbox isolation
+          const writeResult = await (handle as any).writeFile(safePath, result.data.content);
+          if (!writeResult?.success) {
+            throw new Error(writeResult?.output || `Failed to write file to sandbox: ${safePath}`);
+          }
+
+          // Update options.localPath to the safe path
+          options.localPath = safePath;
         }
-        
+
         return {
           success: result.success,
           localPath: options.localPath,

@@ -106,11 +106,17 @@ export class OAuthService {
 
   constructor() {
     this.db = getDatabase();
-    this.ensureSchema();
+    if (this.db) {
+      this.ensureSchema();
+    } else {
+      console.warn('[OAuthService] Database not ready, schema will be ensured on first use');
+    }
   }
 
   private ensureSchema(): void {
     if (this.schemaEnsured) return;
+    if (!this.db) return;
+    
     try {
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS external_connections (
@@ -206,6 +212,11 @@ export class OAuthService {
     redirectUri?: string;
     usePkce?: boolean; // Enable PKCE by default for public clients
   }): Promise<OAuthSession> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[OAuthService] Database not ready");
+      return; // or throw error depending on method
+    }
     const id = randomUUID();
     const state = randomUUID();
     const nonce = randomUUID();
@@ -252,6 +263,11 @@ export class OAuthService {
   }
 
   async getOAuthSessionByState(state: string): Promise<OAuthSession | null> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[OAuthService] Database not ready");
+      return; // or throw error depending on method
+    }
     const stmt = this.db.prepare(`
       SELECT * FROM oauth_sessions 
       WHERE state = ? AND is_completed = FALSE AND datetime(expires_at) > datetime('now')
@@ -274,6 +290,11 @@ export class OAuthService {
   }
 
   async completeOAuthSession(state: string): Promise<void> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[OAuthService] Database not ready");
+      return; // or throw error depending on method
+    }
     const stmt = this.db.prepare(`
       UPDATE oauth_sessions SET is_completed = TRUE, completed_at = datetime('now') WHERE state = ?
     `);
@@ -364,6 +385,11 @@ export class OAuthService {
     expiresIn?: number;
     scopes?: string[];
   }): Promise<OAuthConnection> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[OAuthService] Database not ready");
+      return; // or throw error depending on method
+    }
     // Only encrypt tokens if they are not empty strings
     // For Arcade/Nango connections, we store empty strings since they manage tokens internally
     const accessTokenEnc = params.accessToken ? encrypt(params.accessToken) : null;
@@ -401,6 +427,11 @@ export class OAuthService {
   }
 
   async getUserConnections(userId: number, provider?: string): Promise<OAuthConnection[]> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[OAuthService] Database not ready");
+      return; // or throw error depending on method
+    }
     const sql = provider
       ? `SELECT * FROM external_connections WHERE user_id = ? AND provider = ? AND is_active = TRUE`
       : `SELECT * FROM external_connections WHERE user_id = ? AND is_active = TRUE`;
@@ -418,6 +449,11 @@ export class OAuthService {
   }
 
   async getDecryptedToken(connectionId: number, userId: number): Promise<{ accessToken: string; refreshToken?: string } | null> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[OAuthService] Database not ready");
+      return; // or throw error depending on method
+    }
     const stmt = this.db.prepare(`
       SELECT access_token_encrypted, refresh_token_encrypted FROM external_connections
       WHERE id = ? AND user_id = ? AND is_active = TRUE
@@ -435,6 +471,11 @@ export class OAuthService {
   }
 
   async revokeConnection(connectionId: number, userId: number): Promise<boolean> {
+    // Ensure database is available
+    if (!this.db) {
+      console.warn("[OAuthService] Database not ready");
+      return; // or throw error depending on method
+    }
     const stmt = this.db.prepare(`
       UPDATE external_connections SET is_active = FALSE, updated_at = datetime('now')
       WHERE id = ? AND user_id = ?

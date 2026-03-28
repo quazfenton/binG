@@ -242,8 +242,13 @@ WARNING: This action is irreversible.`,
       }
       
       const result = await vfs.deletePath(ownerId, path);
-      return { 
-        deletedCount: result.deletedCount,
+      const deletedCount = result === null || result === undefined
+        ? 0
+        : typeof result === 'object'
+          ? result.deletedCount || 0
+          : (result ? 1 : 0);
+      return {
+        deletedCount,
         success: true,
       };
     } catch (error) {

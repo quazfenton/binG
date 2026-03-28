@@ -20,6 +20,7 @@ import { getProviderForTask, getModelForTask } from '../config/task-providers';
 import { advancedToolCallDispatcher } from '../tools/tool-integration/parsers/dispatcher';
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
 import { chatLogger } from './chat-logger';
+import { chatRequestLogger } from './chat-request-logger';
 
 export interface EnhancedLLMRequest extends LLMRequest {
   fallbackProviders?: string[];
@@ -110,8 +111,8 @@ export class EnhancedLLMService {
       },
       {
         provider: 'zen',
-        baseUrl: process.env.zen_BASE_URL || 'https://api.zen.ai/v1',
-        apiKey: process.env.zen_API_KEY || '',
+        baseUrl: process.env.ZEN_BASE_URL || 'https://api.zen.ai/v1',
+        apiKey: process.env.ZEN_API_KEY || '',
         models: PROVIDERS.zen.models,
         priority: 8
       }
@@ -146,7 +147,9 @@ export class EnhancedLLMService {
 
     // Use explicitly passed provider first, then task-specific provider, then default
     const actualProvider = provider || (task ? getProviderForTask(task) : getProviderForTask('chat'));
-    const actualModel = task ? getModelForTask(task, llmRequest.model) : llmRequest.model;
+    const actualModel = task 
+      ? getModelForTask(task, llmRequest.model) 
+      : llmRequest.model || 'default';  // Default model if none specified
 
     chatLogger.debug('Enhanced LLM service processing request', { requestId, provider: actualProvider, model: actualModel, userId }, {
       task,
@@ -212,15 +215,52 @@ export class EnhancedLLMService {
 
     // Try primary provider first
     try {
-      const fullRequest = { ...llmRequest, provider: actualProvider, model: actualModel };
-      const response = await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker, requestId);
-      const latency = Date.now() - requestStartTime;
+      const fullRequest = { ...llmRequest, provider: actualProvider, model: actualModel }
+      
+      // Log request start for telemetry
+      await chatRequestLogger.logRequestStart(
+        requestId || `llm-${Date.now()}`,
+        userId || 'anonymous',
+        actualProvider,
+        actualModel,
+        fullRequest.messages,
+        fullRequest.stream || false
+      )
+      
+      const response = await this.callProviderWithEnhancedClient(actualProvider, fullRequest, retryOptions, enableCircuitBreaker, requestId)
+      const latency = Date.now() - requestStartTime
       chatLogger.info('Provider request completed', { requestId, provider: actualProvider, model: actualModel }, {
         latencyMs: latency,
         tokensUsed: response.tokensUsed,
         finishReason: response.finishReason,
-      });
-      return await postProcessToolCalls(response);
+      })
+
+      // Add metadata about actual provider/model used
+      const enhancedResponse = {
+        ...response,
+        metadata: {
+          ...response.metadata,
+          actualProvider,
+          actualModel,
+          fallbackChain: [],
+        },
+      }
+
+      const result = await postProcessToolCalls(enhancedResponse)
+      
+      // Record telemetry for model ranking
+      await chatRequestLogger.logRequestComplete(
+        requestId || `llm-${Date.now()}`,
+        true,  // success
+        undefined,  // responseSize
+        typeof response.tokensUsed === 'number' 
+          ? { prompt: 0, completion: 0, total: response.tokensUsed }
+          : response.tokensUsed,
+        latency,
+        undefined  // error
+      )
+      
+      return result
     } catch (primaryError) {
       const primaryLatency = Date.now() - requestStartTime;
       chatLogger.warn('Primary provider failed', { requestId, provider: actualProvider, model: actualModel }, {
@@ -233,6 +273,10 @@ export class EnhancedLLMService {
         this.endpointConfigs.has(fallbackProvider) &&
         this.isProviderHealthy(fallbackProvider)
       );
+
+      // Track the fallback chain with detailed error information
+      const fallbackChainLog: string[] = [];
+      fallbackChainLog.push(`${actualProvider}/${actualModel} failed: ${primaryError instanceof Error ? primaryError.message : String(primaryError)}`);
 
       if (availableFallbacks.length === 0) {
         chatLogger.error('No healthy fallback providers available', { requestId, provider: actualProvider }, {
@@ -248,7 +292,8 @@ export class EnhancedLLMService {
       for (let attemptIndex = 0; attemptIndex < availableFallbacks.length; attemptIndex++) {
         const fallbackProvider = availableFallbacks[attemptIndex];
         const fallbackStartTime = Date.now();
-        
+        let fallbackModelUsed = actualModel;
+
         try {
           chatLogger.info('Trying fallback provider', { requestId, provider: fallbackProvider, model: actualModel }, {
             attempt: attemptIndex + 1,
@@ -259,9 +304,13 @@ export class EnhancedLLMService {
           const supportedModel = this.findCompatibleModel(actualModel, fallbackConfig.models);
 
           if (!supportedModel) {
+            const modelError = `Model '${actualModel}' not supported by ${fallbackProvider}`;
             chatLogger.warn('Model not supported by fallback provider', { requestId, provider: fallbackProvider, model: actualModel });
+            fallbackChainLog.push(`${fallbackProvider}/${actualModel} skipped: ${modelError}`);
             continue;
           }
+
+          fallbackModelUsed = supportedModel;
 
           const fallbackRequest = {
             ...llmRequest,
@@ -284,19 +333,26 @@ export class EnhancedLLMService {
             tokensUsed: response.tokensUsed,
           });
 
+          // Build successful fallback response with full metadata
           const fallbackResponse = {
             ...response,
-            provider: `${actualProvider} -> ${fallbackProvider}`,
-            model: supportedModel  // Include the actual fallback model used
+            metadata: {
+              ...response.metadata,
+              actualProvider: fallbackProvider,
+              actualModel: supportedModel,
+              fallbackChain: fallbackChainLog,
+            },
           };
           return await postProcessToolCalls(fallbackResponse);
         } catch (fallbackError) {
           const fallbackLatency = Date.now() - fallbackStartTime;
-          chatLogger.warn('Fallback provider failed', { requestId, provider: fallbackProvider, model: actualModel }, {
+          const errorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          chatLogger.warn('Fallback provider failed', { requestId, provider: fallbackProvider, model: fallbackModelUsed }, {
             latencyMs: fallbackLatency,
             attempt: attemptIndex + 1,
-            error: fallbackError instanceof Error ? fallbackError.message : String(fallbackError),
+            error: errorMsg,
           });
+          fallbackChainLog.push(`${fallbackProvider}/${fallbackModelUsed} failed: ${errorMsg}`);
           continue;
         }
       }
@@ -384,6 +440,16 @@ export class EnhancedLLMService {
       throw new Error(`Provider ${provider} not configured`);
     }
 
+    // CRITICAL: Validate API key is present before making request
+    if (!config.apiKey || config.apiKey.trim() === '') {
+      chatLogger.error(`Provider ${provider} missing API key`, { requestId, provider }, {
+        hasApiKey: !!config.apiKey,
+        apiKeyLength: config.apiKey?.length || 0,
+        envVarName: this.getEnvVarNameForProvider(provider),
+      });
+      throw new Error(`${provider} API key not configured. Please set ${this.getEnvVarNameForProvider(provider)} in your environment variables.`);
+    }
+
     const callStartTime = Date.now();
 
     // Filter messages for provider compatibility
@@ -392,13 +458,19 @@ export class EnhancedLLMService {
 
     const providerRequest = {
       ...request,
-      messages: filteredMessages
+      messages: filteredMessages,
+      // CRITICAL FIX: Pass API key explicitly in request for providers that support it
+      // This ensures API keys from env vars are used even if llmService wasn't initialized properly
+      // Note: Using 'apiKey' (singular) which is read by generateResponse method
+      apiKey: config.apiKey,
     };
 
     chatLogger.debug('Calling provider', { requestId, provider, model: request.model }, {
       messageCount: filteredMessages.length,
       temperature: request.temperature,
       maxTokens: request.maxTokens,
+      apiKeySet: !!config.apiKey,
+      requestHasKey: !!providerRequest.apiKey,
     });
 
     try {
@@ -418,6 +490,24 @@ export class EnhancedLLMService {
       });
       throw this.enhanceError(error as Error, provider);
     }
+  }
+
+  private getEnvVarNameForProvider(provider: string): string {
+    const envVarMap: Record<string, string> = {
+      'openrouter': 'OPENROUTER_API_KEY',
+      'chutes': 'CHUTES_API_KEY',
+      'anthropic': 'ANTHROPIC_API_KEY',
+      'google': 'GOOGLE_API_KEY',
+      'mistral': 'MISTRAL_API_KEY',
+      'github': 'GITHUB_MODELS_API_KEY or AZURE_OPENAI_API_KEY',
+      'portkey': 'PORTKEY_API_KEY',
+      'zen': 'ZEN_API_KEY',
+      'openai': 'OPENAI_API_KEY',
+      'cohere': 'COHERE_API_KEY',
+      'together': 'TOGETHER_API_KEY',
+      'replicate': 'REPLICATE_API_TOKEN',
+    };
+    return envVarMap[provider] || `${provider.toUpperCase()}_API_KEY`;
   }
 
   /**
@@ -481,13 +571,13 @@ export class EnhancedLLMService {
     ];
 
     for (const pattern of patterns) {
-      const match = model.match(pattern);
+      const match = model?.match(pattern);
       if (match) {
         return match[1].toLowerCase();
       }
     }
 
-    return model.split('-')[0].toLowerCase();
+    return model?.split('-')[0].toLowerCase() || 'unknown';
   }
 
   private isProviderHealthy(provider: string): boolean {

@@ -44,7 +44,8 @@
  * - NULLCLAW_POOL_SIZE: Number of containers in pool (default: 2, max: 4)
  * - NULLCLAW_IMAGE: Docker image (default: 'ghcr.io/nullclaw/nullclaw:latest')
  * - NULLCLAW_PORT: Base port (default: 3001)
- * - NULLCLAW_TIMEOUT: Request timeout in milliseconds (default: 300000 = 5 minutes)
+ * - NULLCLAW_REQUEST_TIMEOUT_MS: Request timeout in milliseconds (default: 300000 = 5 minutes)
+ * - NULLCLAW_TIMEOUT: (DEPRECATED - use NULLCLAW_REQUEST_TIMEOUT_MS) Legacy timeout - values < 1000 treated as seconds, >= 1000 as milliseconds
  */
 
 import { createLogger } from '../utils/logger';
@@ -119,9 +120,21 @@ class NullclawIntegration {
     image: process.env.NULLCLAW_IMAGE || 'ghcr.io/nullclaw/nullclaw:latest',
     basePort: parseInt(process.env.NULLCLAW_PORT || '3001'),
     timeout: (() => {
-      const rawTimeout = Number(process.env.NULLCLAW_REQUEST_TIMEOUT_MS ?? process.env.NULLCLAW_TIMEOUT ?? '300000');
-      if (!Number.isFinite(rawTimeout) || rawTimeout <= 0) return 300000;
-      return rawTimeout;
+      // PRIORITY 1: New explicit env var (already in milliseconds)
+      if (process.env.NULLCLAW_REQUEST_TIMEOUT_MS != null) {
+        const timeout = Number(process.env.NULLCLAW_REQUEST_TIMEOUT_MS);
+        if (Number.isFinite(timeout) && timeout > 0) return timeout;
+      }
+      // PRIORITY 2: Legacy env var (assume seconds, convert to ms)
+      // Only apply conversion if the value looks like seconds (< 1000 is likely seconds)
+      if (process.env.NULLCLAW_TIMEOUT != null) {
+        const rawTimeout = Number(process.env.NULLCLAW_TIMEOUT);
+        if (Number.isFinite(rawTimeout) && rawTimeout > 0) {
+          // If using legacy var and value is < 1000, treat as seconds and convert
+          return rawTimeout < 1000 ? rawTimeout * 1000 : rawTimeout;
+        }
+      }
+      return 300000; // Default: 5 minutes
     })(),
     allowedDomains: (process.env.NULLCLAW_ALLOWED_DOMAINS || 'openrouter.ai,api.discord.com,api.telegram.org').split(','),
     healthCheckTimeout: parseInt(process.env.NULLCLAW_HEALTH_TIMEOUT || '30000'),

@@ -117,9 +117,27 @@ export class OracleVMSandboxHandle implements SandboxHandle {
   }
 
   private isPathInWorkspace(path: string): boolean {
-    const normalizedPath = path.replace(/\\/g, '/');
-    const normalizedWorkspace = this.workspaceDir.replace(/\\/g, '/');
-    return normalizedPath.startsWith(normalizedWorkspace);
+    // SECURITY: Properly validate path is within workspace
+    // Must resolve path to handle .. traversal attempts
+    const pathModule = require('path');
+    
+    try {
+      // Resolve to absolute path, normalizing any .. or . segments
+      const resolvedPath = pathModule.resolve(path);
+      const resolvedWorkspace = pathModule.resolve(this.workspaceDir);
+      
+      // Add trailing separator to prevent partial matches
+      // e.g., /workspace-evil should not match /workspace
+      const workspaceWithSep = resolvedWorkspace.endsWith(pathModule.sep) 
+        ? resolvedWorkspace 
+        : resolvedWorkspace + pathModule.sep;
+      
+      // Check if resolved path equals workspace OR starts with workspace + separator
+      return resolvedPath === resolvedWorkspace || resolvedPath.startsWith(workspaceWithSep);
+    } catch {
+      // If path resolution fails, reject the path
+      return false;
+    }
   }
 
   async destroySandbox(): Promise<void> {
@@ -214,13 +232,26 @@ export class OracleVMSandboxHandle implements SandboxHandle {
           return;
         }
 
+        // SECURITY: Validate command against allowed patterns to prevent shell injection
+        // Only allow git subcommands followed by safe arguments (no shell metacharacters)
+        // Use [ \t] instead of \s to prevent newlines from passing the regex
+        const gitCommandPattern = /^(git[ \t]+(?:status|diff|commit|push|pull|branch|log|stash|init|add|clone)(?:[ \t]+[A-Za-z0-9_./=@:+-]+)*)$/;
+        if (!gitCommandPattern.test(command.trim())) {
+          resolve({
+            success: false,
+            output: 'Invalid git command: only safe git subcommands are allowed',
+            exitCode: 1,
+            executionTime: Date.now() - startTime,
+          });
+          return;
+        }
+
         // SECURITY: Use single quotes and escape any single quotes in the path
         // This prevents shell injection via the cwd
         const escapedCwd = workingDir.replace(/'/g, "'\\''");
-        const escapedCommand = command.replace(/'/g, "'\\''");
-        
+
         // Build command with working directory using single quotes
-        const fullCommand = `cd '${escapedCwd}' && ${escapedCommand}`;
+        const fullCommand = `cd '${escapedCwd}' && ${command}`;
 
         conn.exec(fullCommand, (err: any, stream: any) => {
           if (err) {

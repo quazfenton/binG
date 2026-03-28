@@ -106,7 +106,15 @@ export type ExecutionPolicy =
    * Use for: ML training, large builds, production deployments
    * Provider: e2b or daytona with high resources
    */
-  | 'cloud-sandbox';
+  | 'cloud-sandbox'
+
+  /**
+   * Hardware-isolated code execution via KVM
+   * Use for: Untrusted code, eval(), security-critical execution
+   * Provider: zeroboot (sub-millisecond VM forking)
+   * Note: No network inside sandbox, pre-baked templates only
+   */
+  | 'isolated-code-exec';
 
 /**
  * Execution policy configuration
@@ -200,6 +208,15 @@ export const EXECUTION_POLICY_CONFIGS: Record<ExecutionPolicy, ExecutionPolicyCo
     preferredProviders: ['e2b', 'daytona'],
     resources: { cpu: 4, memory: 8, disk: 50 },
   },
+
+  'isolated-code-exec': {
+    policy: 'isolated-code-exec',
+    allowLocalFallback: false,
+    maxWaitTime: 10,
+    requiredCapabilities: ['pty'],
+    preferredProviders: ['zeroboot'],
+    resources: { cpu: 1, memory: 1 },
+  },
 };
 
 /**
@@ -249,6 +266,15 @@ export function determineExecutionPolicy(options: {
 
   const taskLower = task.toLowerCase();
 
+  // Patterns that indicate UNTRUSTED/HIGH-RISK code execution (use Zeroboot)
+  const isolatedCodePatterns = [
+    /\b(eval|Function)\s*\(/i,
+    /\b(vm\.runInNewContext|vm\.runInThisContext)\b/i,
+    /\b(__import__\s*\(\s*['"]os['"])\s*\)/i,
+    /\b(subprocess|os\.system|os\.popen)\b/i,
+    /\b(untrusted|user.*input|sandbox.*exec)\b/i,
+  ];
+
   // Patterns that indicate ACTUAL EXECUTION (not just writing code)
   const executionPatterns = [
     // Explicit execution commands
@@ -276,6 +302,11 @@ export function determineExecutionPolicy(options: {
   // Desktop/GUI tasks - require sandbox with desktop
   if (requiresGUI || taskLower.includes('gui') || taskLower.includes('desktop') || taskLower.includes('browser')) {
     return 'desktop-required';
+  }
+
+  // High-risk/untrusted code execution - use Zeroboot (hardware isolation)
+  if (isolatedCodePatterns.some(pattern => pattern.test(task))) {
+    return 'isolated-code-exec';
   }
 
   // Check if this is clearly a code writing task (should NOT use sandbox)
@@ -339,7 +370,7 @@ export function getPreferredProviders(policy: ExecutionPolicy): string[] {
 /**
  * Risk level for command/code execution
  */
-export type RiskLevel = 'safe' | 'low' | 'medium' | 'high' | 'critical';
+export type RiskLevel = 'safe' | 'low' | 'medium' | 'high' | 'critical' | 'kvm';
 
 /**
  * Individual risk factor
@@ -397,6 +428,33 @@ export const RISK_PATTERNS: Record<string, { pattern: RegExp; severity: number; 
     pattern: /xmrig|cryptonight|monero|minerd/i,
     severity: 100,
     description: 'Cryptocurrency miner detected',
+  },
+
+  // KVM - Hardware isolation required (Zeroboot)
+  'eval-execution': {
+    pattern: /\beval\s*\(/i,
+    severity: 98,
+    description: 'eval() execution - requires KVM hardware isolation',
+  },
+  'function-constructor': {
+    pattern: /\bFunction\s*\(/i,
+    severity: 98,
+    description: 'Function constructor - requires KVM hardware isolation',
+  },
+  'vm-run': {
+    pattern: /vm\.runIn(?:NewContext|ThisContext|Context)\s*\(/i,
+    severity: 99,
+    description: 'VM context execution - requires KVM hardware isolation',
+  },
+  'untrusted-code': {
+    pattern: /\b(untrusted|user.*input|sandbox.*exec)\b/i,
+    severity: 96,
+    description: 'Untrusted code execution - requires KVM hardware isolation',
+  },
+  'dynamic-import-os': {
+    pattern: /__import__\s*\(\s*['"]os['"]\s*\)|os\.system\s*\(|os\.popen\s*\(/i,
+    severity: 97,
+    description: 'Dynamic OS access - requires KVM hardware isolation',
   },
 
   // High - Require sandbox-heavy
@@ -479,7 +537,8 @@ export const RISK_THRESHOLDS: Record<RiskLevel, { min: number; max: number; poli
   'low': { min: 21, max: 40, policy: 'sandbox-preferred' },
   'medium': { min: 41, max: 60, policy: 'sandbox-required' },
   'high': { min: 61, max: 80, policy: 'sandbox-heavy' },
-  'critical': { min: 81, max: 100, policy: 'cloud-sandbox' },
+  'critical': { min: 81, max: 95, policy: 'cloud-sandbox' },
+  'kvm': { min: 96, max: 100, policy: 'isolated-code-exec' },
 };
 
 /**
@@ -532,7 +591,7 @@ export function assessRisk(input: string, context?: {
   }
 
   // Critical risks should be blocked
-  const shouldBlock = level === 'critical' && factors.some(f => f.severity >= 100);
+  const shouldBlock = (level === 'critical' || level === 'kvm') && factors.some(f => f.severity >= 100);
   const blockReason = shouldBlock
     ? `Blocked: ${factors.filter(f => f.severity >= 100).map(f => f.description).join(', ')}`
     : undefined;

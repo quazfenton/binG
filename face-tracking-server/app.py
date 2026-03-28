@@ -33,13 +33,21 @@ CORS(app, origins=[
 API_KEY = os.environ.get('FACE_TRACKING_API_KEY', None)
 
 def require_auth():
-    """SECURITY: Check API key for sensitive operations"""
+    """
+    SECURITY: Check API key for sensitive operations
+    
+    Only accepts API key via X-API-Key header.
+    Never accept via query params - they can leak via:
+    - Server logs
+    - Browser history
+    - Referer headers
+    - Bookmarks
+    """
     if not API_KEY:
         return True  # No auth required if no key configured (dev mode)
     
     auth_header = request.headers.get('X-API-Key')
-    auth_param = request.args.get('api_key')
-    return auth_header == API_KEY or auth_param == API_KEY
+    return auth_header == API_KEY
 
 # Initialize MediaPipe Face Mesh
 mp_face_mesh = mp.solutions.face_mesh

@@ -65,6 +65,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     processingSteps: [],
     gitCommits: [],
     diffs: [],
+    fileEdits: [],
+    specAmplification: undefined,
+    refinementProgress: undefined,
+    dagProgress: undefined,
   });
 
   const abortControllerRef = useRef<AbortController | null>(null);
@@ -441,6 +445,46 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }
                   break;
 
+                case 'primary_done':
+                  // Primary response completed, but stream stays open for background refinement
+                  // Update metadata but DON'T close the stream or call onFinish yet
+                  if (eventData.messageMetadata) {
+                    const metadata = eventData.messageMetadata;
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
+                        ? { ...msg, metadata: { ...(msg.metadata || {}), ...metadata } }
+                        : msg
+                    ));
+                  }
+                  // Update version if provided
+                  if (eventData.version) {
+                    setCurrentVersion(eventData.version);
+                  }
+                  // Mark primary as complete but keep listening for background events
+                  setAgentStatus('executing'); // Still executing background tasks
+                  break;
+
+                case 'primary_response':
+                  // Primary response content from spec enhancement routing
+                  // eventData contains: { content, timestamp }
+                  // Note: File edits in primary response are handled server-side via applyFilesystemEditsFromResponse
+                  // Client just displays the content - filesystem edits come via separate 'filesystem' event
+                  if (eventData.content) {
+                    accumulatedContent += eventData.content;
+
+                    // Update the assistant message in real-time
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
+                        ? { ...msg, content: accumulatedContent }
+                        : msg
+                    ));
+                  }
+                  // Update agent status to executing if we're receiving content
+                  if (agentStatus === 'thinking') {
+                    setAgentStatus('executing');
+                  }
+                  break;
+
                 case 'done':
                   if (eventData.messageMetadata) {
                     const metadata = eventData.messageMetadata;
@@ -454,7 +498,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   if (eventData.version) {
                     setCurrentVersion(eventData.version);
                   }
-                  // Streaming complete
+                  // Streaming complete (all background tasks finished)
                   clearTimeout(timeoutId);
                   setIsLoading(false);
                   setAgentStatus('completed');
@@ -586,6 +630,220 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       }],
                     }));
                   }
+                  break;
+
+                case 'file_edit':
+                  // Progressive file edit detected during streaming
+                  // eventData contains: { path, status, operation, timestamp }
+                  if (eventData.path) {
+                    // Update agent activity with progressive file edit
+                    setAgentActivity(prev => ({
+                      ...prev,
+                      status: 'executing',
+                      currentAction: `Editing ${eventData.path}...`,
+                      fileEdits: [...(prev.fileEdits || []), {
+                        path: eventData.path,
+                        status: eventData.status || 'detected',
+                        operation: eventData.operation,
+                        timestamp: eventData.timestamp || Date.now(),
+                      }],
+                    }));
+
+                    if (process.env.NODE_ENV === 'development') {
+                      console.log('[Chat] Progressive file edit detected:', eventData.path);
+                    }
+                  }
+                  break;
+
+                case 'spec_amplification':
+                  // Spec amplification lifecycle event
+                  // eventData contains: { stage, fastModel, specScore, sectionsGenerated, currentIteration, totalIterations, currentSection, error, timestamp, filesystem, content, taskId, taskTitle }
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: eventData.stage === 'complete' || eventData.stage === 'error' || eventData.stage === 'task_complete' ? 'idle' : 'processing',
+                    currentAction: eventData.stage === 'started'
+                      ? 'Generating improvement spec...'
+                      : eventData.stage === 'spec_generated'
+                      ? 'Spec generated, starting refinement...'
+                      : eventData.stage === 'refining'
+                      ? `Refining section ${eventData.currentIteration || 0}/${eventData.totalIterations || 0}...`
+                      : eventData.stage === 'task_complete'
+                      ? `Completed: ${eventData.taskTitle || 'Refinement task'}`
+                      : eventData.stage === 'complete'
+                      ? 'Refinement complete'
+                      : eventData.error || 'Processing...',
+                    specAmplification: {
+                      stage: eventData.stage,
+                      fastModel: eventData.fastModel,
+                      specScore: eventData.specScore,
+                      sectionsGenerated: eventData.sectionsGenerated,
+                      currentIteration: eventData.currentIteration,
+                      totalIterations: eventData.totalIterations,
+                      currentSection: eventData.currentSection,
+                      error: eventData.error,
+                      timestamp: eventData.timestamp || Date.now(),
+                      taskId: eventData.taskId,
+                      taskTitle: eventData.taskTitle,
+                    },
+                  }));
+
+                  // When refinement starts, create a pending message to show loading state
+                  if (eventData.stage === 'started' || eventData.stage === 'refining') {
+                    setMessages(prev => {
+                      const hasPendingRefinement = prev.some(m =>
+                        m.metadata?.isRefinement && m.metadata?.isPending
+                      );
+
+                      if (!hasPendingRefinement) {
+                        // Create pending refinement message with rotating statements
+                        const pendingMessage: Message = {
+                          id: 'refinement-pending',
+                          role: 'assistant',
+                          content: '',
+                          metadata: {
+                            isRefinement: true,
+                            isPending: true,
+                            isLoading: true,
+                          },
+                        };
+                        return [...prev, pendingMessage];
+                      }
+
+                      return prev;
+                    });
+                  }
+
+                  // When a refinement task completes, create/update a message with the content
+                  // Each task gets its own message to show progressive improvements
+                  if (eventData.stage === 'task_complete' && eventData.content) {
+                    // Extract file edits from the content for enhanced-diff-viewer display
+                    // Note: Server already applied these edits via applyFilesystemEditsFromResponse
+                    // We just extract for UI display, not for re-applying
+                    const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
+                    const compactEdits = extractCompactFileEdits(eventData.content);
+                    const writeEdits = extractFileWriteEdits(eventData.content);
+                    const allEdits = [...compactEdits, ...writeEdits];
+
+                    setMessages(prev => {
+                      // Remove pending message if it exists
+                      const withoutPending = prev.filter(m =>
+                        !(m.metadata?.isRefinement && m.metadata?.isPending)
+                      );
+
+                      // Check if this task message already exists (update vs create)
+                      const existingTaskIndex = withoutPending.findIndex(m =>
+                        m.metadata?.taskId === eventData.taskId
+                      );
+
+                      const refinementMessage: Message = {
+                        id: `refinement-${eventData.taskId || Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        role: 'assistant',
+                        content: eventData.content,
+                        metadata: {
+                          isRefinement: true,
+                          taskId: eventData.taskId,
+                          taskTitle: eventData.taskTitle,
+                          provider: eventData.fastModel,
+                          timestamp: eventData.timestamp,
+                          isTaskComplete: true,
+                          // Store extracted edits for enhanced-diff-viewer display
+                          fileEdits: allEdits.length > 0 ? allEdits : undefined,
+                        },
+                      };
+
+                      if (existingTaskIndex >= 0) {
+                        // Update existing task message
+                        const updated = [...withoutPending];
+                        updated[existingTaskIndex] = refinementMessage;
+                        return updated;
+                      }
+
+                      // Add new task message
+                      return withoutPending.concat(refinementMessage);
+                    });
+                  }
+
+                  // When refinement completes, create/update summary message
+                  // This happens regardless of filesystem edits
+                  if (eventData.stage === 'complete') {
+                    // Extract file edits from the refined content for enhanced-diff-viewer display
+                    // Note: Server already applied these edits via applyFilesystemEditsFromResponse
+                    // We just extract for UI display, not for re-applying
+                    const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
+                    const compactEdits = extractCompactFileEdits(eventData.refinedContent || '');
+                    const writeEdits = extractFileWriteEdits(eventData.refinedContent || '');
+                    const allEdits = [...compactEdits, ...writeEdits];
+
+                    setMessages(prev => {
+                      // Remove pending message if it exists
+                      const withoutPending = prev.filter(m =>
+                        !(m.metadata?.isRefinement && m.metadata?.isPending)
+                      );
+
+                      // Check if summary message already exists
+                      const existingSummaryIndex = withoutPending.findIndex(m =>
+                        m.metadata?.isRefinementSummary
+                      );
+
+                      const refinementMessage: Message = {
+                        id: `refinement-summary-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
+                        role: 'assistant',
+                        content: eventData.refinedContent || 'Refinement complete.',
+                        metadata: {
+                          filesystem: eventData.filesystem,
+                          provider: eventData.fastModel,
+                          specScore: eventData.specScore,
+                          isRefinementSummary: true,
+                          sectionsProcessed: eventData.sectionsProcessed,
+                          // Store extracted edits for enhanced-diff-viewer display
+                          fileEdits: allEdits.length > 0 ? allEdits : undefined,
+                        },
+                      };
+
+                      if (existingSummaryIndex >= 0) {
+                        // Update existing summary
+                        const updated = [...withoutPending];
+                        updated[existingSummaryIndex] = refinementMessage;
+                        return updated;
+                      }
+
+                      // Add new summary message
+                      return withoutPending.concat(refinementMessage);
+                    });
+                  }
+                  break;
+
+                case 'spec_refinement':
+                  // Spec section refinement progress
+                  // eventData contains: { section, tasks, progress, content, timestamp }
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: 'processing',
+                    currentAction: `Refining: ${eventData.section}`,
+                    refinementProgress: {
+                      section: eventData.section,
+                      tasks: eventData.tasks,
+                      progress: eventData.progress,
+                      content: eventData.content,
+                      timestamp: eventData.timestamp || Date.now(),
+                    },
+                  }));
+                  break;
+
+                case 'dag_task_status':
+                  // DAG task execution status
+                  // eventData contains: { tasks, overallProgress, activeTasks, timestamp }
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: 'processing',
+                    currentAction: `Executing ${eventData.activeTasks.length} task(s) in parallel...`,
+                    dagProgress: {
+                      tasks: eventData.tasks,
+                      overallProgress: eventData.overallProgress,
+                      activeTasks: eventData.activeTasks,
+                      timestamp: eventData.timestamp || Date.now(),
+                    },
+                  }));
                   break;
 
                 case 'tool_invocation':
