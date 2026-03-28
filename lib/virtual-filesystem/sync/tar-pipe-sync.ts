@@ -17,11 +17,12 @@
 import { createWriteStream, createReadStream } from 'fs';
 import { pipeline } from 'stream/promises';
 import { pack, unpack } from 'tar-stream';
-import { VirtualFilesystemService } from '../virtual-filesystem-service';
+import { virtualFilesystem } from '../index';
 import type { SandboxHandle } from '../../sandbox/providers/sandbox-provider';
 import { emitFilesystemUpdated } from './sync-events';
 
-const vfs = new VirtualFilesystemService();
+// Use shared VFS singleton for consistent state across all routes
+const vfs = virtualFilesystem;
 
 export interface TarPipeSyncOptions {
   /** Minimum files to use tar-pipe (default: 10) */

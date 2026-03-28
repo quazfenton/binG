@@ -10,8 +10,25 @@ const snapshotCache = new Map<string, {
   data: any;
   timestamp: number;
   etag: string;
+  version: number;
 }>();
 const CACHE_TTL_MS = 30000; // 30 seconds server-side cache
+
+// FIX: Invalidate snapshot cache when VFS changes (listen to snapshotChange events)
+// This ensures the cache is invalidated when files are written, preventing stale data
+virtualFilesystem.onSnapshotChange((ownerId: string, version: number) => {
+  // Invalidate all cache entries for this ownerId
+  for (const key of snapshotCache.keys()) {
+    if (key.startsWith(`${ownerId}:`)) {
+      const cached = snapshotCache.get(key);
+      // Invalidate if the cached version is older than the current version
+      if (cached && cached.version < version) {
+        snapshotCache.delete(key);
+        console.log('[VFS SNAPSHOT] Cache invalidated for owner:', ownerId, 'version:', version);
+      }
+    }
+  }
+});
 
 // Request tracking for detecting polling loops
 const requestTracker = new Map<string, { count: number; lastRequest: number; firstRequest: number }>();
@@ -188,6 +205,7 @@ export async function GET(req: NextRequest) {
       data: responseData,
       timestamp: now,
       etag,
+      version: snapshot.version,
     });
 
     // Clean up old cache entries asynchronously to avoid blocking request

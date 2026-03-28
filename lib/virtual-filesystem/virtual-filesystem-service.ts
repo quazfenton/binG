@@ -138,16 +138,21 @@ export class VirtualFilesystemService {
     filePath: string,
     content: string,
     language?: string,
-    options?: { failIfExists?: boolean },
+    options?: { failIfExists?: boolean; append?: boolean },
   ): Promise<VirtualFile> {
-    console.log('[VFS] writeFile called', { ownerId, filePath, contentLength: content?.length });
+    console.log('[VFS] writeFile called', { ownerId, filePath, contentLength: content?.length, append: options?.append });
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
     const previous = workspace.files.get(normalizedPath);
     const now = new Date().toISOString();
-    const normalizedContent = typeof content === 'string' ? content : String(content ?? '');
+    
+    // Handle append mode
+    let normalizedContent = typeof content === 'string' ? content : String(content ?? '');
+    if (options?.append && previous) {
+      normalizedContent = (previous.content || '') + normalizedContent;
+    }
 
-    if (previous && options?.failIfExists) {
+    if (previous && options?.failIfExists && !options?.append) {
       throw new Error(`File already exists: ${normalizedPath}`);
     }
 
