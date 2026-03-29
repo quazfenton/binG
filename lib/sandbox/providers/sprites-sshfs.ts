@@ -1,23 +1,73 @@
 /**
  * Sprites SSHFS Mount Helper
- * 
+ *
  * Mount Sprite filesystem locally via SSHFS for seamless file editing.
  * This provides real-time sync between local IDE and Sprite filesystem.
- * 
+ *
  * Requirements:
  * - SSHFS installed on local machine
  * - Sprites CLI installed and authenticated
  * - OpenSSH server running on Sprite (auto-installed via createSSHFSMount)
- * 
+ *
  * Documentation: https://docs.sprites.dev/working-with-sprites#mounting-filesystem-locally
+ *
+ * SECURITY: Uses execFile with args array to prevent command injection
+ * @see docs/COMPREHENSIVE_SECURITY_AUDIT.md Security audit - CRITICAL fix
  */
 
-import { spawn, ChildProcess, exec } from 'child_process'
+import { spawn, ChildProcess, execFile } from 'child_process'
 import { promisify } from 'util'
 import { existsSync, mkdirSync } from 'fs'
 import { join } from 'path'
 
-const execPromise = promisify(exec)
+// SECURITY: Use execFile instead of exec for safer execution
+const execFilePromise = promisify(execFile)
+
+// ============================================================================
+// Security Validation
+// ============================================================================
+
+/**
+ * Validate sprite name format (Sprites naming convention)
+ * SECURITY: Prevents command injection via spriteName parameter
+ */
+function validateSpriteName(name: string): string {
+  if (!name || typeof name !== 'string') {
+    throw new Error('Sprite name is required')
+  }
+
+  // Sprites names are lowercase alphanumeric with hyphens
+  const spriteNameRegex = /^[a-z0-9][a-z0-9-]{0,62}[a-z0-9]$/
+  if (!spriteNameRegex.test(name)) {
+    throw new Error(
+      'Invalid sprite name format. Must be lowercase alphanumeric with hyphens (e.g., "my-dev-sprite")'
+    )
+  }
+
+  return name
+}
+
+/**
+ * Validate mount point path
+ * SECURITY: Prevents path traversal and ensures safe mount location
+ */
+function validateMountPoint(mountPoint: string): string {
+  if (!mountPoint || typeof mountPoint !== 'string') {
+    throw new Error('Mount point is required')
+  }
+
+  // Block path traversal
+  if (mountPoint.includes('..') || mountPoint.includes('\0')) {
+    throw new Error('Invalid mount point: path traversal detected')
+  }
+
+  // Must be absolute path
+  if (!mountPoint.startsWith('/') && !/^[A-Za-z]:/.test(mountPoint)) {
+    throw new Error('Mount point must be an absolute path')
+  }
+
+  return mountPoint
+}
 
 export interface SSHFSMountConfig {
   /** Sprite name to mount */
@@ -83,6 +133,10 @@ export class SpritesSSHFS {
    */
   async mount(config: SSHFSMountConfig): Promise<SSHFSMountResult> {
     try {
+      // SECURITY: Validate all user inputs
+      const spriteName = validateSpriteName(config.spriteName)
+      const mountPoint = validateMountPoint(config.mountPoint)
+
       const localPort = config.localPort || 2000
       const tunnelTimeout = config.tunnelTimeout || 10000
       const sshfsOptions = config.sshfsOptions || [
@@ -93,8 +147,7 @@ export class SpritesSSHFS {
         'allow_other',
       ]
 
-      // Validate mount point
-      const mountPoint = config.mountPoint
+      // Validate mount point exists
       if (!existsSync(mountPoint)) {
         mkdirSync(mountPoint, { recursive: true })
       }
@@ -210,6 +263,7 @@ export class SpritesSSHFS {
 
   /**
    * Unmount Sprite filesystem
+   * SECURITY: Uses execFile with args array
    */
   async unmount(): Promise<void> {
     try {
@@ -231,9 +285,14 @@ export class SpritesSSHFS {
         const isMacOS = platform.platform().includes('darwin')
 
         if (isMacOS) {
-          await execPromise(`diskutil umount ${this.mountPoint} 2>/dev/null || true`)
+          // SECURITY: Use execFile with args array instead of shell command
+          await execFilePromise('diskutil', ['umount', this.mountPoint], {
+            timeout: 10000,
+          }).catch(() => { /* Ignore unmount errors */ })
         } else {
-          await execPromise(`fusermount -u ${this.mountPoint} 2>/dev/null || true`)
+          await execFilePromise('fusermount', ['-u', this.mountPoint], {
+            timeout: 10000,
+          }).catch(() => { /* Ignore unmount errors */ })
         }
       } catch (error: any) {
         console.warn('[SpritesSSHFS] Unmount warning:', error.message)
@@ -270,10 +329,13 @@ export class SpritesSSHFS {
 
   /**
    * Check if SSHFS is installed
+   * SECURITY: Uses execFile with args array
    */
   private async checkSSHFSInstalled(): Promise<void> {
     try {
-      await execPromise('sshfs --version')
+      await execFilePromise('sshfs', ['--version'], {
+        timeout: 10000,
+      })
     } catch (error: any) {
       const platform = await import('os')
       const isMacOS = platform.platform().includes('darwin')
@@ -287,24 +349,35 @@ export class SpritesSSHFS {
 
   /**
    * Install SSH server on Sprite
+   * SECURITY: Uses execFile with args array, validates spriteName
    */
   private async installSSHServer(spriteName: string): Promise<boolean> {
     try {
-      // Check if SSH is already installed
-      const checkResult = await execPromise(
-        `sprite exec -s ${spriteName} "which sshd || echo 'not_installed'"`
-      )
+      // SECURITY: Validate spriteName
+      const validatedSpriteName = validateSpriteName(spriteName)
 
-      if (checkResult.stdout.includes('not_installed')) {
-        console.log(`[SpritesSSHFS] Installing OpenSSH on ${spriteName}...`)
-        
-        await execPromise(
-          `sprite exec -s ${spriteName} "sudo apt update && sudo apt install -y openssh-server"`
+      // Check if SSH is already installed using execFile with args
+      const { stdout: checkStdout } = await execFilePromise(
+        'sprite',
+        ['exec', '-s', validatedSpriteName, 'which', 'sshd'],
+        { timeout: 30000 }
+      ).catch(() => ({ stdout: 'not_installed' }))
+
+      if (checkStdout.includes('not_installed') || !checkStdout.trim()) {
+        console.log(`[SpritesSSHFS] Installing OpenSSH on ${validatedSpriteName}...`)
+
+        // Install openssh-server using execFile with args
+        await execFilePromise(
+          'sprite',
+          ['exec', '-s', validatedSpriteName, 'sudo', 'apt', 'update', '&&', 'sudo', 'apt', 'install', '-y', 'openssh-server'],
+          { timeout: 120000 }
         )
 
-        // Create service to auto-start SSH
-        await execPromise(
-          `sprite-env services create sshd -s ${spriteName} --cmd "/usr/sbin/sshd" --auto-start`
+        // Create service to auto-start SSH using execFile with args
+        await execFilePromise(
+          'sprite-env',
+          ['services', 'create', 'sshd', '-s', validatedSpriteName, '--cmd', '/usr/sbin/sshd', '--auto-start'],
+          { timeout: 30000 }
         )
 
         console.log(`[SpritesSSHFS] SSH server installed and configured`)
@@ -321,29 +394,54 @@ export class SpritesSSHFS {
 
   /**
    * Authorize SSH public keys
+   * SECURITY: Uses execFile with args array, validates spriteName
    */
   private async authorizeSSHKeys(spriteName: string): Promise<void> {
     try {
+      // SECURITY: Validate spriteName
+      const validatedSpriteName = validateSpriteName(spriteName)
+
       const platform = await import('os')
       const homedir = platform.homedir()
       const pubKeyPath = join(homedir, '.ssh', 'id_*.pub')
 
-      // Get local public keys
-      const keysResult = await execPromise(`cat ${pubKeyPath} 2>/dev/null || echo ""`)
-      const pubKeys = keysResult.stdout.trim()
+      // Get local public keys using execFile with glob expansion handled by shell
+      // Note: We use execFile with 'bash -c' for glob expansion, but sanitize the path first
+      const safePubKeyPath = pubKeyPath.replace(/['";&|`$(){}\\]/g, '')
+      const { stdout: pubKeys } = await execFilePromise(
+        'bash',
+        ['-c', `cat ${safePubKeyPath} 2>/dev/null || echo ""`],
+        { timeout: 10000 }
+      )
 
-      if (!pubKeys) {
+      const trimmedPubKeys = pubKeys.trim()
+
+      if (!trimmedPubKeys) {
         console.warn('[SpritesSSHFS] No SSH public keys found. You may need to create one.')
         return
       }
 
-      // Add to authorized_keys on Sprite
-      const escapedKeys = pubKeys.replace(/'/g, "'\\''")
-      
-      await execPromise(
-        `sprite exec -s ${spriteName} ` +
-        `"mkdir -p ~/.ssh && echo '${escapedKeys}' >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys"`
-      )
+      // SECURITY: Use execFile with args array - pass keys via stdin to avoid shell injection
+      // Split into individual keys and add each one
+      const keys = trimmedPubKeys.split('\n').filter(key => key.trim())
+
+      for (const key of keys) {
+        // Validate key format (should start with ssh-rsa, ssh-ed25519, etc.)
+        if (!/^(ssh-rsa|ssh-ed25519|ecdsa-sha2-nistp256|ecdsa-sha2-nistp384|ecdsa-sha2-nistp521)\s/.test(key)) {
+          console.warn('[SpritesSSHFS] Skipping invalid SSH key format')
+          continue
+        }
+
+        // Use sprite exec with the key passed via stdin to avoid shell injection
+        await execFilePromise(
+          'sprite',
+          ['exec', '-s', validatedSpriteName, 'bash', '-c', 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'],
+          {
+            timeout: 30000,
+            input: key + '\n',
+          }
+        )
+      }
 
       console.log('[SpritesSSHFS] SSH keys authorized')
     } catch (error: any) {
@@ -385,22 +483,39 @@ export async function mountSpriteSSHFS(config: SSHFSMountConfig): Promise<SSHFSM
 
 /**
  * Unmount function for quick mount
+ * SECURITY: Uses execFile with args array and validates mountPoint
  */
 export async function unmountSpriteSSHFS(mountPoint: string): Promise<void> {
   try {
+    // SECURITY: Validate mount point
+    const validatedMountPoint = validateMountPoint(mountPoint)
+
     const platform = await import('os')
     const isMacOS = platform.platform().includes('darwin')
 
     if (isMacOS) {
-      await execPromise(`diskutil umount ${mountPoint} 2>/dev/null || true`)
+      await execFilePromise('diskutil', ['umount', validatedMountPoint], {
+        timeout: 10000,
+      }).catch(() => { /* Ignore unmount errors */ })
     } else {
-      await execPromise(`fusermount -u ${mountPoint} 2>/dev/null || true`)
+      await execFilePromise('fusermount', ['-u', validatedMountPoint], {
+        timeout: 10000,
+      }).catch(() => { /* Ignore unmount errors */ })
     }
 
-    // Kill any remaining tunnel processes
-    await execPromise(`pkill -f "sprite proxy.*2000:22" 2>/dev/null || true`)
+    // Kill any remaining tunnel processes - use pgrep + kill instead of pkill pattern
+    const { stdout: pids } = await execFilePromise('pgrep', ['-f', 'sprite proxy.*2000:22'], {
+      timeout: 5000,
+    }).catch(() => ({ stdout: '' }))
 
-    console.log(`[SpritesSSHFS] Unmounted ${mountPoint}`)
+    if (pids.trim()) {
+      const pidList = pids.trim().split('\n').filter(pid => /^\d+$/.test(pid.trim()))
+      for (const pid of pidList) {
+        process.kill(parseInt(pid.trim()), 'SIGTERM')
+      }
+    }
+
+    console.log(`[SpritesSSHFS] Unmounted ${validatedMountPoint}`)
   } catch (error: any) {
     console.error('[SpritesSSHFS] Unmount error:', error.message)
   }

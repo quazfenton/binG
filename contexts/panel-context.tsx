@@ -2,9 +2,9 @@
 
 import React, { createContext, useContext, useState, useCallback } from "react";
 
-export type PanelTab = "explorer" | "chat" | "thinking" | "music" | "automations" | "youtube" | "forum" | "agent" | "compare" | "integrations" | "git" | "voice" | "remote" | "news" | "cronjobs";
+export type PanelTab = "explorer" | "chat" | "thinking" | "music" | "automations" | "youtube" | "forum" | "agent" | "compare" | "integrations" | "git" | "voice" | "remote" | "news" | "cronjobs" | "frontier-feed" | "command-deck";
 
-export type TopPanelTab = "news" | "plugins" | "workflows" | "orchestration" | "art-gallery" | "mind-map" | "prompt-lab" | "music" | "code-playground";
+export type TopPanelTab = "news" | "plugins" | "workflows" | "orchestration" | "art-gallery" | "mind-map" | "prompt-lab" | "music" | "music-hub" | "immersive" | "code-playground" | "broadway-deal-hunter" | "model-comparison" | "zine-display";
 
 interface PanelContextType {
   isOpen: boolean;

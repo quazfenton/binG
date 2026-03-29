@@ -1,0 +1,134 @@
+{
+  "albums": [
+    {
+      "id": "album-1",
+      "title": "Neon Dreams",
+      "artist": "Digital Underground",
+      "releaseDate": "2026-03-15",
+      "playlistUrl": "https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+      "playlistId": "PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+      "coverUrl": "https://picsum.photos/seed/neondreams/400/400",
+      "isNew": true,
+      "isFeatured": true,
+      "songs": [
+        {
+          "id": "song-1-1",
+          "title": "Midnight Protocol",
+          "artist": "Digital Underground",
+          "album": "Neon Dreams",
+          "videoId": "dQw4w9WgXcQ",
+          "duration": 245,
+          "thumbnailUrl": "https://img.youtube.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
+          "liked": false,
+          "played": false
+        },
+        {
+          "id": "song-1-2",
+          "title": "Binary Sunset",
+          "artist": "Digital Underground",
+          "album": "Neon Dreams",
+          "videoId": "9bZkp7q19f0",
+          "duration": 198,
+          "thumbnailUrl": "https://img.youtube.com/vi/9bZkp7q19f0/maxresdefault.jpg",
+          "liked": true,
+          "played": false
+        },
+        {
+          "id": "song-1-3",
+          "title": "Cyber Rain",
+          "artist": "Digital Underground",
+          "album": "Neon Dreams",
+          "videoId": "kJQP7kiw5Fk",
+          "duration": 223,
+          "thumbnailUrl": "https://img.youtube.com/vi/kJQP7kiw5Fk/maxresdefault.jpg",
+          "liked": false,
+          "played": false
+        }
+      ]
+    },
+    {
+      "id": "album-2",
+      "title": "Quantum Frequencies",
+      "artist": "The Algorithms",
+      "releaseDate": "2026-03-20",
+      "playlistUrl": "https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+      "playlistId": "PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+      "coverUrl": "https://picsum.photos/seed/quantum/400/400",
+      "isNew": true,
+      "isFeatured": false,
+      "songs": [
+        {
+          "id": "song-2-1",
+          "title": "Entanglement",
+          "artist": "The Algorithms",
+          "album": "Quantum Frequencies",
+          "videoId": "LXb3EKWsInQ",
+          "duration": 267,
+          "thumbnailUrl": "https://img.youtube.com/vi/LXb3EKWsInQ/maxresdefault.jpg",
+          "liked": true,
+          "played": false
+        },
+        {
+          "id": "song-2-2",
+          "title": "Superposition",
+          "artist": "The Algorithms",
+          "album": "Quantum Frequencies",
+          "videoId": "hY7m5jjK9mM",
+          "duration": 189,
+          "thumbnailUrl": "https://img.youtube.com/vi/hY7m5jjK9mM/maxresdefault.jpg",
+          "liked": false,
+          "played": false
+        }
+      ]
+    },
+    {
+      "id": "album-3",
+      "title": "Analog Memories",
+      "artist": "Retro Wave Collective",
+      "releaseDate": "2026-03-10",
+      "playlistUrl": "https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+      "playlistId": "PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
+      "coverUrl": "https://picsum.photos/seed/analog/400/400",
+      "isNew": false,
+      "isFeatured": true,
+      "songs": [
+        {
+          "id": "song-3-1",
+          "title": "Cassette Dreams",
+          "artist": "Retro Wave Collective",
+          "album": "Analog Memories",
+          "videoId": "fJ9rUzIMcZQ",
+          "duration": 312,
+          "thumbnailUrl": "https://img.youtube.com/vi/fJ9rUzIMcZQ/maxresdefault.jpg",
+          "liked": false,
+          "played": false
+        },
+        {
+          "id": "song-3-2",
+          "title": "VHS Nights",
+          "artist": "Retro Wave Collective",
+          "album": "Analog Memories",
+          "videoId": "Zi_XLOBDo_Y",
+          "duration": 278,
+          "thumbnailUrl": "https://img.youtube.com/vi/Zi_XLOBDo_Y/maxresdefault.jpg",
+          "liked": true,
+          "played": false
+        },
+        {
+          "id": "song-3-3",
+          "title": "Synthwave Highway",
+          "artist": "Retro Wave Collective",
+          "album": "Analog Memories",
+          "videoId": "7wtfhZwyrcc",
+          "duration": 245,
+          "thumbnailUrl": "https://img.youtube.com/vi/7wtfhZwyrcc/maxresdefault.jpg",
+          "liked": false,
+          "played": false
+        }
+      ]
+    }
+  ],
+  "lastUpdated": "2026-03-29T00:00:00.000Z",
+  "webhookUrl": "",
+  "autoUpdate": true
+}

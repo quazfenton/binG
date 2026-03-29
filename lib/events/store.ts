@@ -1,259 +1,441 @@
 /**
- * Event Store
- * 
- * Database-backed event persistence layer.
- * In production, this would use Prisma/Supabase. For now, uses Redis.
- * Based on trigger.md design.
+ * Event Store - SQLite append-only event persistence
+ *
+ * Provides durable storage for all events with support for:
+ * - Event retrieval by status/type/user
+ * - Status transitions (pending → running → completed/failed)
+ * - Retry tracking
+ * - Replay of failed events
+ *
+ * @module events/store
  */
 
-import { AnyEvent, EventStatus, EventRecord } from './schema';
-import Redis from 'ioredis';
+import { getDatabase } from '@/lib/database/connection';
+import { AnyEvent, EventType } from './schema';
+import { createLogger } from '@/lib/utils/logger';
 
-const REDIS_URL = process.env.REDIS_URL || 'redis://localhost:6379';
-const EVENTS_HASH = 'events:records';
-const EVENTS_BY_USER_PREFIX = 'events:user:';
-const EVENTS_BY_STATUS_PREFIX = 'events:status:';
+const logger = createLogger('Events:Store');
 
-// Lazy Redis connection - only connect when needed
-let redis: Redis | null = null;
-let redisError: Error | null = null;
-
-function getRedis(): Redis {
-  if (redisError) {
-    throw new Error(`Redis unavailable: ${redisError.message}`);
-  }
-  if (!redis) {
-    try {
-      redis = new Redis(REDIS_URL, {
-        lazy: true,
-        maxRetriesPerRequest: 1,
-        connectTimeout: 5000,
-      });
-      redis.on('error', (err) => {
-        redisError = err;
-        console.error('[EventStore] Redis error:', err.message);
-      });
-    } catch (err: any) {
-      redisError = err;
-      throw err;
-    }
-  }
-  return redis;
+/**
+ * Event record interface (database row)
+ */
+export interface EventRecord {
+  id: string;
+  type: string;
+  payload: any;
+  status: EventStatus;
+  retryCount: number;
+  error?: string;
+  createdAt: string;
+  updatedAt?: string;
+  completedAt?: string;
+  userId: string;
+  sessionId?: string;
+  metadata?: Record<string, any>;
 }
 
-// Generate unique event ID
-function generateEventId(): string {
-  return `evt-${Date.now()}-${Math.random().toString(36).slice(2, 12)}`;
-}
+/**
+ * Event status enum
+ */
+export type EventStatus = 'pending' | 'running' | 'completed' | 'failed' | 'cancelled';
 
 /**
  * Create a new event in the store
  */
-export async function createEvent(event: AnyEvent): Promise<EventRecord> {
-  const r = getRedis();
-  const id = generateEventId();
-  const record: EventRecord = {
-    id,
-    type: event.type,
-    payload: event,
-    status: 'pending',
-    createdAt: Date.now(),
-    userId: event.userId,
-  };
+export async function createEvent(
+  event: AnyEvent,
+  userId: string,
+  sessionId?: string
+): Promise<EventRecord> {
+  const db = getDatabase();
+  const id = crypto.randomUUID();
 
-  // Store in Redis hash
-  await r.hset(EVENTS_HASH, id, JSON.stringify(record));
+  try {
+    const stmt = db.prepare(`
+      INSERT INTO events
+      (id, type, payload, status, retry_count, user_id, session_id, created_at)
+      VALUES (?, ?, ?, 'pending', 0, ?, ?, CURRENT_TIMESTAMP)
+    `);
 
-  // Index by user
-  await r.zadd(`${EVENTS_BY_USER_PREFIX}${event.userId}`, record.createdAt, id);
+    stmt.run(id, event.type, JSON.stringify(event), userId, sessionId || null);
 
-  // Index by status
-  await r.zadd(`${EVENTS_BY_STATUS_PREFIX}pending`, record.createdAt, id);
+    logger.info('Event created', {
+      eventId: id,
+      type: event.type,
+      userId,
+      sessionId,
+    });
 
-  console.log(`[EventStore] Created event ${id} of type ${event.type}`);
-  return record;
+    return {
+      id,
+      type: event.type,
+      payload: event,
+      status: 'pending',
+      retryCount: 0,
+      createdAt: new Date().toISOString(),
+      userId,
+      sessionId,
+    };
+  } catch (error: any) {
+    logger.error('Failed to create event', {
+      error: error.message,
+      event,
+      userId,
+    });
+    throw error;
+  }
+}
+
+/**
+ * Get pending events for processing
+ */
+export async function getPendingEvents(limit: number = 10): Promise<EventRecord[]> {
+  const db = getDatabase();
+
+  try {
+    const stmt = db.prepare(`
+      SELECT * FROM events
+      WHERE status = 'pending'
+      ORDER BY created_at ASC
+      LIMIT ?
+    `);
+
+    const rows = stmt.all(limit) as any[];
+
+    return rows.map((row) => ({
+      ...row,
+      payload: JSON.parse(row.payload),
+    }));
+  } catch (error: any) {
+    logger.error('Failed to get pending events', { error: error.message });
+    return [];
+  }
+}
+
+/**
+ * Get events by status
+ */
+export async function getEventsByStatus(status: EventStatus, limit: number = 50): Promise<EventRecord[]> {
+  const db = getDatabase();
+
+  try {
+    const stmt = db.prepare(`
+      SELECT * FROM events
+      WHERE status = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `);
+
+    const rows = stmt.all(status, limit) as any[];
+
+    return rows.map((row) => ({
+      ...row,
+      payload: JSON.parse(row.payload),
+    }));
+  } catch (error: any) {
+    logger.error('Failed to get events by status', { error: error.message, status });
+    return [];
+  }
+}
+
+/**
+ * Get events by user
+ */
+export async function getEventsByUser(userId: string, limit: number = 50): Promise<EventRecord[]> {
+  const db = getDatabase();
+
+  try {
+    const stmt = db.prepare(`
+      SELECT * FROM events
+      WHERE user_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `);
+
+    const rows = stmt.all(userId, limit) as any[];
+
+    return rows.map((row) => ({
+      ...row,
+      payload: JSON.parse(row.payload),
+    }));
+  } catch (error: any) {
+    logger.error('Failed to get events by user', { error: error.message, userId });
+    return [];
+  }
+}
+
+/**
+ * Get events by session
+ */
+export async function getEventsBySession(sessionId: string, limit: number = 100): Promise<EventRecord[]> {
+  const db = getDatabase();
+
+  try {
+    const stmt = db.prepare(`
+      SELECT * FROM events
+      WHERE session_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `);
+
+    const rows = stmt.all(sessionId, limit) as any[];
+
+    return rows.map((row) => ({
+      ...row,
+      payload: JSON.parse(row.payload),
+    }));
+  } catch (error: any) {
+    logger.error('Failed to get events by session', { error: error.message, sessionId });
+    return [];
+  }
 }
 
 /**
  * Get event by ID
  */
-export async function getEvent(id: string): Promise<EventRecord | null> {
-  const r = getRedis();
-  const data = await r.hget(EVENTS_HASH, id);
-  if (!data) return null;
-  return JSON.parse(data) as EventRecord;
-}
+export async function getEventById(id: string): Promise<EventRecord | null> {
+  const db = getDatabase();
 
-/**
- * Get events for a user
- */
-export async function getUserEvents(
-  userId: string,
-  limit = 50,
-  status?: EventStatus
-): Promise<EventRecord[]> {
-  const key = status 
-    ? `${EVENTS_BY_STATUS_PREFIX}${status}`
-    : `${EVENTS_BY_USER_PREFIX}${userId}`;
-  
-  const ids = await redis.zrevrange(key, 0, limit - 1);
-  const events: EventRecord[] = [];
-  
-  for (const id of ids) {
-    const event = await getEvent(id);
-    if (event && (!status || event.status === status)) {
-      if (!status || event.userId === userId) {
-        events.push(event);
-      }
+  try {
+    const row = db.prepare('SELECT * FROM events WHERE id = ?').get(id) as any;
+
+    if (!row) {
+      return null;
     }
+
+    return {
+      ...row,
+      payload: JSON.parse(row.payload),
+    };
+  } catch (error: any) {
+    logger.error('Failed to get event by ID', { error: error.message, id });
+    return null;
   }
-  
-  return events;
 }
 
 /**
- * Get pending events (for worker processing)
+ * Mark event as running
  */
-export async function getPendingEvents(limit = 10): Promise<EventRecord[]> {
-  const ids = await redis.zrangebyscore(
-    `${EVENTS_BY_STATUS_PREFIX}pending`,
-    0,
-    Date.now()
-  );
-  
-  const events: EventRecord[] = [];
-  for (const id of ids.slice(0, limit)) {
-    const event = await getEvent(id);
-    if (event) events.push(event);
+export async function markEventRunning(id: string): Promise<void> {
+  const db = getDatabase();
+
+  try {
+    db.prepare(`
+      UPDATE events
+      SET status = 'running',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(id);
+
+    logger.debug('Event marked as running', { eventId: id });
+  } catch (error: any) {
+    logger.error('Failed to mark event as running', { error: error.message, id });
+    throw error;
   }
-  
-  return events;
 }
 
 /**
- * Mark event as processing
+ * Mark event as complete
  */
-export async function markEventProcessing(id: string): Promise<void> {
-  const r = getRedis();
-  const event = await getEvent(id);
-  if (!event) return;
+export async function markEventComplete(id: string, result?: any): Promise<void> {
+  const db = getDatabase();
 
-  // Remove from pending
-  await r.zrem(`${EVENTS_BY_STATUS_PREFIX}pending`, id);
-  
-  // Add to processing
-  await r.zadd(`${EVENTS_BY_STATUS_PREFIX}processing`, Date.now(), id);
-  
-  // Update status in record
-  event.status = 'processing';
-  await r.hset(EVENTS_HASH, id, JSON.stringify(event));
-}
+  try {
+    db.prepare(`
+      UPDATE events
+      SET status = 'completed',
+          updated_at = CURRENT_TIMESTAMP,
+          completed_at = CURRENT_TIMESTAMP,
+          metadata = ?
+      WHERE id = ?
+    `).run(JSON.stringify({ result }), id);
 
-/**
- * Cancel a pending event
- */
-export async function cancelEvent(id: string): Promise<void> {
-  const r = getRedis();
-  const event = await getEvent(id);
-  if (!event) return;
-
-  // Only cancel if still pending
-  if (event.status !== 'pending') {
-    throw new Error(`Cannot cancel event with status: ${event.status}`);
+    logger.info('Event completed', { eventId: id });
+  } catch (error: any) {
+    logger.error('Failed to mark event as complete', { error: error.message, id });
+    throw error;
   }
-
-  // Remove from pending
-  await r.zrem(`${EVENTS_BY_STATUS_PREFIX}pending`, id);
-  
-  // Update status to cancelled
-  event.status = 'cancelled';
-  await r.hset(EVENTS_HASH, id, JSON.stringify(event));
-
-  console.log(`[EventStore] Cancelled event ${id}`);
-}
-
-/**
- * Mark event as completed
- */
-export async function markEventComplete(
-  id: string, 
-  result?: Record<string, any>
-): Promise<void> {
-  const r = getRedis();
-  const event = await getEvent(id);
-  if (!event) return;
-
-  // Remove from processing
-  await r.zrem(`${EVENTS_BY_STATUS_PREFIX}processing`, id);
-  
-  // Add to completed
-  await r.zadd(`${EVENTS_BY_STATUS_PREFIX}completed`, Date.now(), id);
-  
-  // Update record
-  event.status = 'completed';
-  event.processedAt = Date.now();
-  event.result = result;
-  await r.hset(EVENTS_HASH, id, JSON.stringify(event));
-  
-  console.log(`[EventStore] Event ${id} completed`);
 }
 
 /**
  * Mark event as failed
  */
 export async function markEventFailed(id: string, error: string): Promise<void> {
-  const r = getRedis();
-  const event = await getEvent(id);
-  if (!event) return;
+  const db = getDatabase();
 
-  // Remove from processing
-  await r.zrem(`${EVENTS_BY_STATUS_PREFIX}processing`, id);
-  
-  // Add to failed
-  await r.zadd(`${EVENTS_BY_STATUS_PREFIX}failed`, Date.now(), id);
-  
-  // Update record
-  event.status = 'failed';
-  event.processedAt = Date.now();
-  event.error = error;
-  await r.hset(EVENTS_HASH, id, JSON.stringify(event));
-  
-  console.error(`[EventStore] Event ${id} failed:`, error);
+  try {
+    db.prepare(`
+      UPDATE events
+      SET status = 'failed',
+          error = ?,
+          retry_count = retry_count + 1,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(error, id);
+
+    logger.warn('Event failed', { eventId: id, error });
+  } catch (err: any) {
+    logger.error('Failed to mark event as failed', { error: err.message, id });
+    throw err;
+  }
 }
 
 /**
- * Delete event
+ * Mark event as cancelled
  */
-export async function deleteEvent(id: string): Promise<void> {
-  const r = getRedis();
-  const event = await getEvent(id);
-  if (!event) return;
+export async function markEventCancelled(id: string): Promise<void> {
+  const db = getDatabase();
 
-  // Remove from all indexes
-  await r.zrem(`${EVENTS_BY_STATUS_PREFIX}${event.status}`, id);
-  await r.zrem(`${EVENTS_BY_USER_PREFIX}${event.userId}`, id);
-  await r.hdel(EVENTS_HASH, id);
+  try {
+    db.prepare(`
+      UPDATE events
+      SET status = 'cancelled',
+          updated_at = CURRENT_TIMESTAMP
+      WHERE id = ?
+    `).run(id);
+
+    logger.info('Event cancelled', { eventId: id });
+  } catch (error: any) {
+    logger.error('Failed to mark event as cancelled', { error: error.message, id });
+    throw error;
+  }
+}
+
+/**
+ * Replay failed events (reset to pending for retry)
+ */
+export async function replayFailedEvents(maxRetries: number = 3): Promise<number> {
+  const db = getDatabase();
+
+  try {
+    const stmt = db.prepare(`
+      UPDATE events
+      SET status = 'pending',
+          error = NULL,
+          updated_at = CURRENT_TIMESTAMP
+      WHERE status = 'failed'
+        AND retry_count < ?
+    `);
+
+    const result = stmt.run(maxRetries);
+
+    logger.info('Replayed failed events', {
+      replayed: result.changes,
+      maxRetries,
+    });
+
+    return result.changes;
+  } catch (error: any) {
+    logger.error('Failed to replay failed events', { error: error.message });
+    return 0;
+  }
 }
 
 /**
  * Get event statistics
  */
-export async function getEventStats(userId?: string): Promise<{
+export async function getEventStats(): Promise<{
   total: number;
   pending: number;
-  processing: number;
+  running: number;
   completed: number;
   failed: number;
+  cancelled: number;
 }> {
-  const r = getRedis();
-  const [pending, processing, completed, failed] = await Promise.all([
-    r.zcard(`${EVENTS_BY_STATUS_PREFIX}pending`),
-    r.zcard(`${EVENTS_BY_STATUS_PREFIX}processing`),
-    r.zcard(`${EVENTS_BY_STATUS_PREFIX}completed`),
-    r.zcard(`${EVENTS_BY_STATUS_PREFIX}failed`),
-  ]);
+  const db = getDatabase();
 
-  const total = pending + processing + completed + failed;
+  try {
+    const stats: any = {};
 
-  return { total, pending, processing, completed, failed };
+    const total = db.prepare('SELECT COUNT(*) as count FROM events').get() as any;
+    stats.total = total.count;
+
+    const pending = db.prepare("SELECT COUNT(*) as count FROM events WHERE status = 'pending'").get() as any;
+    stats.pending = pending.count;
+
+    const running = db.prepare("SELECT COUNT(*) as count FROM events WHERE status = 'running'").get() as any;
+    stats.running = running.count;
+
+    const completed = db.prepare("SELECT COUNT(*) as count FROM events WHERE status = 'completed'").get() as any;
+    stats.completed = completed.count;
+
+    const failed = db.prepare("SELECT COUNT(*) as count FROM events WHERE status = 'failed'").get() as any;
+    stats.failed = failed.count;
+
+    const cancelled = db.prepare("SELECT COUNT(*) as count FROM events WHERE status = 'cancelled'").get() as any;
+    stats.cancelled = cancelled.count;
+
+    return stats as any;
+  } catch (error: any) {
+    logger.error('Failed to get event statistics', { error: error.message });
+    return { total: 0, pending: 0, running: 0, completed: 0, failed: 0, cancelled: 0 };
+  }
+}
+
+/**
+ * Purge old completed events (cleanup)
+ */
+export async function purgeOldEvents(olderThanDays: number = 7): Promise<number> {
+  const db = getDatabase();
+
+  try {
+    const stmt = db.prepare(`
+      DELETE FROM events
+      WHERE status IN ('completed', 'cancelled')
+        AND completed_at < datetime('now', ?)
+    `);
+
+    const result = stmt.run(`-${olderThanDays} days`);
+
+    logger.info('Purged old events', {
+      purged: result.changes,
+      olderThanDays,
+    });
+
+    return result.changes;
+  } catch (error: any) {
+    logger.error('Failed to purge old events', { error: error.message });
+    return 0;
+  }
+}
+
+/**
+ * Initialize event store (create tables if not exist)
+ */
+export async function initializeEventStore(): Promise<void> {
+  const db = getDatabase();
+
+  try {
+    // Create events table
+    db.prepare(`
+      CREATE TABLE IF NOT EXISTS events (
+        id TEXT PRIMARY KEY,
+        type TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        status TEXT NOT NULL DEFAULT 'pending',
+        retry_count INTEGER NOT NULL DEFAULT 0,
+        error TEXT,
+        user_id TEXT NOT NULL,
+        session_id TEXT,
+        metadata TEXT,
+        created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+        updated_at DATETIME,
+        completed_at DATETIME,
+        FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
+      )
+    `).run();
+
+    // Create indexes
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_events_status ON events(status)').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_events_type ON events(type)').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_events_user_id ON events(user_id)').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_events_session_id ON events(session_id)').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at)').run();
+    db.prepare('CREATE INDEX IF NOT EXISTS idx_events_status_type ON events(status, type)').run();
+
+    logger.info('Event store initialized');
+  } catch (error: any) {
+    logger.error('Failed to initialize event store', { error: error.message });
+    throw error;
+  }
 }

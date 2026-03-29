@@ -5,13 +5,14 @@
  * Supports tiered verification (MINIMAL, STANDARD, STRICT, PARANOID)
  *
  * @see https://mastra.ai/docs/verification/incremental
+ * @see docs/COMPREHENSIVE_SECURITY_AUDIT.md Security audit - P1 fix
  */
 
-import { exec } from 'child_process';
+import { execFile } from 'child_process';
 import { promisify } from 'util';
 import { getModel } from '../models/model-router';
 
-const execPromise = promisify(exec);
+const execFilePromise = promisify(execFile);
 
 /**
  * Verification tier levels
@@ -158,10 +159,13 @@ export class IncrementalVerifier {
 
   /**
    * Incremental TypeScript check
+   * SECURITY: Uses execFile with args array instead of string interpolation
    */
   private async incrementalTypeCheck(files: string[]): Promise<VerificationResult> {
     try {
-      await execPromise(`tsc --incremental --build ${files.join(' ')}`);
+      await execFilePromise('tsc', ['--incremental', '--build', ...files], {
+        timeout: 120000, // 2 minute timeout
+      });
       return { passed: true, duration: 0, tier: VerificationTier.MINIMAL, filesChecked: files.length };
     } catch (error: any) {
       return {
@@ -176,13 +180,16 @@ export class IncrementalVerifier {
 
   /**
    * Run impacted tests
+   * SECURITY: Uses execFile with args array instead of string interpolation
    */
   private async runImpactedTests(files: string[]): Promise<VerificationResult> {
     // Map files to test files
     const testFiles = files.map(f => f.replace('.ts', '.spec.ts').replace('.tsx', '.spec.tsx'));
 
     try {
-      await execPromise(`npm test -- ${testFiles.join(' ')}`);
+      await execFilePromise('npm', ['test', ...testFiles], {
+        timeout: 300000, // 5 minute timeout
+      });
       return { passed: true, duration: 0, tier: VerificationTier.MINIMAL, filesChecked: files.length };
     } catch (error: any) {
       return {
@@ -197,10 +204,14 @@ export class IncrementalVerifier {
 
   /**
    * Targeted security scan
+   * SECURITY: Uses execFile with args array instead of string interpolation
    */
   private async targetedSecurityScan(files: string[]): Promise<VerificationResult> {
     try {
-      await execPromise(`semgrep --include ${files.join(' --include ')} --config=auto`);
+      const args = ['--config=auto', ...files.flatMap(f => ['--include', f])];
+      await execFilePromise('semgrep', args, {
+        timeout: 180000, // 3 minute timeout
+      });
       return { passed: true, duration: 0, tier: VerificationTier.STANDARD, filesChecked: files.length };
     } catch (error: any) {
       return {
@@ -215,10 +226,13 @@ export class IncrementalVerifier {
 
   /**
    * Full TypeScript check
+   * SECURITY: Uses execFile with args array (no interpolation needed)
    */
   private async fullTypeCheck(): Promise<VerificationResult> {
     try {
-      await execPromise('tsc --noEmit');
+      await execFilePromise('tsc', ['--noEmit'], {
+        timeout: 180000, // 3 minute timeout
+      });
       return { passed: true, duration: 0, tier: VerificationTier.STRICT, filesChecked: -1 };
     } catch (error: any) {
       return {
@@ -233,10 +247,13 @@ export class IncrementalVerifier {
 
   /**
    * Full test suite
+   * SECURITY: Uses execFile with args array (no interpolation needed)
    */
   private async fullTestSuite(): Promise<VerificationResult> {
     try {
-      await execPromise('npm test');
+      await execFilePromise('npm', ['test'], {
+        timeout: 600000, // 10 minute timeout
+      });
       return { passed: true, duration: 0, tier: VerificationTier.PARANOID, filesChecked: -1 };
     } catch (error: any) {
       return {
@@ -251,10 +268,13 @@ export class IncrementalVerifier {
 
   /**
    * Full security scan
+   * SECURITY: Uses execFile with args array (no interpolation needed)
    */
   private async fullSecurityScan(): Promise<VerificationResult> {
     try {
-      await execPromise('semgrep --config=auto .');
+      await execFilePromise('semgrep', ['--config=auto', '.'], {
+        timeout: 300000, // 5 minute timeout
+      });
       return { passed: true, duration: 0, tier: VerificationTier.PARANOID, filesChecked: -1 };
     } catch (error: any) {
       return {

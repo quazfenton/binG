@@ -7,65 +7,64 @@ import { startCacheCleanup } from "../../lib/cache"
 import dynamic from "next/dynamic"
 
 // Dynamically import components to avoid build-time SSR errors
-// These components will only load on the client side
 const TamboWrapper = dynamic(
   () => import("../../components/tambo/tambo-wrapper").then(mod => mod.TamboWrapper),
-  { 
-    ssr: false,
-    loading: () => <FallbackUI message="Loading Tambo..." />
-  }
+  { ssr: false, loading: () => <FallbackUI message="Loading Tambo..." /> }
 )
 
 const PWAInstallPrompt = dynamic(
   () => import("../../components/pwa-install-prompt").then(mod => mod.PWAInstallPrompt),
-  { 
-    ssr: false,
-    loading: () => null
-  }
+  { ssr: false, loading: () => null }
 )
 
-const ConversationInterface = dynamic(
+// Enhanced conversation interface with production-ready panels
+const EnhancedConversationInterface = dynamic(
+  () => import("../../components/enhanced-conversation-interface").then(mod => mod.EnhancedConversationInterface),
+  { ssr: false, loading: () => <FallbackUI message="Loading enhanced interface..." /> }
+)
+
+// Legacy fallback
+const LegacyConversationInterface = dynamic(
   () => import("../../components/conversation-interface"),
-  {
-    ssr: false,
-    loading: () => <FallbackUI message="Loading interface..." />
-  }
+  { ssr: false, loading: () => <FallbackUI message="Loading interface..." /> }
 )
 
 const TopPanel = dynamic(
   () => import("../../components/top-panel"),
-  {
-    ssr: false,
-    loading: () => null
-  }
+  { ssr: false, loading: () => null }
 )
 
 export default function ChatBox() {
   const [mounted, setMounted] = useState(false)
+  const [useEnhanced, setUseEnhanced] = useState(true)
   const CUSTOM_BG_MEDIA_KEY = "custom_bg_media_url"
 
-  // Only render the 3D interface after component has mounted on the client
   useEffect(() => {
     setMounted(true)
-    // Initialize cache cleanup
     startCacheCleanup()
 
-    // Apply persisted or env-provided custom background media URL.
+    // Check enhanced interface preference
+    if (typeof window !== "undefined") {
+      const enhancedEnabled = localStorage.getItem("use_enhanced_interface")
+      if (enhancedEnabled !== null) {
+        setUseEnhanced(enhancedEnabled === "true")
+      }
+    }
+
+    // Apply background media
     const root = document.documentElement
-    const saved = typeof localStorage !== 'undefined' ? localStorage.getItem(CUSTOM_BG_MEDIA_KEY) : null
+    const saved = typeof window !== "undefined" && localStorage.getItem(CUSTOM_BG_MEDIA_KEY)
     const fallback = process.env.NEXT_PUBLIC_BG_MEDIA_URL || ""
     const mediaUrl = (saved || fallback || "").trim()
 
     if (mediaUrl) {
-      // SECURITY: Validate URL before applying (client-side check)
       try {
         const url = new URL(mediaUrl)
         if (url.protocol !== 'https:') {
           console.warn('[Page] Blocked non-HTTPS background URL')
           return
         }
-        
-        // Block obvious SSRF attempts
+
         const hostname = url.hostname.toLowerCase()
         const blockedPatterns = [
           'localhost', '127.', '10.', '192.168.', '172.16.', '172.17.', '172.18.',
@@ -73,7 +72,7 @@ export default function ChatBox() {
           '172.26.', '172.27.', '172.28.', '172.29.', '172.30.', '172.31.',
           '169.254.', '0.0.0.0', '.local', '.internal', 'metadata'
         ]
-        
+
         if (blockedPatterns.some(pattern => hostname.includes(pattern))) {
           console.warn('[Page] Blocked unsafe background URL:', mediaUrl)
           return
@@ -83,8 +82,6 @@ export default function ChatBox() {
         return
       }
 
-      // Use image proxy to bypass CORS/hotlinking restrictions
-      // The proxy will perform additional server-side SSRF validation
       const proxiedUrl = `/api/image-proxy?url=${encodeURIComponent(mediaUrl)}`
       root.style.setProperty("--app-bg-media", `url("${proxiedUrl}")`)
       root.style.setProperty("--app-bg-media-opacity", "0.12")
@@ -97,9 +94,21 @@ export default function ChatBox() {
 
   return (
     <TamboWrapper>
-      <ConversationInterface />
-      <TopPanel />
-      <PWAInstallPrompt />
+      <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
+        {useEnhanced ? (
+          <EnhancedConversationInterface
+            enableWorkspacePanel={true}
+            enableTopPanel={true}
+            enableTerminal={false}
+          />
+        ) : (
+          <>
+            <TopPanel />
+            <LegacyConversationInterface />
+          </>
+        )}
+        <PWAInstallPrompt />
+      </ThemeProvider>
     </TamboWrapper>
   )
 }

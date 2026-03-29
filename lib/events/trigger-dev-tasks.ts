@@ -67,7 +67,6 @@ export const TaskResultEvent = z.object({
  * Usage: Register with trigger.dev schedules to run every N minutes
  * 
  * @example
- * ```typescript
  * import { schedules } from "@trigger.dev/sdk";
  * 
  * export const agentLoop = schedules.task({
@@ -77,7 +76,7 @@ export const TaskResultEvent = z.object({
  *     // Load active agents and run cognition cycles
  *   }
  * });
- * ```
+ */
  */
 export interface AgentLoopTaskDefinition {
   id: string;

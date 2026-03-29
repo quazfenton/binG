@@ -34,6 +34,8 @@ import {
   Folder,
   ChevronRight,
   ChevronDown,
+  ChevronLeft,
+  ChevronUp,
   X,
   CheckCircle,
   Loader2,
@@ -42,34 +44,22 @@ import {
   Eye,
   Edit,
   Copy,
-  Download,
   Bot,
   Workflow,
   Database,
-  Mail,
   Video,
-  BookOpen,
   GraduationCap,
   MessageCircle,
-  FileSpreadsheet,
-  Cloud,
   Music2,
   Mic,
-  Share2,
-  LineChart,
   Search,
-  FileText as FileDoc,
   Clock,
   Youtube,
   Paperclip,
-  Maximize2,
-  Minimize2,
   Users,
   Heart,
-  MessageCircle as MessageComment,
   Send,
   User,
-  LogIn,
   Cpu,
   Terminal,
   GitCommit,
@@ -78,10 +68,7 @@ import {
   Clock3,
   CheckCircle2,
   AlertCircle,
-  ChevronUp,
-  ChevronDown as ChevronDownIcon,
   Square,
-  Github,
   Monitor,
   Newspaper,
 } from "lucide-react";
@@ -123,7 +110,270 @@ import { VoicePanel } from "@/components/voice-panel";
 import VNCConnectionTab from "@/components/vnc-connection-tab";
 import { NewsPanel } from "@/components/news-panel";
 import { CronJobsPanel } from "@/components/cron-jobs-panel";
+import FrontierFeedPlugin from "@/components/plugins/frontier-feed-plugin";
 import { PROVIDERS } from "@/lib/chat/providers";
+
+// ---------------------------------------------------------------------------
+// Tab definitions - single source of truth for the workspace tab bar
+// ---------------------------------------------------------------------------
+
+interface TabDef {
+  value: PanelTab;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  shortcut?: string;
+}
+
+const TAB_DEFS: TabDef[] = [
+  { value: 'explorer', label: 'Files', icon: FolderOpen },
+  { value: 'agent', label: 'Agent', icon: Sparkles },
+  { value: 'chat', label: 'Chat', icon: Cpu },
+  { value: 'thinking', label: 'Think', icon: Brain },
+  { value: 'music', label: 'Music', icon: Music },
+  { value: 'automations', label: 'Automate', icon: Workflow },
+  { value: 'youtube', label: 'Videos', icon: Youtube },
+  { value: 'forum', label: 'Forum', icon: Users },
+  { value: 'compare', label: 'Compare', icon: Zap },
+  { value: 'integrations', label: 'Integrations', icon: Database },
+  { value: 'git', label: 'Git', icon: GitCommit },
+  { value: 'voice', label: 'Voice', icon: Mic },
+  { value: 'remote', label: 'Remote', icon: Monitor },
+  { value: 'news', label: 'News', icon: Newspaper },
+  { value: 'cronjobs', label: 'Cron', icon: Clock },
+  { value: 'frontier-feed', label: 'Frontier', icon: Sparkles },
+];
+
+// ---------------------------------------------------------------------------
+// Scrollable tab bar with arrows and animated indicator
+// ---------------------------------------------------------------------------
+
+interface ScrollableTabBarProps {
+  tabs: TabDef[];
+  activeTab: PanelTab;
+  onTabChange: (tab: PanelTab) => void;
+}
+
+function ScrollableTabBar({ tabs, activeTab, onTabChange }: ScrollableTabBarProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  // Drag-to-scroll state
+  const dragState = useRef({
+    isDragging: false,
+    startX: 0,
+    scrollLeft: 0,
+    didDrag: false,
+  });
+
+  const checkScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 2);
+    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 2);
+  }, []);
+
+  useEffect(() => {
+    checkScroll();
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener('scroll', checkScroll, { passive: true });
+    const observer = new ResizeObserver(checkScroll);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener('scroll', checkScroll);
+      observer.disconnect();
+    };
+  }, [checkScroll]);
+
+  // Auto-scroll active tab into view
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const activeBtn = el.querySelector<HTMLElement>(`[data-tab-value="${activeTab}"]`);
+    activeBtn?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }, [activeTab]);
+
+  // Drag-to-scroll handlers
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    dragState.current = {
+      isDragging: true,
+      startX: e.pageX - el.offsetLeft,
+      scrollLeft: el.scrollLeft,
+      didDrag: false,
+    };
+    el.style.cursor = 'grabbing';
+    el.style.userSelect = 'none';
+  }, []);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    const el = scrollRef.current;
+    if (!el || !dragState.current.isDragging) return;
+    e.preventDefault();
+    const x = e.pageX - el.offsetLeft;
+    const walk = x - dragState.current.startX;
+    if (Math.abs(walk) > 5) {
+      dragState.current.didDrag = true;
+    }
+    el.scrollLeft = dragState.current.scrollLeft - walk;
+  }, []);
+
+  const handleMouseUpOrLeave = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    dragState.current.isDragging = false;
+    el.style.cursor = '';
+    el.style.userSelect = '';
+  }, []);
+
+  const handleTabClick = useCallback((tabValue: PanelTab, e: React.MouseEvent) => {
+    if (dragState.current.didDrag) {
+      e.preventDefault();
+      e.stopPropagation();
+      dragState.current.didDrag = false;
+      return;
+    }
+    onTabChange(tabValue);
+  }, [onTabChange]);
+
+  const scrollBy = (direction: 'left' | 'right') => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: direction === 'left' ? -200 : 200, behavior: 'smooth' });
+  };
+
+  return (
+    <div className="relative flex items-center flex-1 min-w-0">
+      {/* Left fade + arrow */}
+      {canScrollLeft && (
+        <div className="absolute left-0 z-10 flex items-center h-full pointer-events-none">
+          <div className="h-full w-6 bg-gradient-to-r from-black/80 to-transparent pointer-events-none" />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute left-0 h-6 w-6 text-white/70 hover:text-white hover:bg-white/10 pointer-events-auto"
+            onClick={() => scrollBy('left')}
+            tabIndex={-1}
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      )}
+
+      {/* Scrollable tabs container */}
+      <div
+        ref={scrollRef}
+        className="flex gap-1 overflow-x-auto no-scrollbar flex-1 cursor-grab select-none"
+        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUpOrLeave}
+        onMouseLeave={handleMouseUpOrLeave}
+      >
+        {tabs.map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.value;
+          return (
+            <button
+              key={tab.value}
+              data-tab-value={tab.value}
+              onClick={(e) => handleTabClick(tab.value, e)}
+              className={`
+                relative flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full
+                transition-all duration-200 whitespace-nowrap cursor-pointer border
+                ${
+                  isActive
+                    ? 'bg-white/10 border-white/20 text-white shadow-sm'
+                    : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                }
+              `}
+            >
+              <Icon className="h-3 w-3 shrink-0" />
+              <span>{tab.label}</span>
+              {isActive && (
+                <motion.div
+                  layoutId="workspace-active-tab-indicator"
+                  className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full bg-white/50"
+                  transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Right fade + arrow */}
+      {canScrollRight && (
+        <div className="absolute right-0 z-10 flex items-center h-full pointer-events-none">
+          <div className="h-full w-6 bg-gradient-to-l from-black/80 to-transparent pointer-events-none" />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute right-0 h-6 w-6 text-white/70 hover:text-white hover:bg-white/10 pointer-events-auto"
+            onClick={() => scrollBy('right')}
+            tabIndex={-1}
+          >
+            <ChevronRight className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Error boundary for tab content
+// ---------------------------------------------------------------------------
+
+interface TabErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class TabErrorBoundary extends React.Component<
+  { children: React.ReactNode; tabName: string },
+  TabErrorBoundaryState
+> {
+  constructor(props: { children: React.ReactNode; tabName: string }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): TabErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error(`[Workspace] Error in tab "${this.props.tabName}":`, error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-full flex items-center justify-center p-8">
+          <div className="text-center space-y-3 max-w-sm">
+            <div className="text-4xl">⚠️</div>
+            <h3 className="text-lg font-semibold text-white">Tab Error</h3>
+            <p className="text-sm text-white/60">
+              The {this.props.tabName} tab encountered an error.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => this.setState({ hasError: false, error: null })}
+              className="border-white/20 text-white/80 hover:bg-white/10"
+            >
+              Try Again
+            </Button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // Helper to normalize paths to relative format (project/...) for API compatibility
 // Moved outside component to avoid recreation on every render
@@ -244,6 +494,19 @@ export function ExperimentalWorkspacePanel() {
   
   // Resizable panel width
   const [panelWidth, setPanelWidth] = useState(400);
+
+  // Close panel on Escape
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closePanel();
+      }
+    };
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [isOpen, closePanel]);
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartX = useRef(0);
   const resizeStartWidth = useRef(400);
@@ -2135,166 +2398,14 @@ export function ExperimentalWorkspacePanel() {
                 )}
               </AnimatePresence>
 
-              {/* Tabs - sleek horizontal pill design with grab scroll */}
+              {/* Tabs - scrollable pill design with arrows */}
               <Tabs value={activeTab} onValueChange={(v) => setTab(v as PanelTab)} className="flex-1 flex flex-col">
-                <div 
-                  className="flex gap-1 mx-4 mt-4 overflow-x-auto no-scrollbar cursor-grab active:cursor-grabbing select-none"
-                  style={{ scrollBehavior: 'smooth' }}
-                >
-                  <button
-                    onClick={() => setTab('explorer')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'explorer' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <FolderOpen className="h-3 w-3" />
-                    Files
-                  </button>
-                  <button
-                    onClick={() => setTab('chat')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'chat' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Cpu className="h-3 w-3" />
-                    Agent
-                  </button>
-                  <button
-                    onClick={() => setTab('thinking')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'thinking' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Brain className="h-3 w-3" />
-                    Think
-                  </button>
-                  <button
-                    onClick={() => setTab('music')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'music' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Music className="h-3 w-3" />
-                    Music
-                  </button>
-                  <button
-                    onClick={() => setTab('automations')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'automations' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Workflow className="h-3 w-3" />
-                    Automate
-                  </button>
-                  <button
-                    onClick={() => setTab('youtube')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'youtube' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Youtube className="h-3 w-3" />
-                    Videos
-                  </button>
-                  <button
-                    onClick={() => setTab('forum')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'forum' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Users className="h-3 w-3" />
-                    Forum
-                  </button>
-                  <button
-                    onClick={() => setTab('compare')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'compare' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Zap className="h-3 w-3" />
-                    Compare
-                  </button>
-                  <button
-                    onClick={() => setTab('integrations')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'integrations'
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Database className="h-3 w-3" />
-                    Integrations
-                  </button>
-                  <button
-                    onClick={() => setTab('git')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'git'
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <GitCommit className="h-3 w-3" />
-                    Git
-                  </button>
-                  <button
-                    onClick={() => setTab('voice')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'voice'
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Mic className="h-3 w-3" />
-                    Voice
-                  </button>
-                  <button
-                    onClick={() => setTab('remote')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'remote'
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Monitor className="h-3 w-3" />
-                    Remote
-                  </button>
-                  <button
-                    onClick={() => setTab('news')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'news'
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Newspaper className="h-3 w-3" />
-                    News
-                  </button>
-                  <button
-                    onClick={() => setTab('cronjobs')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'cronjobs'
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Clock className="h-3 w-3" />
-                    Cron
-                  </button>
+                <div className="px-4 mt-3">
+                  <ScrollableTabBar
+                    tabs={TAB_DEFS}
+                    activeTab={activeTab}
+                    onTabChange={setTab}
+                  />
                 </div>
 
                 {/* Explorer Tab */}
@@ -3790,6 +3901,11 @@ export function ExperimentalWorkspacePanel() {
                 {/* Cron Jobs Tab - Authenticated users only, max 1 job per user */}
                 <TabsContent value="cronjobs" className="flex-1 mt-0 overflow-hidden">
                   <CronJobsPanel />
+                </TabsContent>
+
+                {/* Frontier Feed Tab */}
+                <TabsContent value="frontier-feed" className="flex-1 mt-0 overflow-hidden">
+                  <FrontierFeedPlugin />
                 </TabsContent>
               </Tabs>
             </div>

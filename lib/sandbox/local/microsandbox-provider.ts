@@ -461,34 +461,40 @@ class LocalSandboxHandle implements SandboxHandle {
     // SECURITY: Sanitize command to prevent injection
     const safeCommand = this.sanitizeCommand(command);
 
-    const { exec } = require('child_process')
-    const util = require('util')
-    const execPromise = util.promisify(exec)
+    // SECURITY: Use execFile instead of exec for safer execution
+    const { execFile } = require('child_process');
+    const util = require('util');
+    const execFilePromise = util.promisify(execFile);
 
-    const execCwd = cwd ? path.resolve(this.workspacePath, cwd.replace(/^\//, '')) : this.workspacePath
+    const execCwd = cwd ? path.resolve(this.workspacePath, cwd.replace(/^\//, '')) : this.workspacePath;
 
     try {
       // Convert timeout from seconds to milliseconds (callers pass seconds)
       // Default to 60 seconds if not specified
       const timeoutMs = timeout ? timeout * 1000 : 60000;
 
-      const result = await execPromise(safeCommand, {
+      // SECURITY: Parse command into binary + args for execFile
+      // This prevents shell interpretation while preserving functionality
+      const [binary, ...args] = safeCommand.split(' ').filter(Boolean);
+
+      const result = await execFilePromise(binary, args, {
         cwd: execCwd,
         timeout: timeoutMs,
         env: { ...process.env, NODE_ENV: 'development' },
-      })
+        maxBuffer: 10 * 1024 * 1024, // 10MB buffer limit
+      });
 
       return {
         success: true,
         output: result.stdout || result.stderr || '',
         exitCode: 0,
-      }
+      };
     } catch (error: any) {
       return {
         success: false,
         output: error.message || error.stderr || 'Command execution failed',
         exitCode: error.code || 1,
-      }
+      };
     }
   }
 
