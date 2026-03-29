@@ -174,6 +174,14 @@ function FeedCard({ item, index, onRemove, onTogglePin, isPinned }: FeedCardProp
   const isInView = useInView(ref, { once: false, amount: 0.3 });
   const ps = priorityStyle(item.priority);
   const expired = isExpired(item);
+  const [, forceUpdate] = useState(0);
+
+  // Live-updating time display
+  useEffect(() => {
+    if (!item.expiresAt) return;
+    const interval = setInterval(() => forceUpdate(n => n + 1), 30000);
+    return () => clearInterval(interval);
+  }, [item.expiresAt]);
 
   const timeAgo = useMemo(() => {
     const diff = Date.now() - new Date(item.createdAt).getTime();
@@ -324,7 +332,16 @@ export default function FrontierFeedPlugin() {
     if (!inputText.trim()) return;
     const items = parseInput(inputText, inputFormat);
     if (items.length === 0) { toast.error("No valid items parsed"); return; }
-    setState(prev => ({ ...prev, items: [...items, ...prev.items].slice(0, prev.maxItems) }));
+    // Deduplicate by title+body combination
+    setState(prev => {
+      const existingKeys = new Set(prev.items.map(i => i.title.toLowerCase() + "::" + i.body.toLowerCase().slice(0, 80)));
+      const newItems = items.filter(i => !existingKeys.has(i.title.toLowerCase() + "::" + i.body.toLowerCase().slice(0, 80)));
+      if (newItems.length < items.length) {
+        toast.info("Skipped " + (items.length - newItems.length) + " duplicate" + (items.length - newItems.length > 1 ? "s" : ""));
+      }
+      if (newItems.length === 0) return prev;
+      return { ...prev, items: [...newItems, ...prev.items].slice(0, prev.maxItems) };
+    });
     setInputText("");
     setShowInput(false);
     toast.success("Added " + items.length + " item" + (items.length > 1 ? "s" : ""));
@@ -340,9 +357,43 @@ export default function FrontierFeedPlugin() {
   }, []);
 
   const handleClearAll = useCallback(() => {
-    setState(prev => ({ ...prev, items: prev.items.filter(i => pinnedIds.has(i.id)) }));
-    toast.success("Cleared unpinned items");
+    setState(prev => {
+      const cleared = prev.items.filter(i => !pinnedIds.has(i.id));
+      if (cleared.length === 0) return prev;
+      // Store in sessionStorage for undo
+      try { sessionStorage.setItem("frontier-feed-undo", JSON.stringify(cleared)); } catch {}
+      toast.success("Cleared " + cleared.length + " unpinned items", {
+        action: {
+          label: "Undo",
+          onClick: () => {
+            try {
+              const saved = sessionStorage.getItem("frontier-feed-undo");
+              if (saved) {
+                const items = JSON.parse(saved);
+                setState(p => ({ ...p, items: [...items, ...p.items].slice(0, p.maxItems) }));
+                sessionStorage.removeItem("frontier-feed-undo");
+                toast.success("Restored " + items.length + " items");
+              }
+            } catch {}
+          },
+        },
+        duration: 8000,
+      });
+      return { ...prev, items: prev.items.filter(i => pinnedIds.has(i.id)) };
+    });
   }, [pinnedIds]);
+
+  // Keyboard shortcuts
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        document.querySelector<HTMLInputElement>('input[placeholder*="Search"]')?.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
 
   const handleExport = useCallback(() => {
     const blob = new Blob([JSON.stringify(state.items, null, 2)], { type: "application/json" });
@@ -400,8 +451,8 @@ export default function FrontierFeedPlugin() {
             {stats.pinned > 0 && <span className="flex items-center gap-1 text-[10px] text-yellow-300"><Star className="h-2.5 w-2.5" fill="currentColor" />{stats.pinned} pinned</span>}
             {stats.expired > 0 && <span className="flex items-center gap-1 text-[10px] text-white/40"><Clock className="h-2.5 w-2.5" />{stats.expired} expired</span>}
           </div>
-          <div className="flex items-center gap-2">
-            <Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search feed..." className="h-7 text-xs bg-white/5 border-white/10 text-white/90 placeholder:text-white/30 flex-1" />
+          <div className="flex items-center gap-2 flex-wrap">
+            <Input value={searchQuery} onChange={(e) => setSearchQuery(e.target.value)} placeholder="Search feed... (Ctrl+K)" className="h-7 text-xs bg-white/5 border-white/10 text-white/90 placeholder:text-white/30 flex-1 min-w-[120px]" />
             <select value={state.filterCategory} onChange={(e) => setState(prev => ({ ...prev, filterCategory: e.target.value }))} className="h-7 text-xs bg-white/5 border border-white/10 rounded px-2 text-white/70 focus:outline-none focus:border-purple-500/50">
               {categories.map(c => <option key={c} value={c} className="bg-gray-900">{c === "all" ? "All Categories" : c}</option>)}
             </select>

@@ -16,6 +16,9 @@ export * from './bash-tool';
 export * from './dag-compiler';
 export * from './dag-executor';
 
+// Diff-based repair
+export * from './diff-repair';
+
 // Self-healing layer (explicit exports to avoid conflicts)
 export {
   classifyError,

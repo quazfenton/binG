@@ -1,0 +1,45 @@
+-- Event store for durable execution
+-- Migration: 001-events-table
+-- Date: 2026-03-29
+
+-- Main events table
+CREATE TABLE IF NOT EXISTS events (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,
+  payload TEXT NOT NULL,
+  status TEXT NOT NULL DEFAULT 'pending',
+  retry_count INTEGER NOT NULL DEFAULT 0,
+  error TEXT,
+  user_id TEXT NOT NULL,
+  session_id TEXT,
+  metadata TEXT,
+  created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+  updated_at DATETIME,
+  completed_at DATETIME,
+  FOREIGN KEY (session_id) REFERENCES sessions(id) ON DELETE SET NULL
+);
+
+-- Indexes for common queries
+CREATE INDEX IF NOT EXISTS idx_events_status ON events(status);
+CREATE INDEX IF NOT EXISTS idx_events_type ON events(type);
+CREATE INDEX IF NOT EXISTS idx_events_user_id ON events(user_id);
+CREATE INDEX IF NOT EXISTS idx_events_session_id ON events(session_id);
+CREATE INDEX IF NOT EXISTS idx_events_created_at ON events(created_at);
+CREATE INDEX IF NOT EXISTS idx_events_status_type ON events(status, type);
+CREATE INDEX IF NOT EXISTS idx_events_user_status ON events(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_events_created_status ON events(created_at, status);
+
+-- Comments for documentation
+COMMENT ON TABLE events IS 'Durable event store for agent execution tracking';
+COMMENT ON COLUMN events.id IS 'Unique event identifier (UUID)';
+COMMENT ON COLUMN events.type IS 'Event type discriminator (e.g., SCHEDULED_TASK, BACKGROUND_JOB)';
+COMMENT ON COLUMN events.payload IS 'JSON-encoded event data matching the event schema';
+COMMENT ON COLUMN events.status IS 'Event status: pending, running, completed, failed, cancelled';
+COMMENT ON COLUMN events.retry_count IS 'Number of retry attempts for failed events';
+COMMENT ON COLUMN events.error IS 'Error message if event failed';
+COMMENT ON COLUMN events.user_id IS 'User who owns this event (Auth0 sub)';
+COMMENT ON COLUMN events.session_id IS 'Optional session ID for scoping events';
+COMMENT ON COLUMN events.metadata IS 'JSON-encoded metadata (results, logs, etc.)';
+COMMENT ON COLUMN events.created_at IS 'Event creation timestamp';
+COMMENT ON COLUMN events.updated_at IS 'Last update timestamp';
+COMMENT ON COLUMN events.completed_at IS 'Completion timestamp (for completed/failed events)';

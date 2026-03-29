@@ -15,57 +15,197 @@
 import type { ZineContent, DataSource } from "./index";
 
 // ============================================================================
-// RSS Feed Parser
+// RSS Feed Parser (Production-Ready)
 // ============================================================================
 
-export async function fetchRSSFeed(url: string): Promise<ZineContent[]> {
+export async function fetchRSSFeed(url: string, limit = 20): Promise<ZineContent[]> {
   try {
-    // Use CORS proxy if needed
-    const proxyUrl = `/api/rss-proxy?url=${encodeURIComponent(url)}`;
-    const response = await fetch(proxyUrl);
+    // Use our API proxy for CORS bypass and SSRF protection
+    const proxyUrl = `/api/zine/rss-proxy?url=${encodeURIComponent(url)}`;
+    
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
+    
+    const response = await fetch(proxyUrl, {
+      signal: controller.signal,
+      headers: {
+        "Accept": "application/rss+xml, application/xml, text/xml, application/atom+xml",
+      },
+    });
+    
+    clearTimeout(timeoutId);
+    
+    if (!response.ok) {
+      throw new Error(`RSS feed returned ${response.status}`);
+    }
+    
     const xml = await response.text();
     
+    // Parse XML
     const parser = new DOMParser();
     const xmlDoc = parser.parseFromString(xml, "text/xml");
     
-    const items = xmlDoc.querySelectorAll("item, entry");
+    // Check for parse errors
+    const parseError = xmlDoc.querySelector("parsererror");
+    if (parseError) {
+      throw new Error("Invalid XML format");
+    }
+    
+    // Get items (RSS 2.0 or Atom)
+    const items = Array.from(xmlDoc.querySelectorAll("item, entry")).slice(0, limit);
     const contents: ZineContent[] = [];
     
-    items.forEach((item) => {
-      const title = item.querySelector("title")?.textContent || "";
-      const link = item.querySelector("link")?.textContent || "";
-      const description = item.querySelector("description, summary")?.textContent || "";
-      const pubDate = item.querySelector("pubDate, published")?.textContent || "";
-      const media = Array.from(item.querySelectorAll("enclosure, media:content"))
-        .map(el => el.getAttribute("url"))
-        .filter(Boolean) as string[];
-      
-      contents.push({
-        id: `rss-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        type: media.length > 0 ? "mixed" : "text",
-        title,
-        body: stripHtml(description),
-        media,
-        metadata: { link, pubDate, source: "rss" },
-        source: url,
-        createdAt: pubDate ? new Date(pubDate).getTime() : Date.now(),
-        expiresAt: Date.now() + 3600000, // 1 hour
-        priority: 5,
-      });
-    });
+    for (const item of items) {
+      try {
+        const content = parseRSSItem(item, url);
+        if (content) {
+          contents.push(content);
+        }
+      } catch (itemError) {
+        console.warn("Error parsing RSS item:", itemError);
+        // Continue with next item
+      }
+    }
     
     return contents;
   } catch (error) {
     console.error("Error fetching RSS feed:", error);
+    
+    // Return empty array on error (don't break the app)
     return [];
   }
 }
 
+/**
+ * Parse individual RSS item
+ */
+function parseRSSItem(item: Element, sourceUrl: string): ZineContent | null {
+  // Extract common fields
+  const title = item.querySelector("title")?.textContent?.trim() || "Untitled";
+  const linkElement = item.querySelector("link");
+  const link = linkElement?.getAttribute("href") || linkElement?.textContent?.trim() || "";
+  
+  // Get description/content
+  const description = 
+    item.querySelector("description")?.textContent ||
+    item.querySelector("summary")?.textContent ||
+    item.querySelector("content\\:encoded")?.textContent ||
+    "";
+  
+  // Get publication date
+  const pubDateStr = 
+    item.querySelector("pubDate")?.textContent ||
+    item.querySelector("published")?.textContent ||
+    item.querySelector("updated")?.textContent ||
+    "";
+  
+  const pubDate = pubDateStr ? new Date(pubDateStr).getTime() : Date.now();
+  
+  // Get media (enclosures, attachments, media:content)
+  const media: string[] = [];
+  
+  // RSS enclosure
+  const enclosure = item.querySelector("enclosure");
+  if (enclosure?.getAttribute("url")) {
+    media.push(enclosure.getAttribute("url")!);
+  }
+  
+  // Media:content
+  const mediaContent = item.querySelector("media\\:content, content");
+  if (mediaContent?.getAttribute("url")) {
+    media.push(mediaContent.getAttribute("url")!);
+  }
+  
+  // Atom attachments
+  const attachments = item.querySelectorAll("link[rel='enclosure'], link[type^='image/'], link[type^='video/']");
+  attachments.forEach(att => {
+    const href = att.getAttribute("href");
+    if (href) media.push(href);
+  });
+  
+  // Get author
+  const author = 
+    item.querySelector("author")?.textContent ||
+    item.querySelector("dc\\:creator")?.textContent ||
+    item.querySelector("source")?.textContent ||
+    "";
+  
+  // Get categories/tags
+  const categories = Array.from(item.querySelectorAll("category"))
+    .map(cat => cat.textContent || cat.getAttribute("term") || "")
+    .filter(Boolean);
+  
+  // Determine content type
+  const contentType: ZineContent["type"] = media.length > 0 
+    ? (media.some(m => /\.(mp4|webm|ogg)$/i.test(m)) ? "video" : "mixed")
+    : "text";
+  
+  // Calculate priority based on recency and content
+  const hoursSincePublication = (Date.now() - pubDate) / (1000 * 60 * 60);
+  let priority = 5;
+  if (hoursSincePublication < 1) priority = 8; // Very recent
+  else if (hoursSincePublication < 6) priority = 7;
+  else if (hoursSincePublication < 24) priority = 6;
+  
+  if (media.length > 0) priority += 1;
+  if (categories.some(c => /breaking|urgent|important/i.test(c))) priority += 2;
+  
+  return {
+    id: `rss-${sourceUrl.hashCode()}-${pubDate}-${Math.random().toString(36).slice(2, 9)}`,
+    type: contentType,
+    title,
+    subtitle: author ? `By ${author}` : undefined,
+    body: stripHtml(description).slice(0, 500), // Limit body length
+    media,
+    metadata: {
+      link,
+      pubDate: new Date(pubDate).toISOString(),
+      source: "rss",
+      author,
+      categories,
+      originalUrl: sourceUrl,
+    },
+    source: sourceUrl,
+    createdAt: pubDate,
+    expiresAt: Date.now() + 3600000, // 1 hour default
+    priority,
+    position: { zone: getRandomZone() },
+  };
+}
+
+/**
+ * Strip HTML tags from string
+ */
 function stripHtml(html: string): string {
+  if (!html) return "";
   const tmp = document.createElement("div");
   tmp.innerHTML = html;
   return tmp.textContent || tmp.innerText || "";
 }
+
+/**
+ * Get random zone for content positioning
+ */
+function getRandomZone(): ZineContent["position"]["zone"] {
+  const zones: ZineContent["position"]["zone"][] = [
+    "top-left", "top-right", "bottom-left", "bottom-right", "center"
+  ];
+  return zones[Math.floor(Math.random() * zones.length)];
+}
+
+/**
+ * String hashCode helper
+ */
+// @ts-ignore
+String.prototype.hashCode = function(): number {
+  let hash = 0;
+  for (let i = 0; i < this.length; i++) {
+    const char = this.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return Math.abs(hash);
+};
 
 // ============================================================================
 // Webhook Handler

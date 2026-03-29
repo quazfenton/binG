@@ -49,7 +49,7 @@ async function fetchTwitter<T>(endpoint: string, token: string, options?: Reques
 
 /**
  * GET /api/integrations/twitter
- * 
+ *
  * Query params:
  * - action: 'tweets' | 'search' | 'me' (default: 'me')
  * - query: string (for search action)
@@ -64,7 +64,7 @@ export async function GET(request: NextRequest) {
 
     // Try to get Auth0 Twitter token
     const auth0Token = await getAccessTokenForConnection(AUTH0_CONNECTIONS.TWITTER);
-    
+
     if (!auth0Token) {
       return NextResponse.json({
         error: 'Twitter not connected',
@@ -78,16 +78,16 @@ export async function GET(request: NextRequest) {
     switch (action) {
       case 'me':
         return await handleGetMe(auth0Token);
-      
+
       case 'tweets':
         return await handleGetTweets(auth0Token, maxResults);
-      
+
       case 'search':
         if (!query) {
           return NextResponse.json({ error: 'query parameter required for search' }, { status: 400 });
         }
         return await handleSearch(auth0Token, query, maxResults);
-      
+
       default:
         return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
     }
@@ -168,20 +168,34 @@ async function handleSearch(token: string, query: string, maxResults: string) {
 
 /**
  * POST /api/integrations/twitter
- * 
+ *
  * Body:
  * - action: 'tweet' | 'reply'
  * - text: string (tweet content)
  * - replyToTweetId?: string (for replies)
  */
 export async function POST(request: NextRequest) {
+  // Handle malformed JSON separately
+  let body: any;
   try {
-    const body = await request.json();
+    body = await request.json();
+  } catch (error: any) {
+    console.warn('[Twitter Integration] Malformed JSON:', error.message);
+    return NextResponse.json(
+      { 
+        error: 'Invalid JSON in request body',
+        details: error.message 
+      }, 
+      { status: 400 }
+    );
+  }
+
+  try {
     const { action, text, replyToTweetId } = body;
 
     // Try to get Auth0 Twitter token
     const auth0Token = await getAccessTokenForConnection(AUTH0_CONNECTIONS.TWITTER);
-    
+
     if (!auth0Token) {
       return NextResponse.json({
         error: 'Twitter not connected',

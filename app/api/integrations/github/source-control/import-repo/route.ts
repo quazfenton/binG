@@ -176,10 +176,34 @@ export async function POST(request: NextRequest) {
         : `Imported ${Object.keys(fileContents).length} files`,
     });
   } catch (error: any) {
+    // Log full error details server-side
     console.error('[GitHub Import] Error:', error);
-    return NextResponse.json({ 
-      error: error.message || 'Failed to import repository',
-      details: error.toString(),
+    
+    // Determine safe error message for client
+    let safeMessage = 'Failed to import repository';
+    
+    // Only include error message if it's a known, safe error type
+    if (error instanceof SyntaxError) {
+      safeMessage = 'Invalid request body';
+    } else if (error.name === 'AbortError') {
+      safeMessage = 'Request timed out';
+    } else if (error.message && (
+      error.message.includes('not found') ||
+      error.message.includes('required') ||
+      error.message.includes('authentication')
+    )) {
+      // Safe to include these specific messages
+      safeMessage = error.message;
+    }
+    // For all other errors, use generic message to avoid leaking internal details
+    
+    return NextResponse.json({
+      error: safeMessage,
+      // Only include details in development mode
+      ...(process.env.NODE_ENV === 'development' && {
+        details: error.toString(),
+        stack: error.stack,
+      }),
     }, { status: 500 });
   }
 }
