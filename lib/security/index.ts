@@ -1,6 +1,6 @@
 /**
  * Security Module
- * 
+ *
  * Central export for all security utilities
  */
 
@@ -9,20 +9,37 @@ export {
   safeJoin,
   isValidResourceId,
   validateRelativePath,
-  
+
   // Schemas
   sandboxIdSchema,
   relativePathSchema,
   commandSchema,
-  
+
   // Rate limiting
   RateLimiter,
-  
+
   // Security utilities
   securityHeaders,
   sanitizeOutput,
   generateSecureId,
 } from './security-utils';
+
+export {
+  // Safe command execution
+  safeExec,
+  safeSpawn,
+  safeExecWithRetry,
+  ALLOWED_COMMANDS,
+  BLOCKED_PATTERNS,
+  BLOCKED_METACHARACTERS,
+  DEFAULT_TIMEOUT,
+  DEFAULT_MAX_OUTPUT_SIZE,
+
+  // Types
+  type SafeExecOptions,
+  type SafeSpawnOptions,
+  type ExecResult,
+} from './safe-exec';
 
 export {
   // JWT authentication

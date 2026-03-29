@@ -9,10 +9,12 @@
  *   node scripts/github-trending-cli.js --clone 1    # Clone the #1 trending repo
  *   node scripts/github-trending-cli.js --clone 1,2,3 # Clone multiple repos
  *   node scripts/github-trending-cli.js --help       # Show help
+ *
+ * SECURITY: Uses spawn with args array to prevent command injection
  */
 
 import https from 'https';
-import { execSync } from 'child_process';
+import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 
@@ -140,31 +142,44 @@ function displayRepos(repos) {
 }
 
 /**
- * Clone a repository
+ * Clone a repository securely using spawn with args array
+ * SECURITY: Prevents command injection by using args array instead of string interpolation
  */
 function cloneRepo(repoUrl, rank) {
   const repoName = repoUrl.replace('https://github.com/', '').replace('.git', '');
   const destPath = path.join(CLONE_BASE_PATH, repoName.split('/')[1]);
-  
+
   console.log(`\n🔄 Cloning #${rank}: ${repoName}...`);
   console.log(`   Destination: ${destPath}\n`);
-  
+
   // Ensure base directory exists
   if (!fs.existsSync(CLONE_BASE_PATH)) {
     fs.mkdirSync(CLONE_BASE_PATH, { recursive: true });
   }
-  
-  try {
-    execSync(`git clone ${repoUrl} ${destPath}`, { 
+
+  return new Promise((resolve, reject) => {
+    // SECURITY: Use spawn with args array to prevent command injection
+    const child = spawn('git', ['clone', repoUrl, destPath], {
       stdio: 'inherit',
-      cwd: process.cwd()
+      cwd: process.cwd(),
+      shell: false, // Explicitly disable shell interpretation
     });
-    console.log(`\n✅ Successfully cloned ${repoName} to ${destPath}\n`);
-    return true;
-  } catch (error) {
-    console.error(`\n❌ Failed to clone ${repoName}: ${error.message}\n`);
-    return false;
-  }
+
+    child.on('close', (code) => {
+      if (code === 0) {
+        console.log(`\n✅ Successfully cloned ${repoName} to ${destPath}\n`);
+        resolve(true);
+      } else {
+        console.error(`\n❌ Failed to clone ${repoName}: git clone failed with exit code ${code}\n`);
+        resolve(false);
+      }
+    });
+
+    child.on('error', (error) => {
+      console.error(`\n❌ Failed to clone ${repoName}: ${error.message}\n`);
+      resolve(false);
+    });
+  });
 }
 
 /**
@@ -246,7 +261,7 @@ async function main() {
       // Clone specified repositories
       const successful = [];
       const failed = [];
-      
+
       for (const rank of ranksToClone) {
         const repo = repos.find(r => r.rank === rank);
         if (!repo) {
@@ -254,14 +269,16 @@ async function main() {
           failed.push(rank);
           continue;
         }
-        
-        if (cloneRepo(repo.url, rank)) {
+
+        // SECURITY: cloneRepo now returns a Promise, so we await it
+        const success = await cloneRepo(repo.url, rank);
+        if (success) {
           successful.push(rank);
         } else {
           failed.push(rank);
         }
       }
-      
+
       console.log(`\n📊 Summary: ${successful.length} cloned, ${failed.length} failed`);
       if (failed.length > 0) {
         process.exit(1);

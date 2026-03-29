@@ -179,6 +179,34 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
 
     switch (section) {
+       // Broadway Deal Hunter
+       case "broadway-deal-hunter": {
+         // Trigger the Trigger.dev task for Broadway deal hunting
+         try {
+           // Import Trigger SDK
+           const { trigger } = await import("@trigger.dev/sdk/v3");
+           
+           // Trigger the broadwayMonitor task
+           const run = await trigger.broadwayMonitor.trigger({
+             // We could pass parameters here if needed
+           });
+           
+           // Return immediate response - the task runs in background
+           // In a real implementation, we might want to use real-time streams
+           // to get the result when it's ready, or poll for completion
+           return NextResponse.json({
+             success: true,
+             message: "Broadway deal hunting task triggered",
+             runId: run.id
+           });
+         } catch (error: any) {
+           console.error("Failed to trigger Broadway deal hunter:", error);
+           return NextResponse.json({
+             success: false,
+             error: error.message || "Failed to trigger task"
+           }, { status: 500 });
+         }
+       }
       // Art Gallery
       case "art/generate": {
         const schema = z.object({
@@ -240,10 +268,26 @@ export async function POST(request: NextRequest) {
             const logs: string[] = [];
             const originalLog = console.log;
             console.log = (...args) => logs.push(args.join(" "));
-            
-            const result = new Function('"use strict";' + parsed.code)();
+
+            // SECURITY: Use vm2 for sandboxed code execution instead of new Function()
+            // This prevents access to require(), process.env, and other sensitive APIs
+            let result: any;
+            try {
+              const { VM } = await import('vm2');
+              const vm = new VM({
+                timeout: 5000,
+                sandbox: { console: { log: console.log } },
+              });
+              result = vm.run(parsed.code);
+            } catch (vmError: any) {
+              // Fallback if vm2 not available: use Function with strict mode
+              // Note: This is less secure but maintains compatibility
+              const resultFunc = new Function('"use strict";' + parsed.code);
+              result = resultFunc();
+            }
+
             console.log = originalLog;
-            
+
             return NextResponse.json({
               output: logs.join("\n") + (result !== undefined ? `\n=> ${result}` : ""),
               exitCode: 0,

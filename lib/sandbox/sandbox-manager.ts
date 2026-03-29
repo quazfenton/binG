@@ -143,10 +143,12 @@ export class SandboxManager extends EventEmitter {
     const sandbox = await this.getSandbox(sandboxId);
 
     const startTime = Date.now();
+    // SECURITY: Use shell:false since commandSchema already validates the command
+    // shell:true is unnecessary and adds attack surface
     const child = spawn(command, args || [], {
       cwd: sandbox.workspace,
       timeout: timeout || 30000,
-      shell: true,
+      shell: false, // SECURITY: Disabled - commandSchema provides validation
     });
 
     this.runningProcesses.set(sandboxId, child);
