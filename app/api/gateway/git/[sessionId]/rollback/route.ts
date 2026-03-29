@@ -4,7 +4,7 @@ import { resolveFilesystemOwnerWithFallback } from '@/app/api/filesystem/utils';
 import { withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { getGitBackedVFSForOwner } from '@/lib/virtual-filesystem/git-backed-vfs';
-import { VirtualFilesystemService } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/index';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:GitRollback');
@@ -254,7 +254,7 @@ async function executeShadowRollback(sessionId: string, version: number, targetF
       }
 
       // Restore filtered files directly
-      const vfs = new VirtualFilesystemService();
+      const vfs = virtualFilesystem;
       const ownerId = sessionId; // Use sessionId as ownerId for shadow commits
       let restoredCount = 0;
 
@@ -386,7 +386,7 @@ async function executeVFSSnapshotRollback(
     }
 
     // Restore VFS state
-    const vfs = new VirtualFilesystemService();
+    const vfs = virtualFilesystem;
     const ownerId = userId;
     let restoredCount = 0;
     const errors: string[] = [];
@@ -447,8 +447,7 @@ async function executeGitRollback(
 ) {
   try {
     // Get GitBackedVFS instance
-    const vfs = new VirtualFilesystemService();
-    const gitBackedVFS = getGitBackedVFSForOwner(userId, vfs, {
+    const gitBackedVFS = getGitBackedVFSForOwner(userId, virtualFilesystem.underlying, {
       sessionId,
       autoCommit: false,
     });

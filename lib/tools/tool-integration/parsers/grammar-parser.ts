@@ -7,10 +7,64 @@ export class GrammarToolCallParser {
 
     const calls: ParsedToolCall[] = [];
 
-    // First, try to parse WRITE commands in format: "WRITE filename <<<\ncontent\n>>>"
+    // NEW: Parse bash heredoc format: cat > file << 'EOF' ... EOF
+    const bashHeredocRegex = /cat\s*(>>?)\s*([^\s<>&|]+)\s*<<\s*['"]?(\w+)['"]?\s*\n([\s\S]*?)\n?\3(?:\s|$)/gi;
+    let bashMatch: RegExpExecArray | null;
+    
+    while ((bashMatch = bashHeredocRegex.exec(content)) !== null) {
+      const [, mode, filename, , fileContent] = bashMatch;
+      if (filename && fileContent) {
+        calls.push({
+          name: 'filesystem.write_file',
+          arguments: {
+            path: filename.trim(),
+            content: fileContent.trimEnd(),
+            append: mode === '>>',
+          },
+          source: 'grammar',
+        });
+      }
+    }
+
+    // Also parse mkdir commands
+    const mkdirRegex = /mkdir\s+(-p\s+)?([^\s&|;<>]+)/gi;
+    let mkdirMatch: RegExpExecArray | null;
+    
+    while ((mkdirMatch = mkdirRegex.exec(content)) !== null) {
+      const [, , dirpath] = mkdirMatch;
+      if (dirpath && !dirpath.startsWith('-')) {
+        calls.push({
+          name: 'filesystem.create_directory',
+          arguments: {
+            path: dirpath.trim(),
+          },
+          source: 'grammar',
+        });
+      }
+    }
+
+    // Also parse rm commands
+    const rmRegex = /rm\s+(-[rf]+\s+)?([^\s&|;<>]+)/gi;
+    let rmMatch: RegExpExecArray | null;
+    
+    while ((rmMatch = rmRegex.exec(content)) !== null) {
+      const [, , filepath] = rmMatch;
+      if (filepath && !filepath.startsWith('-')) {
+        calls.push({
+          name: 'filesystem.delete_file',
+          arguments: {
+            path: filepath.trim(),
+          },
+          source: 'grammar',
+        });
+      }
+    }
+
+    // Fallback: Try to parse WRITE commands in format: "WRITE filename <<<\ncontent\n>>>"
+    // (deprecated but kept for backward compatibility)
     const writeCommandRegex = /WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let writeMatch: RegExpExecArray | null;
-    
+
     while ((writeMatch = writeCommandRegex.exec(content)) !== null) {
       const [, filename, fileContent] = writeMatch;
       if (filename && fileContent) {
@@ -28,7 +82,7 @@ export class GrammarToolCallParser {
     // Also support READ command format: "READ filename"
     const readCommandRegex = /READ\s+([^\n\r]+)/gi;
     let readMatch: RegExpExecArray | null;
-    
+
     while ((readMatch = readCommandRegex.exec(content)) !== null) {
       const [, filename] = readMatch;
       if (filename) {

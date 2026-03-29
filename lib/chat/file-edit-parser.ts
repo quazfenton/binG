@@ -390,7 +390,9 @@ export function extractMarkdownCodeBlockFiles(content: string): FileEdit[] {
  * Extract both compact and multi-line file_edit formats
  * Also extracts file_write, ws_action, and simple JSON formats
  * Uses conditional parsing - only runs regex if signature is detected
- * 
+ *
+ * NEW: Also extracts bash heredoc syntax (cat > file << 'EOF')
+ *
  * Deduplicates by path (first occurrence wins) to handle cases where multiple
  * parsers might match the same file or LLM outputs duplicate edit blocks.
  * First wins is chosen because: if LLM shows the same file twice, the first
@@ -400,7 +402,13 @@ export function extractMarkdownCodeBlockFiles(content: string): FileEdit[] {
 export function extractFileEdits(content: string): FileEdit[] {
   const allEdits: FileEdit[] = [];
 
-  // Only run parsers if their signature is detected (O(1) string check)
+  // NEW: Try bash heredoc syntax first (preferred, more natural for LLMs)
+  const bashEdits = extractBashFileEdits(content);
+  for (const write of bashEdits.writes) {
+    allEdits.push({ path: write.path, content: write.content });
+  }
+
+  // Existing parsers (keep for backward compatibility)
   if (content.includes('<file_edit')) {
     allEdits.push(...extractCompactFileEdits(content));
     allEdits.push(...extractMultiLineFileEdits(content));
@@ -433,11 +441,20 @@ export function extractFileEdits(content: string): FileEdit[] {
     }
   }
 
+  logger.debug('File edits extracted', {
+    total: dedupedEdits.size,
+    bashEdits: bashEdits.writes.length,
+  });
+
   return Array.from(dedupedEdits.values());
 }
 
 /**
  * Extract fenced diff blocks: ```diff path\ncontent\n```
+ * 
+ * FIX: Now correctly distinguishes between:
+ * - ```diff path\n<unified diff content>``` (diff patch for a file)
+ * - ```diff\ndiff --git a/path b/path\n...``` (raw git diff output - should NOT be parsed as file edit)
  */
 export function extractFencedDiffEdits(content: string): DiffEdit[] {
   const edits: DiffEdit[] = [];
@@ -452,7 +469,20 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
   while ((match = regex.exec(content)) !== null) {
     const targetPath = match[1]?.trim();
     const diff = match[2] ?? '';
+    
     if (!targetPath) continue;
+    
+    // CRITICAL FIX: Detect if the path itself is a raw git diff header
+    // The LLM may output: ```diff\ndiff --git a/path b/path\n...``` instead of ```diff\npath\n...```
+    // In this case, BOTH group 1 (targetPath) AND group 2 (diff content) contain "diff --git"
+    // We need to check BOTH to properly detect raw git diff output
+    const isRawGitDiff = /^diff --git/m.test(targetPath) || /^diff --git/m.test(diff);
+    
+    if (isRawGitDiff) {
+      console.warn('[extractFencedDiffEdits] Skipping raw git diff output (should use diff parser):', targetPath);
+      continue;
+    }
+    
     edits.push({ path: targetPath, diff: diff.trim() });
   }
 

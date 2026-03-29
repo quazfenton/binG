@@ -481,53 +481,65 @@ Current workspace: ${this.context.workspacePath}
 Available Tools:
 ${this.tools.map(t => `- ${t.name}: ${t.description}`).join('\n')}
 
-TOOL CALLING FORMAT:
-When you need to create or modify files, use this exact format:
+FILE WRITING FORMAT (USE BASH HEREDOC SYNTAX):
+When you need to create or modify files, use bash heredoc syntax:
 
-WRITE path/to/file.ext <<<
+cat > path/to/file.ext << 'EOF'
 file content here
->>>
+EOF
 
-To read a file:
+To append to a file:
+cat >> path/to/file.ext << 'EOF'
+additional content
+EOF
+
+To read a file, use the READ tool:
 READ path/to/file.ext
 
+To create directories:
+mkdir -p path/to/directory
+
+To delete files:
+rm path/to/file.ext
+
 Examples:
-WRITE package.json <<<
+cat > package.json << 'EOF'
 {
   "name": "my-app",
   "version": "1.0.0"
 }
->>>
+EOF
 
-WRITE src/index.js <<<
+cat > src/index.js << 'EOF'
 console.log('Hello World');
->>>
-
-READ package.json
+EOF
 
 Best Practices:
 1. Always check if a file exists before editing (use READ or list_directory)
 2. Use relative paths from workspace root (e.g., "toDoApp/src/app.js")
-3. After creating files, suggest running commands
-4. Use the WRITE/READ format above to directly manipulate files
+3. Use mkdir -p to create directories before writing files in them
+4. After creating files, suggest running commands
+5. Use bash heredoc syntax (cat > file << 'EOF') for all file writes
+
+DO NOT use: WRITE <<<, <file_write>, <file_edit>, or XML-like tags
 
 Response Format:
-- Use WRITE/READ format to create/read files
+- Use bash heredoc syntax to create/write files
 - When task is complete, respond with { "done": true, "message": "..." }
 - Provide clear explanations of what you're doing
 
 Example:
 User: "Create a todo app"
 Assistant:
-WRITE package.json <<<
+cat > package.json << 'EOF'
 {
   "name": "todo-app",
   "version": "1.0.0"
 }
->>>
-WRITE src/index.js <<<
+EOF
+cat > src/index.js << 'EOF'
 // Todo app code
->>>
+EOF
 Assistant: { "done": true, "message": "Created a todo app with package.json and src/index.js" }`;
   }
 
