@@ -57,7 +57,162 @@ import {
   getAnimationProps,
   pick,
   rand,
+  getResponsiveGridTemplate,
+  getZoneVisibility,
+  getZoneColumns,
+  getResponsiveGap,
+  getResponsivePadding,
+  pluginRegistry,
+  type DataSourcePlugin,
 } from "./zine-engine";
+
+// ---------------------------------------------------------------------------
+// Responsive Layout Hook - Viewport-based fragment sizing
+// ---------------------------------------------------------------------------
+
+export type ViewportSize = 'mobile' | 'tablet' | 'desktop' | 'wide';
+
+export interface ResponsiveConfig {
+  size: ViewportSize;
+  width: number;
+  fontScale: number;
+  maxWidth: number;
+  zoneGap: number;
+  padding: number;
+  gridColumns: number;
+  showLabels: boolean;
+  animationDuration: number;
+}
+
+const VIEWPORT_BREAKPOINTS = {
+  mobile: 0,
+  tablet: 640,
+  desktop: 1024,
+  wide: 1440,
+};
+
+const RESPONSIVE_CONFIGS: Record<ViewportSize, Omit<ResponsiveConfig, 'size' | 'width'>> = {
+  mobile: {
+    fontScale: 0.65,
+    maxWidth: 90,
+    zoneGap: '4px',
+    padding: 8,
+    gridColumns: 1,
+    showLabels: false,
+    animationDuration: 0.3,
+  },
+  tablet: {
+    fontScale: 0.8,
+    maxWidth: 85,
+    zoneGap: '6px',
+    padding: 12,
+    gridColumns: 2,
+    showLabels: true,
+    animationDuration: 0.5,
+  },
+  desktop: {
+    fontScale: 1,
+    maxWidth: 80,
+    zoneGap: '8px',
+    padding: 16,
+    gridColumns: 3,
+    showLabels: true,
+    animationDuration: 0.7,
+  },
+  wide: {
+    fontScale: 1.15,
+    maxWidth: 75,
+    zoneGap: '12px',
+    padding: 20,
+    gridColumns: 4,
+    showLabels: true,
+    animationDuration: 0.8,
+  },
+};
+
+function getViewportSize(width: number): ViewportSize {
+  if (width >= VIEWPORT_BREAKPOINTS.desktop) return 'wide';
+  if (width >= VIEWPORT_BREAKPOINTS.tablet) return 'desktop';
+  if (width >= VIEWPORT_BREAKPOINTS.mobile) return 'tablet';
+  return 'mobile';
+}
+
+export function useResponsiveLayout() {
+  const [viewport, setViewport] = useState<{ width: number; height: number }>({
+    width: typeof window !== 'undefined' ? window.innerWidth : 1024,
+    height: typeof window !== 'undefined' ? window.innerHeight : 768,
+  });
+
+  useEffect(() => {
+    const handleResize = () => {
+      setViewport({ width: window.innerWidth, height: window.innerHeight });
+    };
+
+    handleResize();
+    window.addEventListener('resize', handleResize);
+    return () => window.removeEventListener('resize', handleResize);
+  }, []);
+
+  const size = getViewportSize(viewport.width);
+  const baseConfig = RESPONSIVE_CONFIGS[size];
+
+  const config: ResponsiveConfig = {
+    size,
+    width: viewport.width,
+    ...baseConfig,
+  };
+
+  // Calculate aspect ratio adjustments
+  const aspectRatio = viewport.width / viewport.height;
+  const isPortrait = aspectRatio < 1;
+  const isLandscape = aspectRatio > 1.5;
+
+  // Adjust config based on aspect ratio
+  if (isPortrait) {
+    config.fontScale *= 0.85;
+    config.gridColumns = Math.max(1, config.gridColumns - 1);
+  } else if (isLandscape) {
+    config.gridColumns = Math.min(4, config.gridColumns + 1);
+  }
+
+  return config;
+}
+
+// Apply responsive scaling to fragment styles
+export function applyResponsiveStyles(
+  style: ZineFragment['style'],
+  config: ResponsiveConfig,
+  type: FragmentType,
+): React.CSSProperties {
+  const baseFontSize = style.fontSize * config.fontScale;
+  
+  // Type-specific responsive sizing
+  const typeScales: Record<FragmentType, number> = {
+    heading: 1,
+    announcement: 0.95,
+    quote: 0.9,
+    text: 0.85,
+    data: 0.75,
+    notification: 0.8,
+    whisper: 0.7,
+    ticker: 0.75,
+    media: 0.85,
+  };
+
+  const fontSize = baseFontSize * (typeScales[type] || 0.85);
+  const maxWidth = type === 'heading' 
+    ? `${config.maxWidth + 5}%` 
+    : type === 'whisper' 
+      ? `${config.maxWidth * 0.6}%` 
+      : `${config.maxWidth}%`;
+
+  return {
+    fontSize: `${fontSize}px`,
+    maxWidth,
+    letterSpacing: `${style.letterSpacing * config.fontScale}px`,
+    lineHeight: style.lineHeight,
+  };
+}
 
 // ---------------------------------------------------------------------------
 // Hooks
@@ -99,12 +254,223 @@ function useNotificationEngine() {
   return { notifications, push, dismiss, clearAll };
 }
 
+// ---------------------------------------------------------------------------
+// OAuth Notifications Hook - fetches real notifications from connected providers
+// ---------------------------------------------------------------------------
+
+interface FetchedNotification {
+  id: string;
+  content: string;
+  type: string;
+  source: string;
+  author?: string;
+  timestamp: string;
+  url?: string;
+  priority?: 'low' | 'normal' | 'high';
+}
+
+function useOAuthNotifications(
+  pushNotification: (fragment: ZineFragment, duration?: number, position?: NotificationItem["position"]) => void,
+  template: ZineTemplate,
+  enabled: boolean,
+) {
+  const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
+  const [isPolling, setIsPolling] = useState(false);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+  const lastFetchRef = useRef<number>(0);
+
+  // Fetch connected OAuth providers on mount
+  useEffect(() => {
+    async function checkConnections() {
+      try {
+        const res = await fetch('/api/auth/oauth/connections');
+        if (res.ok) {
+          const data = await res.json();
+          setConnectedProviders(data.connections || []);
+        }
+      } catch (err) {
+        console.log('[Zine] Failed to check OAuth connections:', err);
+      }
+    }
+    checkConnections();
+  }, []);
+
+  // Fetch notifications from API
+  const fetchNotifications = useCallback(async () => {
+    // Debounce to prevent rapid polling
+    const now = Date.now();
+    if (now - lastFetchRef.current < 5000) return;
+    lastFetchRef.current = now;
+
+    try {
+      const res = await fetch('/api/zine-display/notifications');
+      if (!res.ok) return;
+
+      const data = await res.json();
+      if (!data.success || !data.notifications) return;
+
+      const notifs: FetchedNotification[] = data.notifications;
+
+      // Convert to fragments and push as notifications
+      for (const notif of notifs.slice(0, 3)) {
+        const sourceIcons: Record<string, string> = {
+          discord: '💬',
+          gmail: '📧',
+          slack: '💼',
+          github: '🐙',
+          twitter: '🐦',
+        };
+        const icon = sourceIcons[notif.source] || '📌';
+
+        const fragment = createFragment(
+          `${icon} ${notif.content}`,
+          'notification',
+          notif.source,
+          notif.priority === 'high' ? 'drop' : 'fade-in',
+          template,
+          notif.author,
+          { url: notif.url, timestamp: notif.timestamp },
+        );
+
+        pushNotification(fragment, 12000, 'top-right');
+      }
+    } catch (err) {
+      console.log('[Zine] Notification fetch error:', err);
+    }
+  }, [pushNotification, template]);
+
+  // Start/stop polling when enabled and has connected providers
+  useEffect(() => {
+    if (!enabled || connectedProviders.length === 0) {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+      setIsPolling(false);
+      return;
+    }
+
+    // Initial fetch
+    fetchNotifications();
+
+    // Poll every 30 seconds
+    intervalRef.current = setInterval(fetchNotifications, 30000);
+    setIsPolling(true);
+
+    return () => {
+      if (intervalRef.current) {
+        clearInterval(intervalRef.current);
+        intervalRef.current = null;
+      }
+    };
+  }, [enabled, connectedProviders.length, fetchNotifications]);
+
+  return { connectedProviders, isPolling, fetchNow: fetchNotifications };
+}
+
+// ---------------------------------------------------------------------------
+// SSE Hook - Real-time updates via Server-Sent Events
+// ---------------------------------------------------------------------------
+
+function useSSEStream(
+  pushNotification: (fragment: ZineFragment, duration?: number, position?: NotificationItem["position"]) => void,
+  template: ZineTemplate,
+  channel: string = 'default',
+  enabled: boolean,
+) {
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const reconnectTimeoutRef = useRef<NodeJS.Timeout | null>(null);
+  const [isConnected, setIsConnected] = useState(false);
+  const [lastEvent, setLastEvent] = useState<string>('');
+
+  // Connect to SSE stream
+  const connect = useCallback(() => {
+    if (eventSourceRef.current) {
+      eventSourceRef.current.close();
+    }
+
+    const sseUrl = `/api/zine-display/sse?channel=${encodeURIComponent(channel)}`;
+    const eventSource = new EventSource(sseUrl);
+
+    eventSource.onopen = () => {
+      setIsConnected(true);
+      console.log('[Zine-SSE] Connected to channel:', channel);
+    };
+
+    eventSource.onmessage = (event) => {
+      try {
+        const message = JSON.parse(event.data);
+        setLastEvent(message.timestamp);
+
+        // Handle different event types
+        if (message.event === 'notification' || message.event === 'data') {
+          const fragment = createFragment(
+            message.data.content || 'New update',
+            message.data.type || 'text',
+            message.data.source || 'sse',
+            'fade-in',
+            template,
+            message.data.author,
+            { url: message.data.url, timestamp: message.data.timestamp },
+          );
+          pushNotification(fragment, 15000, 'top-right');
+        }
+      } catch (e) {
+        // Ignore parse errors
+      }
+    };
+
+    eventSource.onerror = () => {
+      setIsConnected(false);
+      eventSource.close();
+
+      // Attempt reconnect after 5 seconds
+      if (enabled) {
+        reconnectTimeoutRef.current = setTimeout(() => {
+          connect();
+        }, 5000);
+      }
+    };
+
+    eventSourceRef.current = eventSource;
+  }, [channel, template, enabled, pushNotification]);
+
+  // Connect/disconnect based on enabled state
+  useEffect(() => {
+    if (enabled) {
+      connect();
+    } else {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+        eventSourceRef.current = null;
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+      setIsConnected(false);
+    }
+
+    return () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+      if (reconnectTimeoutRef.current) {
+        clearTimeout(reconnectTimeoutRef.current);
+      }
+    };
+  }, [enabled, connect]);
+
+  return { isConnected, lastEvent };
+}
+
 function useDataSources(
   template: ZineTemplate,
   onData: (fragments: ZineFragment[]) => void,
 ) {
   const managerRef = useRef<DataSourceManager | null>(null);
   const [sources, setSources] = useState<DataSourceConfig[]>([]);
+  const [isPolling, setIsPolling] = useState(false);
+  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
   const onDataRef = useRef(onData);
   onDataRef.current = onData;
 
@@ -121,13 +487,46 @@ function useDataSources(
     }
     setSources(mgr.getSources());
 
-    return () => mgr.destroy();
+    return () => {
+      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+      mgr.destroy();
+    };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   useEffect(() => {
     managerRef.current?.setTemplate(template);
   }, [template]);
+
+  // Start/stop continuous polling for all enabled sources
+  // Use ref to track polling state to avoid stale closure issues
+  const isPollingRef = useRef(false);
+  
+  const togglePolling = useCallback(() => {
+    if (isPollingRef.current) {
+      if (pollingIntervalRef.current) {
+        clearInterval(pollingIntervalRef.current);
+        pollingIntervalRef.current = null;
+      }
+      isPollingRef.current = false;
+      setIsPolling(false);
+    } else {
+      // Poll every 30 seconds
+      pollingIntervalRef.current = setInterval(() => {
+        const enabledSources = managerRef.current?.getSources().filter(s => s.enabled) || [];
+        for (const source of enabledSources) {
+          managerRef.current?.fetchSource(source.id);
+        }
+      }, 30000);
+      isPollingRef.current = true;
+      setIsPolling(true);
+      // Initial fetch
+      const enabledSources = managerRef.current?.getSources().filter(s => s.enabled) || [];
+      for (const source of enabledSources) {
+        managerRef.current?.fetchSource(source.id);
+      }
+    }
+  }, []);
 
   const addSource = useCallback((config: DataSourceConfig) => {
     managerRef.current?.addSource(config);
@@ -148,7 +547,7 @@ function useDataSources(
     managerRef.current?.fetchSource(id);
   }, []);
 
-  return { sources, addSource, removeSource, toggleSource, fetchNow };
+  return { sources, addSource, removeSource, toggleSource, fetchNow, isPolling, togglePolling };
 }
 
 // ---------------------------------------------------------------------------
@@ -162,6 +561,7 @@ interface FragmentRendererProps {
   isPaused: boolean;
   template: ZineTemplate;
   bounded: boolean;
+  responsiveConfig?: ResponsiveConfig;
 }
 
 function FragmentRenderer({
@@ -171,6 +571,7 @@ function FragmentRenderer({
   isPaused,
   template,
   bounded,
+  responsiveConfig,
 }: FragmentRendererProps) {
   const { style, animation, content, type, animSeeds } = fragment;
   const animProps = getAnimationProps(animation, index, animSeeds);
@@ -198,22 +599,27 @@ function FragmentRenderer({
     );
   }
 
+  // Calculate responsive styles for unbounded fragments
+  const responsiveStyles = responsiveConfig
+    ? applyResponsiveStyles(style, responsiveConfig, type)
+    : {};
+
   // Unbounded: absolute positioned floating text
   const inlineStyle: React.CSSProperties = {
     position: "absolute",
     left: `${style.x}%`,
     top: `${style.y}%`,
     transform: `rotate(${style.rotation}deg) scale(${style.scale})`,
-    fontSize: `${style.fontSize}px`,
+    fontSize: responsiveStyles.fontSize ?? `${style.fontSize}px`,
     fontFamily: style.fontFamily,
     color: style.color,
     fontWeight: style.fontWeight,
-    letterSpacing: `${style.letterSpacing}px`,
-    lineHeight: style.lineHeight,
+    letterSpacing: responsiveStyles.letterSpacing ?? `${style.letterSpacing}px`,
+    lineHeight: responsiveStyles.lineHeight ?? style.lineHeight,
     textTransform: style.textTransform,
     textAlign: style.textAlign,
     zIndex: style.zIndex,
-    maxWidth: type === "heading" ? "80%" : type === "whisper" ? "50%" : "60%",
+    maxWidth: responsiveStyles.maxWidth ?? (type === "heading" ? "80%" : type === "whisper" ? "50%" : "60%"),
     mixBlendMode: style.mixBlendMode as React.CSSProperties["mixBlendMode"],
     pointerEvents: "auto",
     cursor: "default",
@@ -235,7 +641,7 @@ function FragmentRenderer({
       {...mergedAnim}
       style={inlineStyle}
       className="group"
-      whileHover={{ scale: (style.scale || 1) * 1.05, zIndex: 999 }}
+      whileHover={{ scale: ((style.scale || 1) * (responsiveConfig?.fontScale ?? 1)) * 1.05, zIndex: 999 }}
     >
       <span className="relative">{content}</span>
       {fragment.author && (
@@ -378,6 +784,7 @@ interface ContentZoneProps {
   onRemove: (id: string) => void;
   isPaused: boolean;
   template: ZineTemplate;
+  responsiveConfig?: ResponsiveConfig;
 }
 
 function ContentZone({
@@ -386,6 +793,7 @@ function ContentZone({
   onRemove,
   isPaused,
   template,
+  responsiveConfig,
 }: ContentZoneProps) {
   const isBounded = zone.bordered || template.displayMode === "bounded";
   const isUnbounded = !isBounded && (template.displayMode === "unbounded" || zone.type === "floating");
@@ -414,6 +822,7 @@ function ContentZone({
               isPaused={isPaused}
               template={template}
               bounded={false}
+              responsiveConfig={responsiveConfig}
             />
           ))}
         </AnimatePresence>
@@ -451,6 +860,7 @@ function ContentZone({
                 isPaused={isPaused}
                 template={template}
                 bounded={true}
+                responsiveConfig={responsiveConfig}
               />
             ))}
           </AnimatePresence>
@@ -537,7 +947,225 @@ function NotificationOverlay({
 }
 
 // ---------------------------------------------------------------------------
-// SourceManagerPanel — UI for managing data sources
+// Plugin Configuration Form — for custom data source plugins
+// ---------------------------------------------------------------------------
+
+interface PluginConfigFormProps {
+  plugin: DataSourcePlugin;
+  onSubmit: (config: DataSourceConfig) => void;
+  onCancel: () => void;
+}
+
+function PluginConfigForm({ plugin, onSubmit, onCancel }: PluginConfigFormProps) {
+  const [formData, setFormData] = useState<Record<string, string>>(() => {
+    const initial: Record<string, string> = {};
+    if (plugin.configSchema) {
+      for (const [key, field] of Object.entries(plugin.configSchema)) {
+        initial[key] = field.default !== undefined ? String(field.default) : '';
+      }
+    }
+    return initial;
+  });
+  const [isTesting, setIsTesting] = useState(false);
+  const [testResult, setTestResult] = useState<{ success: boolean; message: string } | null>(null);
+
+  const handleSubmit = () => {
+    // Validate required fields
+    if (plugin.configSchema) {
+      for (const [key, field] of Object.entries(plugin.configSchema)) {
+        if (field.required && !formData[key]?.trim()) {
+          toast.error(`${key} is required`);
+          return;
+        }
+      }
+    }
+
+    // Store full plugin config in transform field for the plugin to use
+    const config: DataSourceConfig = {
+      id: crypto.randomUUID(),
+      type: 'api',
+      name: `${plugin.icon} ${plugin.name}`,
+      enabled: true,
+      url: formData.url || formData.endpoint || undefined,
+      pollIntervalMs: parseInt(formData.pollIntervalMs) || 60000,
+      // Serialize full plugin config including plugin ID for plugin registry to use
+      transform: JSON.stringify({
+        _pluginId: plugin.id,
+        ...formData,
+      }),
+    };
+
+    onSubmit(config);
+  };
+
+  const handleTest = async () => {
+    setIsTesting(true);
+    setTestResult(null);
+
+    try {
+      if (plugin.test) {
+        const mockConfig: DataSourceConfig = {
+          id: 'test',
+          type: 'api',
+          name: 'Test',
+          enabled: true,
+          url: formData.url || formData.endpoint,
+          pollIntervalMs: 60000,
+        };
+        const result = await plugin.test(mockConfig);
+        setTestResult({
+          success: result,
+          message: result ? 'Connection successful!' : 'Connection failed',
+        });
+      } else {
+        setTestResult({
+          success: true,
+          message: 'Plugin does not support connection testing',
+        });
+      }
+    } catch (err) {
+      setTestResult({
+        success: false,
+        message: err instanceof Error ? err.message : 'Test failed',
+      });
+    } finally {
+      setIsTesting(false);
+    }
+  };
+
+  return (
+    <div className="p-3 rounded-md bg-white/[0.03] border border-white/[0.08] space-y-3">
+      <div className="flex items-center gap-2">
+        <span className="text-lg">{plugin.icon}</span>
+        <div>
+          <span className="text-xs font-medium text-white/80">{plugin.name}</span>
+          <span className="text-[9px] text-white/30 ml-2">v{plugin.version}</span>
+        </div>
+      </div>
+
+      <p className="text-[9px] text-white/40">{plugin.description}</p>
+
+      {plugin.configSchema && Object.keys(plugin.configSchema).length > 0 && (
+        <div className="space-y-2">
+          {Object.entries(plugin.configSchema).map(([key, field]) => (
+            <div key={key}>
+              <label className="text-[9px] text-white/50 uppercase tracking-wider flex items-center gap-1">
+                {key}
+                {field.required && <span className="text-red-400">*</span>}
+              </label>
+              {field.type === 'object' ? (
+                <Textarea
+                  value={formData[key] || ''}
+                  onChange={(e) => setFormData({ ...formData, [key]: e.target.value })}
+                  placeholder='{"key": "value"}'
+                  className="h-16 text-[10px] bg-black/30 border-white/10 text-white/80 placeholder:text-white/20 font-mono"
+                />
+              ) : (
+                <Input
+                  type={field.type === 'number' ? 'number' : 'text'}
+                  value={formData[key] || ''}
+                  onChange={(e) => setFormData({ ...formData, [key]: e.target.value })}
+                  placeholder={field.default !== undefined ? String(field.default) : key}
+                  className="h-6 text-[10px] bg-black/30 border-white/10 text-white/80 placeholder:text-white/20"
+                />
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {testResult && (
+        <div className={`text-[9px] px-2 py-1 rounded ${testResult.success ? 'bg-green-500/10 text-green-400' : 'bg-red-500/10 text-red-400'}`}>
+          {testResult.message}
+        </div>
+      )}
+
+      <div className="flex gap-2">
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={handleTest}
+          disabled={isTesting}
+          className="h-6 text-[9px] text-white/40"
+        >
+          {isTesting ? 'Testing...' : 'Test Connection'}
+        </Button>
+        <div className="flex-1" />
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onCancel}
+          className="h-6 text-[9px] text-white/30"
+        >
+          Cancel
+        </Button>
+        <Button
+          size="sm"
+          onClick={handleSubmit}
+          className="h-6 text-[9px] bg-white/10 hover:bg-white/15 text-white/70 border border-white/10"
+        >
+          Add Plugin
+        </Button>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// PluginSelector — Choose from available plugins
+// ---------------------------------------------------------------------------
+
+interface PluginSelectorProps {
+  onSelect: (plugin: DataSourcePlugin) => void;
+  onCancel: () => void;
+}
+
+function PluginSelector({ onSelect, onCancel }: PluginSelectorProps) {
+  const plugins = pluginRegistry.list();
+
+  return (
+    <div className="p-3 rounded-md bg-white/[0.03] border border-white/[0.08] space-y-2">
+      <div className="flex items-center justify-between">
+        <span className="text-[10px] uppercase tracking-wider text-white/40 font-medium">
+          Select Plugin
+        </span>
+        <Button
+          variant="ghost"
+          size="sm"
+          onClick={onCancel}
+          className="h-5 text-[9px] text-white/30"
+        >
+          <X className="w-3 h-3" />
+        </Button>
+      </div>
+
+      <div className="grid grid-cols-2 gap-2">
+        {plugins.map((plugin) => (
+          <button
+            key={plugin.id}
+            onClick={() => onSelect(plugin)}
+            className="p-2 rounded-md bg-white/[0.02] hover:bg-white/[0.06] border border-white/[0.06] hover:border-white/10 transition-all text-left"
+          >
+            <div className="flex items-center gap-2 mb-1">
+              <span className="text-lg">{plugin.icon}</span>
+              <span className="text-[10px] font-medium text-white/70">{plugin.name}</span>
+            </div>
+            <p className="text-[8px] text-white/30 line-clamp-2">{plugin.description}</p>
+          </button>
+        ))}
+      </div>
+
+      <div className="pt-2 border-t border-white/[0.06]">
+        <p className="text-[8px] text-white/25 text-center">
+          Custom plugins can be registered via the plugin API
+        </p>
+      </div>
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// SourceManagerPanel — UI for managing data sources with plugin support
 // ---------------------------------------------------------------------------
 
 interface SourceManagerPanelProps {
@@ -559,6 +1187,8 @@ function SourceManagerPanel({
   const [newName, setNewName] = useState("");
   const [newUrl, setNewUrl] = useState("");
   const [newType, setNewType] = useState<DataSourceConfig["type"]>("rss");
+  const [showPluginSelector, setShowPluginSelector] = useState(false);
+  const [selectedPlugin, setSelectedPlugin] = useState<DataSourcePlugin | null>(null);
 
   const handleAdd = () => {
     if (!newName.trim()) return;
@@ -577,24 +1207,65 @@ function SourceManagerPanel({
     toast.success("Source added");
   };
 
+  const handlePluginSelect = (plugin: DataSourcePlugin) => {
+    setSelectedPlugin(plugin);
+    setShowPluginSelector(false);
+  };
+
+  const handlePluginSubmit = (config: DataSourceConfig) => {
+    onAdd(config);
+    setSelectedPlugin(null);
+    toast.success(`${config.name} added`);
+  };
+
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
         <span className="text-[10px] uppercase tracking-wider text-white/40 font-medium">
           Data Sources
         </span>
-        <Button
-          variant="ghost"
-          size="sm"
-          onClick={() => setShowAddForm(!showAddForm)}
-          className="h-5 text-[10px] text-white/40 hover:text-white/70 px-1.5"
-        >
-          <Plus className="w-2.5 h-2.5 mr-1" />
-          Add
-        </Button>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowPluginSelector(true)}
+            className="h-5 text-[10px] text-purple-400 hover:text-purple-300 px-1.5"
+            title="Add custom plugin"
+          >
+            <Layers className="w-2.5 h-2.5 mr-1" />
+            Plugins
+          </Button>
+          <Button
+            variant="ghost"
+            size="sm"
+            onClick={() => setShowAddForm(!showAddForm)}
+            className="h-5 text-[10px] text-white/40 hover:text-white/70 px-1.5"
+          >
+            <Plus className="w-2.5 h-2.5 mr-1" />
+            Add
+          </Button>
+        </div>
       </div>
 
-      {showAddForm && (
+      {/* Plugin selector dropdown */}
+      {showPluginSelector && (
+        <PluginSelector
+          onSelect={handlePluginSelect}
+          onCancel={() => setShowPluginSelector(false)}
+        />
+      )}
+
+      {/* Plugin configuration form */}
+      {selectedPlugin && (
+        <PluginConfigForm
+          plugin={selectedPlugin}
+          onSubmit={handlePluginSubmit}
+          onCancel={() => setSelectedPlugin(null)}
+        />
+      )}
+
+      {/* Basic source add form */}
+      {showAddForm && !selectedPlugin && !showPluginSelector && (
         <div className="p-2 rounded-md bg-white/[0.03] border border-white/[0.06] space-y-2">
           <div className="flex items-center gap-1">
             {(["rss", "webhook", "api", "url", "local"] as const).map((t) => (
@@ -644,6 +1315,7 @@ function SourceManagerPanel({
         </div>
       )}
 
+      {/* Sources list - separated by type */}
       <div className="space-y-1">
         {sources.map((src) => (
           <div
@@ -692,6 +1364,13 @@ function SourceManagerPanel({
             </div>
           </div>
         ))}
+      </div>
+
+      {/* Plugin usage hint */}
+      <div className="pt-2 border-t border-white/[0.06]">
+        <p className="text-[8px] text-white/25 text-center">
+          <span className="text-purple-400">Pro tip:</span> Use Plugins for REST API, WebSocket, GraphQL, Database, or Custom JS
+        </p>
       </div>
     </div>
   );
@@ -1038,6 +1717,33 @@ export default function ZineDisplayTab() {
   const template = getTemplate(templateId);
   const { notifications, push: pushNotification, dismiss: dismissNotification, clearAll: clearNotifications } = useNotificationEngine();
 
+  // Responsive layout configuration
+  const responsiveConfig = useResponsiveLayout();
+  
+  // Get responsive grid template from engine
+  const responsiveGridTemplate = template.gridTemplate ? getResponsiveGridTemplate(template, responsiveConfig.size) : undefined;
+  const zoneVisibility = getZoneVisibility(template, responsiveConfig.size);
+  const zoneColumns = getZoneColumns(responsiveConfig.size);
+  const responsiveGap = getResponsiveGap(template, responsiveConfig.size);
+  const responsivePadding = getResponsivePadding(template, responsiveConfig.size);
+
+  // OAuth notifications - fetch from connected providers
+  const [oauthNotificationsEnabled, setOauthNotificationsEnabled] = useState(false);
+  const { connectedProviders, isPolling, fetchNow: fetchOAuthNotifications } = useOAuthNotifications(
+    pushNotification,
+    template,
+    oauthNotificationsEnabled,
+  );
+
+  // SSE real-time stream
+  const [sseEnabled, setSseEnabled] = useState(false);
+  const { isConnected: sseConnected, lastEvent } = useSSEStream(
+    pushNotification,
+    template,
+    'default',
+    sseEnabled,
+  );
+
   const addFragments = useCallback(
     (newFragments: ZineFragment[]) => {
       setFragments((prev) => {
@@ -1048,7 +1754,7 @@ export default function ZineDisplayTab() {
     [template.maxVisible],
   );
 
-  const { sources, addSource, removeSource, toggleSource, fetchNow } =
+  const { sources, addSource, removeSource, toggleSource, fetchNow, isPolling, togglePolling } =
     useDataSources(template, addFragments);
 
   // Load sample content on first mount
@@ -1196,9 +1902,86 @@ export default function ZineDisplayTab() {
                   >
                     {template.emoji} {template.name}
                   </Badge>
+                  {/* Viewport size indicator */}
+                  <Badge
+                    variant="secondary"
+                    className={`text-[8px] px-1.5 py-0 ${
+                      responsiveConfig.size === 'mobile' ? 'bg-orange-500/10 text-orange-400/70 border border-orange-400/20' :
+                      responsiveConfig.size === 'tablet' ? 'bg-yellow-500/10 text-yellow-400/70 border border-yellow-400/20' :
+                      responsiveConfig.size === 'desktop' ? 'bg-green-500/10 text-green-400/70 border border-green-400/20' :
+                      'bg-blue-500/10 text-blue-400/70 border border-blue-400/20'
+                    }`}
+                  >
+                    {responsiveConfig.size.toUpperCase()}
+                  </Badge>
                 </div>
 
                 <div className="flex items-center gap-1">
+                  {/* OAuth Notifications Toggle */}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setOauthNotificationsEnabled(!oauthNotificationsEnabled)}
+                    className={`h-6 w-6 p-0 ${
+                      oauthNotificationsEnabled
+                        ? "text-green-400"
+                        : "text-white/40 hover:text-white/80"
+                    }`}
+                    title={oauthNotificationsEnabled ? "OAuth Notifications ON (click to disable)" : "Enable OAuth Notifications (Discord, Gmail, Slack, GitHub)"}
+                  >
+                    <Bell className={`w-3 h-3 ${isPolling ? 'animate-pulse' : ''}`} />
+                  </Button>
+                  {oauthNotificationsEnabled && connectedProviders.length > 0 && (
+                    <Badge
+                      variant="secondary"
+                      className="text-[8px] h-4 px-1 bg-green-500/10 text-green-400/70 border border-green-400/20"
+                    >
+                      {connectedProviders.length} connected
+                    </Badge>
+                  )}
+                  {/* SSE Real-time Toggle */}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={() => setSseEnabled(!sseEnabled)}
+                    className={`h-6 w-6 p-0 ${
+                      sseConnected
+                        ? "text-amber-400"
+                        : "text-white/40 hover:text-white/80"
+                    }`}
+                    title={sseEnabled ? "SSE Connected (click to disconnect)" : "Enable SSE for real-time push"}
+                  >
+                    <Wifi className={`w-3 h-3 ${sseConnected ? 'animate-pulse' : ''}`} />
+                  </Button>
+                  {sseConnected && (
+                    <Badge
+                      variant="secondary"
+                      className="text-[8px] h-4 px-1 bg-amber-500/10 text-amber-400/70 border border-amber-400/20"
+                    >
+                      LIVE
+                    </Badge>
+                  )}
+                  <Button
+                    variant="ghost"
+                    size="sm"
+                    onClick={togglePolling}
+                    className={`h-6 w-6 p-0 ${
+                      isPolling
+                        ? "text-cyan-400"
+                        : "text-white/40 hover:text-white/80"
+                    }`}
+                    title={isPolling ? "Stop polling" : "Start continuous polling (30s interval)"}
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isPolling ? 'animate-spin' : ''}`} />
+                  </Button>
+                  {isPolling && (
+                    <Badge
+                      variant="secondary"
+                      className="text-[8px] h-4 px-1 bg-cyan-500/10 text-cyan-400/70 border border-cyan-400/20"
+                    >
+                      POLL
+                    </Badge>
+                  )}
                   <Button
                     variant="ghost"
                     size="sm"
@@ -1356,23 +2139,36 @@ export default function ZineDisplayTab() {
         {isBoundedTemplate ? (
           // Bounded / Hybrid — CSS Grid layout with zones
           <div
-            className="h-full w-full p-3 overflow-hidden"
+            className="h-full w-full overflow-hidden"
             style={{
               display: "grid",
-              gridTemplate: template.gridTemplate ?? "'full' 1fr / 1fr",
-              gap: template.gridGap ?? "8px",
+              gridTemplateColumns: `repeat(${zoneColumns}, 1fr)`,
+              gridTemplate: responsiveGridTemplate ?? "'full' 1fr / 1fr",
+              gap: template.gridGap ?? responsiveGap,
+              padding: responsivePadding,
             }}
           >
             {template.zones.map((zone, idx) => {
+              // Skip hidden zones based on viewport
+              const zoneKey = zone.gridArea ?? zone.type;
+              const visibility = zoneVisibility[zoneKey] ?? 'show';
+              if (visibility === 'hide') return null;
+              
               if (zone.type === "floating") return null;
               const zoneFrags = fragmentsByZone.get(
                 zone.gridArea ?? zone.type,
               ) ?? [];
+              
+              // Apply collapse styling
+              const isCollapsed = visibility === 'collapse';
+              
               return (
                 <div
                   key={`${zone.type}-${idx}`}
                   style={{ gridArea: zone.gridArea }}
-                  className={`overflow-hidden rounded-lg ${
+                  className={`overflow-hidden rounded-lg transition-all ${
+                    isCollapsed ? 'max-h-0 p-0 opacity-0' : ''
+                  } ${
                     zone.bordered
                       ? "border border-white/[0.08] bg-white/[0.02]"
                       : ""
@@ -1384,6 +2180,7 @@ export default function ZineDisplayTab() {
                     onRemove={removeFragment}
                     isPaused={isPaused}
                     template={template}
+                    responsiveConfig={responsiveConfig}
                   />
                 </div>
               );
@@ -1405,6 +2202,7 @@ export default function ZineDisplayTab() {
                         onRemove={removeFragment}
                         isPaused={isPaused}
                         template={template}
+                        responsiveConfig={responsiveConfig}
                       />
                     );
                   })}
@@ -1425,19 +2223,26 @@ export default function ZineDisplayTab() {
                   onRemove={removeFragment}
                   isPaused={isPaused}
                   template={template}
+                  responsiveConfig={responsiveConfig}
                 />
               );
             })}
           </div>
         )}
 
-        {/* Template watermark */}
-        <div className="absolute bottom-2 right-3 pointer-events-none z-50">
+        {/* Template watermark with responsive info */}
+        <div className="absolute bottom-2 right-3 pointer-events-none z-50 flex items-center gap-2">
           <span
             className="text-[9px] font-mono tracking-widest uppercase"
             style={{ color: template.palette.muted, opacity: 0.3 }}
           >
             {template.id} · {template.displayMode}
+          </span>
+          <span
+            className="text-[8px] font-mono"
+            style={{ color: template.palette.muted, opacity: 0.2 }}
+          >
+            {responsiveConfig.width}px
           </span>
         </div>
       </div>

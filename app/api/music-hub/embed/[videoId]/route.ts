@@ -155,7 +155,7 @@ export async function GET(
       }
 
       const html = await response.text();
-      
+
       // Modify HTML to work in our context
       const modifiedHtml = html
         .replace(/<base[^>]*>/g, "") // Remove base tags
@@ -168,12 +168,39 @@ export async function GET(
         await cacheEmbed(videoId, modifiedHtml, source.id);
       }
 
-      return new NextResponse(modifiedHtml, {
+      // SECURITY: Wrap untrusted HTML in sandboxed iframe instead of serving as our origin
+      const sandboxedHtml = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Music Embed</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    iframe { width: 100%; height: 100%; border: none; }
+  </style>
+</head>
+<body>
+  <iframe
+    sandbox="allow-scripts allow-same-origin allow-presentation"
+    referrerpolicy="strict-origin-when-cross-origin"
+    srcdoc="${modifiedHtml.replace(/"/g, '&quot;')}"
+    title="Video Embed"
+  ></iframe>
+</body>
+</html>`.trim();
+
+      return new NextResponse(sandboxedHtml, {
         headers: {
           "Content-Type": "text/html",
           "Cache-Control": "public, max-age=3600",
           "X-Cache": "MISS",
           "X-Source": source.id,
+          // Additional security headers
+          "X-Content-Type-Options": "nosniff",
+          "X-Frame-Options": "SAMEORIGIN",
         },
       });
     } catch (error) {

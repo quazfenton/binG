@@ -1,10 +1,35 @@
 /**
  * Simulated Orchestration
- * 
+ *
  * Lightweight task orchestration for multi-agent collaboration.
  * Provides task proposal, review, and execution tracking.
- * 
+ *
  * @deprecated This is an MVP stub. Use lib/orchestra/mastra/workflows/ for production.
+ *
+ * This file was created during initial prototyping and should not be used for new development.
+ * All production orchestration logic has been moved to:
+ * - lib/orchestra/mastra/workflows/ - Workflow templates
+ * - lib/orchestra/mastra/verification/ - Verification system
+ * - lib/agent/stateful-agent.ts - Agent implementation
+ *
+ * Migration guide:
+ * ```typescript
+ * // Before
+ * import { SimulatedOrchestration } from '@/lib/agent/simulated-orchestration';
+ * const orchestrator = new SimulatedOrchestrator();
+ *
+ * // After - For workflow-based orchestration
+ * import { WorkflowTemplates } from '@/lib/orchestra/mastra/workflows';
+ * const workflow = WorkflowTemplates.getTemplate('research');
+ *
+ * // After - For agent-based orchestration
+ * import { StatefulAgent } from '@/lib/agent/stateful-agent';
+ * const agent = new StatefulAgent(config);
+ * ```
+ *
+ * @see lib/orchestra/mastra/workflows/ - Production workflow templates
+ * @see lib/orchestra/mastra/verification/ - Production verification system
+ * @see lib/agent/stateful-agent.ts - Production agent implementation
  */
 
 import { createLogger } from '../utils/logger';

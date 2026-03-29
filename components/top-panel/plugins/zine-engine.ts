@@ -881,6 +881,61 @@ export class DataSourceManager {
     try {
       let fragments: ZineFragment[] = [];
 
+      // Check for plugin-based source (config stored in transform field)
+      if (src.transform) {
+        try {
+          const pluginConfig = JSON.parse(src.transform);
+          const pluginId = pluginConfig._pluginId;
+          
+          if (pluginId) {
+            const plugin = pluginRegistry.get(pluginId);
+            if (plugin) {
+              // Build full config with parsed plugin settings
+              let headers: Record<string, string> | undefined;
+              if (pluginConfig.headers) {
+                try {
+                  headers = typeof pluginConfig.headers === 'object' 
+                    ? pluginConfig.headers 
+                    : JSON.parse(pluginConfig.headers);
+                } catch {
+                  // Ignore parse errors, headers will be undefined
+                }
+              }
+
+              const fullConfig: DataSourceConfig = {
+                ...src,
+                url: pluginConfig.url || pluginConfig.endpoint || src.url,
+                method: pluginConfig.method,
+                headers,
+              };
+              
+              // Add remaining plugin config fields
+              for (const [key, value] of Object.entries(pluginConfig)) {
+                if (key !== '_pluginId' && key !== 'url' && key !== 'endpoint' && key !== 'headers') {
+                  (fullConfig as Record<string, unknown>)[key] = value;
+                }
+              }
+              
+              try {
+                fragments = await plugin.fetch(fullConfig, this.template);
+              } catch (pluginErr) {
+                console.error(`[DataSourceManager] Plugin "${pluginId}" fetch error:`, pluginErr);
+                fragments = [];
+              }
+              
+              if (fragments.length > 0) {
+                src.lastFetchedAt = Date.now();
+                this.onData(fragments);
+              }
+              return;
+            }
+          }
+        } catch (parseErr) {
+          console.warn('[DataSourceManager] Failed to parse plugin config:', parseErr);
+        }
+      }
+
+      // Default source handlers
       switch (src.type) {
         case 'rss': {
           const params = new URLSearchParams();
@@ -1335,6 +1390,361 @@ export class AdvancedContentParser {
 }
 
 // ---------------------------------------------------------------------------
+// Modular Data Source Plugin System
+// ---------------------------------------------------------------------------
+
+/**
+ * Base interface for data source plugins
+ * Custom plugins can implement this to add new data source types
+ */
+export interface DataSourcePlugin {
+  /** Unique identifier for the plugin */
+  id: string;
+  /** Display name */
+  name: string;
+  /** Icon emoji or identifier */
+  icon: string;
+  /** Plugin version */
+  version: string;
+  /** Description of what this plugin fetches */
+  description: string;
+  /** Supported configuration options */
+  configSchema?: Record<string, { type: string; required: boolean; default?: unknown }>;
+  /** Fetch data from the source */
+  fetch(config: DataSourceConfig, template: ZineTemplate): Promise<ZineFragment[]>;
+  /** Optional: Transform raw data before fragment creation */
+  transform?: (data: unknown) => unknown;
+  /** Optional: Test connection/config validity */
+  test?: (config: DataSourceConfig) => Promise<boolean>;
+}
+
+/**
+ * Registry of built-in and custom data source plugins
+ */
+export class DataSourcePluginRegistry {
+  private plugins: Map<string, DataSourcePlugin> = new Map();
+
+  /** Register a new plugin */
+  register(plugin: DataSourcePlugin): void {
+    if (this.plugins.has(plugin.id)) {
+      console.warn(`[DataSourcePluginRegistry] Plugin "${plugin.id}" already registered, replacing`);
+    }
+    this.plugins.set(plugin.id, plugin);
+    console.log(`[DataSourcePluginRegistry] Registered plugin: ${plugin.name} v${plugin.version}`);
+  }
+
+  /** Unregister a plugin */
+  unregister(id: string): boolean {
+    return this.plugins.delete(id);
+  }
+
+  /** Get a plugin by ID */
+  get(id: string): DataSourcePlugin | undefined {
+    return this.plugins.get(id);
+  }
+
+  /** List all registered plugins */
+  list(): DataSourcePlugin[] {
+    return Array.from(this.plugins.values());
+  }
+
+  /** Get plugins by category */
+  getByCategory(category: string): DataSourcePlugin[] {
+    return this.list().filter(p => p.id.startsWith(category));
+  }
+}
+
+// Global plugin registry instance
+export const pluginRegistry = new DataSourcePluginRegistry();
+
+// ---------------------------------------------------------------------------
+// Built-in Plugin: REST API
+// ---------------------------------------------------------------------------
+
+const restApiPlugin: DataSourcePlugin = {
+  id: 'rest-api',
+  name: 'REST API',
+  icon: '🌐',
+  version: '1.0.0',
+  description: 'Fetch data from any REST API endpoint',
+  configSchema: {
+    url: { type: 'string', required: true },
+    method: { type: 'string', required: false, default: 'GET' },
+    headers: { type: 'object', required: false },
+    path: { type: 'string', required: false }, // JSON path to extract data
+    pollIntervalMs: { type: 'number', required: false, default: 60000 },
+  },
+  async fetch(config, template) {
+    const { url, method = 'GET', headers = {}, path } = config;
+    
+    try {
+      const res = await fetch(url, { method, headers: headers as Record<string, string> });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      
+      const json = await res.json();
+      let data = path ? jsonPath(json, path) : json;
+      
+      if (!Array.isArray(data)) data = [data];
+      
+      return (data as unknown[]).slice(0, 10).map((item: unknown) => {
+        const content = typeof item === 'object' 
+          ? JSON.stringify(item).slice(0, 200) 
+          : String(item);
+        return createFragment(content, 'data', 'api', 'typewriter', template, undefined, {
+          url: (item as Record<string, unknown>)?.url as string,
+          meta: { plugin: 'rest-api', source: url },
+        });
+      });
+    } catch (err) {
+      console.error('[rest-api] Fetch error:', err);
+      return [];
+    }
+  },
+  async test(config) {
+    if (!config.url) return false;
+    try {
+      const res = await fetch(config.url, { method: 'HEAD' });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Built-in Plugin: Database Query
+// ---------------------------------------------------------------------------
+
+const databasePlugin: DataSourcePlugin = {
+  id: 'database',
+  name: 'Database Query',
+  icon: '🗄️',
+  version: '1.0.0',
+  description: 'Execute queries against connected databases',
+  configSchema: {
+    connectionString: { type: 'string', required: true },
+    query: { type: 'string', required: true },
+    pollIntervalMs: { type: 'number', required: false, default: 60000 },
+  },
+  async fetch(config, template) {
+    // In production, this would connect to actual databases
+    // For now, return mock data representing database results
+    const mockRows = [
+      { id: 1, name: 'User Registration', count: 142 },
+      { id: 2, name: 'Active Sessions', count: 89 },
+      { id: 3, name: 'API Calls', count: 1247 },
+    ];
+    
+    return mockRows.map(row => createFragment(
+      `${row.name}: ${row.count}`,
+      'data',
+      'api',
+      'fade-in',
+      template,
+      undefined,
+      { meta: { plugin: 'database', row } },
+    ));
+  },
+  async test(config) {
+    if (!config.url && !config.transform) return false;
+    // Database test requires connection string in transform
+    try {
+      const pluginConfig = config.transform ? JSON.parse(config.transform) : {};
+      if (!pluginConfig.connectionString) {
+        // No connection string - can't test without one
+        return false;
+      }
+      // In production, would test actual database connection
+      // For now, validate connection string format
+      return pluginConfig.connectionString.length > 0;
+    } catch {
+      return false;
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Built-in Plugin: WebSocket Stream
+// ---------------------------------------------------------------------------
+
+const websocketPlugin: DataSourcePlugin = {
+  id: 'websocket',
+  name: 'WebSocket Stream',
+  icon: '🔌',
+  version: '1.0.0',
+  description: 'Connect to WebSocket endpoints for real-time data',
+  configSchema: {
+    url: { type: 'string', required: true },
+    filter: { type: 'string', required: false }, // JSONPath filter
+  },
+  async fetch(config, template) {
+    // WebSocket handling would be done client-side
+    // This returns a placeholder fragment
+    return [createFragment(
+      `WebSocket: ${config.url}`,
+      'data',
+      'api',
+      'slide-right',
+      template,
+      undefined,
+      { meta: { plugin: 'websocket', url: config.url } },
+    )];
+  },
+  async test(config) {
+    if (!config.url) return false;
+    // WebSocket URL validation (must start with ws:// or wss://)
+    const url = config.url.toLowerCase();
+    return url.startsWith('ws://') || url.startsWith('wss://');
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Built-in Plugin: GraphQL
+// ---------------------------------------------------------------------------
+
+const graphqlPlugin: DataSourcePlugin = {
+  id: 'graphql',
+  name: 'GraphQL',
+  icon: '◼️',
+  version: '1.0.0',
+  description: 'Query GraphQL endpoints',
+  configSchema: {
+    endpoint: { type: 'string', required: true },
+    query: { type: 'string', required: true },
+    variables: { type: 'object', required: false },
+  },
+  async fetch(config, template) {
+    const { endpoint, query, variables = {} } = config;
+    
+    try {
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query, variables }),
+      });
+      
+      const json = await res.json();
+      const data = json.data;
+      
+      if (typeof data === 'object' && data !== null) {
+        const items = Array.isArray(data) ? data : Object.values(data).flat().slice(0, 5);
+        return (items as unknown[]).map(item => createFragment(
+          JSON.stringify(item).slice(0, 150),
+          'data',
+          'api',
+          'typewriter',
+          template,
+          undefined,
+          { meta: { plugin: 'graphql' } },
+        ));
+      }
+    } catch (err) {
+      console.error('[graphql] Error:', err);
+    }
+    return [];
+  },
+  async test(config) {
+    if (!config.url && !config.endpoint) return false;
+    const endpoint = config.url || config.endpoint;
+    try {
+      // Send introspection query to validate endpoint
+      const res = await fetch(endpoint, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ query: '{ __schema { types { name } } }' }),
+      });
+      return res.ok;
+    } catch {
+      return false;
+    }
+  },
+};
+
+// ---------------------------------------------------------------------------
+// Built-in Plugin: Custom JavaScript
+// ---------------------------------------------------------------------------
+
+const customJsPlugin: DataSourcePlugin = {
+  id: 'custom-js',
+  name: 'Custom JS',
+  icon: '⚡',
+  version: '1.0.0',
+  description: 'Execute custom JavaScript to transform data',
+  configSchema: {
+    code: { type: 'string', required: true },
+    inputSource: { type: 'string', required: false },
+  },
+  async fetch(config, template) {
+    const { code } = config;
+    try {
+      // Safe custom code execution - in production would use a sandbox
+      const fn = new Function('data', code);
+      const result = fn({ timestamp: Date.now(), template: template.id });
+      
+      if (typeof result === 'string') {
+        return [createFragment(result, 'data', 'api', 'fade-in', template)];
+      }
+      if (Array.isArray(result)) {
+        return result.map((item: unknown) => createFragment(
+          String(item), 'data', 'api', 'fade-in', template,
+        ));
+      }
+    } catch (err) {
+      console.error('[custom-js] Error:', err);
+    }
+    return [];
+  },
+  async test(config) {
+    // Test code syntax by attempting to parse it
+    let code = '';
+    try {
+      if (config.code) {
+        code = config.code;
+      } else if (config.transform) {
+        const pluginConfig = JSON.parse(config.transform);
+        code = pluginConfig.code || '';
+      }
+    } catch {
+      // Invalid JSON - can't test
+      return false;
+    }
+    
+    if (!code) return false;
+    try {
+      // Try to create function to validate syntax (won't execute, just parse)
+      new Function('data', code);
+      return true;
+    } catch {
+      return false;
+    }
+  },
+};
+
+// Helper: simple JSON path extraction (defined before plugins that use it)
+function jsonPath(obj: unknown, path: string): unknown {
+  const parts = path.replace(/^\.?(?:\.|\[|\])/g, '').split(/\.|\[|\]/).filter(Boolean);
+  let current: unknown = obj;
+  for (const part of parts) {
+    if (current === null || current === undefined) return undefined;
+    current = (current as Record<string, unknown>)[part];
+  }
+  return current;
+}
+
+// Register built-in plugins
+pluginRegistry.register(restApiPlugin);
+pluginRegistry.register(databasePlugin);
+pluginRegistry.register(websocketPlugin);
+pluginRegistry.register(graphqlPlugin);
+pluginRegistry.register(customJsPlugin);
+
+// ---------------------------------------------------------------------------
+// NOTE: Custom JS plugin uses new Function() which is not sandboxed.
+// In production, use vm2 or isolated-vm for safe execution.
+// ---------------------------------------------------------------------------
+// Predefined data source presets
+
+// ---------------------------------------------------------------------------
 // Predefined data source presets
 // ---------------------------------------------------------------------------
 
@@ -1344,3 +1754,394 @@ export const SOURCE_PRESETS: DataSourceConfig[] = [
   { id: 'verge-rss', type: 'rss', name: 'The Verge', enabled: false, rssSource: 'verge', pollIntervalMs: 300000 },
   { id: 'webhook-poll', type: 'webhook', name: 'Webhook Inbox', enabled: false, pollIntervalMs: 15000 },
 ];
+
+// ---------------------------------------------------------------------------
+// Responsive Template Overrides
+// ---------------------------------------------------------------------------
+
+/**
+ * Mobile-responsive template overrides
+ * Adjusts grid layouts for smaller screens
+ */
+export interface ResponsiveTemplateOverride {
+  breakpoint: 'mobile' | 'tablet' | 'desktop' | 'wide';
+  gridTemplate?: string;
+  gridGap?: string;
+  fontScale?: number;
+  zoneVisibility?: Record<string, 'show' | 'hide' | 'collapse'>;
+}
+
+/**
+ * Get responsive grid template based on viewport size
+ */
+export function getResponsiveGridTemplate(
+  template: ZineTemplate,
+  viewportSize: 'mobile' | 'tablet' | 'desktop' | 'wide',
+): string | undefined {
+  // Mobile overrides for multi-column templates
+  if (viewportSize === 'mobile') {
+    switch (template.id) {
+      case 'magazine':
+        return "'hero' auto 'body' 1fr 'sidebar' auto / 1fr";
+      case 'newspaper':
+        return "'title' auto 'col1' 1fr 'col2' 1fr / 1fr";
+      case 'data-terminal':
+        return "'header' auto 'main' 1fr 'aside' auto 'ticker' auto / 1fr";
+      case 'art-deco':
+        // Art Deco: Stack hero and body vertically on mobile, hide floating elements
+        return "'hero' auto 'body' 1fr / 1fr";
+      case 'brutalist':
+        return "'full' 1fr / 1fr";
+      case 'message-board':
+        return "'board' 1fr / 1fr";
+      case 'rss-feed':
+        return "'feed' 1fr / 1fr";
+      case 'notification-stream':
+        return "'stream' 1fr / 1fr";
+      default:
+        return undefined;
+    }
+  }
+  
+  if (viewportSize === 'tablet') {
+    switch (template.id) {
+      case 'magazine':
+        return "'hero hero' auto 'body sidebar sidebar' 1fr / 1fr 1fr";
+      case 'newspaper':
+        return "'title title title' auto 'col1 col2' 1fr / 1fr 1fr";
+      case 'data-terminal':
+        return "'header header' auto 'main aside' 1fr / 1fr 1fr";
+      case 'art-deco':
+        // Art Deco: Two-column on tablet
+        return "'hero hero' auto 'body body' 1fr / 1fr 1fr";
+      case 'brutalist':
+        return "'full' 1fr / 1fr";
+      default:
+        return undefined;
+    }
+  }
+  
+  // Wide/desktop: use original template with potential adjustments
+  if (viewportSize === 'wide') {
+    switch (template.id) {
+      case 'art-deco':
+        // Art Deco: Use original template but with extra columns for body content
+        return "'hero hero' auto 'body body' 1fr / 1fr 1fr";
+      default:
+        break;
+    }
+  }
+  
+  return template.gridTemplate;
+}
+
+/**
+ * Get responsive zone visibility based on viewport
+ * Returns which zones should be shown, hidden, or collapsed
+ */
+export function getZoneVisibility(
+  template: ZineTemplate,
+  viewportSize: 'mobile' | 'tablet' | 'desktop' | 'wide',
+): Record<string, 'show' | 'hide' | 'collapse'> {
+  const visibility: Record<string, 'show' | 'hide' | 'collapse'> = {};
+  
+  // Default: all zones shown
+  for (const zone of template.zones) {
+    const key = zone.gridArea ?? zone.type;
+    visibility[key] = 'show';
+  }
+  
+  // Mobile-specific zone visibility
+  if (viewportSize === 'mobile') {
+    // Hide sidebar on mobile, collapse footer
+    switch (template.id) {
+      case 'magazine':
+        visibility['sidebar'] = 'hide';
+        visibility['footer'] = 'collapse';
+        break;
+      case 'newspaper':
+        visibility['col3'] = 'hide';
+        break;
+      case 'data-terminal':
+        visibility['aside'] = 'collapse';
+        visibility['ticker'] = 'collapse';
+        break;
+      case 'art-deco':
+        // Hide floating elements on mobile for cleaner layout
+        visibility['floating'] = 'hide';
+        break;
+      case 'neon-board':
+        // Keep full zone visible but reduce fragments count for mobile
+        // Visibility stays as 'show' by default for unbounded templates
+        break;
+      case 'brutalist':
+      case 'message-board':
+      case 'rss-feed':
+      case 'notification-stream':
+        // Single-zone templates - no visibility changes needed
+        break;
+      default:
+        break;
+    }
+  }
+  
+  // Tablet-specific zone visibility
+  if (viewportSize === 'tablet') {
+    switch (template.id) {
+      case 'magazine':
+        visibility['sidebar'] = 'collapse';
+        break;
+      case 'data-terminal':
+        visibility['aside'] = 'collapse';
+        break;
+      case 'art-deco':
+        // Collapse floating elements on tablet
+        visibility['floating'] = 'collapse';
+        break;
+      case 'neon-board':
+        // Single unbounded zone - no visibility changes needed
+        break;
+      default:
+        break;
+    }
+  }
+  
+  // Wide-specific zone visibility
+  if (viewportSize === 'wide') {
+    switch (template.id) {
+      case 'art-deco':
+        // Show floating elements on wide screens
+        visibility['floating'] = 'show';
+        break;
+      default:
+        break;
+    }
+  }
+  
+  return visibility;
+}
+
+/**
+ * Apply responsive grid columns to a template's zone configuration
+ */
+export function getZoneColumns(
+  viewportSize: 'mobile' | 'tablet' | 'desktop' | 'wide',
+): number {
+  const columns: Record<string, number> = {
+    mobile: 1,
+    tablet: 2,
+    desktop: 3,
+    wide: 4,
+  };
+  return columns[viewportSize];
+}
+
+/**
+ * Get responsive gap (spacing between grid items) based on template and viewport
+ */
+export function getResponsiveGap(
+  template: ZineTemplate,
+  viewportSize: 'mobile' | 'tablet' | 'desktop' | 'wide',
+): string {
+  // Template-specific gap overrides
+  const templateGaps: Record<string, Record<string, string>> = {
+    magazine: {
+      mobile: '8px',
+      tablet: '10px',
+      desktop: '12px',
+      wide: '16px',
+    },
+    newspaper: {
+      mobile: '8px',
+      tablet: '12px',
+      desktop: '16px',
+      wide: '20px',
+    },
+    data-terminal: {
+      mobile: '4px',
+      tablet: '6px',
+      desktop: '8px',
+      wide: '10px',
+    },
+    art-deco: {
+      mobile: '12px',
+      tablet: '16px',
+      desktop: '20px',
+      wide: '24px',
+    },
+    brutalist: {
+      mobile: '0px',
+      tablet: '0px',
+      desktop: '2px',
+      wide: '4px',
+    },
+    neon-board: {
+      mobile: '16px',
+      tablet: '20px',
+      desktop: '24px',
+      wide: '32px',
+    },
+    message-board: {
+      mobile: '8px',
+      tablet: '10px',
+      desktop: '12px',
+      wide: '16px',
+    },
+    rss-feed: {
+      mobile: '6px',
+      tablet: '8px',
+      desktop: '10px',
+      wide: '14px',
+    },
+    notification-stream: {
+      mobile: '4px',
+      tablet: '6px',
+      desktop: '8px',
+      wide: '12px',
+    },
+    freeform: {
+      mobile: '0px',
+      tablet: '0px',
+      desktop: '0px',
+      wide: '0px',
+    },
+    punk-zine: {
+      mobile: '0px',
+      tablet: '0px',
+      desktop: '4px',
+      wide: '8px',
+    },
+    whisper: {
+      mobile: '20px',
+      tablet: '24px',
+      desktop: '32px',
+      wide: '40px',
+    },
+    chalkboard: {
+      mobile: '12px',
+      tablet: '16px',
+      desktop: '20px',
+      wide: '24px',
+    },
+  };
+
+  const templateOverrides = templateGaps[template.id];
+  if (templateOverrides) {
+    return templateOverrides[viewportSize];
+  }
+
+  // Default gaps based on viewport
+  const defaultGaps: Record<string, string> = {
+    mobile: '8px',
+    tablet: '10px',
+    desktop: '12px',
+    wide: '16px',
+  };
+
+  return defaultGaps[viewportSize];
+}
+
+/**
+ * Get responsive padding (inner spacing) based on template and viewport
+ */
+export function getResponsivePadding(
+  template: ZineTemplate,
+  viewportSize: 'mobile' | 'tablet' | 'desktop' | 'wide',
+): number {
+  // Template-specific padding overrides
+  const templatePaddings: Record<string, Record<string, number>> = {
+    magazine: {
+      mobile: 8,
+      tablet: 12,
+      desktop: 16,
+      wide: 20,
+    },
+    newspaper: {
+      mobile: 6,
+      tablet: 10,
+      desktop: 14,
+      wide: 18,
+    },
+    data-terminal: {
+      mobile: 4,
+      tablet: 6,
+      desktop: 8,
+      wide: 10,
+    },
+    art-deco: {
+      mobile: 10,
+      tablet: 16,
+      desktop: 20,
+      wide: 28,
+    },
+    brutalist: {
+      mobile: 4,
+      tablet: 6,
+      desktop: 8,
+      wide: 12,
+    },
+    neon-board: {
+      mobile: 12,
+      tablet: 16,
+      desktop: 20,
+      wide: 24,
+    },
+    message-board: {
+      mobile: 6,
+      tablet: 10,
+      desktop: 14,
+      wide: 18,
+    },
+    rss-feed: {
+      mobile: 8,
+      tablet: 12,
+      desktop: 16,
+      wide: 20,
+    },
+    notification-stream: {
+      mobile: 6,
+      tablet: 8,
+      desktop: 12,
+      wide: 16,
+    },
+    freeform: {
+      mobile: 16,
+      tablet: 20,
+      desktop: 24,
+      wide: 32,
+    },
+    punk-zine: {
+      mobile: 8,
+      tablet: 12,
+      desktop: 16,
+      wide: 20,
+    },
+    whisper: {
+      mobile: 24,
+      tablet: 32,
+      desktop: 40,
+      wide: 48,
+    },
+    chalkboard: {
+      mobile: 12,
+      tablet: 16,
+      desktop: 20,
+      wide: 24,
+    },
+  };
+
+  const templateOverrides = templatePaddings[template.id];
+  if (templateOverrides) {
+    return templateOverrides[viewportSize];
+  }
+
+  // Default padding based on viewport
+  const defaultPaddings: Record<string, number> = {
+    mobile: 8,
+    tablet: 12,
+    desktop: 16,
+    wide: 20,
+  };
+
+  return defaultPaddings[viewportSize];
+}

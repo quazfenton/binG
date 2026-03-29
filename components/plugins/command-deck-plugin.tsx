@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useEffect, useCallback, useMemo } from "react";
+import React, { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
@@ -15,7 +15,7 @@ import {
   List, Eye, ChevronRight, ChevronDown, ChevronUp, Settings,
   Plus, Trash2, Copy, Star, Heart, Bookmark, Hash, AtSign,
   Video, Image, MapPin, Mic, Smartphone, Layers, Box,
-  Workflow, Timer, BarChart3, PieChart, TrendingUp,
+  Workflow, Timer, BarChart3, PieChart, TrendingUp, X,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -50,7 +50,7 @@ interface PlatformStatus {
 }
 
 type ViewMode = "zine" | "grid" | "list" | "flow";
-type FilterMode = "all" | "connected" | "available" | "email" | "social" | "dev" | "productivity";
+type FilterMode = "all" | "connected" | "available" | "email" | "social" | "dev" | "productivity" | "media" | "web";
 
 // ---------------------------------------------------------------------------
 // Platform action definitions
@@ -303,6 +303,11 @@ export default function CommandDeckPlugin() {
   const [executionLog, setExecutionLog] = useState<Array<{ action: string; result: ActionResult }>>([]);
   const [showLog, setShowLog] = useState(false);
   const [loading, setLoading] = useState(true);
+  const searchRef = useRef<HTMLInputElement>(null);
+  const [pinnedIds, setPinnedIds] = useState<Set<string>>(() => {
+    if (typeof window === "undefined") return new Set();
+    try { const s = localStorage.getItem("command-deck-pins"); return s ? new Set(JSON.parse(s)) : new Set(); } catch { return new Set(); }
+  });
 
   // Fetch connection statuses on mount
   const fetchStatuses = useCallback(async () => {
@@ -375,8 +380,37 @@ export default function CommandDeckPlugin() {
     const connectedProviders = Object.values(platformStatuses).filter(s => s.connected).length;
     const totalActions = PLATFORM_ACTIONS.length;
     const executableActions = PLATFORM_ACTIONS.filter(a => !a.requiresConnection || platformStatuses[a.provider]?.connected).length;
-    return { totalProviders, connectedProviders, totalActions, executableActions };
-  }, [platformStatuses, providers]);
+    return { totalProviders, connectedProviders, totalActions, executableActions, pinned: pinnedIds.size };
+  }, [platformStatuses, providers, pinnedIds]);
+
+  // Persist pinned IDs to localStorage
+  useEffect(() => {
+    try { localStorage.setItem("command-deck-pins", JSON.stringify([...pinnedIds])); } catch {}
+  }, [pinnedIds]);
+
+  // Connection polling every 60s
+  useEffect(() => {
+    const interval = setInterval(fetchStatuses, 60000);
+    return () => clearInterval(interval);
+  }, [fetchStatuses]);
+
+  // Keyboard shortcut: Ctrl+K to focus search, Escape to clear
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if ((e.metaKey || e.ctrlKey) && e.key === "k") {
+        e.preventDefault();
+        searchRef.current?.focus();
+      }
+    };
+    document.addEventListener("keydown", handleKeyDown);
+    return () => document.removeEventListener("keydown", handleKeyDown);
+  }, []);
+
+  // Connect provider (defined before handleExecute to avoid ref issues)
+  const handleConnect = useCallback((provider: string) => {
+    toast.info("Opening OAuth for " + (PROVIDER_META[provider]?.name || provider));
+    window.dispatchEvent(new CustomEvent("open-integrations", { detail: { provider } }));
+  }, []);
 
   // Execute action
   const handleExecute = useCallback(async (action: ActionItem) => {
@@ -387,7 +421,6 @@ export default function CommandDeckPlugin() {
     };
 
     try {
-      // Attempt real execution via API
       const res = await fetch("/api/integrations/execute", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -417,15 +450,23 @@ export default function CommandDeckPlugin() {
       result.message = err instanceof Error ? err.message : "Network error";
     }
 
-    setExecutionLog(prev => [{ action: action.label, result }, ...prev].slice(0, 20));
+    setExecutionLog(prev => [{ action: action.label, result }, ...prev].slice(0, 50));
     showExecutionResult(result, action.label);
-  }, []);
+  }, [handleConnect]);
 
   // Connect provider
   const handleConnect = useCallback((provider: string) => {
     toast.info("Opening OAuth for " + (PROVIDER_META[provider]?.name || provider));
-    // Open integrations panel or OAuth popup
     window.dispatchEvent(new CustomEvent("open-integrations", { detail: { provider } }));
+  }, []);
+
+  // Toggle pin
+  const handleTogglePin = useCallback((id: string) => {
+    setPinnedIds(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
   }, []);
 
   // Toggle provider expansion
@@ -445,6 +486,8 @@ export default function CommandDeckPlugin() {
     { value: "social", label: "Social" },
     { value: "dev", label: "Dev" },
     { value: "productivity", label: "Work" },
+    { value: "media", label: "Media" },
+    { value: "web", label: "Web" },
   ];
 
   return (
@@ -487,7 +530,7 @@ export default function CommandDeckPlugin() {
           </div>
 
           {/* Stats */}
-          <div className="flex items-center gap-3 mb-3">
+          <div className="flex items-center gap-3 mb-3 flex-wrap">
             <span className="flex items-center gap-1 text-[10px] text-green-300">
               <div className="h-1.5 w-1.5 rounded-full bg-green-400" />
               {stats.connectedProviders} connected
@@ -500,16 +543,31 @@ export default function CommandDeckPlugin() {
               <Zap className="h-2.5 w-2.5" />
               {stats.executableActions} actions ready
             </span>
+            {stats.pinned > 0 && (
+              <span className="flex items-center gap-1 text-[10px] text-yellow-300">
+                <Star className="h-2.5 w-2.5" fill="currentColor" />
+                {stats.pinned} pinned
+              </span>
+            )}
           </div>
 
           {/* Search + filters */}
-          <div className="flex items-center gap-2">
-            <Input
-              value={searchQuery}
-              onChange={(e) => setSearchQuery(e.target.value)}
-              placeholder="Search actions..."
-              className="h-7 text-xs bg-white/5 border-white/10 text-white/90 placeholder:text-white/30 flex-1"
-            />
+          <div className="flex items-center gap-2 flex-wrap">
+            <div className="relative flex-1 min-w-[140px]">
+              <Search className="absolute left-2.5 top-1/2 -translate-y-1/2 h-3 w-3 text-white/25" />
+              <Input
+                ref={searchRef}
+                value={searchQuery}
+                onChange={(e) => setSearchQuery(e.target.value)}
+                placeholder="Search actions... (Ctrl+K)"
+                className="h-7 text-xs bg-white/5 border-white/10 text-white/90 placeholder:text-white/25 pl-8 pr-7"
+              />
+              {searchQuery && (
+                <button onClick={() => setSearchQuery("")} className="absolute right-2 top-1/2 -translate-y-1/2 text-white/30 hover:text-white/60">
+                  <X className="h-3 w-3" />
+                </button>
+              )}
+            </div>
             <div className="flex gap-1">
               {filterOptions.map((opt) => (
                 <button
