@@ -1,6 +1,6 @@
 /**
  * Fly.io Sprites Sandbox Provider
- * 
+ *
  * Persistent, hardware-isolated execution environments with:
  * - True persistence (ext4 filesystem persists indefinitely)
  * - Hardware isolation (dedicated microVM)
@@ -10,9 +10,12 @@
  * - Public URLs (https://<name>.sprites.app)
  * - Session management (detachable TTY sessions)
  * - Services (auto-restart processes on wake)
- * 
+ *
  * Documentation: https://docs.sprites.dev/
  * SDK: @fly/sprites (requires Node.js 24+)
+ *
+ * SECURITY: Uses execFile with args array for all command execution
+ * @see docs/COMPREHENSIVE_SECURITY_AUDIT.md Security audit - P2 fix
  */
 
 import type { ToolResult, PreviewInfo } from '../types'
@@ -30,6 +33,11 @@ import { quotaManager } from '@/lib/management/quota-manager'
 import { SandboxSecurityManager } from '../security-manager'
 import { syncVfsSnapshotToSprite, syncChangedFilesToSprite, type TarSyncFile } from './sprites-tar-sync'
 import { SpritesCheckpointManager, createCheckpointManager, type RetentionPolicy } from './sprites-checkpoint-manager'
+import { execFile } from 'child_process';
+import { promisify } from 'util';
+
+// SECURITY: Centralized execFile promise wrapper for consistent security
+const execFilePromise = promisify(execFile);
 
 const WORKSPACE_DIR = '/home/sprite/workspace'
 const MAX_INSTANCES = 30
@@ -718,6 +726,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
    * This is the RECOMMENDED way to run persistent services (web servers, etc.)
    *
    * @deprecated Use configureService() instead which uses execFile directly
+   * SECURITY: Refactored to use execFile with args array
    */
   async createService(config: ServiceConfig): Promise<ServiceInfo> {
     if (!this.enableAutoServices) {
@@ -725,33 +734,37 @@ export class SpritesSandboxHandle implements SandboxHandle {
     }
 
     try {
-      const { exec } = await import('child_process')
-      const util = await import('util')
-      const execPromise = util.promisify(exec)
-
-      // Build command with options
-      let cmd = `sprite-env services create ${config.name} -s ${this.id} --cmd "${config.command}"`
+      // SECURITY: Use execFile with args array instead of string interpolation
+      const args = [
+        'services',
+        'create',
+        config.name,
+        '-s',
+        this.id,
+        '--cmd',
+        config.command,
+      ];
 
       if (config.args && config.args.length > 0) {
-        cmd += ` --args "${config.args.join(' ')}"`
+        args.push('--args', config.args.join(' '));
       }
 
       if ((config as any).workingDir) {
-        cmd += ` --workdir "${(config as any).workingDir}"`
+        args.push('--workdir', (config as any).workingDir);
       }
 
       if (config.autoStart !== false) {
-        cmd += ' --autostart'
+        args.push('--autostart');
       }
 
       // Add environment variables
       if ((config as any).env) {
         for (const [key, value] of Object.entries((config as any).env)) {
-          cmd += ` --env ${key}=${value}`
+          args.push('--env', `${key}=${value}`);
         }
       }
 
-      await execPromise(cmd)
+      await execFilePromise('sprite-env', args, { timeout: 60000 });
 
       return {
         id: config.name,
@@ -759,7 +772,7 @@ export class SpritesSandboxHandle implements SandboxHandle {
         status: 'running',
         port: config.port,
         url: config.port ? `${this.metadata.url}:${config.port}` : undefined,
-      }
+      };
     } catch (error: any) {
       console.error('[Sprites] Service creation failed:', error.message)
       throw new Error(`Failed to create service: ${error.message}`)
@@ -858,15 +871,14 @@ export class SpritesSandboxHandle implements SandboxHandle {
     restartCount?: number
   }> {
     try {
-      const { exec } = await import('child_process')
-      const util = await import('util')
-      const execPromise = util.promisify(exec)
+      // SECURITY: Use execFile with args array instead of string interpolation
+      const { stdout } = await execFilePromise(
+        'sprite-env',
+        ['services', 'status', serviceName, '-s', this.id, '--json'],
+        { timeout: 30000, maxBuffer: 1024 * 1024 } // 1MB buffer
+      );
 
-      const { stdout } = await execPromise(
-        `sprite-env services status ${serviceName} -s ${this.id} --json 2>/dev/null || echo "{}"`
-      )
-
-      const status = JSON.parse(stdout || '{}')
+      const status = JSON.parse(stdout || '{}');
 
       return {
         status: status.state || 'unknown',
@@ -874,11 +886,11 @@ export class SpritesSandboxHandle implements SandboxHandle {
         url: status.url,
         lastStarted: status.last_started,
         restartCount: status.restart_count
-      }
+      };
     } catch {
       return {
         status: 'unknown'
-      }
+      };
     }
   }
 
@@ -918,28 +930,38 @@ export class SpritesSandboxHandle implements SandboxHandle {
     }
 
     try {
-      const { exec } = await import('child_process')
-      const util = await import('util')
-      const execPromise = util.promisify(exec)
-
-      await execPromise(
-        `sprite-env services create http-server -s ${this.id} ` +
-        `--cmd "node" --args "server.js" ` +
-        `--port ${port} ` +
-        `--autostart --autostop=suspend`
-      )
+      // SECURITY: Use execFile with args array instead of string interpolation
+      await execFilePromise(
+        'sprite-env',
+        [
+          'services',
+          'create',
+          'http-server',
+          '-s',
+          this.id,
+          '--cmd',
+          'node',
+          '--args',
+          'server.js',
+          '--port',
+          port.toString(),
+          '--autostart',
+          '--autostop=suspend',
+        ],
+        { timeout: 60000 }
+      );
 
       return {
         success: true,
         url: this.metadata.url,
         message: `HTTP service configured on port ${port}. Sprite will auto-suspend when idle.`
-      }
+      };
     } catch (error: any) {
       return {
         success: false,
         url: '',
         message: `Failed to configure service: ${error.message}`
-      }
+      };
     }
   }
 
@@ -1068,78 +1090,78 @@ export class SpritesSandboxHandle implements SandboxHandle {
 
   /**
    * Configure URL authentication mode
+   * SECURITY: Uses execFile with args array
    */
   async updateUrlAuth(mode: 'public' | 'default'): Promise<void> {
     try {
-      const { exec } = await import('child_process')
-      const util = await import('util')
-      const execPromise = util.promisify(exec)
-      
-      await execPromise(
-        `sprite url update --auth ${mode} -s ${this.id}`
-      )
-      
-      console.log(`[Sprites] URL auth updated to: ${mode}`)
+      await execFilePromise(
+        'sprite',
+        ['url', 'update', '--auth', mode, '-s', this.id],
+        { timeout: 30000 }
+      );
+
+      console.log(`[Sprites] URL auth updated to: ${mode}`);
     } catch (error: any) {
-      console.error('[Sprites] URL auth update failed:', error.message)
-      throw new Error(`Failed to update URL auth: ${error.message}`)
+      console.error('[Sprites] URL auth update failed:', error.message);
+      throw new Error(`Failed to update URL auth: ${error.message}`);
     }
   }
 
   /**
    * Create env service (auto-restart on wake)
    * Uses sprite-env services command
+   * SECURITY: Uses execFile with args array
    */
   async createEnvService(config: EnvServiceConfig): Promise<ServiceInfo> {
     try {
-      const { exec } = await import('child_process')
-      const util = await import('util')
-      const execPromise = util.promisify(exec)
-      
-      // Build command
-      let cmd = `sprite-env services create ${config.name} --cmd "${config.command}"`
-      
+      const args = [
+        'services',
+        'create',
+        config.name,
+        '--cmd',
+        config.command,
+      ];
+
       if (config.args?.length) {
-        cmd += ` --args "${config.args.join(' ')}"`
+        args.push('--args', config.args.join(' '));
       }
-      
+
       if (config.workingDir) {
-        cmd += ` --dir "${config.workingDir}"`
+        args.push('--dir', config.workingDir);
       }
-      
+
       if (config.autoStart !== false) {
-        cmd += ' --auto-start'
+        args.push('--auto-start');
       }
-      
-      cmd += ` -s ${this.id}`
-      
-      await execPromise(cmd)
-      
+
+      args.push('-s', this.id);
+
+      await execFilePromise('sprite-env', args, { timeout: 60000 });
+
       return {
         id: config.name,
         name: config.name,
         status: 'running',
-      }
+      };
     } catch (error: any) {
-      console.error('[Sprites] Env service creation failed:', error.message)
-      throw new Error(`Failed to create env service: ${error.message}`)
+      console.error('[Sprites] Env service creation failed:', error.message);
+      throw new Error(`Failed to create env service: ${error.message}`);
     }
   }
 
   /**
    * List all env services
+   * SECURITY: Uses execFile with args array
    */
   async listEnvServices(): Promise<ServiceInfo[]> {
     try {
-      const { exec } = await import('child_process')
-      const util = await import('util')
-      const execPromise = util.promisify(exec)
+      const { stdout } = await execFilePromise(
+        'sprite-env',
+        ['services', 'list', '-s', this.id, '--json'],
+        { timeout: 30000, maxBuffer: 1024 * 1024 }
+      );
 
-      const { stdout } = await execPromise(
-        `sprite-env services list -s ${this.id} --json 2>/dev/null || echo "[]"`
-      )
-
-      const services = JSON.parse(stdout || '[]')
+      const services = JSON.parse(stdout || '[]');
       return Array.isArray(services) ? services.map((s: any) => ({
         id: s.name,
         name: s.name,
@@ -1155,59 +1177,57 @@ export class SpritesSandboxHandle implements SandboxHandle {
 
   /**
    * Start a service
+   * SECURITY: Uses execFile with args array
    */
   async startService(name: string): Promise<{
     success: boolean
     message?: string
   }> {
     try {
-      const { exec } = await import('child_process')
-      const util = await import('util')
-      const execPromise = util.promisify(exec)
-
-      await execPromise(
-        `sprite-env services start ${name} -s ${this.id}`
-      )
+      await execFilePromise(
+        'sprite-env',
+        ['services', 'start', name, '-s', this.id],
+        { timeout: 30000 }
+      );
 
       return {
         success: true,
         message: `Service ${name} started`,
-      }
+      };
     } catch (error: any) {
-      console.error('[Sprites] Service start failed:', error.message)
+      console.error('[Sprites] Service start failed:', error.message);
       return {
         success: false,
         message: `Failed to start service: ${error.message}`,
-      }
+      };
     }
   }
 
   /**
    * Stop a service
+   * SECURITY: Uses execFile with args array
    */
   async stopService(name: string): Promise<{
     success: boolean
     message?: string
   }> {
     try {
-      const { exec } = await import('child_process')
-      const util = await import('util')
-      const execPromise = util.promisify(exec)
-
-      await execPromise(
-        `sprite-env services stop ${name} -s ${this.id}`
-      )
+      await execFilePromise(
+        'sprite-env',
+        ['services', 'stop', name, '-s', this.id],
+        { timeout: 30000 }
+      );
 
       return {
         success: true,
         message: `Service ${name} stopped`,
-      }
+      };
     } catch (error: any) {
-      console.error('[Sprites] Service stop failed:', error.message)
+      console.error('[Sprites] Service stop failed:', error.message);
       return {
         success: false,
         message: `Failed to stop service: ${error.message}`,
-      }
+      };
     }
   }
 
