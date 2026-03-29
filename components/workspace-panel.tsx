@@ -84,7 +84,6 @@ import {
   Github,
   Monitor,
   Newspaper,
-  Clock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";

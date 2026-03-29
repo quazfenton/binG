@@ -545,7 +545,4 @@ export default function ArtGalleryTab() {
   );
 }
 
-// Simple Label component
-function Label({ children, className }: { children: React.ReactNode; className?: string }) {
-  return <label className={`text-xs ${className}`}>{children}</label>;
-}
+

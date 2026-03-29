@@ -45,31 +45,79 @@ const DEFAULT_CONFIG: OrchestrationModeConfig = {
 
 const STORAGE_KEY = 'orchestration_mode_config';
 
+// Valid modes set for validation
+const VALID_MODES = new Set<OrchestrationMode>([
+  'task-router',
+  'unified-agent',
+  'mastra-workflow',
+  'crewai',
+  'v2-executor',
+]);
+
+/**
+ * Validate and sanitize persisted config from localStorage
+ * Prevents crashes from malformed or user-edited values
+ */
+function validatePersistedConfig(parsed: unknown): Partial<OrchestrationModeConfig> {
+  if (!parsed || typeof parsed !== 'object') {
+    return {};
+  }
+
+  const config = parsed as Record<string, unknown>;
+  const validated: Partial<OrchestrationModeConfig> = {};
+
+  // Validate mode - must be one of the supported modes
+  if (
+    typeof config.mode === 'string' &&
+    VALID_MODES.has(config.mode as OrchestrationMode)
+  ) {
+    validated.mode = config.mode as OrchestrationMode;
+  }
+
+  // Validate autoApply - must be boolean
+  if (typeof config.autoApply === 'boolean') {
+    validated.autoApply = config.autoApply;
+  }
+
+  // Validate streamEnabled - must be boolean
+  if (typeof config.streamEnabled === 'boolean') {
+    validated.streamEnabled = config.streamEnabled;
+  }
+
+  return validated;
+}
+
 const OrchestrationModeContext = createContext<OrchestrationModeContextType | undefined>(undefined);
 
 export function OrchestrationModeProvider({ children }: { children: React.ReactNode }) {
   const [config, setConfig] = useState<OrchestrationModeConfig>(() => {
     // Load from localStorage on mount
     if (typeof window === 'undefined') return DEFAULT_CONFIG;
-    
+
     try {
       const stored = localStorage.getItem(STORAGE_KEY);
       if (stored) {
-        const parsed = JSON.parse(stored) as OrchestrationModeConfig;
-        return { ...DEFAULT_CONFIG, ...parsed };
+        const parsed = JSON.parse(stored);
+        const validated = validatePersistedConfig(parsed);
+        // Merge validated values with defaults
+        return { ...DEFAULT_CONFIG, ...validated };
       }
     } catch (error) {
       console.warn('[OrchestrationMode] Failed to load config:', error);
     }
-    
+
     return DEFAULT_CONFIG;
   });
 
   const saveConfig = useCallback((newConfig: OrchestrationModeConfig) => {
-    setConfig(newConfig);
+    // Validate before saving to prevent persisting invalid configs
+    const validated = validatePersistedConfig(newConfig);
+    const finalConfig = { ...DEFAULT_CONFIG, ...validated };
+    
+    setConfig(finalConfig);
     if (typeof window !== 'undefined') {
       try {
-        localStorage.setItem(STORAGE_KEY, JSON.stringify(newConfig));
+        localStorage.setItem(STORAGE_KEY, JSON.stringify(finalConfig));
       } catch (error) {
         console.warn('[OrchestrationMode] Failed to save config:', error);
       }
@@ -77,6 +125,11 @@ export function OrchestrationModeProvider({ children }: { children: React.ReactN
   }, []);
 
   const setMode = useCallback((mode: OrchestrationMode) => {
+    // Validate mode before saving
+    if (!VALID_MODES.has(mode)) {
+      console.warn('[OrchestrationMode] Invalid mode:', mode);
+      return;
+    }
     saveConfig({ ...config, mode });
   }, [config, saveConfig]);
 

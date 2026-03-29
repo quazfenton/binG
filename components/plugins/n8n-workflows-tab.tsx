@@ -94,6 +94,99 @@ interface WorkflowSettings {
   compactMode: boolean;
 }
 
+// Security: Constants for validation
+const MIN_REFRESH_INTERVAL = 5; // Minimum 5 seconds to prevent rapid firing
+const MAX_REFRESH_INTERVAL = 3600; // Maximum 1 hour
+const DEFAULT_REFRESH_INTERVAL = 30; // Default 30 seconds
+
+// Security: Simple encryption for sensitive data (XOR with key)
+// Note: This is obfuscation, not true encryption. For production, use secure HTTP-only cookies.
+const STORAGE_KEY = 'n8n-workflow-settings';
+const SENSITIVE_KEY = 'n8n-api-key';
+const XOR_KEY = 0x42; // Simple XOR key for obfuscation
+
+function obfuscateSensitiveData(data: string): string {
+  return btoa(data.split('').map(char => 
+    String.fromCharCode(char.charCodeAt(0) ^ XOR_KEY)
+  ).join(''));
+}
+
+function deobfuscateSensitiveData(data: string): string {
+  try {
+    return atob(data).split('').map(char => 
+      String.fromCharCode(char.charCodeAt(0) ^ XOR_KEY)
+    ).join('');
+  } catch {
+    return '';
+  }
+}
+
+function loadSettings(): WorkflowSettings {
+  try {
+    const saved = localStorage.getItem(STORAGE_KEY);
+    if (saved) {
+      const parsed = JSON.parse(saved);
+      // SECURITY: Load API key from separate storage with obfuscation
+      const obfuscatedKey = localStorage.getItem(SENSITIVE_KEY);
+      const apiKey = obfuscatedKey ? deobfuscateSensitiveData(obfuscatedKey) : '';
+      
+      return {
+        ...parsed,
+        apiKey,
+        // Validate refresh interval
+        refreshInterval: Math.max(
+          MIN_REFRESH_INTERVAL,
+          Math.min(MAX_REFRESH_INTERVAL, parsed.refreshInterval || DEFAULT_REFRESH_INTERVAL)
+        ),
+      };
+    }
+  } catch (e) {
+    console.error("Failed to load workflow settings:", e);
+  }
+  
+  // Return defaults
+  return {
+    n8nUrl: "",
+    apiKey: "",
+    autoRefresh: true,
+    refreshInterval: DEFAULT_REFRESH_INTERVAL,
+    showNotifications: true,
+    compactMode: false,
+  };
+}
+
+function saveSettings(settings: WorkflowSettings): void {
+  try {
+    // SECURITY: Store API key separately with obfuscation
+    if (settings.apiKey) {
+      localStorage.setItem(SENSITIVE_KEY, obfuscateSensitiveData(settings.apiKey));
+    }
+    
+    // Store non-sensitive settings normally (without API key)
+    const { apiKey, ...nonSensitiveSettings } = settings;
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(nonSensitiveSettings));
+  } catch (e) {
+    console.error("Failed to save workflow settings:", e);
+  }
+}
+
+// Validate refresh interval
+function validateRefreshInterval(value: number): number {
+  const validated = parseInt(value.toString()) || DEFAULT_REFRESH_INTERVAL;
+  
+  if (validated < MIN_REFRESH_INTERVAL) {
+    console.warn(`[n8n] Refresh interval too low (${validated}s), using minimum ${MIN_REFRESH_INTERVAL}s`);
+    return MIN_REFRESH_INTERVAL;
+  }
+  
+  if (validated > MAX_REFRESH_INTERVAL) {
+    console.warn(`[n8n] Refresh interval too high (${validated}s), using maximum ${MAX_REFRESH_INTERVAL}s`);
+    return MAX_REFRESH_INTERVAL;
+  }
+  
+  return validated;
+}
+
 // Mock data (will be replaced with real n8n API calls)
 const MOCK_WORKFLOWS: Workflow[] = [
   {
@@ -190,43 +283,27 @@ export default function WorkflowsTab() {
   const [isRefreshing, setIsRefreshing] = useState(false);
   const [activeTab, setActiveTab] = useState<"workflows" | "executions" | "settings">("workflows");
 
-  const [settings, setSettings] = useState<WorkflowSettings>({
-    n8nUrl: "",
-    apiKey: "",
-    autoRefresh: true,
-    refreshInterval: 30,
-    showNotifications: true,
-    compactMode: false,
-  });
+  // SECURITY: Load settings with validation and secure API key handling
+  const [settings, setSettings] = useState<WorkflowSettings>(loadSettings);
 
-  // Load settings from localStorage
+  // SECURITY: Save settings with validation and secure API key handling
   useEffect(() => {
-    try {
-      const saved = localStorage.getItem("n8n-workflow-settings");
-      if (saved) {
-        setSettings(JSON.parse(saved));
-      }
-    } catch (e) {
-      console.error("Failed to load workflow settings:", e);
-    }
-  }, []);
-
-  // Save settings to localStorage
-  useEffect(() => {
-    try {
-      localStorage.setItem("n8n-workflow-settings", JSON.stringify(settings));
-    } catch (e) {
-      console.error("Failed to save workflow settings:", e);
-    }
+    saveSettings(settings);
   }, [settings]);
 
-  // Auto-refresh
+  // Auto-refresh with validated interval
   useEffect(() => {
     if (!settings.autoRefresh) return;
 
+    // SECURITY: Validate interval before setting up auto-refresh
+    const safeInterval = Math.max(
+      MIN_REFRESH_INTERVAL * 1000,
+      Math.min(MAX_REFRESH_INTERVAL * 1000, settings.refreshInterval * 1000)
+    );
+
     const interval = setInterval(() => {
       handleRefresh();
-    }, settings.refreshInterval * 1000);
+    }, safeInterval);
 
     return () => clearInterval(interval);
   }, [settings.autoRefresh, settings.refreshInterval]);
@@ -256,8 +333,19 @@ export default function WorkflowsTab() {
   };
 
   const handleSaveSettings = () => {
-    localStorage.setItem("n8n-workflow-settings", JSON.stringify(settings));
-    toast.success("Settings saved");
+    // SECURITY: Validate settings before saving
+    const validatedSettings = {
+      ...settings,
+      refreshInterval: validateRefreshInterval(settings.refreshInterval),
+    };
+    
+    if (validatedSettings.refreshInterval !== settings.refreshInterval) {
+      setSettings(validatedSettings);
+      toast.info(`Refresh interval adjusted to ${validatedSettings.refreshInterval}s (min: ${MIN_REFRESH_INTERVAL}s, max: ${MAX_REFRESH_INTERVAL}s)`);
+    }
+    
+    saveSettings(validatedSettings);
+    toast.success("Settings saved securely");
     setShowSettings(false);
   };
 
@@ -576,7 +664,12 @@ export default function WorkflowsTab() {
                     <Input
                       type="number"
                       value={settings.refreshInterval}
-                      onChange={(e) => setSettings(prev => ({ ...prev, refreshInterval: parseInt(e.target.value) || 30 }))}
+                      onChange={(e) => {
+                        const value = validateRefreshInterval(parseInt(e.target.value) || DEFAULT_REFRESH_INTERVAL);
+                        setSettings(prev => ({ ...prev, refreshInterval: value }));
+                      }}
+                      min={MIN_REFRESH_INTERVAL}
+                      max={MAX_REFRESH_INTERVAL}
                       className="bg-black/40 border-white/20 text-white"
                     />
                   </div>

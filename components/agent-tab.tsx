@@ -237,13 +237,24 @@ export default function AgentTab({ onClose }: AgentTabProps) {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2 }}
                 >
-                  <Card
-                    className={`cursor-pointer transition-all duration-300 ${
+                  {/* Accessible mode selector card - uses button for keyboard accessibility */}
+                  <button
+                    type="button"
+                    role="radio"
+                    aria-checked={isSelected}
+                    aria-label={`Select ${mode.name} mode`}
+                    className={`w-full text-left cursor-pointer transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:ring-offset-2 focus:ring-offset-gray-900 rounded-lg ${
                       isSelected
                         ? 'bg-gradient-to-br from-purple-500/20 to-blue-500/20 border-purple-500/40'
                         : 'bg-white/5 border-white/10 hover:border-white/20'
                     }`}
                     onClick={() => handleModeSelect(modeId)}
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        handleModeSelect(modeId);
+                      }
+                    }}
                   >
                     <CardContent className="p-3">
                       <div className="flex items-start gap-3">
@@ -252,7 +263,7 @@ export default function AgentTab({ onClose }: AgentTabProps) {
                         }`}>
                           <Icon className={`h-5 w-5 ${
                             isSelected ? 'text-purple-400' : 'text-white/60'
-                          }`} />
+                          }`} aria-hidden="true" />
                         </div>
                         <div className="flex-1 min-w-0">
                           <div className="flex items-center gap-2 mb-1">
@@ -262,11 +273,11 @@ export default function AgentTab({ onClose }: AgentTabProps) {
                               {mode.name}
                             </p>
                             {isSelected && (
-                              <CheckCircle2 className="h-3 w-3 text-green-400" />
+                              <CheckCircle2 className="h-3 w-3 text-green-400" aria-hidden="true" />
                             )}
                           </div>
                           <p className="text-xs text-white/50 mb-2">{mode.description}</p>
-                          
+
                           {/* Features */}
                           <div className="flex flex-wrap gap-1 mb-2">
                             {mode.features.slice(0, 3).map((feature, idx) => (
@@ -287,13 +298,13 @@ export default function AgentTab({ onClose }: AgentTabProps) {
                               </Badge>
                             )}
                           </div>
-                          
+
                           {/* Best For */}
                           <p className="text-[10px] text-white/40">
                             <span className="font-medium">Best for:</span> {mode.bestFor}
                           </p>
                         </div>
-                        
+
                         {/* Test Button */}
                         <Button
                           variant="ghost"
@@ -304,17 +315,18 @@ export default function AgentTab({ onClose }: AgentTabProps) {
                           }}
                           disabled={isTesting}
                           className="h-8 w-8 p-0 hover:bg-white/10"
+                          aria-label={`Test ${mode.name} mode`}
                           title={`Test ${mode.name}`}
                         >
                           {isTesting ? (
-                            <Loader2 className="h-3 w-3 animate-spin" />
+                            <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
                           ) : (
-                            <Play className="h-3 w-3" />
+                            <Play className="h-3 w-3" aria-hidden="true" />
                           )}
                         </Button>
                       </div>
                     </CardContent>
-                  </Card>
+                  </button>
                 </motion.div>
               );
             })}
