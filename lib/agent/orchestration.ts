@@ -149,7 +149,29 @@ export {
   taskRouter,
   type TaskRequest,
   type TaskType,
+  type AdvancedTaskType,
 } from './task-router';
+
+// ============================================================================
+// Agent Kernel (OS-like Scheduler)
+// ============================================================================
+
+export {
+  AgentKernel,
+  getAgentKernel,
+  createAgentKernel,
+  startAgentKernel,
+  stopAgentKernel,
+  type AgentType,
+  type AgentPriority,
+  type AgentStatus,
+  type AgentConfig,
+  type Agent,
+  type AgentResources,
+  type AgentQuota,
+  type WorkItem,
+  type KernelStats,
+} from './agent-kernel';
 
 // ============================================================================
 // Unified Agent

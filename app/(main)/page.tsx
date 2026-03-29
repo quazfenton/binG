@@ -26,9 +26,17 @@ const PWAInstallPrompt = dynamic(
 
 const ConversationInterface = dynamic(
   () => import("../../components/conversation-interface"),
-  { 
+  {
     ssr: false,
     loading: () => <FallbackUI message="Loading interface..." />
+  }
+)
+
+const TopPanel = dynamic(
+  () => import("../../components/top-panel"),
+  {
+    ssr: false,
+    loading: () => null
   }
 )
 
@@ -90,6 +98,7 @@ export default function ChatBox() {
   return (
     <TamboWrapper>
       <ConversationInterface />
+      <TopPanel />
       <PWAInstallPrompt />
     </TamboWrapper>
   )

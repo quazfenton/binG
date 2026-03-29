@@ -110,6 +110,7 @@ import InteractiveStoryboardPlugin from "./plugins/interactive-storyboard-plugin
 import CloudStoragePlugin from "./plugins/cloud-storage-plugin";
 import PStreamEmbedPlugin from "./plugins/pstream-embed-plugin";
 import E2BDesktopPlugin from "./plugins/e2b-desktop-plugin";
+import VercelMediaEmbedPlugin from "./plugins/vercel-media-embed-plugin";
 import IntegrationPanel from "./integrations/IntegrationPanel";
 import { useVirtualFilesystem, type AttachedVirtualFile } from "../hooks/use-virtual-filesystem";
 import { usePanel } from "../contexts/panel-context";
@@ -293,6 +294,16 @@ const popOutPlugins: Plugin[] = [
     component: E2BDesktopPlugin,
     category: "media",
     defaultSize: { width: 1200, height: 800 },
+    minSize: { width: 900, height: 600 },
+  },
+  {
+    id: "vercel-media-embed",
+    name: "Vercel Media Sites",
+    description: "Embed custom Vercel sites with media content",
+    icon: Globe,
+    component: VercelMediaEmbedPlugin,
+    category: "media",
+    defaultSize: { width: 1100, height: 750 },
     minSize: { width: 900, height: 600 },
   },
 ];
