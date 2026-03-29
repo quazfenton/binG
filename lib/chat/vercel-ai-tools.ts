@@ -300,11 +300,18 @@ export function createWebTools(context: ToolExecutionContext): Record<string, To
           redirect: 'follow',
         });
 
+        // Re-validate final URL after redirects to prevent SSRF via redirect chains
+        // (e.g., allowed HTTPS hostname redirects to blocked internal IP like 169.254.169.254)
+        const finalUrl = new URL(response.url || args.url);
+        if (finalUrl.protocol !== 'https:' || isHostnameBlocked(finalUrl.hostname)) {
+          return { success: false, error: 'Redirect to unsafe URL blocked' };
+        }
+
         const content = await response.text();
         return {
           success: true,
           content: content.slice(0, 10000),
-          url: args.url,
+          url: finalUrl.href,
           statusCode: response.status,
         };
       },

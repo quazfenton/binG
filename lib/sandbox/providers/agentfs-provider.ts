@@ -232,9 +232,11 @@ export class AgentFSProvider implements SandboxProvider {
 
   async healthCheck(): Promise<{ healthy: boolean; latency?: number; details?: any }> {
     const start = Date.now()
+    let test: any | undefined
+
     try {
       const AgentFS = await getAgentFS()
-      const test = await AgentFS.open()
+      test = await AgentFS.open()
       await test.kv.set('__health__', Date.now())
       await test.kv.delete('__health__')
       return {
@@ -247,6 +249,12 @@ export class AgentFSProvider implements SandboxProvider {
         healthy: false,
         latency: Date.now() - start,
         details: { error: error.message },
+      }
+    } finally {
+      // Cleanup: close the test instance to prevent resource leaks
+      // This is critical for long-running processes with periodic health checks
+      if (test && typeof test.close === 'function') {
+        await test.close()
       }
     }
   }
@@ -272,17 +280,27 @@ export class AgentFSProvider implements SandboxProvider {
     const agent = await AgentFS.open(agentConfig)
     const handle = new AgentFSSandboxHandle(agent, sandboxId)
 
-    // Store env vars in KV if provided
-    if (config.envVars) {
-      for (const [key, value] of Object.entries(config.envVars)) {
-        await agent.kv.set(`env:${key}`, value)
+    try {
+      // Store env vars in KV if provided
+      if (config.envVars) {
+        for (const [key, value] of Object.entries(config.envVars)) {
+          await agent.kv.set(`env:${key}`, value)
+        }
       }
+
+      this.instances.set(sandboxId, handle)
+      logger.info('AgentFS sandbox created', { sandboxId, cloud: !!tursoUrl })
+
+      return handle
+    } catch (error) {
+      // Cleanup: close the agent if initialization fails after AgentFS.open
+      // This prevents resource leaks when env var storage or other init steps fail
+      if (typeof (agent as any).close === 'function') {
+        await (agent as any).close()
+      }
+      logger.error('AgentFS sandbox creation failed', { sandboxId, error })
+      throw error
     }
-
-    this.instances.set(sandboxId, handle)
-    logger.info('AgentFS sandbox created', { sandboxId, cloud: !!tursoUrl })
-
-    return handle
   }
 
   async getSandbox(sandboxId: string): Promise<SandboxHandle> {

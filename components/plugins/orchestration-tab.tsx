@@ -71,6 +71,13 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import OrchestrationVisualizer, { type AgentNode, type AgentEdge, type AgentLog } from "@/components/orchestration-visualizer";
+import FrameworkVisualizer, { 
+  type WorkflowConfig, 
+  type WorkflowParameter,
+  MOCK_MASTRA_WORKFLOW, 
+  MOCK_CREWAI_WORKFLOW 
+} from "@/components/framework-visualizer";
 
 // Types
 interface EventBusEvent {
@@ -377,7 +384,15 @@ export default function OrchestrationTab() {
   const [dagWorkflows, setDagWorkflows] = useState<DAGWorkflow[]>([]);
   const [selectedDag, setSelectedDag] = useState<DAGWorkflow | null>(null);
   const [dagZoom, setDagZoom] = useState(1);
-  const [activeSubTab, setActiveSubTab] = useState<"agents" | "modes" | "events" | "dag">("dag");
+  const [activeSubTab, setActiveSubTab] = useState<"agents" | "modes" | "events" | "dag" | "mastra" | "crewai">("dag");
+  
+  // Enhanced orchestration visualizer state
+  const [visAgents, setVisAgents] = useState<AgentNode[]>([]);
+  const [visEdges, setVisEdges] = useState<AgentEdge[]>([]);
+  
+  // Framework workflows state
+  const [mastraWorkflows, setMastraWorkflows] = useState<WorkflowConfig[]>([MOCK_MASTRA_WORKFLOW]);
+  const [crewaiWorkflows, setCrewaiWorkflows] = useState<WorkflowConfig[]>([MOCK_CREWAI_WORKFLOW]);
   
   const eventsEndRef = useRef<HTMLDivElement>(null);
 
@@ -385,55 +400,261 @@ export default function OrchestrationTab() {
   const fetchKernelData = useCallback(async () => {
     setKernelLoading(true);
     try {
-      const response = await fetch('/api/kernel/stats');
+      // Fetch kernel stats
+      const response = await fetch('/api/kernel/stats', {
+        signal: AbortSignal.timeout(5000), // 5 second timeout
+      });
+      
       if (!response.ok) {
-        throw new Error(`HTTP ${response.status}`);
+        // Differentiate between client and server errors
+        if (response.status >= 500) {
+          console.error('[OrchestrationTab] Kernel server error:', response.status);
+          throw new Error(`Kernel server error: HTTP ${response.status}`);
+        } else if (response.status === 404) {
+          // Kernel API not available - use mock data silently
+          console.log('[OrchestrationTab] Kernel API not available, using mock data');
+          setDagWorkflows(MOCK_DAG_WORKFLOWS);
+          setSelectedDag(MOCK_DAG_WORKFLOWS[0]);
+          setKernelLoading(false);
+          return;
+        } else {
+          throw new Error(`HTTP ${response.status}`);
+        }
       }
+      
       const stats = await response.json();
       setKernelStats(stats);
-      
+
       // Also fetch agents
-      const agentsRes = await fetch('/api/kernel/agents/list');
+      const agentsRes = await fetch('/api/kernel/agents/list', {
+        signal: AbortSignal.timeout(5000),
+      });
+      
       if (agentsRes.ok) {
         const agents = await agentsRes.json();
         setKernelAgents(agents);
         
-        // Convert kernel agents to DAG workflow
-        if (agents.length > 0) {
-          const workflow: DAGWorkflow = {
-            id: 'kernel-agents',
-            name: `Active Agents (${agents.length})`,
-            createdAt: Date.now(),
-            nodes: agents.map((agent: KernelAgent, index: number) => ({
-              id: agent.id,
-              label: agent.config.goal.substring(0, 20) + (agent.config.goal.length > 20 ? '...' : ''),
-              type: agent.config.type === 'daemon' ? 'start' : 'task',
-              status: agent.status as any,
-              x: 50 + (index % 4) * 150,
-              y: 50 + Math.floor(index / 4) * 80,
-            })),
-            edges: agents.filter((a: KernelAgent) => a.config.type === 'daemon' || a.config.type === 'persistent').map((agent: KernelAgent, index: number) => {
-              if (index === 0) return null;
-              return {
-                id: `e-${agent.id}`,
-                source: agents[index - 1].id,
-                target: agent.id,
-              };
-            }).filter(Boolean) as DAGEdge[],
-          };
-          setDagWorkflows([workflow]);
-          setSelectedDag(workflow);
-        }
+        // Convert to visualizer format (immediate)
+        convertKernelAgentsToVisualizer(agents);
+
+        // Convert to DAG workflow (debounced to prevent rapid updates)
+        debouncedConvertToDag(agents);
       }
+      
       setKernelError(null);
     } catch (err: any) {
+      // Log error for debugging
+      console.error('[OrchestrationTab] Failed to fetch kernel data:', err.message);
+      
+      // Set error state
       setKernelError(err.message);
-      // Fallback to mock data
+      
+      // Show user-friendly error message via toast
+      toast.error('Failed to load kernel data', {
+        description: err.message || 'Please check if the kernel API is running',
+        duration: 5000,
+      });
+      
+      // Fallback to mock data for graceful degradation
+      console.log('[OrchestrationTab] Falling back to mock data');
       setDagWorkflows(MOCK_DAG_WORKFLOWS);
       setSelectedDag(MOCK_DAG_WORKFLOWS[0]);
     } finally {
       setKernelLoading(false);
     }
+  }, []);
+
+  // Convert kernel agents to visualizer format
+  const convertKernelAgentsToVisualizer = useCallback((agents: KernelAgent[]) => {
+    // Validate agents data - filter out invalid entries
+    const validAgents = agents.filter(agent => {
+      if (!agent || !agent.id) {
+        console.warn('[OrchestrationTab] Invalid agent detected, skipping:', agent);
+        return false;
+      }
+      if (!agent.config || !agent.config.type) {
+        console.warn('[OrchestrationTab] Agent missing config, skipping:', agent.id);
+        return false;
+      }
+      return true;
+    });
+
+    // Deduplicate agents by ID
+    const uniqueAgents = Array.from(
+      new Map(validAgents.map(agent => [agent.id, agent])).values()
+    );
+
+    const visAgents: AgentNode[] = uniqueAgents.map((agent, index) => ({
+      id: agent.id,
+      name: agent.config.name || `Agent ${index + 1}`,
+      type: agent.config.type === 'daemon' ? 'manager' : 
+            agent.config.type === 'persistent' ? 'executor' : 'tool',
+      status: agent.status === 'running' ? 'executing' :
+              agent.status === 'stopped' ? 'idle' :
+              agent.status === 'error' ? 'failed' : 'thinking',
+      // Stable positioning based on agent ID hash for consistent layout
+      x: 50 + (agent.id.charCodeAt(0) % 4) * 200,
+      y: 50 + (agent.id.charCodeAt(1) % 3) * 150,
+      goal: agent.config.goal,
+      currentTask: agent.status === 'running' ? 'Executing...' : undefined,
+      logs: [{
+        id: `log-${agent.id}-${Date.now()}`,
+        timestamp: Date.now(),
+        type: 'info' as const,
+        message: `Agent ${agent.status}`,
+      }],
+    }));
+
+    // Create edges only between valid agents
+    const visEdges: AgentEdge[] = uniqueAgents
+      .filter((a, i) => i > 0 && uniqueAgents[i - 1])
+      .map((agent, index) => ({
+        id: `edge-${agent.id}`,
+        source: uniqueAgents[index - 1]?.id || '',
+        target: agent.id,
+        type: 'flow' as const,
+        status: agent.status === 'running' ? 'active' as const : 'completed' as const,
+      }))
+      .filter(edge => edge.source && edge.target); // Filter invalid edges
+
+    setVisAgents(visAgents);
+    setVisEdges(visEdges);
+  }, []);
+
+  // Debounced DAG workflow conversion to prevent rapid updates
+  const convertToDagWorkflow = useCallback((agents: KernelAgent[]) => {
+    // Validate agents data
+    const validAgents = agents.filter(agent => 
+      agent && agent.id && agent.config && agent.config.type
+    );
+
+    if (validAgents.length === 0) {
+      console.log('[OrchestrationTab] No valid agents for DAG conversion');
+      return;
+    }
+
+    const workflow: DAGWorkflow = {
+      id: 'kernel-agents',
+      name: `Active Agents (${validAgents.length})`,
+      createdAt: Date.now(),
+      nodes: validAgents.map((agent, index) => ({
+        id: agent.id,
+        label: agent.config.goal?.substring(0, 20) + (agent.config.goal?.length > 20 ? '...' : '') || `Agent ${index + 1}`,
+        type: agent.config.type === 'daemon' ? 'start' : 'task',
+        status: agent.status as any,
+        // Stable positioning
+        x: 50 + (index % 4) * 150,
+        y: 50 + Math.floor(index / 4) * 80,
+      })),
+      edges: validAgents
+        .filter((_, index) => index > 0)
+        .map((agent, index) => ({
+          id: `e-${agent.id}`,
+          source: validAgents[index - 1].id,
+          target: agent.id,
+        })),
+    };
+    
+    setDagWorkflows([workflow]);
+    setSelectedDag(workflow);
+  }, []);
+
+  // Debounce helper
+  const debounce = <T extends (...args: any[]) => any>(
+    func: T,
+    wait: number
+  ): ((...args: Parameters<T>) => void) => {
+    let timeout: NodeJS.Timeout | null = null;
+    return (...args: Parameters<T>) => {
+      if (timeout) clearTimeout(timeout);
+      timeout = setTimeout(() => func(...args), wait);
+    };
+  };
+
+  // Debounced version of DAG conversion (300ms delay)
+  const debouncedConvertToDag = useCallback(
+    debounce((agents: KernelAgent[]) => convertToDagWorkflow(agents), 300),
+    [convertToDagWorkflow]
+  );
+
+  // HITL Handlers
+  const handleAgentNudge = useCallback((agentId: string, instruction: string) => {
+    console.log(`[HITL] Nudging agent ${agentId}:`, instruction);
+    toast.success('Instruction sent to agent', {
+      description: `Agent ${agentId} has been nudged`,
+    });
+    // TODO: Send to API endpoint
+  }, []);
+
+  const handleAgentApprove = useCallback((agentId: string) => {
+    console.log(`[HITL] Approved agent ${agentId}`);
+    toast.success('Agent approved', {
+      description: `Agent ${agentId} can continue`,
+    });
+    // TODO: Send approval to API endpoint
+    setVisAgents(prev => prev.map(a => 
+      a.id === agentId ? { ...a, hitlApproved: true, status: 'executing' as const } : a
+    ));
+  }, []);
+
+  const handleAgentReject = useCallback((agentId: string, reason: string) => {
+    console.log(`[HITL] Rejected agent ${agentId}:`, reason);
+    toast.error('Agent rejected', {
+      description: reason,
+    });
+    // TODO: Send rejection to API endpoint
+    setVisAgents(prev => prev.map(a => 
+      a.id === agentId ? { ...a, status: 'failed' as const } : a
+    ));
+  }, []);
+
+  // Framework workflow handlers
+  const handleToggleWorkflow = useCallback((workflowId: string, enabled: boolean) => {
+    console.log(`[Framework] Toggling workflow ${workflowId}:`, enabled);
+    // Update state
+    setMastraWorkflows(prev => prev.map(w => 
+      w.id === workflowId ? { ...w, enabled } : w
+    ));
+    setCrewaiWorkflows(prev => prev.map(w => 
+      w.id === workflowId ? { ...w, enabled } : w
+    ));
+  }, []);
+
+  const handleUpdateParameter = useCallback((workflowId: string, parameterId: string, value: any) => {
+    console.log(`[Framework] Updating parameter ${parameterId} in ${workflowId}:`, value);
+    // Update state
+    setMastraWorkflows(prev => prev.map(w => 
+      w.id === workflowId ? {
+        ...w,
+        parameters: w.parameters.map(p => 
+          p.id === parameterId ? { ...p, value } : p
+        )
+      } : w
+    ));
+    setCrewaiWorkflows(prev => prev.map(w => 
+      w.id === workflowId ? {
+        ...w,
+        parameters: w.parameters.map(p => 
+          p.id === parameterId ? { ...p, value } : p
+        )
+      } : w
+    ));
+  }, []);
+
+  const handleRunWorkflow = useCallback((workflowId: string) => {
+    console.log(`[Framework] Running workflow ${workflowId}`);
+    toast.success('Workflow execution started', {
+      description: 'Monitor logs for progress',
+    });
+    // TODO: Call API to start workflow
+  }, []);
+
+  const handleStopWorkflow = useCallback((workflowId: string) => {
+    console.log(`[Framework] Stopping workflow ${workflowId}`);
+    toast.info('Workflow execution stopped', {
+      description: 'Workflow has been halted',
+    });
+    // TODO: Call API to stop workflow
   }, []);
 
   // Poll kernel data every 5 seconds
@@ -615,139 +836,61 @@ export default function OrchestrationTab() {
             <Network className="w-3 h-3 mr-1" />
             DAG
           </Button>
+          <Button
+            variant={activeSubTab === "mastra" ? "secondary" : "ghost"}
+            size="sm"
+            onClick={() => setActiveSubTab("mastra")}
+            className={`text-xs ${activeSubTab === "mastra" ? "bg-purple-500/20 text-purple-300" : "text-white/60"}`}
+          >
+            <Layers className="w-3 h-3 mr-1" />
+            Mastra
+          </Button>
+          <Button
+            variant={activeSubTab === "crewai" ? "secondary" : "ghost"}
+            size="sm"
+            onClick={() => setActiveSubTab("crewai")}
+            className={`text-xs ${activeSubTab === "crewai" ? "bg-cyan-500/20 text-cyan-300" : "text-white/60"}`}
+          >
+            <Bot className="w-3 h-3 mr-1" />
+            CrewAI
+          </Button>
         </div>
       </div>
 
       {/* Content */}
       <div className="flex-1 overflow-hidden p-4">
         {activeSubTab === "dag" ? (
-          /* DAG Visualizer View */
-          <div className="h-full flex flex-col">
-            {/* DAG Controls */}
-            <div className="flex items-center justify-between mb-4">
-              <div className="flex items-center gap-3">
-                <Select
-                  value={selectedDag?.id || ""}
-                  onValueChange={(id) => setSelectedDag(dagWorkflows.find(d => d.id === id) || null)}
-                >
-                  <SelectTrigger className="w-[200px] bg-black/40 border-white/20 text-white">
-                    <SelectValue placeholder="Select Workflow" />
-                  </SelectTrigger>
-                  <SelectContent>
-                    {dagWorkflows.map(dag => (
-                      <SelectItem key={dag.id} value={dag.id}>{dag.name}</SelectItem>
-                    ))}
-                  </SelectContent>
-                </Select>
-                <Button variant="ghost" size="icon" className="text-white/60">
-                  <Plus className="w-4 h-4" />
-                </Button>
-              </div>
-              <div className="flex items-center gap-2">
-                <Button variant="ghost" size="icon" onClick={() => setDagZoom(z => Math.max(0.5, z - 0.1))} className="text-white/60">
-                  <ZoomOut className="w-4 h-4" />
-                </Button>
-                <span className="text-xs text-white/40 w-12 text-center">{Math.round(dagZoom * 100)}%</span>
-                <Button variant="ghost" size="icon" onClick={() => setDagZoom(z => Math.min(2, z + 0.1))} className="text-white/60">
-                  <ZoomIn className="w-4 h-4" />
-                </Button>
-                <Button variant="ghost" size="icon" onClick={() => setDagZoom(1)} className="text-white/60">
-                  <Maximize className="w-4 h-4" />
-                </Button>
-              </div>
-            </div>
-
-            {/* DAG Canvas */}
-            <div className="flex-1 relative bg-black/20 rounded-lg border border-white/10 overflow-hidden">
-              <div
-                className="absolute inset-0"
-                style={{ transform: `scale(${dagZoom})`, transformOrigin: 'top left' }}
-              >
-                {/* SVG for edges */}
-                <svg className="absolute inset-0 w-full h-full pointer-events-none">
-                  {selectedDag?.edges.map(edge => {
-                    const source = selectedDag.nodes.find(n => n.id === edge.source);
-                    const target = selectedDag.nodes.find(n => n.id === edge.target);
-                    if (!source || !target) return null;
-                    return (
-                      <g key={edge.id}>
-                        <line
-                          x1={(source.x || 0) + 30}
-                          y1={(source.y || 0) + 20}
-                          x2={(target.x || 0) + 30}
-                          y2={(target.y || 0) + 20}
-                          stroke="#6b7280"
-                          strokeWidth="2"
-                          strokeDasharray={edge.label ? "5,5" : "none"}
-                        />
-                        {edge.label && (
-                          <text
-                            x={((source.x || 0) + (target.x || 0)) / 2 + 30}
-                            y={((source.y || 0) + (target.y || 0)) / 2 + 15}
-                            fill="#9ca3af"
-                            fontSize="10"
-                          >
-                            {edge.label}
-                          </text>
-                        )}
-                      </g>
-                    );
-                  })}
-                </svg>
-
-                {/* Nodes */}
-                {selectedDag?.nodes.map(node => (
-                  <motion.div
-                    key={node.id}
-                    initial={{ opacity: 0, scale: 0.8 }}
-                    animate={{ opacity: 1, scale: 1 }}
-                    className={`absolute flex items-center gap-2 px-3 py-2 rounded-lg border-2 bg-black/60 cursor-pointer transition-all hover:scale-105 ${
-                      getDagNodeBorder(node.type)
-                    }`}
-                    style={{
-                      left: node.x || 0,
-                      top: node.y || 0,
-                      borderColor: getDagNodeColor(node.status),
-                    }}
-                  >
-                    <span style={{ color: getDagNodeColor(node.status) }} className="text-lg">
-                      {getDagNodeShape(node.type)}
-                    </span>
-                    <span className="text-sm text-white">{node.label}</span>
-                    <Badge
-                      variant="outline"
-                      className="text-[10px] border-white/20 ml-2"
-                      style={{ color: getDagNodeColor(node.status) }}
-                    >
-                      {node.status}
-                    </Badge>
-                  </motion.div>
-                ))}
-              </div>
-            </div>
-
-            {/* DAG Legend */}
-            <div className="flex items-center gap-6 mt-4 text-xs text-white/60">
-              <div className="flex items-center gap-2">
-                <span className="text-green-400">●</span> Start
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-white">○</span> Task
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-yellow-400">◇</span> Decision
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="text-red-400">■</span> End
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-0.5 bg-green-400"></span> Completed
-              </div>
-              <div className="flex items-center gap-2">
-                <span className="w-3 h-0.5 bg-blue-400"></span> Running
-              </div>
-            </div>
-          </div>
+          /* Enhanced Orchestration Visualizer */
+          <OrchestrationVisualizer
+            agents={visAgents}
+            edges={visEdges}
+            onAgentNudge={handleAgentNudge}
+            onAgentApprove={handleAgentApprove}
+            onAgentReject={handleAgentReject}
+            onRefresh={fetchKernelData}
+          />
+        ) : activeSubTab === "mastra" ? (
+          /* Mastra Workflow Visualizer */
+          <FrameworkVisualizer
+            framework="mastra"
+            workflows={mastraWorkflows}
+            onToggleWorkflow={handleToggleWorkflow}
+            onUpdateParameter={handleUpdateParameter}
+            onRunWorkflow={handleRunWorkflow}
+            onStopWorkflow={handleStopWorkflow}
+            onRefresh={fetchKernelData}
+          />
+        ) : activeSubTab === "crewai" ? (
+          /* CrewAI Workflow Visualizer */
+          <FrameworkVisualizer
+            framework="crewai"
+            workflows={crewaiWorkflows}
+            onToggleWorkflow={handleToggleWorkflow}
+            onUpdateParameter={handleUpdateParameter}
+            onRunWorkflow={handleRunWorkflow}
+            onStopWorkflow={handleStopWorkflow}
+            onRefresh={fetchKernelData}
+          />
         ) : activeSubTab === "agents" ? (
           /* Agents View */
           <ScrollArea className="h-full">

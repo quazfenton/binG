@@ -37,16 +37,12 @@ import {
   Activity,
   Waves,
   Circle,
+  Zap,
   BarChart3,
   Maximize2,
   Settings,
-  Playlist,
   ListMusic,
   RefreshCw,
-  SkipForward,
-  SkipBack,
-  Volume2,
-  VolumeX,
 } from "lucide-react";
 import { toast } from "sonner";
 
@@ -247,7 +243,14 @@ export default function MusicVisualizerTab() {
       }
     };
 
-    draw();
+    // Only start animation when playing
+    if (isPlaying) {
+      draw();
+    } else {
+      // Clear canvas when paused
+      ctx.fillStyle = "rgba(0, 0, 0, 1)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+    }
 
     return () => {
       if (animationRef.current) {
@@ -518,7 +521,7 @@ export default function MusicVisualizerTab() {
             <div className="space-y-2">
               <div className="flex items-center justify-between mb-4">
                 <h4 className="text-sm font-semibold text-white flex items-center gap-2">
-                  <Playlist className="w-4 h-4" />
+                  <ListMusic className="w-4 h-4" />
                   Playlist
                 </h4>
                 <Badge variant="outline" className="text-[10px] border-white/20">

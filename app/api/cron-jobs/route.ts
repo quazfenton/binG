@@ -8,11 +8,63 @@ const SCHEDULER_URL = process.env.SCHEDULER_URL || 'http://localhost:3007';
 // Max jobs per user (quota limit)
 const MAX_JOBS_PER_USER = 1;
 
+/**
+ * Validate cron expression
+ * Uses a more accurate validation than regex alone
+ */
+function isValidCronExpression(expression: string): boolean {
+  // Basic regex check
+  const cronRegex = /^(((\d+,)+\d+|(\d+(\/|-)\d+)|\d+|\*) ?){5}$/;
+  if (!cronRegex.test(expression)) return false;
+  
+  // Additional validation for each field
+  const fields = expression.split(' ');
+  if (fields.length !== 5) return false;
+  
+  const ranges = [
+    { min: 0, max: 59 },   // Minutes
+    { min: 0, max: 23 },   // Hours
+    { min: 1, max: 31 },   // Day of month
+    { min: 1, max: 12 },   // Month
+    { min: 0, max: 6 },    // Day of week
+  ];
+  
+  for (let i = 0; i < 5; i++) {
+    const field = fields[i];
+    const { min, max } = ranges[i];
+    
+    // Skip wildcard
+    if (field === '*') continue;
+    
+    // Validate each part (handles comma-separated values)
+    const parts = field.split(',');
+    for (const part of parts) {
+      // Handle step values (e.g., */5, 1-10/2)
+      const [range, step] = part.split('/');
+      if (step && isNaN(parseInt(step))) return false;
+      
+      // Handle ranges (e.g., 1-5)
+      if (range.includes('-')) {
+        const [start, end] = range.split('-').map(Number);
+        if (isNaN(start) || isNaN(end) || start < min || end > max) return false;
+      } else {
+        const num = parseInt(range);
+        if (isNaN(num) || num < min || num > max) return false;
+      }
+    }
+  }
+  
+  return true;
+}
+
 // Request validation schemas
 const createJobSchema = z.object({
   name: z.string().min(1).max(100),
   type: z.enum(['sandbox-command', 'nullclaw-agent', 'http-webhook', 'workspace-index', 'sandbox-cleanup', 'health-check', 'custom']),
-  schedule: z.string().regex(/^(\*|[0-5]?\d)(-|\/([0-5]?\d))?(\s+(\*|[0-5]?\d)(-|\/([0-5]?\d))?){0,4}$/, 'Invalid cron expression'),
+  schedule: z.string().refine(
+    (val) => isValidCronExpression(val),
+    { message: 'Invalid cron expression. Expected format: minute hour day month weekday (e.g., "0 * * * *")' }
+  ),
   timezone: z.string().optional(),
   payload: z.record(z.any()).optional(),
   enabled: z.boolean().default(true),
@@ -44,6 +96,27 @@ interface ScheduledTask {
   timeout?: number;
   ownerId?: string;
   tags?: string[];
+}
+
+/**
+ * Fetch job count from the scheduler service for a user
+ * More efficient than fetching all jobs when we only need the count
+ */
+async function fetchSchedulerJobCount(ownerId: string): Promise<number> {
+  try {
+    const response = await fetch(`${SCHEDULER_URL}/tasks?ownerId=${ownerId}&count=true`, {
+      headers: { 'Content-Type': 'application/json' },
+    });
+    if (!response.ok) {
+      console.error('[CronJobs] Scheduler count fetch failed:', response.status);
+      return 0;
+    }
+    const data = await response.json() as { count: number };
+    return data.count || 0;
+  } catch (error) {
+    console.error('[CronJobs] Failed to fetch job count:', error);
+    return 0;
+  }
 }
 
 /**
@@ -168,9 +241,10 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Check quota - fetch existing jobs from scheduler
-    const existingJobs = await fetchSchedulerTasks(auth.userId);
-    if (existingJobs.length >= MAX_JOBS_PER_USER) {
+    // Check quota - fetch job count from scheduler (more efficient than fetching all jobs)
+    // Note: For perfect atomicity, quota should be enforced at the scheduler service level
+    const jobCount = await fetchSchedulerJobCount(auth.userId);
+    if (jobCount >= MAX_JOBS_PER_USER) {
       return NextResponse.json(
         { error: `You can only have ${MAX_JOBS_PER_USER} cron job. Delete an existing one to create a new one.` },
         { status: 403 }

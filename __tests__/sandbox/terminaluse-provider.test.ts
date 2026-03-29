@@ -509,17 +509,33 @@ describe('TerminalUseSandboxHandle', () => {
 
   describe('streamTask', () => {
     it('should stream events from task', async () => {
-      // Mock SSE stream
+      // Mock SSE stream with full TerminalUseEvent JSON payloads
+      const event1 = {
+        id: 'evt1',
+        task_id: 'task_test',
+        agent_id: 'agent_123',
+        sequence_id: 1,
+        content: { type: 'text', text: 'Event 1' },
+        created_at: new Date().toISOString(),
+      }
+      const event2 = {
+        id: 'evt2',
+        task_id: 'task_test',
+        agent_id: 'agent_123',
+        sequence_id: 2,
+        content: { type: 'text', text: 'Event 2' },
+        created_at: new Date().toISOString(),
+      }
       const mockStream = {
         getReader: () => ({
           read: vi.fn()
             .mockResolvedValueOnce({
               done: false,
-              value: new TextEncoder().encode('data: {"type":"text","text":"Event 1"}\n\n'),
+              value: new TextEncoder().encode(`data: ${JSON.stringify(event1)}\n\n`),
             })
             .mockResolvedValueOnce({
               done: false,
-              value: new TextEncoder().encode('data: {"type":"text","text":"Event 2"}\n\n'),
+              value: new TextEncoder().encode(`data: ${JSON.stringify(event2)}\n\n`),
             })
             .mockResolvedValueOnce({ done: true, value: undefined }),
           releaseLock: vi.fn(),
@@ -544,26 +560,28 @@ describe('TerminalUseSandboxHandle', () => {
 
   describe('getState', () => {
     it('should get task state', async () => {
-      mockFetch
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({
-            id: 'task_test',
-            agent_name: 'my-agent',
-            status: 'RUNNING',
-          }),
-        })
-        .mockResolvedValueOnce({
-          ok: true,
-          json: () => Promise.resolve({
-            id: 'state_123',
-            task_id: 'task_test',
-            agent_id: 'my-agent',
-            state: { step: 'analysis', count: 5 },
-            created_at: new Date().toISOString(),
-            updated_at: new Date().toISOString(),
-          }),
-        })
+      // First call: getTask to verify task exists
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          id: 'task_test',
+          agent_name: 'my-agent',
+          status: 'RUNNING',
+          params: {},
+        }),
+      })
+      // Second call: getState returns TerminalUseState with state field
+      mockFetch.mockResolvedValueOnce({
+        ok: true,
+        json: () => Promise.resolve({
+          id: 'state_123',
+          task_id: 'task_test',
+          agent_id: 'my-agent',
+          state: { step: 'analysis', count: 5 },
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString(),
+        }),
+      })
 
       const state = await handle.getState('my-agent')
 

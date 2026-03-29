@@ -25,8 +25,19 @@
 
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/lib/utils/logger';
+import { createHash } from 'crypto';
 
 const logger = createLogger('Agent:OrchestrationMode');
+
+/**
+ * Hash task content for logging (prevents leaking secrets while allowing correlation)
+ */
+async function hashTask(content: string): Promise<string> {
+  if (!content) return 'empty';
+  const hash = createHash('sha256');
+  hash.update(content);
+  return hash.digest('hex').substring(0, 16);
+}
 
 export type OrchestrationMode = 
   | 'task-router'
@@ -78,11 +89,11 @@ export function getOrchestrationModeFromRequest(req: NextRequest): Orchestration
 
 /**
  * Execute task with selected orchestration mode
- * 
+ *
  * @param mode - Orchestration mode to use
  * @param request - Request parameters
  * @returns Orchestration result with response and metadata
- * 
+ *
  * @throws Error if mode execution fails (caught and returned as error result)
  */
 export async function executeWithOrchestrationMode(
@@ -90,10 +101,21 @@ export async function executeWithOrchestrationMode(
   request: OrchestrationRequest
 ): Promise<OrchestrationResult> {
   const startTime = Date.now();
-  
-  logger.info('Executing with orchestration mode', { 
-    mode, 
-    task: request.task?.substring(0, 100),
+
+  // Validate required identifiers - don't collapse to 'default' to maintain isolation
+  if (!request.ownerId) {
+    throw new Error('ownerId is required for orchestration. Missing user identity breaks isolation.');
+  }
+  if (!request.sessionId) {
+    throw new Error('sessionId is required for orchestration. Missing conversation ID breaks isolation.');
+  }
+
+  // Log without raw task content (security: prevent leaking secrets/tokens in logs)
+  const taskHash = await hashTask(request.task);
+  logger.info('Executing with orchestration mode', {
+    mode,
+    taskLength: request.task?.length || 0,
+    taskHash,
     sessionId: request.sessionId,
     ownerId: request.ownerId,
   });
@@ -108,10 +130,11 @@ export async function executeWithOrchestrationMode(
       case 'task-router': {
         const { taskRouter } = await import('@/lib/agent/task-router');
 
+        // ownerId and sessionId already validated at function entry
         const taskResult = await taskRouter.executeTask({
-          id: request.sessionId || `task_${Date.now()}`,
-          userId: request.ownerId || 'default',
-          conversationId: request.sessionId || 'default',
+          id: request.sessionId,
+          userId: request.ownerId,
+          conversationId: request.sessionId,
           task: request.task,
           stream: request.stream,
         });
@@ -165,9 +188,10 @@ export async function executeWithOrchestrationMode(
         const { mastraWorkflowIntegration } = await import('@/lib/agent/mastra-workflow-integration');
 
         const workflowId = 'code-agent'; // Default workflow
+        // ownerId already validated at function entry
         const workflowResult = await mastraWorkflowIntegration.executeWorkflow(workflowId, {
           task: request.task,
-          ownerId: request.ownerId || 'default',
+          ownerId: request.ownerId,
         });
 
         result = {
@@ -190,8 +214,9 @@ export async function executeWithOrchestrationMode(
       case 'crewai': {
         const { runCrewAI } = await import('@/lib/crewai');
 
+        // sessionId already validated at function entry
         const crewResult = await runCrewAI({
-          sessionId: request.sessionId || 'default',
+          sessionId: request.sessionId,
           userMessage: request.task,
         });
 
@@ -213,9 +238,10 @@ export async function executeWithOrchestrationMode(
       case 'v2-executor': {
         const { executeV2Task } = await import('@/lib/agent/v2-executor');
 
+        // ownerId and sessionId already validated at function entry
         const v2Result = await executeV2Task({
-          userId: request.ownerId || 'default',
-          conversationId: request.sessionId || 'default',
+          userId: request.ownerId,
+          conversationId: request.sessionId,
           task: request.task,
           stream: request.stream,
           preferredAgent: 'opencode', // Default to OpenCode for v2

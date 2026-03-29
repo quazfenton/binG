@@ -2236,14 +2236,27 @@ export class ResponseRouter {
   /**
    * Create streaming events from unified response
    */
-  createStreamingEvents(response: UnifiedResponse, requestId: string): string[] {
+  createStreamingEvents(
+    response: UnifiedResponse,
+    requestId: string,
+    options?: {
+      includeReasoning?: boolean;
+      includeToolState?: boolean;
+      includeFilesystem?: boolean;
+      includeDiffs?: boolean;
+      chunkSize?: number;
+      emitPrimaryContentImmediately?: boolean;
+    }
+  ): string[] {
     // Use enhanced streaming events module
     const { createStreamingEvents } = require('./streaming-events')
     return createStreamingEvents(response, requestId, {
-      includeReasoning: true,
-      includeToolState: true,
-      includeFilesystem: true,
-      includeDiffs: true,
+      includeReasoning: options?.includeReasoning ?? true,
+      includeToolState: options?.includeToolState ?? true,
+      includeFilesystem: options?.includeFilesystem ?? true,
+      includeDiffs: options?.includeDiffs ?? true,
+      chunkSize: options?.chunkSize ?? 8,
+      emitPrimaryContentImmediately: options?.emitPrimaryContentImmediately ?? true,
     })
   }
 
