@@ -38,7 +38,7 @@ export async function GET(request: NextRequest) {
 
     // Create SSE stream
     const encoder = new TextEncoder();
-    let lastEventId = '';
+    let lastEventTimestamp = '';
 
     const stream = new ReadableStream({
       async start(controller) {
@@ -46,7 +46,7 @@ export async function GET(request: NextRequest) {
         controller.enqueue(encoder.encode(`data: ${JSON.stringify({ type: 'connected', timestamp: new Date().toISOString() })}\n\n`));
 
         // Store connection for broadcasting
-        const connection = { controller, userId, types, statuses, lastEventId };
+        const connection = { controller, userId, types, statuses, lastEventTimestamp };
         const userConnections = sseConnections.get(userId) || [];
         userConnections.push(connection);
         sseConnections.set(userId, userConnections);
@@ -72,6 +72,9 @@ export async function GET(request: NextRequest) {
             controller.enqueue(
               encoder.encode(`data: ${JSON.stringify({ type: 'event', event })}\n\n`)
             );
+            
+            // Update cursor to last event's timestamp
+            lastEventTimestamp = row.created_at;
           }
         } catch (error: any) {
           logger.error('Failed to send initial events', { error: error.message });
@@ -83,8 +86,8 @@ export async function GET(request: NextRequest) {
             const db = getDatabase();
             let query = 'SELECT * FROM events WHERE user_id = ? AND created_at > ? ORDER BY created_at ASC';
             
-            const since = lastEventId ? new Date(parseInt(lastEventId.split('_')[1])) : new Date(0);
-            const rows = db.prepare(query).all(userId, since.toISOString()) as any[];
+            const since = lastEventTimestamp || new Date(0).toISOString();
+            const rows = db.prepare(query).all(userId, since) as any[];
 
             for (const row of rows) {
               const event = {
@@ -100,7 +103,8 @@ export async function GET(request: NextRequest) {
                 encoder.encode(`data: ${JSON.stringify({ type: 'event', event })}\n\n`)
               );
 
-              lastEventId = `evt_${Date.now()}`;
+              // Update cursor from actual event timestamp, not wall-clock time
+              lastEventTimestamp = row.created_at;
             }
           } catch (error: any) {
             logger.error('Polling error', { error: error.message });
@@ -130,6 +134,7 @@ export async function GET(request: NextRequest) {
       },
     });
   } catch (error: any) {
+    // Log detailed error server-side, return generic message to client
     logger.error('SSE stream error', { error: error.message });
     return new Response('Internal Server Error', { status: 500 });
   }
@@ -180,6 +185,7 @@ export async function POST(request: NextRequest) {
 
     return new Response(JSON.stringify({ success: true }));
   } catch (error: any) {
+    // Log detailed error server-side, return generic message to client
     logger.error('Broadcast error', { error: error.message });
     return new Response('Internal Server Error', { status: 500 });
   }

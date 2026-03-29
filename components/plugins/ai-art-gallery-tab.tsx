@@ -288,7 +288,11 @@ export default function ArtGalleryTab() {
             onChange={(e) => setGenerationPrompt(e.target.value)}
             placeholder="Describe what you want to create..."
             className="flex-1 bg-black/40 border-purple-500/30 text-white placeholder:text-white/40"
-            onKeyDown={(e) => e.key === "Enter" && handleGenerate()}
+            onKeyDown={(e) => {
+              if (e.key === "Enter" && !isGenerating) {
+                handleGenerate();
+              }
+            }}
           />
           <Select
             value={selectedStyleForGen}

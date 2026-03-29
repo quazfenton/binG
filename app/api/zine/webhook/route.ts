@@ -92,10 +92,11 @@ function verifySignature(payload: string, signature: string, secret: string): bo
 
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
+    // Read raw body ONCE — cannot call request.json() then request.text()
+    const rawBody = await request.text();
     const signature = request.headers.get("x-zine-signature");
     const timestamp = request.headers.get("x-zine-timestamp");
-    
+
     // Verify timestamp (prevent replay attacks)
     if (timestamp) {
       const now = Date.now();
@@ -107,16 +108,26 @@ export async function POST(request: NextRequest) {
         );
       }
     }
-    
-    // Verify signature if provided
+
+    // Verify signature if provided — uses rawBody read above
     if (signature) {
-      const rawBody = await request.text();
       if (!verifySignature(rawBody, signature, webhookSecret)) {
         return NextResponse.json(
           { error: "Invalid signature" },
           { status: 401 }
         );
       }
+    }
+
+    // Parse JSON from the raw body (after signature verification)
+    let body: Record<string, any>;
+    try {
+      body = JSON.parse(rawBody);
+    } catch {
+      return NextResponse.json(
+        { error: "Invalid JSON body" },
+        { status: 400 }
+      );
     }
     
     // Parse payload

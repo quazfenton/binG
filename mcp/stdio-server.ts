@@ -21,6 +21,7 @@
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createLogger } from '../utils/logger';
+import { registerMultiAgentTools } from '@/lib/mcp/multi-agent-tools';
 
 const logger = createLogger('MCP:StdioServer');
 
@@ -42,6 +43,12 @@ const server = new Server(
     },
   }
 );
+
+// Register standard tools
+// ... existing tool registrations ...
+
+// Register multi-agent tools
+registerMultiAgentTools(server);
 
 // Register tools
 server.tool(

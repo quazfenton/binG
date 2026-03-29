@@ -445,7 +445,7 @@ export function mergeOutputStreams(
   streams: EnhancedOutputStreamManager[],
   target: EnhancedOutputStreamManager
 ): () => void {
-  const unsubscribers: Array(() => void) = [];
+  const unsubscribers: Array<() => void> = [];
 
   for (const stream of streams) {
     const unsubscribe = stream.onOutput && (() => {

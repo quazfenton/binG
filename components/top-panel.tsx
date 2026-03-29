@@ -47,6 +47,7 @@ import {
   Palette,
   Sparkles,
   Activity,
+  Workflow,
 } from "lucide-react";
 import WorkflowsTab from "./plugins/n8n-workflows-tab";
 import OrchestrationTab from "./plugins/orchestration-tab";
@@ -58,6 +59,7 @@ import MusicHubTab from "./plugins/music-hub-tab";
 import ImmersiveView from "./plugins/immersive-view";
 import ZineFlowEngine from "./plugins/zine-flow-engine";
 import EventsPanel from "./plugins/events-panel";
+import WorkflowVisualizer from "./plugins/workflow-visualizer";
 import CodePlaygroundTab from "./plugins/code-playground-tab";
 import BroadwayDealHunterTab from "./top-panel/plugins/broadway-deal-hunter-tab";
 import ModelComparisonTab from "./top-panel/plugins/model-comparison-tab";
@@ -145,6 +147,7 @@ const TAB_DEFS: TabDef[] = [
   { value: "immersive", label: "Immersive", icon: Aperture },
   { value: "zine-flow", label: "Zine Flow", icon: Sparkles },
   { value: "events", label: "Events", icon: Activity },
+  { value: "workflows", label: "Workflows", icon: Workflow },
   { value: "code-playground", label: "Code", icon: Code },
   { value: "broadway-deal-hunter", label: "Broadway", icon: Zap },
   { value: "model-comparison", label: "Model Compare", icon: Zap },
@@ -755,6 +758,13 @@ export default function TopPanel() {
                   <TabsContent value="events" className="h-full mt-0">
                     <TabErrorBoundary tabName="Events Panel">
                       <EventsPanel />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  {/* Workflow Visualizer */}
+                  <TabsContent value="workflows" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Workflow Visualizer">
+                      <WorkflowVisualizer />
                     </TabErrorBoundary>
                   </TabsContent>
 

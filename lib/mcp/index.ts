@@ -98,3 +98,16 @@ export {
   SmitheryServerSchema,
   SmitheryConnectionSchema,
 } from './smithery-service'
+
+// MCP Store & Discovery (NEW)
+export {
+  mcpStoreService,
+  type MCPStoreService,
+} from './mcp-store-service'
+
+export type {
+  MCPServerPackage,
+  MCPApiKeyConfig,
+  MCPStoreConfig,
+  MCPStoreStats,
+} from './mcp-store-service'

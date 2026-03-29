@@ -147,10 +147,10 @@ export async function GET(request: NextRequest) {
       }
 
       case "workflows/settings": {
-        // Get workflow settings from env
+        // Get workflow settings from env (never expose API key to the client)
         return NextResponse.json({
           n8nUrl: process.env.N8N_URL || "",
-          apiKey: process.env.N8N_API_KEY || "",
+          apiKey: "", // Never expose API key - client only needs to know if configured
           autoRefresh: true,
           refreshInterval: 30,
           showNotifications: true,
@@ -269,9 +269,8 @@ export async function POST(request: NextRequest) {
             const originalLog = console.log;
             console.log = (...args) => logs.push(args.join(" "));
 
-            // SECURITY: Use vm2 for sandboxed code execution instead of new Function()
-            // This prevents access to require(), process.env, and other sensitive APIs
-            let result: any;
+            // SECURITY: Use vm2 for sandboxed code execution
+            // vm2 is REQUIRED - do not fallback to unsafe new Function()
             try {
               const { VM } = await import('vm2');
               const vm = new VM({
@@ -279,20 +278,23 @@ export async function POST(request: NextRequest) {
                 sandbox: { console: { log: console.log } },
               });
               result = vm.run(parsed.code);
+
+              console.log = originalLog;
+
+              return NextResponse.json({
+                output: logs.join("\n") + (result !== undefined ? `\n=> ${result}` : ""),
+                exitCode: 0,
+                executionTime: Math.random() * 100,
+              });
             } catch (vmError: any) {
-              // Fallback if vm2 not available: use Function with strict mode
-              // Note: This is less secure but maintains compatibility
-              const resultFunc = new Function('"use strict";' + parsed.code);
-              result = resultFunc();
+              console.error("vm2 not available - code execution disabled for security");
+              return NextResponse.json({
+                output: "",
+                error: "Code execution requires vm2 package. Please install: npm install vm2",
+                exitCode: 1,
+                executionTime: 0,
+              });
             }
-
-            console.log = originalLog;
-
-            return NextResponse.json({
-              output: logs.join("\n") + (result !== undefined ? `\n=> ${result}` : ""),
-              exitCode: 0,
-              executionTime: Math.random() * 100,
-            });
           } catch (err: any) {
             return NextResponse.json({
               output: "",

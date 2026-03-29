@@ -62,6 +62,7 @@ import {
   getZoneColumns,
   getResponsiveGap,
   getResponsivePadding,
+  getResponsiveFontScale,
   pluginRegistry,
   type DataSourcePlugin,
 } from "./zine-engine";
@@ -174,6 +175,9 @@ export function useResponsiveLayout() {
   } else if (isLandscape) {
     config.gridColumns = Math.min(4, config.gridColumns + 1);
   }
+
+  // Store viewport size for template-specific scaling in component
+  (config as ResponsiveConfig & { viewportSize: typeof size }).viewportSize = size;
 
   return config;
 }
@@ -822,7 +826,7 @@ function ContentZone({
               isPaused={isPaused}
               template={template}
               bounded={false}
-              responsiveConfig={responsiveConfig}
+              responsiveConfig={fragmentConfig}
             />
           ))}
         </AnimatePresence>
@@ -860,7 +864,7 @@ function ContentZone({
                 isPaused={isPaused}
                 template={template}
                 bounded={true}
-                responsiveConfig={responsiveConfig}
+                responsiveConfig={fragmentConfig}
               />
             ))}
           </AnimatePresence>
@@ -1726,6 +1730,17 @@ export default function ZineDisplayTab() {
   const zoneColumns = getZoneColumns(responsiveConfig.size);
   const responsiveGap = getResponsiveGap(template, responsiveConfig.size);
   const responsivePadding = getResponsivePadding(template, responsiveConfig.size);
+  
+  // Get template-specific font scale factor (templates with large decorative fonts need scaling)
+  const templateFontScale = getResponsiveFontScale(template, responsiveConfig.size);
+  
+  // Combine base config font scale with template-specific scale
+  // Use weighted blend: base scale provides viewport baseline, template scale adjusts for decorative fonts
+  // This avoids double-scaling that would make fonts too small on mobile
+  const combinedFontScale = responsiveConfig.fontScale * 0.7 + templateFontScale * 0.3;
+  
+  // Create modified config for fragment rendering with combined font scale
+  const fragmentConfig = { ...responsiveConfig, fontScale: combinedFontScale };
 
   // OAuth notifications - fetch from connected providers
   const [oauthNotificationsEnabled, setOauthNotificationsEnabled] = useState(false);
@@ -2180,7 +2195,7 @@ export default function ZineDisplayTab() {
                     onRemove={removeFragment}
                     isPaused={isPaused}
                     template={template}
-                    responsiveConfig={responsiveConfig}
+                    responsiveConfig={fragmentConfig}
                   />
                 </div>
               );
@@ -2202,7 +2217,7 @@ export default function ZineDisplayTab() {
                         onRemove={removeFragment}
                         isPaused={isPaused}
                         template={template}
-                        responsiveConfig={responsiveConfig}
+                        responsiveConfig={fragmentConfig}
                       />
                     );
                   })}
@@ -2223,7 +2238,7 @@ export default function ZineDisplayTab() {
                   onRemove={removeFragment}
                   isPaused={isPaused}
                   template={template}
-                  responsiveConfig={responsiveConfig}
+                  responsiveConfig={fragmentConfig}
                 />
               );
             })}
