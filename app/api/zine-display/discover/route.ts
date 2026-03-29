@@ -16,6 +16,40 @@ import {
 } from '@/lib/zine-rss-auto-discovery';
 
 // ---------------------------------------------------------------------
+// SSRF Protection - Validate URL is safe for server-side fetches
+// ---------------------------------------------------------------------
+
+function assertSafeExternalUrl(raw: string): void {
+  const u = new URL(raw);
+  const host = u.hostname.toLowerCase();
+
+  // Block localhost and loopback addresses
+  if (host === 'localhost' || host === '127.0.0.1' || host === '::1') {
+    throw new Error('Localhost URLs are not allowed');
+  }
+
+  // Block link-local addresses
+  if (host.startsWith('169.254.') || host.startsWith('fe80:')) {
+    throw new Error('Link-local addresses are not allowed');
+  }
+
+  // Block private IP ranges
+  const privateRanges = [
+    /^10\./,                       // 10.0.0.0/8
+    /^172\.(1[6-9]|2\d|3[01])\./, // 172.16.0.0/12
+    /^192\.168\./,                // 192.168.0.0/16
+  ];
+  if (privateRanges.some(regex => regex.test(host))) {
+    throw new Error('Private IP addresses are not allowed');
+  }
+
+  // Only allow http and https
+  if (u.protocol !== 'http:' && u.protocol !== 'https:') {
+    throw new Error('Only HTTP and HTTPS protocols are allowed');
+  }
+}
+
+// ---------------------------------------------------------------------
 // POST - Discover RSS feeds from URL
 // ---------------------------------------------------------------------
 
@@ -30,6 +64,9 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { url, maxFeeds = 10, validateFeeds = true, discover = true } = discoverSchema.parse(body);
+
+    // SSRF Protection - validate URL before making any server-side fetches
+    assertSafeExternalUrl(url);
 
     // If not discovering, just validate the single URL
     if (!discover) {
@@ -51,9 +88,11 @@ export async function POST(request: NextRequest) {
       // No feeds found - try to validate the URL itself
       const validation = await validateFeed(url);
       return NextResponse.json({
-        success: false,
+        success: validation.valid,
         url,
-        message: 'No RSS/Atom feeds found on this page',
+        message: validation.valid
+          ? 'Input URL is a valid direct feed URL'
+          : 'No RSS/Atom feeds found on this page',
         feeds: [],
         directValidation: validation,
       });

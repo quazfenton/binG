@@ -310,8 +310,19 @@ export async function POST(request: NextRequest) {
           );
         }
 
+        // Validate playlist ID before persisting
+        const playlistId = extractPlaylistId(album.playlistUrl);
+        
+        // Reject if null or clearly a video ID (starts with underscore or is too short)
+        if (!playlistId || playlistId.startsWith('_') || playlistId.length < 10) {
+          return NextResponse.json(
+            { success: false, error: 'Invalid playlist URL. Ensure it contains a valid YouTube playlist ID (e.g., ?list=PL...)' },
+            { status: 400, headers }
+          );
+        }
+
         currentPlaylist.pendingSync = {
-          playlistId: extractPlaylistId(album.playlistUrl),
+          playlistId,
           requestedAt: new Date().toISOString(),
           status: 'pending',
         };

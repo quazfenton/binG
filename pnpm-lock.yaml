@@ -288,7 +288,7 @@ importers:
         specifier: ^0.93.1
         version: 0.93.1
       '@trigger.dev/sdk':
-        specifier: ^4.4.3
+        specifier: ^4.0.2
         version: 4.4.3(ai@6.0.116(zod@3.25.76))(bufferutil@4.1.0)(utf-8-validate@6.0.6)(zod@3.25.76)
       '@types/diff':
         specifier: ^8.0.0
@@ -546,7 +546,7 @@ importers:
         specifier: ^0.5.0
         version: 0.5.2
       trigger.dev:
-        specifier: ^4.4.3
+        specifier: ^4.0.2
         version: 4.4.3(@cfworker/json-schema@4.1.1)(bufferutil@4.1.0)(react@19.2.4)(typescript@5.9.3)(utf-8-validate@6.0.6)
       ts-morph:
         specifier: ^25.0.0

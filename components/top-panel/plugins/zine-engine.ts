@@ -190,7 +190,7 @@ export const ALL_ANIMATIONS: ZineAnimation[] = [
 ];
 
 // ---------------------------------------------------------------------------
-// Templates (13)
+// Templates (23)
 // ---------------------------------------------------------------------------
 
 export const TEMPLATES: ZineTemplate[] = [
@@ -424,6 +424,184 @@ export const TEMPLATES: ZineTemplate[] = [
     palette: { bg: '#0d0d1a', text: 'rgba(255,255,255,0.9)', accent: 'rgba(140,120,255,0.85)', muted: 'rgba(255,255,255,0.25)', highlight: 'rgba(255,180,100,0.9)' },
     zones: [
       { type: 'full', gridArea: 'stream', overflow: 'scroll', maxFragments: 100, bordered: false },
+    ],
+  },
+  // ========== NEW TEMPLATES ==========
+  {
+    id: 'vapor-wave',
+    name: 'Vapor Wave',
+    emoji: '🎮',
+    category: 'experimental',
+    displayMode: 'unbounded',
+    density: 'normal',
+    maxVisible: 60,
+    defaultAnimation: 'glitch',
+    backgroundCSS: 'bg-gradient-to-br from-[#1a0a2e] via-[#2d1b4e] to-[#1a0a2e]',
+    fonts: { heading: FONT_FAMILIES.impact, body: FONT_FAMILIES.sans, accent: FONT_FAMILIES.trebuchet, mono: FONT_FAMILIES.mono },
+    palette: { bg: '#1a0a2e', text: 'rgba(255,180,220,0.9)', accent: 'rgba(100,220,255,0.85)', muted: 'rgba(255,100,200,0.3)', highlight: 'rgba(255,220,100,0.95)' },
+    zones: [
+      { type: 'full', bounds: { x: 0, y: 0, w: 100, h: 100 }, overflow: 'visible', maxFragments: 60, bordered: false },
+    ],
+  },
+  {
+    id: 'led-wall',
+    name: 'LED Wall',
+    emoji: '🟩',
+    category: 'data',
+    displayMode: 'bounded',
+    density: 'dense',
+    maxVisible: 120,
+    defaultAnimation: 'pulse',
+    backgroundCSS: 'bg-[#000800]',
+    gridTemplate: "'led' 1fr / 1fr",
+    fonts: { heading: FONT_FAMILIES.mono, body: FONT_FAMILIES.mono, accent: FONT_FAMILIES.mono, mono: FONT_FAMILIES.mono },
+    palette: { bg: '#000800', text: 'rgba(0,255,0,0.9)', accent: 'rgba(0,200,0,0.8)', muted: 'rgba(0,100,0,0.4)', highlight: 'rgba(0,255,100,1)' },
+    zones: [
+      { type: 'full', gridArea: 'led', overflow: 'scroll', maxFragments: 120, bordered: false },
+    ],
+  },
+  {
+    id: 'minimal',
+    name: 'Minimal',
+    emoji: '⬜',
+    category: 'editorial',
+    displayMode: 'bounded',
+    density: 'sparse',
+    maxVisible: 30,
+    defaultAnimation: 'fade-in',
+    backgroundCSS: 'bg-[#fafafa]',
+    gridTemplate: "'main' 1fr / 1fr",
+    fonts: { heading: FONT_FAMILIES.sans, body: FONT_FAMILIES.sans, accent: FONT_FAMILIES.sans, mono: FONT_FAMILIES.mono },
+    palette: { bg: '#fafafa', text: 'rgba(20,20,20,0.9)', accent: 'rgba(100,100,100,0.7)', muted: 'rgba(200,200,200,0.5)', highlight: 'rgba(0,0,0,0.95)' },
+    zones: [
+      { type: 'full', gridArea: 'main', overflow: 'scroll', maxFragments: 30, bordered: false },
+    ],
+  },
+  {
+    id: 'timeline',
+    name: 'Timeline',
+    emoji: '📅',
+    category: 'data',
+    displayMode: 'bounded',
+    density: 'normal',
+    maxVisible: 40,
+    defaultAnimation: 'slide-left',
+    backgroundCSS: 'bg-gradient-to-r from-[#0f172a] via-[#1e293b] to-[#0f172a]',
+    gridTemplate: "'timeline' 1fr / 1fr",
+    fonts: { heading: FONT_FAMILIES.sans, body: FONT_FAMILIES.sans, accent: FONT_FAMILIES.mono, mono: FONT_FAMILIES.mono },
+    palette: { bg: '#0f172a', text: 'rgba(226,232,240,0.9)', accent: 'rgba(148,163,184,0.85)', muted: 'rgba(71,85,105,0.4)', highlight: 'rgba(56,189,248,0.95)' },
+    zones: [
+      { type: 'full', gridArea: 'timeline', overflow: 'scroll', maxFragments: 40, bordered: false },
+    ],
+  },
+  {
+    id: 'dashboard',
+    name: 'Dashboard',
+    emoji: '📊',
+    category: 'data',
+    displayMode: 'bounded',
+    density: 'dense',
+    maxVisible: 80,
+    defaultAnimation: 'fade-in',
+    backgroundCSS: 'bg-[#0f172a]',
+    gridTemplate: "'header header' auto 'stats stats' auto 'main main' 1fr 'footer footer' auto / 1fr 1fr",
+    gridGap: '12px',
+    fonts: { heading: FONT_FAMILIES.sans, body: FONT_FAMILIES.sans, accent: FONT_FAMILIES.mono, mono: FONT_FAMILIES.mono },
+    palette: { bg: '#0f172a', text: 'rgba(248,250,252,0.95)', accent: 'rgba(99,102,241,0.9)', muted: 'rgba(71,85,105,0.5)', highlight: 'rgba(52,211,153,0.95)' },
+    zones: [
+      { type: 'title', gridArea: 'header', overflow: 'hidden', maxFragments: 2, bordered: false, label: 'DASHBOARD' },
+      { type: 'sidebar', gridArea: 'stats', overflow: 'scroll', maxFragments: 8, bordered: true, label: 'QUICK STATS' },
+      { type: 'body', gridArea: 'main', overflow: 'scroll', maxFragments: 50, bordered: false, label: 'MAIN FEED' },
+      { type: 'ticker', gridArea: 'footer', overflow: 'hidden', maxFragments: 4, bordered: false, label: 'LAST UPDATED' },
+    ],
+  },
+  {
+    id: 'split-screen',
+    name: 'Split Screen',
+    emoji: '🔀',
+    category: 'editorial',
+    displayMode: 'bounded',
+    density: 'normal',
+    maxVisible: 40,
+    defaultAnimation: 'slide-left',
+    backgroundCSS: 'bg-[#0c0c0c]',
+    gridTemplate: "'left right' 1fr / 1fr 1fr",
+    gridGap: '2px',
+    fonts: { heading: FONT_FAMILIES.sans, body: FONT_FAMILIES.sans, accent: FONT_FAMILIES.serif, mono: FONT_FAMILIES.mono },
+    palette: { bg: '#0c0c0c', text: 'rgba(255,255,255,0.9)', accent: 'rgba(255,255,255,0.6)', muted: 'rgba(255,255,255,0.2)', highlight: 'rgba(255,255,255,1)' },
+    zones: [
+      { type: 'body', gridArea: 'left', overflow: 'scroll', maxFragments: 20, bordered: false, label: 'PANEL A' },
+      { type: 'body', gridArea: 'right', overflow: 'scroll', maxFragments: 20, bordered: false, label: 'PANEL B' },
+    ],
+  },
+  {
+    id: 'vintage-paper',
+    name: 'Vintage Paper',
+    emoji: '📜',
+    category: 'editorial',
+    displayMode: 'unbounded',
+    density: 'sparse',
+    maxVisible: 35,
+    defaultAnimation: 'fade-in',
+    backgroundCSS: 'bg-[#f4ecd8]',
+    fonts: { heading: FONT_FAMILIES.serif, body: FONT_FAMILIES.serif, accent: FONT_FAMILIES.palatino, mono: FONT_FAMILIES.mono },
+    palette: { bg: '#f4ecd8', text: 'rgba(60,50,40,0.9)', accent: 'rgba(120,80,40,0.8)', muted: 'rgba(150,130,110,0.4)', highlight: 'rgba(180,100,50,0.95)' },
+    zones: [
+      { type: 'full', bounds: { x: 5, y: 5, w: 90, h: 90 }, overflow: 'visible', maxFragments: 35, bordered: false },
+    ],
+  },
+  {
+    id: 'glass-morphism',
+    name: 'Glass Morphism',
+    emoji: '✨',
+    category: 'experimental',
+    displayMode: 'unbounded',
+    density: 'sparse',
+    maxVisible: 45,
+    defaultAnimation: 'fade-in',
+    backgroundCSS: 'bg-gradient-to-br from-[#667eea] via-[#764ba2] to-[#6dd5ed]',
+    fonts: { heading: FONT_FAMILIES.sans, body: FONT_FAMILIES.sans, accent: FONT_FAMILIES.trebuchet, mono: FONT_FAMILIES.mono },
+    palette: { bg: '#1a1a2e', text: 'rgba(255,255,255,0.9)', accent: 'rgba(255,255,255,0.7)', muted: 'rgba(255,255,255,0.3)', highlight: 'rgba(255,255,255,1)' },
+    zones: [
+      { type: 'full', bounds: { x: 0, y: 0, w: 100, h: 100 }, overflow: 'visible', maxFragments: 45, bordered: false },
+    ],
+  },
+  {
+    id: 'terminal-grid',
+    name: 'Terminal Grid',
+    emoji: '📟',
+    category: 'data',
+    displayMode: 'bounded',
+    density: 'dense',
+    maxVisible: 100,
+    defaultAnimation: 'typewriter',
+    backgroundCSS: 'bg-[#0c0c0c]',
+    gridTemplate: "'info stats1 stats2' auto 'data data data' 1fr 'log log log' auto / 2fr 1fr 1fr",
+    gridGap: '4px',
+    fonts: { heading: FONT_FAMILIES.mono, body: FONT_FAMILIES.mono, accent: FONT_FAMILIES.mono, mono: FONT_FAMILIES.mono },
+    palette: { bg: '#0c0c0c', text: 'rgba(0,255,0,0.85)', accent: 'rgba(255,255,0,0.8)', muted: 'rgba(0,128,0,0.4)', highlight: 'rgba(0,255,0,1)' },
+    zones: [
+      { type: 'title', gridArea: 'info', overflow: 'hidden', maxFragments: 2, bordered: true, label: 'TERM_INFO' },
+      { type: 'sidebar', gridArea: 'stats1', overflow: 'scroll', maxFragments: 5, bordered: true, label: 'STAT_A' },
+      { type: 'sidebar', gridArea: 'stats2', overflow: 'scroll', maxFragments: 5, bordered: true, label: 'STAT_B' },
+      { type: 'body', gridArea: 'data', overflow: 'scroll', maxFragments: 60, bordered: true, label: 'DATA_STREAM' },
+      { type: 'ticker', gridArea: 'log', overflow: 'hidden', maxFragments: 8, bordered: true, label: 'LOG_OUTPUT' },
+    ],
+  },
+  {
+    id: 'cyber-punk',
+    name: 'Cyber Punk',
+    emoji: '🤖',
+    category: 'experimental',
+    displayMode: 'unbounded',
+    density: 'dense',
+    maxVisible: 70,
+    defaultAnimation: 'glitch',
+    backgroundCSS: 'bg-gradient-to-br from-[#0a0a0f] via-[#1a0a1a] to-[#0a0a0f]',
+    fonts: { heading: FONT_FAMILIES.impact, body: FONT_FAMILIES.sans, accent: FONT_FAMILIES.mono, mono: FONT_FAMILIES.mono },
+    palette: { bg: '#0a0a0f', text: 'rgba(255,0,100,0.9)', accent: 'rgba(0,255,255,0.85)', muted: 'rgba(150,0,100,0.3)', highlight: 'rgba(255,255,0,0.95)' },
+    zones: [
+      { type: 'full', bounds: { x: 0, y: 0, w: 100, h: 100 }, overflow: 'visible', maxFragments: 70, bordered: false },
     ],
   },
 ];
@@ -1798,6 +1976,26 @@ export function getResponsiveGridTemplate(
         return "'feed' 1fr / 1fr";
       case 'notification-stream':
         return "'stream' 1fr / 1fr";
+      case 'vapor-wave':
+        return "'full' 1fr / 1fr";
+      case 'led-wall':
+        return "'led' 1fr / 1fr";
+      case 'minimal':
+        return "'main' 1fr / 1fr";
+      case 'timeline':
+        return "'timeline' 1fr / 1fr";
+      case 'dashboard':
+        return "'header' auto 'main' 1fr / 1fr";
+      case 'split-screen':
+        return "'left' 1fr / 1fr";
+      case 'vintage-paper':
+        return "'full' 1fr / 1fr";
+      case 'glass-morphism':
+        return "'full' 1fr / 1fr";
+      case 'terminal-grid':
+        return "'info' auto 'data' 1fr 'log' auto / 1fr";
+      case 'cyber-punk':
+        return "'full' 1fr / 1fr";
       default:
         return undefined;
     }
@@ -1816,6 +2014,26 @@ export function getResponsiveGridTemplate(
         return "'hero hero' auto 'body body' 1fr / 1fr 1fr";
       case 'brutalist':
         return "'full' 1fr / 1fr";
+      case 'vapor-wave':
+        return "'full' 1fr / 1fr";
+      case 'led-wall':
+        return "'led' 1fr / 1fr";
+      case 'minimal':
+        return "'main' 1fr / 1fr";
+      case 'timeline':
+        return "'timeline' 1fr / 1fr";
+      case 'dashboard':
+        return "'header header' auto 'stats stats' auto 'main main' 1fr / 1fr 1fr";
+      case 'split-screen':
+        return "'left right' 1fr / 1fr 1fr";
+      case 'vintage-paper':
+        return "'full' 1fr / 1fr";
+      case 'glass-morphism':
+        return "'full' 1fr / 1fr";
+      case 'terminal-grid':
+        return "'info stats1 stats2' auto 'data data data' 1fr 'log log log' auto / 1fr 1fr 1fr";
+      case 'cyber-punk':
+        return "'full' 1fr / 1fr";
       default:
         return undefined;
     }
@@ -1825,8 +2043,13 @@ export function getResponsiveGridTemplate(
   if (viewportSize === 'wide') {
     switch (template.id) {
       case 'art-deco':
-        // Art Deco: Use original template but with extra columns for body content
         return "'hero hero' auto 'body body' 1fr / 1fr 1fr";
+      case 'dashboard':
+        return "'header header header' auto 'stats stats stats' auto 'main main main' 1fr / 1fr 1fr 1fr";
+      case 'split-screen':
+        return "'left right' 1fr / 1fr 1fr";
+      case 'terminal-grid':
+        return "'info stats1 stats2' auto 'data data data' 1fr 'log log log' auto / 2fr 1fr 1fr";
       default:
         break;
     }
@@ -1901,6 +2124,16 @@ export function getZoneVisibility(
       case 'neon-board':
         // Single unbounded zone - no visibility changes needed
         break;
+      case 'dashboard':
+        visibility['footer'] = 'collapse';
+        break;
+      case 'split-screen':
+        visibility['right'] = 'hide';
+        break;
+      case 'terminal-grid':
+        visibility['stats1'] = 'collapse';
+        visibility['stats2'] = 'collapse';
+        break;
       default:
         break;
     }
@@ -1910,8 +2143,17 @@ export function getZoneVisibility(
   if (viewportSize === 'wide') {
     switch (template.id) {
       case 'art-deco':
-        // Show floating elements on wide screens
         visibility['floating'] = 'show';
+        break;
+      case 'dashboard':
+        visibility['footer'] = 'show';
+        break;
+      case 'split-screen':
+        visibility['right'] = 'show';
+        break;
+      case 'terminal-grid':
+        visibility['stats1'] = 'show';
+        visibility['stats2'] = 'show';
         break;
       default:
         break;
@@ -1957,13 +2199,13 @@ export function getResponsiveGap(
       desktop: '16px',
       wide: '20px',
     },
-    data-terminal: {
+    "data-terminal": {
       mobile: '4px',
       tablet: '6px',
       desktop: '8px',
       wide: '10px',
     },
-    art-deco: {
+    "art-deco": {
       mobile: '12px',
       tablet: '16px',
       desktop: '20px',
@@ -1975,25 +2217,25 @@ export function getResponsiveGap(
       desktop: '2px',
       wide: '4px',
     },
-    neon-board: {
+    "neon-board": {
       mobile: '16px',
       tablet: '20px',
       desktop: '24px',
       wide: '32px',
     },
-    message-board: {
+    "message-board": {
       mobile: '8px',
       tablet: '10px',
       desktop: '12px',
       wide: '16px',
     },
-    rss-feed: {
+    'rss-feed': {
       mobile: '6px',
       tablet: '8px',
       desktop: '10px',
       wide: '14px',
     },
-    notification-stream: {
+    'notification-stream': {
       mobile: '4px',
       tablet: '6px',
       desktop: '8px',
@@ -2005,23 +2247,83 @@ export function getResponsiveGap(
       desktop: '0px',
       wide: '0px',
     },
-    punk-zine: {
+    'punk-zine': {
       mobile: '0px',
       tablet: '0px',
       desktop: '4px',
       wide: '8px',
     },
-    whisper: {
+    'whisper': {
       mobile: '20px',
       tablet: '24px',
       desktop: '32px',
       wide: '40px',
     },
-    chalkboard: {
+    'chalkboard': {
       mobile: '12px',
       tablet: '16px',
       desktop: '20px',
       wide: '24px',
+    },
+    'vapor-wave': {
+      mobile: '16px',
+      tablet: '20px',
+      desktop: '24px',
+      wide: '32px',
+    },
+    'led-wall': {
+      mobile: '2px',
+      tablet: '2px',
+      desktop: '4px',
+      wide: '4px',
+    },
+    'minimal': {
+      mobile: '8px',
+      tablet: '12px',
+      desktop: '16px',
+      wide: '20px',
+    },
+    'timeline': {
+      mobile: '8px',
+      tablet: '10px',
+      desktop: '12px',
+      wide: '16px',
+    },
+    'dashboard': {
+      mobile: '6px',
+      tablet: '8px',
+      desktop: '12px',
+      wide: '16px',
+    },
+    'split-screen': {
+      mobile: '0px',
+      tablet: '1px',
+      desktop: '2px',
+      wide: '2px',
+    },
+    'vintage-paper': {
+      mobile: '12px',
+      tablet: '16px',
+      desktop: '20px',
+      wide: '24px',
+    },
+    'glass-morphism': {
+      mobile: '20px',
+      tablet: '24px',
+      desktop: '32px',
+      wide: '40px',
+    },
+    'terminal-grid': {
+      mobile: '2px',
+      tablet: '3px',
+      desktop: '4px',
+      wide: '4px',
+    },
+    'cyber-punk': {
+      mobile: '8px',
+      tablet: '12px',
+      desktop: '16px',
+      wide: '20px',
     },
   };
 
@@ -2039,6 +2341,110 @@ export function getResponsiveGap(
   };
 
   return defaultGaps[viewportSize];
+}
+
+/**
+ * Get responsive font scale factor based on template and viewport
+ * Reduces font sizes on smaller screens for templates with large decorative fonts
+ */
+export function getResponsiveFontScale(
+  template: ZineTemplate,
+  viewportSize: 'mobile' | 'tablet' | 'desktop' | 'wide',
+): number {
+  // Templates with large decorative fonts need font size reduction on mobile
+  const decorativeFontTemplates: Record<string, Record<string, number>> = {
+    // Impact/Palatino heading fonts - significant scaling on mobile
+    "art-deco": {
+      mobile: 0.7,
+      tablet: 0.85,
+      desktop: 1.0,
+      wide: 1.15,
+    },
+    "neon-board": {
+      mobile: 0.65,
+      tablet: 0.8,
+      desktop: 1.0,
+      wide: 1.2,
+    },
+    'vapor-wave': {
+      mobile: 0.7,
+      tablet: 0.85,
+      desktop: 1.0,
+      wide: 1.15,
+    },
+    'cyber-punk': {
+      mobile: 0.7,
+      tablet: 0.85,
+      desktop: 1.0,
+      wide: 1.1,
+    },
+    'punk-zine': {
+      mobile: 0.75,
+      tablet: 0.9,
+      desktop: 1.0,
+      wide: 1.1,
+    },
+    freeform: {
+      mobile: 0.8,
+      tablet: 0.9,
+      desktop: 1.0,
+      wide: 1.1,
+    },
+    whisper: {
+      // Whisper uses small fonts - less scaling needed
+      mobile: 0.9,
+      tablet: 0.95,
+      desktop: 1.0,
+      wide: 1.05,
+    },
+    'vintage-paper': {
+      // Serif fonts - moderate scaling
+      mobile: 0.8,
+      tablet: 0.9,
+      desktop: 1.0,
+      wide: 1.1,
+    },
+    'glass-morphism': {
+      mobile: 0.85,
+      tablet: 0.95,
+      desktop: 1.0,
+      wide: 1.05,
+    },
+    // Data/terminal templates - monospace, less scaling needed
+    'data-terminal': {
+      mobile: 0.9,
+      tablet: 0.95,
+      desktop: 1.0,
+      wide: 1.0,
+    },
+    'led-wall': {
+      mobile: 0.95,
+      tablet: 1.0,
+      desktop: 1.0,
+      wide: 1.0,
+    },
+    'terminal-grid': {
+      mobile: 0.9,
+      tablet: 0.95,
+      desktop: 1.0,
+      wide: 1.0,
+    },
+  };
+
+  const templateScale = decorativeFontTemplates[template.id];
+  if (templateScale) {
+    return templateScale[viewportSize];
+  }
+
+  // Default: slight reduction on mobile, full size on desktop+
+  const defaultScales: Record<string, number> = {
+    mobile: 0.85,
+    tablet: 0.95,
+    desktop: 1.0,
+    wide: 1.0,
+  };
+
+  return defaultScales[viewportSize];
 }
 
 /**
@@ -2062,13 +2468,13 @@ export function getResponsivePadding(
       desktop: 14,
       wide: 18,
     },
-    data-terminal: {
+    "data-terminal": {
       mobile: 4,
       tablet: 6,
       desktop: 8,
       wide: 10,
     },
-    art-deco: {
+    "art-deco": {
       mobile: 10,
       tablet: 16,
       desktop: 20,
@@ -2080,37 +2486,37 @@ export function getResponsivePadding(
       desktop: 8,
       wide: 12,
     },
-    neon-board: {
+    "neon-board": {
       mobile: 12,
       tablet: 16,
       desktop: 20,
       wide: 24,
     },
-    message-board: {
+    "message-board": {
       mobile: 6,
       tablet: 10,
       desktop: 14,
       wide: 18,
     },
-    rss-feed: {
+    'rss-feed': {
       mobile: 8,
       tablet: 12,
       desktop: 16,
       wide: 20,
     },
-    notification-stream: {
+    'notification-stream': {
       mobile: 6,
       tablet: 8,
       desktop: 12,
       wide: 16,
     },
-    freeform: {
+    'freeform': {
       mobile: 16,
       tablet: 20,
       desktop: 24,
       wide: 32,
     },
-    punk-zine: {
+    'punk-zine': {
       mobile: 8,
       tablet: 12,
       desktop: 16,
@@ -2123,6 +2529,66 @@ export function getResponsivePadding(
       wide: 48,
     },
     chalkboard: {
+      mobile: 12,
+      tablet: 16,
+      desktop: 20,
+      wide: 24,
+    },
+    'vapor-wave': {
+      mobile: 16,
+      tablet: 20,
+      desktop: 24,
+      wide: 32,
+    },
+    'led-wall': {
+      mobile: 4,
+      tablet: 6,
+      desktop: 8,
+      wide: 10,
+    },
+    minimal: {
+      mobile: 16,
+      tablet: 24,
+      desktop: 32,
+      wide: 40,
+    },
+    timeline: {
+      mobile: 8,
+      tablet: 12,
+      desktop: 16,
+      wide: 20,
+    },
+    dashboard: {
+      mobile: 8,
+      tablet: 12,
+      desktop: 16,
+      wide: 20,
+    },
+    'split-screen': {
+      mobile: 8,
+      tablet: 12,
+      desktop: 16,
+      wide: 20,
+    },
+    'vintage-paper': {
+      mobile: 20,
+      tablet: 24,
+      desktop: 32,
+      wide: 40,
+    },
+    'glass-morphism': {
+      mobile: 20,
+      tablet: 24,
+      desktop: 32,
+      wide: 40,
+    },
+    'terminal-grid': {
+      mobile: 4,
+      tablet: 6,
+      desktop: 8,
+      wide: 10,
+    },
+    'cyber-punk': {
       mobile: 12,
       tablet: 16,
       desktop: 20,

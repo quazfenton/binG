@@ -209,6 +209,7 @@ export default function MindMapTab() {
     a.href = url;
     a.download = `mindmap-${selectedChain.taskId}.json`;
     a.click();
+    URL.revokeObjectURL(url); // Clean up blob URL to prevent memory leaks
     toast.success("Mind map exported");
   };
 
@@ -233,7 +234,7 @@ export default function MindMapTab() {
             onClick={() => setIsPlaying(!isPlaying)}
             className={isPlaying ? "text-green-400" : "text-white/60"}
           >
-            {isPlaying ? <Play className="w-4 h-4" /> : <Pause className="w-4 h-4" />}
+            {isPlaying ? <Pause className="w-4 h-4" /> : <Play className="w-4 h-4" />}
           </Button>
           <Button
             variant="ghost"

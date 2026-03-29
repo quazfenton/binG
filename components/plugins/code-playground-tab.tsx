@@ -11,7 +11,7 @@
 
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { motion } from "framer-motion";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
@@ -137,6 +137,13 @@ export default function CodePlaygroundTab() {
   const [isRunning, setIsRunning] = useState(false);
   const [activeTab, setActiveTab] = useState<"editor" | "templates" | "snippets">("editor");
   const [consoleOpen, setConsoleOpen] = useState(true);
+  const isMountedRef = useRef(true);
+
+  useEffect(() => {
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   const handleRun = async () => {
     if (!code.trim()) {
@@ -150,6 +157,11 @@ export default function CodePlaygroundTab() {
 
     // Simulate code execution
     await new Promise(resolve => setTimeout(resolve, 1500));
+
+    // Check if component is still mounted
+    if (!isMountedRef.current) {
+      return;
+    }
 
     try {
       // Very basic execution simulation (in production, use proper sandbox)

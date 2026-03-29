@@ -60,25 +60,13 @@ export const TaskResultEvent = z.object({
 
 /**
  * Persistent Agent Loop Task
- * 
+ *
  * Agents don't just run once - they wake up, think, act, sleep, repeat.
  * This is the core pattern for autonomous agents.
- * 
+ *
  * Usage: Register with trigger.dev schedules to run every N minutes
- * 
- * @example
- * ```ts
- * import { schedules } from "@trigger.dev/sdk";
- * 
- * export const agentLoop = schedules.task({
- *   id: "agent-loop",
- *   cron: "*/2 * * * *", // every 2 minutes
- *   run: async (_: any, io: any) => {
- *     // Load active agents and run cognition cycles
- *   }
- * });
- * ```
- 
+ */
+
 export interface AgentLoopTaskDefinition {
   id: string;
   name: string;
