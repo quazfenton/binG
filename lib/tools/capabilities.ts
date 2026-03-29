@@ -106,6 +106,7 @@ export const FILE_WRITE_CAPABILITY: CapabilityDefinition = {
     encoding: z.enum(['utf-8', 'base64', 'binary']).optional().default('utf-8'),
     createDirs: z.boolean().optional().default(true),
     atomic: z.boolean().optional().default(false),
+    append: z.boolean().optional().default(false).describe('Append to file instead of overwrite'),
   }),
   outputSchema: z.object({
     success: z.boolean(),
@@ -114,6 +115,26 @@ export const FILE_WRITE_CAPABILITY: CapabilityDefinition = {
   }),
   providerPriority: ['mcp-filesystem', 'local-fs', 'vfs'],
   tags: ['file', 'write', 'filesystem', 'io', 'create'],
+};
+
+export const FILE_APPEND_CAPABILITY: CapabilityDefinition = {
+  id: 'file.append',
+  name: 'Append File',
+  category: 'file',
+  description: 'Append content to an existing file. Creates file if it does not exist.',
+  inputSchema: z.object({
+    path: z.string().describe('File path to append to'),
+    content: z.string().describe('Content to append'),
+    encoding: z.enum(['utf-8', 'base64', 'binary']).optional().default('utf-8'),
+    createDirs: z.boolean().optional().default(true),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    path: z.string(),
+    bytesWritten: z.number(),
+  }),
+  providerPriority: ['mcp-filesystem', 'local-fs', 'vfs'],
+  tags: ['file', 'append', 'filesystem', 'io'],
 };
 
 export const FILE_DELETE_CAPABILITY: CapabilityDefinition = {
@@ -884,6 +905,7 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   // File
   FILE_READ_CAPABILITY,
   FILE_WRITE_CAPABILITY,
+  FILE_APPEND_CAPABILITY,
   FILE_DELETE_CAPABILITY,
   FILE_LIST_CAPABILITY,
   FILE_SEARCH_CAPABILITY,
@@ -891,6 +913,7 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   SANDBOX_EXECUTE_CAPABILITY,
   SANDBOX_SHELL_CAPABILITY,
   SANDBOX_SESSION_CAPABILITY,
+  BASH_CAPABILITY,
   // Web
   WEB_BROWSE_CAPABILITY,
   WEB_SEARCH_CAPABILITY,
