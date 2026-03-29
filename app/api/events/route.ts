@@ -45,7 +45,18 @@ export async function GET(request: NextRequest) {
     let events;
 
     if (status) {
-      // Get events by status (admin only)
+      // Get events by status (admin only) - require admin role
+      const session = await auth0.getSession(request);
+      if (!session?.user) {
+        return NextResponse.json({ error: 'Not authenticated' }, { status: 401 });
+      }
+      
+      // Check for admin role
+      const roles = session.user['https://binG.com/roles'] || [];
+      if (!roles.includes('admin')) {
+        return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+      }
+      
       const { getEventsByStatus } = await import('@/lib/events/store');
       events = await getEventsByStatus(status, limit);
     } else if (sessionId) {
@@ -63,9 +74,11 @@ export async function GET(request: NextRequest) {
       count: events.length,
     });
   } catch (error: any) {
+    // Log detailed error server-side, return generic message to client
+    console.error('[Events API] GET error:', error);
     return NextResponse.json(
       {
-        error: error.message || 'Failed to get events',
+        error: 'Failed to get events',
       },
       { status: 500 }
     );
@@ -106,10 +119,11 @@ export async function POST(request: NextRequest) {
       status: result.status,
     });
   } catch (error: any) {
+    // Log detailed error server-side, return generic message to client
+    console.error('[Events API] POST error:', error);
     return NextResponse.json(
       {
-        error: error.message || 'Failed to emit event',
-        details: error.message,
+        error: 'Failed to emit event',
       },
       { status: 500 }
     );
@@ -135,6 +149,12 @@ export async function DELETE(request: NextRequest) {
     const action = searchParams.get('action');
 
     if (action === 'replay') {
+      // Admin-only: require admin role
+      const roles = session.user['https://binG.com/roles'] || [];
+      if (!roles.includes('admin')) {
+        return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+      }
+      
       const maxRetries = parseInt(searchParams.get('maxRetries') || '3');
       const replayed = await replayFailedEvents(maxRetries);
 
@@ -145,6 +165,12 @@ export async function DELETE(request: NextRequest) {
     }
 
     if (action === 'purge') {
+      // Admin-only: require admin role
+      const roles = session.user['https://binG.com/roles'] || [];
+      if (!roles.includes('admin')) {
+        return NextResponse.json({ error: 'Admin access required' }, { status: 403 });
+      }
+      
       const olderThanDays = parseInt(searchParams.get('olderThanDays') || '7');
       const purged = await purgeOldEvents(olderThanDays);
 
@@ -159,8 +185,10 @@ export async function DELETE(request: NextRequest) {
       { status: 400 }
     );
   } catch (error: any) {
+    // Log detailed error server-side, return generic message to client
+    console.error('[Events API] DELETE error:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to manage events' },
+      { error: 'Failed to manage events' },
       { status: 500 }
     );
   }

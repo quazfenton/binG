@@ -247,36 +247,43 @@ export function ResizablePanelGroup({
   // Mouse/Touch event handlers
   const handleDragStart = useCallback((e: React.MouseEvent | React.TouchEvent) => {
     e.preventDefault();
-    
-    const clientPos = "touches" in e ? e.touches[0].clientY : e.clientY;
-    
+
+    // Use correct axis based on orientation
+    const clientPos = orientation === "vertical"
+      ? ("touches" in e ? e.touches[0].clientY : e.clientY)
+      : ("touches" in e ? e.touches[0].clientX : e.clientX);
+
     dragStartRef.current = {
       startPosition: clientPos,
       startSize: size,
     };
-    
+
     setIsDragging(true);
     setPreviousSize(size);
-  }, [size]);
+  }, [size, orientation]);
 
   const handleDragMove = useCallback((e: MouseEvent | TouchEvent) => {
     if (!isDragging) return;
+
+    // Use correct axis based on orientation
+    const clientPos = orientation === "vertical"
+      ? ("touches" in e ? e.touches[0].clientY : e.clientY)
+      : ("touches" in e ? e.touches[0].clientX : e.clientX);
     
-    const clientPos = "touches" in e ? e.touches[0].clientY : e.clientY;
     const delta = clientPos - dragStartRef.current.startPosition;
-    
+
     // For vertical orientation, dragging down increases size
-    // For horizontal, dragging right increases size
-    const newSize = dragStartRef.current.startSize + (orientation === "vertical" ? delta : -delta);
-    
+    // For horizontal orientation, dragging RIGHT increases size (positive delta)
+    const newSize = dragStartRef.current.startSize + (orientation === "vertical" ? delta : delta);
+
     // Use RAF for smooth updates
     if (rafId.current) {
       cancelAnimationFrame(rafId.current);
     }
-    
+
     rafId.current = requestAnimationFrame(() => {
       updateSize(newSize);
-      
+
       // Check for snap
       if (snapPoints.length > 0 && showSnapIndicators) {
         snapToNearest(newSize);

@@ -262,11 +262,15 @@ export default function MusicVisualizerTab() {
   // Simulate playback progress
   useEffect(() => {
     let interval: number;
-    
+
     if (isPlaying) {
       interval = window.setInterval(() => {
-        setCurrentTime(prev => {
+        setCurrentTime((prev) => {
           if (prev >= currentTrack.duration) {
+            if (repeatMode === "one") {
+              // Restart the current track instead of advancing
+              return 0;
+            }
             handleNext();
             return 0;
           }
@@ -276,7 +280,7 @@ export default function MusicVisualizerTab() {
     }
 
     return () => clearInterval(interval);
-  }, [isPlaying, currentTrack]);
+  }, [isPlaying, currentTrack, repeatMode]);
 
   const handlePlayPause = () => {
     setIsPlaying(!isPlaying);

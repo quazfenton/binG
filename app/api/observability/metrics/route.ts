@@ -4,11 +4,11 @@
  * Endpoints for metrics and tracing data.
  *
  * GET /api/observability/metrics - Prometheus metrics
- * GET /api/observability/status - Observability status
+ * GET /api/observability/status - Observability status (see ../status/route.ts)
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getPrometheusMetrics, getObservabilityStatus } from '@/lib/observability';
+import { getPrometheusMetrics } from '@/lib/observability';
 
 /**
  * GET /api/observability/metrics
@@ -41,28 +41,10 @@ export async function GET(request: NextRequest) {
       error: 'Invalid format. Use "prometheus" or "json"',
     }, { status: 400 });
   } catch (error: any) {
+    // Log detailed error server-side, return generic message to client
+    console.error('[Observability] Failed to get metrics:', error);
     return NextResponse.json({
-      error: error.message || 'Failed to get metrics',
-    }, { status: 500 });
-  }
-}
-
-/**
- * GET /api/observability/status
- * 
- * Returns observability system status
- */
-export async function GET_STATUS() {
-  try {
-    const status = getObservabilityStatus();
-    
-    return NextResponse.json({
-      success: true,
-      status,
-    });
-  } catch (error: any) {
-    return NextResponse.json({
-      error: error.message || 'Failed to get status',
+      error: 'Failed to get metrics',
     }, { status: 500 });
   }
 }
