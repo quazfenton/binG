@@ -29,9 +29,13 @@ interface ScheduledTask {
 async function fetchSchedulerTask(taskId: string): Promise<ScheduledTask | null> {
   try {
     const response = await fetch(`${SCHEDULER_URL}/tasks/${taskId}`);
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.error(`[CronJobs] Fetch task ${taskId} failed: ${response.status} ${response.statusText}`);
+      return null;
+    }
     return await response.json() as ScheduledTask;
-  } catch {
+  } catch (error: any) {
+    console.error(`[CronJobs] Fetch task ${taskId} error:`, error.message);
     return null;
   }
 }
@@ -42,9 +46,13 @@ async function triggerSchedulerTask(taskId: string): Promise<{ success: boolean;
     const response = await fetch(`${SCHEDULER_URL}/tasks/${taskId}/trigger`, {
       method: 'POST',
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.error(`[CronJobs] Trigger task ${taskId} failed: ${response.status} ${response.statusText}`);
+      return null;
+    }
     return await response.json() as { success: boolean; output?: string; error?: string; duration: number };
-  } catch {
+  } catch (error: any) {
+    console.error(`[CronJobs] Trigger task ${taskId} error:`, error.message);
     return null;
   }
 }
@@ -90,7 +98,11 @@ export async function POST(
       );
     }
 
-    console.log(`[CronJobs API] Triggered job ${id} for user ${auth.userId}:`, result);
+    // Log only non-sensitive metadata (avoid logging output/error which may contain sensitive data)
+    console.log(`[CronJobs API] Triggered job ${id} for user ${auth.userId}`, {
+      success: result.success,
+      duration: result.duration,
+    });
 
     return NextResponse.json({
       success: result.success,

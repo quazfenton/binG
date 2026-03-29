@@ -677,15 +677,16 @@ export async function POST(request: NextRequest) {
       }
 
       // Check if custom orchestration mode is selected via header
+      // This applies to ALL chat requests, not just integration pipeline requests
       const orchestrationMode = getOrchestrationModeFromRequest(request);
-      
+
       if (orchestrationMode !== 'task-router') {
         // User has selected a custom orchestration mode
         chatLogger.info('Custom orchestration mode selected', { 
           mode: orchestrationMode,
           requestId,
         });
-        
+
         const orchestrationResult = await executeWithOrchestrationMode(orchestrationMode, {
           task: context ? `${context}\n\nTASK:\n${task}` : task,
           sessionId: resolvedConversationId,
@@ -706,7 +707,7 @@ export async function POST(request: NextRequest) {
                     agentType: orchestrationResult.metadata?.agentType,
                   })}\n\n`
                 ));
-                
+
                 // Send response content
                 if (orchestrationResult.response) {
                   controller.enqueue(encoder.encode(
@@ -715,7 +716,7 @@ export async function POST(request: NextRequest) {
                     })}\n\n`
                   ));
                 }
-                
+
                 // Send completion
                 controller.enqueue(encoder.encode(
                   `event: done\ndata: ${JSON.stringify({
@@ -723,7 +724,7 @@ export async function POST(request: NextRequest) {
                     metadata: orchestrationResult.metadata,
                   })}\n\n`
                 ));
-                
+
                 controller.close();
               } catch (error: any) {
                 controller.enqueue(encoder.encode(
@@ -735,10 +736,10 @@ export async function POST(request: NextRequest) {
               }
             },
           });
-          
+
           return new Response(streamBody, { headers: SSE_RESPONSE_HEADERS });
         }
-        
+
         // Non-streaming response
         return NextResponse.json({
           success: orchestrationResult.success,
@@ -746,8 +747,9 @@ export async function POST(request: NextRequest) {
           data: orchestrationResult,
         });
       }
-      
+
       // Default: Use existing unified agent flow (task-router mode)
+      // This is the fallback when no custom orchestration mode is selected
       const result = await processUnifiedAgentRequest(config);
       return NextResponse.json({
         success: result.success,
@@ -1226,6 +1228,40 @@ export async function POST(request: NextRequest) {
 
                   // Handle finish reason at end of stream
                   if (streamChunk.isComplete) {
+                    // Post-processing: run filesystem edits on accumulated stream content
+                    // This ensures WRITE/APPLY_DIFF from streamed output reaches the VFS
+                    const streamedContent = streamingContentBuffer;
+                    if (enableFilesystemEdits && streamedContent.trim()) {
+                      try {
+                        const streamedEdits = await applyFilesystemEditsFromResponse({
+                          ownerId: filesystemOwnerId,
+                          conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                          requestId: streamRequestId,
+                          scopePath: requestedScopePath,
+                          lastUserMessage: (() => {
+                            const c = [...messages].reverse().find((m) => m.role === 'user')?.content;
+                            return typeof c === 'string' ? c : '';
+                          })(),
+                          attachedPaths: attachedFilesystemFiles.map((file) => file.path),
+                          responseContent: streamedContent,
+                          commands: unifiedResponse.commands,
+                        });
+                        // Emit applied file edits
+                        if (streamedEdits?.applied?.length) {
+                          for (const edit of streamedEdits.applied) {
+                            realEmit('file_edit', {
+                              path: edit.path,
+                              status: 'applied',
+                              operation: edit.operation || 'write',
+                              timestamp: Date.now(),
+                            });
+                          }
+                        }
+                      } catch (editErr: any) {
+                        chatLogger.warn('Post-stream filesystem edits failed', { requestId: streamRequestId, error: editErr.message });
+                      }
+                    }
+
                     realEmit('done', {
                       requestId: streamRequestId,
                       timestamp: Date.now(),

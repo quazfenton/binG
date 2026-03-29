@@ -5,10 +5,62 @@ import { z } from 'zod';
 // Scheduler service connection
 const SCHEDULER_URL = process.env.SCHEDULER_URL || 'http://localhost:3007';
 
-// Update job schema
+/**
+ * Validate cron expression
+ * Uses a more accurate regex that validates standard 5-field cron expressions
+ */
+function isValidCronExpression(expression: string): boolean {
+  // More accurate cron validation regex
+  const cronRegex = /^(((\d+,)+\d+|(\d+(\/|-)\d+)|\d+|\*) ?){5}$/;
+  if (!cronRegex.test(expression)) return false;
+  
+  // Additional validation for each field
+  const fields = expression.split(' ');
+  if (fields.length !== 5) return false;
+  
+  const ranges = [
+    { min: 0, max: 59 },   // Minutes
+    { min: 0, max: 23 },   // Hours
+    { min: 1, max: 31 },   // Day of month
+    { min: 1, max: 12 },   // Month
+    { min: 0, max: 6 },    // Day of week
+  ];
+  
+  for (let i = 0; i < 5; i++) {
+    const field = fields[i];
+    const { min, max } = ranges[i];
+    
+    // Skip wildcard
+    if (field === '*') continue;
+    
+    // Validate each part (handles comma-separated values)
+    const parts = field.split(',');
+    for (const part of parts) {
+      // Handle step values (e.g., */5, 1-10/2)
+      const [range, step] = part.split('/');
+      if (step && isNaN(parseInt(step))) return false;
+      
+      // Handle ranges (e.g., 1-5)
+      if (range.includes('-')) {
+        const [start, end] = range.split('-').map(Number);
+        if (isNaN(start) || isNaN(end) || start < min || end > max) return false;
+      } else {
+        const num = parseInt(range);
+        if (isNaN(num) || num < min || num > max) return false;
+      }
+    }
+  }
+  
+  return true;
+}
+
+// Update job schema with better cron validation
 const updateJobSchema = z.object({
   name: z.string().min(1).max(100).optional(),
-  schedule: z.string().regex(/^(\*|[0-5]?\d)(-|\/([0-5]?\d))?(\s+(\*|[0-5]?\d)(-|\/([0-5]?\d))?){0,4}$/).optional(),
+  schedule: z.string().optional().refine(
+    (val) => !val || isValidCronExpression(val),
+    { message: 'Invalid cron expression. Expected format: minute hour day month weekday' }
+  ),
   timezone: z.string().optional(),
   payload: z.record(z.any()).optional(),
   enabled: z.boolean().optional(),
@@ -42,9 +94,13 @@ interface ScheduledTask {
 async function fetchSchedulerTask(taskId: string): Promise<ScheduledTask | null> {
   try {
     const response = await fetch(`${SCHEDULER_URL}/tasks/${taskId}`);
-    if (!response.ok) return null;
+    if (!response.ok) {
+      console.error(`[CronJobs] Fetch task ${taskId} failed: ${response.status} ${response.statusText}`);
+      return null;
+    }
     return await response.json() as ScheduledTask;
-  } catch {
+  } catch (error: any) {
+    console.error(`[CronJobs] Fetch task ${taskId} error:`, error.message);
     return null;
   }
 }
@@ -57,9 +113,14 @@ async function updateSchedulerTask(taskId: string, updates: Partial<ScheduledTas
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
     });
-    if (!response.ok) return null;
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error(`[CronJobs] Update task ${taskId} failed: ${response.status} ${errorText}`);
+      return null;
+    }
     return await response.json() as ScheduledTask;
-  } catch {
+  } catch (error: any) {
+    console.error(`[CronJobs] Update task ${taskId} error:`, error.message);
     return null;
   }
 }
@@ -70,8 +131,13 @@ async function deleteSchedulerTask(taskId: string): Promise<boolean> {
     const response = await fetch(`${SCHEDULER_URL}/tasks/${taskId}`, {
       method: 'DELETE',
     });
-    return response.ok;
-  } catch {
+    if (!response.ok) {
+      console.error(`[CronJobs] Delete task ${taskId} failed: ${response.status} ${response.statusText}`);
+      return false;
+    }
+    return true;
+  } catch (error: any) {
+    console.error(`[CronJobs] Delete task ${taskId} error:`, error.message);
     return false;
   }
 }
