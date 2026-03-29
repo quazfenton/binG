@@ -80,6 +80,11 @@ async function startup() {
     await startProviderHealthCheck();
     logger.info('Provider health checker started');
 
+    // Start Agent Kernel (OS-like scheduler)
+    const { startAgentKernel } = await import('@/lib/agent/agent-kernel');
+    await startAgentKernel();
+    logger.info('Agent Kernel started');
+
     // Log backend status
     if (!backendStatus.websocket.running) {
       logger.warn('WebSocket server failed to start', backendStatus.websocket.error);

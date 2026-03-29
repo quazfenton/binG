@@ -166,6 +166,18 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     }
   }
 
+  // Register Event System tools (task.schedule, task.status, task.cancel)
+  // These provide background task scheduling via trigger.dev patterns
+  try {
+    const { registerEventTools } = await import('./bootstrap/bootstrap-events');
+    const count = await registerEventTools(registry, config);
+    toolCount += count;
+    logger.info(`Registered ${count} event system tools`);
+  } catch (error: any) {
+    logger.warn('Event system tools not available', error.message);
+    errors.push(`Event system: ${error.message}`);
+  }
+
   // Register MCP Gateway tools (if configured)
   if (process.env.MCP_GATEWAY_URL) {
     try {

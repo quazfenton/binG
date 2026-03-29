@@ -949,6 +949,90 @@ export const BASH_CAPABILITY: CapabilityDefinition = {
   tags: ['bash', 'shell', 'command', 'execute', 'self-healing'],
 };
 
+export const SCHEDULE_TASK_CAPABILITY: CapabilityDefinition = {
+  id: 'task.schedule',
+  name: 'Schedule Background Task',
+  category: 'automation',
+  description: 'Schedule background tasks for later execution. Supports cron scheduling, delayed execution, or immediate execution. Tasks are processed by the event worker and can trigger webhooks, run sandbox commands, send emails, or trigger agent tasks.',
+  inputSchema: z.object({
+    taskType: z.enum(['HACKER_NEWS_DAILY', 'RESEARCH_TASK', 'REPO_DIGEST', 'SEND_EMAIL', 'WEBHOOK', 'SANDBOX_COMMAND', 'NULLCLAW_AGENT', 'CUSTOM_DAG']).describe('Type of background task'),
+    schedule: z.object({
+      type: z.enum(['cron', 'delay', 'immediate']).describe('Scheduling type'),
+      expression: z.string().optional().describe('Cron expression (e.g., "*/5 * * * *")'),
+      delayMs: z.number().optional().describe('Delay in milliseconds'),
+    }).describe('When to execute'),
+    payload: z.record(z.any()).describe('Task-specific payload'),
+    metadata: z.object({
+      name: z.string().optional(),
+      priority: z.enum(['low', 'normal', 'high']).optional(),
+      maxRetries: z.number().optional(),
+      timeout: z.number().optional(),
+    }).optional(),
+    userId: z.string().describe('User identifier'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    taskId: z.string(),
+    status: z.enum(['scheduled', 'delayed', 'immediate']),
+    taskType: z.string(),
+    scheduledFor: z.string().optional(),
+    error: z.string().optional(),
+  }),
+  providerPriority: ['events', 'trigger-dev', 'custom'],
+  tags: ['task', 'schedule', 'background', 'cron', 'event', 'automation'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.95,
+  },
+};
+
+export const TASK_STATUS_CAPABILITY: CapabilityDefinition = {
+  id: 'task.status',
+  name: 'Get Task Status',
+  category: 'automation',
+  description: 'Get the status of a scheduled background task by its ID.',
+  inputSchema: z.object({
+    taskId: z.string().describe('Task ID returned from task.schedule'),
+  }),
+  outputSchema: z.object({
+    exists: z.boolean(),
+    status: z.string().optional(),
+    type: z.string().optional(),
+    createdAt: z.number().optional(),
+    processedAt: z.number().optional(),
+    error: z.string().optional(),
+  }),
+  providerPriority: ['events', 'trigger-dev', 'custom'],
+  tags: ['task', 'status', 'background', 'check'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.99,
+  },
+};
+
+export const TASK_CANCEL_CAPABILITY: CapabilityDefinition = {
+  id: 'task.cancel',
+  name: 'Cancel Scheduled Task',
+  category: 'automation',
+  description: 'Cancel a pending scheduled task before it executes.',
+  inputSchema: z.object({
+    taskId: z.string().describe('Task ID to cancel'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    error: z.string().optional(),
+  }),
+  providerPriority: ['events', 'trigger-dev', 'custom'],
+  tags: ['task', 'cancel', 'background', 'stop'],
+  metadata: {
+    latency: 'low',
+    cost: 'low',
+    reliability: 0.95,
+  },
+};
+
 // ============================================================================
 // Export All Capabilities
 // ============================================================================
@@ -995,6 +1079,10 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   INTEGRATION_REVOKE_CAPABILITY,
   INTEGRATION_SEARCH_TOOLS_CAPABILITY,
   INTEGRATION_PROXY_CAPABILITY,
+  // Task Scheduling (trigger.dev integration)
+  SCHEDULE_TASK_CAPABILITY,
+  TASK_STATUS_CAPABILITY,
+  TASK_CANCEL_CAPABILITY,
 ];
 
 // ============================================================================

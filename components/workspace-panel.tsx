@@ -83,6 +83,8 @@ import {
   Square,
   Github,
   Monitor,
+  Newspaper,
+  Clock,
 } from "lucide-react";
 import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";
@@ -120,6 +122,8 @@ import IntegrationPanel from "@/components/integrations/IntegrationPanel";
 import GitSourceControl from "@/components/git-source-control-tabs";
 import { VoicePanel } from "@/components/voice-panel";
 import VNCConnectionTab from "@/components/vnc-connection-tab";
+import { NewsPanel } from "@/components/news-panel";
+import { CronJobsPanel } from "@/components/cron-jobs-panel";
 import { PROVIDERS } from "@/lib/chat/providers";
 
 // Helper to normalize paths to relative format (project/...) for API compatibility
@@ -2270,6 +2274,28 @@ export function ExperimentalWorkspacePanel() {
                     <Monitor className="h-3 w-3" />
                     Remote
                   </button>
+                  <button
+                    onClick={() => setTab('news')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'news'
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
+                  >
+                    <Newspaper className="h-3 w-3" />
+                    News
+                  </button>
+                  <button
+                    onClick={() => setTab('cronjobs')}
+                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
+                      activeTab === 'cronjobs'
+                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
+                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                    }`}
+                  >
+                    <Clock className="h-3 w-3" />
+                    Cron
+                  </button>
                 </div>
 
                 {/* Explorer Tab */}
@@ -3755,6 +3781,16 @@ export function ExperimentalWorkspacePanel() {
                   <div className="flex-1 overflow-hidden">
                     <VNCConnectionTab />
                   </div>
+                </TabsContent>
+
+                {/* News Tab - News feed from multiple sources */}
+                <TabsContent value="news" className="flex-1 mt-0 overflow-hidden">
+                  <NewsPanel />
+                </TabsContent>
+
+                {/* Cron Jobs Tab - Authenticated users only, max 1 job per user */}
+                <TabsContent value="cronjobs" className="flex-1 mt-0 overflow-hidden">
+                  <CronJobsPanel />
                 </TabsContent>
               </Tabs>
             </div>
