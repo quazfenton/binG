@@ -1,99 +1,242 @@
 /**
- * Event Router
- * 
- * The execution layer that routes events to their handlers.
- * Based on trigger.md design.
- * 
- * This replaces brittle "if/else taskType" logic with a clean switch.
+ * Event Router - Switch-based event dispatch
+ *
+ * Routes events to appropriate handlers based on event type.
+ * Provides error handling, retry logic, and self-healing capabilities.
+ *
+ * @module events/router
  */
 
-import { AnyEvent, EventRecord } from './schema';
-import { markEventComplete, markEventFailed } from './store';
+import { EventRecord } from './store';
+import { markEventRunning, markEventComplete, markEventFailed, markEventCancelled } from './store';
+import { createLogger } from '@/lib/utils/logger';
+import { EventTypes } from './schema';
 
-// Import handlers
-import { handleHackerNews } from './trigger/handlers/hacker-news';
-import { handleResearch } from './trigger/handlers/research';
-import { handleRepoDigest } from './trigger/handlers/repo-digest';
-import { handleSendEmail } from './trigger/handlers/email';
-import { handleWebhook } from './trigger/handlers/webhook';
-import { handleSandboxCommand } from './trigger/handlers/sandbox';
-import { handleNullclawAgent } from './trigger/handlers/nullclaw';
+const logger = createLogger('Events:Router');
 
 /**
- * Route an event to its handler based on type
- * 
- * @param eventRecord - The stored event record
- * @returns The result of handling the event
+ * Event handler interface
  */
-export async function routeEvent(eventRecord: EventRecord): Promise<Record<string, any>> {
-  const event = eventRecord.payload as AnyEvent;
-  
-  console.log(`[EventRouter] Routing event ${eventRecord.id} of type ${event.type}`);
-  
+export interface EventHandler {
+  (event: EventRecord): Promise<any>;
+}
+
+/**
+ * Handler registry
+ */
+const handlers = new Map<string, EventHandler>();
+
+/**
+ * Register an event handler
+ */
+export function registerHandler(eventType: string, handler: EventHandler): void {
+  handlers.set(eventType, handler);
+  logger.info('Handler registered', { eventType });
+}
+
+/**
+ * Unregister an event handler
+ */
+export function unregisterHandler(eventType: string): void {
+  handlers.delete(eventType);
+  logger.info('Handler unregistered', { eventType });
+}
+
+/**
+ * Get registered handler for event type
+ */
+export function getHandler(eventType: string): EventHandler | undefined {
+  return handlers.get(eventType);
+}
+
+/**
+ * Get all registered handlers
+ */
+export function getRegisteredHandlers(): string[] {
+  return Array.from(handlers.keys());
+}
+
+/**
+ * Route event to appropriate handler
+ */
+export async function routeEvent(event: EventRecord): Promise<void> {
+  const handler = handlers.get(event.type);
+
+  if (!handler) {
+    const error = `No handler registered for event type: ${event.type}`;
+    logger.error(error, { eventId: event.id, type: event.type });
+    await markEventFailed(event.id, error);
+    throw new Error(error);
+  }
+
   try {
-    let result: Record<string, any>;
-    
-    switch (event.type) {
-      case 'HACKER_NEWS_DAILY':
-        result = await handleHackerNews(event);
-        break;
-        
-      case 'RESEARCH_TASK':
-        result = await handleResearch(event);
-        break;
-        
-      case 'REPO_DIGEST':
-        result = await handleRepoDigest(event);
-        break;
-        
-      case 'SEND_EMAIL':
-        result = await handleSendEmail(event);
-        break;
-        
-      case 'WEBHOOK':
-        result = await handleWebhook(event);
-        break;
-        
-      case 'SANDBOX_COMMAND':
-        result = await handleSandboxCommand(event);
-        break;
-        
-      case 'NULLCLAW_AGENT':
-        result = await handleNullclawAgent(event);
-        break;
-        
-      default:
-        throw new Error(`Unknown event type: ${(event as AnyEvent).type}`);
+    await markEventRunning(event.id);
+
+    logger.info('Executing event handler', {
+      eventId: event.id,
+      type: event.type,
+      retryCount: event.retry_count,
+    });
+
+    const result = await handler(event);
+
+    await markEventComplete(event.id, result);
+
+    logger.info('Event completed', {
+      eventId: event.id,
+      type: event.type,
+    });
+  } catch (error: any) {
+    logger.error('Event handler failed', {
+      eventId: event.id,
+      type: event.type,
+      error: error.message,
+      stack: error.stack,
+    });
+
+    await markEventFailed(event.id, error.message);
+
+    // Attempt self-healing if enabled
+    if (event.retry_count < 3) {
+      await attemptSelfHealing(event, error);
     }
-    
-    // Mark as completed
-    await markEventComplete(eventRecord.id, result);
-    
-    console.log(`[EventRouter] Event ${eventRecord.id} handled successfully`);
-    return result;
-    
-  } catch (err: any) {
-    // Mark as failed
-    await markEventFailed(eventRecord.id, err.message);
-    
-    console.error(`[EventRouter] Event ${eventRecord.id} failed:`, err.message);
-    throw err;
+
+    throw error;
   }
 }
 
 /**
- * Get handler name for an event type (for logging/monitoring)
+ * Attempt self-healing for failed events
  */
-export function getHandlerName(eventType: string): string {
-  const handlerNames: Record<string, string> = {
-    HACKER_NEWS_DAILY: 'HackerNewsDailyHandler',
-    RESEARCH_TASK: 'ResearchTaskHandler',
-    REPO_DIGEST: 'RepoDigestHandler',
-    SEND_EMAIL: 'EmailHandler',
-    WEBHOOK: 'WebhookHandler',
-    SANDBOX_COMMAND: 'SandboxCommandHandler',
-    NULLCLAW_AGENT: 'NullclawAgentHandler',
-  };
-  
-  return handlerNames[eventType] || 'UnknownHandler';
+async function attemptSelfHealing(event: EventRecord, error: any): Promise<void> {
+  try {
+    const { attemptSelfHealing: selfHeal } = await import('./self-healing');
+    const healingResult = await selfHeal(event, error);
+
+    if (healingResult.success && healingResult.fix) {
+      logger.info('Self-healing successful', {
+        eventId: event.id,
+        fix: healingResult.fix,
+      });
+
+      // Reset event to pending with fix applied
+      const { healEvent } = await import('./store');
+      if (healEvent) {
+        await healEvent(event.id, healingResult.fix);
+      }
+    }
+  } catch (healingError: any) {
+    logger.warn('Self-healing failed', {
+      eventId: event.id,
+      error: healingError.message,
+    });
+  }
 }
+
+/**
+ * Process all pending events
+ */
+export async function processPendingEvents(limit: number = 10): Promise<{
+  processed: number;
+  succeeded: number;
+  failed: number;
+  skipped: number;
+}> {
+  const { getPendingEvents } = await import('./store');
+  const events = await getPendingEvents(limit);
+
+  let processed = 0;
+  let succeeded = 0;
+  let failed = 0;
+  let skipped = 0;
+
+  for (const event of events) {
+    try {
+      await routeEvent(event);
+      processed++;
+      succeeded++;
+    } catch (error: any) {
+      processed++;
+      failed++;
+    }
+  }
+
+  return { processed, succeeded, failed, skipped };
+}
+
+/**
+ * Start event processor loop
+ */
+export function startEventProcessor(intervalMs: number = 5000): NodeJS.Timeout {
+  logger.info('Starting event processor', { intervalMs });
+
+  const timer = setInterval(() => {
+    processPendingEvents().catch(console.error);
+  }, intervalMs);
+
+  return timer;
+}
+
+/**
+ * Stop event processor
+ */
+export function stopEventProcessor(timer: NodeJS.Timeout): void {
+  clearInterval(timer);
+  logger.info('Event processor stopped');
+}
+
+/**
+ * Cancel event by ID
+ */
+export async function cancelEvent(eventId: string, reason?: string): Promise<void> {
+  await markEventCancelled(eventId);
+  logger.info('Event cancelled', { eventId, reason });
+}
+
+/**
+ * Retry event by ID
+ */
+export async function retryEvent(eventId: string): Promise<void> {
+  const { getEventById } = await import('./store');
+  const event = await getEventById(eventId);
+
+  if (!event) {
+    throw new Error(`Event not found: ${eventId}`);
+  }
+
+  if (event.status !== 'failed') {
+    throw new Error(`Event is not failed: ${event.status}`);
+  }
+
+  const db = require('@/lib/database/connection').getDatabase();
+  db.prepare(`
+    UPDATE events
+    SET status = 'pending', error = NULL, updated_at = CURRENT_TIMESTAMP
+    WHERE id = ?
+  `).run(eventId);
+
+  logger.info('Event retry initiated', { eventId });
+}
+
+/**
+ * Get event processing statistics
+ */
+export async function getProcessingStats(): Promise<{
+  registered_handlers: number;
+  pending_events: number;
+  running_events: number;
+  failed_events: number;
+}> {
+  const { getEventStats } = await import('./store');
+  const stats = await getEventStats();
+
+  return {
+    registered_handlers: handlers.size,
+    pending_events: stats.pending,
+    running_events: stats.running,
+    failed_events: stats.failed,
+  };
+}
+
+// Export store functions for convenience
+export { replayFailedEvents } from './store';

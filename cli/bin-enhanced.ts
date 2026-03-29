@@ -144,7 +144,8 @@ async function apiRequest(endpoint: string, options: any = {}): Promise<any> {
     if (error.code === 'ECONNREFUSED') {
       throw new Error(`Cannot connect to binG API at ${url}. Is the server running?`);
     }
-    if (error.code === 'ETIMEDOUT') {
+    // Axios uses 'ECONNABORTED' for timeouts, but also handle 'ETIMEDOUT' for compatibility
+    if (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED') {
       throw new Error(`Request timed out after ${options.timeout || 120000}ms`);
     }
     throw error;
@@ -444,16 +445,22 @@ async function websocketTerminal(sandboxId: string): Promise<void> {
         process.exit(0);
       });
 
-      // Handle unexpected exits
+      // Handle unexpected exits - log errors before exiting
       process.on('exit', cleanupTerminal);
-      process.on('uncaughtException', () => {
+      process.on('uncaughtException', (error) => {
+        console.error(COLORS.error('\nUncaught Exception:'), error.message);
+        console.error(COLORS.error('Stack:'), error.stack);
         cleanupTerminal();
+        process.exit(1); // Ensure process exits
       });
-      process.on('unhandledRejection', () => {
+      process.on('unhandledRejection', (reason, promise) => {
+        console.error(COLORS.error('\nUnhandled Rejection at:'), promise);
+        console.error(COLORS.error('Reason:'), reason);
         cleanupTerminal();
+        process.exit(1); // Ensure process exits
       });
     });
-    
+
   } catch (error: any) {
     // Restore terminal state if we enabled raw mode before the error
     if (process.stdin.isTTY && process.stdin.isRaw) {

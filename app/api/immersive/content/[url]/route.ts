@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
+import { isHostnameBlocked } from "@/lib/utils/url-validation";
 
 const DATA_DIR = join(process.cwd(), "data");
 const CACHE_PATH = join(DATA_DIR, "immersive-content-cache.json");
@@ -30,17 +31,8 @@ const RATE_LIMIT = {
 // Allowed protocols
 const ALLOWED_PROTOCOLS = ['https:', 'http:'];
 
-// Blocked domains/patterns
-const BLOCKED_PATTERNS = [
-  /localhost/i,
-  /127\.0\.0\.1/i,
-  /0\.0\.0\.0/i,
-  /\.internal$/i,
-  /\.local$/i,
-  /192\.168\./i,
-  /10\./i,
-  /172\.(1[6-9]|2[0-9]|3[01])\./i,
-];
+// Maximum redirect hops to prevent redirect loops
+const MAX_REDIRECT_HOPS = 5;
 
 // Rate limit store
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
@@ -83,7 +75,7 @@ function checkRateLimit(identifier: string): { allowed: boolean; remaining: numb
   return { allowed: true, remaining: RATE_LIMIT.maxRequests - record.count };
 }
 
-// Validate URL
+// Validate URL with SSRF protection
 function validateUrl(input: string): { valid: boolean; url?: string; error?: string } {
   if (!input || input.trim().length === 0) {
     return { valid: false, error: 'URL is required' };
@@ -101,14 +93,35 @@ function validateUrl(input: string): { valid: boolean; url?: string; error?: str
       return { valid: false, error: 'Only HTTP and HTTPS URLs are allowed' };
     }
 
-    const hostname = url.hostname.toLowerCase();
-    if (BLOCKED_PATTERNS.some(pattern => pattern.test(hostname))) {
+    // Use shared SSRF validator
+    if (isHostnameBlocked(url.hostname)) {
       return { valid: false, error: 'Access to local/internal addresses is blocked for security' };
     }
 
     return { valid: true, url: url.href };
   } catch {
     return { valid: false, error: 'Invalid URL format' };
+  }
+}
+
+// Validate redirect URL to prevent SSRF via redirect
+function validateRedirectUrl(currentUrl: string, redirectUrl: string): { valid: boolean; url?: string; error?: string } {
+  try {
+    // Resolve relative URLs against current URL
+    const resolved = new URL(redirectUrl, currentUrl);
+
+    if (!ALLOWED_PROTOCOLS.includes(resolved.protocol)) {
+      return { valid: false, error: 'Redirect to non-HTTP(S) URL blocked' };
+    }
+
+    // Use shared SSRF validator
+    if (isHostnameBlocked(resolved.hostname)) {
+      return { valid: false, error: 'Redirect to local/internal address blocked' };
+    }
+
+    return { valid: true, url: resolved.href };
+  } catch {
+    return { valid: false, error: 'Invalid redirect URL' };
   }
 }
 
@@ -284,21 +297,54 @@ export async function GET(
     }
   }
 
-  // Fetch content
+  // Fetch content with redirect validation
   try {
-    const controller = new AbortController();
-    const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
+    let currentUrl = finalUrl;
+    let redirectCount = 0;
+    let response: Response;
 
-    const response = await fetch(finalUrl, {
-      signal: controller.signal,
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; ImmersiveView/1.0)',
-        'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
-        'Accept-Language': 'en-US,en;q=0.9',
-      },
-    });
+    // Manually handle redirects to validate each hop
+    while (redirectCount < MAX_REDIRECT_HOPS) {
+      const controller = new AbortController();
+      const timeoutId = setTimeout(() => controller.abort(), REQUEST_TIMEOUT);
 
-    clearTimeout(timeoutId);
+      response = await fetch(currentUrl, {
+        signal: controller.signal,
+        redirect: 'manual', // Disable automatic redirects
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; ImmersiveView/1.0)',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+          'Accept-Language': 'en-US,en;q=0.9',
+        },
+      });
+
+      clearTimeout(timeoutId);
+
+      // Check if redirect
+      if ([301, 302, 303, 307, 308].includes(response.status)) {
+        const location = response.headers.get('location');
+        if (!location) {
+          throw new Error('Redirect response missing Location header');
+        }
+
+        // Validate redirect URL
+        const redirectValidation = validateRedirectUrl(currentUrl, location);
+        if (!redirectValidation.valid) {
+          throw new Error(`Redirect blocked: ${redirectValidation.error}`);
+        }
+
+        currentUrl = redirectValidation.url!;
+        redirectCount++;
+        continue; // Follow redirect
+      }
+
+      // Not a redirect, we're done
+      break;
+    }
+
+    if (redirectCount >= MAX_REDIRECT_HOPS) {
+      throw new Error(`Too many redirects (max: ${MAX_REDIRECT_HOPS})`);
+    }
 
     if (!response.ok) {
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
@@ -307,14 +353,14 @@ export async function GET(
     const contentType = response.headers.get('content-type') || '';
     const html = await response.text();
 
-    // If not parsing, return raw HTML
+    // Always return JSON - never serve raw HTML from our origin
     if (!parse) {
-      return new NextResponse(html, {
-        headers: {
-          'Content-Type': contentType || 'text/html',
-          ...headers,
-        },
-      });
+      return NextResponse.json({
+        success: true,
+        html,
+        source: response.url,
+        contentType,
+      }, { headers });
     }
 
     // Parse content

@@ -24,6 +24,8 @@ import { createLogger } from '../utils/logger';
 import type { ExecutionPolicy } from '../sandbox/types';
 import { determineExecutionPolicy } from '../sandbox/types';
 import { scheduleTask } from '@/lib/events/trigger-integration';
+import { emitEvent } from '@/lib/events/bus';
+import { EventTypes } from '@/lib/events/schema';
 import { getAgentKernel, AgentType, AgentPriority } from './agent-kernel';
 
 const logger = createLogger('Agent:TaskRouter');
@@ -456,20 +458,67 @@ class TaskRouter {
 
     const userId = request.userId;
     const task = request.task;
+    const sessionId = request.conversationId;
 
     try {
       // Map advanced type to task type and context with full coverage
       const fallbackConfig = this.getFallbackConfig(advancedType, task);
-      
+
+      // Emit event for durable execution tracking
+      const eventResult = await emitEvent(
+        {
+          type: EventTypes.WORKFLOW,
+          templateId: advancedType,
+          sessionId,
+          userId,
+          phase: 'started',
+          metadata: {
+            taskType: fallbackConfig.taskType,
+            goal: fallbackConfig.payload.prompt,
+            priority: fallbackConfig.metadata.priority,
+          },
+        },
+        userId,
+        sessionId
+      );
+
+      logger.info(`[TaskRouter] Event emitted for advanced task`, {
+        eventId: eventResult.eventId,
+        advancedType,
+      });
+
+      // Also schedule the task for immediate execution
       return await scheduleTask({
         taskType: fallbackConfig.taskType,
         schedule: fallbackConfig.schedule,
         payload: { ...fallbackConfig.payload, prompt: fallbackConfig.payload.prompt || task },
-        metadata: fallbackConfig.metadata,
+        metadata: {
+          ...fallbackConfig.metadata,
+          eventId: eventResult.eventId,
+        },
         userId,
       });
     } catch (error: any) {
       logger.error(`[TaskRouter] Fallback execution failed:`, error.message);
+
+      // Emit failure event
+      try {
+        await emitEvent(
+          {
+            type: EventTypes.WORKFLOW,
+            templateId: advancedType,
+            sessionId: request.conversationId,
+            userId: request.userId,
+            phase: 'failed',
+            error: error.message,
+          },
+          request.userId,
+          request.conversationId
+        );
+      } catch (emitError: any) {
+        logger.error(`[TaskRouter] Failed to emit failure event:`, emitError.message);
+      }
+
       return { success: false, error: error.message, type: advancedType };
     }
   }

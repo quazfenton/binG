@@ -98,16 +98,22 @@ async function ensureDataDir(): Promise<void> {
   }
 }
 
-// Read playlist with fallback
+// Read playlist with safe fallback
 async function readPlaylist(): Promise<any> {
   try {
     await ensureDataDir();
     const data = await readFile(PLAYLIST_PATH, "utf-8");
     return JSON.parse(data);
-  } catch {
-    // File doesn't exist or is invalid, return default
-    await writeFile(PLAYLIST_PATH, JSON.stringify(DEFAULT_PLAYLIST, null, 2));
-    return DEFAULT_PLAYLIST;
+  } catch (error: any) {
+    // Only create default playlist if file doesn't exist
+    // For other errors (parse failures, read errors), rethrow to caller
+    if (error.code === 'ENOENT') {
+      await writeFile(PLAYLIST_PATH, JSON.stringify(DEFAULT_PLAYLIST, null, 2));
+      return DEFAULT_PLAYLIST;
+    }
+    // Log error for debugging but don't overwrite production data
+    console.error('[Playlist] Failed to read playlist:', error.message);
+    throw error;
   }
 }
 

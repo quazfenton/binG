@@ -46,6 +46,7 @@ import {
   Aperture,
   Palette,
   Sparkles,
+  Activity,
 } from "lucide-react";
 import WorkflowsTab from "./plugins/n8n-workflows-tab";
 import OrchestrationTab from "./plugins/orchestration-tab";
@@ -56,6 +57,7 @@ import MusicVisualizerTab from "./plugins/music-visualizer-tab";
 import MusicHubTab from "./plugins/music-hub-tab";
 import ImmersiveView from "./plugins/immersive-view";
 import ZineFlowEngine from "./plugins/zine-flow-engine";
+import EventsPanel from "./plugins/events-panel";
 import CodePlaygroundTab from "./plugins/code-playground-tab";
 import BroadwayDealHunterTab from "./top-panel/plugins/broadway-deal-hunter-tab";
 import ModelComparisonTab from "./top-panel/plugins/model-comparison-tab";
@@ -142,6 +144,7 @@ const TAB_DEFS: TabDef[] = [
   { value: "music-hub", label: "Music Hub", icon: Radio },
   { value: "immersive", label: "Immersive", icon: Aperture },
   { value: "zine-flow", label: "Zine Flow", icon: Sparkles },
+  { value: "events", label: "Events", icon: Activity },
   { value: "code-playground", label: "Code", icon: Code },
   { value: "broadway-deal-hunter", label: "Broadway", icon: Zap },
   { value: "model-comparison", label: "Model Compare", icon: Zap },
@@ -745,6 +748,13 @@ export default function TopPanel() {
                   <TabsContent value="zine-flow" className="h-full mt-0">
                     <TabErrorBoundary tabName="Zine Flow Engine">
                       <ZineFlowEngine />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  {/* Events Panel */}
+                  <TabsContent value="events" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Events Panel">
+                      <EventsPanel />
                     </TabErrorBoundary>
                   </TabsContent>
 

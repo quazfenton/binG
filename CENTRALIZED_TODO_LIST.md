@@ -69,21 +69,27 @@
 
 ### 4. Warm Pool Manager for Sandboxes
 **Source:** 000.md, ARCHITECTURE_IMPROVEMENTS_STATUS.md
-**Status:** ❌ NOT STARTED
-**Effort:** 2-3 days
+**Status:** ✅ ALREADY IMPLEMENTED (lib/sandbox/sandbox-orchestrator.ts)
+**Effort:** N/A - Already done
 **Impact:** 10s → 300ms sandbox startup
 
-**Tasks:**
-- [ ] Create `/lib/sandbox/warm-pool-manager.ts`
-- [ ] Implement pre-warming for common templates (node, python, base)
-- [ ] Add automatic refill on usage
-- [ ] Add health checking
-- [ ] Integrate with `lib/sandbox/provider-router.ts`
-- [ ] Add capacity handling with cooldown
+**Existing Implementation:**
+- `lib/sandbox/sandbox-orchestrator.ts` - Warm pool with 3 sandboxes per provider
+- `lib/sandbox/base-image.ts` - Pre-configured environments (node, python, system)
+- `lib/sandbox/snapshot-manager.ts` - Named snapshots for fast restore
+- `lib/sandbox/dep-cache.ts` - Dependency caching
 
-**Files to Create:**
-- `lib/sandbox/warm-pool-manager.ts`
-- `__tests__/sandbox/warm-pool.test.ts`
+**Features Implemented:**
+- Pre-warmed sandbox pool (WARM_POOL_SIZE = 3)
+- Automatic refill on usage
+- Health checking via resource monitor
+- Idle cleanup (5 minute timeout)
+- Migration support for overloaded providers
+
+**Enhancement Opportunities:**
+- [ ] Increase WARM_POOL_SIZE based on usage patterns
+- [ ] Add predictive warming based on user patterns
+- [ ] Add warm pool metrics dashboard
 
 ---
 
@@ -136,38 +142,51 @@
 
 ### 7. Timeout Escalation Strategy
 **Source:** ARCHITECTURE_IMPROVEMENTS_STATUS.md
-**Status:** ❌ NOT STARTED
-**Effort:** 1 day
+**Status:** ✅ ALREADY IMPLEMENTED (lib/agent/timeout-escalation.ts)
+**Effort:** N/A - Already done
 **Impact:** Better timeout handling, graceful degradation
 
-**Tasks:**
-- [ ] Create `/lib/agent/timeout-escalation.ts`
-- [ ] Implement staged timeouts (10s → 30s → 60s)
-- [ ] Add warn/terminate/migrate stages
-- [ ] Integrate with StatefulAgent
-- [ ] Add metrics for timeout tracking
+**Existing Implementation:**
+- `lib/agent/timeout-escalation.ts` - Staged timeout approach
+- `lib/sandbox/timeout-retry-utils.ts` - Retry utilities
+- `lib/sandbox/circuit-breaker.ts` - Circuit breaker pattern
 
-**Files to Create:**
-- `lib/agent/timeout-escalation.ts`
+**Features Implemented:**
+- ESCALATION_PROFILES with staged timeouts
+- Stage 1: 10s → warn
+- Stage 2: 30s → sandbox migrate
+- Stage 3: 60s → terminate
+- Integration with SandboxOrchestrator
+
+**Enhancement Opportunities:**
+- [ ] Add metrics for timeout tracking
+- [ ] Add user-configurable timeout profiles
+- [ ] Add predictive timeout based on task type
 
 ---
 
 ### 8. Provider Health Prediction
 **Source:** ARCHITECTURE_IMPROVEMENTS_STATUS.md
-**Status:** ❌ NOT STARTED
-**Effort:** 1-2 days
+**Status:** ✅ ALREADY IMPLEMENTED (lib/sandbox/provider-health.ts)
+**Effort:** N/A - Already done
 **Impact:** Predict failures before they happen
 
-**Tasks:**
-- [ ] Create `/lib/sandbox/provider-health.ts`
-- [ ] Track failure rates per provider
-- [ ] Implement health scoring (0-100)
-- [ ] Add deprioritization for unhealthy providers
-- [ ] Add latency spike detection
-- [ ] Integrate with provider-router
+**Existing Implementation:**
+- `lib/sandbox/provider-health.ts` - ProviderHealthTracker class
+- Integrated with `lib/sandbox/provider-router.ts` for routing decisions
 
-**Files to Create:**
-- `lib/sandbox/provider-health.ts`
+**Features Implemented:**
+- Per-provider call tracking (success/failure/latency)
+- Rolling window failure rate calculation (5 min window)
+- Latency spike detection (3x baseline threshold)
+- Health score computation (0-1 scale)
+- Deprioritization recommendations with cooldown
+- `getHealthiest()` method for provider selection
+
+**Enhancement Opportunities:**
+- [ ] Add persistence for health data across restarts
+- [ ] Add ML-based failure prediction
+- [ ] Add health dashboard UI
 
 ---
 
@@ -175,21 +194,26 @@
 
 ### 9. Observability/Tracing (OpenTelemetry)
 **Source:** ARCHITECTURE_IMPROVEMENTS_STATUS.md
-**Status:** ❌ NOT STARTED
-**Effort:** 2-3 days
+**Status:** ⚠️ PARTIALLY IMPLEMENTED
+**Effort:** 1-2 days to complete
 **Impact:** Full request tracing, bottleneck identification
 
-**Tasks:**
-- [ ] Add @opentelemetry/api to package.json
-- [ ] Create `/lib/observability/tracing.ts`
-- [ ] Add spans for: agent-execution, tool-calls, sandbox-creation
-- [ ] Create `/lib/observability/metrics.ts`
-- [ ] Add Prometheus/Grafana integration
-- [ ] Create dashboard for key metrics
+**Existing Implementation:**
+- `lib/utils/logger.ts` - Comprehensive logging throughout
+- `lib/management/resource-monitor.ts` - Resource metrics
+- `lib/observability/` - Basic observability structure
 
-**Files to Create:**
-- `lib/observability/tracing.ts`
-- `lib/observability/metrics.ts`
+**Missing:**
+- [ ] OpenTelemetry integration
+- [ ] Distributed tracing spans
+- [ ] Prometheus metrics export
+- [ ] Grafana dashboard
+
+**Enhancement Tasks:**
+- [ ] Add @opentelemetry/api to package.json
+- [ ] Create tracing spans for agent-execution, tool-calls, sandbox-creation
+- [ ] Add Prometheus metrics endpoint
+- [ ] Create Grafana dashboard template
 
 ---
 
@@ -215,20 +239,26 @@
 
 ### 11. Snapshot System
 **Source:** ARCHITECTURE_IMPROVEMENTS_STATUS.md
-**Status:** ❌ NOT STARTED
-**Effort:** 2-3 days
+**Status:** ✅ ALREADY IMPLEMENTED (lib/sandbox/snapshot-manager.ts)
+**Effort:** N/A - Already done
 **Impact:** 60s → 5s startup for configured sandboxes
 
-**Tasks:**
-- [ ] Create `/lib/sandbox/snapshot-manager.ts`
-- [ ] Implement snapshot creation
-- [ ] Implement snapshot restore
-- [ ] Add snapshot listing
-- [ ] Add pre-configured environments (node, python, rust)
-- [ ] Integrate with warm pool
+**Existing Implementation:**
+- `lib/sandbox/snapshot-manager.ts` - Named snapshot management
+- `lib/sandbox/checkpoint-system.ts` - Provider-level checkpoints
+- `lib/sandbox/snapshot-portability.ts` - Cross-provider migration
 
-**Files to Create:**
-- `lib/sandbox/snapshot-manager.ts`
+**Features Implemented:**
+- Named snapshots (e.g., "node18-base", "python3-ml")
+- Metadata tracking (creation time, size estimate, labels)
+- LRU eviction when snapshot limit reached (50 max)
+- Restore from snapshot to new sandbox handle
+- Integration with CheckpointSystem for persistence
+
+**Enhancement Opportunities:**
+- [ ] Add snapshot sharing between users
+- [ ] Add snapshot versioning
+- [ ] Add snapshot marketplace
 
 ---
 
@@ -411,6 +441,14 @@
 - [x] Template flows
 - [x] Loop detection
 - [x] Enhanced logging
+
+### From CENTRALIZED_TODO_LIST.md (Latest Session - March 29, 2026)
+- [x] Event Store Schema (`lib/events/schema.ts`)
+- [x] Event Store Persistence (`lib/events/store.ts`)
+- [x] Event Bus API (`lib/events/bus.ts`)
+- [x] Events API Endpoint (`app/api/events/route.ts`)
+- [x] Database Migration (`lib/database/migrations/001-events-table.sql`)
+- [x] Events Module Index (`lib/events/index.ts`)
 
 ---
 

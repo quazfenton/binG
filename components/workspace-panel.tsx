@@ -71,6 +71,7 @@ import {
   Square,
   Monitor,
   Newspaper,
+  Command,
 } from "lucide-react";
 import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";
@@ -111,6 +112,7 @@ import VNCConnectionTab from "@/components/vnc-connection-tab";
 import { NewsPanel } from "@/components/news-panel";
 import { CronJobsPanel } from "@/components/cron-jobs-panel";
 import FrontierFeedPlugin from "@/components/plugins/frontier-feed-plugin";
+import CommandDeckPlugin from "@/components/plugins/command-deck-plugin";
 import { PROVIDERS } from "@/lib/chat/providers";
 
 // ---------------------------------------------------------------------------
@@ -141,6 +143,7 @@ const TAB_DEFS: TabDef[] = [
   { value: 'news', label: 'News', icon: Newspaper },
   { value: 'cronjobs', label: 'Cron', icon: Clock },
   { value: 'frontier-feed', label: 'Frontier', icon: Sparkles },
+  { value: 'command-deck', label: 'Actions', icon: Command },
 ];
 
 // ---------------------------------------------------------------------------
@@ -3906,6 +3909,11 @@ export function ExperimentalWorkspacePanel() {
                 {/* Frontier Feed Tab */}
                 <TabsContent value="frontier-feed" className="flex-1 mt-0 overflow-hidden">
                   <FrontierFeedPlugin />
+                </TabsContent>
+
+                {/* Command Deck Tab */}
+                <TabsContent value="command-deck" className="flex-1 mt-0 overflow-hidden">
+                  <CommandDeckPlugin />
                 </TabsContent>
               </Tabs>
             </div>
