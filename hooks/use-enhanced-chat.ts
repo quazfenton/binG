@@ -209,7 +209,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
       // Some auth-required responses are returned as JSON, not SSE.
       const contentType = response.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
+      
+      // Check for JSON responses (errors, auth required, etc.)
+      // Skip this for SSE streams which may include 'application/json' in content-type
+      if (contentType.includes('application/json') && !contentType.includes('text/event-stream')) {
         const payload = await response.json().catch(() => ({} as any));
         const authRequired =
           payload?.status === 'auth_required' ||

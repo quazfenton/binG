@@ -123,7 +123,7 @@ const RESPONSIVE_CONFIGS: Record<ViewportSize, Omit<ResponsiveConfig, 'size' | '
   wide: {
     fontScale: 1.15,
     maxWidth: 75,
-    zoneGap: '12px',
+    zoneGap: 12,
     padding: 20,
     gridColumns: 4,
     showLabels: true,
@@ -324,17 +324,15 @@ function useOAuthNotifications(
            github: '🐙',
            twitter: '🐦',
          };
-         const icon = sourceIcons[notif.source] || '📌';
- 
-         const fragment = createFragment(
-           `${icon} ${notif.content}`,
-           'notification',
-           notif.source,
-           notif.priority === 'high' ? 'drop' : 'fade-in',
-           template,
-           notif.author,
-           { url: notif.url, timestamp: notif.timestamp },
-         );
+         const icon = sourceIcons[notif.source] || '📌';        const fragment = createFragment(
+          `${icon} ${notif.content}`,
+          'notification',
+          (notif.source || 'manual') as any,
+          notif.priority === 'high' ? 'drop' : 'fade-in',
+          template,
+          notif.author || undefined,
+          { url: notif.url, timestamp: notif.timestamp },
+        );
  
          pushNotification(fragment, 12000, 'top-right');
        }

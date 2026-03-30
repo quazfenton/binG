@@ -1981,26 +1981,20 @@ export function ExperimentalWorkspacePanel() {
       const isDragTarget = dragOverFolder === node.path;
 
       return (
-        <div 
-          key={node.path} 
-          className="group"
-          onDragOver={(e) => handleDragOver(e, node.path)}
-          onDragLeave={handleDragLeave}
-          onDrop={(e) => handleDrop(e, node.path)}
-        >
+        <div key={node.path} className="group" onDragOver={(e) => handleDragOver(e, node.path)} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, node.path)}>
           <div className={`flex items-center rounded ${isDragTarget ? 'bg-cyan-500/30 border border-cyan-500/50' : ''}`}>
             <button
               onClick={() => toggleFolder(node.path)}
               onDoubleClick={() => handleRenameFile(node.path, node.name)}
-              className="flex items-center gap-1 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors"
+              className="flex items-center gap-1 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors overflow-hidden"
               style={{ paddingLeft: indent + 8 }}
             >
               {isExpanded ? (
-                <ChevronDown className="h-3 w-3 text-white/60" />
+                <ChevronDown className="h-3 w-3 text-white/60 flex-shrink-0" />
               ) : (
-                <ChevronRight className="h-3 w-3 text-white/60" />
+                <ChevronRight className="h-3 w-3 text-white/60 flex-shrink-0" />
               )}
-              <Folder className="h-3 w-3 text-blue-400" />
+              <Folder className="h-3 w-3 text-blue-400 flex-shrink-0" />
               {renamingFile === node.path ? (
                 <Input
                   value={renameValue}
@@ -2010,12 +2004,12 @@ export function ExperimentalWorkspacePanel() {
                     if (e.key === 'Escape') cancelRename();
                   }}
                   onBlur={confirmRename}
-                  className="h-5 text-xs bg-black/50 border-white/30"
+                  className="h-5 text-xs bg-black/50 border-white/30 min-w-0 flex-1"
                   autoFocus
                   onClick={(e) => e.stopPropagation()}
                 />
               ) : (
-                <span className="text-white/80">{node.name}</span>
+                <span className="text-white/80 truncate flex-1 min-w-0">{node.name}</span>
               )}
             </button>
             {/* Paste button when clipboard has content */}
@@ -2413,10 +2407,10 @@ export function ExperimentalWorkspacePanel() {
                   />
                 </div>
 
-                {/* Explorer Tab */}
-                <TabsContent value="explorer" className="flex-1 mt-0 overflow-hidden">
-                  <ScrollArea className="h-full">
-                    <div className="p-4 space-y-2">
+                 {/* Explorer Tab */}
+                 <TabsContent value="explorer" className="flex-1 mt-0 h-full">
+                   <ScrollArea className="h-full max-h-full">
+                     <div className="p-4 space-y-2 max-w-full overflow-auto">
                       <div className="flex items-center justify-between mb-4">
                         <span className="text-xs text-white/60">File Explorer</span>
                         <div className="flex gap-1">
