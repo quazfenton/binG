@@ -86,6 +86,8 @@ export async function executeBashCommand(
       // Locale settings for consistent output
       LANG: process.env.LANG || 'en_US.UTF-8',
       LC_ALL: process.env.LC_ALL || 'en_US.UTF-8',
+      // Node environment
+      NODE_ENV: process.env.NODE_ENV || 'development',
       // Allow user-provided env to override defaults
       ...options.env,
     };
@@ -93,7 +95,7 @@ export async function executeBashCommand(
     return new Promise((resolve, reject) => {
       const proc = spawn('bash', ['-c', command], {
         cwd: workingDir,
-        env: safeEnv,
+        env: safeEnv as NodeJS.ProcessEnv,
         timeout: options.timeout || DEFAULT_CONFIG.defaultTimeout,
         shell: false, // Explicitly use bash from spawn
       });

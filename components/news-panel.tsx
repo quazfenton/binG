@@ -770,9 +770,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
         return (
           <div className="space-y-4">
             <div className="grid grid-cols-1 gap-4">
-              {filteredArticles.slice(0, 3).map((article, index) => (
+              {filteredArticles.slice(0, 3).map((article) => (
                 <HeroCard
-                  key={`${article.id}-${article.source}-hero-${index}`}
+                  key={`${article.url}-hero`}
                   article={article}
                   onClick={(e) => handleArticleClick(article, e)}
                 />
@@ -780,9 +780,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
             </div>
             <div className="space-y-2 mt-6">
               <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider">More Stories</h3>
-              {filteredArticles.slice(3).map((article, index) => (
+              {filteredArticles.slice(3).map((article) => (
                 <CompactCard
-                  key={`${article.id}-${article.source}-compact-${index}`}
+                  key={`${article.url}-compact`}
                   article={article}
                   onClick={(e) => handleArticleClick(article, e)}
                 />
@@ -794,9 +794,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
       case "grid":
         return (
           <div className={`grid ${getGridClass()} gap-3`}>
-            {filteredArticles.map((article, index) => (
+            {filteredArticles.map((article) => (
               <MasonryCard
-                key={`${article.id}-${article.source}-${index}`}
+                key={article.url}
                 article={article}
                 style={layoutConfig.cardStyle}
                 onClick={(e) => handleArticleClick(article, e)}
@@ -808,9 +808,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
       case "masonry":
         return (
           <div className={`grid ${getGridClass()} gap-2`}>
-            {filteredArticles.map((article, index) => (
+            {filteredArticles.map((article) => (
               <MasonryCard
-                key={`${article.id}-${article.source}-${index}`}
+                key={article.url}
                 article={article}
                 style="collage"
                 onClick={(e) => handleArticleClick(article, e)}
@@ -822,9 +822,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
       case "video":
         return (
           <div className={`grid ${getGridClass()} gap-4`}>
-            {filteredArticles.map((article, index) => (
+            {filteredArticles.map((article) => (
               <VideoCard
-                key={`${article.id}-${article.source}-${index}`}
+                key={article.url}
                 article={article}
                 onClick={(e) => handleArticleClick(article, e)}
               />
@@ -835,9 +835,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
       case "live":
         return (
           <div className={`${getGridClass()} gap-3`}>
-            {filteredArticles.slice(0, 10).map((article, index) => (
+            {filteredArticles.slice(0, 10).map((article) => (
               <LiveCard
-                key={`${article.id}-${article.source}-${index}`}
+                key={`${article.url}-live`}
                 article={{ ...article, isLive: true, viewerCount: Math.floor(Math.random() * 5000) + 100 }}
                 onClick={(e) => handleArticleClick(article, e)}
               />
@@ -848,9 +848,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
       case "list":
         return (
           <div className="space-y-1">
-            {filteredArticles.map((article, index) => (
+            {filteredArticles.map((article) => (
               <ListCard
-                key={`${article.id}-${article.source}-list-${index}`}
+                key={article.url}
                 article={article}
                 onClick={(e) => handleArticleClick(article, e)}
               />
@@ -861,9 +861,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
       case "compact":
         return (
           <div className="space-y-2">
-            {filteredArticles.map((article, index) => (
+            {filteredArticles.map((article) => (
               <CompactCard
-                key={`${article.id}-${article.source}-compact-${index}`}
+                key={article.url}
                 article={article}
                 onClick={(e) => handleArticleClick(article, e)}
               />

@@ -352,11 +352,25 @@ export async function POST(request: NextRequest) {
     const defaultScopePath = `project/sessions/${sanitizePathSegment(resolvedConversationId)}`;
     // Sanitize scopePath to ensure folder names are not corrupted with ownerId prefix
     // e.g., "project/sessions/anon:1774710784761_6TB03h8Ow:002" -> "project/sessions/002"
-    const requestedScopePath = sanitizeScopePath(
-      typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
-        ? filesystemContext.scopePath.trim()
-        : defaultScopePath
-    );
+    const rawScopePath = typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
+      ? filesystemContext.scopePath.trim()
+      : defaultScopePath;
+    
+    // Log scopePath for debugging session folder naming issues
+    console.log('[Chat API] Scope path handling:', {
+      rawScopePath,
+      defaultScopePath,
+      fromClient: !!filesystemContext?.scopePath,
+      resolvedConversationId,
+    });
+    
+    const requestedScopePath = sanitizeScopePath(rawScopePath);
+    
+    // Log sanitized result
+    console.log('[Chat API] Sanitized scope path:', {
+      before: rawScopePath,
+      after: requestedScopePath,
+    });
     // SECURITY: Use persistent anonymous session ID from cookie if available
     // Sanitize to prevent path traversal attacks (e.g., ".." or "/" in cookie value)
     // Use resolveFilesystemOwner for consistent anonymous session handling
@@ -1122,6 +1136,13 @@ export async function POST(request: NextRequest) {
 
               emitRef.current = realEmit;
 
+              // Send initial 'init' event to establish stream connection immediately
+              // This helps client-side rendering detect the stream has started
+              realEmit('init', {
+                requestId: streamRequestId,
+                timestamp: Date.now(),
+              });
+
               // Flush any pending events
               for (const pending of pendingEvents) {
                 realEmit(pending.event, { requestId: streamRequestId, ...pending.data, timestamp: pending.timestamp });
@@ -1646,7 +1667,7 @@ export async function POST(request: NextRequest) {
                 e.includes('event: sandbox_output') ||
                 e.includes('event: spec_amplification')  // Include spec amplification progress
               );
-              const tokenEvents = events.filter(e => e.includes('event: token') && e.includes('"type":"token"'));
+              const tokenEvents = events.filter(e => e.includes('event: token'));
               const doneEvent = events.find(e => e.includes('event: done'));
 
               // Send metadata events first (quick succession)
