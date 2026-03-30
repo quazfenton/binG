@@ -37,6 +37,7 @@ import {
   CheckCircle,
   XCircle,
   AlertCircle,
+  Info,
   Zap,
   Calendar,
   BarChart3,
@@ -509,6 +510,9 @@ export default function WorkflowsTab() {
     return new Date(timestamp).toLocaleString();
   };
 
+  // Check if n8n is configured
+  const isConfigured = settings.n8nUrl && settings.apiKey;
+
   return (
     <div className="h-full flex flex-col">
       {/* Header */}
@@ -519,7 +523,9 @@ export default function WorkflowsTab() {
           </div>
           <div>
             <h3 className="text-lg font-semibold text-white">n8n Workflows</h3>
-            <p className="text-xs text-white/60">Automation & Workflow Management</p>
+            <p className="text-xs text-white/60">
+              {isConfigured ? 'Connected to n8n' : 'Setup required - Automation & Workflow Management'}
+            </p>
           </div>
         </div>
 
@@ -563,6 +569,95 @@ export default function WorkflowsTab() {
         </div>
       </div>
 
+      {/* Initial Setup Box - Show when not configured */}
+      {!isConfigured && activeTab !== "settings" && (
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="p-6 mx-4 mt-4 rounded-lg bg-gradient-to-r from-orange-500/10 to-red-500/10 border border-orange-500/30"
+        >
+          <div className="flex items-start gap-4">
+            <div className="p-3 bg-orange-500/20 rounded-lg">
+              <Zap className="w-8 h-8 text-orange-400" />
+            </div>
+            <div className="flex-1">
+              <h3 className="text-lg font-semibold text-white mb-2">Connect to n8n</h3>
+              <p className="text-sm text-white/70 mb-4">
+                Set up your n8n instance to start automating workflows. Your credentials are stored securely with encryption.
+              </p>
+              
+              <div className="grid grid-cols-2 gap-4 mb-4">
+                <div className="text-sm">
+                  <div className="flex items-center gap-2 text-white/60 mb-1">
+                    <CheckCircle className="w-4 h-4 text-green-400" />
+                    <span>Secure localStorage with obfuscation</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-white/60">
+                    <CheckCircle className="w-4 h-4 text-green-400" />
+                    <span>Auto-refresh workflows</span>
+                  </div>
+                </div>
+                <div className="text-sm">
+                  <div className="flex items-center gap-2 text-white/60 mb-1">
+                    <CheckCircle className="w-4 h-4 text-green-400" />
+                    <span>Real-time execution monitoring</span>
+                  </div>
+                  <div className="flex items-center gap-2 text-white/60">
+                    <CheckCircle className="w-4 h-4 text-green-400" />
+                    <span>Workflow triggers & scheduling</span>
+                  </div>
+                </div>
+              </div>
+
+              <div className="flex items-center gap-3">
+                <Button
+                  onClick={() => setActiveTab("settings")}
+                  className="bg-orange-500 hover:bg-orange-600 text-white"
+                >
+                  <Settings className="w-4 h-4 mr-2" />
+                  Configure n8n
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={() => window.open('https://n8n.io/getting-started', '_blank')}
+                  className="border-white/20 text-white/80 hover:bg-white/10"
+                >
+                  <ExternalLink className="w-4 h-4 mr-2" />
+                  n8n Setup Guide
+                </Button>
+              </div>
+            </div>
+          </div>
+        </motion.div>
+      )}
+
+      {/* Connection Status Banner - Show when configured but not connected */}
+      {isConfigured && !isConnected && !isLoading && (
+        <motion.div
+          initial={{ opacity: 0, y: -20 }}
+          animate={{ opacity: 1, y: 0 }}
+          className="p-4 mx-4 mt-4 rounded-lg bg-yellow-500/10 border border-yellow-500/30"
+        >
+          <div className="flex items-center justify-between">
+            <div className="flex items-center gap-3">
+              <AlertCircle className="w-5 h-5 text-yellow-400" />
+              <div>
+                <p className="text-sm font-medium text-yellow-200">Connection failed</p>
+                <p className="text-xs text-yellow-400/80">Unable to connect to n8n. Check your credentials and try again.</p>
+              </div>
+            </div>
+            <Button
+              onClick={handleTestConnection}
+              variant="outline"
+              className="border-yellow-500/50 text-yellow-200 hover:bg-yellow-500/20"
+            >
+              <RefreshCw className="w-4 h-4 mr-2" />
+              Test Connection
+            </Button>
+          </div>
+        </motion.div>
+      )}
+
       {/* Content */}
       <ScrollArea className="flex-1">
         <AnimatePresence mode="wait">
@@ -575,6 +670,45 @@ export default function WorkflowsTab() {
               exit={{ opacity: 0, y: -20 }}
               className="p-4 space-y-3"
             >
+              {/* Demo Mode Notice */}
+              {!isConfigured && (
+                <div className="p-3 rounded-lg bg-blue-500/10 border border-blue-500/30 flex items-center gap-3">
+                  <Info className="w-5 h-5 text-blue-400 flex-shrink-0" />
+                  <div className="flex-1 text-sm text-blue-200">
+                    <span className="font-medium">Demo Mode:</span> Showing sample workflows. Configure n8n credentials to see your real workflows.
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={() => setActiveTab("settings")}
+                    variant="outline"
+                    className="border-blue-500/50 text-blue-200 hover:bg-blue-500/20"
+                  >
+                    <Settings className="w-4 h-4 mr-2" />
+                    Configure
+                  </Button>
+                </div>
+              )}
+
+              {/* Connected Notice */}
+              {isConfigured && isConnected && (
+                <div className="p-3 rounded-lg bg-green-500/10 border border-green-500/30 flex items-center gap-3">
+                  <CheckCircle className="w-5 h-5 text-green-400 flex-shrink-0" />
+                  <div className="flex-1 text-sm text-green-200">
+                    <span className="font-medium">Connected:</span> Showing live workflows from {settings.n8nUrl}
+                  </div>
+                  <Button
+                    size="sm"
+                    onClick={handleRefresh}
+                    variant="outline"
+                    disabled={isRefreshing}
+                    className="border-green-500/50 text-green-200 hover:bg-green-500/20"
+                  >
+                    <RefreshCw className={`w-4 h-4 mr-2 ${isRefreshing ? "animate-spin" : ""}`} />
+                    Refresh
+                  </Button>
+                </div>
+              )}
+
               {/* Stats Overview */}
               <div className="grid grid-cols-4 gap-3 mb-4">
                 <Card className="bg-white/5 border-white/10">

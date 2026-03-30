@@ -7,9 +7,10 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { readFile, writeFile, mkdir } from "fs/promises";
+import { readFile, writeFile, mkdir, rename } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
+import { createHash } from "crypto";
 
 const DATA_DIR = join(process.cwd(), "data");
 const SNIPPETS_PATH = join(DATA_DIR, "code-snippets.json");
@@ -73,10 +74,55 @@ async function readSnippets(): Promise<any[]> {
   }
 }
 
-// Write snippets
+// Write snippets atomically with mutex
+const writeQueue: Array<() => Promise<void>> = [];
+let isWriting = false;
+
+async function processWriteQueue(): Promise<void> {
+  if (isWriting || writeQueue.length === 0) return;
+  
+  isWriting = true;
+  const task = writeQueue.shift();
+  
+  try {
+    await task?.();
+  } finally {
+    isWriting = false;
+    await processWriteQueue();
+  }
+}
+
 async function writeSnippets(snippets: any[]): Promise<void> {
   await ensureDataDir();
-  await writeFile(SNIPPETS_PATH, JSON.stringify(snippets, null, 2));
+  
+  // Write to temp file first, then rename for atomic operation
+  const tempPath = `${SNIPPETS_PATH}.tmp.${Date.now()}-${createHash('md5').update(Math.random().toString()).digest('hex').slice(0, 8)}`;
+  
+  try {
+    await writeFile(tempPath, JSON.stringify(snippets, null, 2), 'utf-8');
+    await rename(tempPath, SNIPPETS_PATH);
+  } catch (error) {
+    // Clean up temp file on error
+    try {
+      await writeFile(tempPath, '[]');
+    } catch {}
+    throw error;
+  }
+}
+
+// Queue-based write for concurrent safety
+async function queueWriteSnippets(snippets: any[]): Promise<void> {
+  return new Promise((resolve, reject) => {
+    writeQueue.push(async () => {
+      try {
+        await writeSnippets(snippets);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+    processWriteQueue();
+  });
 }
 
 // GET - List all snippets and templates
@@ -153,7 +199,7 @@ export async function POST(request: NextRequest) {
         };
 
         currentSnippets.unshift(newSnippet);
-        await writeSnippets(currentSnippets);
+        await queueWriteSnippets(currentSnippets);
 
         return NextResponse.json({
           success: true,
@@ -170,7 +216,7 @@ export async function POST(request: NextRequest) {
         }
 
         const filtered = currentSnippets.filter(s => s.id !== snippet.id);
-        await writeSnippets(filtered);
+        await queueWriteSnippets(filtered);
 
         return NextResponse.json({
           success: true,
@@ -186,7 +232,7 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        await writeSnippets(newSnippets);
+        await queueWriteSnippets(newSnippets);
 
         return NextResponse.json({
           success: true,

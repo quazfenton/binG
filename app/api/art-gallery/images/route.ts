@@ -10,6 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
+import { auth0 } from "@/lib/auth0";
 
 const DATA_DIR = join(process.cwd(), "data");
 const IMAGES_PATH = join(DATA_DIR, "art-gallery.json");
@@ -97,6 +98,24 @@ async function writeImages(images: any[]): Promise<void> {
   await writeFile(IMAGES_PATH, JSON.stringify(images, null, 2));
 }
 
+// Get auth session from request
+async function getAuthSession(request: NextRequest) {
+  try {
+    const session = await auth0.getSession(request);
+    if (!session?.user) return null;
+    
+    return {
+      user: {
+        id: session.user.sub,
+        email: session.user.email,
+        roles: (session.user as any)['https://binG.com/roles'] || [],
+      },
+    };
+  } catch {
+    return null;
+  }
+}
+
 // GET - List all images
 export async function GET(request: NextRequest) {
   try {
@@ -155,6 +174,18 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { action, image, images: newImages } = body;
+
+    // SECURITY: Auth check for destructive operations
+    const session = await getAuthSession(request);
+    const isAdmin = session?.user?.roles?.includes('admin') ?? false;
+
+    // Block destructive operations for non-admin users
+    if ((action === 'delete' || action === 'replace') && !isAdmin) {
+      return NextResponse.json(
+        { success: false, error: isAdmin ? 'Authentication required' : 'Admin access required for this operation' },
+        { status: isAdmin ? 403 : 401 }
+      );
+    }
 
     const currentImages = await readImages();
 
