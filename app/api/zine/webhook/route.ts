@@ -136,20 +136,32 @@ export async function POST(request: NextRequest) {
     const result = WebhookSchema.safeParse(body);
     if (result.success) {
       content = {
-        ...result.data.content,
+        type: result.data.content.type,
         id: result.data.content.id || `webhook-${Date.now()}`,
         createdAt: result.data.content.createdAt || Date.now(),
+        title: result.data.content.title,
+        body: result.data.content.body,
+        media: result.data.content.media,
+        metadata: result.data.content.metadata,
         source: "webhook",
+        expiresAt: result.data.content.expiresAt,
+        priority: result.data.content.priority,
       };
     } else {
       // Try to parse as direct content
       const contentResult = ContentSchema.safeParse(body);
       if (contentResult.success) {
         content = {
-          ...contentResult.data,
+          type: contentResult.data.type,
           id: contentResult.data.id || `webhook-${Date.now()}`,
           createdAt: contentResult.data.createdAt || Date.now(),
+          title: contentResult.data.title,
+          body: contentResult.data.body,
+          media: contentResult.data.media,
+          metadata: contentResult.data.metadata,
           source: "webhook",
+          expiresAt: contentResult.data.expiresAt,
+          priority: contentResult.data.priority,
         };
       } else {
         return NextResponse.json(

@@ -266,7 +266,8 @@ export async function POST(request: NextRequest) {
         payload = {
           ...validated,
           source: validated.source || 'webhook',
-        };
+          content: validated.content || '', // Ensure content is never undefined
+        } as ZineNotificationPayload;
       }
     } else {
       // Plain text body
@@ -288,21 +289,28 @@ export async function POST(request: NextRequest) {
 
     // Generate unique ID if not provided
     const id = payload.id || `notif-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`;
+    
+    // Ensure content is always present (satisfy ZineNotificationPayload type)
+    const typedPayload = {
+      ...payload,
+      content: payload.content || '',
+    } as ZineNotificationPayload;
 
     // Detect content type for styling
     const contentType2 = detectContentType(payload.content);
 
     // Build response
-    const response = {
+    const response: { success: boolean; id: string; received: Record<string, unknown>; instructions: string } = {
       success: true,
       id,
       received: {
-        source: payload.source,
-        type: payload.type || 'notification',
+        source: typedPayload.source,
+        type: typedPayload.type || 'notification',
         contentType: contentType2,
-        author: payload.author,
-        priority: payload.priority || 'normal',
-        timestamp: payload.timestamp || new Date().toISOString(),
+        content: typedPayload.content,
+        author: typedPayload.author,
+        priority: typedPayload.priority || 'normal',
+        timestamp: typedPayload.timestamp || new Date().toISOString(),
       },
       instructions: 'Content will be styled based on detected type and displayed in Zine Display',
     };

@@ -278,10 +278,10 @@ function useOAuthNotifications(
   template: ZineTemplate,
   enabled: boolean,
 ) {
-  const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
-  const [isPolling, setIsPolling] = useState(false);
-  const intervalRef = useRef<NodeJS.Timeout | null>(null);
-  const lastFetchRef = useRef<number>(0);
+   const [connectedProviders, setConnectedProviders] = useState<string[]>([]);
+   const [isOAuthPolling, setIsOAuthPolling] = useState(false);
+   const intervalRef = useRef<NodeJS.Timeout | null>(null);
+   const lastFetchRef = useRef<number>(0);
 
   // Fetch connected OAuth providers on mount
   useEffect(() => {

@@ -181,31 +181,13 @@ export async function POST(request: NextRequest) {
     switch (section) {
        // Broadway Deal Hunter
        case "broadway-deal-hunter": {
-         // Trigger the Trigger.dev task for Broadway deal hunting
-         try {
-           // Import Trigger SDK
-           const { trigger } = await import("@trigger.dev/sdk/v3");
-           
-           // Trigger the broadwayMonitor task
-           const run = await trigger.broadwayMonitor.trigger({
-             // We could pass parameters here if needed
-           });
-           
-           // Return immediate response - the task runs in background
-           // In a real implementation, we might want to use real-time streams
-           // to get the result when it's ready, or poll for completion
-           return NextResponse.json({
-             success: true,
-             message: "Broadway deal hunting task triggered",
-             runId: run.id
-           });
-         } catch (error: any) {
-           console.error("Failed to trigger Broadway deal hunter:", error);
-           return NextResponse.json({
-             success: false,
-             error: error.message || "Failed to trigger task"
-           }, { status: 500 });
-         }
+         // TODO: Implement Broadway deal hunting integration
+         // For now, return a placeholder response
+         return NextResponse.json({
+           success: true,
+           message: "Broadway deal hunting feature coming soon",
+           runId: null
+         });
        }
       // Art Gallery
       case "art/generate": {
@@ -277,7 +259,7 @@ export async function POST(request: NextRequest) {
                 timeout: 5000,
                 sandbox: { console: { log: console.log } },
               });
-              result = vm.run(parsed.code);
+              const result = vm.run(parsed.code);
 
               console.log = originalLog;
 

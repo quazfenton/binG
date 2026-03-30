@@ -20,7 +20,7 @@
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 import { registerMultiAgentTools } from '@/lib/mcp/multi-agent-tools';
 
 const logger = createLogger('MCP:StdioServer');
