@@ -14,6 +14,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
+import { timingSafeEqual } from "crypto";
 
 const DATA_DIR = join(process.cwd(), "data");
 const PLAYLIST_PATH = join(DATA_DIR, "music-hub-playlist.json");
@@ -26,6 +27,20 @@ const RATE_LIMIT = {
 
 // Rate limit store (in-memory for now)
 const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
+
+/**
+ * Constant-time comparison for webhook secrets to prevent timing attacks
+ */
+function safeCompare(a: string, b: string): boolean {
+  const bufA = Buffer.from(a, 'utf8');
+  const bufB = Buffer.from(b, 'utf8');
+  
+  // Lengths must match
+  if (bufA.length !== bufB.length) return false;
+  
+  // Use timing-safe comparison
+  return timingSafeEqual(bufA, bufB);
+}
 
 // Default playlist
 const DEFAULT_PLAYLIST = {
@@ -211,9 +226,9 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { action, album, playlist: newPlaylist, webhookSecret } = body;
 
-    // Validate webhook secret if configured
+    // Validate webhook secret if configured using constant-time comparison
     const expectedSecret = process.env.MUSIC_HUB_WEBHOOK_SECRET;
-    if (expectedSecret && webhookSecret !== expectedSecret) {
+    if (expectedSecret && (!webhookSecret || !safeCompare(webhookSecret, expectedSecret))) {
       return NextResponse.json(
         { success: false, error: 'Unauthorized: Invalid webhook secret' },
         { status: 401, headers }

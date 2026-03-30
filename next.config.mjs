@@ -136,6 +136,8 @@ const nextConfig = {
     'jsonwebtoken',
     'jose',
     'bcryptjs',
+    '@tursodatabase/database',
+    '@tursodatabase/sync',
   ],
   webpack: (config, { isServer, dev }) => {
     if (!isServer) {

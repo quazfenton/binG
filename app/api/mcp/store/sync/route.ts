@@ -20,8 +20,21 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const body = await request.json();
-    const { query, limit, verified } = body || {};
+    // Parse body gracefully - allow empty body for full sync
+    let body: { query?: string; limit?: number; verified?: boolean } = {};
+    try {
+      const raw = await request.text();
+      if (raw && raw.trim()) {
+        body = JSON.parse(raw);
+      }
+    } catch {
+      return NextResponse.json(
+        { error: 'Invalid JSON body' },
+        { status: 400 }
+      );
+    }
+
+    const { query, limit, verified } = body;
 
     const servers = await mcpStoreService.syncWithSmithery({
       query,
@@ -37,7 +50,7 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     logger.error('Failed to sync with Smithery:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to sync with Smithery' },
+      { error: 'Failed to sync with Smithery' },
       { status: 500 }
     );
   }

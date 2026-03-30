@@ -36,12 +36,22 @@ async function ensureDataDir() {
 // Load bookmarks from file
 async function loadBookmarks(): Promise<Bookmark[]> {
   await ensureDataDir();
-  
+
   try {
     const data = await readFile(BOOKMARKS_FILE, 'utf-8');
-    return JSON.parse(data);
-  } catch {
-    return [];
+    const parsed: unknown = JSON.parse(data);
+    if (!Array.isArray(parsed)) {
+      throw new Error('Bookmarks file does not contain an array');
+    }
+    return parsed as Bookmark[];
+  } catch (error: unknown) {
+    // Only return empty array if file doesn't exist
+    if ((error as NodeJS.ErrnoException).code === 'ENOENT') {
+      return [];
+    }
+    // Log and rethrow all other errors (corruption, permissions, etc.)
+    console.error('Failed to read bookmarks file:', BOOKMARKS_FILE, error);
+    throw error;
   }
 }
 
@@ -99,27 +109,49 @@ export async function POST(request: NextRequest) {
     const existing = await loadBookmarks();
     const existingUrls = new Set(existing.map(b => b.url));
 
-    // Filter out duplicates and add IDs
+    // Filter out duplicates and add IDs with field validation
     const added: Bookmark[] = [];
     for (const bookmark of newBookmarks) {
-      if (!bookmark.url || existingUrls.has(bookmark.url)) {
+      // Validate required fields
+      if (!bookmark || typeof bookmark !== 'object') {
         continue;
       }
 
+      const url = bookmark.url;
+      if (!url || typeof url !== 'string') {
+        continue;
+      }
+
+      // Validate URL format (must be HTTP/HTTPS)
+      try {
+        const urlObj = new URL(url);
+        if (urlObj.protocol !== 'http:' && urlObj.protocol !== 'https:') {
+          continue;
+        }
+      } catch {
+        continue;
+      }
+
+      // Skip if already exists
+      if (existingUrls.has(url)) {
+        continue;
+      }
+
+      // Whitelist only allowed fields with type validation
       const newBookmark: Bookmark = {
         id: `bookmark-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-        url: bookmark.url,
-        title: bookmark.title,
-        description: bookmark.description,
-        imageUrl: bookmark.imageUrl,
-        siteName: bookmark.siteName,
-        tags: bookmark.tags || [],
-        addedAt: bookmark.addedAt || Date.now(),
+        url,
+        title: typeof bookmark.title === 'string' ? bookmark.title : undefined,
+        description: typeof bookmark.description === 'string' ? bookmark.description : undefined,
+        imageUrl: typeof bookmark.imageUrl === 'string' ? bookmark.imageUrl : undefined,
+        siteName: typeof bookmark.siteName === 'string' ? bookmark.siteName : undefined,
+        tags: Array.isArray(bookmark.tags) ? bookmark.tags.filter(t => typeof t === 'string') : [],
+        addedAt: typeof bookmark.addedAt === 'number' ? bookmark.addedAt : Date.now(),
       };
 
       existing.push(newBookmark);
       added.push(newBookmark);
-      existingUrls.add(bookmark.url);
+      existingUrls.add(url);
     }
 
     await saveBookmarks(existing);
@@ -182,7 +214,7 @@ export async function PUT(request: NextRequest) {
     const body = await request.json();
     const { id, ...updates } = body;
 
-    if (!id) {
+    if (!id || typeof id !== 'string') {
       return NextResponse.json(
         { error: 'Bookmark ID is required' },
         { status: 400 }
@@ -199,9 +231,29 @@ export async function PUT(request: NextRequest) {
       );
     }
 
+    // Whitelist only allowed mutable fields with type validation
+    const allowedUpdates: Partial<Bookmark> = {};
+    
+    if (typeof updates.title === 'string') {
+      allowedUpdates.title = updates.title;
+    }
+    if (typeof updates.description === 'string') {
+      allowedUpdates.description = updates.description;
+    }
+    if (typeof updates.imageUrl === 'string') {
+      allowedUpdates.imageUrl = updates.imageUrl;
+    }
+    if (typeof updates.siteName === 'string') {
+      allowedUpdates.siteName = updates.siteName;
+    }
+    if (Array.isArray(updates.tags)) {
+      allowedUpdates.tags = updates.tags.filter(t => typeof t === 'string');
+    }
+
+    // Prevent overwriting immutable fields (id, addedAt, url)
     bookmarks[index] = {
       ...bookmarks[index],
-      ...updates,
+      ...allowedUpdates,
       updatedAt: Date.now(),
     };
 

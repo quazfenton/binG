@@ -20,12 +20,5 @@ CREATE INDEX IF NOT EXISTS idx_healing_log_strategy ON event_healing_log(strateg
 CREATE INDEX IF NOT EXISTS idx_healing_log_success ON event_healing_log(success);
 CREATE INDEX IF NOT EXISTS idx_healing_log_created_at ON event_healing_log(created_at);
 
--- Comments
-COMMENT ON TABLE event_healing_log IS 'Self-healing attempt history for failed events';
-COMMENT ON COLUMN event_healing_log.id IS 'Unique healing log identifier (UUID)';
-COMMENT ON COLUMN event_healing_log.event_id IS 'Associated event ID that was healed';
-COMMENT ON COLUMN event_healing_log.strategy IS 'Healing strategy used (retry, llm, fallback, skip)';
-COMMENT ON COLUMN event_healing_log.success IS 'Whether healing was successful';
-COMMENT ON COLUMN event_healing_log.explanation IS 'Explanation of healing attempt';
-COMMENT ON COLUMN event_healing_log.fix_applied IS 'Fix that was applied (if any)';
-COMMENT ON COLUMN event_healing_log.confidence IS 'Confidence score (0.0-1.0)';
+-- Note: SQLite doesn't support COMMENT ON statements
+-- Column documentation is maintained in the application code and schema files

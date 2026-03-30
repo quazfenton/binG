@@ -480,9 +480,9 @@ export async function GET(
 // DELETE - Clear cache
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { url: string } }
+  { params }: { params: Promise<{ url: string }> }
 ) {
-  const { url } = params;
+  const { url } = await params;
   const headers = {
     'X-RateLimit-Limit': RATE_LIMIT.maxRequests.toString(),
   };
