@@ -92,22 +92,21 @@ export class LocalCommandExecutor {
     const defaultCwd = 'project/sessions'
     
     // Use external cwd if provided and valid, otherwise use default
-    this.cwd[this.terminalId] = extCwd && extCwd.trim() ? extCwd : defaultCwd
+    // FIX: Validate that the CWD actually exists in the filesystem - if not, fall back to default
+    let initialCwd = extCwd && extCwd.trim() ? extCwd : defaultCwd
+    
+    // Check if the directory exists in filesystem, if not use default
+    const fs = this.getExtFileSystem?.() || this.fileSystem
+    if (!fs[initialCwd] || fs[initialCwd]?.type !== 'directory') {
+      initialCwd = defaultCwd
+    }
+    
+    this.cwd[this.terminalId] = initialCwd
 
     // Ensure project root exists
     if (!this.fileSystem['project']) {
       this.fileSystem = {
         'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
-      }
-    }
-
-    // Ensure project/sessions directory exists for default cwd
-    // This creates the sessions folder so the terminal can start there without errors
-    if (!this.fileSystem['project/sessions']) {
-      this.fileSystem['project/sessions'] = { 
-        type: 'directory', 
-        createdAt: Date.now(), 
-        modifiedAt: Date.now() 
       }
     }
   }

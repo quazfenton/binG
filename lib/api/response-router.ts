@@ -481,9 +481,11 @@ export class ResponseRouter {
       if (routerResponse.stream && typeof routerResponse.stream === 'object' && Symbol.asyncIterator in routerResponse.stream) {
         // This is a streaming response - return it with the stream generator
         // The caller will consume chunks as they arrive
+        // IMPORTANT: Preserve existing content for fallback standard streaming path
+        // (in case caller doesn't use the stream generator)
         return {
           success: true,
-          content: '', // Will be populated by streaming chunks
+          content: routerResponse.content || '', // Preserve content for standard streaming fallback
           stream: routerResponse.stream, // Pass through the async generator
           data: {
             ...routerResponse.data,
@@ -2020,7 +2022,7 @@ export class ResponseRouter {
       
       // Return primary response immediately (full response, not just .data)
       // This ensures content is properly passed through to the streaming pipeline
-      return primaryResult
+      return primaryResult as UnifiedResponse
       
       chatLogger.debug('File system edits detected, running spec amplification', { 
         requestId: request.requestId,

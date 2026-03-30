@@ -138,11 +138,15 @@ export default function MessageBubble({
     // First check for filesystem transaction (standard chat flow)
     const metadataFilesystem = (message.metadata as any)?.filesystem;
     if (metadataFilesystem && typeof metadataFilesystem === "object") {
+      // FIX: Show diff viewer even when transactionId is null but files were applied
+      // This handles "auto_applied" status where no transaction is needed
       const txId = typeof metadataFilesystem.transactionId === "string" ? metadataFilesystem.transactionId : "";
-      if (txId) {
+      const applied = Array.isArray(metadataFilesystem.applied) ? metadataFilesystem.applied : [];
+      
+      if (txId || applied.length > 0) {
         return {
-          transactionId: txId,
-          applied: Array.isArray(metadataFilesystem.applied) ? metadataFilesystem.applied : [],
+          transactionId: txId || undefined,
+          applied: applied,
           errors: Array.isArray(metadataFilesystem.errors) ? metadataFilesystem.errors : [],
           status: typeof metadataFilesystem.status === "string" ? metadataFilesystem.status : "auto_applied",
           isSpecEnhancement: false,

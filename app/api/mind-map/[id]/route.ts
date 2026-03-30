@@ -110,7 +110,15 @@ export async function PUT(request: NextRequest, { params }: { params: Promise<{ 
     }
 
     const body = await request.json();
-    
+
+    // Validate body is a non-null object
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return NextResponse.json(
+        { error: 'Request body must be a JSON object' },
+        { status: 400 }
+      );
+    }
+
     // Validate input types
     if (body.title !== undefined && typeof body.title !== 'string') {
       return NextResponse.json(

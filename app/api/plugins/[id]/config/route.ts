@@ -79,9 +79,9 @@ export async function POST(
     try {
       body = await request.json();
     } catch (parseError: any) {
-      logger.warn('Invalid JSON in plugin config request', { 
-        pluginId: id, 
-        error: parseError.message 
+      logger.warn('Invalid JSON in plugin execution request', {
+        pluginId: id,
+        error: parseError.message
       });
       return NextResponse.json(
         { error: 'Invalid JSON body' },
