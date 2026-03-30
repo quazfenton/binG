@@ -46,6 +46,56 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+// Fetch reasoning chains from API
+async function fetchChains(taskId?: string): Promise<ReasoningChain[]> {
+  try {
+    const params = new URLSearchParams();
+    if (taskId) params.set('taskId', taskId);
+    
+    const response = await fetch(`/api/mind-map/chains?${params}`);
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch chains');
+    }
+    
+    return data.chains || [];
+  } catch (err: any) {
+    console.error('[MindMap] Failed to fetch chains:', err);
+    toast.error('Failed to load reasoning chains');
+    return [];
+  }
+}
+
+// Fetch chain stats from API
+async function fetchStats(): Promise<{
+  totalChains: number;
+  activeChains: number;
+  totalThoughts: number;
+  avgThoughtsPerTask: number;
+  avgTokensPerTask: number;
+}> {
+  try {
+    const response = await fetch('/api/mind-map/stats');
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch stats');
+    }
+    
+    return data.stats;
+  } catch (err: any) {
+    console.error('[MindMap] Failed to fetch stats:', err);
+    return {
+      totalChains: 0,
+      activeChains: 0,
+      totalThoughts: 0,
+      avgThoughtsPerTask: 0,
+      avgTokensPerTask: 0,
+    };
+  }
+}
+
 // Types
 interface ThoughtNode {
   id: string;
@@ -180,13 +230,50 @@ const NODE_ICONS = {
 };
 
 export default function MindMapTab() {
-  const [chains, setChains] = useState<ReasoningChain[]>(MOCK_CHAINS);
+  const [chains, setChains] = useState<ReasoningChain[]>([]);
   const [selectedChain, setSelectedChain] = useState<ReasoningChain | null>(null);
-  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set(["node-1", "node-3"]));
+  const [expandedNodes, setExpandedNodes] = useState<Set<string>>(new Set());
   const [isPlaying, setIsPlaying] = useState(true);
   const [zoom, setZoom] = useState(1);
   const [filterType, setFilterType] = useState<string>("all");
   const [searchQuery, setSearchQuery] = useState("");
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<{
+    totalChains: number;
+    activeChains: number;
+    totalThoughts: number;
+    avgThoughtsPerTask: number;
+    avgTokensPerTask: number;
+  } | null>(null);
+
+  // Load chains on mount
+  useEffect(() => {
+    loadData();
+    const interval = setInterval(loadData, 30000); // Refresh every 30s
+    return () => clearInterval(interval);
+  }, []);
+
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      const [chainsData, statsData] = await Promise.all([
+        fetchChains(),
+        fetchStats(),
+      ]);
+      
+      setChains(chainsData);
+      setStats(statsData);
+      
+      if (chainsData.length > 0 && !selectedChain) {
+        setSelectedChain(chainsData[0]);
+        setExpandedNodes(new Set([chainsData[0].nodes[0]?.id]));
+      }
+    } catch (err: any) {
+      console.error('[MindMap] Failed to load data:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const toggleNode = (nodeId: string) => {
     setExpandedNodes(prev => {

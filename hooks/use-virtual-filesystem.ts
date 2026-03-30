@@ -71,8 +71,8 @@ interface SnapshotCacheEntry {
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
 const listCache = new Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }>();
 const inFlightRequests = new Map<string, Promise<any>>();
-const SNAPSHOT_CACHE_TTL_MS = 5000;  // 5 seconds for snapshots - reduced for fresher data
-const LIST_CACHE_TTL_MS = 3000;      // 3 seconds for directory listings - reduced for responsiveness
+const SNAPSHOT_CACHE_TTL_MS = 10000;  // 10 seconds for snapshots (was 5s) - reduced polling
+const LIST_CACHE_TTL_MS = 8000;      // 8 seconds for directory listings (was 3s) - reduced polling
 const SNAPSHOT_CACHE_MAX_ENTRIES = 100;
 
 // Debounce map to prevent duplicate API calls within short time windows

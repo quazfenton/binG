@@ -44,6 +44,72 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
+
+// Fetch images from API
+async function fetchImages(limit = 50, style?: string): Promise<GeneratedImage[]> {
+  try {
+    const params = new URLSearchParams();
+    params.set('limit', limit.toString());
+    if (style) params.set('style', style);
+    
+    const response = await fetch(`/api/ai-art/images?${params}`);
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch images');
+    }
+    
+    return data.images || [];
+  } catch (err: any) {
+    console.error('[AIArt] Failed to fetch images:', err);
+    toast.error('Failed to load gallery');
+    return [];
+  }
+}
+
+// Fetch stats from API
+async function fetchStats(): Promise<{
+  totalImages: number;
+  totalLikes: number;
+  totalDownloads: number;
+  imagesByStyle: Record<string, number>;
+  imagesThisWeek: number;
+}> {
+  try {
+    const response = await fetch('/api/ai-art/stats');
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch stats');
+    }
+    
+    return data.stats;
+  } catch (err: any) {
+    console.error('[AIArt] Failed to fetch stats:', err);
+    return {
+      totalImages: 0,
+      totalLikes: 0,
+      totalDownloads: 0,
+      imagesByStyle: {},
+      imagesThisWeek: 0,
+    };
+  }
+}
+
+// Like image via API
+async function likeImage(id: string): Promise<boolean> {
+  try {
+    const response = await fetch(`/api/ai-art/images/${id}/like`, {
+      method: 'POST',
+    });
+    
+    const data = await response.json();
+    return data.success === true;
+  } catch (err: any) {
+    console.error('[AIArt] Failed to like image:', err);
+    return false;
+  }
+}
 import {
   Select,
   SelectContent,
@@ -78,7 +144,8 @@ interface ArtStyle {
   examples: number;
 }
 
-const MOCK_IMAGES: GeneratedImage[] = [
+// Fallback images if API fails (used as initial state before fetch)
+const FALLBACK_IMAGES: GeneratedImage[] = [
   {
     id: "img-1",
     prompt: "Cyberpunk cityscape at night with neon lights and flying cars",
@@ -118,45 +185,6 @@ const MOCK_IMAGES: GeneratedImage[] = [
     height: 768,
     seed: 999,
   },
-  {
-    id: "img-4",
-    prompt: "Fantasy dragon perched on castle tower",
-    url: "https://picsum.photos/seed/fantasy1/1024/1024",
-    style: "fantasy",
-    model: "flux-1",
-    createdAt: Date.now() - 28800000,
-    likes: 892,
-    downloads: 445,
-    width: 1024,
-    height: 1024,
-    seed: 777,
-  },
-  {
-    id: "img-5",
-    prompt: "Minimalist zen garden with cherry blossoms",
-    url: "https://picsum.photos/seed/zen1/1024/768",
-    style: "minimalist",
-    model: "sdxl",
-    createdAt: Date.now() - 86400000,
-    likes: 445,
-    downloads: 178,
-    width: 1024,
-    height: 768,
-    seed: 555,
-  },
-  {
-    id: "img-6",
-    prompt: "Steampunk mechanical owl with brass gears",
-    url: "https://picsum.photos/seed/steam1/1024/1024",
-    style: "steampunk",
-    model: "flux-1",
-    createdAt: Date.now() - 172800000,
-    likes: 678,
-    downloads: 289,
-    width: 1024,
-    height: 1024,
-    seed: 333,
-  },
 ];
 
 const ART_STYLES: ArtStyle[] = [
@@ -170,7 +198,40 @@ const ART_STYLES: ArtStyle[] = [
 ];
 
 export default function ArtGalleryTab() {
-  const [images, setImages] = useState<GeneratedImage[]>(MOCK_IMAGES);
+  const [images, setImages] = useState<GeneratedImage[]>([]);
+  const [loading, setLoading] = useState(true);
+  const [stats, setStats] = useState<{
+    totalImages: number;
+    totalLikes: number;
+    totalDownloads: number;
+    imagesByStyle: Record<string, number>;
+    imagesThisWeek: number;
+  } | null>(null);
+
+  // Fetch images and stats on mount
+  useEffect(() => {
+    loadData();
+    const interval = setInterval(loadData, 60000); // Refresh every minute
+    return () => clearInterval(interval);
+  }, []);
+
+  const loadData = async () => {
+    try {
+      setLoading(true);
+      const [imagesData, statsData] = await Promise.all([
+        fetchImages(50),
+        fetchStats(),
+      ]);
+      
+      setImages(imagesData.length > 0 ? imagesData : FALLBACK_IMAGES);
+      setStats(statsData);
+    } catch (err) {
+      console.warn('Failed to load data, using fallback:', err);
+      setImages(FALLBACK_IMAGES);
+    } finally {
+      setLoading(false);
+    }
+  };
   const [selectedImage, setSelectedImage] = useState<GeneratedImage | null>(null);
   const [selectedStyle, setSelectedStyle] = useState<string>("all");
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");

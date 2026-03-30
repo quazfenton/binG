@@ -152,7 +152,7 @@ function MCPServerCard({
               <CardTitle className="text-base flex items-center gap-2">
                 {server.displayName}
                 {server.verified && (
-                  <Shield className="w-4 h-4 text-blue-400" title="Verified" />
+                  <Shield className="w-4 h-4 text-blue-400" />
                 )}
               </CardTitle>
               <CardDescription className="text-xs">

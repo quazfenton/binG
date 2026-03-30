@@ -2,7 +2,7 @@
  * Monaco VFS Editor Module
  */
 
-export { MonacoVFSEditor, type MonacoEditorProps, type OpenFileEvent } from "./monaco-vfs-editor";
+export { MonacoVFSEditor, type MonacoEditorProps, type OpenFileEvent } from "../monaco-vfs-editor";
 export {
   terminalCommandHandlers,
   getTerminalHandler,

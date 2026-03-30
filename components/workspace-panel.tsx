@@ -28,9 +28,6 @@ import {
   ExternalLink,
   LucideHistory,
   RotateCcw,
-  Command,
-  Cpu,
-  GitCommit,
   Mail,
   Share2,
   RefreshCw,
@@ -66,8 +63,8 @@ import {
   Send,
   User,
   Cpu,
-  Terminal,
   GitCommit,
+  Terminal,
   FileDiff,
   Activity,
   Clock3,
@@ -3785,7 +3782,7 @@ export function ExperimentalWorkspacePanel() {
                                     onClick={() => handleToggleComments(post.id)}
                                     className="h-6 text-xs hover:bg-blue-500/20 hover:text-blue-400"
                                   >
-                                    <MessageComment className="h-3 w-3 mr-1" />
+                                    <MessageCircle className="h-3 w-3 mr-1" />
                                     {post.comments.length}
                                   </Button>
                                 </div>
