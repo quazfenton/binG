@@ -271,7 +271,7 @@ export class LLMProviderRouter {
       // Fallback to openrouter if no providers available
       return {
         provider: 'openrouter',
-        model: model || 'qwen/qwen3-4b:free',
+        model: model || 'qwen/qwen3-30b-a3b:free',
         reason: 'No providers available, using fallback',
         estimatedLatencyMs: 2000,
         costPer1kTokens: 0.001,
@@ -418,7 +418,7 @@ export class LLMProviderRouter {
   private getDefaultModel(provider: LLMProviderType): string {
     const defaults: Record<LLMProviderType, string> = {
       'openai': 'gpt-4o-mini',
-      'openrouter': 'qwen/qwen3-4b:free',
+      'openrouter': 'qwen/qwen3-30b-a3b:free',
       'anthropic': 'claude-3-haiku-20240307',
       'google': 'gemini-2.0-flash',
       'mistral': 'mistral-small-2402',

@@ -176,13 +176,20 @@ async function loadPrompts(): Promise<Prompt[]> {
     if (!Array.isArray(parsed)) {
       throw new Error('Prompts file does not contain an array');
     }
-    // Validate each prompt object
-    if (!parsed.every(isValidPrompt)) {
-      console.warn('[Prompts API] Invalid prompts detected, resetting to defaults');
+    // Filter out invalid prompts, keeping valid ones
+    const validPrompts = parsed.filter(isValidPrompt);
+    if (validPrompts.length < parsed.length) {
+      console.warn(`[Prompts API] Filtered ${parsed.length - validPrompts.length} invalid prompts`);
+      // Save filtered list back to file
+      await savePrompts(validPrompts);
+    }
+    // Return defaults only if no valid prompts remain
+    if (validPrompts.length === 0) {
+      console.warn('[Prompts API] No valid prompts, seeding defaults');
       await savePrompts(DEFAULT_PROMPTS);
       return DEFAULT_PROMPTS;
     }
-    return parsed as Prompt[];
+    return validPrompts;
   } catch (error: any) {
     if (error.code === 'ENOENT') {
       // Initialize with default prompts
@@ -266,13 +273,16 @@ export async function GET(request: NextRequest) {
       }
     });
 
+    // Capture total before applying limit for pagination
+    const totalMatching = prompts.length;
+
     // Apply limit
     prompts = prompts.slice(0, limit);
 
     return NextResponse.json({
       success: true,
       prompts,
-      total: prompts.length,
+      total: totalMatching,
       categories: CATEGORIES,
     });
   } catch (error: any) {

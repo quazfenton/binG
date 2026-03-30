@@ -397,17 +397,25 @@ export async function* streamWithVercelAI(
     const transforms: any[] = [];
 
     // Smooth streaming for natural token flow
-    if (smoothStreaming) {
-      transforms.push(smoothStream({ delayInMs: 15 }));
+    if (smoothStreaming && typeof smoothStream === 'function') {
+      try {
+        transforms.push(smoothStream({ delayInMs: 15 }));
+      } catch (smoothError) {
+        chatLogger.warn('smoothStream middleware failed, skipping', { error: smoothError });
+      }
     }
 
     // Reasoning extraction for providers that support extended thinking
     const reasoningTag = getReasoningTag(provider);
-    if (reasoningTag) {
-      transforms.push(extractReasoningMiddleware(reasoningTag));
+    if (reasoningTag && typeof extractReasoningMiddleware === 'function') {
+      try {
+        transforms.push(extractReasoningMiddleware(reasoningTag));
+      } catch (reasoningError) {
+        chatLogger.warn('extractReasoningMiddleware failed, skipping', { error: reasoningError });
+      }
     }
 
-    // Build streamText options
+    // Build streamText options - only include experimental_transform if transforms exist
     const streamOptions: any = {
       model: vercelModel as any,
       messages: chatMessages,
@@ -417,7 +425,7 @@ export async function* streamWithVercelAI(
       maxSteps,
       abortSignal: signal,
       toolCallStreaming,
-      experimental_transform: transforms.length > 0 ? transforms : undefined,
+      ...(transforms.length > 0 ? { experimental_transform: transforms } : {}),
       experimental_telemetry: {
         isEnabled: false,
         functionId: 'llm-stream',
@@ -448,22 +456,24 @@ export async function* streamWithVercelAI(
     for await (const chunk of result.fullStream) {
       if (signal?.aborted) return;
 
-      switch (chunk.type) {
+      switch (chunk.type as string) {
         case 'text-delta': {
           yield {
-            content: chunk.text,
+            content: (chunk as any).text,
             isComplete: false,
             timestamp: new Date(),
           };
           break;
         }
 
-        case 'reasoning': {
-          reasoningContent += chunk.text ?? '';
+        case 'reasoning-start': {
+          // reasoning-start contains reasoning content in text property for some providers
+          const reasoningText = (chunk as any).text ?? '';
+          reasoningContent += reasoningText;
           yield {
             content: '',
             isComplete: false,
-            reasoning: chunk.text ?? '',
+            reasoning: reasoningText,
             timestamp: new Date(),
           };
           break;
@@ -474,8 +484,8 @@ export async function* streamWithVercelAI(
             content: '',
             isComplete: false,
             toolCalls: [{
-              id: chunk.toolCallId,
-              name: chunk.toolName,
+              id: (chunk as any).toolCallId,
+              name: (chunk as any).toolName,
               arguments: (chunk as any).args || (chunk as any).arguments || {},
             }],
             timestamp: new Date(),
@@ -488,7 +498,7 @@ export async function* streamWithVercelAI(
             content: '',
             isComplete: false,
             toolInvocations: [{
-              toolCallId: chunk.toolCallId,
+              toolCallId: (chunk as any).toolCallId,
               toolName: (chunk as any).toolName,
               state: 'result' as const,
               args: (chunk as any).args || {},
@@ -513,6 +523,7 @@ export async function* streamWithVercelAI(
         case 'step-finish':
         case 'start':
         case 'finish':
+          // Skip these event types - handled elsewhere
           break;
       }
     }

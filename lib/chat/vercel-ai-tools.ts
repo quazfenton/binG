@@ -39,6 +39,8 @@ export function createToolFromCapability(
     parameters?: z.ZodSchema;
   }
 ): Tool {
+  // Use double cast to work around Vercel AI SDK tool() type issues
+  // First cast to unknown, then to Tool - avoids overload matching issues
   return tool({
     description: options?.description || `Execute ${capabilityId} capability`,
     parameters: options?.parameters || z.record(z.any()),
@@ -67,7 +69,7 @@ export function createToolFromCapability(
         throw error;
       }
     },
-  }) as Tool;
+  }) as unknown as Tool;
 }
 
 /**

@@ -803,9 +803,11 @@ export default function TerminalPanel({
       isConnected: false,
     };
 
-    // Set default cwd to the current filesystem scope path
-    // This ensures the terminal starts within the active workspace scope
-    localShellCwdRef.current[id] = normalizeScopePath(filesystemScopePathRef.current);
+    // FIX: Start at parent sessions directory, not specific session folder
+    // Session folders (001, 002, etc.) are only created when LLM generates files
+    // Starting at project/sessions avoids "directory doesn't exist" errors
+    const parentScopePath = filesystemScopePathRef.current?.replace(/\/sessions\/[^/]+$/, '') || 'project/sessions';
+    localShellCwdRef.current[id] = parentScopePath;
     reconnectCooldownUntilRef.current[id] = 0;
     commandQueueRef.current[id] = [];
     commandHistoryRef.current[id] = [];
