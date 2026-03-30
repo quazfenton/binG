@@ -362,7 +362,12 @@ export async function PUT(request: NextRequest) {
       prompt: prompts[index],
     });
   } catch (error: any) {
-    console.error('[Prompts API] PUT error:', error);
+    // Only log detailed errors in development
+    if (process.env.NODE_ENV === 'development') {
+      console.error('[Prompts API] PUT error:', error);
+    } else {
+      console.error('[Prompts API] PUT error: Failed to update prompt');
+    }
     return NextResponse.json(
       { error: 'Failed to update prompt' },
       { status: 500 }
@@ -413,7 +418,12 @@ export async function DELETE(request: NextRequest) {
       message: 'Prompt deleted',
     });
   } catch (error: any) {
-    console.error('[Prompts API] DELETE error:', error);
+    // Only log detailed errors in development
+    if (process.env.NODE_ENV === 'development') {
+      console.error('[Prompts API] DELETE error:', error);
+    } else {
+      console.error('[Prompts API] DELETE error: Failed to delete prompt');
+    }
     return NextResponse.json(
       { error: 'Failed to delete prompt' },
       { status: 500 }
