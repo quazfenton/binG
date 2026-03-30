@@ -306,11 +306,11 @@ export class MCPStoreService {
   async installServer(serverId: string, config?: {
     mcpUrl?: string;
     apiKeys?: Record<string, string>;
-  }): Promise<boolean> {
+  }): Promise<InstallResult> {
     const server = this.servers.get(serverId);
     if (!server) {
       logger.error(`Server not found: ${serverId}`);
-      return false;
+      return { success: false, reason: 'not_found' };
     }
 
     try {
@@ -342,21 +342,21 @@ export class MCPStoreService {
       this.saveToStorage();
 
       logger.info(`Installed MCP server: ${serverId}`);
-      return true;
+      return { success: true };
     } catch (error: any) {
-      logger.error(`Failed to install server ${serverId}:`, error.message);
-      return false;
+      logger.error(`Failed to install server ${serverId}:`, error);
+      return { success: false, reason: 'internal', error };
     }
   }
 
   /**
    * Uninstall an MCP server
    */
-  async uninstallServer(serverId: string): Promise<boolean> {
+  async uninstallServer(serverId: string): Promise<UninstallResult> {
     const server = this.servers.get(serverId);
     if (!server) {
       logger.error(`Server not found: ${serverId}`);
-      return false;
+      return { success: false, reason: 'not_found' };
     }
 
     try {
@@ -370,10 +370,10 @@ export class MCPStoreService {
       this.saveToStorage();
 
       logger.info(`Uninstalled MCP server: ${serverId}`);
-      return true;
+      return { success: true };
     } catch (error: any) {
-      logger.error(`Failed to uninstall server ${serverId}:`, error.message);
-      return false;
+      logger.error(`Failed to uninstall server ${serverId}:`, error);
+      return { success: false, reason: 'internal', error };
     }
   }
 

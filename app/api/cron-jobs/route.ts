@@ -183,23 +183,22 @@ export async function GET(request: NextRequest) {
   try {
     const auth = await resolveFilesystemOwner(request);
     
-    if (!auth.isAuthenticated || !auth.userId) {
+    if (!auth.isAuthenticated || !auth.ownerId) {
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
       );
     }
 
-    // Only allow authenticated (non-anon) users
-    if (auth.userId.startsWith('anon:')) {
+    if (auth.ownerId.startsWith('anon:')) {
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
       );
     }
 
-    // Fetch jobs from scheduler service
-    const jobs = await fetchSchedulerTasks(auth.userId);
+    // Fetch user's jobs from scheduler service
+    const jobs = await fetchSchedulerTasks(auth.ownerId);
     return NextResponse.json({ jobs });
   } catch (error: any) {
     console.error('[CronJobs API] GET error:', error);
@@ -214,8 +213,8 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const auth = await resolveFilesystemOwner(request);
-    
-    if (!auth.isAuthenticated || !auth.userId) {
+
+    if (!auth.isAuthenticated || !auth.ownerId) {
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
@@ -223,7 +222,7 @@ export async function POST(request: NextRequest) {
     }
 
     // Only allow authenticated (non-anon) users
-    if (auth.userId.startsWith('anon:')) {
+    if (auth.ownerId.startsWith('anon:')) {
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
@@ -231,7 +230,7 @@ export async function POST(request: NextRequest) {
     }
 
     const body = await request.json();
-    
+
     // Validate input
     const parsed = createJobSchema.safeParse(body);
     if (!parsed.success) {
@@ -243,7 +242,7 @@ export async function POST(request: NextRequest) {
 
     // Check quota - fetch job count from scheduler (more efficient than fetching all jobs)
     // Note: For perfect atomicity, quota should be enforced at the scheduler service level
-    const jobCount = await fetchSchedulerJobCount(auth.userId);
+    const jobCount = await fetchSchedulerJobCount(auth.ownerId);
     if (jobCount >= MAX_JOBS_PER_USER) {
       return NextResponse.json(
         { error: `You can only have ${MAX_JOBS_PER_USER} cron job. Delete an existing one to create a new one.` },
@@ -261,7 +260,7 @@ export async function POST(request: NextRequest) {
       enabled: parsed.data.enabled,
       maxRetries: parsed.data.maxRetries,
       timeout: parsed.data.timeout,
-      ownerId: auth.userId,
+      ownerId: auth.ownerId,
       tags: parsed.data.tags,
     });
 
@@ -272,7 +271,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    console.log(`[CronJobs API] Created task ${task.id} for user ${auth.userId}`);
+    console.log(`[CronJobs API] Created task ${task.id} for user ${auth.ownerId}`);
     return NextResponse.json(task, { status: 201 });
   } catch (error: any) {
     console.error('[CronJobs API] POST error:', error);

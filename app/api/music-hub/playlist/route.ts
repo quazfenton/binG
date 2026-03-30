@@ -146,7 +146,8 @@ function validateAlbum(album: any): { valid: boolean; error?: string } {
 
 // GET - Retrieve playlist
 export async function GET(request: NextRequest) {
-  const clientId = request.headers.get('x-forwarded-for') || request.ip || 'unknown';
+  // Use x-forwarded-for header instead of request.ip (which doesn't exist in Next.js)
+  const clientId = request.headers.get('x-forwarded-for') || 'unknown';
   const rateLimit = checkRateLimit(`get:${clientId}`);
 
   const headers = {
@@ -189,7 +190,8 @@ export async function GET(request: NextRequest) {
 
 // POST - Update playlist
 export async function POST(request: NextRequest) {
-  const clientId = request.headers.get('x-forwarded-for') || request.ip || 'unknown';
+  // Use x-forwarded-for header instead of request.ip (which doesn't exist in Next.js)
+  const clientId = request.headers.get('x-forwarded-for') || 'unknown';
   const rateLimit = checkRateLimit(`post:${clientId}`);
 
   const headers = {

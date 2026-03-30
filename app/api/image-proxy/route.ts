@@ -15,6 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import ipaddr from 'ipaddr.js';
 import { validateImageUrl, isHostnameSafe } from '@/lib/utils/image-loader';
+import { sanitizeUrlInput } from '@/lib/utils/sanitize';
 import { createHash } from 'crypto';
 
 // Configuration
@@ -301,6 +302,17 @@ export async function GET(request: NextRequest) {
   if (!imageUrl) {
     return NextResponse.json(
       { error: 'Missing url parameter' },
+      { status: 400 }
+    );
+  }
+
+  // Sanitize URL input to handle edge cases like null bytes and unusual encoding
+  try {
+    imageUrl = sanitizeUrlInput(imageUrl);
+  } catch (sanitizeError: any) {
+    console.error('[Image-Proxy] URL sanitization failed:', sanitizeError.message);
+    return NextResponse.json(
+      { error: sanitizeError.message || 'URL sanitization failed' },
       { status: 400 }
     );
   }
