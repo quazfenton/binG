@@ -8,6 +8,12 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { parseRSSFeed, type NewsArticle } from '@/lib/news/rss-parser';
 
+// Image proxy helper
+function proxyImageUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  return `/api/image-proxy?url=${encodeURIComponent(url)}`;
+}
+
 // RSS feed sources
 const RSS_FEEDS = [
   {
@@ -58,7 +64,7 @@ const FALLBACK_NEWS: NewsArticle[] = [
     source: 'TechCrunch',
     category: 'AI',
     publishedAt: new Date(Date.now() - 7200000),
-    imageUrl: 'https://picsum.photos/seed/ai1/400/300',
+    imageUrl: '/api/image-proxy?url=' + encodeURIComponent('https://picsum.photos/seed/ai1/400/300'),
   },
   {
     id: 'fallback-2',
@@ -68,7 +74,7 @@ const FALLBACK_NEWS: NewsArticle[] = [
     source: 'Vercel',
     category: 'Development',
     publishedAt: new Date(Date.now() - 14400000),
-    imageUrl: 'https://picsum.photos/seed/nextjs/400/300',
+    imageUrl: '/api/image-proxy?url=' + encodeURIComponent('https://picsum.photos/seed/nextjs/400/300'),
   },
   {
     id: 'fallback-3',
@@ -78,7 +84,7 @@ const FALLBACK_NEWS: NewsArticle[] = [
     source: 'Hacker News',
     category: 'AI',
     publishedAt: new Date(Date.now() - 21600000),
-    imageUrl: 'https://picsum.photos/seed/opensource/400/300',
+    imageUrl: '/api/image-proxy?url=' + encodeURIComponent('https://picsum.photos/seed/opensource/400/300'),
   },
   {
     id: 'fallback-4',
@@ -88,7 +94,7 @@ const FALLBACK_NEWS: NewsArticle[] = [
     source: 'Wired',
     category: 'Development',
     publishedAt: new Date(Date.now() - 28800000),
-    imageUrl: 'https://picsum.photos/seed/wasm/400/300',
+    imageUrl: '/api/image-proxy?url=' + encodeURIComponent('https://picsum.photos/seed/wasm/400/300'),
   },
   {
     id: 'fallback-5',
@@ -98,7 +104,7 @@ const FALLBACK_NEWS: NewsArticle[] = [
     source: 'The Verge',
     category: 'Development',
     publishedAt: new Date(Date.now() - 36000000),
-    imageUrl: 'https://picsum.photos/seed/fullstack/400/300',
+    imageUrl: '/api/image-proxy?url=' + encodeURIComponent('https://picsum.photos/seed/fullstack/400/300'),
   },
   {
     id: 'fallback-6',
@@ -108,7 +114,7 @@ const FALLBACK_NEWS: NewsArticle[] = [
     source: 'Ars Technica',
     category: 'AI',
     publishedAt: new Date(Date.now() - 43200000),
-    imageUrl: 'https://picsum.photos/seed/quantum/400/300',
+    imageUrl: '/api/image-proxy?url=' + encodeURIComponent('https://picsum.photos/seed/quantum/400/300'),
   },
 ];
 
@@ -154,11 +160,12 @@ export async function GET(request: NextRequest) {
         const articles = await parseRSSFeed(feed.url);
         clearTimeout(timeoutId);
 
-        // Add source metadata
+        // Add source metadata and proxy images
         const enriched = articles.slice(0, 10).map(article => ({
           ...article,
           source: feed.name,
           category: feed.category,
+          imageUrl: proxyImageUrl(article.imageUrl),
         }));
 
         // Cache the result
@@ -187,6 +194,12 @@ export async function GET(request: NextRequest) {
         publishedAt: new Date(article.publishedAt),
       }));
     }
+
+    // Proxy images for all articles
+    allArticles = allArticles.map(article => ({
+      ...article,
+      imageUrl: article.imageUrl || proxyImageUrl(article.imageUrl),
+    }));
 
     // Sort by date (newest first)
     allArticles.sort((a, b) => b.publishedAt.getTime() - a.publishedAt.getTime());

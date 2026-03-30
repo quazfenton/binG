@@ -104,34 +104,6 @@ export async function GET(request: NextRequest) {
 }
 
 /**
- * GET /api/mind-map/:id - Get specific mind map
- */
-export async function GETById(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  try {
-    const { id } = await params;
-    const mindMap = mindMaps.get(id);
-
-    if (!mindMap) {
-      return NextResponse.json(
-        { error: 'Mind map not found' },
-        { status: 404 }
-      );
-    }
-
-    return NextResponse.json({
-      success: true,
-      mindMap,
-    });
-  } catch (error: any) {
-    console.error('[Mind Map API] GET by ID error:', error);
-    return NextResponse.json(
-      { error: 'Failed to get mind map' },
-      { status: 500 }
-    );
-  }
-}
-
-/**
  * POST /api/mind-map - Create new mind map
  */
 export async function POST(request: NextRequest) {
@@ -167,76 +139,6 @@ export async function POST(request: NextRequest) {
     console.error('[Mind Map API] POST error:', error);
     return NextResponse.json(
       { error: 'Failed to create mind map' },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * PUT /api/mind-map/:id - Update mind map
- */
-export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  try {
-    const { id } = await params;
-    const mindMap = mindMaps.get(id);
-
-    if (!mindMap) {
-      return NextResponse.json(
-        { error: 'Mind map not found' },
-        { status: 404 }
-      );
-    }
-
-    const body = await request.json();
-    const { title, nodes, isPublic } = body;
-
-    const updated: MindMap = {
-      ...mindMap,
-      title: title ?? mindMap.title,
-      nodes: nodes ?? mindMap.nodes,
-      isPublic: isPublic ?? mindMap.isPublic,
-      updatedAt: Date.now(),
-    };
-
-    mindMaps.set(id, updated);
-
-    return NextResponse.json({
-      success: true,
-      mindMap: updated,
-    });
-  } catch (error: any) {
-    console.error('[Mind Map API] PUT error:', error);
-    return NextResponse.json(
-      { error: 'Failed to update mind map' },
-      { status: 500 }
-    );
-  }
-}
-
-/**
- * DELETE /api/mind-map/:id - Delete mind map
- */
-export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
-  try {
-    const { id } = await params;
-    
-    if (!mindMaps.has(id)) {
-      return NextResponse.json(
-        { error: 'Mind map not found' },
-        { status: 404 }
-      );
-    }
-
-    mindMaps.delete(id);
-
-    return NextResponse.json({
-      success: true,
-      message: 'Mind map deleted',
-    });
-  } catch (error: any) {
-    console.error('[Mind Map API] DELETE error:', error);
-    return NextResponse.json(
-      { error: 'Failed to delete mind map' },
       { status: 500 }
     );
   }

@@ -104,13 +104,39 @@ async function ensureDataDir() {
   }
 }
 
+// In-memory queue for prompt writes (prevents race conditions)
+const writeQueue: Array<() => Promise<void>> = [];
+let isWriting = false;
+
+// Process write queue sequentially
+async function processWriteQueue() {
+  if (isWriting || writeQueue.length === 0) return;
+  
+  isWriting = true;
+  while (writeQueue.length > 0) {
+    const write = writeQueue.shift();
+    if (write) {
+      try {
+        await write();
+      } catch (error: any) {
+        console.error('[Prompts API] Write queue error:', error);
+      }
+    }
+  }
+  isWriting = false;
+}
+
 // Load prompts from file
 async function loadPrompts(): Promise<Prompt[]> {
   await ensureDataDir();
 
   try {
     const data = await readFile(PROMPTS_FILE, 'utf-8');
-    return JSON.parse(data);
+    const parsed: unknown = JSON.parse(data);
+    if (!Array.isArray(parsed)) {
+      throw new Error('Prompts file does not contain an array');
+    }
+    return parsed as Prompt[];
   } catch (error: any) {
     if (error.code === 'ENOENT') {
       // Initialize with default prompts
@@ -121,10 +147,21 @@ async function loadPrompts(): Promise<Prompt[]> {
   }
 }
 
-// Save prompts to file
+// Save prompts to file (queued to prevent race conditions)
 async function savePrompts(prompts: Prompt[]) {
   await ensureDataDir();
-  await writeFile(PROMPTS_FILE, JSON.stringify(prompts, null, 2));
+  
+  return new Promise<void>((resolve, reject) => {
+    writeQueue.push(async () => {
+      try {
+        await writeFile(PROMPTS_FILE, JSON.stringify(prompts, null, 2));
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+    processWriteQueue();
+  });
 }
 
 /**
@@ -261,12 +298,21 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    const { id, action } = body;
+    const { id, action, apiKey } = body;
 
     if (!id || !action) {
       return NextResponse.json(
         { error: 'Prompt ID and action are required' },
         { status: 400 }
+      );
+    }
+
+    // Require API key for edit operations (upvote/download are public)
+    const expectedApiKey = process.env.PROMPTS_API_KEY;
+    if (action === 'edit' && (!apiKey || apiKey !== expectedApiKey)) {
+      return NextResponse.json(
+        { error: 'Unauthorized. API key required for editing prompts' },
+        { status: 401 }
       );
     }
 
@@ -331,11 +377,21 @@ export async function DELETE(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const id = searchParams.get('id');
+    const apiKey = searchParams.get('apiKey');
 
     if (!id) {
       return NextResponse.json(
         { error: 'Prompt ID is required' },
         { status: 400 }
+      );
+    }
+
+    // Require API key for delete operations
+    const expectedApiKey = process.env.PROMPTS_API_KEY;
+    if (!apiKey || apiKey !== expectedApiKey) {
+      return NextResponse.json(
+        { error: 'Unauthorized. API key required for deleting prompts' },
+        { status: 401 }
       );
     }
 
