@@ -178,25 +178,30 @@ export async function POST(request: NextRequest) {
   } catch (error: any) {
     // Log full error details server-side
     console.error('[GitHub Import] Error:', error);
-    
-    // Determine safe error message for client
+
+    // Determine safe error message + HTTP status for client
     let safeMessage = 'Failed to import repository';
-    
+    let status = 500;
+
     // Only include error message if it's a known, safe error type
     if (error instanceof SyntaxError) {
       safeMessage = 'Invalid request body';
+      status = 400;
     } else if (error.name === 'AbortError') {
       safeMessage = 'Request timed out';
-    } else if (error.message && (
-      error.message.includes('not found') ||
-      error.message.includes('required') ||
-      error.message.includes('authentication')
-    )) {
-      // Safe to include these specific messages
-      safeMessage = error.message;
+      status = 504;
+    } else if (error.message && error.message.includes('not found')) {
+      safeMessage = 'Repository not found';
+      status = 404;
+    } else if (error.message && error.message.includes('required')) {
+      safeMessage = 'Missing required parameter';
+      status = 400;
+    } else if (error.message && error.message.includes('authentication')) {
+      safeMessage = 'Authentication failed';
+      status = 401;
     }
     // For all other errors, use generic message to avoid leaking internal details
-    
+
     return NextResponse.json({
       error: safeMessage,
       // Only include details in development mode
@@ -204,6 +209,6 @@ export async function POST(request: NextRequest) {
         details: error.toString(),
         stack: error.stack,
       }),
-    }, { status: 500 });
+    }, { status });
   }
 }

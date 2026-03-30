@@ -14,13 +14,23 @@ import {
   discoverFeedsFromUrl, 
   validateFeed 
 } from '@/lib/zine-rss-auto-discovery';
+import { sanitizeUrlInput } from '@/lib/utils/sanitize';
+import { checkRateLimitMiddleware } from '@/lib/middleware/rate-limit';
 
 // ---------------------------------------------------------------------
 // SSRF Protection - Validate URL is safe for server-side fetches
 // ---------------------------------------------------------------------
 
 function assertSafeExternalUrl(raw: string): void {
-  const u = new URL(raw);
+  // First sanitize the input
+  let sanitized: string;
+  try {
+    sanitized = sanitizeUrlInput(raw);
+  } catch (error: any) {
+    console.error('[Zine-Discover] URL sanitization failed:', error.message);
+    throw error;
+  }
+  const u = new URL(sanitized);
   const host = u.hostname.toLowerCase();
 
   // Block localhost and loopback addresses
@@ -61,6 +71,13 @@ const discoverSchema = z.object({
 });
 
 export async function POST(request: NextRequest) {
+  // Rate limiting: 20 requests per minute per IP for the discover endpoint
+  // This endpoint makes external HTTP requests so we need stricter limits
+  const rateLimitCheck = checkRateLimitMiddleware(request, 'zine-discover', 20, 60000);
+  if (rateLimitCheck) {
+    return rateLimitCheck;
+  }
+
   try {
     const body = await request.json();
     const { url, maxFeeds = 10, validateFeeds = true, discover = true } = discoverSchema.parse(body);

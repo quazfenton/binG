@@ -58,7 +58,7 @@ function isValidCronExpression(expression: string): boolean {
 const updateJobSchema = z.object({
   name: z.string().min(1).max(100).optional(),
   schedule: z.string().optional().refine(
-    (val) => !val || isValidCronExpression(val),
+    (val) => val === undefined || isValidCronExpression(val),
     { message: 'Invalid cron expression. Expected format: minute hour day month weekday' }
   ),
   timezone: z.string().optional(),
@@ -90,29 +90,50 @@ interface ScheduledTask {
   ownerId?: string;
 }
 
+// Timeout constant for scheduler requests (5 seconds)
+const SCHEDULER_REQUEST_TIMEOUT = 5000;
+
 // Helper to fetch task from scheduler
 async function fetchSchedulerTask(taskId: string): Promise<ScheduledTask | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SCHEDULER_REQUEST_TIMEOUT);
+  
   try {
-    const response = await fetch(`${SCHEDULER_URL}/tasks/${taskId}`);
+    const response = await fetch(`${SCHEDULER_URL}/tasks/${taskId}`, {
+      signal: controller.signal,
+    });
+    clearTimeout(timeoutId);
+    
     if (!response.ok) {
       console.error(`[CronJobs] Fetch task ${taskId} failed: ${response.status} ${response.statusText}`);
       return null;
     }
     return await response.json() as ScheduledTask;
   } catch (error: any) {
-    console.error(`[CronJobs] Fetch task ${taskId} error:`, error.message);
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      console.error(`[CronJobs] Fetch task ${taskId} timed out after ${SCHEDULER_REQUEST_TIMEOUT}ms`);
+    } else {
+      console.error(`[CronJobs] Fetch task ${taskId} error:`, error.message);
+    }
     return null;
   }
 }
 
 // Helper to update task via scheduler
 async function updateSchedulerTask(taskId: string, updates: Partial<ScheduledTask>): Promise<ScheduledTask | null> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SCHEDULER_REQUEST_TIMEOUT);
+  
   try {
     const response = await fetch(`${SCHEDULER_URL}/tasks/${taskId}`, {
       method: 'PUT',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(updates),
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
+    
     if (!response.ok) {
       const errorText = await response.text();
       console.error(`[CronJobs] Update task ${taskId} failed: ${response.status} ${errorText}`);
@@ -120,24 +141,40 @@ async function updateSchedulerTask(taskId: string, updates: Partial<ScheduledTas
     }
     return await response.json() as ScheduledTask;
   } catch (error: any) {
-    console.error(`[CronJobs] Update task ${taskId} error:`, error.message);
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      console.error(`[CronJobs] Update task ${taskId} timed out after ${SCHEDULER_REQUEST_TIMEOUT}ms`);
+    } else {
+      console.error(`[CronJobs] Update task ${taskId} error:`, error.message);
+    }
     return null;
   }
 }
 
 // Helper to delete task via scheduler
 async function deleteSchedulerTask(taskId: string): Promise<boolean> {
+  const controller = new AbortController();
+  const timeoutId = setTimeout(() => controller.abort(), SCHEDULER_REQUEST_TIMEOUT);
+  
   try {
     const response = await fetch(`${SCHEDULER_URL}/tasks/${taskId}`, {
       method: 'DELETE',
+      signal: controller.signal,
     });
+    clearTimeout(timeoutId);
+    
     if (!response.ok) {
       console.error(`[CronJobs] Delete task ${taskId} failed: ${response.status} ${response.statusText}`);
       return false;
     }
     return true;
   } catch (error: any) {
-    console.error(`[CronJobs] Delete task ${taskId} error:`, error.message);
+    clearTimeout(timeoutId);
+    if (error.name === 'AbortError') {
+      console.error(`[CronJobs] Delete task ${taskId} timed out after ${SCHEDULER_REQUEST_TIMEOUT}ms`);
+    } else {
+      console.error(`[CronJobs] Delete task ${taskId} error:`, error.message);
+    }
     return false;
   }
 }
@@ -244,7 +281,7 @@ export async function DELETE(
       );
     }
 
-    console.log(`[CronJobs API] Deleted job ${id} for user ${auth.userId}`);
+    console.log(`[CronJobs API] Deleted job ${id} for user ${auth.ownerId}`);
     return NextResponse.json({ deleted: true });
   } catch (error: any) {
     console.error('[CronJobs API] DELETE error:', error);

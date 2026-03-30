@@ -11,6 +11,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { auth0 } from "@/lib/auth0";
 import { readFile, writeFile, mkdir } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
@@ -27,6 +28,7 @@ const RATE_LIMIT = {
   windowMs: 60 * 1000,
   maxRequests: 20, // 20 requests per minute
 };
+const MAX_RESPONSE_SIZE = 5 * 1024 * 1024; // 5MB limit
 
 // Allowed protocols
 const ALLOWED_PROTOCOLS = ['https:', 'http:'];
@@ -123,6 +125,45 @@ function validateRedirectUrl(currentUrl: string, redirectUrl: string): { valid: 
   } catch {
     return { valid: false, error: 'Invalid redirect URL' };
   }
+}
+
+/**
+ * Read response body with size limit to prevent OOM
+ */
+async function readResponseWithLimit(response: Response, maxSize: number): Promise<string> {
+  if (!response.body) {
+    throw new Error('Response body is null');
+  }
+
+  const reader = response.body.getReader();
+  const chunks: Uint8Array[] = [];
+  let totalBytes = 0;
+
+  try {
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      totalBytes += value.length;
+      if (totalBytes > maxSize) {
+        throw new Error(`Response size exceeds limit (${maxSize} bytes)`);
+      }
+
+      chunks.push(value);
+    }
+  } finally {
+    reader.releaseLock();
+  }
+
+  // Concatenate chunks and decode
+  const concatenated = new Uint8Array(totalBytes);
+  let offset = 0;
+  for (const chunk of chunks) {
+    concatenated.set(chunk, offset);
+    offset += chunk.length;
+  }
+
+  return new TextDecoder('utf-8').decode(concatenated);
 }
 
 // Ensure data directory
@@ -249,25 +290,34 @@ function extractText(html: string): string {
 // GET - Fetch and parse content
 export async function GET(
   request: NextRequest,
-  { params }: { params: { url: string } }
+  { params }: { params: Promise<{ url: string }> }
 ) {
-  const clientId = request.headers.get('x-forwarded-for') || request.ip || 'unknown';
+  // Use x-forwarded-for header instead of request.ip (which doesn't exist in Next.js)
+  const clientId = request.headers.get('x-forwarded-for') || 'unknown';
   const rateLimit = checkRateLimit(`content:${clientId}`);
 
-  const headers = {
+  // Success headers - cacheable
+  const successHeaders = {
     'X-RateLimit-Limit': RATE_LIMIT.maxRequests.toString(),
     'X-RateLimit-Remaining': rateLimit.remaining.toString(),
     'Cache-Control': 'public, max-age=3600',
   };
 
+  // Error headers - never cacheable
+  const errorHeaders = {
+    'X-RateLimit-Limit': RATE_LIMIT.maxRequests.toString(),
+    'X-RateLimit-Remaining': rateLimit.remaining.toString(),
+    'Cache-Control': 'no-store, no-cache, must-revalidate',
+  };
+
   if (!rateLimit.allowed) {
     return NextResponse.json(
       { error: 'Rate limit exceeded. Please try again later.' },
-      { status: 429, headers }
+      { status: 429, headers: errorHeaders }
     );
   }
 
-  const { url } = params;
+  const { url } = await params;
   const searchParams = request.nextUrl.searchParams;
   const useCache = searchParams.get('cache') !== 'false';
   const parse = searchParams.get('parse') === 'true';
@@ -279,7 +329,7 @@ export async function GET(
   if (!validation.valid) {
     return NextResponse.json(
       { error: validation.error },
-      { status: 400, headers }
+      { status: 400, headers: errorHeaders }
     );
   }
 
@@ -293,7 +343,7 @@ export async function GET(
         success: true,
         cached: true,
         content: cached,
-      }, { headers });
+      }, { headers: successHeaders });
     }
   }
 
@@ -350,8 +400,26 @@ export async function GET(
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
 
+    // Check content type - only process HTML
     const contentType = response.headers.get('content-type') || '';
-    const html = await response.text();
+    if (!contentType.includes('text/html') && !contentType.includes('application/xhtml')) {
+      return NextResponse.json(
+        { error: 'Only HTML content is supported' },
+        { status: 415, headers: errorHeaders }
+      );
+    }
+
+    // Check content length if available
+    const contentLength = response.headers.get('content-length');
+    if (contentLength && parseInt(contentLength) > MAX_RESPONSE_SIZE) {
+      return NextResponse.json(
+        { error: 'Content too large' },
+        { status: 413, headers: errorHeaders }
+      );
+    }
+
+    // Stream response with size limit
+    const html = await readResponseWithLimit(response, MAX_RESPONSE_SIZE);
 
     // Always return JSON - never serve raw HTML from our origin
     if (!parse) {
@@ -360,15 +428,15 @@ export async function GET(
         html,
         source: response.url,
         contentType,
-      }, { headers });
+      }, { headers: successHeaders });
     }
 
-    // Parse content
+    // Parse content - use currentUrl (post-redirect) for accurate source and relative paths
     const parsed: ExtractedContent = {
-      url: finalUrl,
+      url: currentUrl,
       title: extractTitle(html),
       description: extractDescription(html),
-      images: extractImages(html, finalUrl),
+      images: extractImages(html, currentUrl),
       videos: [],
       links: [],
       text: extractText(html),
@@ -377,17 +445,17 @@ export async function GET(
 
     // Cache the result
     if (useCache) {
-      await cacheContent(finalUrl, parsed);
+      await cacheContent(currentUrl, parsed);
     }
 
     return NextResponse.json({
       success: true,
       cached: false,
       content: parsed,
-    }, { headers });
+    }, { headers: successHeaders });
   } catch (error) {
     console.error('[Immersive API] Fetch error:', error);
-    
+
     // Return graceful degradation
     const urlObj = new URL(finalUrl);
     const fallbackContent: ExtractedContent = {
@@ -405,7 +473,7 @@ export async function GET(
       success: false,
       error: error instanceof Error ? error.message : 'Failed to fetch content',
       content: fallbackContent,
-    }, { status: 500, headers });
+    }, { status: 500, headers: errorHeaders });
   }
 }
 
@@ -421,8 +489,26 @@ export async function DELETE(
 
   try {
     const cache = await readCache();
-    
+
     if (url === 'all') {
+      // SECURITY: Require admin auth for bulk cache invalidation
+      const session = await auth0.getSession(request);
+      if (!session?.user) {
+        return NextResponse.json(
+          { error: 'Authentication required' },
+          { status: 401, headers }
+        );
+      }
+
+      // Check for admin role
+      const roles = session.user['https://binG.com/roles'] || [];
+      if (!roles.includes('admin')) {
+        return NextResponse.json(
+          { error: 'Admin access required for bulk cache invalidation' },
+          { status: 403, headers }
+        );
+      }
+
       await writeCache({});
       return NextResponse.json({ success: true, message: 'Cache cleared' }, { headers });
     }

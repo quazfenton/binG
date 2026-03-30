@@ -1,5 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
+import { sanitizeUrlInput } from '@/lib/utils/sanitize';
 
 // ---------------------------------------------------------------------
 // Types
@@ -440,12 +441,24 @@ export async function POST(request: NextRequest) {
         );
       }
 
+      // Sanitize URL input to handle edge cases like null bytes and unusual encoding
+      let sanitizedUrl: string;
+      try {
+        sanitizedUrl = sanitizeUrlInput(url);
+      } catch (sanitizeError: any) {
+        console.error('[Zine-Feed] URL sanitization failed:', sanitizeError.message);
+        return NextResponse.json(
+          { success: false, error: sanitizeError.message || 'URL sanitization failed' },
+          { status: 400 }
+        );
+      }
+
       let response: Response;
       try {
         const controller = new AbortController();
         const timeout = setTimeout(() => controller.abort(), 10000);
 
-        response = await fetch(url, {
+        response = await fetch(sanitizedUrl, {
           headers: {
             'User-Agent': 'ZineDisplay/1.0',
             'Accept': 'application/json, text/plain, application/xml',
