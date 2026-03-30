@@ -113,22 +113,84 @@ const TEMPLATES: CodeTemplate[] = [
   },
 ];
 
-const MOCK_SNIPPETS: CodeSnippet[] = [
-  {
-    id: "snippet-1",
-    name: "API Helper Function",
-    language: "typescript",
-    code: `export async function apiRequest<T>(\n  endpoint: string,\n  options?: RequestInit\n): Promise<T> {\n  const response = await fetch(\`/api/\${endpoint}\`, {\n    ...options,\n    headers: {\n      'Content-Type': 'application/json',\n      ...options?.headers,\n    },\n  });\n\n  if (!response.ok) {\n    throw new Error(\`HTTP error! status: \${response.status}\`);\n  }\n\n  return response.json();\n}`,
-    output: "Function exported successfully",
-    createdAt: Date.now() - 86400000,
-    updatedAt: Date.now() - 43200000,
-    isPublic: true,
-    likes: 23,
-  },
-];
+// Execute code via API
+async function executeCode(code: string, language: string, timeout?: number): Promise<{
+  success: boolean;
+  output: string;
+  error?: string;
+  executionTime: number;
+}> {
+  try {
+    const response = await fetch('/api/code/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        code,
+        language,
+        timeout,
+      }),
+    });
+
+    const result = await response.json();
+
+    if (!result.success) {
+      throw new Error(result.error || 'Execution failed');
+    }
+
+    return {
+      success: result.success,
+      output: result.output,
+      error: result.error,
+      executionTime: result.executionTime,
+    };
+  } catch (err: any) {
+    console.error('[CodePlayground] Failed to execute code:', err);
+    throw err;
+  }
+}
+
+// Get code template from API
+async function getCodeTemplate(language: string): Promise<string> {
+  try {
+    const response = await fetch(`/api/code/execute?language=${language}`);
+    const data = await response.json();
+
+    if (data.success) {
+      return data.template;
+    }
+
+    return '';
+  } catch (err) {
+    console.error('[CodePlayground] Failed to get template:', err);
+    return '';
+  }
+}
+
+// Fallback snippets when API is unavailable
+const FALLBACK_SNIPPETS: CodeSnippet[] = [];
 
 export default function CodePlaygroundTab() {
-  const [snippets, setSnippets] = useState<CodeSnippet[]>(MOCK_SNIPPETS);
+  const [snippets, setSnippets] = useState<CodeSnippet[]>(FALLBACK_SNIPPETS);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch snippets from API on mount
+  useEffect(() => {
+    const fetchData = async () => {
+      try {
+        const response = await fetch('/api/code/snippets?type=all');
+        const data = await response.json();
+        if (data.success && data.snippets) {
+          setSnippets(data.snippets);
+        }
+      } catch (err) {
+        console.warn('Failed to fetch snippets, using fallback:', err);
+      } finally {
+        setLoading(false);
+      }
+    };
+
+    fetchData();
+  }, []);
   const [selectedSnippet, setSelectedSnippet] = useState<CodeSnippet | null>(null);
   const [code, setCode] = useState("");
   const [language, setLanguage] = useState("javascript");
@@ -155,45 +217,27 @@ export default function CodePlaygroundTab() {
     setError("");
     setOutput("");
 
-    // Simulate code execution
-    await new Promise(resolve => setTimeout(resolve, 1500));
-
-    // Check if component is still mounted
-    if (!isMountedRef.current) {
-      return;
-    }
-
     try {
-      // Very basic execution simulation (in production, use proper sandbox)
-      if (language === "javascript") {
-        // Capture console.log output
-        const logs: string[] = [];
-        const originalLog = console.log;
-        console.log = (...args) => {
-          logs.push(args.join(" "));
-        };
+      // Execute code via API
+      const result = await executeCode(code, language, 10000);
 
-        try {
-          // eslint-disable-next-line no-eval
-          const result = eval(code);
-          console.log = originalLog;
-          setOutput(logs.join("\n") + (result !== undefined ? `\n=> ${result}` : ""));
-          toast.success("Code executed successfully");
-        } catch (err: any) {
-          console.log = originalLog;
-          setError(err.message);
-          toast.error("Execution failed");
-        }
+      if (!isMountedRef.current) return;
+
+      if (result.success) {
+        setOutput(result.output);
+        toast.success(`Executed in ${result.executionTime}ms`);
       } else {
-        setOutput(`[${language}] Code execution simulated\nOutput would appear here in production`);
-        toast.success("Code executed (simulated)");
+        setError(result.error || 'Execution failed');
+        toast.error("Execution failed");
       }
     } catch (err: any) {
+      if (!isMountedRef.current) return;
+      
       setError(err.message);
-      toast.error("Execution failed");
+      toast.error(err.message || "Execution failed");
+    } finally {
+      setIsRunning(false);
     }
-
-    setIsRunning(false);
   };
 
   const handleSave = () => {
@@ -218,11 +262,22 @@ export default function CodePlaygroundTab() {
     toast.success("Snippet saved");
   };
 
-  const handleLoadTemplate = (template: CodeTemplate) => {
-    setCode(template.code);
-    setLanguage(template.language);
-    setActiveTab("editor");
-    toast.success(`Loaded ${template.name} template`);
+  const handleLoadTemplate = async (template: CodeTemplate) => {
+    try {
+      // Load template from API
+      const templateCode = await getCodeTemplate(template.language);
+      
+      setCode(templateCode || template.code);
+      setLanguage(template.language);
+      setActiveTab("editor");
+      toast.success(`Loaded ${template.name} template`);
+    } catch (err: any) {
+      // Fallback to local template
+      setCode(template.code);
+      setLanguage(template.language);
+      setActiveTab("editor");
+      toast.success(`Loaded ${template.name} template (offline)`);
+    }
   };
 
   const handleCopyCode = () => {

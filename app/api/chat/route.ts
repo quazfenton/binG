@@ -48,6 +48,13 @@ import {
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
 
+// Precompile optimization: enable dynamic to allow static generation for simple requests
+export const dynamic = 'auto';
+
+// Cache configuration for precompiled responses
+export const revalidate = 0; // Default: no cache (opt-in only)
+export const dynamicParams = true;
+
 // LLM Agent Tools Configuration
 const LLM_AGENT_TOOLS_ENABLED = process.env.LLM_AGENT_TOOLS_ENABLED !== 'false';
 const LLM_AGENT_TOOLS_MAX_ITERATIONS = parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '10', 10);
@@ -3228,8 +3235,34 @@ export async function applyFilesystemEditsFromResponse(input: {
 }
 
 export async function GET(request: NextRequest) {
-  // Redirect to dedicated /api/providers endpoint
-  // This avoids duplicating provider listing logic
+  // Precompile warmup: Initialize LLM providers on first GET request
+  // This ensures the route is ready for subsequent POST requests without cold start
+  const url = new URL(request.url);
+  
+  // If called with ?warmup=true, trigger provider initialization
+  if (url.searchParams.get('warmup') === 'true') {
+    try {
+      const { llmService } = await import("@/lib/chat/llm-providers");
+      await llmService.warmupProviders();
+      const availableProviders = llmService.getAvailableProviders();
+      
+      return NextResponse.json({
+        success: true,
+        message: "Chat API pre-warmed and ready",
+        availableProviders: availableProviders.length,
+        providers: availableProviders.map(p => p.id),
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      console.error("Chat API warmup error:", error);
+      return NextResponse.json(
+        { success: false, error: "Warmup failed" },
+        { status: 500 }
+      );
+    }
+  }
+  
+  // Default: Redirect to providers endpoint
   return NextResponse.redirect(new URL('/api/providers', request.url));
 }
 

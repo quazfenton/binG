@@ -320,11 +320,12 @@ const ContentItemComponent: React.FC<ContentItemProps> = ({
   containerSize,
 }) => {
   const controls = useAnimation();
+  const elementRef = useRef<HTMLDivElement>(null);
   const [isHovered, setIsHovered] = useState(false);
   const [position, setPosition] = useState<Position2D>(
     style.floating && item.position ? item.position : { x: 0, y: 0 }
   );
-  const animationRef = useRef<number>();
+  const animationRef = useRef<number | undefined>(undefined);
 
   // Floating animation
   useEffect(() => {
@@ -473,7 +474,7 @@ const ContentItemComponent: React.FC<ContentItemProps> = ({
 
   return (
     <motion.div
-      ref={controls}
+      ref={elementRef}
       initial={{ opacity: 0 }}
       animate={controls}
       exit={{ opacity: 0, scale: 0.8 }}
@@ -573,7 +574,7 @@ export default function ZineFlowEngine() {
   const [containerSize, setContainerSize] = useState({ width: 1920, height: 1080 });
   
   const containerRef = useRef<HTMLDivElement>(null);
-  const rotationTimeoutRef = useRef<NodeJS.Timeout>();
+  const rotationTimeoutRef = useRef<NodeJS.Timeout | undefined>(undefined);
 
   // Load persisted data
   useEffect(() => {

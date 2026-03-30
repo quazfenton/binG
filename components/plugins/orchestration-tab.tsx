@@ -52,6 +52,7 @@ import {
   EyeOff,
   ChevronRight,
   ChevronDown,
+  Bot,
   Pause,
   FastForward,
   Rewind,
@@ -72,12 +73,124 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import OrchestrationVisualizer, { type AgentNode, type AgentEdge, type AgentLog } from "@/components/orchestration-visualizer";
-import FrameworkVisualizer, { 
-  type WorkflowConfig, 
+import FrameworkVisualizer, {
+  type WorkflowConfig,
   type WorkflowParameter,
-  MOCK_MASTRA_WORKFLOW, 
-  MOCK_CREWAI_WORKFLOW 
+  MOCK_MASTRA_WORKFLOW,
+  MOCK_CREWAI_WORKFLOW
 } from "@/components/framework-visualizer";
+
+// Fetch agents from API
+async function fetchAgents(): Promise<AgentOption[]> {
+  try {
+    const response = await fetch('/api/orchestration/agents');
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch agents');
+    }
+    
+    return (data.agents || []).map((agent: any) => ({
+      id: agent.id,
+      name: agent.name,
+      type: 'llm' as const,
+      provider: agent.provider,
+      model: agent.model,
+      active: agent.active,
+      priority: 1,
+      status: agent.status === 'running' ? 'online' : agent.status === 'error' ? 'error' : 'busy',
+      lastActive: agent.lastActive,
+      executions: 0,
+      successRate: 100,
+    }));
+  } catch (err: any) {
+    console.error('[Orchestration] Failed to fetch agents:', err);
+    return [];
+  }
+}
+
+// Fetch workflows from API
+async function fetchWorkflows(): Promise<WorkflowConfig[]> {
+  try {
+    const response = await fetch('/api/orchestration/workflows');
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch workflows');
+    }
+    
+    return data.workflows || [];
+  } catch (err: any) {
+    console.error('[Orchestration] Failed to fetch workflows:', err);
+    return [];
+  }
+}
+
+// Execute workflow via API
+async function executeWorkflow(workflowId: string, params?: Record<string, any>): Promise<{ executionId: string; status: string }> {
+  try {
+    const response = await fetch(`/api/orchestration/workflows/${workflowId}/execute`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ params }),
+    });
+    
+    const result = await response.json();
+    
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to execute workflow');
+    }
+    
+    return result;
+  } catch (err: any) {
+    console.error('[Orchestration] Failed to execute workflow:', err);
+    throw err;
+  }
+}
+
+// Fetch agent logs from API
+async function fetchLogs(agentId?: string, limit = 50): Promise<AgentLog[]> {
+  try {
+    const params = new URLSearchParams();
+    if (agentId) params.set('agentId', agentId);
+    params.set('limit', limit.toString());
+    
+    const response = await fetch(`/api/orchestration/logs?${params}`);
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch logs');
+    }
+    
+    return data.logs || [];
+  } catch (err: any) {
+    console.error('[Orchestration] Failed to fetch logs:', err);
+    return [];
+  }
+}
+
+// Control agent via API
+async function controlAgent(agentId: string, action: 'start' | 'stop' | 'pause' | 'resume', task?: string): Promise<boolean> {
+  try {
+    const response = await fetch(`/api/orchestration/agents/${agentId}/${action}`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ task }),
+    });
+    
+    const result = await response.json();
+    
+    if (!result.success) {
+      throw new Error(result.error || `Failed to ${action} agent`);
+    }
+    
+    return true;
+  } catch (err: any) {
+    console.error('[Orchestration] Failed to control agent:', err);
+    toast.error(err.message || `Failed to ${action} agent`);
+    return false;
+  }
+}
 
 // Types
 interface EventBusEvent {
@@ -340,6 +453,7 @@ const MOCK_DAG_WORKFLOWS: DAGWorkflow[] = [
 // Kernel data types (mirrored from agent-kernel.ts for client)
 interface KernelAgent {
   id: string;
+  name?: string;
   config: {
     type: 'ephemeral' | 'persistent' | 'daemon' | 'worker';
     goal: string;
@@ -366,13 +480,14 @@ interface KernelStats {
 
 export default function OrchestrationTab() {
   const [events, setEvents] = useState<EventBusEvent[]>(MOCK_EVENTS);
-  const [agents, setAgents] = useState<AgentOption[]>(MOCK_AGENTS);
+  const [agents, setAgents] = useState<AgentOption[]>([]);
   const [modes, setModes] = useState<OrchestrationMode[]>(MOCK_MODES);
   const [isPaused, setIsPaused] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<EventBusEvent | null>(null);
   const [filterType, setFilterType] = useState<string>("all");
   const [autoScroll, setAutoScroll] = useState(true);
   const [showAgentDetails, setShowAgentDetails] = useState<Record<string, boolean>>({});
+  const [loading, setLoading] = useState(true);
 
   // Real Kernel Data State
   const [kernelStats, setKernelStats] = useState<KernelStats | null>(null);
@@ -385,16 +500,53 @@ export default function OrchestrationTab() {
   const [selectedDag, setSelectedDag] = useState<DAGWorkflow | null>(null);
   const [dagZoom, setDagZoom] = useState(1);
   const [activeSubTab, setActiveSubTab] = useState<"agents" | "modes" | "events" | "dag" | "mastra" | "crewai">("dag");
-  
+
   // Enhanced orchestration visualizer state
   const [visAgents, setVisAgents] = useState<AgentNode[]>([]);
   const [visEdges, setVisEdges] = useState<AgentEdge[]>([]);
-  
+
   // Framework workflows state
-  const [mastraWorkflows, setMastraWorkflows] = useState<WorkflowConfig[]>([MOCK_MASTRA_WORKFLOW]);
-  const [crewaiWorkflows, setCrewaiWorkflows] = useState<WorkflowConfig[]>([MOCK_CREWAI_WORKFLOW]);
-  
+  const [mastraWorkflows, setMastraWorkflows] = useState<WorkflowConfig[]>([]);
+  const [crewaiWorkflows, setCrewaiWorkflows] = useState<WorkflowConfig[]>([]);
+
   const eventsEndRef = useRef<HTMLDivElement>(null);
+
+  // Fetch agents from API
+  const loadAgents = useCallback(async () => {
+    try {
+      const data = await fetchAgents();
+      setAgents(data);
+    } catch (err: any) {
+      console.error('[OrchestrationTab] Failed to fetch agents:', err);
+    }
+  }, []);
+
+  // Fetch workflows from API
+  const loadWorkflows = useCallback(async () => {
+    try {
+      const workflows = await fetchWorkflows();
+      setMastraWorkflows(workflows);
+      setCrewaiWorkflows(workflows);
+    } catch (err: any) {
+      console.error('[OrchestrationTab] Failed to fetch workflows:', err);
+    }
+  }, []);  // Load data on mount
+  useEffect(() => {
+    const loadData = async () => {
+      setLoading(true);
+      await Promise.all([
+        loadAgents(),
+        loadWorkflows(),
+      ]);
+      setLoading(false);
+    };
+
+    loadData();
+    
+    // Refresh every 30 seconds
+    const interval = setInterval(loadData, 30000);
+    return () => clearInterval(interval);
+  }, [loadAgents, loadWorkflows]);
 
   // Fetch real kernel data
   const fetchKernelData = useCallback(async () => {
@@ -486,12 +638,13 @@ export default function OrchestrationTab() {
 
     const visAgents: AgentNode[] = uniqueAgents.map((agent, index) => ({
       id: agent.id,
-      name: agent.config.name || `Agent ${index + 1}`,
+      name: agent.name || agent.config.goal?.substring(0, 20) || `Agent ${index + 1}`,
       type: agent.config.type === 'daemon' ? 'manager' : 
             agent.config.type === 'persistent' ? 'executor' : 'tool',
       status: agent.status === 'running' ? 'executing' :
-              agent.status === 'stopped' ? 'idle' :
-              agent.status === 'error' ? 'failed' : 'thinking',
+              agent.status === 'terminated' ? 'idle' :
+              agent.status === 'failed' ? 'failed' :
+              agent.status === 'ready' ? 'completed' : 'thinking',
       // Stable positioning based on agent ID hash for consistent layout
       x: 50 + (agent.id.charCodeAt(0) % 4) * 200,
       y: 50 + (agent.id.charCodeAt(1) % 3) * 150,

@@ -36,6 +36,49 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+// Fetch workflows from API
+async function fetchWorkflows() {
+  try {
+    const response = await fetch('/api/workflows/visualizer');
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch workflows');
+    }
+    
+    return {
+      templates: data.templates || [],
+      instances: data.instances || [],
+    };
+  } catch (err: any) {
+    console.error('[WorkflowVisualizer] Failed to fetch:', err);
+    toast.error('Failed to load workflows');
+    return { templates: [], instances: [] };
+  }
+}
+
+// Execute workflow via API
+async function executeWorkflow(workflowId: string, input?: any) {
+  try {
+    const response = await fetch('/api/workflows/visualizer/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ workflowId, input }),
+    });
+    
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to execute workflow');
+    }
+    
+    return data.instance;
+  } catch (err: any) {
+    console.error('[WorkflowVisualizer] Execution failed:', err);
+    throw err;
+  }
+}
+
 // Types
 interface WorkflowStep {
   id: string;
@@ -133,6 +176,29 @@ export default function WorkflowVisualizer() {
   const [selectedInstance, setSelectedInstance] = useState<WorkflowInstance | null>(null);
   const [isRunning, setIsRunning] = useState(false);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [loading, setLoading] = useState(true);
+  const [templates, setTemplates] = useState<WorkflowTemplate[]>([]);
+
+  // Load workflows on mount
+  useEffect(() => {
+    loadWorkflows();
+    const interval = setInterval(loadWorkflows, 30000); // Refresh every 30s
+    return () => clearInterval(interval);
+  }, []);
+
+  const loadWorkflows = async () => {
+    try {
+      setLoading(true);
+      const data = await fetchWorkflows();
+      setTemplates(data.templates || WORKFLOW_TEMPLATES);
+      setInstances(data.instances || []);
+    } catch (err) {
+      console.warn('Failed to load workflows, using defaults:', err);
+      setTemplates(WORKFLOW_TEMPLATES);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   // Simulate workflow execution
   useEffect(() => {
@@ -172,24 +238,18 @@ export default function WorkflowVisualizer() {
   }, [isRunning, selectedInstance]);
 
   // Start workflow
-  const startWorkflow = (template: WorkflowTemplate) => {
-    const newInstance: WorkflowInstance = {
-      id: `workflow_${Date.now()}`,
-      workflowId: template.id,
-      name: `${template.name} - ${new Date().toLocaleTimeString()}`,
-      status: 'running',
-      steps: template.steps.map(s => ({
-        ...s,
-        status: 'pending',
-      })),
-      startedAt: Date.now(),
-      progress: 0,
-    };
-
-    setInstances(prev => [newInstance, ...prev]);
-    setSelectedInstance(newInstance);
-    setIsRunning(true);
-    toast.success(`Started ${template.name} workflow`);
+  const startWorkflow = async (template: WorkflowTemplate) => {
+    try {
+      const instance = await executeWorkflow(template.id);
+      
+      setInstances(prev => [instance, ...prev]);
+      setSelectedInstance(instance);
+      setIsRunning(true);
+      toast.success(`Started ${template.name} workflow`);
+    } catch (err: any) {
+      console.error('Failed to start workflow:', err);
+      toast.error(err.message || 'Failed to start workflow');
+    }
   };
 
   // Stop workflow

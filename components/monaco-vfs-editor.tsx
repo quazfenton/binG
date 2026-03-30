@@ -212,7 +212,6 @@ const LANGUAGE_EXTENSIONS: Record<string, string> = {
   ion: "ion",
   parquet: "parquet",
   orc: "orc",
-  avro: "avro",
 };
 
 const FILE_ICONS: Record<string, React.ComponentType<{ className?: string }>> = {

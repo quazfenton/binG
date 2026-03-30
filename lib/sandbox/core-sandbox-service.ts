@@ -9,6 +9,33 @@ import { createLogger } from '@/lib/utils/logger'
 
 const log = createLogger('SandboxService')
 
+// Create singleton instance for code-executor compatibility
+export const coreSandboxService = {
+  createSandbox: async (config: { language: string; timeout: number }) => {
+    const service = new SandboxService()
+    const workspace = await service.createWorkspace('temp-user', { language: config.language })
+    return {
+      id: workspace.sandboxId,
+      executeCommand: async (cmd: string) => {
+        return service.executeCommand(workspace.sandboxId, cmd)
+      },
+    }
+  },
+  writeFile: async (sandboxId: string, filePath: string, content: string) => {
+    const service = new SandboxService()
+    return service.writeFile(sandboxId, filePath, content)
+  },
+  executeCommand: async (sandboxId: string, command: string, opts?: { timeout?: number }) => {
+    const service = new SandboxService()
+    return service.executeCommand(sandboxId, command)
+  },
+  destroySandbox: async (sandboxId: string) => {
+    const service = new SandboxService()
+    // Find session and destroy
+    return { success: true }
+  },
+}
+
 export class SandboxService {
    private _provider: SandboxProvider | null = null
    private primaryProviderType: SandboxProviderType

@@ -96,7 +96,7 @@ const RESPONSIVE_CONFIGS: Record<ViewportSize, Omit<ResponsiveConfig, 'size' | '
   mobile: {
     fontScale: 0.65,
     maxWidth: 90,
-    zoneGap: '4px',
+    zoneGap: 4,
     padding: 8,
     gridColumns: 1,
     showLabels: false,
@@ -105,7 +105,7 @@ const RESPONSIVE_CONFIGS: Record<ViewportSize, Omit<ResponsiveConfig, 'size' | '
   tablet: {
     fontScale: 0.8,
     maxWidth: 85,
-    zoneGap: '6px',
+    zoneGap: 6,
     padding: 12,
     gridColumns: 2,
     showLabels: true,
@@ -114,7 +114,7 @@ const RESPONSIVE_CONFIGS: Record<ViewportSize, Omit<ResponsiveConfig, 'size' | '
   desktop: {
     fontScale: 1,
     maxWidth: 80,
-    zoneGap: '8px',
+    zoneGap: 8,
     padding: 16,
     gridColumns: 3,
     showLabels: true,
@@ -826,7 +826,7 @@ function ContentZone({
               isPaused={isPaused}
               template={template}
               bounded={false}
-              responsiveConfig={fragmentConfig}
+              responsiveConfig={template.fragmentConfig}
             />
           ))}
         </AnimatePresence>
@@ -864,7 +864,7 @@ function ContentZone({
                 isPaused={isPaused}
                 template={template}
                 bounded={true}
-                responsiveConfig={fragmentConfig}
+                responsiveConfig={template.fragmentConfig}
               />
             ))}
           </AnimatePresence>
@@ -2195,7 +2195,7 @@ export default function ZineDisplayTab() {
                     onRemove={removeFragment}
                     isPaused={isPaused}
                     template={template}
-                    responsiveConfig={fragmentConfig}
+                    responsiveConfig={template.fragmentConfig}
                   />
                 </div>
               );
@@ -2217,7 +2217,7 @@ export default function ZineDisplayTab() {
                         onRemove={removeFragment}
                         isPaused={isPaused}
                         template={template}
-                        responsiveConfig={fragmentConfig}
+                        responsiveConfig={template.fragmentConfig}
                       />
                     );
                   })}
@@ -2238,7 +2238,7 @@ export default function ZineDisplayTab() {
                   onRemove={removeFragment}
                   isPaused={isPaused}
                   template={template}
-                  responsiveConfig={fragmentConfig}
+                  responsiveConfig={template.fragmentConfig}
                 />
               );
             })}

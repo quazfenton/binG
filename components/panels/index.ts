@@ -24,17 +24,11 @@ export {
 
 // Enhanced panel implementations
 export {
-  EnhancedInteractionPanel,
-  type EnhancedInteractionPanelProps,
-} from "./enhanced-interaction-panel";
-
-export {
   EnhancedTopPanel,
 } from "./enhanced-top-panel";
 
 export {
   EnhancedWorkspacePanel,
-  type EnhancedWorkspacePanelProps,
 } from "./enhanced-workspace-panel";
 
 // ============================================================================
@@ -59,30 +53,6 @@ export {
  *     >
  *       <PanelContent />
  *     </ResizablePanelGroup>
- *   );
- * }
- */
-
-/**
- * @example
- * // Using EnhancedInteractionPanel
- * import { EnhancedInteractionPanel } from "@/components/panels";
- *
- * function ChatInterface() {
- *   return (
- *     <EnhancedInteractionPanel
- *       onSubmit={(content, attachments) => {
- *         // Handle message submission
- *         sendMessage(content, attachments);
- *       }}
- *       onNewChat={() => startNewConversation()}
- *       isProcessing={isGenerating}
- *       input={input}
- *       setInput={setInput}
- *       availableProviders={providers}
- *       onProviderChange={handleProviderChange}
- *       // ... other props
- *     />
  *   );
  * }
  */
@@ -218,26 +188,6 @@ export {
  * @property {string} handleClassName - Resize handle classes
  * @property {boolean} showSnapIndicators - Show snap zone indicators
  * @property {boolean} enableKeyboardShortcuts - Enable keyboard controls
- */
-
-/**
- * EnhancedInteractionPanel Props:
- *
- * @interface EnhancedInteractionPanelProps
- * @property {(content: string, attachments?: AttachedVirtualFile[]) => void} onSubmit - Message submit handler
- * @property {() => void} onNewChat - New chat handler
- * @property {boolean} isProcessing - Processing state
- * @property {boolean} allowInputWhileProcessing - Allow queuing messages
- * @property {() => void} toggleAccessibility - Toggle settings
- * @property {() => void} toggleHistory - Toggle history
- * @property {() => void} toggleCodePreview - Toggle code preview
- * @property {() => void} onStopGeneration - Stop generation handler
- * @property {string} currentProvider - Current LLM provider
- * @property {string} currentModel - Current model
- * @property {string} input - Input text
- * @property {(value: string) => void} setInput - Input setter
- * @property {LLMProvider[]} availableProviders - Available providers
- * @property {(provider: string, model: string) => void} onProviderChange - Provider change handler
  */
 
 /**

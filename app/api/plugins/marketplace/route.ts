@@ -1,73 +1,52 @@
+/**
+ * Plugin Marketplace API
+ *
+ * GET /api/plugins/marketplace - List marketplace plugins
+ * GET /api/plugins/marketplace/search - Search plugins
+ * GET /api/plugins/installed - List installed plugins
+ * POST /api/plugins/:id/install - Install plugin
+ * POST /api/plugins/:id/uninstall - Uninstall plugin
+ * POST /api/plugins/:id/enable - Enable plugin
+ * POST /api/plugins/:id/disable - Disable plugin
+ * PUT /api/plugins/:id/config - Update plugin config
+ * POST /api/plugins/:id/execute - Execute plugin
+ */
+
 import { NextRequest, NextResponse } from 'next/server';
+import {
+  getMarketplacePlugins,
+  getInstalledPlugins,
+  installPlugin,
+  uninstallPlugin,
+  enablePlugin,
+  disablePlugin,
+  updatePluginConfig,
+  executePlugin,
+  searchPlugins,
+  type PluginCategory,
+} from '@/lib/plugins/plugin-system';
+import { createLogger } from '@/lib/utils/logger';
 
-type NpmSearchResponse = {
-  objects?: Array<{
-    package?: {
-      name?: string;
-      description?: string;
-      version?: string;
-      date?: string;
-      publisher?: { username?: string };
-      keywords?: string[];
-    };
-    score?: { final?: number };
-  }>;
-};
+const logger = createLogger('API:Plugins');
 
-export async function GET(req: NextRequest) {
+// GET - List marketplace plugins
+export async function GET(request: NextRequest) {
   try {
-    const { searchParams } = new URL(req.url);
-    const search = searchParams.get('search') || 'bing-plugin';
-    const category = searchParams.get('category') || 'utility';
-
-    const npmRes = await fetch(
-      `https://registry.npmjs.org/-/v1/search?text=${encodeURIComponent(search)}&size=50`,
-      { cache: 'no-store' }
-    );
+    const searchParams = request.nextUrl.searchParams;
+    const category = searchParams.get('category') as PluginCategory | undefined;
     
-    // Check if npm API request was successful
-    if (!npmRes.ok) {
-      console.error('Marketplace npm API error:', npmRes.status, npmRes.statusText);
-      return NextResponse.json(
-        { error: 'Failed to fetch plugins from npm registry' },
-        { status: npmRes.status === 429 ? 429 : 502 }
-      );
-    }
+    const plugins = await getMarketplacePlugins(category);
     
-    const data = (await npmRes.json()) as NpmSearchResponse;
-    const objects = data.objects || [];
-
-    const plugins = objects.map((obj) => {
-      const pkg = obj.package || {};
-      const score = obj.score?.final || 0;
-      return {
-        id: pkg.name || '',
-        name: pkg.name || '',
-        description: pkg.description || 'No description',
-        version: pkg.version || '0.0.0',
-        author: pkg.publisher?.username || 'Unknown',
-        // Use plugin's own keywords for category, not the request category
-        // This ensures category filtering works correctly
-        category: pkg.keywords?.[0] || 'utility',
-        rating: Math.min(5, Math.max(1, Number((score * 5).toFixed(1)))),
-        downloads: 0,
-        size: 'Unknown',
-        lastUpdated: pkg.date || new Date(0).toISOString(),
-        verified: false,
-        featured: false,
-        tags: pkg.keywords || [],
-        // NPM Search API doesn't include dependencies; would need separate registry.npmjs.org/{pkg} call
-        permissions: ['network'],
-        screenshots: [],
-        price: 0,
-        installed: false,
-        compatible: true,
-      };
+    return NextResponse.json({
+      success: true,
+      plugins,
+      count: plugins.length,
     });
-
-    return NextResponse.json(plugins);
-  } catch (error) {
-    console.error('Marketplace fetch error:', error);
-    return NextResponse.json({ error: 'Failed to fetch marketplace' }, { status: 500 });
+  } catch (error: any) {
+    logger.error('Failed to get marketplace plugins:', error);
+    return NextResponse.json(
+      { error: 'Failed to get marketplace plugins' },
+      { status: 500 }
+    );
   }
 }

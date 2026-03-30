@@ -1,90 +1,105 @@
 import React, { useState, useEffect } from "react";
 import { Button } from "@/components/ui/button";
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { AlertCircle, Clock, ExternalLink, RefreshCw, Zap } from "lucide-react";
+import { Input } from "@/components/ui/input";
+import { Badge } from "@/components/ui/badge";
+import { AlertCircle, Clock, ExternalLink, RefreshCw, Zap, Search, Ticket, MapPin, Calendar } from "lucide-react";
+import { toast } from "sonner";
 
 interface BroadwayDeal {
   show: string;
   price: string;
+  originalPrice?: string;
+  savings?: string;
   time: string;
-  liveViewUrl?: string;
+  venue: string;
+  date: string;
+  url?: string;
+  source: string;
+}
+
+// Sanitize search input - remove potentially dangerous characters
+function sanitizeSearchInput(input: string): string {
+  // Limit length to 100 characters
+  const maxLength = 100;
+  // Only allow alphanumeric, spaces, hyphens, apostrophes, and basic punctuation
+  const allowedPattern = /^[a-zA-Z0-9\s\-'.]+$/;
+  
+  let sanitized = input.trim().slice(0, maxLength);
+  
+  // If input contains disallowed characters, filter them out
+  if (!allowedPattern.test(sanitized)) {
+    sanitized = sanitized.replace(/[^a-zA-Z0-9\s\-'.]/g, '');
+  }
+  
+  return sanitized;
 }
 
 export default function BroadwayDealHunterTab() {
-  const [deal, setDeal] = useState<BroadwayDeal | null>(null);
+  const [deals, setDeals] = useState<BroadwayDeal[]>([]);
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [lastChecked, setLastChecked] = useState<Date | null>(null);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [dataSource, setDataSource] = useState<string>('Demo');
 
-      // Check for deals manually or on schedule
-  const checkForDeals = async () => {
+  // Check for deals using the new Deals API
+  const checkForDeals = async (query?: string) => {
     setLoading(true);
     setError(null);
-    
+
     try {
-      // Call our backend API to trigger the Trigger.dev task
-      const response = await fetch("/api/top-panel?section=broadway-deal-hunter", {
-        method: "POST",
-      });
+      // Call our backend API for deals
+      const params = new URLSearchParams();
+      if (query) params.set('search', query);
+      params.set('category', 'Entertainment');
       
+      const response = await fetch(`/api/deals?${params}`);
+
       if (!response.ok) {
-        throw new Error(`Failed to check for deals: ${response.statusText}`);
+        throw new Error(`Failed to fetch deals: ${response.statusText}`);
       }
-      
+
       const result = await response.json();
-      
+
       if (result.success) {
-        // Task triggered successfully
-        // In a real implementation with Trigger.dev, we would:
-        // 1. Subscribe to real-time streams to get live updates
-        // 2. Or poll for the task completion
-        // 3. Or use webhooks to get notified when done
+        // Transform deals API response to BroadwayDeal format
+        const transformedDeals = result.deals.map((deal: any) => ({
+          show: deal.title,
+          price: `$${deal.dealPrice}`,
+          originalPrice: `$${deal.originalPrice}`,
+          savings: `${deal.discount}% off`,
+          time: new Date(deal.createdAt).toLocaleTimeString(),
+          venue: deal.store,
+          date: deal.expiresAt ? new Date(deal.expiresAt).toLocaleDateString() : 'No expiry',
+          url: deal.dealUrl,
+          source: deal.store,
+        }));
         
-        // For now, we'll simulate getting a result after a delay
-        // In production, this would be replaced with actual Trigger.dev integration
-        setTimeout(() => {
-          // Simulate different possible outcomes
-          const random = Math.random();
-          
-          if (random < 0.7) { // 70% chance of finding a deal
-            const deals = [
-              "Show: The Lion King, Price: $89, Time: 7:00 PM",
-              "Show: Hamilton, Price: $120, Time: 8:00 PM",
-              "Show: Wicked, Price: $95, Time: 6:30 PM",
-              "Show: The Phantom of the Opera, Price: $75, Time: 8:00 PM",
-              "Show: Moulin Rouge! The Musical, Price: $110, Time: 7:30 PM"
-            ];
-            
-            const selectedDeal = deals[Math.floor(Math.random() * deals.length)];
-            
-            // Parse the result string (format: "Show: [name], Price: [exact current price], Time: [time]")
-            const dealText = selectedDeal;
-            const showMatch = dealText.match(/Show:\s*([^,]+)/);
-            const priceMatch = dealText.match(/Price:\s*([^,]+)/);
-            const timeMatch = dealText.match(/Time:\s*([^,]+)/);
-            
-            setDeal({
-              show: showMatch ? showMatch[1].trim() : "Unknown Show",
-              price: priceMatch ? priceMatch[1].trim() : "Unknown Price",
-              time: timeMatch ? timeMatch[1].trim() : "Unknown Time",
-              liveViewUrl: `https://live.anchorbrowser.io?sessionId=simulated-${Date.now()}`
-            });
-          } else { // 30% chance of no deals
-            setDeal(null);
-            setError("No Broadway deals found today");
-          }
-          
-          setLastChecked(new Date());
-        }, 3000); // Simulate 3 second delay for task execution (more realistic)
+        setDeals(transformedDeals);
+        setDataSource('Broadway Deals');
+        setLastChecked(new Date());
+
+        if (transformedDeals.length > 0) {
+          toast.success(`Found ${transformedDeals.length} deals`);
+        } else {
+          setError("No deals found");
+        }
       } else {
-        throw new Error(result.error || "Failed to trigger task");
+        throw new Error(result.error || "Failed to fetch deals");
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : "An unknown error occurred");
-      setDeal(null);
+      setDeals([]);
     } finally {
       setLoading(false);
     }
+  };
+
+  // Handle search submit
+  const handleSearch = (e: React.FormEvent) => {
+    e.preventDefault();
+    checkForDeals(searchQuery);
   };
 
   // Check for deals when component mounts
@@ -97,87 +112,120 @@ export default function BroadwayDealHunterTab() {
       {/* Header */}
       <div className="flex items-center justify-between mb-4">
         <h3 className="text-lg font-semibold text-white flex items-center gap-2">
-          <span>🎭</span> Broadway Deal Hunter
+          <Ticket className="h-5 w-5 text-yellow-400" />
+          Broadway Deal Hunter
         </h3>
         <Button 
           variant="outline" 
           size="sm" 
-          onClick={checkForDeals}
+          onClick={() => checkForDeals(searchQuery)}
           disabled={loading}
           className="text-white/60 hover:text-white border-white/20"
         >
           {loading ? (
-            <>
-              <RefreshCw className="mr-2 h-4 w-4 animate-spin" />
-              Checking...
-            </>
+            <RefreshCw className="h-4 w-4 animate-spin" />
           ) : (
-            <>
-              <RefreshCw className="mr-2 h-4 w-4" />
-              Check Now
-            </>
+            <RefreshCw className="h-4 w-4" />
           )}
         </Button>
       </div>
 
-      {/* Last checked timestamp */}
+      {/* Search Input */}
+      <form onSubmit={handleSearch} className="flex gap-2">
+        <Input
+          value={searchQuery}
+          onChange={(e) => setSearchQuery(e.target.value)}
+          placeholder="Search shows (e.g., Hamilton, Lion King)..."
+          className="bg-black/40 border-white/20 text-white placeholder:text-white/40"
+        />
+        <Button 
+          type="submit"
+          variant="ghost"
+          size="sm"
+          disabled={loading}
+          className="text-white/60 hover:text-white"
+        >
+          <Search className="h-4 w-4" />
+        </Button>
+      </form>
+
+      {/* Last checked timestamp & source */}
       {lastChecked && (
-        <p className="text-xs text-white/40">
-          Last checked: {lastChecked.toLocaleTimeString()}
-        </p>
+        <div className="flex items-center justify-between text-xs text-white/40">
+          <span>Last checked: {lastChecked.toLocaleTimeString()}</span>
+          <span className={dataSource === 'Ticketmaster' || dataSource === 'Ticketmaster API' ? 'text-green-400' : ''}>
+            Source: {dataSource}
+          </span>
+        </div>
       )}
 
-      {/* Deal Display */}
-      {deal ? (
-        <Card className="bg-white/5 border border-white/10">
-          <CardHeader className="pb-2">
-            <CardTitle className="text-white flex items-center gap-2">
-              <Zap className="h-4 w-4" /> Best Deal Found
-            </CardTitle>
-          </CardHeader>
-          <CardContent className="space-y-3">
-            <div className="space-y-2">
-              <div className="flex items-center gap-3">
-                <div className="bg-white/10 rounded-full p-2">
-                  <span className="text-xl">🎫</span>
+      {/* Deals Display */}
+      {deals.length > 0 ? (
+        <div className="space-y-3 max-h-[400px] overflow-y-auto">
+          {deals.map((deal, index) => (
+            <Card key={index} className="bg-white/5 border border-white/10 hover:bg-white/10 transition-all">
+              <CardContent className="p-4 space-y-3">
+                <div className="flex items-start justify-between">
+                  <div className="flex items-center gap-3">
+                    <div className="bg-yellow-500/20 rounded-full p-2">
+                      <Ticket className="h-5 w-5 text-yellow-400" />
+                    </div>
+                    <div>
+                      <h4 className="text-base font-semibold text-white">{deal.show}</h4>
+                      <div className="flex items-center gap-2 text-xs text-white/50">
+                        <MapPin className="h-3 w-3" />
+                        {deal.venue}
+                      </div>
+                    </div>
+                  </div>
+                  {deal.savings && (
+                    <Badge className="bg-green-500/20 text-green-400 border-green-500/30">
+                      {deal.savings}
+                    </Badge>
+                  )}
                 </div>
-                <div>
-                  <h4 className="text-lg font-semibold text-white">{deal.show}</h4>
-                  <p className="text-white/60 text-sm">Current lowest price</p>
+                
+                <div className="grid grid-cols-2 gap-3">
+                  <div className="bg-white/5 rounded-lg p-2">
+                    <p className="text-xs text-white/50">Price</p>
+                    <div className="flex items-baseline gap-2">
+                      <span className="text-lg font-bold text-white">{deal.price}</span>
+                      {deal.originalPrice && (
+                        <span className="text-xs text-white/40 line-through">{deal.originalPrice}</span>
+                      )}
+                    </div>
+                    {deal.savings && (
+                      <p className="text-xs text-green-400 mt-1">{deal.savings}</p>
+                    )}
+                  </div>
+                  <div className="bg-white/5 rounded-lg p-2">
+                    <p className="text-xs text-white/50">Show Time</p>
+                    <div className="flex items-center gap-1 text-white">
+                      <Clock className="h-3 w-3 text-white/50" />
+                      {deal.time}
+                    </div>
+                    <div className="flex items-center gap-1 text-xs text-white/50">
+                      <Calendar className="h-3 w-3" />
+                      {deal.date}
+                    </div>
+                  </div>
                 </div>
-              </div>
-              
-              <div className="bg-white/5 rounded-lg p-3 border border-white/10">
-                <p className="font-mono text-white text-lg">
-                  {deal.price}
-                </p>
-                <p className="text-xs text-white/50 mt-1">Starting price</p>
-              </div>
-              
-              <div className="flex items-center gap-3">
-                <div className="bg-white/10 rounded-full p-2">
-                  <span className="text-xl">⏰</span>
-                </div>
-                <div>
-                  <h4 className="text-lg font-semibold text-white">{deal.time}</h4>
-                  <p className="text-white/60 text-sm">Show time</p>
-                </div>
-              </div>
-              
-              {deal.liveViewUrl && (
-                <Button 
-                  variant="ghost" 
-                  size="sm" 
-                  onClick={() => window.open(deal.liveViewUrl, "_blank")}
-                  className="w-full text-white/60 hover:text-white border-white/20"
-                >
-                  <ExternalLink className="mr-2 h-4 w-4" />
-                  View Live Browser Session
-                </Button>
-              )}
-            </div>
-          </CardContent>
-        </Card>
+                
+                {deal.url && (
+                  <Button 
+                    variant="outline" 
+                    size="sm" 
+                    onClick={() => window.open(deal.url, "_blank")}
+                    className="w-full mt-2 border-yellow-500/30 text-yellow-400 hover:bg-yellow-500/10"
+                  >
+                    <ExternalLink className="h-4 w-4 mr-2" />
+                    Get Tickets
+                  </Button>
+                )}
+              </CardContent>
+            </Card>
+          ))}
+        </div>
       ) : error ? (
         <div className="bg-white/5 border border-white/10 rounded-lg p-4">
           <AlertCircle className="h-4 w-4 text-red-400 mb-2" />
@@ -185,7 +233,8 @@ export default function BroadwayDealHunterTab() {
         </div>
       ) : (
         <div className="bg-white/5 border border-white/10 rounded-lg p-8 text-center">
-          <p className="text-white/60">No Broadway deals found yet. Click "Check Now" to search for the latest deals.</p>
+          <Ticket className="h-12 w-12 text-white/20 mx-auto mb-3" />
+          <p className="text-white/60">No Broadway deals found. Try a different search or click refresh.</p>
         </div>
       )}
     </div>

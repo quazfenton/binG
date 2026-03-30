@@ -5,12 +5,15 @@
  * 
  * Enhanced version with:
  * - WebSocket terminal support
- * - Mastra workflow execution
- * - Git operations
- * - Cloud storage management
- * - Quota monitoring
- * - OAuth integrations
- * - Enhanced error handling
+ * - Mastra/n8n workflow execution
+ * - Git operations (status, commit, push)
+ * - Cloud storage management (upload, list, usage)
+ * - Quota monitoring and cost tracking
+ * - OAuth integrations (GitHub, Google, Notion, etc.)
+ * - Multi-provider fallback (automatic failover)
+ * - Circuit breaker protection
+ * - 20+ LLM providers (OpenAI, Anthropic, Google, Mistral, GitHub, NVIDIA NIM, etc.)
+ * - 25+ Sandbox providers (Daytona, E2B, Blaxel, Sprites, CodeSandbox, etc.)
  * 
  * @see https://github.com/quazfenton/binG
  */
@@ -31,7 +34,7 @@ import FormData from 'form-data';
 dotenv.config();
 
 // CLI Configuration
-const CLI_VERSION = '1.1.0';
+const CLI_VERSION = '1.2.0';
 const DEFAULT_API_BASE = process.env.BING_API_URL || 'http://localhost:3000/api';
 const CONFIG_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', '.bing-cli');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');

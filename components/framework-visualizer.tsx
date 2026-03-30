@@ -61,6 +61,7 @@ export interface WorkflowStep {
   duration?: number;
   error?: string;
   config?: Record<string, any>;
+  condition?: string;
 }
 
 export interface WorkflowEdge {
@@ -226,7 +227,7 @@ export default function FrameworkVisualizer({
   onRunWorkflow,
   onStopWorkflow,
   onRefresh,
-}: FrameworkVisualizerProps) {
+}: WorkflowVisualizerProps) {
   const [selectedWorkflow, setSelectedWorkflow] = useState<WorkflowConfig | null>(
     workflows.find(w => w.enabled) || workflows[0] || null
   );
@@ -376,7 +377,7 @@ export default function FrameworkVisualizer({
           <Button
             variant="ghost"
             size="sm"
-            onClick={handleToggle}
+            onClick={() => handleToggle(!selectedWorkflow.enabled)}
             className={`text-xs ${
               selectedWorkflow.enabled
                 ? 'bg-green-500/20 text-green-300 hover:bg-green-500/30'

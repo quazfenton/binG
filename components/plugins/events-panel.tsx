@@ -135,7 +135,7 @@ export default function EventsPanel() {
           const data = JSON.parse(event.data);
           
           if (data.type === 'connected') {
-            logger.info('SSE connected');
+            console.log('[EventsPanel] SSE connected');
           } else if (data.type === 'event') {
             // Add new event to list
             setEvents((prev) => {

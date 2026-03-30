@@ -726,23 +726,26 @@ export function EnhancedTopPanel() {
       {/* Top Panel with Resizable Group */}
       <AnimatePresence>
         {panelVisible && (
-          <ResizablePanelGroup
-            orientation="vertical"
-            defaultSize={panelHeight}
-            minSize={300}
-            maxSize={700}
-            snapPoints={[400, 500, 600]}
-            storageKey="top-panel-height"
-            onSizeChange={setPanelHeight}
+          <div
             className="fixed z-[150] bg-gradient-to-b from-black/70 via-black/50 to-transparent backdrop-blur-xl border border-white/10 shadow-2xl rounded-2xl"
             style={{
               top: "80px",
               left: "20px",
               right: "420px",
             }}
-            showSnapIndicators
-            enableKeyboardShortcuts
           >
+            <ResizablePanelGroup
+              orientation="vertical"
+              defaultSize={panelHeight}
+              minSize={300}
+              maxSize={700}
+              snapPoints={[400, 500, 600]}
+              storageKey="top-panel-height"
+              onSizeChange={setPanelHeight}
+              className="h-full"
+              showSnapIndicators
+              enableKeyboardShortcuts
+            >
             {/* Panel Content */}
             <div className="h-full flex flex-col overflow-hidden rounded-2xl">
               {/* Header with tabs */}
@@ -784,7 +787,8 @@ export function EnhancedTopPanel() {
                 {renderTabContent(topPanelActiveTab)}
               </div>
             </div>
-          </ResizablePanelGroup>
+            </ResizablePanelGroup>
+          </div>
         )}
       </AnimatePresence>
     </>

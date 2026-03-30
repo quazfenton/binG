@@ -51,6 +51,68 @@ import {
 import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
 
+// Fetch templates from API
+async function fetchTemplates(): Promise<PromptTemplate[]> {
+  try {
+    const response = await fetch('/api/prompts/templates');
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch templates');
+    }
+    
+    return data.templates || [];
+  } catch (err: any) {
+    console.error('[PromptLab] Failed to fetch templates:', err);
+    toast.error('Failed to load templates');
+    return [];
+  }
+}
+
+// Test prompt via API
+async function testPrompt(template: string, input: string, provider: string, model: string, variables?: Record<string, string>) {
+  try {
+    const response = await fetch('/api/prompts/test', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ template, input, provider, model, variables }),
+    });
+    
+    const result = await response.json();
+    
+    if (!result.success) {
+      throw new Error(result.error || 'Test failed');
+    }
+    
+    return result;
+  } catch (err: any) {
+    console.error('[PromptLab] Test failed:', err);
+    throw err;
+  }
+}
+
+// Save template via API
+async function saveTemplate(template: Omit<PromptTemplate, 'createdAt' | 'updatedAt' | 'uses' | 'rating'>) {
+  try {
+    const response = await fetch('/api/prompts/templates', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(template),
+    });
+    
+    const result = await response.json();
+    
+    if (!result.success) {
+      throw new Error(result.error || 'Failed to save template');
+    }
+    
+    return result.template;
+  } catch (err: any) {
+    console.error('[PromptLab] Save failed:', err);
+    throw err;
+  }
+}
+
 // Types
 interface PromptTemplate {
   id: string;
@@ -80,7 +142,8 @@ interface TestResult {
   timestamp: number;
 }
 
-const MOCK_TEMPLATES: PromptTemplate[] = [
+// Fallback templates if API fails (used as initial state before fetch)
+const FALLBACK_TEMPLATES: PromptTemplate[] = [
   {
     id: "tmpl-1",
     name: "Code Review Expert",
@@ -154,7 +217,26 @@ const CATEGORIES = [
 ];
 
 export default function PromptLabTab() {
-  const [templates, setTemplates] = useState<PromptTemplate[]>(MOCK_TEMPLATES);
+  const [templates, setTemplates] = useState<PromptTemplate[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Fetch templates from API on mount
+  useEffect(() => {
+    loadTemplates();
+  }, []);
+
+  const loadTemplates = async () => {
+    try {
+      setLoading(true);
+      const data = await fetchTemplates();
+      setTemplates(data.length > 0 ? data : FALLBACK_TEMPLATES);
+    } catch (err) {
+      console.warn('Failed to fetch templates, using fallback:', err);
+      setTemplates(FALLBACK_TEMPLATES);
+    } finally {
+      setLoading(false);
+    }
+  };
   const [selectedTemplate, setSelectedTemplate] = useState<PromptTemplate | null>(null);
   const [searchQuery, setSearchQuery] = useState("");
   const [selectedCategory, setSelectedCategory] = useState("all");

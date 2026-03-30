@@ -175,7 +175,7 @@ function MessageBubble({ message, isStreaming }: { message: Message; isStreaming
 
       {/* Timestamp */}
       <div className="mt-2 text-[10px] text-white/40">
-        {new Date(message.createdAt || Date.now()).toLocaleString()}
+        {message.timestamp ? new Date(message.timestamp).toLocaleString() : new Date().toLocaleString()}
       </div>
     </motion.div>
   );
@@ -379,7 +379,7 @@ export function EnhancedWorkspacePanel({
   // Thread management
   const createNewThread = useCallback(() => {
     const newThread: ChatThread = {
-      id: `thread-${Date.now()}-${secureRandomId(6)}`,
+      id: `thread-${Date.now()}-${secureRandomId('6')}`,
       name: `New Conversation ${threads.length + 1}`,
       messages: [],
       createdAt: Date.now(),
@@ -417,7 +417,7 @@ export function EnhancedWorkspacePanel({
       id: `msg-${Date.now()}`,
       role: "user",
       content: trimmed,
-      createdAt: Date.now(),
+      timestamp: new Date().toISOString(),
     };
 
     setThreads(prev => prev.map(t =>
