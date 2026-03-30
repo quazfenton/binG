@@ -29,26 +29,27 @@ import { cn } from "@/lib/utils";
 import { parseLinks, parseLinksFromFile, type ParsedLink } from "@/lib/bookmarks/link-parser";
 
 import {
-  Link,
-  Upload,
-  FileText,
-  FileCode,
-  ExternalLink,
-  Trash2,
-  RefreshCw,
-  Search,
-  Filter,
-  Grid3X3,
-  List,
-  Plus,
-  X,
-  Image as ImageIcon,
-  Globe,
-  FolderArchive,
-  Bookmark,
-  CheckCircle,
-  AlertCircle,
-  Loader2,
+   Link,
+   Upload,
+   FileText,
+   FileCode,
+   ExternalLink,
+   Trash2,
+   RefreshCw,
+   Search,
+   Filter,
+   Grid3X3,
+   List,
+   Plus,
+   X,
+   Image as ImageIcon,
+   Globe,
+   FolderArchive,
+   FolderOpen,
+   Bookmark,
+   CheckCircle,
+   AlertCircle,
+   Loader2,
 } from "lucide-react";
 
 // ============================================================================
@@ -381,15 +382,15 @@ export function BookmarksCurationPlugin() {
             <div className="space-y-3">
               <Label>Import from third-party services</Label>
               <div className="grid grid-cols-1 gap-3">
-                <IntegrationCard
-                  name="Google Docs"
-                  icon={FolderArchive}
-                  description="Import links from Google Docs"
-                  onImport={async () => {
-                    toast.info("Google Docs integration coming soon");
-                    return [];
-                  }}
-                />
+                 <IntegrationCard
+                   name="Google Docs"
+                   icon={FolderOpen}
+                   description="Import links from Google Docs"
+                   onImport={async () => {
+                     toast.info("Google Docs integration coming soon");
+                     return [];
+                   }}
+                 />
                 <IntegrationCard
                   name="Browser Bookmarks"
                   icon={Bookmark}

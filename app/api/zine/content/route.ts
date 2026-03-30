@@ -110,9 +110,16 @@ export async function POST(request: NextRequest) {
     }
     
     const content: ZineContent = {
-      ...result.data,
+      type: result.data.type,
       id: result.data.id || `zine-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
       createdAt: result.data.createdAt || Date.now(),
+      title: result.data.title,
+      body: result.data.body,
+      media: result.data.media,
+      metadata: result.data.metadata,
+      source: result.data.source,
+      expiresAt: result.data.expiresAt,
+      priority: result.data.priority,
     };
     
     contentStore.set(content.id, content);

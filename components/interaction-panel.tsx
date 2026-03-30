@@ -75,6 +75,8 @@ import Server from "lucide-react/dist/esm/icons/server";
 import Scale from "lucide-react/dist/esm/icons/scale";
 import Terminal from "lucide-react/dist/esm/icons/terminal";
 import Link from "lucide-react/dist/esm/icons/link";
+import Mic from "lucide-react/dist/esm/icons/mic";
+import MicOff from "lucide-react/dist/esm/icons/mic-off";
 import X from "lucide-react/dist/esm/icons/x";
 import ArrowUp from "lucide-react/dist/esm/icons/arrow-up";
 import ChevronRight from "lucide-react/dist/esm/icons/chevron-right";
@@ -133,6 +135,7 @@ import ImageGenerationTab from "./image-generation-tab";
 import SquareSplitHorizontal from "lucide-react/dist/esm/icons/square-split-horizontal";
 import Bell from "lucide-react/dist/esm/icons/bell";
 import { ImportDialog } from "./file-import/import-dialog";
+import { useVoiceInput } from "../hooks/use-voice-input";
 
 // Pop-out plugin windows for Plugins tab
 const popOutPlugins: Plugin[] = [
@@ -490,6 +493,23 @@ export default function InteractionPanel({
     setPendingInput(null);
     onClearPendingInput?.();
   }, [onClearPendingInput]);
+
+  // Voice input
+  const { isListening, startListening, stopListening, transcript } = useVoiceInput();
+
+  useEffect(() => {
+    if (transcript) {
+      setInput(input + transcript);
+    }
+  }, [transcript, setInput]);
+
+  const handleVoiceToggle = useCallback(() => {
+    if (isListening) {
+      stopListening();
+    } else {
+      startListening();
+    }
+  }, [isListening, startListening, stopListening]);
 
   // Memoized handler for ProviderSelector
   const handleProviderSelect = useCallback((provider: string, model: string) => {
@@ -2011,6 +2031,22 @@ export default function InteractionPanel({
                       >
                         <Cloud className="w-4 h-4 text-blue-400" />
                       </button>
+                      <button
+                        type="button"
+                        onClick={handleVoiceToggle}
+                        className={`p-1.5 rounded-md border transition-colors ${
+                          isListening
+                            ? "bg-red-500/20 border-red-400/50 animate-pulse"
+                            : "bg-white/5 border-white/10 hover:bg-white/15"
+                        }`}
+                        title={isListening ? "Stop listening" : "Voice input"}
+                      >
+                        {isListening ? (
+                          <MicOff className="w-4 h-4 text-red-400" />
+                        ) : (
+                          <Mic className="w-4 h-4 text-white/60" />
+                        )}
+                      </button>
                     </div>
 
                     {showFileSelector && (
@@ -2226,6 +2262,30 @@ export default function InteractionPanel({
                         </>
                       )}
                     </Button>
+                  )}
+
+                  {/* Pending Input Indicator */}
+                  {pendingInput && (
+                    <div className="flex items-center justify-between px-2 py-1.5 bg-yellow-500/10 border border-yellow-400/30 rounded-lg">
+                      <span className="text-xs text-yellow-300">
+                        Message queued - will send after current response completes
+                      </span>
+                      <button
+                        type="button"
+                        onClick={clearPendingInput}
+                        className="text-yellow-300 hover:text-white text-xs"
+                      >
+                        Cancel
+                      </button>
+                    </div>
+                  )}
+
+                  {/* Error Display */}
+                  {_error && (
+                    <div className="flex items-center gap-2 px-2 py-1.5 bg-red-500/10 border border-red-400/30 rounded-lg">
+                      <AlertCircle className="w-3.5 h-3.5 text-red-400 shrink-0" />
+                      <span className="text-xs text-red-300 flex-1">{_error}</span>
+                    </div>
                   )}
                 </form>
               </TabsContent>

@@ -3257,7 +3257,6 @@ root.render(<App />);` };
                           autorun: true,
                           recompileMode: "delayed",
                           recompileDelay: 500,
-                          logLevel: 'debug', // Enable debug logging for troubleshooting
                           // CORS fix: Use configurable CDN source for bundler resources
                           // Sandpack loads bundler from CDN, which may be blocked by CORS/firewalls
                           // Can be overridden via NEXT_PUBLIC_SANDBPACK_BUNDLER_URL env variable
@@ -3270,27 +3269,7 @@ root.render(<App />);` };
                             {} as Record<string, string>
                           ) || {},
                         }}
-                        onError={(error) => {
-                          // Capture Sandpack internal errors (bundler, network, CORS, etc.)
-                          logError('[Sandpack] Internal error:', error);
-                          logError('[Sandpack] Error details:', {
-                            message: error.message,
-                            template: activeTemplate,
-                            filesCount: Object.keys(sandpackFiles).length,
-                            framework: effectiveFramework
-                          });
-                          
-                          // Check for common CORS/network errors
-                          if (error.message?.toLowerCase().includes('cors') ||
-                              error.message?.toLowerCase().includes('network') ||
-                              error.message?.toLowerCase().includes('failed to fetch')) {
-                            logWarn('[Sandpack] CORS/Network error detected. Possible causes:');
-                            logWarn('  - CDN resources blocked by firewall/adblock');
-                            logWarn('  - Offline mode - Sandpack requires initial CDN load');
-                            logWarn('  - Browser extension blocking cross-origin requests');
-                            logWarn('Try: Disable adblock, check internet connection, or use different browser');
-                          }
-                        }}
+
                       />
                     ) : (
                       <div className="h-full flex items-center justify-center text-gray-400">

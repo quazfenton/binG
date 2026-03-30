@@ -365,16 +365,16 @@ export function EnhancedWorkspacePanel({
     }
   }, [activeThreadId]);
 
-  // Auto-scroll to bottom
-  useEffect(() => {
-    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
-  }, [activeThread?.messages]);
-
   // Get active thread
   const activeThread = useMemo(
     () => threads.find(t => t.id === activeThreadId) || null,
     [threads, activeThreadId]
   );
+
+  // Auto-scroll to bottom
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: "smooth" });
+  }, [activeThread?.messages]);
 
   // Thread management
   const createNewThread = useCallback(() => {

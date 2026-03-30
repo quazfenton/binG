@@ -68,13 +68,17 @@ import {
   Zap,
   CheckCircle,
   AlertCircle,
+  Terminal,
+  Monitor,
+  Upload,
 } from "lucide-react";
+import { Card, CardContent } from "@/components/ui/card";
 
 // ============================================================================
 // Types
 // ============================================================================
 
-interface InteractionPanelProps {
+export interface EnhancedInteractionPanelProps {
   onSubmit: (content: string, attachments?: AttachedVirtualFile[]) => void;
   onNewChat: () => void;
   isProcessing: boolean;
@@ -323,7 +327,7 @@ export function EnhancedInteractionPanel({
   onStartPollingDiffs,
   onStopPollingDiffs,
   onPollDiffsNow,
-}: InteractionPanelProps) {
+}: EnhancedInteractionPanelProps) {
   const { isOpen: isPanelOpen } = usePanel();
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -378,7 +382,7 @@ export function EnhancedInteractionPanel({
   // Handle transcript from voice input
   useEffect(() => {
     if (transcript) {
-      setInput(prev => prev + transcript);
+      setInput(input + transcript);
     }
   }, [transcript, setInput]);
 

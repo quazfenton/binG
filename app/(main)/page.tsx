@@ -17,14 +17,7 @@ const PWAInstallPrompt = dynamic(
   { ssr: false, loading: () => null }
 )
 
-// Enhanced conversation interface with production-ready panels
-const EnhancedConversationInterface = dynamic(
-  () => import("../../components/enhanced-conversation-interface").then(mod => mod.EnhancedConversationInterface),
-  { ssr: false, loading: () => <FallbackUI message="Loading enhanced interface..." /> }
-)
-
-// Legacy fallback
-const LegacyConversationInterface = dynamic(
+const ConversationInterface = dynamic(
   () => import("../../components/conversation-interface"),
   { ssr: false, loading: () => <FallbackUI message="Loading interface..." /> }
 )
@@ -36,20 +29,11 @@ const TopPanel = dynamic(
 
 export default function ChatBox() {
   const [mounted, setMounted] = useState(false)
-  const [useEnhanced, setUseEnhanced] = useState(true)
   const CUSTOM_BG_MEDIA_KEY = "custom_bg_media_url"
 
   useEffect(() => {
     setMounted(true)
     startCacheCleanup()
-
-    // Check enhanced interface preference
-    if (typeof window !== "undefined") {
-      const enhancedEnabled = localStorage.getItem("use_enhanced_interface")
-      if (enhancedEnabled !== null) {
-        setUseEnhanced(enhancedEnabled === "true")
-      }
-    }
 
     // Apply background media
     const root = document.documentElement
@@ -95,18 +79,8 @@ export default function ChatBox() {
   return (
     <TamboWrapper>
       <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
-        {useEnhanced ? (
-          <EnhancedConversationInterface
-            enableWorkspacePanel={true}
-            enableTopPanel={true}
-            enableTerminal={false}
-          />
-        ) : (
-          <>
-            <TopPanel />
-            <LegacyConversationInterface />
-          </>
-        )}
+        <TopPanel />
+        <ConversationInterface />
         <PWAInstallPrompt />
       </ThemeProvider>
     </TamboWrapper>

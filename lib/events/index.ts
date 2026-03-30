@@ -135,10 +135,10 @@ export type {
   ErrorClassification,
 } from './self-healing';
 
-// binG handlers exports
+// binG handlers exports (alias handleResearchTask to avoid conflict with sample-handlers)
 export {
   handleAgentLoop,
-  handleResearchTask,
+  handleResearchTask as handleBingResearchTask,
   handleDAGWorkflow,
   handleSkillBootstrap,
   handleMultiAgentConsensus,

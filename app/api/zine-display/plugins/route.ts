@@ -48,13 +48,22 @@ const pluginConfigSchema = z.object({
 // Users can access browser APIs, make network requests, etc.
 
 function createPluginFromConfig(config: z.infer<typeof pluginConfigSchema>): DataSourcePlugin & { isCustom: boolean; createdAt: string } {
+  // Transform configSchema to match expected type (make type and required required)
+  const transformedConfigSchema = config.configSchema ? 
+    Object.fromEntries(
+      Object.entries(config.configSchema).map(([key, val]) => [
+        key,
+        { type: val.type, required: val.required ?? false, default: val.default }
+      ])
+    ) : undefined;
+
   const basePlugin: DataSourcePlugin = {
     id: config.id,
     name: config.name,
     icon: config.icon,
     version: config.version,
     description: config.description || '',
-    configSchema: config.configSchema,
+    configSchema: transformedConfigSchema,
     fetch: async (dsConfig, template) => {
       // Default fetch implementation - returns placeholder
       // In production, this could call an external handler
