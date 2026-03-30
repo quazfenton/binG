@@ -10,7 +10,7 @@ import { NextRequest, NextResponse } from "next/server";
 import { readFile, writeFile, mkdir, rename } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
-import { createHash } from "crypto";
+import { createHash, randomUUID } from "crypto";
 
 const DATA_DIR = join(process.cwd(), "data");
 const SNIPPETS_PATH = join(DATA_DIR, "code-snippets.json");
@@ -178,20 +178,33 @@ export async function POST(request: NextRequest) {
 
     switch (action) {
       case 'save': {
-        if (!snippet?.code) {
+        // Validate required fields
+        if (!snippet?.code || typeof snippet.code !== 'string') {
           return NextResponse.json(
             { success: false, error: 'Code is required' },
             { status: 400 }
           );
         }
+        if (!snippet?.name || typeof snippet.name !== 'string') {
+          return NextResponse.json(
+            { success: false, error: 'Snippet name is required' },
+            { status: 400 }
+          );
+        }
+        if (!snippet?.language || typeof snippet.language !== 'string') {
+          return NextResponse.json(
+            { success: false, error: 'Snippet language is required' },
+            { status: 400 }
+          );
+        }
 
         const newSnippet = {
-          id: `snippet-${Date.now()}`,
-          name: snippet.name || `Snippet ${currentSnippets.length + 1}`,
-          language: snippet.language || 'javascript',
+          id: `snippet-${randomUUID()}`,
+          name: snippet.name,
+          language: snippet.language,
           code: snippet.code,
-          output: snippet.output,
-          error: snippet.error,
+          output: snippet.output || '',
+          error: snippet.error || '',
           createdAt: Date.now(),
           updatedAt: Date.now(),
           isPublic: false,

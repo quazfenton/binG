@@ -113,11 +113,22 @@ export async function GET(request: NextRequest) {
     const source = searchParams.get('source');
     const search = searchParams.get('search');
 
+    // Validate source parameter
+    const validSources = ['spotify', 'apple-music', 'youtube'];
+    if (source && !validSources.includes(source)) {
+      return NextResponse.json(
+        { error: `Invalid source parameter. Must be one of: ${validSources.join(', ')}` },
+        { status: 400 }
+      );
+    }
+
     if (type === 'playlists') {
       let playlists = [...SAMPLE_PLAYLISTS];
 
+      // Filter by source (case-insensitive)
       if (source) {
-        playlists = playlists.filter(p => p.source === source);
+        const normalizedSource = source.toLowerCase();
+        playlists = playlists.filter(p => p.source.toLowerCase() === normalizedSource);
       }
 
       if (search) {
@@ -138,8 +149,10 @@ export async function GET(request: NextRequest) {
     // Default: return tracks
     let tracks = [...SAMPLE_TRACKS];
 
+    // Filter by source (case-insensitive)
     if (source) {
-      tracks = tracks.filter(t => t.source === source);
+      const normalizedSource = source.toLowerCase();
+      tracks = tracks.filter(t => t.source.toLowerCase() === normalizedSource);
     }
 
     if (search) {
@@ -154,7 +167,7 @@ export async function GET(request: NextRequest) {
       success: true,
       tracks,
       total: tracks.length,
-      sources: ['spotify', 'apple-music', 'youtube'],
+      sources: validSources,
     });
   } catch (error: any) {
     console.error('[Music API] Error:', error);

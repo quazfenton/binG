@@ -17,9 +17,32 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { template, input, provider, model, variables } = body;
 
+    // Validate required fields
     if (!template || !input) {
       return NextResponse.json(
         { error: 'Template and input are required' },
+        { status: 400 }
+      );
+    }
+
+    // Validate input types
+    if (typeof template !== 'string') {
+      return NextResponse.json(
+        { error: 'Template must be a string' },
+        { status: 400 }
+      );
+    }
+
+    if (typeof input !== 'object' || input === null) {
+      return NextResponse.json(
+        { error: 'Input must be an object' },
+        { status: 400 }
+      );
+    }
+
+    if (variables && typeof variables !== 'object') {
+      return NextResponse.json(
+        { error: 'Variables must be an object' },
         { status: 400 }
       );
     }
@@ -33,9 +56,18 @@ export async function POST(request: NextRequest) {
       ...result,
     });
   } catch (error: any) {
+    // Distinguish between validation errors and internal errors
+    if (error instanceof Error && error.message.includes('Invalid')) {
+      logger.warn('Validation error in prompt test:', error.message);
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      );
+    }
+    
     logger.error('Failed to test prompt:', error);
     return NextResponse.json(
-      { error: error.message || 'Failed to test prompt' },
+      { error: 'Failed to test prompt' },
       { status: 500 }
     );
   }
@@ -46,7 +78,8 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const templateId = searchParams.get('templateId') || undefined;
-    const limit = parseInt(searchParams.get('limit') || '50');
+    // Cap limit to prevent excessive data retrieval (max 100)
+    const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 100);
 
     const history = await getTestHistory(templateId, limit);
 

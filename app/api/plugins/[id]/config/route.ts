@@ -17,8 +17,31 @@ export async function PUT(
 ) {
   try {
     const { id } = await params;
-    const body = await request.json();
+    
+    // Parse and validate request body
+    let body: any;
+    try {
+      body = await request.json();
+    } catch (parseError: any) {
+      logger.warn('Invalid JSON in plugin config request', { 
+        pluginId: id, 
+        error: parseError.message 
+      });
+      return NextResponse.json(
+        { error: 'Invalid JSON body' },
+        { status: 400 }
+      );
+    }
+    
     const { config } = body;
+
+    // Validate config object
+    if (!config || typeof config !== 'object') {
+      return NextResponse.json(
+        { error: 'Invalid config format. Config must be an object' },
+        { status: 400 }
+      );
+    }
 
     const success = await updatePluginConfig(id, config);
 
@@ -67,6 +90,14 @@ export async function POST(
     }
     
     const { input } = body;
+
+    // Validate input object
+    if (!input || typeof input !== 'object') {
+      return NextResponse.json(
+        { error: 'Invalid input format. Input must be an object' },
+        { status: 400 }
+      );
+    }
 
     const result = await executePlugin(id, input);
 
