@@ -770,9 +770,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
         return (
           <div className="space-y-4">
             <div className="grid grid-cols-1 gap-4">
-              {filteredArticles.slice(0, 3).map((article) => (
+              {filteredArticles.slice(0, 3).map((article, index) => (
                 <HeroCard
-                  key={article.id}
+                  key={`${article.id}-${article.source}-hero-${index}`}
                   article={article}
                   onClick={(e) => handleArticleClick(article, e)}
                 />
@@ -780,9 +780,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
             </div>
             <div className="space-y-2 mt-6">
               <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider">More Stories</h3>
-              {filteredArticles.slice(3).map((article) => (
+              {filteredArticles.slice(3).map((article, index) => (
                 <CompactCard
-                  key={article.id}
+                  key={`${article.id}-${article.source}-compact-${index}`}
                   article={article}
                   onClick={(e) => handleArticleClick(article, e)}
                 />
@@ -794,9 +794,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
       case "grid":
         return (
           <div className={`grid ${getGridClass()} gap-3`}>
-            {filteredArticles.map((article) => (
+            {filteredArticles.map((article, index) => (
               <MasonryCard
-                key={article.id}
+                key={`${article.id}-${article.source}-${index}`}
                 article={article}
                 style={layoutConfig.cardStyle}
                 onClick={(e) => handleArticleClick(article, e)}
@@ -808,9 +808,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
       case "masonry":
         return (
           <div className={`grid ${getGridClass()} gap-2`}>
-            {filteredArticles.map((article) => (
+            {filteredArticles.map((article, index) => (
               <MasonryCard
-                key={article.id}
+                key={`${article.id}-${article.source}-${index}`}
                 article={article}
                 style="collage"
                 onClick={(e) => handleArticleClick(article, e)}
@@ -822,9 +822,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
       case "video":
         return (
           <div className={`grid ${getGridClass()} gap-4`}>
-            {filteredArticles.map((article) => (
+            {filteredArticles.map((article, index) => (
               <VideoCard
-                key={article.id}
+                key={`${article.id}-${article.source}-${index}`}
                 article={article}
                 onClick={(e) => handleArticleClick(article, e)}
               />
@@ -835,9 +835,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
       case "live":
         return (
           <div className={`${getGridClass()} gap-3`}>
-            {filteredArticles.slice(0, 10).map((article) => (
+            {filteredArticles.slice(0, 10).map((article, index) => (
               <LiveCard
-                key={article.id}
+                key={`${article.id}-${article.source}-${index}`}
                 article={{ ...article, isLive: true, viewerCount: Math.floor(Math.random() * 5000) + 100 }}
                 onClick={(e) => handleArticleClick(article, e)}
               />
@@ -848,9 +848,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
       case "list":
         return (
           <div className="space-y-1">
-            {filteredArticles.map((article) => (
+            {filteredArticles.map((article, index) => (
               <ListCard
-                key={article.id}
+                key={`${article.id}-${article.source}-list-${index}`}
                 article={article}
                 onClick={(e) => handleArticleClick(article, e)}
               />
@@ -861,9 +861,9 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
       case "compact":
         return (
           <div className="space-y-2">
-            {filteredArticles.map((article) => (
+            {filteredArticles.map((article, index) => (
               <CompactCard
-                key={article.id}
+                key={`${article.id}-${article.source}-compact-${index}`}
                 article={article}
                 onClick={(e) => handleArticleClick(article, e)}
               />

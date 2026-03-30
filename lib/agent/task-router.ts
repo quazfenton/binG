@@ -349,6 +349,7 @@ class TaskRouter {
     schedule?: string;
     maxIterations?: number;
     context?: Record<string, any>;
+    userId: string;
   } {
     // Extract goal from task
     const goalMatch = task.match(/(?:goal|objective|purpose|research|investigate)[:\s]*(.+)/i);
@@ -356,55 +357,60 @@ class TaskRouter {
 
     switch (advancedType) {
       case 'agent-loop':
-        return {
-          type: 'persistent',
-          name: 'Agent Loop',
-          goal,
-          priority: 'normal',
-          schedule: '*/2 * * * *',
-          maxIterations: 100,
-          context: { loop: true },
-        };
+    return {
+      type: 'persistent',
+      name: 'Agent Loop',
+      goal,
+      priority: 'normal',
+      schedule: '*/2 * * * *',
+      maxIterations: 100,
+      context: { loop: true },
+      userId,
+    };
 
       case 'research':
-        return {
-          type: 'ephemeral',
-          name: 'Research Agent',
-          goal: `Research: ${goal}`,
-          priority: 'high',
-          maxIterations: 10,
-          context: { depth: 5, sources: ['web', 'news', 'code'] },
-        };
+    return {
+      type: 'ephemeral',
+      name: 'Research Agent',
+      goal: `Research: ${goal}`,
+      priority: 'high',
+      maxIterations: 10,
+      context: { depth: 5, sources: ['web', 'news', 'code'] },
+      userId,
+    };
 
       case 'dag-workflow':
-        return {
-          type: 'worker',
-          name: 'DAG Worker',
-          goal,
-          priority: 'normal',
-          maxIterations: 20,
-          context: { dag: true },
-        };
+    return {
+      type: 'worker',
+      name: 'DAG Worker',
+      goal,
+      priority: 'normal',
+      maxIterations: 20,
+      context: { dag: true },
+      userId,
+    };
 
       case 'skill-build':
-        return {
-          type: 'persistent',
-          name: 'Skill Builder',
-          goal: `Extract skills from: ${goal}`,
-          priority: 'low',
-          maxIterations: 5,
-          context: { skillExtraction: true },
-        };
+    return {
+      type: 'persistent',
+      name: 'Skill Builder',
+      goal: `Extract skills from: ${goal}`,
+      priority: 'low',
+      maxIterations: 5,
+      context: { skillExtraction: true },
+      userId,
+    };
 
       case 'consensus':
-        return {
-          type: 'ephemeral',
-          name: 'Consensus Agent',
-          goal: `Debate and find consensus: ${goal}`,
-          priority: 'normal',
-          maxIterations: 3,
-          context: { roles: ['planner', 'executor', 'critic'] },
-        };
+    return {
+      type: 'ephemeral',
+      name: 'Consensus Agent',
+      goal: `Debate and find consensus: ${goal}`,
+      priority: 'normal',
+      maxIterations: 3,
+      context: { roles: ['planner', 'executor', 'critic'] },
+      userId,
+    };
 
       case 'reflection':
         return {
@@ -414,6 +420,7 @@ class TaskRouter {
           priority: 'low',
           maxIterations: 2,
           context: { reflection: true },
+          userId,
         };
 
       case 'tool-discover':

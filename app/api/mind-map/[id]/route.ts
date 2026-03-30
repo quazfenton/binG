@@ -12,6 +12,24 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 
+interface MindMapNode {
+  id: string;
+  text: string;
+  parentId?: string;
+  x: number;
+  y: number;
+  color: string;
+}
+
+interface MindMap {
+  id: string;
+  title: string;
+  nodes: MindMapNode[];
+  createdAt: number;
+  updatedAt: number;
+  isPublic: boolean;
+}
+
 // In-memory store (shared with main route)
 // ⚠️ WARNING: This is for demonstration/prototyping only.
 // In production, use a persistent database with proper concurrency handling.
@@ -50,9 +68,9 @@ if (mindMaps.size === 0) {
 /**
  * GET /api/mind-map/[id] - Get specific mind map
  */
-export async function GET(request: NextRequest, { params }: { params: { id: string } }) {
+export async function GET(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   try {
-    const { id } = params;
     const mindMap = mindMaps.get(id);
 
     if (!mindMap) {
@@ -78,9 +96,9 @@ export async function GET(request: NextRequest, { params }: { params: { id: stri
 /**
  * PUT /api/mind-map/[id] - Update mind map
  */
-export async function PUT(request: NextRequest, { params }: { params: { id: string } }) {
+export async function PUT(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   try {
-    const { id } = params;
     const mindMap = mindMaps.get(id);
 
     if (!mindMap) {
@@ -140,9 +158,9 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
 /**
  * DELETE /api/mind-map/[id] - Delete mind map
  */
-export async function DELETE(request: NextRequest, { params }: { params: { id: string } }) {
+export async function DELETE(request: NextRequest, { params }: { params: Promise<{ id: string }> }) {
+  const { id } = await params;
   try {
-    const { id } = params;
 
     if (!mindMaps.has(id)) {
       return NextResponse.json(

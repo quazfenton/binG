@@ -147,6 +147,14 @@ export interface DataSourceConfig {
   rssSource?: string;
   transform?: string;
   lastFetchedAt?: number;
+  method?: string;
+  headers?: Record<string, string>;
+  path?: string;
+  endpoint?: string;
+  query?: string;
+  variables?: Record<string, unknown>;
+  code?: string;
+  inputSource?: string;
 }
 
 export interface NotificationItem {
@@ -674,7 +682,7 @@ export function generateStyle(
       break;
     case 'quote':
       base.fontSize = rand(16, 26);
-      base.fontFamily = fonts.serif ?? fonts.body;
+      base.fontFamily = fonts.accent ?? fonts.body;
       base.fontWeight = 400;
       base.rotation = displayMode === 'unbounded' ? rand(-6, 6) : 0;
       base.letterSpacing = rand(0, 1.5);
@@ -1090,7 +1098,7 @@ export class DataSourceManager {
               // Add remaining plugin config fields
               for (const [key, value] of Object.entries(pluginConfig)) {
                 if (key !== '_pluginId' && key !== 'url' && key !== 'endpoint' && key !== 'headers') {
-                  (fullConfig as Record<string, unknown>)[key] = value;
+                  (fullConfig as unknown as Record<string, unknown>)[key] = value;
                 }
               }
               
@@ -1402,9 +1410,9 @@ export class AdvancedContentParser {
       ));
     }
     
-    if (embed.footer?.text) {
+    if ((embed.footer as any)?.text) {
       fragments.push(createFragment(
-        String(embed.footer.text),
+        String((embed.footer as any).text),
         'whisper',
         'webhook',
         'dissolve',
@@ -1417,11 +1425,11 @@ export class AdvancedContentParser {
 
   // Parse Telegram message with entities
   static parseTelegramMessage(message: Record<string, unknown>): ZineFragment[] {
-    const text = message.text || message.caption || '';
+    const text = String(message.text || message.caption || '');
     if (!text) return [];
 
     // Check for commands
-    if (typeof text === 'string' && text.startsWith('/')) {
+    if (text.startsWith('/')) {
       return [createFragment(
         `Command: ${text}`,
         'data',
@@ -1442,9 +1450,9 @@ export class AdvancedContentParser {
 
   // Parse email with headers
   static parseEmail(email: Record<string, unknown>): ZineFragment[] {
-    const subject = email.subject || '';
-    const text = email.text || '';
-    const from = email.from || 'Unknown';
+    const subject = String(email.subject || '');
+    const text = String(email.text || '');
+    const from = String(email.from || 'Unknown');
 
     const fragments: ZineFragment[] = [];
 
@@ -1475,9 +1483,9 @@ export class AdvancedContentParser {
 
   // Parse Slack message with blocks
   static parseSlackMessage(message: Record<string, unknown>): ZineFragment[] {
-    const text = message.text || '';
-    const user = message.user_name || 'Slack User';
-    const channel = message.channel_name;
+    const text = String(message.text || '');
+    const user = String(message.user_name || 'Slack User');
+    const channel = String(message.channel_name || '');
 
     const fragments: ZineFragment[] = [];
 
@@ -1535,7 +1543,7 @@ export class AdvancedContentParser {
         )];
 
       case 'telegram':
-        return this.parseTelegramMessage(data.message || data);
+        return this.parseTelegramMessage((data.message as Record<string, unknown>) || data);
 
       case 'email':
         return this.parseEmail(data);
