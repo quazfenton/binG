@@ -2770,7 +2770,18 @@ export async function applyFilesystemEditsFromResponse(input: {
     }
     return validPath;
   }).filter((p): p is string => !!p);
-  const folderCreateTargets = [...new Set([...parsedResponse.folders, ...fileWriteFolderCreateOps.folders])];
+  
+  // Validate folder paths from parsed response (same validation as writes/diffs/deletes)
+  const validatedParsedFolders = parsedResponse.folders.map((folderPath) => {
+    const validPath = validateExtractedPath(folderPath);
+    if (!validPath) {
+      console.warn('[applyFilesystemEdits] Rejected invalid folder path:', folderPath.substring(0, 80));
+      return null;
+    }
+    return validPath;
+  }).filter((p): p is string => !!p);
+  
+  const folderCreateTargets = [...new Set([...validatedParsedFolders, ...fileWriteFolderCreateOps.folders])];
   const requestFiles = input.commands?.request_files || [];
 
   // Only create transaction if there are mutating operations (write/patch/delete/apply_diff)
@@ -3259,19 +3270,28 @@ export async function GET(request: NextRequest) {
   // Precompile warmup: Initialize LLM providers on first GET request
   // This ensures the route is ready for subsequent POST requests without cold start
   const url = new URL(request.url);
-  
+
   // If called with ?warmup=true, trigger provider initialization
+  // SECURITY: Only allow in development or with admin auth header
   if (url.searchParams.get('warmup') === 'true') {
+    // Check for admin auth header or dev-only mode
+    const isAdminAuth = request.headers.get('x-admin-secret') === process.env.CHAT_ADMIN_SECRET;
+    const isDevOnly = process.env.NODE_ENV === 'development';
+    
+    if (!isAdminAuth && !isDevOnly) {
+      return NextResponse.json(
+        { error: 'Unauthorized: warmup requires admin auth or dev mode' },
+        { status: 401 }
+      );
+    }
+    
     try {
       const { llmService } = await import("@/lib/chat/llm-providers");
       await llmService.warmupProviders();
-      const availableProviders = llmService.getAvailableProviders();
-      
+
       return NextResponse.json({
         success: true,
         message: "Chat API pre-warmed and ready",
-        availableProviders: availableProviders.length,
-        providers: availableProviders.map(p => p.id),
         timestamp: Date.now(),
       });
     } catch (error) {
@@ -3282,7 +3302,7 @@ export async function GET(request: NextRequest) {
       );
     }
   }
-  
+
   // Default: Redirect to providers endpoint
   return NextResponse.redirect(new URL('/api/providers', request.url));
 }

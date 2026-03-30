@@ -2408,11 +2408,7 @@ export function ExperimentalWorkspacePanel() {
 
                  {/* Explorer Tab */}
                  <TabsContent value="explorer" className="flex-1 mt-0 h-full">
-                   <div
-                     className="h-full overflow-auto"
-                     tabIndex={-1}
-                     style={{ scrollBehavior: 'smooth', outline: 'none' }}
-                   >
+                   <div className="h-full overflow-y-auto custom-scrollbar">
                      <div className="p-4 space-y-2 max-w-full">
                       <div className="flex items-center justify-between mb-4">
                         <span className="text-xs text-white/60">File Explorer</span>
@@ -3061,11 +3057,7 @@ export function ExperimentalWorkspacePanel() {
 
                 {/* Thinking Area Tab */}
                 <TabsContent value="thinking" className="flex-1 mt-0 overflow-hidden">
-                  <div
-                    className="h-full overflow-auto"
-                    tabIndex={-1}
-                    style={{ scrollBehavior: 'smooth', outline: 'none' }}
-                  >
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                     <div className="p-4 space-y-4">
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
@@ -3253,11 +3245,7 @@ export function ExperimentalWorkspacePanel() {
 
                 {/* Music Playlist Tab */}
                 <TabsContent value="music" className="flex-1 mt-0 overflow-hidden">
-                  <div
-                    className="h-full overflow-auto"
-                    tabIndex={-1}
-                    style={{ scrollBehavior: 'smooth', outline: 'none' }}
-                  >
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                     <div className="p-4 space-y-4">
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
@@ -3424,11 +3412,7 @@ export function ExperimentalWorkspacePanel() {
 
                 {/* Automations Tab - Redesigned */}
                 <TabsContent value="automations" className="flex-1 mt-0 overflow-hidden">
-                  <div
-                    className="h-full overflow-auto"
-                    tabIndex={-1}
-                    style={{ scrollBehavior: 'smooth', outline: 'none' }}
-                  >
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                     <div className="p-4 space-y-4">
                       {/* Header with Stats */}
                       <div className="flex items-center justify-between mb-4">
@@ -3690,11 +3674,7 @@ export function ExperimentalWorkspacePanel() {
 
                 {/* Forum Tab */}
                 <TabsContent value="forum" className="flex-1 mt-0 overflow-hidden">
-                  <div
-                    className="h-full overflow-auto"
-                    tabIndex={-1}
-                    style={{ scrollBehavior: 'smooth', outline: 'none' }}
-                  >
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                     <div className="p-4 space-y-4">
                       {/* Header */}
                       <div className="flex items-center justify-between mb-4">
@@ -3862,11 +3842,7 @@ export function ExperimentalWorkspacePanel() {
 
                 {/* Compare Tab - Multi-Model Comparison */}
                 <TabsContent value="compare" className="flex-1 mt-0 overflow-hidden">
-                  <div
-                    className="h-full overflow-auto"
-                    tabIndex={-1}
-                    style={{ scrollBehavior: 'smooth', outline: 'none' }}
-                  >
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                     <div className="p-4">
                       <div className="mb-4">
                         <h3 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-2">
@@ -3888,11 +3864,7 @@ export function ExperimentalWorkspacePanel() {
 
                 {/* Integrations Tab - OAuth Connections */}
                 <TabsContent value="integrations" className="flex-1 mt-0 overflow-hidden">
-                  <div
-                    className="h-full overflow-auto"
-                    tabIndex={-1}
-                    style={{ scrollBehavior: 'smooth', outline: 'none' }}
-                  >
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                     <div className="p-4">
                       <IntegrationPanel
                         userId={getOrCreateAnonymousSessionId()}
@@ -4155,11 +4127,7 @@ export function ExperimentalWorkspacePanel() {
                     <Loader2 className="h-6 w-6 animate-spin text-white/60" />
                   </div>
                 ) : (
-                  <div
-                    className="flex-1 max-h-64 mb-4 overflow-auto"
-                    tabIndex={-1}
-                    style={{ scrollBehavior: 'smooth', outline: 'none' }}
-                  >
+                  <div className="flex-1 max-h-64 mb-4 overflow-y-auto custom-scrollbar">
                     <div className="space-y-2 pr-4">
                       {githubRepos.map((repo) => (
                         <div

@@ -157,7 +157,16 @@
     background: rgba(80, 80, 80, 0.5);
 }
 
-/* Custom scrollbar styles */
+/* Custom scrollbar styles - invisible except on hover */
+.custom-scrollbar {
+    scrollbar-width: thin;
+    scrollbar-color: transparent transparent;
+}
+
+.custom-scrollbar:hover {
+    scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+
 .custom-scrollbar::-webkit-scrollbar {
     width: 6px;
     height: 6px;
@@ -168,12 +177,17 @@
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(0, 0, 0, 0.2);
+    background: rgba(255, 255, 255, 0.1);
     border-radius: 3px;
+    transition: background 0.2s ease;
 }
 
 .custom-scrollbar::-webkit-scrollbar-thumb:hover {
-    background: rgba(0, 0, 0, 0.3);
+    background: rgba(255, 255, 255, 0.3);
+}
+
+.custom-scrollbar:hover::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.25);
 }
 
 .no-scrollbar {
@@ -186,12 +200,24 @@
 }
 
 /* Dark mode scrollbar */
+:where(.dark, .midnight) .custom-scrollbar {
+    scrollbar-color: transparent transparent;
+}
+
+:where(.dark, .midnight) .custom-scrollbar:hover {
+    scrollbar-color: rgba(255, 255, 255, 0.25) transparent;
+}
+
 :where(.dark, .midnight) .custom-scrollbar::-webkit-scrollbar-thumb {
-    background: rgba(255, 255, 255, 0.2);
+    background: rgba(255, 255, 255, 0.15);
 }
 
 :where(.dark, .midnight) .custom-scrollbar::-webkit-scrollbar-thumb:hover {
     background: rgba(255, 255, 255, 0.3);
+}
+
+:where(.dark, .midnight) .custom-scrollbar:hover::-webkit-scrollbar-thumb {
+    background: rgba(255, 255, 255, 0.25);
 }
 
 /* Tab bar scrollbar - black, thin, hover-only */
