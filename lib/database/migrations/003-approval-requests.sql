@@ -26,13 +26,5 @@ CREATE INDEX IF NOT EXISTS idx_approval_requests_created_at ON approval_requests
 CREATE INDEX IF NOT EXISTS idx_approval_requests_expires_at ON approval_requests(expires_at);
 CREATE INDEX IF NOT EXISTS idx_approval_requests_pending ON approval_requests(status, created_at);
 
--- Comments
-COMMENT ON TABLE approval_requests IS 'Human approval requests for workflow pauses';
-COMMENT ON COLUMN approval_requests.id IS 'Unique approval request identifier (UUID)';
-COMMENT ON COLUMN approval_requests.event_id IS 'Associated event ID requiring approval';
-COMMENT ON COLUMN approval_requests.action IS 'Action requiring approval (e.g., Deploy to production)';
-COMMENT ON COLUMN approval_requests.details IS 'JSON-encoded approval details';
-COMMENT ON COLUMN approval_requests.status IS 'Status: pending, approved, rejected, expired';
-COMMENT ON COLUMN approval_requests.response IS 'User response/reason for approval decision';
-COMMENT ON COLUMN approval_requests.expires_at IS 'Expiration timestamp for auto-expiry';
-COMMENT ON COLUMN approval_requests.user_id IS 'User who should approve (optional)';
+-- Note: SQLite doesn't support COMMENT ON statements
+-- Column documentation is maintained in the application code and schema files

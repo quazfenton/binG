@@ -7,8 +7,10 @@
  * @module events/handlers/bash-execution
  */
 
-import { EventRecord } from '../../store';
+import type { EventRecord } from '../store';
 import { createLogger } from '@/lib/utils/logger';
+import { registerHandler } from '../router';
+import { EventTypes } from '../schema';
 
 const logger = createLogger('Events:BashExecution');
 

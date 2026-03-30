@@ -5,7 +5,7 @@
  * Enables LLM tools to emit events for background processing.
  */
 
-import { emitEvent, emitEventWithOptions } from './bus';
+import { emitEvent } from './bus';
 import { AnyEvent } from './schema';
 import { z } from 'zod';
 

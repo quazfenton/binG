@@ -302,10 +302,23 @@ async function invokeTool(toolName: string, args: any): Promise<any> {
       // Import from correct path
       const { createAgent, getRecommendedAgent } = await import('@/lib/spawn');
       const recommendedType = getRecommendedAgent(args.task);
-      const agent = await createAgent(recommendedType, {
-        workspaceDir: '/workspace',
-      });
-      return { agentId: agent.id, status: 'started', type: recommendedType };
+      
+      // Use explicit type matching to satisfy overloads
+      let agent: { id: string };
+      switch (recommendedType) {
+        case 'claude-code':
+          agent = (await createAgent('claude-code', { workspaceDir: '/workspace' })) as any;
+          break;
+        case 'amp':
+          agent = (await createAgent('amp', { workspaceDir: '/workspace' })) as any;
+          break;
+        case 'opencode':
+          agent = (await createAgent('opencode', { workspaceDir: '/workspace' })) as any;
+          break;
+        default:
+          throw new Error(`Unsupported agent type: ${recommendedType}`);
+      }
+      return { agentId: (agent as any).id, status: 'started', type: recommendedType };
     }
 
     case 'get_agent_status': {
@@ -315,7 +328,7 @@ async function invokeTool(toolName: string, args: any): Promise<any> {
       if (!agent) {
         throw new Error('Agent not found');
       }
-      return { status: agent.status, progress: agent.progress };
+      return { status: (agent as any).status, progress: (agent as any).progress };
     }
 
     case 'stop_agent': {
