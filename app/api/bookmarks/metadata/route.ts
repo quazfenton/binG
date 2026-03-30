@@ -39,30 +39,93 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Fetch the page
-    const response = await fetch(url, {
-      headers: {
-        'User-Agent': 'Mozilla/5.0 (compatible; binG Bookmarks/1.0)',
-        'Accept': 'text/html,application/xhtml+xml',
-      },
-      signal: AbortSignal.timeout(10000), // 10 second timeout
-    });
-
-    if (!response.ok) {
+    // Fetch the URL with timeout
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 10000);
+    
+    let response: Response;
+    try {
+      response = await fetch(url, {
+        signal: controller.signal,
+        headers: {
+          'User-Agent': 'Mozilla/5.0 (compatible; binG/1.0)',
+          'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8',
+        },
+      });
+    } catch (fetchError) {
+      clearTimeout(timeoutId);
+      if (fetchError instanceof Error && fetchError.name === 'AbortError') {
+        return NextResponse.json(
+          { error: 'Request timed out' },
+          { status: 408 }
+        );
+      }
       return NextResponse.json(
         { error: 'Failed to fetch URL' },
         { status: 500 }
       );
     }
+    clearTimeout(timeoutId);
 
-    const html = await response.text();
+    // Validate content type before fetching
+    const contentType = response.headers.get('content-type');
+    if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+      return NextResponse.json(
+        { error: 'URL does not point to an HTML page' },
+        { status: 400 }
+      );
+    }
+
+    // Fetch with size limit - read as stream and cap at 1MB
+    const reader = response.body?.getReader();
+    if (!reader) {
+      return NextResponse.json(
+        { error: 'Failed to read response body' },
+        { status: 500 }
+      );
+    }
+
+    const chunks: Uint8Array[] = [];
+    let totalLength = 0;
+    const MAX_SIZE = 1024 * 1024; // 1MB limit
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      totalLength += value.length;
+      if (totalLength > MAX_SIZE) {
+        await reader.cancel();
+        return NextResponse.json(
+          { error: 'Response too large (max 1MB)' },
+          { status: 400 }
+        );
+      }
+      chunks.push(value);
+    }
+
+    // Concatenate chunks and decode
+    const htmlBytes = new Uint8Array(totalLength);
+    let offset = 0;
+    for (const chunk of chunks) {
+      htmlBytes.set(chunk, offset);
+      offset += chunk.length;
+    }
+
+    const html = new TextDecoder().decode(htmlBytes);
 
     // Parse OpenGraph metadata
     const metadata = parseOpenGraph(html, url);
 
     return NextResponse.json(metadata);
-  } catch (error) {
-    console.error('Error fetching metadata:', error);
+  } catch (error: any) {
+    if (error.name === 'AbortError') {
+      return NextResponse.json(
+        { error: 'Request timed out' },
+        { status: 408 }
+      );
+    }
+    console.error('Error fetching metadata:', error.message);
     return NextResponse.json(
       { error: 'Failed to fetch metadata' },
       { status: 500 }

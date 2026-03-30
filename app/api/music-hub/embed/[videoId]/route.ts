@@ -109,9 +109,9 @@ async function cacheEmbed(videoId: string, html: string, source: string): Promis
 // GET - Serve embed or proxy from source
 export async function GET(
   request: NextRequest,
-  { params }: { params: { videoId: string } }
+  { params }: { params: Promise<{ videoId: string }> }
 ) {
-  const { videoId } = params;
+  const { videoId } = await params;
   const searchParams = request.nextUrl.searchParams;
   const autoplay = searchParams.get("autoplay") === "1";
   const useCache = searchParams.get("cache") !== "false";
@@ -224,9 +224,9 @@ export async function GET(
 // DELETE - Clear cache for a video
 export async function DELETE(
   request: NextRequest,
-  { params }: { params: { videoId: string } }
+  { params }: { params: Promise<{ videoId: string }> }
 ) {
-  const { videoId } = params;
+  const { videoId } = await params;
 
   try {
     const data = await readFile(CACHE_PATH, "utf-8");

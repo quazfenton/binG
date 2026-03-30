@@ -1,4 +1,18 @@
 /**
+ * ⚠️ DEPRECATED - Enhanced Conversation Interface
+ * 
+ * This component is no longer used as of March 30, 2026.
+ * 
+ * REASON: Introduced bugs (isStreaming errors, chatHistory errors) compared to
+ * the original conversation-interface.tsx which is complete and production-ready.
+ * 
+ * CURRENT: app/(main)/page.tsx renders TopPanel + ConversationInterface directly.
+ * 
+ * @deprecated Use conversation-interface.tsx instead
+ * @see components/ENHANCED_INTERFACE_DEPRECATED.md
+ */
+
+/**
  * Enhanced Conversation Interface
  *
  * Integration wrapper that wires the enhanced panels into the existing conversation flow.
@@ -44,12 +58,12 @@ import type { Message, ChatHistory, LLMProvider } from "@/types";
 
 // Enhanced Panels
 import {
-  EnhancedInteractionPanel,
   EnhancedTopPanel,
   EnhancedWorkspacePanel,
   ResizablePanelGroup,
   PanelPresets,
 } from "@/components/panels";
+import InteractionPanel from "@/components/interaction-panel";
 
 // Legacy components for fallback
 import Settings from "@/components/settings";
@@ -173,33 +187,39 @@ export function EnhancedConversationInterface({
 
   // Chat history
   const {
-    chats: chatHistory,
-    loadChats,
-    saveChat,
+    getAllChats: chats,
+    loadChat,
+    saveCurrentChat,
     deleteChat,
-  } = useChatHistory(user?.id?.toString());
+  } = useChatHistory();
 
   // Diffs poller
   const diffsPoller = useDiffsPoller({
-    enabled: true,
-    interval: 5000,
-    filesystemScopePath,
+    pollInterval: 5000,
+    endpoint: '/api/filesystem/diffs',
   });
 
   // Load available providers
   const availableProviders = useMemo<LLMProvider[]>(() => {
-    return PROVIDERS.filter(p => {
+    return Object.values(PROVIDERS).filter(p => {
+      const provider = p as any;
       // Check if provider has API key configured
-      const hasApiKey = p.apiKeyEnvVar
-        ? !!process.env[p.apiKeyEnvVar]
+      const hasApiKey = provider.apiKeyEnvVar
+        ? !!process.env[provider.apiKeyEnvVar]
         : true;
       return p.id !== "default" && hasApiKey;
-    }).map(p => ({
-      id: p.id,
-      name: p.name,
-      models: p.models,
-      isAvailable: p.apiKeyEnvVar ? !!process.env[p.apiKeyEnvVar] : true,
-    }));
+    }).map(p => {
+      const provider = p as any;
+      return {
+        id: p.id,
+        name: p.name,
+        models: p.models,
+        supportsStreaming: provider.supportsStreaming ?? true,
+        maxTokens: provider.maxTokens ?? 4096,
+        description: provider.description ?? '',
+        isAvailable: provider.apiKeyEnvVar ? !!process.env[provider.apiKeyEnvVar] : true,
+      };
+    });
   }, []);
 
   // Handle provider change
@@ -283,9 +303,10 @@ export function EnhancedConversationInterface({
   // Load chat history on mount
   useEffect(() => {
     if (user?.id) {
-      loadChats();
+      // Use getAllChats (aliased as chats) to load all chats - loadChat requires a chatId
+      const allChats = chats();
     }
-  }, [user?.id, loadChats]);
+  }, [user?.id, chats]);
 
   // Restore conversation UI state
   useEffect(() => {
@@ -336,8 +357,12 @@ export function EnhancedConversationInterface({
   // Detect project folder changes
   useEffect(() => {
     const unsubscribe = onFilesystemUpdated((event) => {
-      if (event.type === "folder-created") {
-        detectNewProjectFolder(event.path, setCurrentMode);
+      const detail = event.detail as any;
+      if (detail?.type === "folder-created") {
+        const newProjectPath = detectNewProjectFolder(detail.path);
+        if (newProjectPath) {
+          setCurrentMode('code');
+        }
       }
     });
     return () => unsubscribe();
@@ -384,12 +409,10 @@ export function EnhancedConversationInterface({
         />
       )}
 
-      {/* Enhanced Interaction Panel (Bottom) */}
-      <EnhancedInteractionPanel
-        onSubmit={(content, attachments) => {
-          // Handle message submission
+      {/* Interaction Panel (Bottom) */}
+      <InteractionPanel
+        onSubmit={(content) => {
           toast.success(`Message sent: ${content.slice(0, 50)}...`);
-          console.log("Attachments:", attachments);
         }}
         onNewChat={handleNewChat}
         isProcessing={streamingState.isStreaming}
@@ -401,7 +424,6 @@ export function EnhancedConversationInterface({
           enhancedBufferManager.cleanup();
           toast.info("Generation stopped");
         }}
-        onRetry={handleRetry}
         currentProvider={currentProvider}
         currentModel={currentModel}
         input=""
@@ -411,7 +433,6 @@ export function EnhancedConversationInterface({
         hasCodeBlocks={false}
         activeTab={activeTab}
         onActiveTabChange={setActiveTab}
-        userId={user?.id?.toString() || getStableSessionId()}
         onAttachedFilesChange={handleAttachedFilesChange}
         filesystemScopePath={filesystemScopePath}
         isPollingDiffs={diffsPoller.isPolling}

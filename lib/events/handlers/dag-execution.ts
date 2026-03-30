@@ -10,7 +10,7 @@
  * @module events/handlers/dag-execution
  */
 
-import { EventRecord } from '../../store';
+import type { EventRecord } from '../store';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Events:DAGExecutor');
