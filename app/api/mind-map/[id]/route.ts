@@ -2,11 +2,19 @@
  * Mind Map By ID API
  *
  * GET /api/mind-map/[id] - Get specific mind map
+ * PUT /api/mind-map/[id] - Update mind map
+ * DELETE /api/mind-map/[id] - Delete mind map
+ *
+ * ⚠️ LIMITATION: Uses in-memory storage (Map) which is NOT suitable for production.
+ * Data will be lost on server restart and is not shared across server instances.
+ * For production use, replace with a database (PostgreSQL, MongoDB, etc.).
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 
 // In-memory store (shared with main route)
+// ⚠️ WARNING: This is for demonstration/prototyping only.
+// In production, use a persistent database with proper concurrency handling.
 const mindMaps = new Map<string, any>();
 
 // Seed with sample mind maps if empty
@@ -83,6 +91,27 @@ export async function PUT(request: NextRequest, { params }: { params: { id: stri
     }
 
     const body = await request.json();
+    
+    // Validate input types
+    if (body.title !== undefined && typeof body.title !== 'string') {
+      return NextResponse.json(
+        { error: 'Title must be a string' },
+        { status: 400 }
+      );
+    }
+    if (body.nodes !== undefined && !Array.isArray(body.nodes)) {
+      return NextResponse.json(
+        { error: 'Nodes must be an array' },
+        { status: 400 }
+      );
+    }
+    if (body.isPublic !== undefined && typeof body.isPublic !== 'boolean') {
+      return NextResponse.json(
+        { error: 'isPublic must be a boolean' },
+        { status: 400 }
+      );
+    }
+
     const { title, nodes, isPublic } = body;
 
     const updated: MindMap = {

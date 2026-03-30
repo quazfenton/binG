@@ -14,6 +14,20 @@
 
 import { secureRandomString } from './utils';
 
+// Get the base URL for server-side fetch calls
+function getBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    return ''; // Client-side: relative URL works
+  }
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    return process.env.NEXT_PUBLIC_APP_URL;
+  }
+  // Default for local development
+  return process.env.NODE_ENV === 'production' 
+    ? 'https://binGPT.ai' 
+    : 'http://localhost:3000';
+}
+
 // Simple logger for session naming (defined early to avoid hoisting issues)
 const logger = {
   debug: (msg: string) => console.debug(`[SessionNaming] ${msg}`),
@@ -59,7 +73,7 @@ async function initializeSessionNaming(): Promise<void> {
     let nodes: any[] = [];
     
     while (attempts < 3) {
-      const response = await fetch(`/api/filesystem/list?path=${encodeURIComponent('project/sessions')}`);
+      const response = await fetch(`${getBaseUrl()}/api/filesystem/list?path=${encodeURIComponent('project/sessions')}`);
 
       if (response.ok) {
         const payload = await response.json().catch(() => null);
@@ -203,7 +217,7 @@ async function getNextStockName(): Promise<string> {
  */
 async function checkNameExistsInFilesystem(name: string): Promise<boolean> {
   try {
-    const response = await fetch(`/api/filesystem/list?path=${encodeURIComponent(`project/sessions/${name}`)}`);
+    const response = await fetch(`${getBaseUrl()}/api/filesystem/list?path=${encodeURIComponent(`project/sessions/${name}`)}`);
 
     if (response.ok) {
       const payload = await response.json().catch(() => null);
@@ -330,6 +344,11 @@ export async function generateSessionName(
  * @returns true if name exists (in memory or filesystem)
  */
 export async function sessionNameExists(name: string): Promise<boolean> {
+  // Guard against undefined/null names to prevent URL parsing failures
+  if (!name || typeof name !== 'string') {
+    return false;
+  }
+  
   const normalizedName = name.toLowerCase();
   
   // Level 1: Check in-memory Set (O(1))
@@ -350,7 +369,7 @@ export async function sessionNameExists(name: string): Promise<boolean> {
   
   // Level 3: Query filesystem (expensive, but cached for 5 seconds)
   try {
-    const response = await fetch(`/api/filesystem/list?path=${encodeURIComponent(`project/sessions/${name}`)}`);
+    const response = await fetch(`${getBaseUrl()}/api/filesystem/list?path=${encodeURIComponent(`project/sessions/${name}`)}`);
 
     if (response.ok) {
       const payload = await response.json().catch(() => null);
