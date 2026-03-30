@@ -35,8 +35,8 @@ export async function PUT(
     
     const { config } = body;
 
-    // Validate config object
-    if (!config || typeof config !== 'object') {
+    // Validate config object (reject arrays)
+    if (!config || typeof config !== 'object' || Array.isArray(config)) {
       return NextResponse.json(
         { error: 'Invalid config format. Config must be an object' },
         { status: 400 }
@@ -91,8 +91,8 @@ export async function POST(
     
     const { input } = body;
 
-    // Validate input object
-    if (!input || typeof input !== 'object') {
+    // Validate input object (reject arrays)
+    if (!input || typeof input !== 'object' || Array.isArray(input)) {
       return NextResponse.json(
         { error: 'Invalid input format. Input must be an object' },
         { status: 400 }
@@ -102,8 +102,12 @@ export async function POST(
     const result = await executePlugin(id, input);
 
     if (!result.success) {
+      logger.warn('Plugin execution returned unsuccessful result', {
+        pluginId: id,
+        error: result.error,
+      });
       return NextResponse.json(
-        { error: result.error || 'Plugin execution failed' },
+        { error: 'Plugin execution failed' },
         { status: 500 }
       );
     }

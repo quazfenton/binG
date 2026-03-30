@@ -10,6 +10,31 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 
+// Simple mutex for preventing concurrent writes
+let promptsLock: Promise<void> = Promise.resolve();
+let promptsLockResolve: (() => void) | null = null;
+
+async function acquirePromptsLock(): Promise<void> {
+  await promptsLock;
+}
+
+function releasePromptsLock(): void {
+  if (promptsLockResolve) {
+    const resolve = promptsLockResolve;
+    promptsLockResolve = null;
+    resolve();
+  }
+}
+
+async function withPromptsLock<T>(fn: () => Promise<T>): Promise<T> {
+  await acquirePromptsLock();
+  try {
+    return await fn();
+  } finally {
+    releasePromptsLock();
+  }
+}
+
 export interface Prompt {
   id: string;
   title: string;
@@ -262,27 +287,30 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const prompts = await loadPrompts();
+    // Use lock to prevent race conditions
+    return await withPromptsLock(async () => {
+      const prompts = await loadPrompts();
 
-    const newPrompt: Prompt = {
-      id: `prompt-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
-      title,
-      content,
-      category,
-      tags: tags || [],
-      upvotes: 0,
-      downloads: 0,
-      createdAt: Date.now(),
-      updatedAt: Date.now(),
-    };
+      const newPrompt: Prompt = {
+        id: `prompt-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
+        title,
+        content,
+        category,
+        tags: tags || [],
+        upvotes: 0,
+        downloads: 0,
+        createdAt: Date.now(),
+        updatedAt: Date.now(),
+      };
 
-    prompts.unshift(newPrompt);
-    await savePrompts(prompts);
+      prompts.unshift(newPrompt);
+      await savePrompts(prompts);
 
-    return NextResponse.json({
-      success: true,
-      prompt: newPrompt,
-    }, { status: 201 });
+      return NextResponse.json({
+        success: true,
+        prompt: newPrompt,
+      }, { status: 201 });
+    });
   } catch (error: any) {
     console.error('[Prompts API] POST error:', error);
     return NextResponse.json(
@@ -316,50 +344,53 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    const prompts = await loadPrompts();
-    const index = prompts.findIndex(p => p.id === id);
+    // Use lock to prevent race conditions
+    return await withPromptsLock(async () => {
+      const prompts = await loadPrompts();
+      const index = prompts.findIndex(p => p.id === id);
 
-    if (index === -1) {
-      return NextResponse.json(
-        { error: 'Prompt not found' },
-        { status: 404 }
-      );
-    }
-
-    switch (action) {
-      case 'upvote':
-        prompts[index].upvotes++;
-        prompts[index].updatedAt = Date.now();
-        break;
-
-      case 'download':
-        prompts[index].downloads++;
-        prompts[index].updatedAt = Date.now();
-        break;
-
-      case 'edit':
-        const { title, content, category, tags } = body;
-        if (title) prompts[index].title = title;
-        if (content) prompts[index].content = content;
-        if (category && CATEGORIES.includes(category)) {
-          prompts[index].category = category;
-        }
-        if (tags) prompts[index].tags = tags;
-        prompts[index].updatedAt = Date.now();
-        break;
-
-      default:
+      if (index === -1) {
         return NextResponse.json(
-          { error: 'Invalid action. Use: upvote, download, or edit' },
-          { status: 400 }
+          { error: 'Prompt not found' },
+          { status: 404 }
         );
-    }
+      }
 
-    await savePrompts(prompts);
+      switch (action) {
+        case 'upvote':
+          prompts[index].upvotes++;
+          prompts[index].updatedAt = Date.now();
+          break;
 
-    return NextResponse.json({
-      success: true,
-      prompt: prompts[index],
+        case 'download':
+          prompts[index].downloads++;
+          prompts[index].updatedAt = Date.now();
+          break;
+
+        case 'edit':
+          const { title, content, category, tags } = body;
+          if (title) prompts[index].title = title;
+          if (content) prompts[index].content = content;
+          if (category && CATEGORIES.includes(category)) {
+            prompts[index].category = category;
+          }
+          if (tags) prompts[index].tags = tags;
+          prompts[index].updatedAt = Date.now();
+          break;
+
+        default:
+          return NextResponse.json(
+            { error: 'Invalid action. Use: upvote, download, or edit' },
+            { status: 400 }
+          );
+      }
+
+      await savePrompts(prompts);
+
+      return NextResponse.json({
+        success: true,
+        prompt: prompts[index],
+      });
     });
   } catch (error: any) {
     // Only log detailed errors in development
@@ -400,22 +431,25 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const prompts = await loadPrompts();
-    const index = prompts.findIndex(p => p.id === id);
+    // Use lock to prevent race conditions
+    return await withPromptsLock(async () => {
+      const prompts = await loadPrompts();
+      const index = prompts.findIndex(p => p.id === id);
 
-    if (index === -1) {
-      return NextResponse.json(
-        { error: 'Prompt not found' },
-        { status: 404 }
-      );
-    }
+      if (index === -1) {
+        return NextResponse.json(
+          { error: 'Prompt not found' },
+          { status: 404 }
+        );
+      }
 
-    prompts.splice(index, 1);
-    await savePrompts(prompts);
+      prompts.splice(index, 1);
+      await savePrompts(prompts);
 
-    return NextResponse.json({
-      success: true,
-      message: 'Prompt deleted',
+      return NextResponse.json({
+        success: true,
+        message: 'Prompt deleted',
+      });
     });
   } catch (error: any) {
     // Only log detailed errors in development

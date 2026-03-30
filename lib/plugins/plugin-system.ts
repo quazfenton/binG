@@ -171,9 +171,9 @@ export async function executePlugin(
   pluginId: string,
   input?: any
 ): Promise<PluginExecutionResult> {
+  const startTime = Date.now();
+  
   try {
-    const startTime = Date.now();
-    
     // TODO: Load and execute plugin in sandbox
     logger.info('Executing plugin:', { pluginId, input });
     

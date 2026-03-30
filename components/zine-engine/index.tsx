@@ -164,7 +164,7 @@ export interface ZineEngineProps {
 // Constants
 // ============================================================================
 
-const DEFAULT_TEMPLATES: ZineTemplate[] = [
+export const DEFAULT_TEMPLATES: ZineTemplate[] = [
   {
     id: "floating-minimal",
     name: "Floating Minimal",
