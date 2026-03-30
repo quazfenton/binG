@@ -66,7 +66,7 @@ export interface UseDiffsPollerReturn {
  */
 export function useDiffsPoller(options: UseDiffsPollerOptions = {}): UseDiffsPollerReturn {
   const {
-    pollInterval = 5000,
+    pollInterval = 10000, // Increased from 5000 to 10000 to prevent rate limiting
     maxFiles = 50,
     onDiffsFetched,
     autoShowNotification = true,

@@ -47,15 +47,15 @@ function getPollingConfig(sandboxId: string): { enabled: boolean; intervalMs?: n
   // Self-hosted containers - use optimized (slower) polling
   // They're on same network so changes are less frequent and latency is lower
   if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) {
-    return { enabled: true, intervalMs: 10000 }; // 10 seconds
+    return { enabled: true, intervalMs: 15000 }; // 15 seconds (was 10s)
   }
   if (sandboxId.startsWith('microsandbox-') || sandboxId.startsWith('micro-')) {
-    return { enabled: true, intervalMs: 10000 }; // 10 seconds
+    return { enabled: true, intervalMs: 15000 }; // 15 seconds (was 10s)
   }
-  
-  // API-based providers - standard polling
-  // External services need more frequent checks for real-time feel
-  return { enabled: true }; // Use default interval
+
+  // API-based providers - slower polling to prevent rate limiting
+  // External services need rate limiting to avoid "Too many requests" errors
+  return { enabled: true, intervalMs: 10000 }; // 10 seconds (was 5s default)
 }
 
 // Global singleton to prevent HMR interval leaks

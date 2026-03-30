@@ -620,7 +620,7 @@ YouTubePlayer.displayName = 'YouTubePlayer';
 
 const AmbientVisualizer: React.FC<{ mode: string; isPlaying: boolean }> = React.memo(({ mode, isPlaying }) => {
   const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationRef = useRef<number>();
+  const animationRef = useRef<number | undefined>(undefined);
   const timeRef = useRef(0);
 
   useEffect(() => {

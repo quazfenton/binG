@@ -244,7 +244,7 @@ const timeAgo = (timestamp: number): string => {
 // Card Templates
 
 // Template 1: Hero Card with large image
-function HeroCard({ article, onClick }: { article: NewsArticle; onClick: () => void }) {
+function HeroCard({ article, onClick }: { article: NewsArticle; onClick?: (e: React.MouseEvent) => void }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -300,7 +300,7 @@ function HeroCard({ article, onClick }: { article: NewsArticle; onClick: () => v
 }
 
 // Template 2: Compact horizontal card
-function CompactCard({ article, onClick }: { article: NewsArticle; onClick: () => void }) {
+function CompactCard({ article, onClick }: { article: NewsArticle; onClick?: (e: React.MouseEvent) => void }) {
   return (
     <motion.div
       initial={{ opacity: 0, x: -20 }}
@@ -330,7 +330,7 @@ function CompactCard({ article, onClick }: { article: NewsArticle; onClick: () =
 }
 
 // Template 3: Grid card with image
-function GridCard({ article, onClick }: { article: NewsArticle; onClick: () => void }) {
+function GridCard({ article, onClick }: { article: NewsArticle; onClick?: (e: React.MouseEvent) => void }) {
   return (
     <motion.div
       initial={{ opacity: 0, scale: 0.95 }}
@@ -371,7 +371,7 @@ function GridCard({ article, onClick }: { article: NewsArticle; onClick: () => v
 }
 
 // Template 4: List item with source icon
-function ListCard({ article, onClick }: { article: NewsArticle; onClick: () => void }) {
+function ListCard({ article, onClick }: { article: NewsArticle; onClick?: (e: React.MouseEvent) => void }) {
   const SourceIcon = NEWS_SOURCES.find(s => s.id === article.source)?.icon || Newspaper;
   
   return (
@@ -400,7 +400,7 @@ function ListCard({ article, onClick }: { article: NewsArticle; onClick: () => v
 }
 
 // Template 5: Video Card with play button overlay
-function VideoCard({ article, onClick }: { article: NewsArticle; onClick: () => void }) {
+function VideoCard({ article, onClick }: { article: NewsArticle; onClick?: (e: React.MouseEvent) => void }) {
   return (
     <motion.div
       initial={{ opacity: 0, y: 20 }}
@@ -463,7 +463,7 @@ function VideoCard({ article, onClick }: { article: NewsArticle; onClick: () => 
 }
 
 // Template 6: Live News Card with pulsing indicator
-function LiveCard({ article, onClick }: { article: NewsArticle; onClick: () => void }) {
+function LiveCard({ article, onClick }: { article: NewsArticle; onClick?: (e: React.MouseEvent) => void }) {
   return (
     <motion.div
       initial={{ opacity: 0, x: -20 }}
@@ -510,7 +510,7 @@ function LiveCard({ article, onClick }: { article: NewsArticle; onClick: () => v
 }
 
 // Template 7: Masonry/Collage Card (for collage layout)
-function MasonryCard({ article, onClick, style = 'rich' }: { article: NewsArticle; onClick: () => void; style?: 'minimal' | 'rich' | 'collage' }) {
+function MasonryCard({ article, onClick, style = 'rich' }: { article: NewsArticle; onClick?: (e: React.MouseEvent) => void; style?: 'minimal' | 'rich' | 'collage' }) {
   const isCollage = style === 'collage';
   const isMinimal = style === 'minimal';
   

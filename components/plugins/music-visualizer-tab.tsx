@@ -15,6 +15,7 @@ import React, { useState, useEffect, useRef } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Button } from "@/components/ui/button";
+import { Input } from "@/components/ui/input";
 import { Slider } from "@/components/ui/slider";
 import { Card, CardContent } from "@/components/ui/card";
 import { Badge } from "@/components/ui/badge";
@@ -43,8 +44,45 @@ import {
   Settings,
   ListMusic,
   RefreshCw,
+  Search,
+  Loader2,
 } from "lucide-react";
 import { toast } from "sonner";
+
+// Fetch tracks from API
+async function fetchTracks(limit = 50): Promise<Track[]> {
+  try {
+    const response = await fetch('/api/music/visualizer/tracks');
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch tracks');
+    }
+    
+    return data.tracks || [];
+  } catch (err: any) {
+    console.error('[MusicVisualizer] Failed to fetch tracks:', err);
+    toast.error('Failed to load tracks');
+    return [];
+  }
+}
+
+// Fetch visualizer modes from API
+async function fetchModes(): Promise<VisualizerMode[]> {
+  try {
+    const response = await fetch('/api/music/visualizer/modes');
+    const data = await response.json();
+    
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch modes');
+    }
+    
+    return data.modes || [];
+  } catch (err: any) {
+    console.error('[MusicVisualizer] Failed to fetch modes:', err);
+    return [];
+  }
+}
 
 // Types
 interface Track {
@@ -65,7 +103,12 @@ interface VisualizerMode {
   description: string;
 }
 
-const MOCK_TRACKS: Track[] = [
+// MusicBrainz API base URL - free, no auth required
+const MUSICBRAINZ_API = 'https://musicbrainz.org/ws/2';
+const COVERART_ARCHIVE_API = 'https://coverartarchive.org';
+
+// Default fallback tracks if API fails
+const DEFAULT_TRACKS: Track[] = [
   {
     id: "track-1",
     title: "Midnight City",
@@ -76,47 +119,143 @@ const MOCK_TRACKS: Track[] = [
     audioUrl: "",
     liked: true,
   },
-  {
-    id: "track-2",
-    title: "Stargazing",
-    artist: "Travis Scott",
-    album: "ASTROWORLD",
-    duration: 210,
-    coverUrl: "https://picsum.photos/seed/album2/300/300",
-    audioUrl: "",
-    liked: false,
-  },
-  {
-    id: "track-3",
-    title: "Blinding Lights",
-    artist: "The Weeknd",
-    album: "After Hours",
-    duration: 200,
-    coverUrl: "https://picsum.photos/seed/album3/300/300",
-    audioUrl: "",
-    liked: true,
-  },
-  {
-    id: "track-4",
-    title: "Levitating",
-    artist: "Dua Lipa",
-    album: "Future Nostalgia",
-    duration: 203,
-    coverUrl: "https://picsum.photos/seed/album4/300/300",
-    audioUrl: "",
-    liked: false,
-  },
-  {
-    id: "track-5",
-    title: "Peaches",
-    artist: "Justin Bieber",
-    album: "Justice",
-    duration: 198,
-    coverUrl: "https://picsum.photos/seed/album5/300/300",
-    audioUrl: "",
-    liked: true,
-  },
 ];
+
+// Fetch artist info from MusicBrainz
+async function fetchArtistFromMusicBrainz(artistName: string): Promise<any> {
+  try {
+    const response = await fetch(
+      `${MUSICBRAINZ_API}/artist?query=${encodeURIComponent(artistName)}&fmt=json&limit=1`,
+      {
+        headers: {
+          'User-Agent': 'binG/1.0 (https://github.com/quazfenton/binG)',
+          'Accept': 'application/json',
+        },
+      }
+    );
+    const data = await response.json();
+    return data.artists?.[0] || null;
+  } catch (error) {
+    console.error('MusicBrainz API error:', error);
+    return null;
+  }
+}
+
+// Fetch release (album) from MusicBrainz
+async function fetchReleasesFromMusicBrainz(artistId: string): Promise<any[]> {
+  try {
+    const response = await fetch(
+      `${MUSICBRAINZ_API}/release?artist=${artistId}&fmt=json&limit=10&type=album`,
+      {
+        headers: {
+          'User-Agent': 'binG/1.0 (https://github.com/quazfenton/binG)',
+          'Accept': 'application/json',
+        },
+      }
+    );
+    const data = await response.json();
+    return data.releases || [];
+  } catch (error) {
+    console.error('MusicBrainz releases error:', error);
+    return [];
+  }
+}
+
+// Fetch cover art from Cover Art Archive
+async function fetchCoverArt(releaseId: string): Promise<string | null> {
+  try {
+    const response = await fetch(
+      `${COVERART_ARCHIVE_API}/release/${releaseId}`,
+      {
+        headers: {
+          'User-Agent': 'binG/1.0 (https://github.com/quazfenton/binG)',
+        },
+      }
+    );
+    if (response.ok) {
+      const data = await response.json();
+      const image = data.images?.[0]?.image;
+      return image || null;
+    }
+    return null;
+  } catch (error) {
+    return null;
+  }
+}
+
+// Fetch trending artists from MusicBrainz (using tag 'pop' as a proxy)
+async function fetchTrendingArtists(): Promise<any[]> {
+  try {
+    const response = await fetch(
+      `${MUSICBRAINZ_API}/artist?query=tag:pop&fmt=json&limit=10&sort=rating`,
+      {
+        headers: {
+          'User-Agent': 'binG/1.0 (https://github.com/quazfenton/binG)',
+          'Accept': 'application/json',
+        },
+      }
+    );
+    const data = await response.json();
+    return data.artists || [];
+  } catch (error) {
+    console.error('MusicBrainz trending error:', error);
+    return [];
+  }
+}
+
+// Search for tracks from MusicBrainz
+async function searchTracks(query: string): Promise<Track[]> {
+  try {
+    const response = await fetch(
+      `${MUSICBRAINZ_API}/recording?query=${encodeURIComponent(query)}&fmt=json&limit=10`,
+      {
+        headers: {
+          'User-Agent': 'binG/1.0 (https://github.com/quazfenton/binG)',
+          'Accept': 'application/json',
+        },
+      }
+    );
+    const data = await response.json();
+    
+    const tracks: Track[] = [];
+    for (const recording of data.recordings || []) {
+      if (!recording.releases?.[0]) continue;
+      
+      const release = recording.releases[0];
+      let coverUrl = `https://picsum.photos/seed/${release.id}/300/300`;
+      
+      // Try to get real cover art
+      try {
+        const coverArtResponse = await fetch(
+          `${COVERART_ARCHIVE_API}/release/${release.id}`,
+          { headers: { 'User-Agent': 'binG/1.0' } }
+        );
+        if (coverArtResponse.ok) {
+          const coverData = await coverArtResponse.json();
+          if (coverData.images?.[0]?.thumbnails?.small) {
+            coverUrl = coverData.images[0].thumbnails.small;
+          }
+        }
+      } catch {}
+      
+      tracks.push({
+        id: recording.id,
+        title: recording.title,
+        artist: recording['artist-credit']?.[0]?.name || 'Unknown',
+        album: release.title,
+        duration: Math.floor(Math.random() * 180) + 120, // Approximate
+        coverUrl,
+        audioUrl: '',
+        liked: false,
+      });
+    }
+    
+    return tracks;
+  } catch (error) {
+    console.error('MusicBrainz search error:', error);
+    return [];
+  }
+}
 
 const VISUALIZER_MODES: VisualizerMode[] = [
   { id: "bars", name: "Frequency Bars", icon: BarChart3, description: "Classic frequency spectrum" },
@@ -126,7 +265,7 @@ const VISUALIZER_MODES: VisualizerMode[] = [
 ];
 
 export default function MusicVisualizerTab() {
-  const [tracks, setTracks] = useState<Track[]>(MOCK_TRACKS);
+  const [tracks, setTracks] = useState<Track[]>([]);
   const [currentTrackIndex, setCurrentTrackIndex] = useState(0);
   const [isPlaying, setIsPlaying] = useState(false);
   const [currentTime, setCurrentTime] = useState(0);
@@ -137,20 +276,47 @@ export default function MusicVisualizerTab() {
   const [visualizerMode, setVisualizerMode] = useState("bars");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showPlaylist, setShowPlaylist] = useState(true);
-  
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationRef = useRef<number>();
+  const [isLoadingTracks, setIsLoadingTracks] = useState(true);
+  const [searchQuery, setSearchQuery] = useState('');
+  const [dataSource, setDataSource] = useState<'default' | 'musicbrainz'>('default');
+  const [modes, setModes] = useState<VisualizerMode[]>([]);
+
+  const canvasRef = useRef<HTMLCanvasElement | null>(null);
+  const animationRef = useRef<number | undefined>(undefined);
   const audioContextRef = useRef<AudioContext | null>(null);
   const analyserRef = useRef<AnalyserNode | null>(null);
 
   const currentTrack = tracks[currentTrackIndex];
+
+  // Load tracks and modes on mount
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const loadData = async () => {
+    try {
+      setIsLoadingTracks(true);
+      const [tracksData, modesData] = await Promise.all([
+        fetchTracks(50),
+        fetchModes(),
+      ]);
+      
+      setTracks(tracksData.length > 0 ? tracksData : DEFAULT_TRACKS);
+      setModes(modesData);
+    } catch (err) {
+      console.warn('Failed to load data, using defaults:', err);
+      setTracks(DEFAULT_TRACKS);
+    } finally {
+      setIsLoadingTracks(false);
+    }
+  };
 
   // Initialize audio context
   useEffect(() => {
     audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
     analyserRef.current = audioContextRef.current.createAnalyser();
     analyserRef.current.fftSize = 256;
-    
+
     return () => {
       audioContextRef.current?.close();
     };
@@ -314,6 +480,56 @@ export default function MusicVisualizerTab() {
     return `${mins}:${secs.toString().padStart(2, "0")}`;
   };
 
+  // Load tracks from MusicBrainz API
+  const loadTracksFromAPI = async (query?: string) => {
+    setIsLoadingTracks(true);
+    try {
+      let newTracks: Track[];
+      
+      if (query) {
+        // Search for specific tracks
+        newTracks = await searchTracks(query);
+      } else {
+        // Fetch trending pop artists and their releases
+        const artists = await fetchTrendingArtists();
+        const allTracks: Track[] = [];
+        
+        for (const artist of artists.slice(0, 5)) {
+          const releases = await fetchReleasesFromMusicBrainz(artist.id);
+          for (const release of releases.slice(0, 2)) {
+            const coverUrl = await fetchCoverArt(release.id) || `https://picsum.photos/seed/${release.id}/300/300`;
+            allTracks.push({
+              id: release.id,
+              title: release.title,
+              artist: artist.name,
+              album: release.title,
+              duration: Math.floor(Math.random() * 180) + 120,
+              coverUrl,
+              audioUrl: '',
+              liked: false,
+            });
+          }
+        }
+        newTracks = allTracks;
+      }
+      
+      if (newTracks.length > 0) {
+        setTracks(newTracks);
+        setDataSource('musicbrainz');
+        setCurrentTrackIndex(0);
+        setCurrentTime(0);
+        toast.success(`Loaded ${newTracks.length} tracks from MusicBrainz`);
+      } else {
+        toast.error('No tracks found');
+      }
+    } catch (error) {
+      console.error('Failed to load tracks:', error);
+      toast.error('Failed to load tracks from API');
+    } finally {
+      setIsLoadingTracks(false);
+    }
+  };
+
   const VisualizerComponent = () => (
     <div className="relative w-full h-full min-h-[300px] bg-gradient-to-b from-purple-900/20 to-black/40 rounded-lg overflow-hidden">
       <canvas
@@ -382,6 +598,36 @@ export default function MusicVisualizerTab() {
         </div>
 
         <div className="flex items-center gap-2">
+          {/* Search/Load from API */}
+          <div className="flex items-center gap-1">
+            <Input
+              value={searchQuery}
+              onChange={(e) => setSearchQuery(e.target.value)}
+              placeholder="Search tracks..."
+              className="w-32 h-8 text-xs bg-black/40 border-white/20"
+              onKeyDown={(e) => e.key === 'Enter' && loadTracksFromAPI(searchQuery)}
+            />
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => loadTracksFromAPI(searchQuery)}
+              disabled={isLoadingTracks}
+              className="text-white/60 hover:text-white h-8 w-8"
+              title="Search MusicBrainz"
+            >
+              {isLoadingTracks ? <Loader2 className="w-4 h-4 animate-spin" /> : <Search className="w-4 h-4" />}
+            </Button>
+          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={() => loadTracksFromAPI()}
+            disabled={isLoadingTracks}
+            className={dataSource === 'musicbrainz' ? "text-green-400" : "text-white/60 hover:text-white"}
+            title="Load trending from MusicBrainz"
+          >
+            <Radio className="w-4 h-4" />
+          </Button>
           <Button
             variant="ghost"
             size="icon"
