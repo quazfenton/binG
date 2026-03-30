@@ -384,7 +384,11 @@ export function BookmarksCurationPlugin() {
               <div className="grid grid-cols-1 gap-3">
                  <IntegrationCard
                    name="Google Docs"
+<<<<<<< HEAD
                    icon={FolderOpen}
+=======
+                   icon={GoogleDrive}
+>>>>>>> 595d4efd308b0438408760da68c58515199cebc1
                    description="Import links from Google Docs"
                    onImport={async () => {
                      toast.info("Google Docs integration coming soon");
