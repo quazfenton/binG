@@ -313,12 +313,19 @@ export default function MusicVisualizerTab() {
 
   // Initialize audio context
   useEffect(() => {
-    audioContextRef.current = new (window.AudioContext || (window as any).webkitAudioContext)();
-    analyserRef.current = audioContextRef.current.createAnalyser();
-    analyserRef.current.fftSize = 256;
+    try {
+      const AudioContextClass = window.AudioContext || (window as any).webkitAudioContext;
+      if (AudioContextClass) {
+        audioContextRef.current = new AudioContextClass();
+        analyserRef.current = audioContextRef.current.createAnalyser();
+        analyserRef.current.fftSize = 256;
+      }
+    } catch (err) {
+      console.warn('Audio context not supported:', err);
+    }
 
     return () => {
-      audioContextRef.current?.close();
+      audioContextRef.current?.close().catch(() => {});
     };
   }, []);
 
@@ -331,81 +338,94 @@ export default function MusicVisualizerTab() {
     if (!ctx) return;
 
     const analyser = analyserRef.current;
-    if (!analyser) return;
+    if (!analyser) {
+      // Draw static message if no analyser
+      ctx.fillStyle = "rgba(0, 0, 0, 1)";
+      ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "rgba(255, 255, 255, 0.5)";
+      ctx.font = "14px sans-serif";
+      ctx.textAlign = "center";
+      ctx.fillText("Audio context not available", canvas.width / 2, canvas.height / 2);
+      return;
+    }
 
     const bufferLength = analyser.frequencyBinCount;
     const dataArray = new Uint8Array(bufferLength);
 
     const draw = () => {
-      animationRef.current = requestAnimationFrame(draw);
+      try {
+        animationRef.current = requestAnimationFrame(draw);
 
-      analyser.getByteFrequencyData(dataArray);
+        analyser.getByteFrequencyData(dataArray);
 
-      ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
+        ctx.fillStyle = "rgba(0, 0, 0, 0.2)";
+        ctx.fillRect(0, 0, canvas.width, canvas.height);
 
-      const barWidth = (canvas.width / bufferLength) * 2.5;
-      let barHeight;
-      let x = 0;
-
-      if (visualizerMode === "bars") {
-        for (let i = 0; i < bufferLength; i++) {
-          barHeight = dataArray[i] * 1.5;
-
-          const gradient = ctx.createLinearGradient(0, canvas.height, 0, canvas.height - barHeight);
-          gradient.addColorStop(0, "#8b5cf6");
-          gradient.addColorStop(0.5, "#ec4899");
-          gradient.addColorStop(1, "#f59e0b");
-
-          ctx.fillStyle = gradient;
-          ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
-
-          x += barWidth + 1;
-        }
-      } else if (visualizerMode === "wave") {
-        ctx.lineWidth = 2;
-        ctx.strokeStyle = "#8b5cf6";
-        ctx.beginPath();
-
-        const sliceWidth = canvas.width / bufferLength;
+        const barWidth = (canvas.width / bufferLength) * 2.5;
+        let barHeight;
         let x = 0;
 
-        for (let i = 0; i < bufferLength; i++) {
-          const v = dataArray[i] / 128.0;
-          const y = (v * canvas.height) / 2;
+        if (visualizerMode === "bars") {
+          for (let i = 0; i < bufferLength; i++) {
+            barHeight = dataArray[i] * 1.5;
 
-          if (i === 0) {
-            ctx.moveTo(x, y);
-          } else {
-            ctx.lineTo(x, y);
+            const gradient = ctx.createLinearGradient(0, canvas.height, 0, canvas.height - barHeight);
+            gradient.addColorStop(0, "#8b5cf6");
+            gradient.addColorStop(0.5, "#ec4899");
+            gradient.addColorStop(1, "#f59e0b");
+
+            ctx.fillStyle = gradient;
+            ctx.fillRect(x, canvas.height - barHeight, barWidth, barHeight);
+
+            x += barWidth + 1;
+          }
+        } else if (visualizerMode === "wave") {
+          ctx.lineWidth = 2;
+          ctx.strokeStyle = "#8b5cf6";
+          ctx.beginPath();
+
+          const sliceWidth = canvas.width / bufferLength;
+          let x = 0;
+
+          for (let i = 0; i < bufferLength; i++) {
+            const v = dataArray[i] / 128.0;
+            const y = (v * canvas.height) / 2;
+
+            if (i === 0) {
+              ctx.moveTo(x, y);
+            } else {
+              ctx.lineTo(x, y);
+            }
+
+            x += sliceWidth;
           }
 
-          x += sliceWidth;
-        }
-
-        ctx.lineTo(canvas.width, canvas.height / 2);
-        ctx.stroke();
-      } else if (visualizerMode === "circle") {
-        const centerX = canvas.width / 2;
-        const centerY = canvas.height / 2;
-        const radius = Math.min(centerX, centerY) * 0.6;
-
-        for (let i = 0; i < bufferLength; i++) {
-          const angle = (i / bufferLength) * Math.PI * 2;
-          const barHeight = (dataArray[i] / 255) * radius * 0.5;
-
-          const x1 = centerX + Math.cos(angle) * radius;
-          const y1 = centerY + Math.sin(angle) * radius;
-          const x2 = centerX + Math.cos(angle) * (radius + barHeight);
-          const y2 = centerY + Math.sin(angle) * (radius + barHeight);
-
-          ctx.strokeStyle = `hsl(${(i / bufferLength) * 360}, 100%, 50%)`;
-          ctx.lineWidth = 2;
-          ctx.beginPath();
-          ctx.moveTo(x1, y1);
-          ctx.lineTo(x2, y2);
+          ctx.lineTo(canvas.width, canvas.height / 2);
           ctx.stroke();
+        } else if (visualizerMode === "circle") {
+          const centerX = canvas.width / 2;
+          const centerY = canvas.height / 2;
+          const radius = Math.min(centerX, centerY) * 0.6;
+
+          for (let i = 0; i < bufferLength; i++) {
+            const angle = (i / bufferLength) * Math.PI * 2;
+            const barHeight = (dataArray[i] / 255) * radius * 0.5;
+
+            const x1 = centerX + Math.cos(angle) * radius;
+            const y1 = centerY + Math.sin(angle) * radius;
+            const x2 = centerX + Math.cos(angle) * (radius + barHeight);
+            const y2 = centerY + Math.sin(angle) * (radius + barHeight);
+
+            ctx.strokeStyle = `hsl(${(i / bufferLength) * 360}, 100%, 50%)`;
+            ctx.lineWidth = 2;
+            ctx.beginPath();
+            ctx.moveTo(x1, y1);
+            ctx.lineTo(x2, y2);
+            ctx.stroke();
+          }
         }
+      } catch (drawError) {
+        console.warn('Visualizer draw error:', drawError);
       }
     };
 
@@ -432,7 +452,7 @@ export default function MusicVisualizerTab() {
     if (isPlaying) {
       interval = window.setInterval(() => {
         setCurrentTime((prev) => {
-          if (prev >= currentTrack.duration) {
+          if (prev >= (currentTrack?.duration || 0)) {
             if (repeatMode === "one") {
               // Restart the current track instead of advancing
               return 0;
@@ -558,13 +578,13 @@ export default function MusicVisualizerTab() {
       {/* Now Playing Overlay */}
       <div className="absolute bottom-4 left-4 right-4 flex items-center gap-4">
         <img
-          src={currentTrack.coverUrl}
-          alt={currentTrack.title}
+          src={currentTrack?.coverUrl || "https://picsum.photos/seed/default/300/300"}
+          alt={currentTrack?.title || "Unknown"}
           className="w-16 h-16 rounded-lg shadow-lg"
         />
         <div className="flex-1 min-w-0">
-          <p className="text-sm font-semibold text-white truncate">{currentTrack.title}</p>
-          <p className="text-xs text-white/60 truncate">{currentTrack.artist}</p>
+          <p className="text-sm font-semibold text-white truncate">{currentTrack?.title || "No track selected"}</p>
+          <p className="text-xs text-white/60 truncate">{currentTrack?.artist || ""}</p>
         </div>
         {isPlaying && (
           <div className="flex items-center gap-1">
@@ -682,14 +702,14 @@ export default function MusicVisualizerTab() {
               <div className="space-y-2">
                 <Slider
                   value={[currentTime]}
-                  max={currentTrack.duration}
+                  max={currentTrack?.duration || 100}
                   step={1}
                   onValueChange={(v) => setCurrentTime(v[0])}
                   className="w-full"
                 />
                 <div className="flex justify-between text-xs text-white/40">
                   <span>{formatTime(currentTime)}</span>
-                  <span>{formatTime(currentTrack.duration)}</span>
+                  <span>{formatTime(currentTrack?.duration || 0)}</span>
                 </div>
               </div>
 

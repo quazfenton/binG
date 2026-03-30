@@ -150,8 +150,10 @@ function parseRSSItem(item: Element, sourceUrl: string): ZineContent | null {
   if (media.length > 0) priority += 1;
   if (categories.some(c => /breaking|urgent|important/i.test(c))) priority += 2;
   
+  // Simple hash function for URL to create compact identifier
+  const urlHash = sourceUrl.split('').reduce((acc, char) => ((acc << 5) - acc) + char.charCodeAt(0), 0) >>> 0;
   return {
-    id: `rss-${sourceUrl.hashCode()}-${pubDate}-${Math.random().toString(36).slice(2, 9)}`,
+    id: `rss-${urlHash}-${pubDate}-${Math.random().toString(36).slice(2, 9)}`,
     type: contentType,
     title,
     subtitle: author ? `By ${author}` : undefined,
@@ -537,7 +539,7 @@ export const createDataSource = {
     url,
     refreshInterval,
     enabled: true,
-    contentFilter: async (data: any) => {
+    contentFilter: (data: any) => {
       // RSS is handled by fetchRSSFeed
       return [];
     },

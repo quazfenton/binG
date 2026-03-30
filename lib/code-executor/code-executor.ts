@@ -170,6 +170,7 @@ async function executePython(code: string, stdin: string | undefined, timeout: n
  * Execute HTML/CSS (render preview)
  */
 async function executeWeb(code: string, language: 'html' | 'css'): Promise<CodeExecutionResult> {
+  const startTime = Date.now();
   return {
     success: true,
     output: `${language.toUpperCase()} code ready for preview`,

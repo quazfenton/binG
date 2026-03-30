@@ -453,9 +453,9 @@ export default function FrameworkVisualizer({
                 >
                   {/* SVG for edges */}
                   <svg className="absolute inset-0 w-full h-full pointer-events-none">
-                    {selectedWorkflow.edges.map(edge => {
-                      const sourceIndex = selectedWorkflow.steps.findIndex(s => s.id === edge.source);
-                      const targetIndex = selectedWorkflow.steps.findIndex(s => s.id === edge.target);
+                    {selectedWorkflow.edges?.map(edge => {
+                      const sourceIndex = selectedWorkflow.steps?.findIndex(s => s.id === edge.source) ?? -1;
+                      const targetIndex = selectedWorkflow.steps?.findIndex(s => s.id === edge.target) ?? -1;
                       if (sourceIndex === -1 || targetIndex === -1) return null;
                       
                       const sourceY = 80 + sourceIndex * 100;

@@ -31,9 +31,9 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    if (typeof input !== 'object' || input === null) {
+    if (typeof input !== 'string') {
       return NextResponse.json(
-        { error: 'Input must be an object' },
+        { error: 'Input must be a string' },
         { status: 400 }
       );
     }

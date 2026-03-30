@@ -4,8 +4,9 @@
  * Main export file
  */
 
-export { ZineEngine, type ZineEngineProps } from "./index";
-export { ZineAdminPanel, type ZineAdminPanelProps, type ZineAdminConfig } from "./admin-panel";
+import { ZineEngine, type ZineEngineProps } from "./index";
+export { ZineEngine, type ZineEngineProps };
+export { ZineAdminPanel, type ZineAdminConfig } from "./admin-panel";
 export {
   fetchRSSFeed,
   createWebhookHandler,

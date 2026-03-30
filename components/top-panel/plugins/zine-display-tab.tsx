@@ -330,7 +330,7 @@ function useOAuthNotifications(
           (notif.source || 'manual') as any,
           notif.priority === 'high' ? 'drop' : 'fade-in',
           template,
-          notif.author || undefined,
+          (notif.author || undefined) as any,
           { url: notif.url, timestamp: notif.timestamp },
         );
  
@@ -824,7 +824,7 @@ function ContentZone({
               isPaused={isPaused}
               template={template}
               bounded={false}
-              responsiveConfig={template.fragmentConfig}
+              responsiveConfig={(template as any).fragmentConfig}
             />
           ))}
         </AnimatePresence>
@@ -862,7 +862,7 @@ function ContentZone({
                 isPaused={isPaused}
                 template={template}
                 bounded={true}
-                responsiveConfig={template.fragmentConfig}
+                responsiveConfig={(template as any).fragmentConfig}
               />
             ))}
           </AnimatePresence>
@@ -2193,7 +2193,7 @@ export default function ZineDisplayTab() {
                     onRemove={removeFragment}
                     isPaused={isPaused}
                     template={template}
-                    responsiveConfig={template.fragmentConfig}
+                    responsiveConfig={(template as any).fragmentConfig}
                   />
                 </div>
               );
@@ -2215,7 +2215,7 @@ export default function ZineDisplayTab() {
                         onRemove={removeFragment}
                         isPaused={isPaused}
                         template={template}
-                        responsiveConfig={template.fragmentConfig}
+                        responsiveConfig={(template as any).fragmentConfig}
                       />
                     );
                   })}
@@ -2236,7 +2236,7 @@ export default function ZineDisplayTab() {
                   onRemove={removeFragment}
                   isPaused={isPaused}
                   template={template}
-                  responsiveConfig={template.fragmentConfig}
+                  responsiveConfig={(template as any).fragmentConfig}
                 />
               );
             })}

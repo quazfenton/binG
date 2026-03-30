@@ -157,7 +157,7 @@ export interface V2ExecuteOptions {
   task: string;
   context?: string;
   stream?: boolean;
-  preferredAgent?: 'opencode' | 'nullclaw' | 'cli';
+  preferredAgent?: 'opencode' | 'nullclaw' | 'cli' | 'advanced';
   executionPolicy?: ExecutionPolicy;
   cliCommand?: { command: string; args?: string[] };
 }

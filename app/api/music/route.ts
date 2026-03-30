@@ -109,9 +109,18 @@ const SAMPLE_PLAYLISTS: Playlist[] = [
 export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
-    const type = searchParams.get('type') || 'tracks';
+    const type = searchParams.get('type');
     const source = searchParams.get('source');
     const search = searchParams.get('search');
+
+    // Validate type parameter
+    const validTypes = ['tracks', 'playlists'];
+    if (type && !validTypes.includes(type)) {
+      return NextResponse.json(
+        { error: `Invalid type parameter. Must be one of: ${validTypes.join(', ')}` },
+        { status: 400 }
+      );
+    }
 
     // Validate source parameter
     const validSources = ['spotify', 'apple-music', 'youtube'];
@@ -122,7 +131,9 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    if (type === 'playlists') {
+    const resolvedType = type || 'tracks';
+
+    if (resolvedType === 'playlists') {
       let playlists = [...SAMPLE_PLAYLISTS];
 
       // Filter by source (case-insensitive)
@@ -168,6 +179,7 @@ export async function GET(request: NextRequest) {
       tracks,
       total: tracks.length,
       sources: validSources,
+      types: validTypes,
     });
   } catch (error: any) {
     console.error('[Music API] Error:', error);
