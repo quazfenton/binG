@@ -432,6 +432,7 @@ class TaskRouter {
           schedule: '*/15 * * * *', // Every 15 min
           maxIterations: 10,
           context: { toolDiscovery: true },
+          userId,
         };
 
       case 'cross-agent':
@@ -442,6 +443,7 @@ class TaskRouter {
           priority: 'high',
           maxIterations: 1,
           context: { messaging: true },
+          userId,
         };
 
       default:
@@ -450,6 +452,7 @@ class TaskRouter {
           name: 'Default Agent',
           goal,
           priority: 'normal',
+          userId,
         };
     }
   }

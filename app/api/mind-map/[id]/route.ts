@@ -18,7 +18,8 @@ interface MindMapNode {
   parentId?: string;
   x: number;
   y: number;
-  color: string;
+  color?: string;
+  icon?: string;
 }
 
 interface MindMap {

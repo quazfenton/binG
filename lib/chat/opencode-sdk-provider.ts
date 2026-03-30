@@ -288,7 +288,9 @@ export class OpenCodeSDKProvider implements LLMProvider {
         isComplete: true,
         finishReason: 'stop',
         usage: {
-          total_tokens: this.estimateTokens(content),
+          totalTokens: this.estimateTokens(content),
+          promptTokens: 0,
+          completionTokens: 0,
         },
       }
 

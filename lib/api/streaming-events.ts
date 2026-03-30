@@ -52,8 +52,8 @@ export function createStreamingEvents(
 
   const events: string[] = []
 
-  // Init event
-  events.push(sseEncode('token', {
+  // Init event - use 'init' type to distinguish from content tokens
+  events.push(sseEncode('init', {
     requestId,
     startTime: Date.now(),
     provider: response.data?.provider,
@@ -150,8 +150,8 @@ export function createStreamingEvents(
     // This gives users something to read while the rest streams progressively
     if (emitPrimaryContentImmediately && chunks.length > 0) {
       // First chunk: emit immediately with slightly larger size (16 chars) for faster perceived response
-      const firstChunkSize = Math.min(16, chunks[0].content.length);
-      const firstChunk = content.slice(0, firstChunkSize);
+      const firstChunkSize = Math.min(16, chunks[0].length);
+      const firstChunk = chunks[0].slice(0, firstChunkSize);
       
       events.push(sseEncode('token', {
         type: 'token',
@@ -167,7 +167,7 @@ export function createStreamingEvents(
         const chunk = chunks[i];
         events.push(sseEncode('token', {
           type: 'token',
-          content: chunk.content,
+          content: chunk,
           requestId,
           timestamp: Date.now(),
           offset: i * chunkSize,

@@ -30,6 +30,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger'
+import { chatLogger } from '@/lib/chat/chat-logger'
 import { normalizeToolInvocations, type ToolInvocation } from '@/lib/types/tool-invocation'
 import { quotaManager } from '@/lib/management/quota-manager'
 import { detectRequestType } from '@/lib/utils/request-type-detector'
@@ -2017,6 +2018,16 @@ export class ResponseRouter {
 
       const primaryData = (primaryResult as any).data
       
+      // Return primary response immediately (full response, not just .data)
+      // This ensures content is properly passed through to the streaming pipeline
+      return primaryResult
+      
+      chatLogger.debug('File system edits detected, running spec amplification', { 
+        requestId: request.requestId,
+        writeDiffsCount: primaryData.commands?.write_diffs?.length ?? 0,
+        filesCount: primaryData.data?.files?.length ?? 0
+      })
+
       // Emit primary response immediately if emit is provided
       if (request.emit) {
         request.emit('primary_response', { content: primaryData.content, timestamp: Date.now() })
