@@ -28,7 +28,7 @@ import { createMistral } from '@ai-sdk/mistral';
 import type { StreamingResponse, LLMMessage } from './llm-providers';
 import { chatLogger } from './chat-logger';
 import { getProviderForModel } from './openai-compat-wrapper';
-import { createAICache, tokenTracker, createTokenLimitMiddleware } from './ai-caching';
+import { tokenTracker } from './ai-caching';
 import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitError, handleTokenLimitError } from './ai-middleware';
 
 /**
@@ -264,14 +264,14 @@ function convertMessages(messages: LLMMessage[]): {
 /**
  * Detect reasoning tag for providers that support extended thinking
  */
-function getReasoningTag(provider: string): { open: string; close: string } | undefined {
+function getReasoningTag(provider: string): { tagName: string; separator?: string; startWithReasoning?: boolean; } | undefined {
   switch (provider) {
     case 'anthropic':
-      return { open: '<thinking>', close: '</thinking>' };
+      return { tagName: 'thinking', separator: '</thinking>' };
     case 'google':
-      return { open: '<thought>', close: '</thought>' };
+      return { tagName: 'thought', separator: '</thought>' };
     case 'deepseek':
-      return { open: '<think>', close: '</think>' };
+      return { tagName: 'reasoning', separator: '', startWithReasoning: true };
     default:
       return undefined;
   }
@@ -451,7 +451,7 @@ export async function* streamWithVercelAI(
       switch (chunk.type) {
         case 'text-delta': {
           yield {
-            content: chunk.textDelta,
+            content: chunk.text,
             isComplete: false,
             timestamp: new Date(),
           };
@@ -459,11 +459,11 @@ export async function* streamWithVercelAI(
         }
 
         case 'reasoning': {
-          reasoningContent += chunk.textDelta;
+          reasoningContent += chunk.text ?? '';
           yield {
             content: '',
             isComplete: false,
-            reasoning: chunk.textDelta,
+            reasoning: chunk.text ?? '',
             timestamp: new Date(),
           };
           break;

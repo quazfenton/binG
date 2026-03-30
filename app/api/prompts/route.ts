@@ -10,29 +10,44 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 
-// Simple mutex for preventing concurrent writes
+// Mutex for preventing concurrent writes (proper implementation)
 let promptsLock: Promise<void> = Promise.resolve();
-let promptsLockResolve: (() => void) | null = null;
-
-async function acquirePromptsLock(): Promise<void> {
-  await promptsLock;
-}
-
-function releasePromptsLock(): void {
-  if (promptsLockResolve) {
-    const resolve = promptsLockResolve;
-    promptsLockResolve = null;
-    resolve();
-  }
-}
 
 async function withPromptsLock<T>(fn: () => Promise<T>): Promise<T> {
-  await acquirePromptsLock();
+  const previousLock = promptsLock;
+  let releaseLock!: () => void;
+  promptsLock = new Promise<void>((resolve) => {
+    releaseLock = resolve;
+  });
+  await previousLock;
   try {
     return await fn();
   } finally {
-    releasePromptsLock();
+    releaseLock();
   }
+}
+
+// Atomic update helper to prevent race conditions
+async function updatePromptsAtomically(mutate: (prompts: Prompt[]) => Prompt[]): Promise<void> {
+  return withPromptsLock(async () => {
+    const prompts = await loadPrompts();
+    const updated = mutate(prompts);
+    await savePrompts(updated);
+  });
+}
+
+// Prompt validation helper
+function isValidPrompt(obj: any): obj is Prompt {
+  return obj &&
+    typeof obj.id === 'string' &&
+    typeof obj.title === 'string' &&
+    typeof obj.content === 'string' &&
+    typeof obj.category === 'string' &&
+    Array.isArray(obj.tags) &&
+    typeof obj.upvotes === 'number' &&
+    typeof obj.downloads === 'number' &&
+    typeof obj.createdAt === 'number' &&
+    typeof obj.updatedAt === 'number';
 }
 
 export interface Prompt {
@@ -161,6 +176,12 @@ async function loadPrompts(): Promise<Prompt[]> {
     if (!Array.isArray(parsed)) {
       throw new Error('Prompts file does not contain an array');
     }
+    // Validate each prompt object
+    if (!parsed.every(isValidPrompt)) {
+      console.warn('[Prompts API] Invalid prompts detected, resetting to defaults');
+      await savePrompts(DEFAULT_PROMPTS);
+      return DEFAULT_PROMPTS;
+    }
     return parsed as Prompt[];
   } catch (error: any) {
     if (error.code === 'ENOENT') {
@@ -287,30 +308,29 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Use lock to prevent race conditions
-    return await withPromptsLock(async () => {
-      const prompts = await loadPrompts();
-
+    // Use atomic update to prevent race conditions
+    let newPromptId: string | null = null;
+    await updatePromptsAtomically((prompts) => {
       const newPrompt: Prompt = {
         id: `prompt-${Date.now()}-${Math.random().toString(36).slice(2, 9)}`,
         title,
         content,
         category,
-        tags: tags || [],
+        tags: Array.isArray(tags) ? tags : [],
         upvotes: 0,
         downloads: 0,
         createdAt: Date.now(),
         updatedAt: Date.now(),
       };
-
+      newPromptId = newPrompt.id;
       prompts.unshift(newPrompt);
-      await savePrompts(prompts);
-
-      return NextResponse.json({
-        success: true,
-        prompt: newPrompt,
-      }, { status: 201 });
+      return prompts;
     });
+
+    return NextResponse.json({
+      success: true,
+      prompt: { id: newPromptId, title, content, category, tags: Array.isArray(tags) ? tags : [] },
+    }, { status: 201 });
   } catch (error: any) {
     console.error('[Prompts API] POST error:', error);
     return NextResponse.json(
@@ -344,16 +364,13 @@ export async function PUT(request: NextRequest) {
       );
     }
 
-    // Use lock to prevent race conditions
-    return await withPromptsLock(async () => {
-      const prompts = await loadPrompts();
+    // Use atomic update to prevent race conditions
+    let updatedPrompt: Prompt | null = null;
+    await updatePromptsAtomically((prompts) => {
       const index = prompts.findIndex(p => p.id === id);
 
       if (index === -1) {
-        return NextResponse.json(
-          { error: 'Prompt not found' },
-          { status: 404 }
-        );
+        throw new Error('Prompt not found');
       }
 
       switch (action) {
@@ -374,25 +391,29 @@ export async function PUT(request: NextRequest) {
           if (category && CATEGORIES.includes(category)) {
             prompts[index].category = category;
           }
-          if (tags) prompts[index].tags = tags;
+          if (Array.isArray(tags)) prompts[index].tags = tags;
           prompts[index].updatedAt = Date.now();
           break;
 
         default:
-          return NextResponse.json(
-            { error: 'Invalid action. Use: upvote, download, or edit' },
-            { status: 400 }
-          );
+          throw new Error('Invalid action. Use: upvote, download, or edit');
       }
 
-      await savePrompts(prompts);
+      updatedPrompt = prompts[index];
+      return prompts;
+    });
 
-      return NextResponse.json({
-        success: true,
-        prompt: prompts[index],
-      });
+    return NextResponse.json({
+      success: true,
+      prompt: updatedPrompt,
     });
   } catch (error: any) {
+    if (error.message === 'Prompt not found') {
+      return NextResponse.json(
+        { error: 'Prompt not found' },
+        { status: 404 }
+      );
+    }
     // Only log detailed errors in development
     if (process.env.NODE_ENV === 'development') {
       console.error('[Prompts API] PUT error:', error);
@@ -431,27 +452,29 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    // Use lock to prevent race conditions
-    return await withPromptsLock(async () => {
-      const prompts = await loadPrompts();
+    // Use atomic update to prevent race conditions
+    await updatePromptsAtomically((prompts) => {
       const index = prompts.findIndex(p => p.id === id);
 
       if (index === -1) {
-        return NextResponse.json(
-          { error: 'Prompt not found' },
-          { status: 404 }
-        );
+        throw new Error('Prompt not found');
       }
 
       prompts.splice(index, 1);
-      await savePrompts(prompts);
+      return prompts;
+    });
 
-      return NextResponse.json({
-        success: true,
-        message: 'Prompt deleted',
-      });
+    return NextResponse.json({
+      success: true,
+      message: 'Prompt deleted',
     });
   } catch (error: any) {
+    if (error.message === 'Prompt not found') {
+      return NextResponse.json(
+        { error: 'Prompt not found' },
+        { status: 404 }
+      );
+    }
     // Only log detailed errors in development
     if (process.env.NODE_ENV === 'development') {
       console.error('[Prompts API] DELETE error:', error);

@@ -46,6 +46,8 @@ export const SSE_EVENT_TYPES = {
   SPEC_REFINEMENT: 'spec_refinement',
   /** DAG task execution status */
   DAG_TASK_STATUS: 'dag_task_status',
+  /** Initialization event */
+  INIT: 'init',
 } as const;
 
 export type SSEEventTypeName = typeof SSE_EVENT_TYPES[keyof typeof SSE_EVENT_TYPES];

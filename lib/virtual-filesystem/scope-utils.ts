@@ -109,32 +109,57 @@ export function extractSessionIdFromPath(scopePath?: string): string | null {
 
 /**
  * Sanitize scope path to remove any ownerId prefix from composite IDs
- * 
- * Converts: project/sessions/anon:1774698249190_p37DQ6WwX:005-1
- * To:       project/sessions/005-1
- * 
+ *
+ * Converts: 
+ *   project/sessions/anon:1774698249190_p37DQ6WwX:005-1 -> project/sessions/005-1
+ *   project/sessions/1774698249190_p37DQ6WwX:002 -> project/sessions/002
+ *   anon:1774698249190_p37DQ6WwX:002 -> 002
+ *   1774698249190_p37DQ6WwX:002 -> 002
+ *
  * This prevents composite IDs from leaking into file paths during LLM refinement
  */
 export function sanitizeScopePath(scopePath?: string): string {
   if (!scopePath) return 'project';
+
+  let normalizedPath = normalizeScopePath(scopePath);
   
-  const normalizedPath = normalizeScopePath(scopePath);
+  // Handle case where scopePath is just a session ID or composite ID without prefix
+  // e.g., "002" or "anon:1774...:002" or "1774...:002"
+  if (!normalizedPath.includes('/sessions/')) {
+    // Check if it's a composite ID format (contains colon)
+    if (normalizedPath.includes(':')) {
+      const parts = normalizedPath.split(':');
+      const lastPart = parts[parts.length - 1];
+      // If last part looks like a session ID (3 digits or with suffix), use it
+      if (/^\d{3}(-\d+)?$/.test(lastPart) || /^[a-z]+(-\d+)?$/.test(lastPart)) {
+        return `project/sessions/${lastPart}`;
+      }
+    }
+    // If it's already a simple session ID, wrap it properly
+    if (/^\d{3}(-\d+)?$/.test(normalizedPath) || /^[a-z]+(-\d+)?$/.test(normalizedPath)) {
+      return `project/sessions/${normalizedPath}`;
+    }
+    // Otherwise return as-is (might be "project" or another valid path)
+    return normalizedPath;
+  }
+
   const match = normalizedPath.match(/^project\/sessions\/([^/]+)(\/.*)?$/i);
-  
+
   if (!match) return normalizedPath;
-  
+
   const sessionIdSegment = match[1];
   const remainingPath = match[2] || '';
-  
+
   // If segment contains composite ID (ownerId:sessionId), extract only sessionId
   // This ensures folder names like "002" are not corrupted with ownerId prefix
   // e.g., "anon:1774710784761_6TB03h8Ow:002" -> "002"
+  // e.g., "1774710784761_6TB03h8Ow:002" -> "002"
   if (sessionIdSegment.includes(':')) {
     const parts = sessionIdSegment.split(':');
     const actualSessionId = parts[parts.length - 1]; // Get the last part (folder name)
     return `project/sessions/${actualSessionId}${remainingPath}`;
   }
-  
+
   return normalizedPath;
 }
 

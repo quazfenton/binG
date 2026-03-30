@@ -22,7 +22,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { usePanel } from "@/contexts/panel-context";
 import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { ResizablePanelGroup, PanelPresets } from "@/components/panels/resizable-panel-group";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
@@ -236,7 +235,7 @@ function ThreadList({
       </div>
 
       {/* Thread List */}
-      <ScrollArea className="flex-1">
+      <div className="flex-1 overflow-auto" tabIndex={0} style={{ scrollBehavior: 'smooth' }}>
         <div className="p-2 space-y-1">
           {filteredThreads.map(thread => (
             <div
@@ -283,7 +282,7 @@ function ThreadList({
             </div>
           )}
         </div>
-      </ScrollArea>
+      </div>
     </div>
   );
 }
@@ -541,7 +540,7 @@ export function EnhancedWorkspacePanel({
           </div>
 
           {/* Messages */}
-          <ScrollArea className="flex-1 p-3">
+          <div className="flex-1 overflow-auto p-3" tabIndex={0} style={{ scrollBehavior: 'smooth' }}>
             {activeThread?.messages.map((message, index) => (
               <MessageBubble
                 key={message.id}
@@ -556,7 +555,7 @@ export function EnhancedWorkspacePanel({
               </div>
             )}
             <div ref={messagesEndRef} />
-          </ScrollArea>
+          </div>
 
           {/* Input Area */}
           <div className="p-3 border-t border-white/10 bg-black/20 shrink-0">

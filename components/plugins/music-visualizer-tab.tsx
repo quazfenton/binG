@@ -452,7 +452,9 @@ export default function MusicVisualizerTab() {
     if (isPlaying) {
       interval = window.setInterval(() => {
         setCurrentTime((prev) => {
-          if (prev >= (currentTrack?.duration || 0)) {
+          const duration = currentTrack?.duration;
+          if (!duration || duration <= 0) return prev;
+          if (prev >= duration) {
             if (repeatMode === "one") {
               // Restart the current track instead of advancing
               return 0;
