@@ -47,9 +47,9 @@ export async function GET(request: NextRequest) {
   // List available Trigger.dev tasks
   if (action === 'tasks' || action === 'list') {
     const tasks = ALL_TRIGGER_TASKS.map(t => ({
-      id: t.id,
-      name: t.name,
-      description: t.description,
+      id: (t as any).id,
+      name: (t as any).name,
+      description: (t as any).description,
       schedule: 'schedule' in t ? (t as any).schedule : null,
     }));
 
@@ -141,7 +141,7 @@ export async function POST(request: NextRequest) {
         return NextResponse.json(
           { 
             success: false, 
-            error: `Unknown task: ${config.taskId}. Available: ${ALL_TRIGGER_TASKS.map(t => t.id).join(', ')}` 
+            error: `Unknown task: ${config.taskId}. Available: ${ALL_TRIGGER_TASKS.map(t => (t as any).id).join(', ')}` 
           },
           { status: 400 }
         );
@@ -161,11 +161,18 @@ export async function POST(request: NextRequest) {
       JOBS.set(jobId, job);
 
       // Simulate task execution (in production, this would use actual Trigger.dev SDK)
-      executeTaskAsync(jobId, config);
+      const taskRequest: TriggerJobRequest = {
+        taskId: config.taskId,
+        payload: config.payload,
+      };
+      if (config.schedule) {
+        taskRequest.schedule = config.schedule as { type: 'cron' | 'interval'; expression: string };
+      }
+      executeTaskAsync(jobId, taskRequest);
 
       return NextResponse.json({
         success: true,
-        message: `Task "${task.name}" scheduled`,
+        message: `Task "${(task as any).name}" scheduled`,
         job,
       });
     }
@@ -197,7 +204,7 @@ export async function POST(request: NextRequest) {
 
       return NextResponse.json({
         success: true,
-        message: `Task "${task.name}" executed`,
+        message: `Task "${(task as any).name}" executed`,
         result,
       });
     }
@@ -313,8 +320,9 @@ async function executeTaskNow(
 
     case 'dag-runner':
       // Would execute DAG
+      const dagPayload = payload.dag as { nodes?: unknown[] } | undefined;
       return { 
-        nodes: payload.dag?.nodes?.length || 0, 
+        nodes: dagPayload?.nodes?.length || 0, 
         executed: true 
       };
 

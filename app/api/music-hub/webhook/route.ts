@@ -28,6 +28,14 @@ const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
 
 function checkRateLimit(identifier: string): { allowed: boolean; remaining: number } {
   const now = Date.now();
+  
+  // Prune expired entries to prevent unbounded memory growth
+  for (const [key, value] of rateLimitStore) {
+    if (now > value.resetTime) {
+      rateLimitStore.delete(key);
+    }
+  }
+  
   const record = rateLimitStore.get(identifier);
 
   if (!record || now > record.resetTime) {
@@ -346,11 +354,9 @@ export async function GET() {
 function extractPlaylistId(url: string): string | null {
   try {
     const urlObj = new URL(url);
-    if (urlObj.hostname.includes('youtube.com')) {
+    // Playlist IDs are always in the 'list' query parameter for both domains
+    if (urlObj.hostname.includes('youtube.com') || urlObj.hostname.includes('youtu.be')) {
       return urlObj.searchParams.get('list');
-    }
-    if (urlObj.hostname.includes('youtu.be')) {
-      return urlObj.pathname.slice(1);
     }
     return null;
   } catch {

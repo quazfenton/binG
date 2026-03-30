@@ -188,7 +188,7 @@ export function EnhancedConversationInterface({
 
   // Load available providers
   const availableProviders = useMemo<LLMProvider[]>(() => {
-    return PROVIDERS.filter(p => {
+    return Object.values(PROVIDERS).filter(p => {
       // Check if provider has API key configured
       const hasApiKey = p.apiKeyEnvVar
         ? !!process.env[p.apiKeyEnvVar]

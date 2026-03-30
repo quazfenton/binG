@@ -11,7 +11,7 @@
  * @module events/handlers/bing
  */
 
-import { EventRecord } from '../../store';
+import type { EventRecord } from '../store';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Events:binGHandlers');
@@ -329,7 +329,7 @@ function useMajorityVote(responses: any[]): string {
  * Register binG custom handlers
  */
 export function registerbinGHandlers(): void {
-  const { registerHandler } = require('../../router');
+  const { registerHandler } = require('../router');
 
   registerHandler('AGENT_LOOP', handleAgentLoop);
   registerHandler('RESEARCH_TASK', handleResearchTask);
