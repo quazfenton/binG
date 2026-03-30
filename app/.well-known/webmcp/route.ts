@@ -299,18 +299,17 @@ async function invokeTool(toolName: string, args: any): Promise<any> {
     }
 
     case 'create_agent': {
-      // Import from existing agent system
-      const { spawnAgent } = await import('@/lib/spawn');
-      const agent = await spawnAgent({
-        task: args.task,
-        model: args.model,
-        executionPolicy: args.executionPolicy,
+      // Import from correct path
+      const { createAgent, getRecommendedAgent } = await import('@/lib/spawn');
+      const recommendedType = getRecommendedAgent(args.task);
+      const agent = await createAgent(recommendedType, {
+        workspaceDir: '/workspace',
       });
-      return { agentId: agent.id, status: 'started' };
+      return { agentId: agent.id, status: 'started', type: recommendedType };
     }
 
     case 'get_agent_status': {
-      const { getAgentServiceManager } = await import('@/lib/spawn');
+      const { getAgentServiceManager } = await import('@/lib/spawn/agent-service-manager');
       const manager = getAgentServiceManager();
       const agent = manager.getAgent(args.agentId);
       if (!agent) {
@@ -320,7 +319,7 @@ async function invokeTool(toolName: string, args: any): Promise<any> {
     }
 
     case 'stop_agent': {
-      const { getAgentServiceManager } = await import('@/lib/spawn');
+      const { getAgentServiceManager } = await import('@/lib/spawn/agent-service-manager');
       const manager = getAgentServiceManager();
       await manager.stopAgent(args.agentId);
       return { success: true };

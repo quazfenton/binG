@@ -95,73 +95,7 @@ export function broadcastToAll(event: string, data: unknown): void {
   }
 }
 
-// ---------------------------------------------------------------------
-// GET - SSE stream handler
-// ---------------------------------------------------------------------
 
-export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams;
-  const channel = searchParams.get('channel') || 'default';
-  const events = searchParams.get('events')?.split(',') || ['notification', 'data', 'status'];
-  
-  const clientId = generateClientId();
-
-  // Create streaming response
-  const stream = new ReadableStream({
-    start(controller) {
-      // Register client
-      if (!CHANNELS.has(channel)) {
-        CHANNELS.set(channel, new Set());
-      }
-      CHANNELS.get(channel)!.add(clientId);
-      CLIENTS.set(clientId, controller);
-
-      // Send initial connection message
-      const initMessage = formatSSEMessage('connected', {
-        clientId,
-        channel,
-        events,
-        timestamp: new Date().toISOString(),
-      });
-      controller.enqueue(new TextEncoder().encode(initMessage));
-
-      // Heartbeat every 30 seconds to keep connection alive
-      const heartbeat = setInterval(() => {
-        try {
-          controller.enqueue(new TextEncoder().encode(': heartbeat\n\n'));
-        } catch {
-          clearInterval(heartbeat);
-        }
-      }, 30000);
-
-      // Clean up on close
-      request.signal.addEventListener('abort', () => {
-        clearInterval(heartbeat);
-        CHANNELS.get(channel)?.delete(clientId);
-        CLIENTS.delete(clientId);
-        try {
-          controller.close();
-        } catch {
-          // Already closed
-        }
-      });
-    },
-    cancel() {
-      // Client disconnected
-      CHANNELS.get(channel)?.delete(clientId);
-      CLIENTS.delete(clientId);
-    },
-  });
-
-  return new Response(stream, {
-    headers: {
-      'Content-Type': 'text/event-stream',
-      'Cache-Control': 'no-cache, no-transform',
-      'Connection': 'keep-alive',
-      'X-Accel-Buffering': 'no',
-    },
-  });
-}
 
 // ---------------------------------------------------------------------
 // POST - Push events to SSE stream (for webhooks/cron/external triggers)
@@ -227,18 +161,80 @@ export async function POST(request: NextRequest) {
 }
 
 // ---------------------------------------------------------------------
-// GET - Channel info and stats
+// GET - Channel info and stats (also handles SSE stream with ?channel= param)
 // ---------------------------------------------------------------------
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
+  const channel = searchParams.get('channel');
   const action = searchParams.get('action');
 
-  // List channels and client counts
+  // If channel param exists, handle SSE stream connection
+  if (channel !== null) {
+    const events = searchParams.get('events')?.split(',') || ['notification', 'data', 'status'];
+    const clientId = generateClientId();
+
+    // Create streaming response
+    const stream = new ReadableStream({
+      start(controller) {
+        // Register client
+        if (!CHANNELS.has(channel)) {
+          CHANNELS.set(channel, new Set());
+        }
+        CHANNELS.get(channel)!.add(clientId);
+        CLIENTS.set(clientId, controller);
+
+        // Send initial connection message
+        const initMessage = formatSSEMessage('connected', {
+          clientId,
+          channel,
+          events,
+          timestamp: new Date().toISOString(),
+        });
+        controller.enqueue(new TextEncoder().encode(initMessage));
+
+        // Heartbeat every 30 seconds
+        const heartbeat = setInterval(() => {
+          try {
+            controller.enqueue(new TextEncoder().encode(': heartbeat\n\n'));
+          } catch {
+            clearInterval(heartbeat);
+          }
+        }, 30000);
+
+        // Clean up on close
+        request.signal.addEventListener('abort', () => {
+          clearInterval(heartbeat);
+          CHANNELS.get(channel)?.delete(clientId);
+          CLIENTS.delete(clientId);
+          try {
+            controller.close();
+          } catch {
+            // Already closed
+          }
+        });
+      },
+      cancel() {
+        CHANNELS.get(channel)?.delete(clientId);
+        CLIENTS.delete(clientId);
+      },
+    });
+
+    return new Response(stream, {
+      headers: {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache, no-transform',
+        'Connection': 'keep-alive',
+        'X-Accel-Buffering': 'no',
+      },
+    });
+  }
+
+  // Handle stats/channels action
   if (action === 'channels' || action === 'stats') {
     const stats: Record<string, number> = {};
-    for (const [channel, clients] of CHANNELS) {
-      stats[channel] = clients.size;
+    for (const [c, clients] of CHANNELS) {
+      stats[c] = clients.size;
     }
 
     return NextResponse.json({
@@ -248,13 +244,14 @@ export async function GET(request: NextRequest) {
     });
   }
 
+  // Default: return service info
   return NextResponse.json({
     service: 'Zine Display SSE',
     version: '1.0.0',
     endpoints: {
       'GET /?channel={name}': 'Connect to SSE stream (channel optional)',
       'POST /': 'Push event to channel or client',
-      'PUT /?action=channels': 'Get channel statistics',
+      'GET /?action=channels': 'Get channel statistics',
     },
     channels: {
       'default': 'General notifications and updates',

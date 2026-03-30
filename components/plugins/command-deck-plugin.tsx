@@ -412,53 +412,47 @@ export default function CommandDeckPlugin() {
     window.dispatchEvent(new CustomEvent("open-integrations", { detail: { provider } }));
   }, []);
 
-  // Execute action
-  const handleExecute = useCallback(async (action: ActionItem) => {
-    const result: ActionResult = {
-      success: false,
-      message: "Connecting to " + action.provider + "...",
-      timestamp: Date.now(),
-    };
+   // Execute action
+   const handleExecute = useCallback(async (action: ActionItem) => {
+     const result: ActionResult = {
+       success: false,
+       message: "Connecting to " + action.provider + "...",
+       timestamp: Date.now(),
+     };
 
-    try {
-      const res = await fetch("/api/integrations/execute", {
-        method: "POST",
-        headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({
-          provider: action.provider,
-          action: action.id.split("-").slice(1).join("_"),
-          params: {},
-        }),
-      });
+     try {
+       const res = await fetch("/api/integrations/execute", {
+         method: "POST",
+         headers: { "Content-Type": "application/json" },
+         body: JSON.stringify({
+           provider: action.provider,
+           action: action.id.split("-").slice(1).join("_"),
+           params: {},
+         }),
+       });
 
-      if (res.ok) {
-        const data = await res.json();
-        result.success = data.success !== false;
-        result.message = data.message || data.output ? "Executed successfully" : "Action triggered";
-        result.data = data.output || data;
-      } else {
-        const err = await res.json().catch(() => ({}));
-        result.message = err.error || "Execution failed (HTTP " + res.status + ")";
-        if (res.status === 401 || err.requiresAuth) {
-          result.message = "Connection required — redirecting to OAuth...";
-          toast.info("Connect " + PROVIDER_META[action.provider]?.name + " to use this action");
-          handleConnect(action.provider);
-          return;
-        }
-      }
-    } catch (err) {
-      result.message = err instanceof Error ? err.message : "Network error";
-    }
+       if (res.ok) {
+         const data = await res.json();
+         result.success = data.success !== false;
+         result.message = data.message || data.output ? "Executed successfully" : "Action triggered";
+         result.data = data.output || data;
+       } else {
+         const err = await res.json().catch(() => ({}));
+         result.message = err.error || "Execution failed (HTTP " + res.status + ")";
+         if (res.status === 401 || err.requiresAuth) {
+           result.message = "Connection required — redirecting to OAuth...";
+           toast.info("Connect " + PROVIDER_META[action.provider]?.name + " to use this action");
+           handleConnect(action.provider);
+           return;
+         }
+       }
+     } catch (err) {
+       result.message = err instanceof Error ? err.message : "Network error";
+     }
 
-    setExecutionLog(prev => [{ action: action.label, result }, ...prev].slice(0, 50));
-    showExecutionResult(result, action.label);
-  }, [handleConnect]);
-
-  // Connect provider
-  const handleConnect = useCallback((provider: string) => {
-    toast.info("Opening OAuth for " + (PROVIDER_META[provider]?.name || provider));
-    window.dispatchEvent(new CustomEvent("open-integrations", { detail: { provider } }));
-  }, []);
+     setExecutionLog(prev => [{ action: action.label, result }, ...prev].slice(0, 50));
+     showExecutionResult(result, action.label);
+   }, [handleConnect]);
 
   // Toggle pin
   const handleTogglePin = useCallback((id: string) => {

@@ -31,9 +31,10 @@ export async function GET(request: NextRequest) {
     }
     
     if (format === 'json') {
+      const metricsData = getPrometheusMetrics();
       return NextResponse.json({
         success: true,
-        metrics,
+        metrics: metricsData,
       });
     }
     

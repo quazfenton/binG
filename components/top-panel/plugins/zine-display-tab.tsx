@@ -299,77 +299,77 @@ function useOAuthNotifications(
     checkConnections();
   }, []);
 
-  // Fetch notifications from API
-  const fetchNotifications = useCallback(async () => {
-    // Debounce to prevent rapid polling
-    const now = Date.now();
-    if (now - lastFetchRef.current < 5000) return;
-    lastFetchRef.current = now;
-
-    try {
-      const res = await fetch('/api/zine-display/notifications');
-      if (!res.ok) return;
-
-      const data = await res.json();
-      if (!data.success || !data.notifications) return;
-
-      const notifs: FetchedNotification[] = data.notifications;
-
-      // Convert to fragments and push as notifications
-      for (const notif of notifs.slice(0, 3)) {
-        const sourceIcons: Record<string, string> = {
-          discord: '💬',
-          gmail: '📧',
-          slack: '💼',
-          github: '🐙',
-          twitter: '🐦',
-        };
-        const icon = sourceIcons[notif.source] || '📌';
-
-        const fragment = createFragment(
-          `${icon} ${notif.content}`,
-          'notification',
-          notif.source,
-          notif.priority === 'high' ? 'drop' : 'fade-in',
-          template,
-          notif.author,
-          { url: notif.url, timestamp: notif.timestamp },
-        );
-
-        pushNotification(fragment, 12000, 'top-right');
-      }
-    } catch (err) {
-      console.log('[Zine] Notification fetch error:', err);
-    }
-  }, [pushNotification, template]);
-
-  // Start/stop polling when enabled and has connected providers
-  useEffect(() => {
-    if (!enabled || connectedProviders.length === 0) {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-      setIsPolling(false);
-      return;
-    }
-
-    // Initial fetch
-    fetchNotifications();
-
-    // Poll every 30 seconds
-    intervalRef.current = setInterval(fetchNotifications, 30000);
-    setIsPolling(true);
-
-    return () => {
-      if (intervalRef.current) {
-        clearInterval(intervalRef.current);
-        intervalRef.current = null;
-      }
-    };
-  }, [enabled, connectedProviders.length, fetchNotifications]);
-
-  return { connectedProviders, isPolling, fetchNow: fetchNotifications };
+   // Fetch notifications from API
+   const fetchNotifications = useCallback(async () => {
+     // Debounce to prevent rapid polling
+     const now = Date.now();
+     if (now - lastFetchRef.current < 5000) return;
+     lastFetchRef.current = now;
+ 
+     try {
+       const res = await fetch('/api/zine-display/notifications');
+       if (!res.ok) return;
+ 
+       const data = await res.json();
+       if (!data.success || !data.notifications) return;
+ 
+       const notifs: FetchedNotification[] = data.notifications;
+ 
+       // Convert to fragments and push as notifications
+       for (const notif of notifs.slice(0, 3)) {
+         const sourceIcons: Record<string, string> = {
+           discord: '💬',
+           gmail: '📧',
+           slack: '💼',
+           github: '🐙',
+           twitter: '🐦',
+         };
+         const icon = sourceIcons[notif.source] || '📌';
+ 
+         const fragment = createFragment(
+           `${icon} ${notif.content}`,
+           'notification',
+           notif.source,
+           notif.priority === 'high' ? 'drop' : 'fade-in',
+           template,
+           notif.author,
+           { url: notif.url, timestamp: notif.timestamp },
+         );
+ 
+         pushNotification(fragment, 12000, 'top-right');
+       }
+     } catch (err) {
+       console.log('[Zine] Notification fetch error:', err);
+     }
+   }, [pushNotification, template]);
+ 
+   // Start/stop polling when enabled and has connected providers
+   useEffect(() => {
+     if (!enabled || connectedProviders.length === 0) {
+       if (intervalRef.current) {
+         clearInterval(intervalRef.current);
+         intervalRef.current = null;
+       }
+       setIsOAuthPolling(false);
+       return;
+     }
+ 
+     // Initial fetch
+     fetchNotifications();
+ 
+     // Poll every 30 seconds
+     intervalRef.current = setInterval(fetchNotifications, 30000);
+     setIsOAuthPolling(true);
+ 
+     return () => {
+       if (intervalRef.current) {
+         clearInterval(intervalRef.current);
+         intervalRef.current = null;
+       }
+     };
+   }, [enabled, connectedProviders.length, fetchNotifications]);
+ 
+   return { connectedProviders, isPolling: isOAuthPolling, fetchNow: fetchNotifications };
 }
 
 // ---------------------------------------------------------------------------
@@ -468,91 +468,91 @@ function useSSEStream(
 }
 
 function useDataSources(
-  template: ZineTemplate,
-  onData: (fragments: ZineFragment[]) => void,
-) {
-  const managerRef = useRef<DataSourceManager | null>(null);
-  const [sources, setSources] = useState<DataSourceConfig[]>([]);
-  const [isPolling, setIsPolling] = useState(false);
-  const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
-  const onDataRef = useRef(onData);
-  onDataRef.current = onData;
-
-  useEffect(() => {
-    const mgr = new DataSourceManager(
-      (frags) => onDataRef.current(frags),
-      template,
-    );
-    managerRef.current = mgr;
-
-    // Load presets
-    for (const preset of SOURCE_PRESETS) {
-      mgr.addSource({ ...preset });
-    }
-    setSources(mgr.getSources());
-
-    return () => {
-      if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
-      mgr.destroy();
-    };
-    // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, []);
-
-  useEffect(() => {
-    managerRef.current?.setTemplate(template);
-  }, [template]);
-
-  // Start/stop continuous polling for all enabled sources
-  // Use ref to track polling state to avoid stale closure issues
-  const isPollingRef = useRef(false);
-  
-  const togglePolling = useCallback(() => {
-    if (isPollingRef.current) {
-      if (pollingIntervalRef.current) {
-        clearInterval(pollingIntervalRef.current);
-        pollingIntervalRef.current = null;
-      }
-      isPollingRef.current = false;
-      setIsPolling(false);
-    } else {
-      // Poll every 30 seconds
-      pollingIntervalRef.current = setInterval(() => {
-        const enabledSources = managerRef.current?.getSources().filter(s => s.enabled) || [];
-        for (const source of enabledSources) {
-          managerRef.current?.fetchSource(source.id);
-        }
-      }, 30000);
-      isPollingRef.current = true;
-      setIsPolling(true);
-      // Initial fetch
-      const enabledSources = managerRef.current?.getSources().filter(s => s.enabled) || [];
-      for (const source of enabledSources) {
-        managerRef.current?.fetchSource(source.id);
-      }
-    }
-  }, []);
-
-  const addSource = useCallback((config: DataSourceConfig) => {
-    managerRef.current?.addSource(config);
-    setSources(managerRef.current?.getSources() ?? []);
-  }, []);
-
-  const removeSource = useCallback((id: string) => {
-    managerRef.current?.removeSource(id);
-    setSources(managerRef.current?.getSources() ?? []);
-  }, []);
-
-  const toggleSource = useCallback((id: string) => {
-    managerRef.current?.toggleSource(id);
-    setSources(managerRef.current?.getSources() ?? []);
-  }, []);
-
-  const fetchNow = useCallback((id: string) => {
-    managerRef.current?.fetchSource(id);
-  }, []);
-
-  return { sources, addSource, removeSource, toggleSource, fetchNow, isPolling, togglePolling };
-}
+   template: ZineTemplate,
+   onData: (fragments: ZineFragment[]) => void,
+ ) {
+   const managerRef = useRef<DataSourceManager | null>(null);
+   const [sources, setSources] = useState<DataSourceConfig[]>([]);
+   const [isDataSourcePolling, setIsDataSourcePolling] = useState(false);
+   const pollingIntervalRef = useRef<NodeJS.Timeout | null>(null);
+   const onDataRef = useRef(onData);
+   onDataRef.current = onData;
+ 
+   useEffect(() => {
+     const mgr = new DataSourceManager(
+       (frags) => onDataRef.current(frags),
+       template,
+     );
+     managerRef.current = mgr;
+ 
+     // Load presets
+     for (const preset of SOURCE_PRESETS) {
+       mgr.addSource({ ...preset });
+     }
+     setSources(mgr.getSources());
+ 
+     return () => {
+       if (pollingIntervalRef.current) clearInterval(pollingIntervalRef.current);
+       mgr.destroy();
+     };
+     // eslint-disable-next-line react-hooks/exhaustive-deps
+   }, []);
+ 
+   useEffect(() => {
+     managerRef.current?.setTemplate(template);
+   }, [template]);
+ 
+   // Start/stop continuous polling for all enabled sources
+   // Use ref to track polling state to avoid stale closure issues
+   const isPollingRef = useRef(false);
+   
+   const togglePolling = useCallback(() => {
+     if (isPollingRef.current) {
+       if (pollingIntervalRef.current) {
+         clearInterval(pollingIntervalRef.current);
+         pollingIntervalRef.current = null;
+       }
+       isPollingRef.current = false;
+       setIsDataSourcePolling(false);
+     } else {
+       // Poll every 30 seconds
+       pollingIntervalRef.current = setInterval(() => {
+         const enabledSources = managerRef.current?.getSources().filter(s => s.enabled) || [];
+         for (const source of enabledSources) {
+           managerRef.current?.fetchSource(source.id);
+         }
+       }, 30000);
+       isPollingRef.current = true;
+       setIsDataSourcePolling(true);
+       // Initial fetch
+       const enabledSources = managerRef.current?.getSources().filter(s => s.enabled) || [];
+       for (const source of enabledSources) {
+         managerRef.current?.fetchSource(source.id);
+       }
+     }
+   }, []);
+ 
+   const addSource = useCallback((config: DataSourceConfig) => {
+     managerRef.current?.addSource(config);
+     setSources(managerRef.current?.getSources() ?? []);
+   }, []);
+ 
+   const removeSource = useCallback((id: string) => {
+     managerRef.current?.removeSource(id);
+     setSources(managerRef.current?.getSources() ?? []);
+   }, []);
+ 
+   const toggleSource = useCallback((id: string) => {
+     managerRef.current?.toggleSource(id);
+     setSources(managerRef.current?.getSources() ?? []);
+   }, []);
+ 
+   const fetchNow = useCallback((id: string) => {
+     managerRef.current?.fetchSource(id);
+   }, []);
+ 
+   return { sources, addSource, removeSource, toggleSource, fetchNow, isPolling: isDataSourcePolling, togglePolling };
+ }
 
 // ---------------------------------------------------------------------------
 // FragmentRenderer — renders a single fragment
@@ -1744,7 +1744,7 @@ export default function ZineDisplayTab() {
 
   // OAuth notifications - fetch from connected providers
   const [oauthNotificationsEnabled, setOauthNotificationsEnabled] = useState(false);
-  const { connectedProviders, isPolling, fetchNow: fetchOAuthNotifications } = useOAuthNotifications(
+  const { connectedProviders, isPolling: oauthIsPolling, fetchNow: fetchOAuthNotifications } = useOAuthNotifications(
     pushNotification,
     template,
     oauthNotificationsEnabled,
@@ -1769,7 +1769,7 @@ export default function ZineDisplayTab() {
     [template.maxVisible],
   );
 
-  const { sources, addSource, removeSource, toggleSource, fetchNow, isPolling, togglePolling } =
+  const { sources, addSource, removeSource, toggleSource, fetchNow, isPolling: sourceIsPolling, togglePolling } =
     useDataSources(template, addFragments);
 
   // Load sample content on first mount
@@ -1944,7 +1944,7 @@ export default function ZineDisplayTab() {
                     }`}
                     title={oauthNotificationsEnabled ? "OAuth Notifications ON (click to disable)" : "Enable OAuth Notifications (Discord, Gmail, Slack, GitHub)"}
                   >
-                    <Bell className={`w-3 h-3 ${isPolling ? 'animate-pulse' : ''}`} />
+                    <Bell className={`w-3 h-3 ${oauthIsPolling ? 'animate-pulse' : ''}`} />
                   </Button>
                   {oauthNotificationsEnabled && connectedProviders.length > 0 && (
                     <Badge
@@ -1981,15 +1981,15 @@ export default function ZineDisplayTab() {
                     size="sm"
                     onClick={togglePolling}
                     className={`h-6 w-6 p-0 ${
-                      isPolling
+                      sourceIsPolling
                         ? "text-cyan-400"
                         : "text-white/40 hover:text-white/80"
                     }`}
-                    title={isPolling ? "Stop polling" : "Start continuous polling (30s interval)"}
+                    title={sourceIsPolling ? "Stop polling" : "Start continuous polling (30s interval)"}
                   >
-                    <RefreshCw className={`w-3 h-3 ${isPolling ? 'animate-spin' : ''}`} />
+                    <RefreshCw className={`w-3 h-3 ${sourceIsPolling ? 'animate-spin' : ''}`} />
                   </Button>
-                  {isPolling && (
+                  {sourceIsPolling && (
                     <Badge
                       variant="secondary"
                       className="text-[8px] h-4 px-1 bg-cyan-500/10 text-cyan-400/70 border border-cyan-400/20"

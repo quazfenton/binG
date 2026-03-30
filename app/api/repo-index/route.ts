@@ -64,40 +64,63 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       error: 'Invalid action. Use "file" or "directory"',
     }, { status: 400 });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[RepoIndex] POST /api/repo-index/index failed', { message });
     return NextResponse.json({
-      error: error.message || 'Failed to index',
+      error: 'Internal server error',
     }, { status: 500 });
   }
 }
 
 /**
- * GET /api/repo-index/search
+ * GET /api/repo-index/search or /api/repo-index?action=stats
  *
- * Search code by keyword or symbol
+ * Search code by keyword or symbol, or get index stats
  */
 export async function GET(request: NextRequest) {
   try {
+    const { searchParams } = new URL(request.url);
+    const action = searchParams.get('action');
+    const query = searchParams.get('q');
+    
+    // Handle stats action
+    if (action === 'stats') {
+      const stats = repoIndexer.getIndexStats();
+      return NextResponse.json({
+        success: true,
+        stats,
+      });
+    }
+
+    // Search action - require authentication
     const session = await auth0.getSession(request);
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
-    const { searchParams } = new URL(request.url);
-    const query = searchParams.get('q');
+    if (!query) {
+      return NextResponse.json({ error: 'Query parameter "q" required or use action=stats' }, { status: 400 });
+    }
+
     const type = searchParams.get('type') || 'keyword';
     const language = searchParams.get('language') || undefined;
     const symbolType = searchParams.get('symbolType') || undefined;
     const limit = parseInt(searchParams.get('limit') || '50');
 
-    if (!query) {
-      return NextResponse.json({ error: 'Query parameter "q" required' }, { status: 400 });
-    }
-
     let results;
 
     if (type === 'symbol') {
-      results = repoIndexer.searchSymbol(query, { type: symbolType as any });
+      // Symbol search - honor language and limit filters
+      const symbolResults = repoIndexer.searchSymbol(query, { type: symbolType as any });
+      
+      // Filter by language if specified
+      let filtered = language
+        ? symbolResults.filter(r => r.file.language === language)
+        : symbolResults;
+      
+      // Apply limit
+      results = filtered.slice(0, limit);
     } else {
       results = repoIndexer.search(query, {
         language,
@@ -119,29 +142,11 @@ export async function GET(request: NextRequest) {
         matches: r.matches.slice(0, 5), // Limit matches in response
       })),
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[RepoIndex] GET /api/repo-index failed', { message });
     return NextResponse.json({
-      error: error.message || 'Search failed',
-    }, { status: 500 });
-  }
-}
-
-/**
- * GET /api/repo-index/stats
- *
- * Get index statistics
- */
-export async function GET_STATS() {
-  try {
-    const stats = repoIndexer.getIndexStats();
-
-    return NextResponse.json({
-      success: true,
-      stats,
-    });
-  } catch (error: any) {
-    return NextResponse.json({
-      error: error.message || 'Failed to get stats',
+      error: 'Request failed',
     }, { status: 500 });
   }
 }
@@ -151,7 +156,7 @@ export async function GET_STATS() {
  *
  * Clear index
  */
-export async function DELETE() {
+export async function DELETE(request: NextRequest) {
   try {
     const session = await auth0.getSession(request);
     if (!session?.user) {
@@ -164,9 +169,11 @@ export async function DELETE() {
       success: true,
       message: 'Index cleared',
     });
-  } catch (error: any) {
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.error('[RepoIndex] DELETE /api/repo-index failed', { message });
     return NextResponse.json({
-      error: error.message || 'Failed to clear index',
+      error: 'Internal server error',
     }, { status: 500 });
   }
 }

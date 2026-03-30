@@ -60,9 +60,18 @@ export async function GET(request: NextRequest) {
           const rows = db.prepare(query).all(userId) as any[];
 
           for (const row of rows.reverse()) {
+            // Safely parse payload with error handling
+            let parsedPayload: any;
+            try {
+              parsedPayload = JSON.parse(row.payload);
+            } catch {
+              logger.warn('Skipping event with invalid payload', { eventId: row.id });
+              continue; // Skip this event but continue with others
+            }
+
             const event = {
               ...row,
-              payload: JSON.parse(row.payload),
+              payload: parsedPayload,
             };
 
             // Apply filters
@@ -72,7 +81,7 @@ export async function GET(request: NextRequest) {
             controller.enqueue(
               encoder.encode(`data: ${JSON.stringify({ type: 'event', event })}\n\n`)
             );
-            
+
             // Update cursor to last event's timestamp
             lastEventTimestamp = row.created_at;
           }
@@ -85,14 +94,25 @@ export async function GET(request: NextRequest) {
           try {
             const db = getDatabase();
             let query = 'SELECT * FROM events WHERE user_id = ? AND created_at > ? ORDER BY created_at ASC';
-            
+
             const since = lastEventTimestamp || new Date(0).toISOString();
             const rows = db.prepare(query).all(userId, since) as any[];
 
             for (const row of rows) {
+              // Safely parse payload with error handling
+              let parsedPayload: any;
+              try {
+                parsedPayload = JSON.parse(row.payload);
+              } catch {
+                logger.warn('Skipping event with invalid payload', { eventId: row.id });
+                // Still update cursor to avoid re-processing corrupt event
+                lastEventTimestamp = row.created_at;
+                continue;
+              }
+
               const event = {
                 ...row,
-                payload: JSON.parse(row.payload),
+                payload: parsedPayload,
               };
 
               // Apply filters
@@ -146,6 +166,7 @@ export async function GET(request: NextRequest) {
 export function broadcastEvent(userId: string, event: any): void {
   const userConnections = sseConnections.get(userId) || [];
   const encoder = new TextEncoder();
+  const deadConnections: typeof userConnections = [];
 
   for (const connection of userConnections) {
     // Apply filters
@@ -157,8 +178,17 @@ export function broadcastEvent(userId: string, event: any): void {
         encoder.encode(`data: ${JSON.stringify({ type: 'event', event })}\n\n`)
       );
     } catch (error: any) {
-      logger.error('Failed to broadcast event', { error: error.message });
+      logger.error('Failed to broadcast event, removing dead connection', { error: error.message });
+      // Mark connection as dead for cleanup
+      deadConnections.push(connection);
     }
+  }
+
+  // Remove dead connections to prevent repeated failures
+  if (deadConnections.length > 0) {
+    const remaining = userConnections.filter(c => !deadConnections.includes(c));
+    sseConnections.set(userId, remaining);
+    logger.debug('Removed dead SSE connections', { count: deadConnections.length });
   }
 }
 
@@ -183,7 +213,9 @@ export async function POST(request: NextRequest) {
 
     broadcastEvent(session.user.sub, event);
 
-    return new Response(JSON.stringify({ success: true }));
+    return new Response(JSON.stringify({ success: true }), {
+      headers: { 'Content-Type': 'application/json' },
+    });
   } catch (error: any) {
     // Log detailed error server-side, return generic message to client
     logger.error('Broadcast error', { error: error.message });

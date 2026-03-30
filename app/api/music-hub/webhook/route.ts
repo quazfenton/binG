@@ -97,7 +97,7 @@ async function logWebhookEvent(event: any): Promise<void> {
 
 // POST - Handle webhook events
 export async function POST(request: NextRequest) {
-  const clientId = request.headers.get('x-forwarded-for') || request.ip || 'unknown';
+  const clientId = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
   const rateLimit = checkRateLimit(`webhook:${clientId}`);
 
   const headers = {

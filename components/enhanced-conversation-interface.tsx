@@ -35,7 +35,7 @@ import { voiceService } from "@/lib/voice/voice-service";
 import { setCurrentMode, detectNewProjectFolder } from "@/lib/chat/mode-manager";
 import { getOrCreateAnonymousSessionId, buildApiHeaders } from "@/lib/utils";
 import { generateSessionName, checkFileConflicts } from "@/lib/session-naming";
-import { generateSecureId } from "@/lib/utils/crypto-random";
+import { secureRandomString } from "@/lib/utils/crypto-random";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 import { createInputContext, processSafeContent, shouldGenerateDiffsForContext } from "@/lib/input-response-separator";
@@ -227,10 +227,10 @@ export function EnhancedConversationInterface({
 
   // Handle new chat
   const handleNewChat = useCallback(() => {
-    const newId = `chat-${generateSecureId(8)}`;
+    const newId = `chat-${secureRandomString(8)}`;
     setCurrentConversationId(newId);
-    setFilesystemSessionId(generateSecureId(16));
-    persistFilesystemScope(newId, generateSecureId(16));
+    setFilesystemSessionId(secureRandomString(16));
+    persistFilesystemScope(newId, secureRandomString(16));
     toast.success("New conversation started");
   }, []);
 

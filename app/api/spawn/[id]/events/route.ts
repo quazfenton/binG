@@ -77,10 +77,14 @@ export async function GET(
           const subscription = await manager.subscribe(id);
           
           // Handle both subscription object { iterator, unsubscribe } and plain iterator
-          if (subscription && typeof subscription === 'object' && 'unsubscribe' in subscription) {
-            eventIterator = subscription.iterator as AsyncIterableIterator<any>;
-            unsubscribe = subscription.unsubscribe as () => void;
-          } else {
+          if (subscription && typeof subscription === 'object') {
+            if ('iterator' in subscription && 'unsubscribe' in subscription) {
+              eventIterator = (subscription as any).iterator as AsyncIterableIterator<any>;
+              unsubscribe = (subscription as any).unsubscribe as () => void;
+            } else if (Symbol.asyncIterator in subscription) {
+              eventIterator = subscription as AsyncIterableIterator<any>;
+            }
+          } else if (subscription && Symbol.asyncIterator in subscription) {
             eventIterator = subscription as AsyncIterableIterator<any>;
           }
 

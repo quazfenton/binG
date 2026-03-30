@@ -47,7 +47,7 @@ import {
   Palette,
   Sparkles,
   Activity,
-  Workflow,
+  Bookmark,
 } from "lucide-react";
 import WorkflowsTab from "./plugins/n8n-workflows-tab";
 import OrchestrationTab from "./plugins/orchestration-tab";
@@ -64,6 +64,7 @@ import CodePlaygroundTab from "./plugins/code-playground-tab";
 import BroadwayDealHunterTab from "./top-panel/plugins/broadway-deal-hunter-tab";
 import ModelComparisonTab from "./top-panel/plugins/model-comparison-tab";
 import ZineDisplayTab from "./top-panel/plugins/zine-display-tab";
+import { BookmarksCurationPlugin } from "@/components/bookmarks/bookmarks-curation-plugin";
 
 // ---------------------------------------------------------------------------
 // Shared data
@@ -758,6 +759,13 @@ export default function TopPanel() {
                   <TabsContent value="events" className="h-full mt-0">
                     <TabErrorBoundary tabName="Events Panel">
                       <EventsPanel />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  {/* Bookmarks Curation */}
+                  <TabsContent value="bookmarks" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Bookmarks">
+                      <BookmarksCurationPlugin />
                     </TabErrorBoundary>
                   </TabsContent>
 

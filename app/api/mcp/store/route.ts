@@ -27,15 +27,11 @@ export async function GET(request: NextRequest) {
     const source = searchParams.get('source') as any;
     const installed = searchParams.get('installed');
 
-    let servers = mcpStoreService.getAllServers();
-
-    // Apply filters
-    if (query) {
-      servers = mcpStoreService.searchServers(query, {
-        source: source || undefined,
-        installed: installed ? installed === 'true' : undefined,
-      });
-    }
+    // Always apply filters, even when query is empty
+    const servers = mcpStoreService.searchServers(query, {
+      source: source || undefined,
+      installed: installed ? installed === 'true' : undefined,
+    });
 
     return NextResponse.json({
       success: true,
@@ -46,44 +42,6 @@ export async function GET(request: NextRequest) {
     logger.error('Failed to list MCP servers:', error);
     return NextResponse.json(
       { error: 'Failed to list servers' },
-      { status: 500 }
-    );
-  }
-}
-
-// ============================================================================
-// POST /api/mcp/store/sync - Sync with Smithery
-// ============================================================================
-
-export async function POST(request: NextRequest) {
-  try {
-    // Auth check
-    const session = await auth0.getSession(request);
-    if (!session?.user) {
-      return NextResponse.json(
-        { error: 'Authentication required' },
-        { status: 401 }
-      );
-    }
-
-    const body = await request.json();
-    const { query, limit, verified } = body || {};
-
-    const servers = await mcpStoreService.syncWithSmithery({
-      query,
-      limit,
-      verified,
-    });
-
-    return NextResponse.json({
-      success: true,
-      servers,
-      count: servers.length,
-    });
-  } catch (error: any) {
-    logger.error('Failed to sync with Smithery:', error);
-    return NextResponse.json(
-      { error: error.message || 'Failed to sync with Smithery' },
       { status: 500 }
     );
   }
@@ -114,12 +72,18 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const success = await mcpStoreService.installServer(serverId, {
+    const result = await mcpStoreService.installServer(serverId, {
       mcpUrl,
       apiKeys,
     });
 
-    if (!success) {
+    if (!result.success) {
+      if (result.reason === 'not_found') {
+        return NextResponse.json(
+          { error: 'Server not found' },
+          { status: 404 }
+        );
+      }
       return NextResponse.json(
         { error: 'Failed to install server' },
         { status: 500 }
@@ -161,9 +125,15 @@ export async function DELETE(request: NextRequest) {
       );
     }
 
-    const success = await mcpStoreService.uninstallServer(serverId);
+    const result = await mcpStoreService.uninstallServer(serverId);
 
-    if (!success) {
+    if (!result.success) {
+      if (result.reason === 'not_found') {
+        return NextResponse.json(
+          { error: 'Server not found' },
+          { status: 404 }
+        );
+      }
       return NextResponse.json(
         { error: 'Failed to uninstall server' },
         { status: 500 }

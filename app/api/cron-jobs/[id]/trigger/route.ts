@@ -66,14 +66,14 @@ export async function POST(
     const { id } = await params;
     const auth = await resolveFilesystemOwner(request);
     
-    if (!auth.isAuthenticated || !auth.userId) {
+    if (!auth.isAuthenticated || !auth.ownerId) {
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
       );
     }
 
-    if (auth.userId.startsWith('anon:')) {
+    if (auth.ownerId.startsWith('anon:')) {
       return NextResponse.json(
         { error: 'Authentication required' },
         { status: 401 }
@@ -82,7 +82,7 @@ export async function POST(
 
     // Verify task exists and belongs to user
     const existingTask = await fetchSchedulerTask(id);
-    if (!existingTask || existingTask.ownerId !== auth.userId) {
+    if (!existingTask || existingTask.ownerId !== auth.ownerId) {
       return NextResponse.json(
         { error: 'Cron job not found' },
         { status: 404 }
@@ -99,7 +99,7 @@ export async function POST(
     }
 
     // Log only non-sensitive metadata (avoid logging output/error which may contain sensitive data)
-    console.log(`[CronJobs API] Triggered job ${id} for user ${auth.userId}`, {
+    console.log(`[CronJobs API] Triggered job ${id} for user ${auth.ownerId}`, {
       success: result.success,
       duration: result.duration,
     });

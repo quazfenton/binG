@@ -4,13 +4,26 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
+import { sanitizeUrlInput } from "@/lib/utils/sanitize";
 
 // Helper function for recursive RSS fetch with redirect validation
 async function fetchRssWithValidation(url: string, blockedPatterns: string[]): Promise<NextResponse> {
+  // Sanitize input to handle edge cases like null bytes and unusual encoding
+  let sanitizedUrl: string;
+  try {
+    sanitizedUrl = sanitizeUrlInput(url);
+  } catch (sanitizeError: any) {
+    console.error('[RSS-Proxy] URL sanitization failed:', sanitizeError.message);
+    return NextResponse.json(
+      { error: sanitizeError.message || 'URL sanitization failed' },
+      { status: 400 }
+    );
+  }
+
   // Validate URL
   let parsedUrl: URL;
   try {
-    parsedUrl = new URL(url);
+    parsedUrl = new URL(sanitizedUrl);
   } catch {
     return NextResponse.json(
       { error: "Invalid URL format" },
@@ -65,7 +78,7 @@ async function fetchRssWithValidation(url: string, blockedPatterns: string[]): P
   }
 
   // Fetch with manual redirect
-  const response = await fetch(url, {
+  const response = await fetch(sanitizedUrl, {
     headers: {
       "User-Agent": "binG Zine Engine RSS Reader/1.0",
       "Accept": "application/rss+xml, application/xml, text/xml, application/atom+xml",
