@@ -32,8 +32,6 @@ import {
   Cpu,
   GitCommit,
   Mail,
-  Monitor,
-  Newspaper,
   Share2,
   RefreshCw,
   Code,
