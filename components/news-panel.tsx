@@ -127,25 +127,42 @@ const LAYOUT_STORAGE_KEY = 'bing-news-layout-';
 // Fetch images for articles without cover images
 async function fetchMissingImages(articles: NewsArticle[]): Promise<Map<string, string[]>> {
   const articlesNeedingImages = articles.filter(a => !a.imageUrl);
-  
+
   if (articlesNeedingImages.length === 0) {
     return new Map();
   }
-  
+
+  // Prepare articles with required fields
+  const articlesForSearch = articlesNeedingImages
+    .filter(a => a.id && a.title)
+    .map(a => ({ id: a.id, title: a.title }));
+
+  if (articlesForSearch.length === 0) {
+    console.warn('[NewsPanel] No valid articles for image search');
+    return new Map();
+  }
+
   try {
     const response = await fetch('/api/news/image-search', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
-        articles: articlesNeedingImages.map(a => ({ id: a.id, title: a.title }))
+        articles: articlesForSearch
       }),
     });
-    
-    if (!response.ok) return new Map();
-    
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({}));
+      console.warn('[NewsPanel] Image search failed:', response.status, errorData.error);
+      return new Map();
+    }
+
     const data = await response.json();
-    if (!data.success) return new Map();
-    
+    if (!data.success) {
+      console.warn('[NewsPanel] Image search returned error:', data.error);
+      return new Map();
+    }
+
     const imageMap = new Map<string, string[]>();
     for (const result of data.results || []) {
       imageMap.set(result.id, result.images || []);

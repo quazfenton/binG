@@ -24,10 +24,11 @@ import { Badge } from "@/components/ui/badge";
 import {
   Play, Pause, SkipForward, SkipBack, Volume2, VolumeX,
   Shuffle, Repeat, Heart, Maximize2, Minimize2, ListMusic,
-  Activity, Zap, Radio, Disc, Waves, RefreshCw, ExternalLink,
-  Download, Layers, Grid3X3, Loader2, AlertCircle, Wifi,
+  Activity, Zap, Radio, Disc, RefreshCw, ExternalLink,
+  Download, Layers, Loader2, AlertCircle, Wifi,
   WifiOff, CheckCircle, Signal, Database, Trash2, Settings, Info,
 } from "lucide-react";
+
 import { toast } from "sonner";
 import { PersistentCache } from "@/lib/cache";
 
@@ -55,6 +56,8 @@ interface Song {
   artist: string;
   album: string;
   videoId: string;
+  watchUrl?: string;
+  embedUrl?: string;
   duration: number;
   thumbnailUrl: string;
   liked: boolean;
@@ -72,6 +75,9 @@ interface Album {
   songs: Song[];
   isNew: boolean;
   isFeatured: boolean;
+  discovered_at?: string;
+  link?: string;
+  videos?: string[];
 }
 
 interface PlaylistConfig {
@@ -79,19 +85,7 @@ interface PlaylistConfig {
   lastUpdated: string;
   webhookUrl?: string;
   autoUpdate: boolean;
-}
-
-interface VisualizerMode {
-  id: string;
-  name: string;
-  icon: React.ComponentType<{ className?: string }>;
-  description: string;
-}
-
-interface LoadError {
-  type: 'network' | 'parse' | 'timeout' | 'unknown';
-  message: string;
-  recoverable: boolean;
+  playlists?: Album[]; // New API returns playlists array
 }
 
 // ==================== Cache Configuration (Memory-Safe) ====================
@@ -100,7 +94,7 @@ const thumbnailCache = new PersistentCache('music_hub_thumb_', 7 * 24 * 60 * 60 
 const metadataCache = new PersistentCache('music_hub_meta_', 24 * 60 * 60 * 1000);
 const playbackCache = new PersistentCache('music_hub_playback_', 30 * 24 * 60 * 60 * 1000);
 
-// Memory cache with size limit
+// Memory cache with size limit for active thumbnails
 class MemoryCache<K, V> {
   private cache = new Map<K, V>();
   private maxSize: number;
@@ -140,34 +134,26 @@ const activeThumbnailCache = new MemoryCache<string, string>(50);
 
 // ==================== Constants ====================
 
-const VISUALIZER_MODES: VisualizerMode[] = [
-  { id: "ambient", name: "Ambient Flow", icon: Waves, description: "Smooth color transitions" },
-  { id: "pulse", name: "Neural Pulse", icon: Activity, description: "Rhythmic beat detection" },
-  { id: "particles", name: "Data Particles", icon: Zap, description: "Reactive particle system" },
-  { id: "grid", name: "Digital Grid", icon: Grid3X3, description: "Retro futuristic grid" },
-];
-
 const EMBED_SOURCES = [
   {
-    id: 'youtube-direct',
-    name: 'YouTube Direct',
-    buildUrl: (videoId: string, autoplay: boolean) =>
-      `https://www.youtube.com/embed/${videoId}?autoplay=${autoplay ? 1 : 0}&rel=0&modestbranding=1&controls=1&enablejsapi=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`,
+    id: 'primary',
+    name: 'Primary',
+    buildUrl: (videoId: string, autoplay: boolean, playlistId?: string, index?: number) => {
+      // Try direct video embed first (more reliable than playlist embed)
+      const baseUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1&controls=1&enablejsapi=1`;
+      return autoplay ? `${baseUrl}&autoplay=1` : baseUrl;
+    },
     priority: 1,
   },
   {
-    id: 'youtube-alt',
-    name: 'YouTube Alternative',
-    buildUrl: (videoId: string, autoplay: boolean) =>
-      `https://www.youtube.com/embed/${videoId}?autoplay=${autoplay ? 1 : 0}&rel=0&controls=1&disablekb=1&fs=0&iv_load_policy=3&modestbranding=1&origin=${typeof window !== 'undefined' ? window.location.origin : ''}`,
+    id: 'with-playlist',
+    name: 'With Playlist',
+    buildUrl: (videoId: string, autoplay: boolean, playlistId?: string, index?: number) => {
+      // Fallback to playlist embed
+      const baseUrl = `https://www.youtube.com/embed/videoseries?list=${playlistId}&index=${index || 1}&rel=0&modestbranding=1&controls=1&enablejsapi=1`;
+      return autoplay ? `${baseUrl}&autoplay=1` : baseUrl;
+    },
     priority: 2,
-  },
-  {
-    id: 'youtube-shorts',
-    name: 'YouTube Shorts',
-    buildUrl: (videoId: string, autoplay: boolean) =>
-      `https://www.youtube.com/shorts/${videoId}?autoplay=${autoplay ? 1 : 0}`,
-    priority: 3,
   },
 ];
 
@@ -441,6 +427,8 @@ CachedThumbnail.displayName = 'CachedThumbnail';
 
 interface YouTubePlayerProps {
   videoId: string;
+  playlistId?: string;
+  songIndex?: number; // 1-based index for playlist position
   onReady: () => void;
   onError: (error: string, source: string) => void;
   onSourceChange: (source: string) => void;
@@ -451,6 +439,8 @@ interface YouTubePlayerProps {
 
 const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
   videoId,
+  playlistId,
+  songIndex = 1,
   onReady,
   onError,
   onSourceChange,
@@ -467,6 +457,11 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
 
   const MAX_RETRIES_PER_SOURCE = 3;
   const LOAD_TIMEOUT = 15000;
+
+  // Log videoId changes for debugging
+  useEffect(() => {
+    console.log('[YouTubePlayer] Video ID:', videoId, 'Playlist ID:', playlistId, 'Autoplay:', autoplay, 'IsPlaying:', isPlaying);
+  }, [videoId, playlistId, autoplay, isPlaying]);
 
   const getRetryDelay = useCallback((attempt: number): number => {
     return Math.min(1000 * Math.pow(2, attempt), 10000);
@@ -500,6 +495,7 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
 
   // Reset on videoId change
   useEffect(() => {
+    console.log('[YouTubePlayer] Video ID changed:', videoId);
     setIsLoading(true);
     setCurrentSourceIndex(0);
     setLoadAttempts({ attempts: 0, lastError: '' });
@@ -508,8 +504,10 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
       clearTimeout(loadTimeoutRef.current);
     }
 
+    // Longer timeout for playlist embeds
     loadTimeoutRef.current = setTimeout(() => {
       if (isLoading) {
+        console.warn('[YouTubePlayer] Load timeout after', LOAD_TIMEOUT, 'ms');
         handleLoadError('Load timeout');
       }
     }, LOAD_TIMEOUT);
@@ -519,7 +517,7 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
         clearTimeout(loadTimeoutRef.current);
       }
     };
-  }, [videoId]);
+  }, [videoId, playlistId, songIndex]);
 
   const handleLoadError = useCallback((errorMessage: string) => {
     console.warn(`[YouTubePlayer] Error: ${errorMessage}, Source: ${EMBED_SOURCES[currentSourceIndex].id}`);
@@ -549,17 +547,70 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
   }, [currentSourceIndex, loadAttempts, getRetryDelay, onError, onSourceChange]);
 
   const handleIframeLoad = useCallback(() => {
-    setIsLoading(false);
-    if (loadTimeoutRef.current) {
-      clearTimeout(loadTimeoutRef.current);
-      loadTimeoutRef.current = null;
-    }
-    onReady();
+    console.log('[YouTubePlayer] Iframe element loaded, checking content...');
+    
+    // Give YouTube time to render, then check if content actually loaded
+    setTimeout(() => {
+      if (iframeRef.current) {
+        const iframe = iframeRef.current;
+        // Check if iframe has content or if it's showing an error
+        try {
+          // If we can access the iframe document, check for YouTube content
+          const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
+          if (iframeDoc) {
+            const hasYouTubeContent = iframeDoc.querySelector('ytd-player') || 
+                                       iframeDoc.querySelector('#movie_player') ||
+                                       iframeDoc.title?.includes('YouTube');
+            
+            if (hasYouTubeContent) {
+              console.log('[YouTubePlayer] YouTube content detected');
+              setIsLoading(false);
+              if (loadTimeoutRef.current) {
+                clearTimeout(loadTimeoutRef.current);
+                loadTimeoutRef.current = null;
+              }
+              onReady();
+            } else {
+              console.warn('[YouTubePlayer] No YouTube content detected, may be blocked');
+              handleLoadError('Content blocked - no YouTube player detected');
+            }
+          } else {
+            // Can't access iframe content (cross-origin), assume success
+            console.log('[YouTubePlayer] Cannot check iframe content (cross-origin), assuming success');
+            setIsLoading(false);
+            if (loadTimeoutRef.current) {
+              clearTimeout(loadTimeoutRef.current);
+              loadTimeoutRef.current = null;
+            }
+            onReady();
+          }
+        } catch (err) {
+          // Cross-origin restriction, assume success
+          console.log('[YouTubePlayer] Cross-origin access restricted, assuming success');
+          setIsLoading(false);
+          if (loadTimeoutRef.current) {
+            clearTimeout(loadTimeoutRef.current);
+            loadTimeoutRef.current = null;
+          }
+          onReady();
+        }
+      }
+    }, 2000); // Wait 2 seconds for YouTube to render
   }, [onReady]);
 
+  const handleIframeError = useCallback(() => {
+    console.error('[YouTubePlayer] Iframe failed to load');
+    handleLoadError('Iframe failed to load - check browser console for details');
+  }, []);
+
   const currentSource = EMBED_SOURCES[currentSourceIndex];
-  const embedUrl = currentSource.buildUrl(videoId, autoplay && isPlaying);
-  const iframeKey = `${videoId}-${currentSourceIndex}-${loadAttempts.attempts}`;
+  const embedUrl = currentSource.buildUrl(videoId, autoplay && isPlaying, playlistId, songIndex);
+  const iframeKey = `${videoId}-${playlistId || 'no-list'}-${songIndex}-${currentSourceIndex}-${loadAttempts.attempts}`;
+  
+  // Log embed URL for debugging
+  useEffect(() => {
+    console.log('[YouTubePlayer] Embed URL:', embedUrl);
+  }, [embedUrl]);
 
   return (
     <div className="relative w-full h-full bg-black rounded-lg overflow-hidden">
@@ -579,6 +630,19 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
             }`} />
             <span className="text-[10px] text-white/40 capitalize">{connectionQuality}</span>
           </div>
+          {/* Manual fallback button if video doesn't load */}
+          <Button
+            variant="outline"
+            size="sm"
+            onClick={() => {
+              const watchUrl = `https://www.youtube.com/watch?v=${videoId}&list=${playlistId}`;
+              window.open(watchUrl, '_blank');
+            }}
+            className="mt-4 border-white/20 text-white/80 hover:bg-white/10 text-[10px]"
+          >
+            <ExternalLink className="w-3 h-3 mr-1" />
+            Open Video in New Tab
+          </Button>
         </div>
       )}
 
@@ -588,11 +652,10 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
         src={embedUrl}
         title="Video Player"
         className="w-full h-full"
-        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
         allowFullScreen
         onLoad={handleIframeLoad}
-        onError={() => handleLoadError('Iframe load error')}
-        sandbox="allow-same-origin allow-scripts allow-presentation allow-forms"
+        onError={handleIframeError}
         loading={preload ? 'eager' : 'lazy'}
         referrerPolicy="strict-origin-when-cross-origin"
       />
@@ -601,17 +664,20 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-purple-900/40 to-black z-20">
           <AlertCircle className="w-12 h-12 mx-auto text-red-400/60 mb-3" />
           <p className="text-sm text-white/60 text-center px-4 mb-4">
-            Unable to load video from any source
+            Unable to load video
           </p>
           <div className="flex gap-2">
             <Button
               variant="outline"
               size="sm"
-              onClick={() => window.open(`https://youtu.be/${videoId}`, "_blank")}
+              onClick={() => {
+                const watchUrl = `https://www.youtube.com/watch?v=${videoId}&list=${playlistId}`;
+                window.open(watchUrl, '_blank');
+              }}
               className="border-white/20 text-white/80 hover:bg-white/10"
             >
               <ExternalLink className="w-4 h-4 mr-2" />
-              Open YouTube
+              Open Video
             </Button>
             <Button
               variant="outline"
@@ -623,9 +689,16 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
               className="border-white/20 text-white/80 hover:bg-white/10"
             >
               <RefreshCw className="w-4 h-4 mr-2" />
-              Retry All
+              Retry
             </Button>
           </div>
+        </div>
+      )}
+
+      {/* Show error message when iframe fails to load */}
+      {!isLoading && loadAttempts.lastError && (
+        <div className="absolute bottom-2 left-2 px-2 py-1 bg-red-900/60 backdrop-blur-sm rounded text-[10px] text-red-200 border border-red-500/30">
+          Load error: {loadAttempts.lastError}
         </div>
       )}
 
@@ -638,108 +711,6 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
 
 const YouTubePlayer = React.memo(YouTubePlayerComponent);
 YouTubePlayer.displayName = 'YouTubePlayer';
-
-// ==================== Ambient Visualizer ====================
-
-const AmbientVisualizer: React.FC<{ mode: string; isPlaying: boolean }> = React.memo(({ mode, isPlaying }) => {
-  const canvasRef = useRef<HTMLCanvasElement>(null);
-  const animationRef = useRef<number | undefined>(undefined);
-  const timeRef = useRef(0);
-
-  useEffect(() => {
-    const canvas = canvasRef.current;
-    if (!canvas) return;
-
-    const ctx = canvas.getContext("2d");
-    if (!ctx) return;
-
-    const draw = () => {
-      animationRef.current = requestAnimationFrame(draw);
-      timeRef.current += 0.01;
-      const time = timeRef.current;
-
-      ctx.fillStyle = "rgba(0, 0, 0, 0.05)";
-      ctx.fillRect(0, 0, canvas.width, canvas.height);
-
-      if (mode === "ambient") {
-        for (let i = 0; i < 5; i++) {
-          const x = Math.sin(time + i) * canvas.width * 0.3 + canvas.width * 0.5;
-          const y = Math.cos(time * 0.8 + i * 0.5) * canvas.height * 0.3 + canvas.height * 0.5;
-          const radius = Math.sin(time * 2 + i) * 50 + 100;
-
-          const gradient = ctx.createRadialGradient(x, y, 0, x, y, radius);
-          gradient.addColorStop(0, `hsla(${(time * 50 + i * 60) % 360}, 70%, 50%, 0.1)`);
-          gradient.addColorStop(1, "transparent");
-
-          ctx.fillStyle = gradient;
-          ctx.fillRect(0, 0, canvas.width, canvas.height);
-        }
-      } else if (mode === "pulse") {
-        const pulse = Math.sin(time * 3) * 0.5 + 0.5;
-        for (let i = 0; i < 8; i++) {
-          const angle = (i / 8) * Math.PI * 2;
-          const x = Math.cos(angle) * 150 * pulse + canvas.width * 0.5;
-          const y = Math.sin(angle) * 150 * pulse + canvas.height * 0.5;
-
-          ctx.beginPath();
-          ctx.arc(x, y, 20 * pulse, 0, Math.PI * 2);
-          ctx.fillStyle = `hsla(${(time * 100 + i * 45) % 360}, 80%, 60%, 0.2)`;
-          ctx.fill();
-        }
-      } else if (mode === "particles") {
-        for (let i = 0; i < 30; i++) {
-          const x = (Math.sin(time * 0.5 + i) * 0.5 + 0.5) * canvas.width;
-          const y = (Math.cos(time * 0.3 + i * 0.7) * 0.5 + 0.5) * canvas.height;
-          const size = Math.sin(time + i) * 3 + 4;
-
-          ctx.beginPath();
-          ctx.arc(x, y, size, 0, Math.PI * 2);
-          ctx.fillStyle = `hsla(${(time * 80 + i * 30) % 360}, 70%, 70%, 0.3)`;
-          ctx.fill();
-        }
-      } else if (mode === "grid") {
-        ctx.strokeStyle = "rgba(139, 92, 246, 0.2)";
-        ctx.lineWidth = 1;
-        const gridSize = 40;
-        const offsetY = (time * 20) % gridSize;
-
-        for (let x = 0; x <= canvas.width; x += gridSize) {
-          ctx.beginPath();
-          ctx.moveTo(x, 0);
-          ctx.lineTo(x, canvas.height);
-          ctx.stroke();
-        }
-
-        for (let y = offsetY; y <= canvas.height; y += gridSize) {
-          ctx.beginPath();
-          ctx.moveTo(0, y);
-          ctx.lineTo(canvas.width, y);
-          ctx.stroke();
-        }
-      }
-    };
-
-    draw();
-
-    return () => {
-      if (animationRef.current) {
-        cancelAnimationFrame(animationRef.current);
-      }
-    };
-  }, [mode]);
-
-  return (
-    <canvas
-      ref={canvasRef}
-      width={800}
-      height={400}
-      className="absolute inset-0 w-full h-full opacity-50"
-      aria-hidden="true"
-    />
-  );
-});
-
-AmbientVisualizer.displayName = 'AmbientVisualizer';
 
 // ==================== Main Component ====================
 
@@ -765,12 +736,11 @@ export default function MusicHubTab() {
   const [repeatMode, setRepeatMode] = useState<"off" | "all" | "one">("off");
 
   // UI state
-  const [visualizerMode, setVisualizerMode] = useState("ambient");
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showPlaylist, setShowPlaylist] = useState(true);
   const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [webhookStatus, setWebhookStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
-  const [currentEmbedSource, setCurrentEmbedSource] = useState<string>('YouTube Direct');
+  const [currentEmbedSource, setCurrentEmbedSource] = useState<string>('Primary');
 
   // Preload state
   const [preloadProgress, setPreloadProgress] = useState(0);
@@ -783,9 +753,21 @@ export default function MusicHubTab() {
   const apiCallTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
   // Memoized computed values
-  const allSongs = useMemo(() => playlist.albums.flatMap(album => album.songs), [playlist.albums]);
-  const currentAlbum = useMemo(() => playlist.albums[currentAlbumIndex], [playlist.albums, currentAlbumIndex]);
-  const currentSong = useMemo(() => currentAlbum?.songs[currentSongIndex], [currentAlbum, currentSongIndex]);
+  const allSongs = useMemo(() => {
+    const songs = playlist.albums.flatMap(album => album.songs);
+    console.log('[MusicHub] All songs:', songs.length, 'Songs from albums:', playlist.albums.length);
+    return songs;
+  }, [playlist.albums]);
+  const currentAlbum = useMemo(() => {
+    const album = playlist.albums[currentAlbumIndex];
+    console.log('[MusicHub] Current album:', currentAlbumIndex, album?.title, 'Songs:', album?.songs?.length, 'PlaylistId:', album?.playlistId);
+    return album;
+  }, [playlist.albums, currentAlbumIndex]);
+  const currentSong = useMemo(() => {
+    const song = currentAlbum?.songs[currentSongIndex];
+    console.log('[MusicHub] Current song:', currentSongIndex, song?.title, 'VideoId:', song?.videoId);
+    return song;
+  }, [currentAlbum, currentSongIndex]);
 
   // Persist playback state (debounced)
   useEffect(() => {
@@ -814,14 +796,65 @@ export default function MusicHubTab() {
   useEffect(() => {
     const fetchPlaylist = async () => {
       try {
+        console.log('[MusicHub] Fetching playlist from API...');
         const response = await fetch('/api/music-hub/playlist', {
-          signal: AbortSignal.timeout(5000),
+          signal: AbortSignal.timeout(10000),
         });
+        console.log('[MusicHub] API response status:', response.status);
         if (response.ok) {
           const data = await response.json();
-          if (data.success && data.playlist?.albums?.length > 0) {
-            setPlaylist(data.playlist);
+          console.log('[MusicHub] API response data:', data);
+          if (data.success) {
+            // New API returns { playlists: [...], total: N }
+            // Old API returns { playlist: { albums: [...] } }
+            let albums: Album[] = [];
+            
+            if (data.playlists && Array.isArray(data.playlists)) {
+              // New API format - playlists is an array of enriched playlists
+              console.log('[MusicHub] Using new API format with', data.playlists.length, 'playlists');
+              albums = data.playlists.map((p: any) => {
+                console.log('[MusicHub] Mapping playlist:', p.title, 'playlist_id:', p.playlist_id, 'id:', p.id);
+                return {
+                  id: p.id || p.playlist_id,
+                  title: p.title,
+                  artist: p.artist,
+                  releaseDate: p.discovered_at || new Date().toISOString().split('T')[0],
+                  playlistUrl: p.link || '',
+                  playlistId: p.playlist_id || p.id, // Ensure we have the playlist ID
+                  coverUrl: p.coverUrl || `https://picsum.photos/seed/${p.playlist_id || p.id}/400/400`,
+                  isNew: p.isNew || false,
+                  isFeatured: p.isFeatured || false,
+                  songs: (p.songs || []).map((s: any, idx: number) => ({
+                    ...s,
+                    // Ensure videoId and other fields exist
+                    videoId: s.videoId,
+                    watchUrl: s.watchUrl || `https://www.youtube.com/watch?v=${s.videoId}&list=${p.playlist_id || p.id}&index=${idx + 1}`,
+                    embedUrl: s.embedUrl || `https://www.youtube.com/embed/${s.videoId}?list=${p.playlist_id || p.id}&index=${idx + 1}`,
+                  })),
+                  discovered_at: p.discovered_at,
+                  link: p.link,
+                  videos: p.videos,
+                };
+              });
+            } else if (data.playlist?.albums) {
+              // Old API format - playlist has albums property
+              console.log('[MusicHub] Using old API format with', data.playlist.albums.length, 'albums');
+              albums = data.playlist.albums;
+            }
+            
+            if (albums.length > 0) {
+              setPlaylist({
+                albums,
+                lastUpdated: data.timestamp || new Date().toISOString(),
+                autoUpdate: true,
+              });
+              console.log(`[MusicHub] Loaded ${albums.length} playlists from API`);
+            } else {
+              console.warn('[MusicHub] No albums found in API response, using default');
+            }
           }
+        } else {
+          console.error('[MusicHub] API returned non-OK status:', response.status);
         }
       } catch (err) {
         console.warn('Failed to fetch playlist from API, using cached/default:', err);
@@ -1069,7 +1102,7 @@ export default function MusicHubTab() {
             </motion.div>
             <div>
               <h3 className="text-lg font-semibold text-white">Music Hub</h3>
-              <p className="text-xs text-white/60 flex items-center gap-2">
+              <div className="text-xs text-white/60 flex items-center gap-2">
                 Digital Underground Experience
                 {webhookStatus === "connected" && (
                   <Badge className="text-[10px] bg-green-500/20 text-green-300 border-green-500/30">
@@ -1077,7 +1110,7 @@ export default function MusicHubTab() {
                     Live
                   </Badge>
                 )}
-              </p>
+              </div>
             </div>
           </div>
 
@@ -1162,8 +1195,6 @@ export default function MusicHubTab() {
               animate={{ opacity: 1, scale: 1 }}
               transition={{ duration: 0.3 }}
             >
-              <AmbientVisualizer mode={visualizerMode} isPlaying={isPlaying} />
-
               {currentSong ? (
                 <ErrorBoundary fallback={
                   <div className="absolute inset-0 flex items-center justify-center">
@@ -1172,6 +1203,8 @@ export default function MusicHubTab() {
                 }>
                   <YouTubePlayer
                     videoId={currentSong.videoId}
+                    playlistId={currentAlbum?.playlistId}
+                    songIndex={currentSongIndex + 1}
                     autoplay={isPlaying}
                     preload={true}
                     isPlaying={isPlaying}
@@ -1275,30 +1308,6 @@ export default function MusicHubTab() {
                 </Button>
               </div>
             </motion.div>
-
-            {/* Visualizer Mode Selector */}
-            <div className="flex gap-2">
-              {VISUALIZER_MODES.map((mode) => {
-                const Icon = mode.icon;
-                return (
-                  <Button
-                    key={mode.id}
-                    variant={visualizerMode === mode.id ? "default" : "outline"}
-                    size="sm"
-                    onClick={() => setVisualizerMode(mode.id)}
-                    className={`flex-1 ${
-                      visualizerMode === mode.id
-                        ? "bg-gradient-to-r from-purple-600 to-pink-600"
-                        : "bg-black/40 border-white/20 text-white/60 hover:bg-white/10"
-                    }`}
-                    aria-pressed={visualizerMode === mode.id}
-                  >
-                    <Icon className="w-4 h-4 mr-2" />
-                    {mode.name}
-                  </Button>
-                );
-              })}
-            </div>
 
             {/* Player Controls */}
             <Card className="bg-white/5 border-white/10 backdrop-blur-sm">

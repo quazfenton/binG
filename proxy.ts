@@ -113,14 +113,14 @@ export async function proxy(request: NextRequest) {
     // MUST include ws: and wss: for Next.js HMR WebSocket connections
     response.headers.set(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https://fonts.gstatic.com; frame-src 'self' https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self';"
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https://fonts.gstatic.com; frame-src 'self' https://www.youtube.com https://youtube.com https://www.youtube-nocookie.com; frame-ancestors 'self' https://www.youtube.com https://youtube.com https://www.youtube-nocookie.com; base-uri 'self'; form-action 'self';"
     );
   } else {
     // Production CSP - RELAXED for Next.js compatibility
     // Next.js uses its own script loading mechanism that doesn't support nonces
     response.headers.set(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: wss: blob:; font-src 'self' data: https://fonts.gstatic.com; frame-src 'self' https: blob:; frame-ancestors 'self'; base-uri 'self'; form-action 'self';"
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: wss: blob:; font-src 'self' data: https://fonts.gstatic.com; frame-src 'self' https://www.youtube.com https://youtube.com https://www.youtube-nocookie.com; frame-ancestors 'self' https://www.youtube.com https://youtube.com https://www.youtube-nocookie.com; base-uri 'self'; form-action 'self';"
     );
   }
 
