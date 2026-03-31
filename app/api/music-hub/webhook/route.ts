@@ -156,30 +156,18 @@ async function processPendingSyncs(playlists: any[]): Promise<void> {
   }
 
   const playlist = playlists[pendingIndex];
-  
+
   try {
     // Update status to in_progress
     playlist.pendingSync.status = 'in_progress';
     playlist.pendingSync.startedAt = new Date().toISOString();
     await writePlaylists(playlists);
 
-    // TODO: Implement actual sync logic here
-    // This would typically call YouTube Music API or similar to sync the playlist
-    // For now, we'll simulate completion
-
-    // Simulate sync completion (replace with actual sync logic)
-    await new Promise(resolve => setTimeout(resolve, 1000));
-
-    playlist.pendingSync.status = 'completed';
-    playlist.pendingSync.completedAt = new Date().toISOString();
-    playlist.pendingSync.result = {
-      videosSynced: playlist.videos?.length || 0,
-      message: 'Sync completed (placeholder - implement actual sync logic)',
-    };
-
-    await writePlaylists(playlists);
-
-    console.log('[Webhook] Pending sync processed:', playlist.playlist_id);
+    // Note: Actual sync logic should be implemented in a background worker
+    // The worker will call YouTube Music API or similar to sync the playlist
+    // and update pendingSync.completedAt/status/result when done
+    
+    console.log('[Webhook] Sync job queued for playlist:', playlist.playlist_id);
   } catch (error) {
     playlist.pendingSync.status = 'failed';
     playlist.pendingSync.failedAt = new Date().toISOString();

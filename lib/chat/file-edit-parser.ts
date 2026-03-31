@@ -358,6 +358,9 @@ export function extractHtmlCommentFileEdits(content: string): FileEdit[] {
 /**
  * Extract <file_edit path="...">content</file_edit> compact format
  * Handles both with and without space: <file_edit path="..."> and <file_editpath="...">
+ * 
+ * IMPORTANT: Validates extracted paths to reject invalid patterns like CSS values,
+ * Vue directives, and code snippets that may be mistakenly output as paths.
  */
 export function extractCompactFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
@@ -370,6 +373,13 @@ export function extractCompactFileEdits(content: string): FileEdit[] {
     const filePath = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!filePath) continue;
+    
+    // CRITICAL: Validate path before adding
+    // Rejects CSS values (0.3s,), Vue directives (@submit...), operators (=), etc.
+    if (!isValidExtractedPath(filePath)) {
+      continue;
+    }
+    
     edits.push({ path: filePath, content: fileContent.trim() });
   }
 
@@ -380,6 +390,8 @@ export function extractCompactFileEdits(content: string): FileEdit[] {
  * Extract <file_write path="...">content</file_write> format
  * This is an alternative format used by some LLMs
  * Handles both with and without space: <file_write path="..."> and <file_writepath="...">
+ * 
+ * IMPORTANT: Validates extracted paths to reject invalid patterns.
  */
 export function extractFileWriteEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
@@ -393,6 +405,13 @@ export function extractFileWriteEdits(content: string): FileEdit[] {
     // Clean up leading/trailing whitespace
     fileContent = fileContent.replace(/^\n+/, '').replace(/\n+$/, '');
     if (!filePath) continue;
+    
+    // CRITICAL: Validate path before adding
+    // Rejects CSS values, Vue directives, operators, and other non-path patterns
+    if (!isValidExtractedPath(filePath)) {
+      continue;
+    }
+    
     edits.push({ path: filePath, content: fileContent });
   }
 
@@ -827,39 +846,61 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
 
 /**
  * Validate path to reject invalid patterns
- * Rejects: paths with command names (WRITE, PATCH, etc.), JSON syntax, malformed paths
+ * Rejects: paths with command names (WRITE, PATCH, etc.), JSON syntax, malformed paths,
+ * CSS values, Vue directives, operators, and other non-path patterns.
  */
 function isValidExtractedPath(path: string): boolean {
   if (!path || path.length === 0 || path.length > 300) return false;
+
+  // Reject single-character paths (except valid single-char filenames like 'a')
+  if (path.length === 1 && !/^[a-zA-Z0-9_]$/.test(path)) return false;
   
+  // Reject paths that are just operators or punctuation
+  if (/^[=+\-*/%<>!&|^~?:,;]+$/.test(path)) return false;
+
   // Reject paths containing command names (WRITE, PATCH, APPLY_DIFF, DELETE)
   if (/\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i.test(path)) return false;
-  
+
   // Reject paths with JSON/object syntax
-  if (path.includes('{') || path.includes('}') || 
+  if (path.includes('{') || path.includes('}') ||
       path.includes('[') || path.includes(']')) return false;
-  
+
   // Reject paths ending with special characters
-  if (path.endsWith('/') || path.endsWith(':') || 
+  if (path.endsWith('/') || path.endsWith(':') ||
       path.endsWith(',') || path.endsWith('{') ||
-      path.endsWith('<') || path.endsWith('>')) return false;
-  
+      path.endsWith('<') || path.endsWith('>') ||
+      path.endsWith('=') || path.endsWith(';')) return false;
+
   // Reject paths starting with special characters (except . for relative paths)
   if (path.startsWith('<') || path.startsWith('>') ||
-      path.startsWith('{') || path.startsWith('}')) return false;
-  
+      path.startsWith('{') || path.startsWith('}') ||
+      path.startsWith('@') || path.startsWith('=') ||
+      path.startsWith('+') || path.startsWith('-') ||
+      path.startsWith('*') || path.startsWith('/') ||
+      path.startsWith('#')) return false;
+
   // Reject paths with heredoc markers
   if (path.includes('<<<') || path.includes('>>>') || path.includes('===')) return false;
-  
-  // Reject paths that look like CSS classes or code (hover:, @click, v-, etc.)
-  if (/^(?:hover:|@|:|v-|:bind|@click|@submit)/i.test(path)) return false;
-  
+
+  // Reject paths that look like CSS classes or Vue directives
+  if (/^(?:hover:|@|:|v-|:bind|@click|@submit|@keyup|@change|@input|@focus|@blur)/i.test(path)) return false;
+
   // Reject paths with colons (CSS classes like hover:scale-105)
-  if (path.includes(':')) return false;
+  // Allow Windows drive letters like C:/
+  if (path.includes(':') && !/^[a-zA-Z]:/.test(path)) return false;
+
+  // Reject paths that look like CSS values (0.3s, 10px, etc.)
+  if (/^\d+\.?\d*(?:px|em|rem|%|s|ms|vh|vw|pt)$/.test(path)) return false;
+
+  // Reject paths that look like event handlers or expressions
+  if (/[=(].*[)]/.test(path)) return false;
+
+  // Must have valid path format - start with alphanumeric or dot
+  if (!/^[a-zA-Z0-9._]/.test(path)) return false;
   
-  // Must have valid path format
-  if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) return false;
-  
+  // Must contain at least one path separator or file extension for multi-segment paths
+  if (path.includes('/') && !/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) return false;
+
   return true;
 }
 

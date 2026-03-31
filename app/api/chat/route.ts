@@ -675,7 +675,7 @@ export async function POST(request: NextRequest) {
 
               const result = await processUnifiedAgentRequest(config);
               sendStep('Start agentic pipeline', result.success ? 'completed' : 'failed');
-              
+
               // FIX: Final parse after stream completes to catch any remaining edits
               // The closing >>> may have arrived in the last chunk
               // CRITICAL: Clear BOTH emittedEdits AND unclosedPositions for proper re-parsing
@@ -683,16 +683,120 @@ export async function POST(request: NextRequest) {
                 fileEditParserState.emittedEdits.clear();
                 fileEditParserState.unclosedPositions.clear();
                 const finalEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
-                for (const edit of finalEdits) {
-                  chatLogger.debug('Final parse file edit detected', { path: edit.path });
-                  emit(SSE_EVENT_TYPES.FILE_EDIT, {
-                    path: edit.path,
-                    status: 'detected',
-                    timestamp: Date.now(),
-                  });
+
+                // SESSION NAMING: Detect if this is a new single-folder project
+                // If so, rename the session folder to match the project folder
+                const responseContent = streamingContentBuffer + (result.response?.content || '');
+                const { detectSingleFolderFromResponse } = await import('@/lib/session-naming');
+                const detectedFolder = detectSingleFolderFromResponse(responseContent);
+                
+                // Check if we should rename: new session (sequential ID) with single detected folder
+                const isSequentialSession = /^\d{3}$/.test(resolvedConversationId);
+                const isNewSession = isSequentialSession && !result.metadata?.isExistingSession;
+                
+                if (detectedFolder && isNewSession && detectedFolder !== resolvedConversationId) {
+                  // Check if detected folder name is available
+                  const { sessionNameExists } = await import('@/lib/session-naming');
+                  const folderExists = await sessionNameExists(detectedFolder);
+                  
+                  if (!folderExists) {
+                    // Rename session folder by moving contents
+                    const oldPath = `project/sessions/${resolvedConversationId}`;
+                    const newPath = `project/sessions/${detectedFolder}`;
+                    
+                    try {
+                      const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service');
+                      // List files in old session
+                      const listing = await virtualFilesystem.listDirectory(filesystemOwnerId, oldPath);
+                      
+                      if (listing.nodes.length > 0) {
+                        // Move each file to new folder
+                        for (const node of listing.nodes) {
+                          const oldFilePath = node.path;
+                          const newFilePath = newPath + node.path.substring(oldPath.length);
+                          await virtualFilesystem.writeFile(
+                            filesystemOwnerId,
+                            newFilePath,
+                            node.content || '',
+                            node.language
+                          );
+                          await virtualFilesystem.deleteFile(filesystemOwnerId, oldFilePath);
+                        }
+                        
+                        // Update resolvedConversationId for future operations
+                        const previousId = resolvedConversationId;
+                        resolvedConversationId = detectedFolder;
+                        
+                        chatLogger.info('Session folder renamed based on detected project structure', {
+                          previousId,
+                          newId: detectedFolder,
+                          filesMoved: listing.nodes.length,
+                        });
+                        
+                        // Emit session rename event for UI
+                        emit('session_renamed', {
+                          previousId,
+                          newId: detectedFolder,
+                          reason: 'single-folder-project',
+                        });
+                      }
+                    } catch (renameError: any) {
+                      chatLogger.warn('Failed to rename session folder', {
+                        error: renameError.message,
+                        detectedFolder,
+                      });
+                    }
+                  }
+                }
+
+                // Apply filesystem edits if any were detected
+                if (finalEdits.length > 0 && filesystemOwnerId) {
+                  try {
+                    const { applyFilesystemEditsFromResponse } = await import('./route');
+                    const appliedEdits = await applyFilesystemEditsFromResponse({
+                      ownerId: filesystemOwnerId,
+                      conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                      requestId,
+                      scopePath: requestedScopePath,
+                      lastUserMessage: task,
+                      attachedPaths: attachedFilesystemFiles.map(f => f.path),
+                      responseContent: streamingContentBuffer,
+                      commands: {},
+                      forceExtract: true,
+                    });
+
+                    // Emit applied edits
+                    if (appliedEdits?.applied?.length) {
+                      for (const edit of appliedEdits.applied) {
+                        emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                          path: edit.path,
+                          status: 'applied',
+                          operation: edit.operation || 'write',
+                          timestamp: Date.now(),
+                        });
+                      }
+                      chatLogger.info('Final parse: applied filesystem edits', {
+                        count: appliedEdits.applied.length
+                      });
+                    }
+                  } catch (editErr: any) {
+                    chatLogger.warn('Final parse: filesystem edit application failed', {
+                      error: editErr.message
+                    });
+                  }
+                } else {
+                  // Just emit events if no filesystem owner
+                  for (const edit of finalEdits) {
+                    chatLogger.debug('Final parse file edit detected', { path: edit.path });
+                    emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                      path: edit.path,
+                      status: 'detected',
+                      timestamp: Date.now(),
+                    });
+                  }
                 }
               }
-              
+
               emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
                 content: result.response,
@@ -726,7 +830,7 @@ export async function POST(request: NextRequest) {
                   // Ignore parse errors during error handling
                 }
               }
-              
+
               emit(SSE_EVENT_TYPES.ERROR, { message: error.message || 'Agentic execution failed' });
 
               // Cleanup on error too

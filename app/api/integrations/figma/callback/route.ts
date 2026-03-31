@@ -1,9 +1,9 @@
 /**
  * Figma OAuth Callback
- * 
+ *
  * Handles the OAuth callback from Figma after user authorization.
  * Exchanges authorization code for access token and stores it in the database.
- * 
+ *
  * Flow:
  * 1. User clicks "Connect Figma" → redirected to /api/integrations/figma?action=authorize
  * 2. User authorizes in Figma popup → Figma redirects to this callback
@@ -16,20 +16,13 @@ import { auth0 } from '@/lib/auth0';
 import { getDatabase } from '@/lib/database/connection';
 import { exchangeCodeForToken, calculateExpiryDate } from '@/lib/figma/oauth';
 import { getFigmaRedirectUri } from '@/lib/figma/config';
+import { oauthStateStore } from '../route';
 
 export const runtime = 'nodejs';
 
-// In-memory state store (should use database in production)
-const oauthStateStore = new Map<string, {
-  userId: number;
-  codeVerifier: string;
-  state: string;
-  expiresAt: Date;
-}>();
-
 /**
  * GET /api/integrations/figma/callback
- * 
+ *
  * Query parameters:
  * - code: Authorization code from Figma
  * - state: State parameter for CSRF protection
@@ -71,7 +64,7 @@ export async function GET(request: NextRequest) {
       );
     }
 
-    // Validate state parameter
+    // Validate state parameter - uses shared store from route.ts
     const stateData = oauthStateStore.get(state);
     if (!stateData) {
       return NextResponse.redirect(
@@ -99,7 +92,7 @@ export async function GET(request: NextRequest) {
 
     // Exchange code for token
     const redirectUri = getFigmaRedirectUri();
-    
+
     let tokenData;
     try {
       tokenData = await exchangeCodeForToken({
@@ -124,7 +117,7 @@ export async function GET(request: NextRequest) {
 
     try {
       const { encryptApiKey } = await import('@/lib/database/connection');
-      
+
       const stmt = db.prepare(`
         INSERT OR REPLACE INTO external_connections (
           user_id,

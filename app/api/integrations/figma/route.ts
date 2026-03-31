@@ -192,7 +192,7 @@ async function isFigmaConnected(userId: number): Promise<boolean> {
 // OAuth State Storage (in-memory for now, should use database)
 // ============================================================================
 
-const oauthStateStore = new Map<string, {
+export const oauthStateStore = new Map<string, {
   userId: number;
   codeVerifier: string;
   state: string;

@@ -49,6 +49,14 @@ async function withPromptsLock<T>(fn: () => Promise<T>): Promise<T> {
   }
 }
 
+// Helper to clone default prompts to prevent mutation of singleton
+function getDefaultPrompts(): Prompt[] {
+  return DEFAULT_PROMPTS.map((prompt) => ({
+    ...prompt,
+    tags: [...prompt.tags],
+  }));
+}
+
 // Atomic update helper to prevent race conditions
 // Read-modify-write happens INSIDE the write queue for true atomicity
 // Uses direct file read to avoid deadlock from loadPrompts -> savePrompts re-enqueue
@@ -68,7 +76,7 @@ async function updatePromptsAtomically(mutate: (prompts: Prompt[]) => Prompt[]):
           prompts = parsed.filter(isValidPrompt);
         } catch (error: any) {
           if (error.code === 'ENOENT') {
-            prompts = DEFAULT_PROMPTS;
+            prompts = getDefaultPrompts();
           } else {
             throw error;
           }
@@ -234,15 +242,17 @@ async function loadPrompts(): Promise<Prompt[]> {
     // Return defaults only if no valid prompts remain
     if (validPrompts.length === 0) {
       console.warn('[Prompts API] No valid prompts, seeding defaults');
-      await savePrompts(DEFAULT_PROMPTS);
-      return DEFAULT_PROMPTS;
+      const defaults = getDefaultPrompts();
+      await savePrompts(defaults);
+      return defaults;
     }
     return validPrompts;
   } catch (error: any) {
     if (error.code === 'ENOENT') {
       // Initialize with default prompts
-      await savePrompts(DEFAULT_PROMPTS);
-      return DEFAULT_PROMPTS;
+      const defaults = getDefaultPrompts();
+      await savePrompts(defaults);
+      return defaults;
     }
     throw error;
   }

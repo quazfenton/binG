@@ -196,15 +196,14 @@ const WEBMCP_MANIFEST: WebMCPManifest = {
     description: 'Authentication via Auth0 bearer token',
   },
   capabilities: {
-    sandbox: true,
+    sandbox: false,
     voice: true,
     llm: true,
     integrations: true,
   },
   endpoints: {
-    tools: '/.well-known/webmcp/tools',
-    invoke: '/.well-known/webmcp/invoke',
-    status: '/.well-known/webmcp/status',
+    tools: '/.well-known/webmcp',
+    invoke: '/.well-known/webmcp',
   },
 };
 
@@ -351,18 +350,18 @@ async function invokeTool(toolName: string, args: any): Promise<any> {
     case 'stop_agent': {
       // Validate agentId argument
       if (!args.agentId || typeof args.agentId !== 'string' || args.agentId.trim() === '') {
-        return { success: false, error: 'agentId is required' };
+        throw new Error('agentId is required and must be a non-empty string');
       }
 
       const { getAgentServiceManager } = await import('@/lib/spawn/agent-service-manager');
       const manager = getAgentServiceManager();
-      
+
       // Check if agent exists before stopping
       const agent = manager.getAgent(args.agentId);
       if (!agent) {
-        return { success: false, error: 'agent_not_found' };
+        throw new Error('Agent not found');
       }
-      
+
       await manager.stopAgent(args.agentId);
       return { success: true };
     }
