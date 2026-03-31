@@ -23,6 +23,9 @@ interface ZineContent {
   createdAt: number;
   expiresAt?: number;
   priority?: number;
+  style?: Record<string, any>;
+  position?: Record<string, any>;
+  animation?: string;
 }
 
 // ============================================================================

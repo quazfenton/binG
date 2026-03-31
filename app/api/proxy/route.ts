@@ -23,10 +23,9 @@ const FETCH_TIMEOUT = 30000; // 30 second timeout
 const MAX_REDIRECTS = 5; // Max redirects to follow
 const MAX_CONTENT_SIZE = 50 * 1024 * 1024; // 50MB max content size
 
-// Allowed content types for proxying (HTML and common web content)
+// Allowed content types for proxying (excluding HTML for security)
+// HTML/XHTML are explicitly blocked to prevent same-origin attacks
 const ALLOWED_CONTENT_TYPES = [
-  'text/html',
-  'application/xhtml+xml',
   'text/xml',
   'application/xml',
   'application/json',
@@ -42,16 +41,26 @@ const ALLOWED_CONTENT_TYPES = [
   'font/woff2',
 ];
 
-// Blocked URL patterns (SSRF protection)
-const BLOCKED_PATTERNS = [
-  'localhost', '127.', '10.', '192.168.',
-  '172.16.', '172.17.', '172.18.', '172.19.', '172.20.', '172.21.',
-  '172.22.', '172.23.', '172.24.', '172.25.', '172.26.', '172.27.',
-  '172.28.', '172.29.', '172.30.', '172.31.',
-  '169.254.', '0.0.0.0', '100.100.', '168.63.129.',
-  'metadata', '.local', '.internal', '::1', '[::1]',
-  'fc00:', 'fd', 'fe80:', '[::ffff:7f', '[::ffff:0:',
-];
+/**
+ * Check if hostname is blocked for SSRF protection
+ * Uses structural validation instead of substring matching to avoid false positives
+ */
+function isBlockedHostname(hostname: string): boolean {
+  const normalizedHostname = hostname.toLowerCase();
+  
+  // Exact dangerous host patterns
+  if (
+    normalizedHostname === 'localhost' ||
+    normalizedHostname === 'metadata' ||
+    normalizedHostname === 'metadata.google.internal' ||
+    normalizedHostname.endsWith('.local') ||
+    normalizedHostname.endsWith('.internal')
+  ) {
+    return true;
+  }
+  
+  return false;
+}
 
 /**
  * Check if IP address is private/internal (SSRF protection)
@@ -110,9 +119,8 @@ async function validateProxyUrl(urlStr: string): Promise<{ valid: boolean; error
     return { valid: false, error: 'Only HTTP and HTTPS URLs are allowed' };
   }
 
-  // Block dangerous patterns
-  const hostname = parsedUrl.hostname.toLowerCase();
-  if (BLOCKED_PATTERNS.some(pattern => hostname.includes(pattern))) {
+  // Block dangerous hostnames using structural validation
+  if (isBlockedHostname(parsedUrl.hostname)) {
     return { valid: false, error: 'Blocked unsafe URL (internal network or cloud metadata)' };
   }
 
@@ -120,7 +128,7 @@ async function validateProxyUrl(urlStr: string): Promise<{ valid: boolean; error
   // multi-record hosts (a public record passes validation, fetch uses private)
   try {
     const { lookup } = await import('dns/promises');
-    const resolved = await lookup(hostname, { family: 0, all: true });
+    const resolved = await lookup(parsedUrl.hostname, { family: 0, all: true });
     for (const entry of resolved) {
       if (isPrivateIP(entry.address)) {
         return { valid: false, error: 'Blocked unsafe URL (resolves to internal network)' };
@@ -301,17 +309,32 @@ export async function GET(request: NextRequest) {
 
   const { response, finalUrl } = result;
 
-  // Get content type
-  const contentType = response.headers.get('content-type') || 'text/html';
+  // Get content type - do NOT default to text/html for security
+  const contentTypeHeader = response.headers.get('content-type');
+  if (!contentTypeHeader) {
+    return NextResponse.json(
+      { error: 'Missing Content-Type header from upstream' },
+      { status: 400 }
+    );
+  }
+  
+  const contentType = contentTypeHeader;
   const normalizedContentType = contentType.split(';')[0].trim().toLowerCase();
 
-  // Log if content type is unexpected (but still allow for flexibility)
-  // We allow all content types for iframe proxying since we're acting as a transparent proxy
+  // Block HTML/XHTML responses to prevent same-origin attacks
+  if (normalizedContentType.startsWith('text/html') || normalizedContentType.startsWith('application/xhtml+xml')) {
+    return NextResponse.json(
+      { error: 'HTML content is not allowed through the proxy for security reasons' },
+      { status: 415 }
+    );
+  }
+
+  // Log if content type is unexpected
   if (!ALLOWED_CONTENT_TYPES.some(allowed => normalizedContentType.startsWith(allowed))) {
     console.log('[Proxy] Unusual content type:', normalizedContentType);
   }
 
-  // Check content length
+  // Check content length from header
   const contentLength = response.headers.get('content-length');
   if (contentLength && parseInt(contentLength, 10) > MAX_CONTENT_SIZE) {
     return NextResponse.json(
@@ -320,22 +343,41 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Get response body
-  let body: ArrayBuffer | ReadableStream<Uint8Array> | null = null;
-  try {
-    // Try to get as stream for large content
-    if (response.body) {
-      body = response.body;
-    } else {
-      body = await response.arrayBuffer();
-    }
-  } catch (error: any) {
-    console.error('[Proxy] Error reading response body:', error.message);
+  // Stream response body with content size enforcement
+  if (!response.body) {
     return NextResponse.json(
-      { error: 'Failed to read response body' },
+      { error: 'No response body from upstream' },
       { status: 500 }
     );
   }
+
+  // Create a transform stream that enforces content size limit and keeps timeout alive
+  const streamController = new AbortController();
+  let timeoutId = setTimeout(() => streamController.abort(), FETCH_TIMEOUT);
+  
+  let bytesReceived = 0;
+  const transformStream = new TransformStream<Uint8Array, Uint8Array>({
+    transform(chunk, controller) {
+      // Reset timeout on each chunk received
+      clearTimeout(timeoutId);
+      timeoutId = setTimeout(() => streamController.abort(), FETCH_TIMEOUT);
+      
+      bytesReceived += chunk.byteLength;
+      if (bytesReceived > MAX_CONTENT_SIZE) {
+        clearTimeout(timeoutId);
+        streamController.abort();
+        controller.error(new Error(`Content size exceeds ${MAX_CONTENT_SIZE / 1024 / 1024}MB limit`));
+        return;
+      }
+      controller.enqueue(chunk);
+    },
+    flush() {
+      clearTimeout(timeoutId);
+    },
+  });
+
+  // Pipe the response body through our size-limiting transform
+  const limitedStream = response.body.pipeThrough(transformStream);
 
   // Build response headers
   const headers: Record<string, string> = {
@@ -372,8 +414,8 @@ export async function GET(request: NextRequest) {
 
   console.log('[Proxy] Successfully proxied:', safeLogUrl(finalUrl));
 
-  // Return proxied response
-  return new NextResponse(body, {
+  // Return proxied response with size-limited stream
+  return new NextResponse(limitedStream, {
     status: response.status,
     headers,
   });

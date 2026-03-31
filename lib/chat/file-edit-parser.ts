@@ -826,8 +826,46 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
 }
 
 /**
+ * Validate path to reject invalid patterns
+ * Rejects: paths with command names (WRITE, PATCH, etc.), JSON syntax, malformed paths
+ */
+function isValidExtractedPath(path: string): boolean {
+  if (!path || path.length === 0 || path.length > 300) return false;
+  
+  // Reject paths containing command names (WRITE, PATCH, APPLY_DIFF, DELETE)
+  if (/\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i.test(path)) return false;
+  
+  // Reject paths with JSON/object syntax
+  if (path.includes('{') || path.includes('}') || 
+      path.includes('[') || path.includes(']')) return false;
+  
+  // Reject paths ending with special characters
+  if (path.endsWith('/') || path.endsWith(':') || 
+      path.endsWith(',') || path.endsWith('{') ||
+      path.endsWith('<') || path.endsWith('>')) return false;
+  
+  // Reject paths starting with special characters (except . for relative paths)
+  if (path.startsWith('<') || path.startsWith('>') ||
+      path.startsWith('{') || path.startsWith('}')) return false;
+  
+  // Reject paths with heredoc markers
+  if (path.includes('<<<') || path.includes('>>>') || path.includes('===')) return false;
+  
+  // Reject paths that look like CSS classes or code (hover:, @click, v-, etc.)
+  if (/^(?:hover:|@|:|v-|:bind|@click|@submit)/i.test(path)) return false;
+  
+  // Reject paths with colons (CSS classes like hover:scale-105)
+  if (path.includes(':')) return false;
+  
+  // Must have valid path format
+  if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) return false;
+  
+  return true;
+}
+
+/**
  * Extract WRITE commands from fs-actions blocks and top-level
- * Format: WRITE path <<<content>>> or ```fs-actions WRITE path <<<content>>>
+ * Format: WRITE path <<<content>>> or WRITE <path> <<<content>>> or ```fs-actions WRITE path <<<content>>>
  *
  * Case-insensitive matching to handle LLM output variations (WRITE, write, Write, etc.)
  */
@@ -846,12 +884,17 @@ export function extractFsActionWrites(content: string): FileEdit[] {
 
   while ((blockMatch = blockRegex.exec(content)) !== null) {
     const blockContent = blockMatch[1] || '';
-    const writeRegex = /WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
+    const writeRegex = /WRITE\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
       const fileContent = writeMatch[2] ?? '';
       if (!path) continue;
+      // Validate path before adding
+      if (!isValidExtractedPath(path)) {
+        continue;
+      }
       writes.push({ path, content: fileContent });
     }
   }
@@ -862,12 +905,15 @@ export function extractFsActionWrites(content: string): FileEdit[] {
 
   while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
     const blockContent = xmlBlockMatch[1] || '';
-    const writeRegex = /WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
+    const writeRegex = /WRITE\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
       const fileContent = writeMatch[2] ?? '';
       if (!path) continue;
+      // Validate path before adding
+      if (!isValidExtractedPath(path)) continue;
       writes.push({ path, content: fileContent });
     }
   }
@@ -878,12 +924,15 @@ export function extractFsActionWrites(content: string): FileEdit[] {
 
   while ((regularBlockMatch = regularBlockRegex.exec(content)) !== null) {
     const blockContent = regularBlockMatch[1] || '';
-    const writeRegex = /^WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
+    // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
+    const writeRegex = /^WRITE\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
       const fileContent = writeMatch[2] ?? '';
       if (!path) continue;
+      // Validate path before adding
+      if (!isValidExtractedPath(path)) continue;
       writes.push({ path, content: fileContent });
     }
   }
@@ -893,30 +942,44 @@ export function extractFsActionWrites(content: string): FileEdit[] {
 
 /**
  * Extract top-level WRITE commands outside code blocks
- * Format: WRITE path <<<content>>>
+ * Format: WRITE path <<<content>>> or WRITE <path> <<<content>>>
+ * 
+ * IMPORTANT: Only extracts when BOTH opening (<<<) AND closing (>>>) markers are present
+ * to avoid extracting incomplete content during streaming.
  */
 export function extractTopLevelWrites(content: string): FileEdit[] {
   const writes: FileEdit[] = [];
 
   if (!content.includes('WRITE')) return writes;
 
-  const topLevelWriteRegex = /^WRITE\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
+  // Quick check: must have both <<< and >>> to proceed
+  if (!content.includes('<<<') || !content.includes('>>>')) {
+    return writes;
+  }
+
+  // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
+  const topLevelWriteRegex = /^WRITE\s+<?([^\s<>]+)>?(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
   let match: RegExpExecArray | null;
   while ((match = topLevelWriteRegex.exec(content)) !== null) {
     const path = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!path) continue;
+    // Validate path before adding
+    if (!isValidExtractedPath(path)) continue;
     // Deduplicate - check if we already have this exact edit
     if (!writes.some(w => w.path === path && w.content === fileContent)) {
       writes.push({ path, content: fileContent });
     }
   }
 
-  const altWriteRegex = /^WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)>>>/gim;
+  // Alternative regex for inline format: WRITE path <<<content>>> or WRITE <path> <<<content>>>
+  const altWriteRegex = /^WRITE\s+<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)>>>/gim;
   while ((match = altWriteRegex.exec(content)) !== null) {
     const path = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!path) continue;
+    // Validate path before adding
+    if (!isValidExtractedPath(path)) continue;
     if (!writes.some(w => w.path === path && w.content === fileContent)) {
       writes.push({ path, content: fileContent });
     }
@@ -946,14 +1009,15 @@ export function extractDeleteEdits(content: string): DeleteEdit[] {
 
 /**
  * Extract PATCH commands from content
- * Format: PATCH path <<<diff>>>
+ * Format: PATCH path <<<diff>>> or PATCH <path> <<<diff>>>
  */
 export function extractPatchEdits(content: string): PatchEdit[] {
   const patches: PatchEdit[] = [];
-  
+
   if (!content.includes('PATCH')) return patches;
 
-  const patchRegex = /^PATCH\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
+  // Updated regex to handle both: PATCH path <<<...>>> and PATCH <path> <<<...>>>
+  const patchRegex = /^PATCH\s+<?([^\s<>]+)>?(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
   let match: RegExpExecArray | null;
   while ((match = patchRegex.exec(content)) !== null) {
     const path = match[1]?.trim();
@@ -1002,8 +1066,10 @@ export function extractFsActionPatches(content: string): PatchEdit[] {
 
   if (!content.includes('PATCH')) return patches;
 
+  // Updated regex to handle both: PATCH path <<<...>>> and PATCH <path> <<<...>>>
+  const patchRegex = /PATCH\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+  
   for (const blockContent of extractFencedBlocks(content, 'fs-actions')) {
-    const patchRegex = /PATCH\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let patchMatch: RegExpExecArray | null;
     while ((patchMatch = patchRegex.exec(blockContent)) !== null) {
       const path = patchMatch[1]?.trim();
@@ -1014,7 +1080,6 @@ export function extractFsActionPatches(content: string): PatchEdit[] {
   }
 
   for (const blockContent of extractXmlBlocks(content, 'fs-actions')) {
-    const patchRegex = /PATCH\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let patchMatch: RegExpExecArray | null;
     while ((patchMatch = patchRegex.exec(blockContent)) !== null) {
       const path = patchMatch[1]?.trim();
@@ -1037,8 +1102,10 @@ export function extractApplyDiffOperations(content: string): ApplyDiffOperation[
     return diffs;
   }
 
+  // Updated regex to handle both: APPLY_DIFF path <<<...>>> and APPLY_DIFF <path> <<<...>>>
+  const diffRegex = /APPLY_DIFF\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*===\s*([\s\S]*?)\s*>>>/gi;
+  
   for (const blockContent of extractFencedBlocks(content, 'fs-actions')) {
-    const diffRegex = /APPLY_DIFF\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*===\s*([\s\S]*?)\s*>>>/gi;
     let diffMatch: RegExpExecArray | null;
     while ((diffMatch = diffRegex.exec(blockContent)) !== null) {
       const path = diffMatch[1]?.trim();
@@ -1050,7 +1117,6 @@ export function extractApplyDiffOperations(content: string): ApplyDiffOperation[
   }
 
   for (const blockContent of extractXmlBlocks(content, 'fs-actions')) {
-    const diffRegex = /APPLY_DIFF\s+([^\s<]+)\s*<<<\s*([\s\S]*?)\s*===\s*([\s\S]*?)\s*>>>/gi;
     let diffMatch: RegExpExecArray | null;
     while ((diffMatch = diffRegex.exec(blockContent)) !== null) {
       const path = diffMatch[1]?.trim();
@@ -1073,7 +1139,8 @@ export function extractApplyDiffOperations(content: string): ApplyDiffOperation[
     diffs.push({ path, search, replace, thought });
   }
 
-  const topLevelDiffRegex = /^\s*APPLY_DIFF\s+([^\s<]+)\s*(?:\n\s*)?<<<\s*\n([\s\S]*?)\n===\s*\n([\s\S]*?)\n>>>/gim;
+  // Updated regex to handle both: APPLY_DIFF path <<<...>>> and APPLY_DIFF <path> <<<...>>>
+  const topLevelDiffRegex = /^\s*APPLY_DIFF\s*<?([^\s<>]+)>?\s*(?:\n\s*)?<<<\s*\n([\s\S]*?)\n===\s*\n([\s\S]*?)\n>>>/gim;
   let topLevelMatch: RegExpExecArray | null;
   while ((topLevelMatch = topLevelDiffRegex.exec(content)) !== null) {
     const path = topLevelMatch[1]?.trim();
@@ -1151,24 +1218,31 @@ function extractFolderCreateEdits(content: string): string[] {
   return folders;
 }
 
-export function parseFilesystemResponse(content: string): ParsedFilesystemResponse {
+export function parseFilesystemResponse(content: string, forceExtract: boolean = false): ParsedFilesystemResponse {
   const writes = new Map<string, FileEdit>();
   const diffs = new Map<string, PatchEdit>();
   const applyDiffs = new Map<string, ApplyDiffOperation>();
   const deletes = new Set<string>();
   const folders = new Set<string>();
 
+  // When forceExtract is true, bypass deduplication to catch all edits
+  // This is used for final parse after stream completes to catch any remaining edits
+  const skipDeduplication = forceExtract;
+
   const addWrite = (edit: FileEdit) => {
     const key = `${edit.path}::${edit.content}`;
-    if (!writes.has(key)) writes.set(key, edit);
+    // When forceExtract is true, always add (skip deduplication)
+    if (skipDeduplication || !writes.has(key)) writes.set(key, edit);
   };
   const addDiff = (edit: PatchEdit) => {
     const key = `${edit.path}::${edit.diff}`;
-    if (!diffs.has(key)) diffs.set(key, edit);
+    // When forceExtract is true, always add (skip deduplication)
+    if (skipDeduplication || !diffs.has(key)) diffs.set(key, edit);
   };
   const addApplyDiff = (edit: ApplyDiffOperation) => {
     const key = `${edit.path}::${edit.search}::${edit.replace}`;
-    if (!applyDiffs.has(key)) applyDiffs.set(key, edit);
+    // When forceExtract is true, always add (skip deduplication)
+    if (skipDeduplication || !applyDiffs.has(key)) applyDiffs.set(key, edit);
   };
 
   for (const edit of extractFileEdits(content)) addWrite(edit);

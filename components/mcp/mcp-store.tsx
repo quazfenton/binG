@@ -25,8 +25,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
-import { mcpStoreService, type MCPServerPackage, type MCPApiKeyConfig } from "@/lib/mcp/mcp-store-service";
-import { mcpToolRegistry } from "@/lib/mcp/registry";
 
 import {
   Search,
@@ -54,6 +52,45 @@ import {
 // ============================================================================
 // Types
 // ============================================================================
+
+export interface MCPServerPackage {
+  id: string;
+  name: string;
+  namespace?: string;
+  displayName: string;
+  description: string;
+  version: string;
+  author?: string;
+  iconUrl?: string;
+  source: 'smithery' | 'local' | 'community' | 'custom';
+  mcpUrl?: string;
+  transportType?: 'stdio' | 'http' | 'websocket';
+  configSchema?: Record<string, any>;
+  apiKeys?: MCPApiKeyConfig[];
+  installed: boolean;
+  enabled: boolean;
+  starCount?: number;
+  verified?: boolean;
+  tags?: string[];
+  createdAt?: number;
+  updatedAt?: number;
+}
+
+export interface MCPApiKeyConfig {
+  name: string;
+  description?: string;
+  required: boolean;
+  envVar?: string;
+  storedValue?: string;
+}
+
+export interface MCPStoreStats {
+  totalServers: number;
+  installedServers: number;
+  activeServers: number;
+  smitheryServers: number;
+  localServers: number;
+}
 
 interface MCPServerCardProps {
   server: MCPServerPackage;
@@ -85,6 +122,59 @@ interface AddCustomServerDialogProps {
 }
 
 // ============================================================================
+// API Functions (client-safe)
+// ============================================================================
+
+async function fetchServers(searchQuery: string = '', source?: string, installed?: boolean): Promise<MCPServerPackage[]> {
+  const params = new URLSearchParams();
+  if (searchQuery) params.set('q', searchQuery);
+  if (source) params.set('source', source);
+  if (installed !== undefined) params.set('installed', String(installed));
+
+  const response = await fetch(`/api/mcp/store?${params.toString()}`);
+  const data = await response.json();
+  if (!data.success) {
+    throw new Error(data.error || 'Failed to fetch servers');
+  }
+  return data.servers || [];
+}
+
+async function fetchStats(): Promise<MCPStoreStats> {
+  const response = await fetch('/api/mcp/store');
+  const data = await response.json();
+  return data.stats || { totalServers: 0, installedServers: 0, activeServers: 0, smitheryServers: 0, localServers: 0 };
+}
+
+async function installServer(serverId: string, mcpUrl?: string, apiKeys?: Record<string, string>): Promise<boolean> {
+  const response = await fetch('/api/mcp/store', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ serverId, mcpUrl, apiKeys }),
+  });
+  const data = await response.json();
+  return data.success;
+}
+
+async function uninstallServer(serverId: string): Promise<boolean> {
+  const response = await fetch(`/api/mcp/store?id=${encodeURIComponent(serverId)}`, {
+    method: 'DELETE',
+  });
+  const data = await response.json();
+  return data.success;
+}
+
+async function syncWithSmithery(): Promise<MCPServerPackage[]> {
+  const response = await fetch('/api/mcp/store/sync', {
+    method: 'POST',
+  });
+  const data = await response.json();
+  if (!data.success) {
+    throw new Error(data.error || 'Sync failed');
+  }
+  return data.servers || [];
+}
+
+// ============================================================================
 // MCP Server Card Component
 // ============================================================================
 
@@ -100,7 +190,7 @@ function MCPServerCard({
   const handleInstall = async () => {
     setIsInstalling(true);
     try {
-      const success = await mcpStoreService.installServer(server.id);
+      const success = await installServer(server.id);
       if (success) {
         toast.success(`Installed ${server.displayName}`);
         onInstall(server);
@@ -118,7 +208,7 @@ function MCPServerCard({
     if (!confirm(`Uninstall ${server.displayName}?`)) return;
 
     try {
-      const success = await mcpStoreService.uninstallServer(server.id);
+      const success = await uninstallServer(server.id);
       if (success) {
         toast.success(`Uninstalled ${server.displayName}`);
         onUninstall(server);
@@ -156,7 +246,7 @@ function MCPServerCard({
                 )}
               </CardTitle>
               <CardDescription className="text-xs">
-                {server.author && <span>{server.author} • </span>}
+                {server.author && <span>{server.author} · </span>}
                 <span className="capitalize">{server.source}</span>
               </CardDescription>
             </div>
@@ -267,19 +357,6 @@ function APIKeyDialog({
   onSave,
 }: APIKeyDialogProps) {
   const [keys, setKeys] = useState<Record<string, string>>({});
-
-  useEffect(() => {
-    if (open && server.apiKeys) {
-      const existingKeys: Record<string, string> = {};
-      for (const apiKey of server.apiKeys) {
-        const storedValue = mcpStoreService.getApiKey(server.id, apiKey.name);
-        if (storedValue) {
-          existingKeys[apiKey.name] = storedValue;
-        }
-      }
-      setKeys(existingKeys);
-    }
-  }, [open, server]);
 
   const handleSave = () => {
     onSave(keys);
@@ -473,32 +550,34 @@ export function MCPStore() {
   const [selectedServer, setSelectedServer] = useState<MCPServerPackage | null>(null);
   const [showApiKeyDialog, setShowApiKeyDialog] = useState(false);
   const [showAddCustomDialog, setShowAddCustomDialog] = useState(false);
-  const [stats, setStats] = useState(mcpStoreService.getStats());
+  const [stats, setStats] = useState<MCPStoreStats>({ totalServers: 0, installedServers: 0, activeServers: 0, smitheryServers: 0, localServers: 0 });
 
   // Load servers on mount
   useEffect(() => {
     loadServers();
   }, []);
 
-  const loadServers = useCallback(() => {
+  const loadServers = useCallback(async () => {
     setIsLoading(true);
-    const allServers = mcpStoreService.getAllServers();
-    setServers(allServers);
-    setStats(mcpStoreService.getStats());
-    setIsLoading(false);
-  }, []);
+    try {
+      const source = filterSource !== 'all' ? filterSource : undefined;
+      const installed = filterInstalled === 'installed' ? true : filterInstalled === 'not-installed' ? false : undefined;
+      const allServers = await fetchServers(searchQuery, source, installed);
+      setServers(allServers);
+      const serverStats = await fetchStats();
+      setStats(serverStats);
+    } catch (error: any) {
+      console.error('Failed to load servers:', error);
+      toast.error('Failed to load servers');
+    } finally {
+      setIsLoading(false);
+    }
+  }, [searchQuery, filterSource, filterInstalled]);
 
   const handleSync = async () => {
     setIsSyncing(true);
     try {
-      const config = mcpStoreService.getConfig();
-      if (!config.smitheryApiKey) {
-        toast.error("Smithery API key is not configured");
-        setIsSyncing(false);
-        return;
-      }
-      
-      const newServers = await mcpStoreService.syncWithSmithery();
+      const newServers = await syncWithSmithery();
       toast.success(`Synced ${newServers.length} servers from Smithery`);
       loadServers();
     } catch (error: any) {
@@ -517,7 +596,7 @@ export function MCPStore() {
   }, [loadServers]);
 
   const handleToggleEnabled = useCallback((server: MCPServerPackage) => {
-    mcpStoreService.setServerEnabled(server.id, server.enabled);
+    // TODO: Implement toggle enabled via API
     loadServers();
   }, [loadServers]);
 
@@ -527,23 +606,21 @@ export function MCPStore() {
   }, []);
 
   const handleSaveApiKeys = useCallback((keys: Record<string, string>) => {
+    // TODO: Implement API key saving via API
     if (!selectedServer) return;
-    for (const [keyName, value] of Object.entries(keys)) {
-      mcpStoreService.storeApiKey(selectedServer.id, keyName, value);
-    }
   }, [selectedServer]);
 
   const handleAddCustomServer = useCallback((config: any) => {
-    mcpStoreService.addCustomServer(config);
+    // TODO: Implement custom server addition via API
     loadServers();
   }, [loadServers]);
 
-  // Filter servers
+  // Filter servers (local filtering as backup)
   const filteredServers = servers.filter(server => {
     if (filterSource !== 'all' && server.source !== filterSource) return false;
     if (filterInstalled === 'installed' && !server.installed) return false;
     if (filterInstalled === 'not-installed' && server.installed) return false;
-    
+
     if (searchQuery) {
       const query = searchQuery.toLowerCase();
       return (
@@ -552,9 +629,14 @@ export function MCPStore() {
         server.description.toLowerCase().includes(query)
       );
     }
-    
+
     return true;
   });
+
+  // Reload when filters change
+  useEffect(() => {
+    loadServers();
+  }, [searchQuery, filterSource, filterInstalled]);
 
   return (
     <div className="h-full flex flex-col">
@@ -563,7 +645,7 @@ export function MCPStore() {
         <div>
           <h2 className="text-lg font-semibold text-white">MCP Store</h2>
           <p className="text-xs text-white/60">
-            {stats.installedServers} installed • {stats.activeServers} active
+            {stats.installedServers} installed · {stats.activeServers} active
           </p>
         </div>
         <div className="flex items-center gap-2">
@@ -603,7 +685,7 @@ export function MCPStore() {
             className="pl-10 bg-white/5 border-white/20"
           />
         </div>
-        
+
         <div className="flex items-center gap-2">
           <Filter className="w-4 h-4 text-white/40" />
           <select
@@ -616,7 +698,7 @@ export function MCPStore() {
             <option value="local">Local</option>
             <option value="custom">Custom</option>
           </select>
-          
+
           <select
             value={filterInstalled}
             onChange={(e) => setFilterInstalled(e.target.value as any)}
@@ -678,4 +760,4 @@ export function MCPStore() {
   );
 }
 
-export default MCPStore;
+export default MCPStore;

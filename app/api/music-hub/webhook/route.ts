@@ -7,6 +7,8 @@
  * - Event logging
  * - Input validation
  * - Error handling
+ * 
+ * Uses data/playlists.json as the standard storage format
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -15,7 +17,7 @@ import { join } from "path";
 import { existsSync } from "fs";
 
 const DATA_DIR = join(process.cwd(), "data");
-const PLAYLIST_PATH = join(DATA_DIR, "music-hub-playlist.json");
+const PLAYLIST_PATH = join(DATA_DIR, "playlists.json");
 const WEBHOOK_LOG_PATH = join(DATA_DIR, "music-hub-webhook-log.json");
 
 // Rate limiting
@@ -28,14 +30,15 @@ const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
 
 function checkRateLimit(identifier: string): { allowed: boolean; remaining: number } {
   const now = Date.now();
-  
+
   // Prune expired entries to prevent unbounded memory growth
-  for (const [key, value] of rateLimitStore) {
+  const entries = Array.from(rateLimitStore.entries());
+  for (const [key, value] of entries) {
     if (now > value.resetTime) {
       rateLimitStore.delete(key);
     }
   }
-  
+
   const record = rateLimitStore.get(identifier);
 
   if (!record || now > record.resetTime) {
@@ -58,23 +61,62 @@ async function ensureDataDir(): Promise<void> {
   }
 }
 
-// Read playlist
-async function readPlaylist(): Promise<any> {
+/**
+ * Parse artist and album title from playlist title
+ * Format: "Artist - Album Title (Full Album)"
+ */
+function parseArtistAndAlbum(playlistTitle: string): { artist: string; albumTitle: string } {
+  const dashIndex = playlistTitle.indexOf(' - ');
+  if (dashIndex === -1) {
+    return { artist: 'Unknown Artist', albumTitle: playlistTitle };
+  }
+  
+  const artist = playlistTitle.substring(0, dashIndex).trim();
+  const albumTitle = playlistTitle.substring(dashIndex + 3).trim();
+  
+  return { artist, albumTitle };
+}
+
+/**
+ * Generate cover URL from playlist ID or title
+ * Uses picsum for placeholder images with seeded randomization
+ */
+function generateCoverUrl(playlistId: string, title: string): string {
+  return `https://picsum.photos/seed/${playlistId || title}/400/400`;
+}
+
+/**
+ * Check if release is recent (within 30 days)
+ */
+function isRecentRelease(discoveredAt: string): boolean {
+  const discovered = new Date(discoveredAt);
+  const now = new Date();
+  const daysDiff = Math.floor((now.getTime() - discovered.getTime()) / (1000 * 60 * 60 * 24));
+  return daysDiff <= 30;
+}
+
+/**
+ * Read playlists from data/playlists.json
+ * Returns array of playlist entries
+ */
+async function readPlaylists(): Promise<any[]> {
   try {
     await ensureDataDir();
     const data = await readFile(PLAYLIST_PATH, "utf-8");
     return JSON.parse(data);
   } catch {
-    const defaultPlaylist = { albums: [], lastUpdated: new Date().toISOString(), autoUpdate: true };
-    await writeFile(PLAYLIST_PATH, JSON.stringify(defaultPlaylist, null, 2));
-    return defaultPlaylist;
+    const defaultPlaylists: any[] = [];
+    await writeFile(PLAYLIST_PATH, JSON.stringify(defaultPlaylists, null, 2));
+    return defaultPlaylists;
   }
 }
 
-// Write playlist
-async function writePlaylist(playlist: any): Promise<void> {
+/**
+ * Write playlists to data/playlists.json
+ */
+async function writePlaylists(playlists: any[]): Promise<void> {
   await ensureDataDir();
-  await writeFile(PLAYLIST_PATH, JSON.stringify(playlist, null, 2));
+  await writeFile(PLAYLIST_PATH, JSON.stringify(playlists, null, 2));
 }
 
 // Log webhook event
@@ -107,40 +149,43 @@ async function logWebhookEvent(event: any): Promise<void> {
  * Process pending playlist syncs
  * Scans for playlists with pendingSync status and processes them
  */
-async function processPendingSyncs(playlist: any): Promise<void> {
-  if (!playlist.pendingSync || playlist.pendingSync.status !== 'pending') {
+async function processPendingSyncs(playlists: any[]): Promise<void> {
+  const pendingIndex = playlists.findIndex((p: any) => p.pendingSync && p.pendingSync.status === 'pending');
+  if (pendingIndex === -1) {
     return;
   }
 
+  const playlist = playlists[pendingIndex];
+  
   try {
     // Update status to in_progress
     playlist.pendingSync.status = 'in_progress';
     playlist.pendingSync.startedAt = new Date().toISOString();
-    await writePlaylist(playlist);
+    await writePlaylists(playlists);
 
     // TODO: Implement actual sync logic here
     // This would typically call YouTube Music API or similar to sync the playlist
     // For now, we'll simulate completion
-    
+
     // Simulate sync completion (replace with actual sync logic)
     await new Promise(resolve => setTimeout(resolve, 1000));
-    
+
     playlist.pendingSync.status = 'completed';
     playlist.pendingSync.completedAt = new Date().toISOString();
     playlist.pendingSync.result = {
-      songsSynced: 0,
+      videosSynced: playlist.videos?.length || 0,
       message: 'Sync completed (placeholder - implement actual sync logic)',
     };
-    
-    await writePlaylist(playlist);
-    
-    console.log('[Webhook] Pending sync processed:', playlist.pendingSync.playlistId);
+
+    await writePlaylists(playlists);
+
+    console.log('[Webhook] Pending sync processed:', playlist.playlist_id);
   } catch (error) {
     playlist.pendingSync.status = 'failed';
     playlist.pendingSync.failedAt = new Date().toISOString();
     playlist.pendingSync.error = error instanceof Error ? error.message : 'Unknown error';
-    await writePlaylist(playlist);
-    
+    await writePlaylists(playlists);
+
     console.error('[Webhook] Sync failed:', error);
   }
 }
@@ -177,14 +222,14 @@ export async function POST(request: NextRequest) {
     // Validate webhook secret if configured
     const expectedSecret = process.env.MUSIC_HUB_WEBHOOK_SECRET;
     const providedSecret = request.headers.get('x-webhook-secret');
-    
+
     if (expectedSecret && providedSecret !== expectedSecret) {
       const error = { success: false, error: 'Unauthorized: Invalid webhook secret' };
       await logWebhookEvent({ ...body, success: false, error: error.error });
       return NextResponse.json(error, { status: 401, headers });
     }
 
-    const playlist = await readPlaylist();
+    const playlists = await readPlaylists();
     let message = '';
 
     switch (type) {
@@ -196,125 +241,149 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const newAlbum = {
-          id: data.id || `album-${Date.now()}`,
+        // Parse artist from title if not provided
+        const { artist } = data.artist 
+          ? { artist: data.artist }
+          : parseArtistAndAlbum(data.title);
+
+        const newPlaylist = {
+          link: data.link || data.playlistUrl || '',
+          playlist_id: data.playlist_id || data.playlistId || extractPlaylistId(data.link || data.playlistUrl || ''),
           title: data.title,
-          artist: data.artist || 'Unknown Artist',
-          releaseDate: data.releaseDate || new Date().toISOString().split('T')[0],
-          playlistUrl: data.playlistUrl || '',
-          playlistId: extractPlaylistId(data.playlistUrl || ''),
-          coverUrl: data.coverUrl || `https://picsum.photos/seed/${Date.now()}/400/400`,
+          discovered_at: data.discovered_at || new Date().toISOString(),
+          videos: data.videos || data.songs?.map((s: any) => s.videoId) || [],
           isNew: true,
           isFeatured: data.isFeatured || false,
-          songs: data.songs || [],
-          addedAt: new Date().toISOString(),
+          artist: artist,
+          coverUrl: data.coverUrl || generateCoverUrl(data.playlist_id || data.playlistId, data.title),
         };
 
-        playlist.albums.unshift(newAlbum);
-        message = `Added new album: ${newAlbum.title}`;
+        playlists.unshift(newPlaylist);
+        message = `Added new album: ${newPlaylist.title} by ${artist}`;
         break;
       }
 
       case 'album_update': {
-        if (!data?.id) {
+        if (!data?.playlist_id && !data?.id) {
           return NextResponse.json(
-            { success: false, error: 'Album ID is required' },
+            { success: false, error: 'Playlist ID is required' },
             { status: 400, headers }
           );
         }
 
-        const albumIndex = playlist.albums.findIndex((a: any) => a.id === data.id);
-        if (albumIndex === -1) {
+        const playlistIndex = playlists.findIndex((p: any) => 
+          p.playlist_id === (data.playlist_id || data.id)
+        );
+        if (playlistIndex === -1) {
           return NextResponse.json(
-            { success: false, error: 'Album not found' },
+            { success: false, error: 'Playlist not found' },
             { status: 404, headers }
           );
         }
 
-        playlist.albums[albumIndex] = {
-          ...playlist.albums[albumIndex],
+        // Update fields
+        const existing = playlists[playlistIndex];
+        playlists[playlistIndex] = {
+          ...existing,
           ...data,
-          lastUpdated: new Date().toISOString(),
+          // Normalize field names
+          playlist_id: data.playlist_id || data.id || existing.playlist_id,
+          title: data.title || existing.title,
+          videos: data.videos || existing.videos,
         };
-        message = `Updated album: ${playlist.albums[albumIndex].title}`;
+        message = `Updated album: ${playlists[playlistIndex].title}`;
         break;
       }
 
       case 'album_remove': {
-        if (!data?.id) {
+        if (!data?.playlist_id && !data?.id) {
           return NextResponse.json(
-            { success: false, error: 'Album ID is required' },
+            { success: false, error: 'Playlist ID is required' },
             { status: 400, headers }
           );
         }
 
-        const removeIndex = playlist.albums.findIndex((a: any) => a.id === data.id);
+        const removeIndex = playlists.findIndex((p: any) => 
+          p.playlist_id === (data.playlist_id || data.id)
+        );
         if (removeIndex === -1) {
           return NextResponse.json(
-            { success: false, error: 'Album not found' },
+            { success: false, error: 'Playlist not found' },
             { status: 404, headers }
           );
         }
 
-        const removedAlbum = playlist.albums.splice(removeIndex, 1)[0];
-        message = `Removed album: ${removedAlbum.title}`;
+        const removedPlaylist = playlists.splice(removeIndex, 1)[0];
+        message = `Removed album: ${removedPlaylist.title}`;
         break;
       }
 
       case 'song_add': {
-        if (!data?.albumId || !data?.song?.title) {
+        if (!data?.playlist_id && !data?.albumId) {
           return NextResponse.json(
-            { success: false, error: 'Album ID and song title are required' },
+            { success: false, error: 'Playlist ID is required' },
             { status: 400, headers }
           );
         }
 
-        const targetAlbum = playlist.albums.find((a: any) => a.id === data.albumId);
-        if (!targetAlbum) {
+        const targetPlaylist = playlists.find((p: any) => 
+          p.playlist_id === (data.playlist_id || data.albumId)
+        );
+        if (!targetPlaylist) {
           return NextResponse.json(
-            { success: false, error: 'Target album not found' },
+            { success: false, error: 'Target playlist not found' },
             { status: 404, headers }
           );
         }
 
-        const newSong = {
-          id: data.song.id || `song-${Date.now()}`,
-          title: data.song.title,
-          artist: data.song.artist || targetAlbum.artist,
-          album: targetAlbum.title,
-          videoId: data.song.videoId,
-          duration: data.song.duration || 180,
-          thumbnailUrl: `https://img.youtube.com/vi/${data.song.videoId}/maxresdefault.jpg`,
-          liked: false,
-          played: false,
-        };
+        const videoId = data.videoId || data.song?.videoId;
+        if (!videoId) {
+          return NextResponse.json(
+            { success: false, error: 'Video ID is required' },
+            { status: 400, headers }
+          );
+        }
 
-        targetAlbum.songs.push(newSong);
-        message = `Added song: ${newSong.title}`;
+        if (!targetPlaylist.videos.includes(videoId)) {
+          targetPlaylist.videos.push(videoId);
+        }
+        message = `Added video to playlist: ${videoId}`;
         break;
       }
 
       case 'playlist_sync': {
-        playlist.pendingSync = {
-          playlistId: data.playlistId,
-          requestedAt: new Date().toISOString(),
-          status: 'pending',
-          source: source || 'n8n',
+        const newPlaylist: any = {
+          link: data.link || data.playlistUrl || '',
+          playlist_id: data.playlist_id || data.playlistId || extractPlaylistId(data.link || data.playlistUrl || ''),
+          title: data.title || 'Unknown Title',
+          discovered_at: new Date().toISOString(),
+          videos: [],
+          pendingSync: {
+            playlistId: data.playlist_id || data.playlistId,
+            requestedAt: new Date().toISOString(),
+            status: 'pending',
+            source: source || 'n8n',
+          },
         };
-        message = `Playlist sync initiated for: ${data.playlistId}`;
-        
+
+        // Parse artist from title if available
+        if (newPlaylist.title) {
+          const { artist } = parseArtistAndAlbum(newPlaylist.title);
+          newPlaylist.artist = artist;
+        }
+
+        playlists.unshift(newPlaylist);
+        message = `Playlist sync initiated for: ${newPlaylist.playlist_id}`;
+
         // Process the pending sync immediately
-        // In production, this could be queued to a background worker instead
-        await processPendingSyncs(playlist);
+        await processPendingSyncs(playlists);
         break;
       }
 
       case 'refresh_metadata': {
-        playlist.lastRefreshed = new Date().toISOString();
-        playlist.albums = playlist.albums.map((album: any) => ({
-          ...album,
-          isNew: isRecentRelease(album.releaseDate),
-        }));
+        playlists.forEach((playlist: any) => {
+          playlist.isNew = isRecentRelease(playlist.discovered_at);
+        });
         message = 'Metadata refreshed';
         break;
       }
@@ -326,8 +395,7 @@ export async function POST(request: NextRequest) {
         );
     }
 
-    playlist.lastUpdated = new Date().toISOString();
-    await writePlaylist(playlist);
+    await writePlaylists(playlists);
 
     await logWebhookEvent({
       event,
@@ -343,12 +411,12 @@ export async function POST(request: NextRequest) {
       success: true,
       message,
       playlist: {
-        albumCount: playlist.albums.length,
-        lastUpdated: playlist.lastUpdated,
+        playlistCount: playlists.length,
+        lastUpdated: new Date().toISOString(),
       },
     }, { headers });
-  } catch (error) {
-    console.error('[Webhook] Error:', error);
+  } catch (err) {
+    console.error('[Webhook] Error processing request');
 
     await logWebhookEvent({
       event: 'error',
@@ -357,7 +425,7 @@ export async function POST(request: NextRequest) {
       timestamp: new Date().toISOString(),
       source: 'n8n',
       success: false,
-      error: error instanceof Error ? error.message : 'Unknown error',
+      error: err instanceof Error ? err.message : 'Unknown error',
     });
 
     return NextResponse.json(
@@ -375,7 +443,7 @@ export async function GET() {
   try {
     await ensureDataDir();
     let logs = { events: [] };
-    
+
     try {
       const data = await readFile(WEBHOOK_LOG_PATH, "utf-8");
       logs = JSON.parse(data);
@@ -388,7 +456,7 @@ export async function GET() {
       events: logs.events,
       totalEvents: logs.events.length,
     });
-  } catch (error) {
+  } catch {
     return NextResponse.json(
       { error: 'Failed to read webhook logs' },
       { status: 500 }
@@ -396,7 +464,7 @@ export async function GET() {
   }
 }
 
-// Helper functions
+// Helper function to extract YouTube playlist ID
 function extractPlaylistId(url: string): string | null {
   try {
     const urlObj = new URL(url);
@@ -408,11 +476,4 @@ function extractPlaylistId(url: string): string | null {
   } catch {
     return null;
   }
-}
-
-function isRecentRelease(releaseDate: string): boolean {
-  const release = new Date(releaseDate);
-  const now = new Date();
-  const daysDiff = Math.floor((now.getTime() - release.getTime()) / (1000 * 60 * 60 * 24));
-  return daysDiff <= 30;
 }

@@ -8,6 +8,8 @@
  * - CORS headers
  * - Cache control
  * - Graceful degradation
+ * 
+ * Uses data/playlists.json as the standard storage format
  */
 
 import { NextRequest, NextResponse } from "next/server";
@@ -17,7 +19,7 @@ import { existsSync } from "fs";
 import { timingSafeEqual } from "crypto";
 
 const DATA_DIR = join(process.cwd(), "data");
-const PLAYLIST_PATH = join(DATA_DIR, "music-hub-playlist.json");
+const PLAYLIST_PATH = join(DATA_DIR, "playlists.json");
 
 // Rate limiting configuration
 const RATE_LIMIT = {
@@ -34,56 +36,53 @@ const rateLimitStore = new Map<string, { count: number; resetTime: number }>();
 function safeCompare(a: string, b: string): boolean {
   const bufA = Buffer.from(a, 'utf8');
   const bufB = Buffer.from(b, 'utf8');
-  
+
   // Lengths must match
   if (bufA.length !== bufB.length) return false;
-  
+
   // Use timing-safe comparison
   return timingSafeEqual(bufA, bufB);
 }
 
-// Default playlist
-const DEFAULT_PLAYLIST = {
-  albums: [
-    {
-      id: "album-1",
-      title: "Neon Dreams",
-      artist: "Digital Underground",
-      releaseDate: "2026-03-15",
-      playlistUrl: "https://www.youtube.com/playlist?list=PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
-      playlistId: "PLrAXtmErZgOeiKm4sgNOknGvNjby9efdf",
-      coverUrl: "https://picsum.photos/seed/neondreams/400/400",
-      isNew: true,
-      isFeatured: true,
-      songs: [
-        {
-          id: "song-1-1",
-          title: "Midnight Protocol",
-          artist: "Digital Underground",
-          album: "Neon Dreams",
-          videoId: "dQw4w9WgXcQ",
-          duration: 245,
-          thumbnailUrl: "https://img.youtube.com/vi/dQw4w9WgXcQ/maxresdefault.jpg",
-          liked: false,
-          played: false,
-        },
-        {
-          id: "song-1-2",
-          title: "Binary Sunset",
-          artist: "Digital Underground",
-          album: "Neon Dreams",
-          videoId: "9bZkp7q19f0",
-          duration: 198,
-          thumbnailUrl: "https://img.youtube.com/vi/9bZkp7q19f0/maxresdefault.jpg",
-          liked: true,
-          played: false,
-        },
-      ],
-    },
-  ],
-  lastUpdated: new Date().toISOString(),
-  autoUpdate: true,
-};
+/**
+ * Parse artist and album title from playlist title
+ * Format: "Artist - Album Title (Full Album)"
+ */
+function parseArtistAndAlbum(playlistTitle: string): { artist: string; albumTitle: string } {
+  const dashIndex = playlistTitle.indexOf(' - ');
+  if (dashIndex === -1) {
+    return { artist: 'Unknown Artist', albumTitle: playlistTitle };
+  }
+  
+  const artist = playlistTitle.substring(0, dashIndex).trim();
+  const albumTitle = playlistTitle.substring(dashIndex + 3).trim();
+  
+  return { artist, albumTitle };
+}
+
+/**
+ * Generate cover URL from playlist ID or title
+ */
+function generateCoverUrl(playlistId: string, title: string): string {
+  return `https://picsum.photos/seed/${playlistId || title}/400/400`;
+}
+
+/**
+ * Generate thumbnail URL for a video
+ */
+function generateThumbnailUrl(videoId: string): string {
+  return `https://img.youtube.com/vi/${videoId}/maxresdefault.jpg`;
+}
+
+/**
+ * Check if playlist is recent (within 30 days)
+ */
+function isRecent(discoveredAt: string): boolean {
+  const discovered = new Date(discoveredAt);
+  const now = new Date();
+  const daysDiff = Math.floor((now.getTime() - discovered.getTime()) / (1000 * 60 * 60 * 24));
+  return daysDiff <= 30;
+}
 
 // Check rate limit
 function checkRateLimit(identifier: string): { allowed: boolean; remaining: number; resetTime: number } {
@@ -113,18 +112,21 @@ async function ensureDataDir(): Promise<void> {
   }
 }
 
-// Read playlist with safe fallback
-async function readPlaylist(): Promise<any> {
+/**
+ * Read playlists from data/playlists.json
+ * Returns array of playlist entries
+ */
+async function readPlaylists(): Promise<any[]> {
   try {
     await ensureDataDir();
     const data = await readFile(PLAYLIST_PATH, "utf-8");
     return JSON.parse(data);
   } catch (error: any) {
-    // Only create default playlist if file doesn't exist
-    // For other errors (parse failures, read errors), rethrow to caller
+    // Only create default empty array if file doesn't exist
     if (error.code === 'ENOENT') {
-      await writeFile(PLAYLIST_PATH, JSON.stringify(DEFAULT_PLAYLIST, null, 2));
-      return DEFAULT_PLAYLIST;
+      const defaultPlaylists: any[] = [];
+      await writeFile(PLAYLIST_PATH, JSON.stringify(defaultPlaylists, null, 2));
+      return defaultPlaylists;
     }
     // Log error for debugging but don't overwrite production data
     console.error('[Playlist] Failed to read playlist:', error.message);
@@ -132,31 +134,43 @@ async function readPlaylist(): Promise<any> {
   }
 }
 
-// Write playlist with error handling
-async function writePlaylist(playlist: any): Promise<void> {
+/**
+ * Write playlists to data/playlists.json
+ */
+async function writePlaylists(playlists: any[]): Promise<void> {
   await ensureDataDir();
-  await writeFile(PLAYLIST_PATH, JSON.stringify(playlist, null, 2));
+  await writeFile(PLAYLIST_PATH, JSON.stringify(playlists, null, 2));
 }
 
-// Validate album data
-function validateAlbum(album: any): { valid: boolean; error?: string } {
-  if (!album || typeof album !== 'object') {
-    return { valid: false, error: 'Album must be an object' };
-  }
-
-  if (!album.title || typeof album.title !== 'string') {
-    return { valid: false, error: 'Album title is required' };
-  }
-
-  if (!album.artist || typeof album.artist !== 'string') {
-    return { valid: false, error: 'Album artist is required' };
-  }
-
-  if (album.songs && !Array.isArray(album.songs)) {
-    return { valid: false, error: 'Songs must be an array' };
-  }
-
-  return { valid: true };
+/**
+ * Convert a playlist entry to the enriched format with songs
+ */
+function enrichPlaylist(playlist: any): any {
+  const { artist } = playlist.artist 
+    ? { artist: playlist.artist }
+    : parseArtistAndAlbum(playlist.title || '');
+  
+  return {
+    id: playlist.playlist_id,
+    playlist_id: playlist.playlist_id,
+    title: playlist.title,
+    artist: artist,
+    link: playlist.link,
+    discovered_at: playlist.discovered_at,
+    isNew: isRecent(playlist.discovered_at),
+    isFeatured: playlist.isFeatured || false,
+    coverUrl: playlist.coverUrl || generateCoverUrl(playlist.playlist_id, playlist.title),
+    songs: (playlist.videos || []).map((videoId: string, index: number) => ({
+      id: `song-${playlist.playlist_id}-${index}`,
+      title: `Track ${index + 1}`,
+      artist: artist,
+      album: playlist.title,
+      videoId: videoId,
+      thumbnailUrl: generateThumbnailUrl(videoId),
+      liked: false,
+      played: false,
+    })),
+  };
 }
 
 // GET - Retrieve playlist
@@ -180,12 +194,16 @@ export async function GET(request: NextRequest) {
   }
 
   try {
-    const playlist = await readPlaylist();
+    const playlists = await readPlaylists();
     
+    // Enrich playlists with additional metadata
+    const enrichedPlaylists = playlists.map(enrichPlaylist);
+
     return NextResponse.json(
       {
         success: true,
-        playlist,
+        playlists: enrichedPlaylists,
+        total: enrichedPlaylists.length,
         timestamp: new Date().toISOString(),
       },
       { headers }
@@ -195,8 +213,8 @@ export async function GET(request: NextRequest) {
     return NextResponse.json(
       {
         success: true,
-        playlist: DEFAULT_PLAYLIST,
-        error: 'Failed to read playlist, returning default',
+        playlists: [],
+        error: 'Failed to read playlist, returning empty',
       },
       { headers }
     );
@@ -224,7 +242,7 @@ export async function POST(request: NextRequest) {
 
   try {
     const body = await request.json();
-    const { action, album, playlist: newPlaylist, webhookSecret } = body;
+    const { action, playlist: playlistData, webhookSecret } = body;
 
     // Validate webhook secret if configured using constant-time comparison
     const expectedSecret = process.env.MUSIC_HUB_WEBHOOK_SECRET;
@@ -235,102 +253,133 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const currentPlaylist = await readPlaylist();
+    const playlists = await readPlaylists();
 
     switch (action) {
-      case 'add_album': {
-        const validation = validateAlbum(album);
-        if (!validation.valid) {
+      case 'add_playlist': {
+        if (!playlistData?.title) {
           return NextResponse.json(
-            { success: false, error: validation.error },
+            { success: false, error: 'Playlist title is required' },
             { status: 400, headers }
           );
         }
 
-        const newAlbum = {
-          ...album,
-          id: album.id || `album-${Date.now()}`,
-          isNew: album.isNew ?? true,
-          isFeatured: album.isFeatured ?? false,
-          songs: album.songs || [],
-          addedAt: new Date().toISOString(),
+        // Parse artist from title if not provided
+        const { artist } = playlistData.artist
+          ? { artist: playlistData.artist }
+          : parseArtistAndAlbum(playlistData.title);
+
+        const playlistId = playlistData.playlist_id || 
+          playlistData.playlistId || 
+          extractPlaylistId(playlistData.link || playlistData.playlistUrl || '');
+
+        // Check for duplicates
+        const exists = playlists.some((p: any) => p.playlist_id === playlistId);
+        if (exists) {
+          return NextResponse.json(
+            { success: false, error: 'Playlist already exists' },
+            { status: 409, headers }
+          );
+        }
+
+        const newPlaylist = {
+          link: playlistData.link || playlistData.playlistUrl || '',
+          playlist_id: playlistId,
+          title: playlistData.title,
+          discovered_at: playlistData.discovered_at || new Date().toISOString(),
+          videos: playlistData.videos || [],
+          isNew: true,
+          isFeatured: playlistData.isFeatured || false,
+          artist: artist,
+          coverUrl: playlistData.coverUrl || generateCoverUrl(playlistId, playlistData.title),
         };
 
-        currentPlaylist.albums.unshift(newAlbum);
+        playlists.unshift(newPlaylist);
         break;
       }
 
-      case 'remove_album': {
-        if (!album?.id) {
+      case 'remove_playlist': {
+        if (!playlistData?.playlist_id) {
           return NextResponse.json(
-            { success: false, error: 'Album ID required' },
+            { success: false, error: 'Playlist ID required' },
             { status: 400, headers }
           );
         }
 
-        const albumIndex = currentPlaylist.albums.findIndex((a: any) => a.id === album.id);
-        if (albumIndex === -1) {
+        const playlistIndex = playlists.findIndex((p: any) => p.playlist_id === playlistData.playlist_id);
+        if (playlistIndex === -1) {
           return NextResponse.json(
-            { success: false, error: 'Album not found' },
+            { success: false, error: 'Playlist not found' },
             { status: 404, headers }
           );
         }
 
-        currentPlaylist.albums.splice(albumIndex, 1);
+        playlists.splice(playlistIndex, 1);
         break;
       }
 
-      case 'update_album': {
-        if (!album?.id) {
+      case 'update_playlist': {
+        if (!playlistData?.playlist_id) {
           return NextResponse.json(
-            { success: false, error: 'Album ID required' },
+            { success: false, error: 'Playlist ID required' },
             { status: 400, headers }
           );
         }
 
-        const albumIndex = currentPlaylist.albums.findIndex((a: any) => a.id === album.id);
-        if (albumIndex === -1) {
+        const playlistIndex = playlists.findIndex((p: any) => p.playlist_id === playlistData.playlist_id);
+        if (playlistIndex === -1) {
           return NextResponse.json(
-            { success: false, error: 'Album not found' },
+            { success: false, error: 'Playlist not found' },
             { status: 404, headers }
           );
         }
 
-        currentPlaylist.albums[albumIndex] = {
-          ...currentPlaylist.albums[albumIndex],
-          ...album,
-          lastUpdated: new Date().toISOString(),
+        // Update allowed fields
+        const existing = playlists[playlistIndex];
+        playlists[playlistIndex] = {
+          ...existing,
+          ...playlistData,
+          playlist_id: existing.playlist_id, // Don't allow changing playlist_id
+          videos: playlistData.videos !== undefined ? playlistData.videos : existing.videos,
         };
         break;
       }
 
-      case 'replace_playlist': {
-        if (!newPlaylist || !newPlaylist.albums || !Array.isArray(newPlaylist.albums)) {
+      case 'add_videos': {
+        if (!playlistData?.playlist_id || !playlistData.videos) {
           return NextResponse.json(
-            { success: false, error: 'Valid playlist data required' },
+            { success: false, error: 'Playlist ID and videos array required' },
             { status: 400, headers }
           );
         }
 
-        Object.assign(currentPlaylist, {
-          ...newPlaylist,
-          lastUpdated: new Date().toISOString(),
-        });
+        const targetPlaylist = playlists.find((p: any) => p.playlist_id === playlistData.playlist_id);
+        if (!targetPlaylist) {
+          return NextResponse.json(
+            { success: false, error: 'Playlist not found' },
+            { status: 404, headers }
+          );
+        }
+
+        // Add new videos that don't already exist
+        const existingVideos = new Set(targetPlaylist.videos || []);
+        const newVideos = playlistData.videos.filter((v: string) => !existingVideos.has(v));
+        targetPlaylist.videos.push(...newVideos);
         break;
       }
 
       case 'sync_playlist': {
-        if (!album?.playlistUrl) {
+        if (!playlistData?.link && !playlistData?.playlistUrl) {
           return NextResponse.json(
             { success: false, error: 'Playlist URL required' },
             { status: 400, headers }
           );
         }
 
-        // Validate playlist ID before persisting
-        const playlistId = extractPlaylistId(album.playlistUrl);
-        
-        // Reject if null or clearly a video ID (starts with underscore or is too short)
+        const playlistUrl = playlistData.link || playlistData.playlistUrl;
+        const playlistId = extractPlaylistId(playlistUrl);
+
+        // Reject if null or clearly a video ID
         if (!playlistId || playlistId.startsWith('_') || playlistId.length < 10) {
           return NextResponse.json(
             { success: false, error: 'Invalid playlist URL. Ensure it contains a valid YouTube playlist ID (e.g., ?list=PL...)' },
@@ -338,11 +387,36 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        currentPlaylist.pendingSync = {
-          playlistId,
-          requestedAt: new Date().toISOString(),
-          status: 'pending',
-        };
+        // Check if playlist already exists
+        const existingIndex = playlists.findIndex((p: any) => p.playlist_id === playlistId);
+        if (existingIndex !== -1) {
+          // Update existing playlist with sync pending
+          playlists[existingIndex].pendingSync = {
+            requestedAt: new Date().toISOString(),
+            status: 'pending',
+          };
+        } else {
+          // Add new playlist with sync pending
+          const newPlaylist: any = {
+            link: playlistUrl,
+            playlist_id: playlistId,
+            title: playlistData.title || 'Unknown Title',
+            discovered_at: new Date().toISOString(),
+            videos: [],
+            pendingSync: {
+              requestedAt: new Date().toISOString(),
+              status: 'pending',
+            },
+          };
+
+          // Parse artist from title if available
+          if (newPlaylist.title) {
+            const { artist } = parseArtistAndAlbum(newPlaylist.title);
+            newPlaylist.artist = artist;
+          }
+
+          playlists.unshift(newPlaylist);
+        }
         break;
       }
 
@@ -353,14 +427,14 @@ export async function POST(request: NextRequest) {
         );
     }
 
-    currentPlaylist.lastUpdated = new Date().toISOString();
-    await writePlaylist(currentPlaylist);
+    await writePlaylists(playlists);
 
     return NextResponse.json(
       {
         success: true,
         message: `Action "${action}" completed successfully`,
-        playlist: currentPlaylist,
+        playlists: playlists.map(enrichPlaylist),
+        total: playlists.length,
       },
       { headers }
     );
