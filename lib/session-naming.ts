@@ -73,20 +73,20 @@ async function initializeSessionNaming(): Promise<void> {
     // Retry logic: VFS might not be ready immediately on page load
     let attempts = 0;
     let nodes: any[] = [];
-    
+
     while (attempts < 3) {
       const response = await fetch(`${getBaseUrl()}/api/filesystem/list?path=${encodeURIComponent('project/sessions')}`);
 
       if (response.ok) {
         const payload = await response.json().catch(() => null);
         nodes = payload?.data?.nodes || [];
-        
+
         // If we got results, break out of retry loop
         if (nodes.length > 0 || payload?.success !== false) {
           break;
         }
       }
-      
+
       // Wait before retrying
       await new Promise(resolve => setTimeout(resolve, 100 * (attempts + 1)));
       attempts++;
@@ -109,9 +109,11 @@ async function initializeSessionNaming(): Promise<void> {
       }
     }
 
-    // Start after the highest used number
+    // FIX: Start AFTER the highest used number
+    // If maxNumber is 0 (no sessions), currentIndex stays 0, next will be 001
+    // If maxNumber is 1 (001 exists), currentIndex becomes 1, next will be 002
     currentIndex = maxNumber;
-    logger.info(`Initialized session naming: ${maxNumber} existing sessions found (from ${nodes.length} nodes)`);
+    logger.info(`Initialized session naming: ${maxNumber} existing sessions found (from ${nodes.length} nodes), next index: ${currentIndex + 1}`);
   } catch (error) {
     logger.warn(`Failed to initialize session naming from filesystem: ${error}`);
   }
@@ -286,6 +288,60 @@ function generateUniqueName(baseName: string): string {
 }
 
 /**
+ * Detect folder structure from response content
+ * Returns the single folder name if all files are in one folder
+ */
+export function detectSingleFolderFromResponse(content: string): string | null {
+  if (!content || content.trim().length === 0) return null;
+  
+  const folderSet = new Set<string>();
+  
+  // Extract paths from WRITE commands: WRITE path <<<content>>>
+  const writeRegex = /WRITE\s+<?([^\s<>]+)>?\s*<<<[\s\S]*?>>>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = writeRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (path && path.includes('/')) {
+      const folder = path.split('/')[0];
+      if (folder && !folder.startsWith('<') && !folder.endsWith('>')) {
+        folderSet.add(folder);
+      }
+    }
+  }
+  
+  // Extract paths from <file_edit path="..."> tags
+  const fileEditRegex = /<file_edit\s*path=["']([^"']+)["']/gi;
+  while ((match = fileEditRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (path && path.includes('/')) {
+      const folder = path.split('/')[0];
+      folderSet.add(folder);
+    }
+  }
+  
+  // Extract paths from fenced code blocks with filename hints
+  const codeBlockRegex = /```[a-zA-Z]*\s*(?:file|path|filename)\s*[:=]\s*([^\n]+)/gi;
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (path && path.includes('/')) {
+      const folder = path.split('/')[0];
+      folderSet.add(folder);
+    }
+  }
+  
+  // If exactly one folder found, return it
+  if (folderSet.size === 1) {
+    const folderName = Array.from(folderSet)[0];
+    // Validate folder name (alphanumeric, no special chars)
+    if (/^[a-zA-Z0-9_-]+$/.test(folderName)) {
+      return folderName;
+    }
+  }
+  
+  return null;
+}
+
+/**
  * Main function to generate a session name
  * @param suggestedFolderName - Optional folder name from LLM response
  * @param isNewProject - Whether this is a new project (first generation)
@@ -311,12 +367,12 @@ export async function generateSessionName(
   const lockPromise = new Promise<void>(resolve => {
     releaseLock = resolve;
   });
-  
+
   const currentLock = nameGenerationLock;
   nameGenerationLock = lockPromise;
-  
+
   await currentLock;
-  
+
   try {
     // Ensure we've scanned existing sessions to avoid collisions
     await initializeSessionNaming();
