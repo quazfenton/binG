@@ -139,48 +139,59 @@ export async function POST(request: NextRequest) {
       const task = getTriggerTask(config.taskId);
       if (!task) {
         return NextResponse.json(
-          { 
-            success: false, 
-            error: `Unknown task: ${config.taskId}. Available: ${ALL_TRIGGER_TASKS.map(t => (t as any).id).join(', ')}` 
+          {
+            success: false,
+            error: `Unknown task: ${config.taskId}. Available: ${ALL_TRIGGER_TASKS.map(t => (t as any).id).join(', ')}`
           },
           { status: 400 }
         );
       }
 
-      // Create job
-      const jobId = `job-${Date.now()}-${Math.random().toString(36).substr(2, 9)}`;
-      const job: TriggerJobResponse = {
-        id: jobId,
-        taskId: config.taskId,
-        status: 'scheduled',
-        scheduledAt: config.schedule 
-          ? new Date().toISOString()
-          : undefined,
-      };
+      // Use Trigger.dev integration layer (with fallback)
+      const { executeTask, scheduleAgentLoop, scheduleDAGExecution, scheduleReflection } = await import('@/lib/events/trigger');
 
-      JOBS.set(jobId, job);
-
-      // Simulate task execution (in production, this would use actual Trigger.dev SDK)
-      const taskRequest: TriggerJobRequest = {
-        taskId: config.taskId,
-        payload: config.payload,
-      };
-      if (config.schedule) {
-        taskRequest.schedule = config.schedule as { type: 'cron' | 'interval'; expression: string };
+      // Handle scheduling for specific task types
+      if (config.taskId === 'agent-loop' && config.schedule) {
+        const result = await scheduleAgentLoop({
+          ...(config.payload as any),
+          schedule: config.schedule,
+        });
+        return NextResponse.json(result);
       }
-      executeTaskAsync(jobId, taskRequest);
+
+      if (config.taskId === 'dag-runner' && config.schedule) {
+        const result = await scheduleDAGExecution({
+          ...(config.payload as any),
+          schedule: config.schedule,
+        });
+        return NextResponse.json(result);
+      }
+
+      if (config.taskId === 'reflection' && config.schedule) {
+        const result = await scheduleReflection({
+          ...(config.payload as any),
+          triggerEventId: `reflection-${Date.now()}`,
+        });
+        return NextResponse.json(result);
+      }
+
+      // For non-scheduled tasks, just execute
+      const result = await executeTask(
+        config.taskId as any,
+        config.payload || {}
+      );
 
       return NextResponse.json({
         success: true,
-        message: `Task "${(task as any).name}" scheduled`,
-        job,
+        result,
+        executionMode: await import('@/lib/events/trigger').then(m => m.getExecutionMode()),
       });
     }
 
     // Trigger a task immediately without scheduling
     if (body.action === 'trigger') {
       const { taskId, payload } = body;
-      
+
       if (!taskId) {
         return NextResponse.json(
           { success: false, error: 'taskId is required' },
@@ -191,21 +202,25 @@ export async function POST(request: NextRequest) {
       const task = getTriggerTask(taskId);
       if (!task) {
         return NextResponse.json(
-          { 
-            success: false, 
-            error: `Unknown task: ${taskId}` 
+          {
+            success: false,
+            error: `Unknown task: ${taskId}`
           },
           { status: 400 }
         );
       }
 
-      // Execute immediately
-      const result = await executeTaskNow(taskId, payload || {});
+      // Execute immediately using Trigger.dev integration (with fallback)
+      const { executeTask, getExecutionMode } = await import('@/lib/events/trigger');
+      
+      const result = await executeTask(taskId as any, payload || {});
+      const mode = await getExecutionMode();
 
       return NextResponse.json({
         success: true,
         message: `Task "${(task as any).name}" executed`,
         result,
+        executionMode: mode,
       });
     }
 
@@ -220,10 +235,25 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      // This would integrate with the feed API
-      const feedResponse = await fetch(
-        `/api/zine-display/feed?action=fetch&source=${encodeURIComponent(source)}`
-      );
+      // Build absolute URL for server-side fetch
+      const origin = request.headers.get('x-forwarded-host') 
+        ? `https://${request.headers.get('x-forwarded-host')}`
+        : process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000';
+      
+      const feedUrl = `${origin}/api/zine-display/feed?action=fetch&source=${encodeURIComponent(source)}`;
+      
+      const feedResponse = await fetch(feedUrl);
+
+      if (!feedResponse.ok) {
+        return NextResponse.json(
+          {
+            success: false,
+            error: `Feed fetch failed: ${feedResponse.status} ${feedResponse.statusText}`
+          },
+          { status: 502 }
+        );
+      }
+
       const feedData = await feedResponse.json();
 
       // Convert to Zine fragments and push to display
@@ -263,8 +293,16 @@ export async function POST(request: NextRequest) {
 // Task Execution Helpers
 // ---------------------------------------------------------------------
 
+/**
+ * Execute task asynchronously (background execution)
+ *
+ * Delegates to Trigger.dev integration layer which handles:
+ * - Trigger.dev SDK execution when available
+ * - Automatic fallback to local execution
+ * - Job status tracking
+ */
 async function executeTaskAsync(
-  jobId: string, 
+  jobId: string,
   config: TriggerJobRequest
 ) {
   // Update job status
@@ -275,18 +313,19 @@ async function executeTaskAsync(
   }
 
   try {
-    // Simulate async task execution
-    // In production, use actual Trigger.dev SDK:
-    // const trigger = await import('@trigger.dev/sdk/v3');
-    // await trigger.trigger(config.taskId, config.payload);
-
-    await new Promise(resolve => setTimeout(resolve, 1000));
+    // Use Trigger.dev integration layer
+    const { executeTask } = await import('@/lib/events/trigger');
+    
+    const result = await executeTask(
+      config.taskId as any,
+      config.payload || {}
+    );
 
     // Update on completion
     const completedJob = JOBS.get(jobId);
     if (completedJob) {
       completedJob.status = 'completed';
-      completedJob.result = { success: true, message: 'Task completed' };
+      completedJob.result = { success: true, output: result };
       JOBS.set(jobId, completedJob);
     }
   } catch (error) {
@@ -300,44 +339,35 @@ async function executeTaskAsync(
   }
 }
 
+/**
+ * Execute task immediately and return result
+ *
+ * Delegates to Trigger.dev integration layer which handles:
+ * - Trigger.dev SDK execution when available  
+ * - Automatic fallback to local execution
+ */
 async function executeTaskNow(
-  taskId: string, 
+  taskId: string,
   payload: Record<string, unknown>
 ): Promise<unknown> {
-  const task = getTriggerTask(taskId);
-  if (!task) {
-    throw new Error(`Task not found: ${taskId}`);
-  }
+  const { executeTask, getExecutionMode } = await import('@/lib/events/trigger');
+  
+  const result = await executeTask(taskId as any, payload);
+  const mode = await getExecutionMode();
+  
+  console.log(`[Zine-Trigger] Task executed in ${mode} mode`, { taskId });
+  
+  return result;
+}
 
-  // Execute based on task type
-  switch (taskId) {
-    case 'research-agent':
-      // Would perform actual research
-      return { 
-        query: payload.query || 'default', 
-        results: ['Research result 1', 'Research result 2'] 
-      };
-
-    case 'dag-runner':
-      // Would execute DAG
-      const dagPayload = payload.dag as { nodes?: unknown[] } | undefined;
-      return { 
-        nodes: dagPayload?.nodes?.length || 0, 
-        executed: true 
-      };
-
-    case 'reflection':
-      // Would analyze results
-      return { 
-        analysis: 'Analysis complete', 
-        improvements: ['Improvement 1'] 
-      };
-
-    default:
-      return { 
-        taskId, 
-        executed: true, 
-        payload 
-      };
+/**
+ * Check if Trigger.dev SDK is available
+ */
+async function isTriggerAvailable(): Promise<boolean> {
+  try {
+    await import('@trigger.dev/sdk/v3');
+    return true;
+  } catch {
+    return false;
   }
 }

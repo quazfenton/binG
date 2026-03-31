@@ -143,8 +143,11 @@ export async function handleHumanApproval(event: EventRecord): Promise<any> {
     const approval = { id: `approval-${Date.now()}`, status: 'pending' };
 
     // Wait for approval (with timeout) - placeholder implementation
+    // FIX: Honor the timeout and fail closed (reject on timeout)
     const response = await new Promise<{ approved: boolean; response: string }>((resolve) => {
-      setTimeout(() => resolve({ approved: true, response: 'Auto-approved' }), 1000);
+      setTimeout(() => resolve({ approved: false, response: 'Timed out waiting for approval' }), timeout);
+      // In production, this would wait for actual human approval via webhook/UI
+      // For now, we fail closed to ensure safety
     });
 
     return {

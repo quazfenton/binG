@@ -28,7 +28,7 @@ async function verifyOpenTelemetry() {
     console.log(`    - @opentelemetry/sdk-trace-node: ${typeof sdkTraceNode.NodeTracerProvider !== 'undefined' ? '✓' : '✗'}`)
     console.log(`    - @opentelemetry/sdk-trace-base: ${typeof sdkTraceBase.BatchSpanProcessor !== 'undefined' ? '✓' : '✗'}`)
     console.log(`    - @opentelemetry/exporter-trace-otlp-http: ${typeof exporterOtlp.OTLPTraceExporter !== 'undefined' ? '✓' : '✗'}`)
-    console.log(`    - @opentelemetry/resources: ${typeof resources.Resource !== 'undefined' ? '✓' : '✗'}`)
+    console.log(`    - @opentelemetry/resources: ${typeof resources.detectResources !== 'undefined' ? '✓' : '✗'}`)
     console.log(`    - @opentelemetry/semantic-conventions: ${typeof semanticConventions.SemanticResourceAttributes !== 'undefined' ? '✓' : '✗'}`)
     console.log(`    - @opentelemetry/sdk-metrics: ${typeof sdkMetrics.MeterProvider !== 'undefined' ? '✓' : '✗'}`)
   } catch (error: any) {

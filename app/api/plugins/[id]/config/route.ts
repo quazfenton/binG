@@ -1,8 +1,8 @@
 /**
- * Plugin Config & Execution API
+ * Plugin Config API
  *
  * PUT /api/plugins/:id/config - Update plugin config
- * POST /api/plugins/:id/execute - Execute plugin with input
+ * POST /api/plugins/:id/config - Execute plugin with config
  */
 
 import { NextRequest, NextResponse } from 'next/server';

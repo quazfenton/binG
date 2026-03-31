@@ -11,6 +11,7 @@ export * from './tracing';
 
 // Metrics exports
 export * from './metrics';
+import { registerAllMetrics } from './metrics';
 
 /**
  * Initialize observability

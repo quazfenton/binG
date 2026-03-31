@@ -226,6 +226,13 @@ export interface SSEErrorPayload {
   details?: string;
 }
 
+export interface SSEInitPayload {
+  /** Session/request ID */
+  requestId?: string;
+  /** Timestamp */
+  timestamp: number;
+}
+
 // ---------------------------------------------------------------------------
 // Discriminated union (useful on the consumer side)
 // ---------------------------------------------------------------------------
@@ -243,6 +250,7 @@ export type SSEEvent =
   | { type: typeof SSE_EVENT_TYPES.SPEC_AMPLIFICATION; data: SSESpecAmplificationPayload }
   | { type: typeof SSE_EVENT_TYPES.SPEC_REFINEMENT; data: SSESpecRefinementPayload }
   | { type: typeof SSE_EVENT_TYPES.DAG_TASK_STATUS; data: SSEDAGTaskStatusPayload }
+  | { type: typeof SSE_EVENT_TYPES.INIT; data: SSEInitPayload }
   | { type: typeof SSE_EVENT_TYPES.DONE; data: SSEDonePayload }
   | { type: typeof SSE_EVENT_TYPES.ERROR; data: SSEErrorPayload }
   | { type: typeof SSE_EVENT_TYPES.HEARTBEAT; data: Record<string, unknown> };

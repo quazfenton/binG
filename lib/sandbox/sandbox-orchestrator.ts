@@ -32,7 +32,7 @@ export interface OrchestratorSession {
   handle: SandboxHandle;
   provider: SandboxProviderType;
   policy: ExecutionPolicy;
-  taskType: 'coding' | 'browsing' | 'automation' | 'general' | 'messaging' | 'api' | 'unknown'; // Persisted task type for migration
+  taskType: 'coding' | 'browsing' | 'automation' | 'general' | 'messaging' | 'api' | 'unknown' | 'advanced' | 'code-interpreter' | 'agent' | 'fullstack-app' | 'frontend-app' | 'batch-job' | 'computer-use' | 'lsp-intelligence' | 'persistent-service' | 'ci-cd' | 'ml-training'; // Persisted task type for migration
   riskAssessment?: RiskAssessment;
   createdAt: number;
   lastActivityAt: number;
@@ -418,7 +418,7 @@ export class SandboxOrchestrator {
   }
 
   private buildTaskContext(
-    taskType: 'coding' | 'browsing' | 'automation' | 'general' | 'messaging' | 'api' | 'unknown',
+    taskType: 'coding' | 'browsing' | 'automation' | 'general' | 'messaging' | 'api' | 'unknown' | 'advanced' | 'code-interpreter' | 'agent' | 'fullstack-app' | 'frontend-app' | 'batch-job' | 'computer-use' | 'lsp-intelligence' | 'persistent-service' | 'ci-cd' | 'ml-training',
     policy: ExecutionPolicy,
   ): TaskContext {
     switch (policy) {

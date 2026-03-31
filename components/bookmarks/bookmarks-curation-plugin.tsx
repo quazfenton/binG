@@ -565,7 +565,13 @@ function BookmarkCard({
             )}
             <div className="flex items-center gap-2 mt-2">
               <Badge variant="outline" className="text-[10px]">
-                {new URL(bookmark.url).hostname}
+                {(() => {
+                  try {
+                    return new URL(bookmark.url).hostname;
+                  } catch {
+                    return 'Unknown';
+                  }
+                })()}
               </Badge>
               {bookmark.tags?.map(tag => (
                 <Badge key={tag} variant="outline" className="text-[10px]">

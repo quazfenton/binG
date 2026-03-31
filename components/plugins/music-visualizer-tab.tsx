@@ -469,7 +469,11 @@ export default function MusicVisualizerTab() {
       interval = window.setInterval(() => {
         setCurrentTime((prev) => {
           const duration = currentTrack?.duration;
-          if (!duration || duration <= 0) return prev;
+          // Guard against missing/invalid duration - pause instead of forcing next
+          if (!duration || duration <= 0) {
+            setIsPlaying(false);
+            return prev;
+          }
           if (prev >= duration) {
             if (repeatMode === "one") {
               // Restart the current track instead of advancing
@@ -492,6 +496,9 @@ export default function MusicVisualizerTab() {
   };
 
   const handleNext = () => {
+    // Guard against empty playlist
+    if (tracks.length === 0) return;
+    
     if (isShuffle) {
       setCurrentTrackIndex(Math.floor(Math.random() * tracks.length));
     } else {
@@ -501,6 +508,9 @@ export default function MusicVisualizerTab() {
   };
 
   const handlePrev = () => {
+    // Guard against empty playlist
+    if (tracks.length === 0) return;
+    
     setCurrentTrackIndex((prev) => (prev - 1 + tracks.length) % tracks.length);
     setCurrentTime(0);
   };

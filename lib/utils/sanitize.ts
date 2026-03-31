@@ -18,14 +18,15 @@ export function sanitizeUrlInput(raw: string): string {
   }
 
   // Check for unusual encoding patterns that might be attempts to bypass filters
-  // Decode percent-encoded sequences and re-encode to normalize
+  // Use decodeURI (not decodeURIComponent) to avoid mutating query parameter values
+  // decodeURIComponent can decode &= etc. which breaks signed URLs
   try {
-    const decoded = decodeURIComponent(raw);
+    const decoded = decodeURI(raw);
     // Reject if decoding reveals suspicious patterns
     if (/[\x00-\x08\x0B\x0C\x0E-\x1F]/.test(decoded)) {
       throw new Error('URL contains invalid characters after decoding');
     }
-    // Normalize and re-encode
+    // Normalize and re-encode (use encodeURI to preserve query structure)
     return encodeURI(decoded);
   } catch {
     // If decoding fails, check if the raw string is valid ASCII printable
