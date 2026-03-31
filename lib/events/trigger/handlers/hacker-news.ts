@@ -5,11 +5,16 @@
  */
 
 import { z } from 'zod';
-import type { HACKER_NEWS_DAILY_EVENT } from '../../schema';
+
+// Hacker News event schema
+const HackerNewsEventSchema = z.object({
+  userId: z.string(),
+  destination: z.string().optional(),
+});
 
 const HN_API_URL = 'https://hacker-news.firebaseio.com/v0';
 
-export async function handleHackerNews(event: z.infer<typeof HACKER_NEWS_DAILY_EVENT>) {
+export async function handleHackerNews(event: z.infer<typeof HackerNewsEventSchema>) {
   console.log(`[HNHandler] Fetching top stories for user ${event.userId}`);
   
   try {

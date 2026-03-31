@@ -43,7 +43,7 @@ export async function attemptSelfHealing(
   logger.info('Attempting self-healing', {
     eventId: event.id,
     type: event.type,
-    retryCount: event.retry_count,
+    retryCount: event.retryCount,
   });
 
   // 1. Classify the error
@@ -147,7 +147,7 @@ function classifyError(error: any): ErrorClassification {
  */
 function determineStrategy(classification: ErrorClassification, event: EventRecord): 'retry' | 'fix' | 'fallback' | 'skip' {
   // If already retried 3 times, try LLM fix
-  if (event.retry_count >= 3) {
+  if (event.retryCount >= 3) {
     return classification.recoverable ? 'fix' : 'skip';
   }
 
@@ -179,7 +179,7 @@ function determineStrategy(classification: ErrorClassification, event: EventReco
  * Heal with simple retry (with exponential backoff)
  */
 async function healWithRetry(event: EventRecord, classification: ErrorClassification): Promise<HealingResult> {
-  const backoffMs = Math.min(1000 * Math.pow(2, event.retry_count), 10000);
+  const backoffMs = Math.min(1000 * Math.pow(2, event.retryCount), 10000);
 
   logger.info('Retrying with backoff', {
     eventId: event.id,
@@ -215,7 +215,7 @@ An event failed with the following error:
 Error: ${error.message}
 Event Type: ${event.type}
 Event Payload: ${JSON.stringify(event.payload, null, 2)}
-Retry Count: ${event.retry_count}
+Retry Count: ${event.retryCount}
 
 Analyze this failure and suggest a fix.
 If the error is due to invalid input, suggest how to correct it.

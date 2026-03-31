@@ -299,12 +299,12 @@ export class MCPGateway {
   /**
    * Topological sort for DAG node ordering
    */
-  private topologicalSort(nodes: Array<{ id: string; dependsOn?: string[] }>): Array<{ id: string; dependsOn?: string[] }> {
-    const sorted: Array<{ id: string; dependsOn?: string[] }> = [];
+  private topologicalSort(nodes: Array<{ id: string; dependsOn?: string[]; type?: string; goal?: string }>): Array<{ id: string; dependsOn?: string[]; type?: string; goal?: string }> {
+    const sorted: Array<{ id: string; dependsOn?: string[]; type?: string; goal?: string }> = [];
     const visited = new Set<string>();
     const temp = new Set<string>();
 
-    const visit = (node: { id: string; dependsOn?: string[] }) => {
+    const visit = (node: { id: string; dependsOn?: string[]; type?: string; goal?: string }) => {
       if (temp.has(node.id)) throw new Error('Circular dependency detected');
       if (visited.has(node.id)) return;
 

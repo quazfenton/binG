@@ -55,6 +55,8 @@ const STOCK_WORDS = [
 const usedNames = new Set<string>();
 let currentIndex = 0;
 let initialized = false;
+// Mutex to prevent race conditions in session name generation
+let nameGenerationLock = Promise.resolve();
 
 // Cache for filesystem checks to avoid redundant API calls
 const filesystemCheckCache = new Map<string, { exists: boolean; checkedAt: number }>();
@@ -304,31 +306,46 @@ export async function generateSessionName(
   isNewProject: boolean = true,
   hasOnlyOneFolder: boolean = false
 ): Promise<string> {
-  // Ensure we've scanned existing sessions to avoid collisions
-  await initializeSessionNaming();
+  // Use mutex to prevent race conditions between concurrent requests
+  let releaseLock: () => void;
+  const lockPromise = new Promise<void>(resolve => {
+    releaseLock = resolve;
+  });
+  
+  const currentLock = nameGenerationLock;
+  nameGenerationLock = lockPromise;
+  
+  await currentLock;
+  
+  try {
+    // Ensure we've scanned existing sessions to avoid collisions
+    await initializeSessionNaming();
 
-  // Rule 1: If it's a new project, has only 1 folder, and LLM suggested a name,
-  // use the LLM-suggested folder name as the session ID (with conflict handling)
-  if (isNewProject && hasOnlyOneFolder && suggestedFolderName) {
-    const cleanName = suggestedFolderName
-      .replace(/[^a-zA-Z0-9_-]/g, '')  // Remove special chars
-      .replace(/^\d+/, '')              // Remove leading numbers
-      .substring(0, 50);                // Limit length
+    // Rule 1: If it's a new project, has only 1 folder, and LLM suggested a name,
+    // use the LLM-suggested folder name as the session ID (with conflict handling)
+    if (isNewProject && hasOnlyOneFolder && suggestedFolderName) {
+      const cleanName = suggestedFolderName
+        .replace(/[^a-zA-Z0-9_-]/g, '')  // Remove special chars
+        .replace(/^\d+/, '')              // Remove leading numbers
+        .substring(0, 50);                // Limit length
 
-    if (cleanName.length > 0) {
-      // generateUniqueName will handle conflicts by appending suffix
-      const name = generateUniqueName(cleanName);
-      // Register immediately to prevent duplicate generation in same session
-      registerSessionName(name);
-      return name;
+      if (cleanName.length > 0) {
+        // generateUniqueName will handle conflicts by appending suffix
+        const name = generateUniqueName(cleanName);
+        // Register immediately to prevent duplicate generation in same session
+        registerSessionName(name);
+        return name;
+      }
     }
-  }
 
-  // Rule 2: Use sequential numbering (001, 002, 003, ...)
-  const name = generateUniqueName(await getNextStockName());
-  // Register immediately to prevent duplicate generation in same session
-  registerSessionName(name);
-  return name;
+    // Rule 2: Use sequential numbering (001, 002, 003, ...)
+    const name = generateUniqueName(await getNextStockName());
+    // Register immediately to prevent duplicate generation in same session
+    registerSessionName(name);
+    return name;
+  } finally {
+    releaseLock!();
+  }
 }
 
 /**

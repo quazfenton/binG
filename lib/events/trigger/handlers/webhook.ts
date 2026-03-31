@@ -5,9 +5,17 @@
  */
 
 import { z } from 'zod';
-import type { WEBHOOK_EVENT } from '../../schema';
 
-export async function handleWebhook(event: z.infer<typeof WEBHOOK_EVENT>) {
+// Webhook event schema
+const WebhookEventSchema = z.object({
+  userId: z.string(),
+  url: z.string().url(),
+  method: z.enum(['GET', 'POST', 'PUT', 'DELETE', 'PATCH']).optional(),
+  body: z.any().optional(),
+  headers: z.record(z.string()).optional(),
+});
+
+export async function handleWebhook(event: z.infer<typeof WebhookEventSchema>) {
   console.log(`[WebhookHandler] Calling ${event.method} ${event.url}`);
   
   try {
@@ -21,7 +29,7 @@ export async function handleWebhook(event: z.infer<typeof WEBHOOK_EVENT>) {
       headers,
     };
     
-    if (event.method !== 'GET' && event.method !== 'HEAD' && event.body) {
+    if (event.method && event.method !== 'GET' && event.body) {
       init.body = JSON.stringify(event.body);
     }
     

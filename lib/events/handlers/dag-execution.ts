@@ -103,7 +103,7 @@ export async function executeDAG(dag: { nodes: DAGNode[] }, context: any): Promi
 /**
  * Execute a single node
  */
-async function executeNode(node: DAGNode, inputs: any[], context: any): Promise<any> {
+export async function executeNode(node: DAGNode, inputs: any[], context: any): Promise<any> {
   logger.debug('Executing node', { nodeId: node.id, type: node.type });
 
   switch (node.type) {

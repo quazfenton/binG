@@ -5,11 +5,18 @@
  */
 
 import { z } from 'zod';
-import type { SANDBOX_COMMAND_EVENT } from '../../schema';
+
+// Sandbox command event schema
+const SandboxCommandEventSchema = z.object({
+  userId: z.string(),
+  command: z.string(),
+  cwd: z.string().optional(),
+  timeout: z.number().optional(),
+});
 
 const SANDBOX_URL = process.env.SANDBOX_POOL_URL || 'http://sandbox:3005';
 
-export async function handleSandboxCommand(event: z.infer<typeof SANDBOX_COMMAND_EVENT>) {
+export async function handleSandboxCommand(event: z.infer<typeof SandboxCommandEventSchema>) {
   console.log(`[SandboxHandler] Executing command for user ${event.userId}`);
   
   try {

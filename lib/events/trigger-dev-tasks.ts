@@ -235,8 +235,8 @@ export const DAGRunnerTask = {
  * 
  * Agents talk via events - pub/sub pattern.
  */
-export const AgentMessageTask: typeof AgentMessageEvent = {
-  id: 'agent-message',
+export const AgentMessageTask = {
+  id: 'agent-message' as const,
   name: 'Agent Message Router',
   description: 'Route messages between agents',
   

@@ -7,7 +7,7 @@
  * In production, this would run as a separate service or be integrated with trigger.dev.
  */
 
-import { getPendingEvents, markEventProcessing } from '../store';
+import { getPendingEvents, markEventRunning } from '../store';
 import { routeEvent } from '../router';
 
 const POLL_INTERVAL = 10000; // 10 seconds
@@ -31,7 +31,7 @@ async function processBatch(): Promise<void> {
   for (const event of events) {
     try {
       // Mark as processing
-      await markEventProcessing(event.id);
+      await markEventRunning(event.id);
       
       // Route to handler
       await routeEvent(event);
@@ -72,7 +72,7 @@ export async function processEvent(eventId: string): Promise<void> {
     throw new Error(`Event ${eventId} not found or not pending`);
   }
   
-  await markEventProcessing(event.id);
+  await markEventRunning(event.id);
   await routeEvent(event);
 }
 

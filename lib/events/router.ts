@@ -75,7 +75,7 @@ export async function routeEvent(event: EventRecord): Promise<void> {
     logger.info('Executing event handler', {
       eventId: event.id,
       type: event.type,
-      retryCount: event.retry_count,
+      retryCount: event.retryCount,
     });
 
     const result = await handler(event);
@@ -97,7 +97,7 @@ export async function routeEvent(event: EventRecord): Promise<void> {
     await markEventFailed(event.id, error.message);
 
     // Attempt self-healing if enabled
-    if (event.retry_count < 3) {
+    if (event.retryCount < 3) {
       await attemptSelfHealing(event, error);
     }
 
@@ -119,11 +119,8 @@ async function attemptSelfHealing(event: EventRecord, error: any): Promise<void>
         fix: healingResult.fix,
       });
 
-      // Reset event to pending with fix applied
-      const { healEvent } = await import('./store');
-      if (healEvent) {
-        await healEvent(event.id, healingResult.fix);
-      }
+      // Note: healEvent function not yet implemented in store
+      // The healing logic here is for future implementation
     }
   } catch (healingError: any) {
     logger.warn('Self-healing failed', {

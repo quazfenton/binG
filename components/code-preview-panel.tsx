@@ -1624,11 +1624,12 @@ export default function CodePreviewPanel({
     lastDirectoryListRef.current = { path, timestamp: now };
     await listFilesystemDirectory(path);
   }, [listFilesystemDirectory, log]);
-  
+
   // Assign to ref so openFilesystemDirectory can access it
+  // NOTE: Don't add debouncedListDirectory to deps - causes infinite loop
   useEffect(() => {
     debouncedListDirectoryRef.current = debouncedListDirectory;
-  }, [debouncedListDirectory]);
+  }, []); // Empty deps - ref assignment doesn't need to re-run
 
   // Clear preview state on navigation (filesystemScopePath change)
   // This ensures fresh state when user navigates to a different session/directory

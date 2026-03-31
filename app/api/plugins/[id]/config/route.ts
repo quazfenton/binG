@@ -91,8 +91,8 @@ export async function POST(
     
     const { input } = body;
 
-    // Validate input object (reject arrays)
-    if (!input || typeof input !== 'object' || Array.isArray(input)) {
+    // Validate input object if provided (reject arrays, allow undefined)
+    if (input !== undefined && (typeof input !== 'object' || input === null || Array.isArray(input))) {
       return NextResponse.json(
         { error: 'Invalid input format. Input must be an object' },
         { status: 400 }

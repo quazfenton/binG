@@ -5,9 +5,15 @@
  */
 
 import { z } from 'zod';
-import type { REPO_DIGEST_EVENT } from '../../schema';
 
-export async function handleRepoDigest(event: z.infer<typeof REPO_DIGEST_EVENT>) {
+// Repo digest event schema
+const RepoDigestEventSchema = z.object({
+  userId: z.string(),
+  repo: z.string(),
+  interval: z.enum(['daily', 'weekly', 'monthly']).optional(),
+});
+
+export async function handleRepoDigest(event: z.infer<typeof RepoDigestEventSchema>) {
   console.log(`[RepoDigestHandler] Generating ${event.interval} digest for ${event.repo}`);
   
   try {

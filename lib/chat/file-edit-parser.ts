@@ -31,6 +31,41 @@ export { stripHeredocBodies } from './bash-file-commands';
 import { stripHeredocBodies as maskHeredocs } from './bash-file-commands';
 
 /**
+ * Validate file path - must be a valid filesystem path
+ * CRITICAL: Prevents AI from generating malformed paths like 'project/sessions/003/{'
+ * 
+ * NOTE: Trailing slashes ARE allowed for directory paths (e.g., "src/", "components/")
+ */
+export function isValidFilePath(path: string, isFolder: boolean = false): boolean {
+  if (!path || path.length === 0) return false;
+  
+  // Paths should NOT contain JSON/object syntax
+  if (path.includes('{') || path.includes('}') || 
+      path.includes('[') || path.includes(']')) {
+    return false;
+  }
+  
+  // For files: should NOT end with special characters
+  // For folders: trailing slash is OK (e.g., "src/", "components/")
+  if (!isFolder) {
+    if (path.endsWith('/') || path.endsWith(':') || 
+        path.endsWith(',') || path.endsWith('{') ||
+        path.endsWith('<') || path.endsWith('>')) {
+      return false;
+    }
+  }
+  
+  // Paths should NOT start with special characters (except . for relative paths)
+  if (path.startsWith('<') || path.startsWith('>') ||
+      path.startsWith('{') || path.startsWith('}') ||
+      path.startsWith('[') || path.startsWith(']')) {
+    return false;
+  }
+  
+  return true;
+}
+
+/**
  * Bash heredoc file edit extraction (inline to avoid module init issues)
  * Parses: cat > file << 'EOF' ... EOF
  */
@@ -377,6 +412,16 @@ export function extractMultiLineFileEdits(content: string): FileEdit[] {
     const filePath = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!filePath) continue;
+    
+    // CRITICAL FIX: Validate path before adding
+    // Skip paths with JSON/object syntax or ending with special chars
+    if (filePath.includes('{') || filePath.includes('}') || 
+        filePath.includes('[') || filePath.includes(']') ||
+        filePath.endsWith('/') || filePath.endsWith(':') ||
+        filePath.endsWith(',') || filePath.endsWith('{')) {
+      continue;
+    }
+    
     edits.push({ path: filePath, content: fileContent.trim() });
   }
 
@@ -405,6 +450,27 @@ export function extractMalformedFileEdits(content: string): FileEdit[] {
 
     // Skip if path looks invalid or contains tags
     if (!filePath || filePath.includes('<') || filePath.includes('>')) continue;
+
+    // CRITICAL FIX: Detect if <path> tag contains JSON/object instead of actual path
+    // If content after </path> starts with { or [, the <path> tag was likely misused for JSON
+    const trimmedContent = fileContent.trim();
+    if (trimmedContent.startsWith('{') || trimmedContent.startsWith('[')) {
+      // This is JSON content, not a file path - skip entirely
+      continue;
+    }
+
+    // CRITICAL FIX: Skip paths that contain JSON/object syntax
+    // Valid file paths should NOT contain: { } [ ] : , (unless encoded)
+    if (filePath.includes('{') || filePath.includes('}') || 
+        filePath.includes('[') || filePath.includes(']')) {
+      continue;
+    }
+
+    // Skip paths that end with special characters (likely parsing errors)
+    if (filePath.endsWith('/') || filePath.endsWith(':') || 
+        filePath.endsWith(',') || filePath.endsWith('{')) {
+      continue;
+    }
 
     // Remove trailing file edit markers from content (case insensitive)
     fileContent = fileContent.replace(/\s*<file\s*edit\s*>?\s*$/gi, '').trim();
@@ -1068,6 +1134,10 @@ export function extractFilenameHintCodeBlocks(content: string): FileEdit[] {
     const path = match[1]?.trim();
     let fileContent = match[2] ?? '';
     if (!path) continue;
+    
+    // CRITICAL FIX: Validate path before adding
+    if (!isValidFilePath(path)) continue;
+    
     fileContent = stripHeredocMarkers(fileContent);
     writes.push({ path, content: fileContent });
   }

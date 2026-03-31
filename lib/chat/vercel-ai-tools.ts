@@ -39,11 +39,10 @@ export function createToolFromCapability(
     parameters?: z.ZodSchema;
   }
 ): Tool {
-  // Use double cast to work around Vercel AI SDK tool() type issues
-  // First cast to unknown, then to Tool - avoids overload matching issues
   return tool({
     description: options?.description || `Execute ${capabilityId} capability`,
     parameters: options?.parameters || z.record(z.any()),
+    // @ts-ignore - Workaround for Vercel AI SDK tool() overload matching issue
     execute: async (args: any) => {
       const context: ToolExecutionContext = {};
 
@@ -340,6 +339,7 @@ export function createSearchTools(context: ToolExecutionContext): Record<string,
         query: z.string().describe('Search query'),
         limit: z.number().optional().default(5).describe('Max results to return (1-10)'),
       }),
+      // @ts-ignore - Workaround for Vercel AI SDK tool() overload matching issue
       execute: async (args: { query: string; limit?: number }) => {
         const { isHostnameBlocked } = await import('@/lib/utils/url-validation');
         const fetch = (await import('node-fetch')).default;
@@ -408,6 +408,7 @@ Returns cleaned article body text with navigation, ads, footers, and boilerplate
         url: z.string().describe('The HTTPS URL to fetch and read'),
         maxChars: z.number().optional().default(12000).describe('Max characters of content to return'),
       }),
+      // @ts-ignore - Workaround for Vercel AI SDK tool() overload matching issue
       execute: async (args: { url: string; maxChars?: number }) => {
         const { isHostnameBlocked } = await import('@/lib/utils/url-validation');
         const fetch = (await import('node-fetch')).default;

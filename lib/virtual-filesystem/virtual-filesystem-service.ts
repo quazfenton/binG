@@ -379,6 +379,20 @@ export class VirtualFilesystemService {
   async listDirectory(ownerId: string, directoryPath: string = this.workspaceRoot): Promise<VirtualFilesystemDirectoryListing> {
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedDirectoryPath = this.normalizePath(directoryPath);
+    
+    // CRITICAL FIX: If path is a file (not a directory), return empty listing
+    // This prevents infinite loops when file paths are accidentally passed to listDirectory
+    if (workspace.files.has(normalizedDirectoryPath)) {
+      const file = workspace.files.get(normalizedDirectoryPath);
+      if (file && !file.isDirectoryMarker) {
+        // This is a file, not a directory - return empty listing
+        return {
+          path: normalizedDirectoryPath,
+          nodes: [],
+        };
+      }
+    }
+    
     const directoryNodes = new Map<string, VirtualFilesystemNode>();
     const fileNodes: VirtualFilesystemNode[] = [];
     const directoryPrefix = `${normalizedDirectoryPath}/`;
@@ -400,11 +414,7 @@ export class VirtualFilesystemService {
         continue;
       }
 
-      if (file.path === normalizedDirectoryPath) {
-        fileNodes.push(this.toFileNode(file));
-        continue;
-      }
-
+      // Skip files that don't start with the directory prefix
       if (!file.path.startsWith(directoryPrefix)) {
         continue;
       }

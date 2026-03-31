@@ -5,9 +5,17 @@
  */
 
 import { z } from 'zod';
-import type { SEND_EMAIL_EVENT } from '../../schema';
 
-export async function handleSendEmail(event: z.infer<typeof SEND_EMAIL_EVENT>) {
+// Email event schema (in production, this would be in schema.ts)
+const EmailEventSchema = z.object({
+  to: z.string().email(),
+  subject: z.string(),
+  body: z.string().optional(),
+  cc: z.string().optional(),
+  bcc: z.string().optional(),
+});
+
+export async function handleSendEmail(event: z.infer<typeof EmailEventSchema>) {
   console.log(`[EmailHandler] Sending email to ${event.to}: ${event.subject}`);
   
   try {
