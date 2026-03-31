@@ -9,6 +9,7 @@
 
 import { createLogger } from '@/lib/utils/logger';
 import { reflectionEngine } from '@/lib/orchestra/reflection-engine';
+import { executeWithFallback } from './utils';
 
 const logger = createLogger('Trigger:Reflection');
 

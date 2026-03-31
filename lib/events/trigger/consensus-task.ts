@@ -85,11 +85,16 @@ async function executeLocally(
     task: payload.task,
   });
 
+  // Transform AgentContribution[] to { agentId, contribution }[] format
+  const transformedContributions = (result.contributions || []).map(c => ({
+    agentId: c.role || 'unknown',
+    contribution: c.content || '',
+  }));
+
   return {
     success: true,
     output: result.output,
     consensusScore: result.consensusScore || 0,
-    contributions: result.contributions || [],
-    votes: result.votes,
+    contributions: transformedContributions,
   };
 }

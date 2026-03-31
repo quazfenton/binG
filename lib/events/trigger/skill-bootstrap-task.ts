@@ -84,7 +84,7 @@ async function executeLocally(
       successfulRun: payload.successfulRun,
       model: payload.model,
     },
-    createdAt: Date.now(),
+    createdAt: Date.now().toString(),
     status: 'pending' as const,
     retryCount: 0,
   };

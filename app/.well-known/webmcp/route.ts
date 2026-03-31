@@ -202,9 +202,9 @@ const WEBMCP_MANIFEST: WebMCPManifest = {
     integrations: true,
   },
   endpoints: {
-    tools: '/api/webmcp/tools',
-    invoke: '/api/webmcp/invoke',
-    status: '/api/webmcp/status',
+    tools: '/.well-known/webmcp/tools',
+    invoke: '/.well-known/webmcp/invoke',
+    status: '/.well-known/webmcp/status',
   },
 };
 
@@ -252,10 +252,20 @@ export async function POST(request: NextRequest) {
       result,
     });
   } catch (error: any) {
-    logger.error('WebMCP invocation error', { error: error.message });
-    return NextResponse.json({
-      error: error.message || 'Tool invocation failed',
-    }, { status: 500 });
+    const message = error.message || 'Tool invocation failed';
+
+    if (error instanceof SyntaxError) {
+      logger.warn('WebMCP malformed JSON', { error: message });
+      return NextResponse.json({ error: 'Malformed JSON body' }, { status: 400 });
+    }
+
+    if (message.startsWith('Unknown tool:') || message.includes('required')) {
+      logger.warn('WebMCP client error', { error: message });
+      return NextResponse.json({ error: message }, { status: 400 });
+    }
+
+    logger.error('WebMCP invocation error', { error: message });
+    return NextResponse.json({ error: message }, { status: 500 });
   }
 }
 

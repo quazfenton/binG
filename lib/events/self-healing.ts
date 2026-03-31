@@ -251,12 +251,15 @@ Respond with JSON:
     });
 
     // Parse response - handle both string and structured content
-    const content =
-      typeof response.content === 'string'
-        ? response.content
-        : Array.isArray(response.content)
-        ? response.content.map((part: any) => (typeof part === 'string' ? part : part?.text ?? '')).join('\n')
-        : String(response.content ?? '');
+    const rawContent = response.content as string | any[] | undefined;
+    let content = '';
+    if (typeof rawContent === 'string') {
+      content = rawContent;
+    } else if (Array.isArray(rawContent)) {
+      content = rawContent.map((part: any) => (typeof part === 'string' ? part : part?.text ?? '')).join('\n');
+    } else {
+      content = String(rawContent ?? '');
+    }
     
     const parsed = parseLLMResponse(content);
 

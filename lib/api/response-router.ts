@@ -2040,8 +2040,30 @@ export class ResponseRouter {
       // Only run spec amplification if code was detected in the initial response
       if (!hasCode) {
         chatLogger.debug('No code detected in initial response, skipping spec amplification', { requestId: request.requestId })
-        // Return primary response without spec amplification
-        return primaryData as UnifiedResponse
+        // Return the FULL primary result (including stream generator for real-time streaming)
+        // NOT just primaryData which loses the stream
+        return primaryResult as UnifiedResponse
+      }
+
+      // CRITICAL FIX: If primary response has a stream generator, wait for it to complete
+      // before starting spec amplification. This ensures we have the FULL content.
+      let completePrimaryContent = primaryData.content || '';
+      if (primaryData.stream) {
+        try {
+          chatLogger.debug('Waiting for primary stream to complete before spec amplification', { requestId: request.requestId });
+          // Consume the stream generator to get complete content
+          for await (const chunk of primaryData.stream) {
+            if (typeof chunk === 'string') {
+              completePrimaryContent += chunk;
+            } else if (chunk?.content) {
+              completePrimaryContent += chunk.content;
+            }
+          }
+          chatLogger.debug('Primary stream completed, content length:', { length: completePrimaryContent.length });
+        } catch (streamError) {
+          logger.warn('Failed to consume primary stream for spec amplification', { error: streamError });
+          // Continue with partial content if stream consumption fails
+        }
       }
 
       // Start spec generation in background (don't await - run in parallel)
@@ -2051,8 +2073,9 @@ export class ResponseRouter {
 
       // Return primary response immediately, start background refinement
       // Background refinement will emit events that appear as new chat messages
+      // Use completePrimaryContent which has the full streamed content
       this.runBackgroundRefinement({
-        primaryData,
+        primaryData: { ...primaryData, content: completePrimaryContent },
         specGenerationPromise,
         request,
         fastModel,

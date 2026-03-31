@@ -18,9 +18,18 @@
 
 import { z } from 'zod';
 import { getSmitheryService, type SmitheryServiceServer } from './smithery-service';
-import { mcpToolRegistry } from './registry';
 import type { MCPServerConfig } from './types';
 import { createLogger } from '@/lib/utils/logger';
+
+// Dynamic import for server-only modules (only used on server)
+let mcpToolRegistry: any = null;
+async function getMcpToolRegistry() {
+  if (!mcpToolRegistry) {
+    const module = await import('./registry');
+    mcpToolRegistry = module.mcpToolRegistry;
+  }
+  return mcpToolRegistry;
+}
 
 const logger = createLogger('MCP:Store');
 
@@ -352,8 +361,11 @@ export class MCPStoreService {
         enabled: true,
       };
 
-      // Register with MCP tool registry
-      mcpToolRegistry.registerServer(mcpConfig);
+      // Register with MCP tool registry (server-only)
+      const registry = await getMcpToolRegistry();
+      if (registry) {
+        registry.registerServer(mcpConfig);
+      }
 
       // Update server state
       server.installed = true;
@@ -380,8 +392,11 @@ export class MCPStoreService {
     }
 
     try {
-      // Unregister from MCP tool registry
-      await mcpToolRegistry.unregisterServer(serverId);
+      // Unregister from MCP tool registry (server-only)
+      const registry = await getMcpToolRegistry();
+      if (registry) {
+        await registry.unregisterServer(serverId);
+      }
 
       // Update server state
       server.installed = false;
@@ -541,19 +556,25 @@ export class MCPStoreService {
   }
 
   /**
-   * Connect all installed servers
+   * Connect all installed servers (server-only)
    */
   async connectAllServers(timeout?: number): Promise<void> {
-    await mcpToolRegistry.connectAll(timeout);
-    logger.info('Connected all MCP servers');
+    const registry = await getMcpToolRegistry();
+    if (registry) {
+      await registry.connectAll(timeout);
+      logger.info('Connected all MCP servers');
+    }
   }
 
   /**
-   * Disconnect all servers
+   * Disconnect all servers (server-only)
    */
   async disconnectAllServers(): Promise<void> {
-    await mcpToolRegistry.disconnectAll();
-    logger.info('Disconnected all MCP servers');
+    const registry = await getMcpToolRegistry();
+    if (registry) {
+      await registry.disconnectAll();
+      logger.info('Disconnected all MCP servers');
+    }
   }
 
   // ==================== Private Helpers ====================
