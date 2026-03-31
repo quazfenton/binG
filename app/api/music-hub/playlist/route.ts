@@ -146,26 +146,33 @@ async function writePlaylists(playlists: any[]): Promise<void> {
  * Convert a playlist entry to the enriched format with songs
  */
 function enrichPlaylist(playlist: any): any {
-  const { artist } = playlist.artist 
+  const { artist } = playlist.artist
     ? { artist: playlist.artist }
     : parseArtistAndAlbum(playlist.title || '');
+
+  const playlistId = playlist.playlist_id;
   
   return {
     id: playlist.playlist_id,
-    playlist_id: playlist.playlist_id,
+    playlist_id: playlistId,
     title: playlist.title,
     artist: artist,
-    link: playlist.link,
+    link: playlist.link || `https://www.youtube.com/playlist?list=${playlistId}`,
     discovered_at: playlist.discovered_at,
     isNew: isRecent(playlist.discovered_at),
     isFeatured: playlist.isFeatured || false,
-    coverUrl: playlist.coverUrl || generateCoverUrl(playlist.playlist_id, playlist.title),
+    coverUrl: playlist.coverUrl || generateCoverUrl(playlistId, playlist.title),
     songs: (playlist.videos || []).map((videoId: string, index: number) => ({
-      id: `song-${playlist.playlist_id}-${index}`,
+      id: `song-${playlistId}-${index}`,
       title: `Track ${index + 1}`,
       artist: artist,
       album: playlist.title,
       videoId: videoId,
+      // Full YouTube watch URL with playlist context
+      watchUrl: `https://www.youtube.com/watch?v=${videoId}&list=${playlistId}&index=${index + 1}`,
+      // Embed URL with playlist for proper embedding
+      embedUrl: `https://www.youtube.com/embed/${videoId}?list=${playlistId}&index=${index + 1}`,
+      duration: 240, // Default 4 minutes - actual duration would require YouTube API
       thumbnailUrl: generateThumbnailUrl(videoId),
       liked: false,
       played: false,
@@ -194,10 +201,15 @@ export async function GET(request: NextRequest) {
   }
 
   try {
+    console.log('[MusicHub API] Reading playlists from:', PLAYLIST_PATH);
     const playlists = await readPlaylists();
-    
+    console.log('[MusicHub API] Read', playlists.length, 'playlists from file');
+    console.log('[MusicHub API] First playlist sample:', playlists[0]?.playlist_id, playlists[0]?.title);
+
     // Enrich playlists with additional metadata
     const enrichedPlaylists = playlists.map(enrichPlaylist);
+    console.log('[MusicHub API] Enriched playlists, first one:', enrichedPlaylists[0]?.playlist_id, enrichedPlaylists[0]?.songs?.length, 'songs');
+    console.log('[MusicHub API] Enriched playlists, total songs:', enrichedPlaylists.reduce((sum, p) => sum + (p.songs?.length || 0), 0));
 
     return NextResponse.json(
       {
