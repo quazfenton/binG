@@ -400,8 +400,8 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
   },
   {
     type: 'agentfs',
-    services: ['persistent-kv', 'persistent-fs', 'tool-tracking'],
-    bestFor: ['data-offload', 'state-persistence', 'session-memory', 'audit-trail'],
+    services: ['persistent-fs'],
+    bestFor: ['persistent-service', 'general'],
     costTier: 'low',
     latencyTier: 'low',
     persistenceSupport: true, // SQLite/Turso-backed

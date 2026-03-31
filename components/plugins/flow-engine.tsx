@@ -40,6 +40,22 @@ import {
 import { toast } from "sonner";
 import { PersistentCache } from "@/lib/cache";
 
+// Helper to ensure image URLs go through the proxy
+function getProxiedImageUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  // Already proxied
+  if (url.startsWith('/api/image-proxy')) return url;
+  // Data URLs (base64) - don't proxy
+  if (url.startsWith('data:')) return url;
+  // External URL - proxy it
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//')) {
+    const fullUrl = url.startsWith('//') ? `https:${url}` : url;
+    return `/api/image-proxy?url=${encodeURIComponent(fullUrl)}`;
+  }
+  // Local/relative paths - don't proxy
+  return url;
+}
+
 // ==================== Types ====================
 
 interface ContentItem {
@@ -401,7 +417,7 @@ const ContentItemComponent: React.FC<ContentItemProps> = ({
             {item.media?.map((media, idx) => (
               <img
                 key={idx}
-                src={media.url}
+                src={getProxiedImageUrl(media.url)}
                 alt={media.alt || item.title}
                 className="w-full rounded-lg"
               />
@@ -417,7 +433,7 @@ const ContentItemComponent: React.FC<ContentItemProps> = ({
               <video
                 key={idx}
                 src={media.url}
-                poster={media.thumbnail}
+                poster={getProxiedImageUrl(media.thumbnail)}
                 controls
                 className="w-full rounded-lg"
               />
@@ -459,7 +475,7 @@ const ContentItemComponent: React.FC<ContentItemProps> = ({
                   media.type === 'image' && (
                     <img
                       key={idx}
-                      src={media.url}
+                      src={getProxiedImageUrl(media.url)}
                       alt={media.alt || 'Media'}
                       className="w-20 h-20 object-cover rounded"
                     />
@@ -557,7 +573,7 @@ ContentItemDisplay.displayName = 'ContentItemDisplay';
 
 // ==================== Main Component ====================
 
-export default function ZineFlowEngine() {
+export default function FlowEngine() {
   // State
   const [items, setItems] = useState<ContentItem[]>([]);
   const [displayConfigs, setDisplayConfigs] = useState<DisplayConfig[]>([]);

@@ -109,18 +109,23 @@ Consider:
  */
 export const researcherStep = createStep({
   id: 'researcher',
-  inputSchema: z.object({
+  inputSchema: ResearchInput.extend({
     plan: ResearchPlan,
-    ownerId: z.string(),
+  }).extend({
+    questions: z.array(z.string()),
   }),
   outputSchema: z.object({
     analyses: z.array(SourceAnalysis),
     collectedData: z.string(),
+    topic: z.string(),
+    questions: z.array(z.string()),
+    plan: ResearchPlan,
+    ownerId: z.string(),
   }),
   execute: async ({ inputData }) => {
-    const { plan, ownerId } = inputData;
-    const agent = getModel('standard');
-    const analyses: SourceAnalysis[] = [];
+    const { topic, plan, ownerId, questions } = inputData;
+    const agent = getModel('fast');
+    const analyses: typeof SourceAnalysis[] = [];
 
     // Simulate source analysis (in production, would fetch actual URLs)
     for (const source of plan.sources.slice(0, 5)) {
@@ -138,7 +143,7 @@ Output JSON format:
   "relevance": 0.9
 }`,
           },
-          { role: 'user', content: `Source: ${source.url}\nType: ${source.type}\nTopic: ${plan.questions.join(', ')}` },
+          { role: 'user', content: `Source: ${source.url}\nType: ${source.type}\nTopic: ${questions.join(', ')}` },
         ]);
 
         const analysis = JSON.parse(response.text.trim());
@@ -155,7 +160,7 @@ Output JSON format:
       .map(a => `Source: ${a.url}\nSummary: ${a.summary}\nKey Points: ${a.keyPoints.join('\n')}`)
       .join('\n\n');
 
-    return { analyses, collectedData };
+    return { analyses, collectedData, topic, questions, plan, ownerId };
   },
   retries: 1,
 });
@@ -172,15 +177,22 @@ export const analystStep = createStep({
     questions: z.array(z.string()),
     collectedData: z.string(),
     analyses: z.array(SourceAnalysis),
+    plan: ResearchPlan,
+    ownerId: z.string(),
   }),
   outputSchema: z.object({
     insights: z.array(z.string()),
     patterns: z.array(z.string()),
     contradictions: z.array(z.string()).optional(),
     gaps: z.array(z.string()).optional(),
+    topic: z.string(),
+    questions: z.array(z.string()),
+    analyses: z.array(SourceAnalysis),
+    plan: ResearchPlan,
+    ownerId: z.string(),
   }),
   execute: async ({ inputData }) => {
-    const { topic, questions, collectedData, analyses } = inputData;
+    const { topic, questions, collectedData, analyses, plan, ownerId } = inputData;
     const agent = getModel('reasoning');
 
     const response = await agent.generate([
@@ -205,7 +217,16 @@ Consider:
       { role: 'user', content: `Topic: ${topic}\nQuestions: ${questions.join(', ')}\n\nData:\n${collectedData}` },
     ]);
 
-    return JSON.parse(response.text.trim());
+    const result = JSON.parse(response.text.trim());
+
+    return {
+      ...result,
+      topic,
+      questions,
+      analyses,
+      plan,
+      ownerId,
+    };
   },
   retries: 2,
 });
@@ -223,12 +244,20 @@ export const synthesizerStep = createStep({
     insights: z.array(z.string()),
     patterns: z.array(z.string()),
     analyses: z.array(SourceAnalysis),
+    plan: ResearchPlan,
+    ownerId: z.string(),
   }),
   outputSchema: z.object({
     synthesis: ResearchSynthesis,
+    insights: z.array(z.string()),
+    analyses: z.array(SourceAnalysis),
+    plan: ResearchPlan,
+    topic: z.string(),
+    questions: z.array(z.string()),
+    ownerId: z.string(),
   }),
   execute: async ({ inputData }) => {
-    const { topic, questions, insights, patterns, analyses } = inputData;
+    const { topic, questions, insights, patterns, analyses, plan, ownerId } = inputData;
     const agent = getModel('reasoning');
 
     const response = await agent.generate([
@@ -256,7 +285,15 @@ Consider:
 
     const synthesis = JSON.parse(response.text.trim());
 
-    return { synthesis };
+    return {
+      synthesis,
+      insights,
+      analyses,
+      plan,
+      topic,
+      questions,
+      ownerId,
+    };
   },
   retries: 2,
 });
@@ -267,13 +304,15 @@ Consider:
 
 export const researchWorkflow = createWorkflow({
   id: 'research',
-  name: 'Research Workflow',
   inputSchema: ResearchInput,
   outputSchema: z.object({
-    result: ResearchSynthesis,
+    synthesis: ResearchSynthesis,
     plan: ResearchPlan,
     analyses: z.array(SourceAnalysis),
     insights: z.array(z.string()),
+    topic: z.string(),
+    questions: z.array(z.string()),
+    ownerId: z.string(),
   }),
   retryConfig: {
     attempts: 2,

@@ -318,9 +318,7 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                       url={iframeUrl}
                       reason={failureReason || 'failed'}
                       errorMessage={errorMessage || iframeError || undefined}
-                      onRetry={handleRetry}
-                      onTryFallback={handleFallback}
-                      onOpenExternal={handleOpenExternal}
+                      onRetry={handleRetry}onOpenExternal={handleOpenExternal}
                       onClose={onClose}
                       autoRetryCount={retryCount}
                       maxRetries={3}

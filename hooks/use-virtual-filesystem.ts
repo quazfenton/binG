@@ -336,12 +336,20 @@ export function useVirtualFilesystem(
       // When files are written, the server may have used a different session ID than
       // what the client currently has in localStorage. This causes reads to return
       // empty results while writes went to a different workspace.
-      
-      // Extract the session part from ownerId (format: "anon:sessionId" or just "sessionId")
+
+      // CRITICAL FIX: Extract simple session ID from potentially composite IDs
+      // This handles formats like "anon:timestamp:001" -> "001" (same logic as server's normalizeSessionId)
+      // Returns empty string for invalid input - caller should handle this case
       const extractSessionPart = (id: string): string => {
-        if (id.startsWith('anon:')) return id.slice(5); // "anon:abc123" -> "abc123"
-        if (id.includes(':')) return id.split(':').slice(1).join(':'); // Handle composite IDs
-        return id;
+        if (!id || typeof id !== 'string') return '';
+        const trimmed = id.trim();
+        if (!trimmed) return '';
+        // Extract last segment after any colons (handles composite IDs)
+        if (trimmed.includes(':')) {
+          const parts = trimmed.split(':');
+          return parts[parts.length - 1].trim();
+        }
+        return trimmed;
       };
       
       // If event has a sessionId, sync with local session to prevent reading from wrong workspace

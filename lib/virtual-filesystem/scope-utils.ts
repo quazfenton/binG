@@ -166,7 +166,7 @@ export function sanitizeScopePath(scopePath?: string): string {
 /**
  * Extracts the scope path (parent directory) from a file path.
  * Used for cache invalidation to notify the correct directory after file operations.
- * 
+ *
  * Examples:
  *   "project/sessions/002/src/App.tsx" -> "project/sessions/002"
  *   "project/sessions/002/package.json" -> "project/sessions/002"
@@ -174,7 +174,91 @@ export function sanitizeScopePath(scopePath?: string): string {
  */
 export function extractScopePath(filePath: string): string {
   const parts = filePath.split('/');
-  return parts.length > 1 
+  return parts.length > 1
     ? parts.slice(0, parts.length - 1).join('/')
     : parts[0] || 'project';
+}
+
+/**
+ * Normalize a session ID to its simple folder name format.
+ *
+ * CRITICAL: This is the single source of truth for extracting session folder names
+ * from potentially composite IDs. Always use this function instead of manual splitting.
+ *
+ * Purpose: Extract the session folder name from internal composite IDs.
+ * This is NOT for generating new session names - use generateSessionName() for that.
+ *
+ * Handles these formats:
+ *   "001" -> "001"
+ *   "alpha" -> "alpha"
+ *   "001-1" -> "001-1"
+ *   "alpha-2" -> "alpha-2"
+ *   "anon:1774710784761_6TB03h8Ow:002" -> "002"
+ *   "1774710784761_6TB03h8Ow:002" -> "002"
+ *   "user123:005" -> "005"
+ *   "anon:timestamp_random:alpha-1" -> "alpha-1"
+ *
+ * Edge cases:
+ *   "" -> "" (empty input returns empty, caller decides fallback)
+ *   null/undefined -> "" (empty string, caller decides fallback)
+ *   "   " -> "" (whitespace only treated as empty)
+ *
+ * @param sessionId - The session ID (may be simple or composite)
+ * @returns The simple session folder name (last segment after any colons), or empty string for invalid input
+ */
+export function normalizeSessionId(sessionId: string): string {
+  // Handle null, undefined, non-string input
+  if (!sessionId || typeof sessionId !== 'string') {
+    return ''; // Return empty - caller should handle invalid input
+  }
+
+  // Trim whitespace
+  const trimmed = sessionId.trim();
+  if (!trimmed) {
+    return ''; // Return empty for whitespace-only input
+  }
+
+  // If contains colons (composite ID), extract the last segment
+  // This handles formats like:
+  // - "anon:timestamp_hash:001" -> "001"
+  // - "userId:conversationId:sessionId" -> "sessionId"
+  if (trimmed.includes(':')) {
+    const parts = trimmed.split(':');
+    return parts[parts.length - 1].trim();
+  }
+
+  // Already a simple ID - return as-is
+  return trimmed;
+}
+
+/**
+ * Build a normalized session filesystem path.
+ *
+ * This function ensures that session paths always use simple folder names,
+ * never composite IDs. It's the safe way to construct session paths.
+ *
+ * Examples:
+ *   normalizeSessionPath("001") -> "project/sessions/001"
+ *   normalizeSessionPath("anon:1774710784761_6TB03h8Ow:002") -> "project/sessions/002"
+ *   normalizeSessionPath("alpha-1") -> "project/sessions/alpha-1"
+ *
+ * @param sessionId - The session ID (may be simple or composite)
+ * @param subPath - Optional sub-path within the session (e.g., "src/App.tsx")
+ * @returns Normalized filesystem path with simple session folder name
+ */
+export function normalizeSessionPath(sessionId: string, subPath?: string): string {
+  const simpleSessionId = normalizeSessionId(sessionId);
+  const basePath = `project/sessions/${simpleSessionId}`;
+
+  if (!subPath) {
+    return basePath;
+  }
+
+  // Normalize sub-path: remove leading slashes, normalize separators
+  const normalizedSubPath = subPath
+    .replace(/\\/g, '/')
+    .replace(/^\/+/, '')
+    .replace(/\/+/g, '/');
+
+  return `${basePath}/${normalizedSubPath}`;
 }

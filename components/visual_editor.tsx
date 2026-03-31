@@ -49,6 +49,22 @@ import React, {
 } from "react";
 import { toast } from "sonner";
 
+// Helper to ensure image URLs go through the proxy
+function getProxiedImageUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  // Already proxied
+  if (url.startsWith('/api/image-proxy')) return url;
+  // Data URLs (base64) - don't proxy
+  if (url.startsWith('data:')) return url;
+  // External URL - proxy it
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//')) {
+    const fullUrl = url.startsWith('//') ? `https:${url}` : url;
+    return `/api/image-proxy?url=${encodeURIComponent(fullUrl)}`;
+  }
+  // Local/relative paths - don't proxy
+  return url;
+}
+
 // ─── Craft.js ────────────────────────────────────────────────────────────────
 import { Editor, Frame, Element, useEditor, useNode } from "@craftjs/core";
 import { Layers } from "@craftjs/layers";
@@ -1513,7 +1529,7 @@ export function TestimonialCardCraft({
       >
         <p style={{ margin: "0 0 16px", color: "#cbd5e1", fontSize: "14px", fontStyle: "italic" }}>"{quote}"</p>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <img src={avatar} alt={author} style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
+          <img src={getProxiedImageUrl(avatar)} alt={author} style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
           <div>
             <p style={{ margin: 0, color: "#f8fafc", fontSize: "14px", fontWeight: 600 }}>{author}</p>
             <p style={{ margin: 0, color: "#94a3b8", fontSize: "12px" }}>{role}</p>
@@ -1704,7 +1720,7 @@ export function AppHeaderCraft({ title = "Profile", avatar = "https://i.pravatar
           ...toStyle(styles),
         }}
       >
-        <img src={avatar} alt="avatar" style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
+        <img src={getProxiedImageUrl(avatar)} alt="avatar" style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
         <h2 style={{ margin: 0, color: "#000", fontSize: "18px", fontWeight: 600 }}>{title}</h2>
       </div>
     </SelectionWrapper>
