@@ -18,7 +18,8 @@
 
 import { z } from 'zod';
 import { getSmitheryService, type SmitheryServiceServer } from './smithery-service';
-import { mcpToolRegistry, type MCPServerConfig } from './registry';
+import { mcpToolRegistry } from './registry';
+import type { MCPServerConfig } from './types';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('MCP:Store');

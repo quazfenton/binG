@@ -32,8 +32,10 @@ import {
   createIncrementalParser,
   extractIncrementalFileEdits,
 } from '@/lib/chat/file-edit-parser';
+import { isValidFilePath } from '@/lib/chat/file-edit-parser';
 import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
 import { generateSessionName, sessionNameExists } from '@/lib/session-naming';
+import { timingSafeEqual } from 'node:crypto';
 import { buildSupplementalAgenticEvents } from '@/lib/api/streaming-events';
 import { sandboxBridge } from '@/lib/sandbox';
 import { determineExecutionPolicy } from '@/lib/sandbox/types';
@@ -48,11 +50,11 @@ import {
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
 
-// Precompile optimization: enable dynamic to allow static generation for simple requests
-export const dynamic = 'auto';
+// Build-time compilation for faster cold starts
+// Route code is pre-compiled at build time, but executes dynamically per-request
+export const dynamic = 'force-dynamic';
 
-// Cache configuration for precompiled responses
-export const revalidate = 0; // Default: no cache (opt-in only)
+// Ensure route is compiled at build time
 export const dynamicParams = true;
 
 // LLM Agent Tools Configuration
@@ -129,6 +131,10 @@ const PATH_BAD_START_RE = /^[^\w./]/
 const PATH_TOO_MANY_DOTS_RE = /^\.{3,}/
 const PATH_TRAVERSAL_RE = /(?:^|\/)\.\.(?:\/|$)/
 const PATH_COMMAND_RE = /\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i
+// Additional: Reject paths that look like CSS classes, Vue directives, or code snippets
+const PATH_LOOKS_LIKE_CODE_RE = /^(?:hover:|@|:|\.|v-|:bind|@click|@submit)/i
+// Additional: Reject paths with colons (CSS classes like hover:scale-105)
+const PATH_HAS_COLON_RE = /:/
 
 // FIX 9: Pre-compiled RegExp for requiresThirdPartyOAuth
 const THIRD_PARTY_OAUTH_RE =
@@ -357,17 +363,17 @@ export async function POST(request: NextRequest) {
       : defaultScopePath;
     
     // Log scopePath for debugging session folder naming issues
-    console.log('[Chat API] Scope path handling:', {
+    chatLogger.debug('Scope path handling:', {
       rawScopePath,
       defaultScopePath,
       fromClient: !!filesystemContext?.scopePath,
       resolvedConversationId,
     });
-    
+
     const requestedScopePath = sanitizeScopePath(rawScopePath);
-    
+
     // Log sanitized result
-    console.log('[Chat API] Sanitized scope path:', {
+    chatLogger.debug('Sanitized scope path:', {
       before: rawScopePath,
       after: requestedScopePath,
     });
@@ -2606,7 +2612,7 @@ function buildAgenticContext(messages: LLMMessage[]): string {
  * Validate an extracted file path to prevent garbage paths from being written.
  * Rejects paths containing heredoc markers, control chars, or command names.
  */
-function validateExtractedPath(raw: string): string | null {
+function validateExtractedPath(raw: string, isFolder: boolean = false): string | null {
   const path = (raw || '').trim().replace(/^['"`]|['"`]$/g, '');
   if (!path) return null;
   if (path.length > 300) return null;
@@ -2617,6 +2623,16 @@ function validateExtractedPath(raw: string): string | null {
   if (PATH_TOO_MANY_DOTS_RE.test(path)) return null;
   if (PATH_TRAVERSAL_RE.test(path)) return null;
   if (PATH_COMMAND_RE.test(path)) return null;
+  // Reject paths that look like CSS classes, Vue directives, or code snippets
+  if (PATH_LOOKS_LIKE_CODE_RE.test(path)) return null;
+  // Reject paths with colons (CSS classes like hover:scale-105)
+  if (PATH_HAS_COLON_RE.test(path)) return null;
+  // Must have a valid file extension or be a directory name
+  if (!/^[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+)*\/?$/.test(path)) return null;
+  
+  // CRITICAL FIX: Use shared validation to reject JSON/object syntax in paths
+  if (!isValidFilePath(path, isFolder)) return null;
+  
   return path;
 }
 
@@ -2771,9 +2787,9 @@ export async function applyFilesystemEditsFromResponse(input: {
     return validPath;
   }).filter((p): p is string => !!p);
   
-  // Validate folder paths from parsed response (same validation as writes/diffs/deletes)
+  // Validate folder paths from parsed response (trailing slashes OK for folders)
   const validatedParsedFolders = parsedResponse.folders.map((folderPath) => {
-    const validPath = validateExtractedPath(folderPath);
+    const validPath = validateExtractedPath(folderPath, true); // isFolder = true
     if (!validPath) {
       console.warn('[applyFilesystemEdits] Rejected invalid folder path:', folderPath.substring(0, 80));
       return null;
@@ -3274,10 +3290,13 @@ export async function GET(request: NextRequest) {
   // If called with ?warmup=true, trigger provider initialization
   // SECURITY: Only allow in development or with admin auth header
   if (url.searchParams.get('warmup') === 'true') {
-    // Check for admin auth header or dev-only mode
-    const isAdminAuth = request.headers.get('x-admin-secret') === process.env.CHAT_ADMIN_SECRET;
+    // Timing-safe comparison to prevent timing attacks
+    const headerValue = request.headers.get('x-admin-secret') || '';
+    const expectedSecret = process.env.CHAT_ADMIN_SECRET || '';
+    const isAdminAuth = headerValue.length === expectedSecret.length && 
+      timingSafeEqual(Buffer.from(headerValue), Buffer.from(expectedSecret));
     const isDevOnly = process.env.NODE_ENV === 'development';
-    
+
     if (!isAdminAuth && !isDevOnly) {
       return NextResponse.json(
         { error: 'Unauthorized: warmup requires admin auth or dev mode' },

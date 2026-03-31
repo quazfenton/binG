@@ -6,9 +6,16 @@
  */
 
 import { z } from 'zod';
-import type { RESEARCH_TASK_EVENT } from '../../schema';
 
-export async function handleResearch(event: z.infer<typeof RESEARCH_TASK_EVENT>) {
+// Research task event schema
+const ResearchEventSchema = z.object({
+  userId: z.string(),
+  query: z.string(),
+  depth: z.number().optional(),
+  sources: z.array(z.string()).optional(),
+});
+
+export async function handleResearch(event: z.infer<typeof ResearchEventSchema>) {
   console.log(`[ResearchHandler] Starting research: "${event.query}" depth=${event.depth}`);
   
   try {
