@@ -52,6 +52,7 @@ import { createDebugLogger } from "@/config/features";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { checkFileConflicts } from "@/lib/session-naming";
 import { buildApiHeaders } from "@/lib/utils";
+import { usePanel } from "@/contexts/panel-context";
 
 // Import live preview offloading functions
 import {
@@ -193,6 +194,7 @@ export default function CodePreviewPanel({
   onApplyPolledDiffs,
   onClearPolledDiffs,
 }: CodePreviewPanelProps) {
+  const { openMonacoEditor } = usePanel();
   const [detectedFramework] = useState<"react" | "vue" | "vanilla">("vanilla");
 
   const { log, error: logError, warn: logWarn } = previewLogger;
@@ -6480,6 +6482,15 @@ root.render(<App />);` };
                   }}
                 >
                   <Edit className="w-4 h-4" /> Rename
+                </button>
+                <button
+                  className="w-full px-4 py-2 text-left text-sm text-cyan-400 hover:bg-cyan-500/10 flex items-center gap-2"
+                  onClick={() => {
+                    openMonacoEditor(contextMenu.path);
+                    setContextMenu(null);
+                  }}
+                >
+                  <CodeIcon className="w-4 h-4" /> Open in Editor
                 </button>
               </>
             )}

@@ -12,7 +12,7 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-s
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
-import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath, extractScopePath } from '@/lib/virtual-filesystem/scope-utils';
+import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath, extractScopePath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
@@ -27,10 +27,10 @@ import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider
 import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@/lib/agent/orchestration-mode-handler';
 import {
   sanitizeAssistantDisplayContent,
-  extractFileWriteEdits,
   parseFilesystemResponse,
   createIncrementalParser,
   extractIncrementalFileEdits,
+  stripHeredocMarkers,
 } from '@/lib/chat/file-edit-parser';
 import { isValidFilePath } from '@/lib/chat/file-edit-parser';
 import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
@@ -2637,32 +2637,12 @@ function validateExtractedPath(raw: string, isFolder: boolean = false): string |
 }
 
 /**
- * Strip heredoc markers (<<<, >>>) that may wrap file content.
- * Also strips a leading WRITE/PATCH command line if present.
+ * Extract folder_create tags from content.
  */
-function stripHeredocMarkers(content: string): string {
-  let cleaned = content;
-  // Remove leading "WRITE path" or "PATCH path" line if the whole block is a command
-  cleaned = cleaned.replace(/^\s*(?:WRITE|PATCH)\s+\S+\s*\n/, '');
-  // Strip leading <<< marker (with optional whitespace/newline)
-  cleaned = cleaned.replace(/^\s*<<<\s*\n?/, '');
-  // Strip trailing >>> marker (with optional whitespace/newline)
-  cleaned = cleaned.replace(/\n?\s*>>>\s*$/, '');
-  return cleaned;
-}
-
-function extractFileWriteFolderCreateTags(content: string): {
-  writes: Array<{ path: string; content: string }>;
-  folders: string[];
-} {
-  // Use shared parser for file_write tags
-  const fileWrites = extractFileWriteEdits(content);
-  const writes: Array<{ path: string; content: string }> = fileWrites.map(w => ({
-    path: w.path,
-    content: w.content
-  }));
-
+function extractFolderCreateTags(content: string): string[] {
   const folders: string[] = []
+
+  if (!content.includes('folder_create')) return folders;
 
   // Extract folder_create tags
   const folderCreateRegex = /<folder_create\s+path\s*=\s*["']([^"']+)["']\s*\/?>/gi
@@ -2680,11 +2660,15 @@ function extractFileWriteFolderCreateTags(content: string): {
     folders.push(validPath)
   }
 
-  return { writes, folders }
+  return folders
 }
 
 function sanitizePathSegment(input: string): string {
-  return input.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'session';
+  // CRITICAL FIX: Use normalizeSessionId to extract simple session name from composite IDs
+  // This prevents "anon:timestamp:001" from becoming "anon-timestamp-001"
+  // If normalizeSessionId returns empty (invalid input), fall back to 'session'
+  const simpleSessionId = normalizeSessionId(input);
+  return simpleSessionId.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'session';
 }
 
 function resolveScopedPath(input: {
@@ -2738,10 +2722,9 @@ export async function applyFilesystemEditsFromResponse(input: {
   };
 }): Promise<FilesystemEditResult> {
   const parsedResponse = parseFilesystemResponse(input.responseContent || '');
-  const fileWriteFolderCreateOps = extractFileWriteFolderCreateTags(input.responseContent || '');
+  const folderCreateOps = extractFolderCreateTags(input.responseContent || '');
   const combinedWriteEdits = [
     ...parsedResponse.writes.map(edit => ({ path: edit.path, content: edit.content })),
-    ...fileWriteFolderCreateOps.writes.map(w => ({ path: w.path, content: w.content })),
   ].map(edit => ({
     ...edit,
     // Universal sanitization: strip any leaked heredoc markers from all extractors
@@ -2797,7 +2780,7 @@ export async function applyFilesystemEditsFromResponse(input: {
     return validPath;
   }).filter((p): p is string => !!p);
   
-  const folderCreateTargets = [...new Set([...validatedParsedFolders, ...fileWriteFolderCreateOps.folders])];
+  const folderCreateTargets = [...new Set([...validatedParsedFolders, ...folderCreateOps])];
   const requestFiles = input.commands?.request_files || [];
 
   // Only create transaction if there are mutating operations (write/patch/delete/apply_diff)

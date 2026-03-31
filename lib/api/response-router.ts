@@ -2173,10 +2173,10 @@ export class ResponseRouter {
         (request.requestId && /^[a-zA-Z0-9_-]+$/.test(request.requestId) ? request.requestId : undefined);
 
       if (ownerIdForEdits && rawConversationId) {
-        // Extract just the session part for scopePath (not the composite ownerId:session)
-        const sessionPart = rawConversationId.includes(':')
-          ? rawConversationId.split(':').slice(1).join(':')
-          : rawConversationId;
+        // CRITICAL FIX: Use normalizeSessionId to extract simple session folder name
+        // This prevents composite IDs like "anon:timestamp:001" from leaking into paths
+        const { normalizeSessionId } = await import('@/lib/virtual-filesystem/scope-utils');
+        const simpleSessionId = normalizeSessionId(rawConversationId) || rawConversationId; // Use original if normalize returns empty
         const compositeConversationId = `${ownerIdForEdits}:${rawConversationId}`;
 
         try {
@@ -2186,7 +2186,7 @@ export class ResponseRouter {
             ownerId: ownerIdForEdits.toString(),
             conversationId: compositeConversationId,
             requestId: `refinement-${Date.now()}`,
-            scopePath: `project/sessions/${sessionPart}`,
+            scopePath: `project/sessions/${simpleSessionId}`,
             lastUserMessage: '',
             attachedPaths: [],
             responseContent: refinedOutput,
