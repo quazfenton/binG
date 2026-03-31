@@ -28,6 +28,7 @@ import {
 import { getSandboxProvider, getSandboxProviderWithFallback } from '../sandbox/providers';
 import type { SandboxHandle, SandboxCreateConfig } from '../sandbox/providers/sandbox-provider';
 import { createOpencodeSessionManager, type OpencodeSessionManager } from '@/lib/opencode';
+import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { enhancedBackgroundJobsManager, type EnhancedJobConfig, type EnhancedJob } from '../agent/enhanced-background-jobs';
 import { executionGraphEngine } from '../agent/execution-graph';
 

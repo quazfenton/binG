@@ -47,43 +47,56 @@ interface EmbedCache {
 }
 
 // Get cached embed
-async function getCachedEmbed(videoId: string): Promise<string | null> {
+async function getCachedEmbed(videoId: string, autoplay?: boolean): Promise<string | null> {
   try {
     const data = await readFile(CACHE_PATH, "utf-8");
     const cache: EmbedCache = JSON.parse(data);
-    
-    const cached = cache[videoId];
+
+    const cacheKey = autoplay ? `${videoId}:autoplay=1` : videoId;
+    const cached = cache[cacheKey];
     if (!cached) return null;
-    
+
     // Check if expired
     if (Date.now() - cached.timestamp > CACHE_TTL) {
-      delete cache[videoId];
+      delete cache[cacheKey];
       await writeFile(CACHE_PATH, JSON.stringify(cache, null, 2));
       return null;
     }
-    
+
     // Update access count
     cached.accessCount++;
     await writeFile(CACHE_PATH, JSON.stringify(cache, null, 2));
-    
+
     return cached.html;
-  } catch (error) {
+  } catch (error: any) {
+    // Only silently ignore ENOENT (file doesn't exist yet)
+    if (error?.code === 'ENOENT') {
+      return null;
+    }
+    // Log other errors for debugging
+    console.error('[Music Embed Cache] Read error:', error);
     return null;
   }
 }
 
 // Cache embed HTML
-async function cacheEmbed(videoId: string, html: string, source: string): Promise<void> {
+async function cacheEmbed(videoId: string, html: string, source: string, autoplay?: boolean): Promise<void> {
   try {
     let cache: EmbedCache = {};
-    
+
     try {
       const data = await readFile(CACHE_PATH, "utf-8");
       cache = JSON.parse(data);
-    } catch {
-      // File doesn't exist
+    } catch (error: any) {
+      // Only silently ignore ENOENT (file doesn't exist yet)
+      if (error?.code !== 'ENOENT') {
+        console.error('[Music Embed Cache] Parse error:', error);
+      }
     }
-    
+
+    // Use autoplay in cache key
+    const cacheKey = autoplay ? `${videoId}:autoplay=1` : videoId;
+
     // Evict oldest if cache is full
     const entries = Object.entries(cache);
     if (entries.length >= MAX_CACHE_SIZE) {
@@ -92,14 +105,14 @@ async function cacheEmbed(videoId: string, html: string, source: string): Promis
       const oldestKey = entries[0][0];
       delete cache[oldestKey];
     }
-    
-    cache[videoId] = {
+
+    cache[cacheKey] = {
       html,
       timestamp: Date.now(),
       source,
       accessCount: 1,
     };
-    
+
     await writeFile(CACHE_PATH, JSON.stringify(cache, null, 2));
   } catch (error) {
     console.error("Failed to cache embed:", error);
@@ -116,18 +129,42 @@ export async function GET(
   const autoplay = searchParams.get("autoplay") === "1";
   const useCache = searchParams.get("cache") !== "false";
 
-  if (!videoId || videoId.length !== 11) {
+  if (!videoId || !/^[A-Za-z0-9_-]{11}$/.test(videoId)) {
     return NextResponse.json(
       { error: "Invalid video ID" },
       { status: 400 }
     );
   }
 
-  // Try cache first
+  // Try cache first (include autoplay in cache key)
   if (useCache) {
-    const cached = await getCachedEmbed(videoId);
+    const cached = await getCachedEmbed(videoId, autoplay);
     if (cached) {
-      return new NextResponse(cached, {
+      // SECURITY: Wrap cached HTML in sandboxed iframe (same as non-cached)
+      const sandboxedHtml = `
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Music Embed</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    html, body { width: 100%; height: 100%; overflow: hidden; }
+    iframe { width: 100%; height: 100%; border: none; }
+  </style>
+</head>
+<body>
+  <iframe
+    sandbox="allow-scripts allow-presentation"
+    referrerpolicy="strict-origin-when-cross-origin"
+    srcdoc="${cached.replace(/"/g, '&quot;')}"
+    title="Video Embed"
+  ></iframe>
+</body>
+</html>`.trim();
+
+      return new NextResponse(sandboxedHtml, {
         headers: {
           "Content-Type": "text/html",
           "Cache-Control": "public, max-age=3600",
@@ -137,10 +174,13 @@ export async function GET(
     }
   }
 
-  // Try each embed source
+  // Try each embed source with timeout
   let lastError: Error | null = null;
-  
+
   for (const source of EMBED_SOURCES) {
+    const controller = new AbortController();
+    const timeoutId = setTimeout(() => controller.abort(), 5000);
+
     try {
       const embedUrl = source.url(videoId);
       const response = await fetch(embedUrl, {
@@ -148,24 +188,33 @@ export async function GET(
           ...source.headers,
           "Accept-Language": "en-US,en;q=0.9",
         },
+        signal: controller.signal,
       });
+
+      clearTimeout(timeoutId);
 
       if (!response.ok) {
         throw new Error(`HTTP ${response.status}`);
       }
 
-      const html = await response.text();
+      let html = await response.text();
+
+      // Apply autoplay parameter
+      if (autoplay) {
+        html = html.replace(/autoplay=\d*/g, 'autoplay=1');
+        if (!html.includes('autoplay=')) {
+          html = html.replace(/src=["']([^"']*youtube[^"']*)["']/g, `src="$1&autoplay=1"`);
+        }
+      }
 
       // Modify HTML to work in our context
       const modifiedHtml = html
         .replace(/<base[^>]*>/g, "") // Remove base tags
-        .replace(/document\.domain/g, "// document.domain") // Disable domain checks
-        .replace(/"https:\/\/www\.youtube\.com/g, '"') // Fix relative URLs
-        .replace(/'https:\/\/www\.youtube\.com/g, "'"); // Fix relative URLs
+        .replace(/document\.domain/g, "// document.domain"); // Disable domain checks
 
-      // Cache the result
+      // Cache the result (include autoplay in cache key)
       if (useCache) {
-        await cacheEmbed(videoId, modifiedHtml, source.id);
+        await cacheEmbed(videoId, modifiedHtml, source.id, autoplay);
       }
 
       // SECURITY: Wrap untrusted HTML in sandboxed iframe instead of serving as our origin
@@ -204,6 +253,7 @@ export async function GET(
         },
       });
     } catch (error) {
+      clearTimeout(timeoutId);
       lastError = error as Error;
       console.warn(`Failed to fetch from ${source.id}:`, error);
       continue;

@@ -5,6 +5,23 @@ import { z } from 'zod';
 // Scheduler service connection - connects to the BullMQ-based scheduler
 const SCHEDULER_URL = process.env.SCHEDULER_URL || 'http://localhost:3007';
 
+// Scheduler fetch timeout - prevents hanging on scheduler stalls
+const SCHEDULER_TIMEOUT_MS = 8000;
+
+/**
+ * Fetch with timeout to prevent hanging requests
+ * Uses AbortController to cancel fetch after timeout
+ */
+async function fetchWithTimeout(url: string, init: RequestInit = {}, timeoutMs: number = SCHEDULER_TIMEOUT_MS): Promise<Response> {
+  const controller = new AbortController();
+  const timer = setTimeout(() => controller.abort(), timeoutMs);
+  try {
+    return await fetch(url, { ...init, signal: controller.signal });
+  } finally {
+    clearTimeout(timer);
+  }
+}
+
 // Max jobs per user (quota limit)
 const MAX_JOBS_PER_USER = 1;
 
@@ -104,18 +121,22 @@ interface ScheduledTask {
  */
 async function fetchSchedulerJobCount(ownerId: string): Promise<number> {
   try {
-    const response = await fetch(`${SCHEDULER_URL}/tasks?ownerId=${ownerId}&count=true`, {
+    const response = await fetchWithTimeout(`${SCHEDULER_URL}/tasks?ownerId=${ownerId}&count=true`, {
       headers: { 'Content-Type': 'application/json' },
     });
     if (!response.ok) {
       console.error('[CronJobs] Scheduler count fetch failed:', response.status);
-      return 0;
+      throw new Error(`Scheduler service returned ${response.status}`);
     }
     const data = await response.json() as { count: number };
     return data.count || 0;
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error('[CronJobs] Scheduler count fetch timed out');
+      throw new Error('Scheduler service timeout');
+    }
     console.error('[CronJobs] Failed to fetch job count:', error);
-    return 0;
+    throw error;
   }
 }
 
@@ -125,19 +146,23 @@ async function fetchSchedulerJobCount(ownerId: string): Promise<number> {
  */
 async function fetchSchedulerTasks(ownerId: string): Promise<ScheduledTask[]> {
   try {
-    const response = await fetch(`${SCHEDULER_URL}/tasks`, {
+    const response = await fetchWithTimeout(`${SCHEDULER_URL}/tasks`, {
       headers: { 'Content-Type': 'application/json' },
     });
     if (!response.ok) {
       console.error('[CronJobs] Scheduler fetch failed:', response.status);
-      return [];
+      throw new Error(`Scheduler service returned ${response.status}`);
     }
     const data = await response.json() as { tasks: ScheduledTask[] };
     // Filter by ownerId
     return (data.tasks || []).filter((t: ScheduledTask) => t.ownerId === ownerId);
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error('[CronJobs] Scheduler fetch timed out');
+      throw new Error('Scheduler service timeout');
+    }
     console.error('[CronJobs] Failed to fetch tasks:', error);
-    return [];
+    throw error;
   }
 }
 
@@ -146,7 +171,7 @@ async function fetchSchedulerTasks(ownerId: string): Promise<ScheduledTask[]> {
  */
 async function createSchedulerTask(task: Omit<ScheduledTask, 'id' | 'createdAt' | 'runCount'>): Promise<ScheduledTask | null> {
   try {
-    const response = await fetch(`${SCHEDULER_URL}/tasks`, {
+    const response = await fetchWithTimeout(`${SCHEDULER_URL}/tasks`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(task),
@@ -158,6 +183,10 @@ async function createSchedulerTask(task: Omit<ScheduledTask, 'id' | 'createdAt' 
     }
     return await response.json() as ScheduledTask;
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error('[CronJobs] Scheduler create timed out');
+      return null;
+    }
     console.error('[CronJobs] Failed to create task:', error);
     return null;
   }
@@ -168,11 +197,15 @@ async function createSchedulerTask(task: Omit<ScheduledTask, 'id' | 'createdAt' 
  */
 async function deleteSchedulerTask(taskId: string): Promise<boolean> {
   try {
-    const response = await fetch(`${SCHEDULER_URL}/tasks/${taskId}`, {
+    const response = await fetchWithTimeout(`${SCHEDULER_URL}/tasks/${taskId}`, {
       method: 'DELETE',
     });
     return response.ok;
   } catch (error) {
+    if (error instanceof Error && error.name === 'AbortError') {
+      console.error('[CronJobs] Scheduler delete timed out');
+      return false;
+    }
     console.error('[CronJobs] Failed to delete task:', error);
     return false;
   }
@@ -182,7 +215,7 @@ async function deleteSchedulerTask(taskId: string): Promise<boolean> {
 export async function GET(request: NextRequest) {
   try {
     const auth = await resolveFilesystemOwner(request);
-    
+
     if (!auth.isAuthenticated || !auth.ownerId) {
       return NextResponse.json(
         { error: 'Authentication required' },
@@ -202,9 +235,11 @@ export async function GET(request: NextRequest) {
     return NextResponse.json({ jobs });
   } catch (error: any) {
     console.error('[CronJobs API] GET error:', error);
+    // Fail closed: return 502/503 for scheduler failures instead of masking with empty list
+    const status = error.message?.includes('timeout') ? 504 : 502;
     return NextResponse.json(
       { error: error.message || 'Failed to fetch cron jobs' },
-      { status: 500 }
+      { status }
     );
   }
 }
@@ -242,7 +277,18 @@ export async function POST(request: NextRequest) {
 
     // Check quota - fetch job count from scheduler (more efficient than fetching all jobs)
     // Note: For perfect atomicity, quota should be enforced at the scheduler service level
-    const jobCount = await fetchSchedulerJobCount(auth.ownerId);
+    let jobCount: number;
+    try {
+      jobCount = await fetchSchedulerJobCount(auth.ownerId);
+    } catch (quotaError: any) {
+      console.error('[CronJobs API] Quota check failed:', quotaError);
+      // Fail closed: can't verify quota, return 502
+      return NextResponse.json(
+        { error: 'Unable to verify job quota (scheduler service unavailable)' },
+        { status: 502 }
+      );
+    }
+    
     if (jobCount >= MAX_JOBS_PER_USER) {
       return NextResponse.json(
         { error: `You can only have ${MAX_JOBS_PER_USER} cron job. Delete an existing one to create a new one.` },
@@ -275,9 +321,11 @@ export async function POST(request: NextRequest) {
     return NextResponse.json(task, { status: 201 });
   } catch (error: any) {
     console.error('[CronJobs API] POST error:', error);
+    // Fail closed: return 502/503 for scheduler failures
+    const status = error.message?.includes('timeout') ? 504 : 502;
     return NextResponse.json(
       { error: error.message || 'Failed to create cron job' },
-      { status: 500 }
+      { status }
     );
   }
 }

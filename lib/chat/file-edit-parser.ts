@@ -1507,14 +1507,17 @@ function detectUnclosedTags(
     }
   }
 
-  // cat > file << 'EOF'  (open but no closing delimiter)
-  const catMatch = tail.match(/cat\s*>>?\s*\S+\s*<<\s*['"]?(\w+)['"]?\s*\n?/);
+  // cat > file << 'EOF'  (open but no closing delimiter on its own line)
+  // Require newline after opening to match extractCatHeredocEdits behaviour
+  const catMatch = tail.match(/cat\s*>>?\s*\S+\s*<<\s*['"]?(\w+)['"]?\s*\n/);
   if (catMatch) {
     const delimiter = catMatch[1];
-    const afterMatch = tail.slice(tail.indexOf(catMatch[0]) + catMatch[0].length);
-    if (!afterMatch.includes(delimiter)) {
-      const idx = tail.indexOf(catMatch[0]);
-      positions.push(windowStart + scanStart + idx);
+    const matchEnd = catMatch.index! + catMatch[0].length;
+    const afterMatch = tail.slice(matchEnd);
+    // Closing delimiter must be on its own line (preceded by \n) or at start
+    const closeRe = new RegExp(`(?:^|\\n)${delimiter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`);
+    if (!closeRe.test(afterMatch)) {
+      positions.push(windowStart + scanStart + catMatch.index!);
     }
   }
 
@@ -1546,17 +1549,28 @@ function detectUnclosedTags(
 }
 
 /**
- * Remove unclosed positions that fall at or after `bufferPos` because
- * content has been re-parsed from that point and any tags there are
- * now either closed or still unclosed (re-tracked on this pass).
+ * Remove unclosed positions that are inside the new parse window
+ * (>= bufferPos) because they will be re-evaluated on this pass.
+ * Positions before bufferPos remain — they extend the next window.
  */
-function resetUnclosedBefore(state: IncrementalParseState, bufferPos: number): void {
+function pruneStaleUnclosed(state: IncrementalParseState, bufferPos: number): void {
   if (state.unclosedPositions.size === 0) return;
   for (const pos of state.unclosedPositions) {
     if (pos >= bufferPos) {
       state.unclosedPositions.delete(pos);
     }
   }
+}
+
+/**
+ * Return the earliest (smallest) value in a Set<number>, or Infinity if empty.
+ */
+function earliestPosition(positions: Set<number>): number {
+  let min = Infinity;
+  for (const pos of positions) {
+    if (pos < min) min = pos;
+  }
+  return min;
 }
 
 /**
@@ -1583,8 +1597,8 @@ export function extractIncrementalFileEdits(
   //    (handles edits larger than the default overlap)
   let parseStart = Math.max(0, state.lastPosition - INCREMENTAL_PARSE_OVERLAP_CHARS);
   if (state.unclosedPositions.size > 0) {
-    const earliestUnclosed = Math.min(...state.unclosedPositions);
-    parseStart = Math.min(parseStart, earliestUnclosed);
+    const earliest = earliestPosition(state.unclosedPositions);
+    if (earliest < parseStart) parseStart = earliest;
   }
   const parseWindow = buffer.slice(parseStart);
 
@@ -1649,7 +1663,7 @@ export function extractIncrementalFileEdits(
 
   // After parsing, detect any tags that are still open (no closing marker found).
   // On the next call, the parse window will extend back to these positions.
-  resetUnclosedBefore(state, parseStart);
+  pruneStaleUnclosed(state, parseStart);
   const unclosed = detectUnclosedTags(parseWindow, parseStart, UNCLOSED_SCAN_TAIL_CHARS);
   for (const pos of unclosed) {
     state.unclosedPositions.add(pos);

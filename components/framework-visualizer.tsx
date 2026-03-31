@@ -568,6 +568,8 @@ export default function FrameworkVisualizer({
                 <CardContent>
                   <ScrollArea className="h-[180px]">
                     <div className="space-y-1">
+                      {/* Ref at top to auto-scroll to newest logs (which appear first after reverse) */}
+                      <div ref={logsEndRef} />
                       {selectedWorkflow.logs?.slice(-20).reverse().map((log) => (
                         <div
                           key={log.id}
@@ -588,7 +590,6 @@ export default function FrameworkVisualizer({
                           <p className="text-white/80 mt-0.5">{log.message}</p>
                         </div>
                       ))}
-                      <div ref={logsEndRef} />
                     </div>
                   </ScrollArea>
                 </CardContent>

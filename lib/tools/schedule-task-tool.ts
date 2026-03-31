@@ -118,8 +118,8 @@ export async function executeGetTaskStatus(
   exists: boolean;
   status?: string;
   type?: string;
-  createdAt?: number;
-  processedAt?: number;
+  createdAt?: string;
+  completedAt?: string;
   error?: string;
 }> {
   const schema = z.object({

@@ -9,6 +9,7 @@
 
 import { EventRecord } from './store';
 import { createLogger } from '@/lib/utils/logger';
+import { randomUUID } from 'crypto';
 
 const logger = createLogger('Events:SelfHealing');
 
@@ -249,8 +250,15 @@ Respond with JSON:
       temperature: 0.3,
     });
 
-    // Parse response
-    const parsed = parseLLMResponse(response.content);
+    // Parse response - handle both string and structured content
+    const content =
+      typeof response.content === 'string'
+        ? response.content
+        : Array.isArray(response.content)
+        ? response.content.map((part: any) => (typeof part === 'string' ? part : part?.text ?? '')).join('\n')
+        : String(response.content ?? '');
+    
+    const parsed = parseLLMResponse(content);
 
     if (!parsed || !parsed.canAutoFix || (parsed.confidence ?? 0) < 0.6) {
       return {
@@ -325,10 +333,25 @@ function parseLLMResponse(content: string): {
  * Apply fix to event payload
  */
 export async function applyFix(event: EventRecord, fix: string): Promise<void> {
-  const db = require('@/lib/database/connection').getDatabase();
+  const { getDatabase } = await import('@/lib/database/connection');
+  const db = getDatabase();
 
-  // Parse current payload
-  const currentPayload = JSON.parse(event.payload);
+  if (!db) {
+    logger.warn('Database not ready, cannot apply fix', { eventId: event.id });
+    return;
+  }
+
+  // Parse current payload with error handling
+  let currentPayload: any;
+  try {
+    currentPayload = typeof event.payload === 'string' ? JSON.parse(event.payload) : event.payload;
+  } catch (parseError: any) {
+    logger.warn('Failed to parse event payload when applying fix', {
+      eventId: event.id,
+      error: parseError.message,
+    });
+    currentPayload = {};
+  }
 
   // Apply fix (this is simplified - actual implementation depends on fix format)
   const updatedPayload = {
@@ -351,7 +374,13 @@ export async function applyFix(event: EventRecord, fix: string): Promise<void> {
  * Get healing history for an event
  */
 export async function getHealingHistory(eventId: string): Promise<any[]> {
-  const db = require('@/lib/database/connection').getDatabase();
+  const { getDatabase } = await import('@/lib/database/connection');
+  const db = getDatabase();
+
+  if (!db) {
+    logger.warn('Database not ready, cannot get healing history', { eventId });
+    return [];
+  }
 
   const rows = db.prepare(`
     SELECT * FROM event_healing_log
@@ -371,8 +400,15 @@ export async function logHealingAttempt(
   success: boolean,
   explanation?: string
 ): Promise<void> {
-  const db = require('@/lib/database/connection').getDatabase();
-  const id = crypto.randomUUID();
+  const { getDatabase } = await import('@/lib/database/connection');
+  const db = getDatabase();
+
+  if (!db) {
+    logger.warn('Database not ready, cannot log healing attempt', { eventId });
+    return;
+  }
+
+  const id = randomUUID();
 
   db.prepare(`
     INSERT INTO event_healing_log
@@ -385,7 +421,13 @@ export async function logHealingAttempt(
  * Initialize healing log table
  */
 export async function initializeHealingLog(): Promise<void> {
-  const db = require('@/lib/database/connection').getDatabase();
+  const { getDatabase } = await import('@/lib/database/connection');
+  const db = getDatabase();
+
+  if (!db) {
+    logger.warn('Database not ready, cannot initialize healing log');
+    return;
+  }
 
   db.prepare(`
     CREATE TABLE IF NOT EXISTS event_healing_log (

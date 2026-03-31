@@ -103,7 +103,7 @@ async function getAuthSession(request: NextRequest) {
   try {
     const session = await auth0.getSession(request);
     if (!session?.user) return null;
-    
+
     return {
       user: {
         id: session.user.sub,
@@ -111,7 +111,10 @@ async function getAuthSession(request: NextRequest) {
         roles: (session.user as any)['https://binG.com/roles'] || [],
       },
     };
-  } catch {
+  } catch (error: unknown) {
+    console.error('[ArtGallery API] Failed to resolve auth session', {
+      message: error instanceof Error ? error.message : String(error),
+    });
     return null;
   }
 }
@@ -177,13 +180,14 @@ export async function POST(request: NextRequest) {
 
     // SECURITY: Auth check for destructive operations
     const session = await getAuthSession(request);
+    const hasSession = !!session?.user;
     const isAdmin = session?.user?.roles?.includes('admin') ?? false;
 
     // Block destructive operations for non-admin users
     if ((action === 'delete' || action === 'replace') && !isAdmin) {
       return NextResponse.json(
-        { success: false, error: isAdmin ? 'Authentication required' : 'Admin access required for this operation' },
-        { status: isAdmin ? 403 : 401 }
+        { success: false, error: hasSession ? 'Admin access required for this operation' : 'Authentication required' },
+        { status: hasSession ? 403 : 401 }
       );
     }
 
@@ -231,10 +235,14 @@ export async function POST(request: NextRequest) {
         }
 
         const index = currentImages.findIndex(img => img.id === image.id);
-        if (index !== -1) {
-          currentImages[index].likes = (currentImages[index].likes || 0) + 1;
-          await writeImages(currentImages);
+        if (index === -1) {
+          return NextResponse.json(
+            { success: false, error: 'Image not found' },
+            { status: 404 }
+          );
         }
+        currentImages[index].likes = (currentImages[index].likes || 0) + 1;
+        await writeImages(currentImages);
 
         return NextResponse.json({
           success: true,
@@ -251,10 +259,14 @@ export async function POST(request: NextRequest) {
         }
 
         const index = currentImages.findIndex(img => img.id === image.id);
-        if (index !== -1) {
-          currentImages[index].downloads = (currentImages[index].downloads || 0) + 1;
-          await writeImages(currentImages);
+        if (index === -1) {
+          return NextResponse.json(
+            { success: false, error: 'Image not found' },
+            { status: 404 }
+          );
         }
+        currentImages[index].downloads = (currentImages[index].downloads || 0) + 1;
+        await writeImages(currentImages);
 
         return NextResponse.json({
           success: true,

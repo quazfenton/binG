@@ -61,7 +61,7 @@ server.registerTool(
       workingDir: { type: 'string', description: 'Working directory' },
     } as unknown as AnySchema,
   },
-  async ({ command, workingDir }) => {
+  async ({ command, workingDir }): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> => {
     try {
       const { exec } = await import('child_process');
 
@@ -138,23 +138,25 @@ server.registerTool(
   }
 );
 
-server.tool(
+server.registerTool(
   'list_directory',
-  'List directory contents',
   {
-    path: { type: 'string', description: 'Directory path' },
+    description: 'List directory contents',
+    inputSchema: {
+      path: { type: 'string', description: 'Directory path' },
+    } as unknown as AnySchema,
   },
-  async ({ path }) => {
+  async ({ path }): Promise<{ content: Array<{ type: 'text'; text: string }>; isError?: boolean }> => {
     try {
       const { readdir } = await import('fs/promises');
       const files = await readdir(path);
-      
+
       return {
-        content: [{ type: 'text', text: files.join('\n') }],
+        content: [{ type: 'text' as const, text: files.join('\n') }],
       };
     } catch (error: any) {
       return {
-        content: [{ type: 'text', text: `List failed: ${error.message}` }],
+        content: [{ type: 'text' as const, text: `List failed: ${error.message}` }],
         isError: true,
       };
     }

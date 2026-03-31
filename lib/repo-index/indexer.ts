@@ -474,22 +474,27 @@ export class RepoIndexer {
     // Simple regex-based symbol extraction
     // For production, use proper AST parser (tree-sitter, babel, etc.)
 
-    const patterns: Record<string, RegExp[]> = {
+    interface PatternInfo {
+      pattern: RegExp;
+      type: SymbolInfo['type'];
+    }
+
+    const patterns: Record<string, PatternInfo[]> = {
       typescript: [
-        { regex: /export\s+(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)/g, type: 'function' },
-        { regex: /export\s+class\s+(\w+)/g, type: 'class' },
-        { regex: /export\s+interface\s+(\w+)/g, type: 'interface' },
-        { regex: /export\s+(?:const|let|var)\s+(\w+)/g, type: 'variable' },
-        { regex: /export\s+type\s+(\w+)/g, type: 'type' },
+        { pattern: /export\s+(?:async\s+)?function\s+(\w+)\s*\(([^)]*)\)/g, type: 'function' },
+        { pattern: /export\s+class\s+(\w+)/g, type: 'class' },
+        { pattern: /export\s+interface\s+(\w+)/g, type: 'interface' },
+        { pattern: /export\s+(?:const|let|var)\s+(\w+)/g, type: 'variable' },
+        { pattern: /export\s+type\s+(\w+)/g, type: 'type' },
       ],
       python: [
-        { regex: /def\s+(\w+)\s*\(([^)]*)\)/g, type: 'function' },
-        { regex: /class\s+(\w+)/g, type: 'class' },
+        { pattern: /def\s+(\w+)\s*\(([^)]*)\)/g, type: 'function' },
+        { pattern: /class\s+(\w+)/g, type: 'class' },
       ],
       rust: [
-        { regex: /fn\s+(\w+)\s*\(([^)]*)\)/g, type: 'function' },
-        { regex: /struct\s+(\w+)/g, type: 'class' },
-        { regex: /trait\s+(\w+)/g, type: 'interface' },
+        { pattern: /fn\s+(\w+)\s*\(([^)]*)\)/g, type: 'function' },
+        { pattern: /struct\s+(\w+)/g, type: 'class' },
+        { pattern: /trait\s+(\w+)/g, type: 'interface' },
       ],
     };
 
@@ -499,8 +504,8 @@ export class RepoIndexer {
       const line = lines[i];
 
       for (const pattern of langPatterns) {
-        const regex = typeof pattern === 'object' && 'regex' in pattern ? pattern.regex : pattern;
-        const type = typeof pattern === 'object' && 'type' in pattern ? pattern.type : 'function';
+        const regex = pattern.pattern;
+        const type = pattern.type;
 
         let match;
         while ((match = regex.exec(line)) !== null) {

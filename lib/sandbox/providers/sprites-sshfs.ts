@@ -433,14 +433,19 @@ export class SpritesSSHFS {
         }
 
         // Use sprite exec with the key passed via stdin to avoid shell injection
-        await execFilePromise(
+        const execResult: any = await execFilePromise(
           'sprite',
           ['exec', '-s', validatedSpriteName, 'bash', '-c', 'mkdir -p ~/.ssh && cat >> ~/.ssh/authorized_keys && chmod 700 ~/.ssh && chmod 600 ~/.ssh/authorized_keys'],
           {
             timeout: 30000,
-            input: key + '\n',
-          }
-        )
+            stdio: ['pipe', 'pipe', 'pipe'],
+          } as any
+        );
+        const child = execResult.child || execResult;
+        if (child?.stdin) {
+          child.stdin.write(key + '\n');
+          child.stdin.end();
+        }
       }
 
       console.log('[SpritesSSHFS] SSH keys authorized')

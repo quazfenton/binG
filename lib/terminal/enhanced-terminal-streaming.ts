@@ -448,10 +448,10 @@ export function mergeOutputStreams(
   const unsubscribers: Array<() => void> = [];
 
   for (const stream of streams) {
-    const unsubscribe = stream.onOutput && (() => {
+    const unsubscribe = (stream as any).onOutput && (() => {
       // Output already written to target via callback
     });
-    
+
     if (unsubscribe) {
       unsubscribers.push(unsubscribe);
     }

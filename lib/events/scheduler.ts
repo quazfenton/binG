@@ -134,6 +134,12 @@ export async function runScheduler(): Promise<{
 
   logger.info('Running scheduler', { timestamp: now.toISOString() });
 
+  // Check if database is ready
+  if (!db) {
+    logger.warn('Database not ready, skipping scheduler run');
+    return { emitted: 0, skipped: 0, errors: 0 };
+  }
+
   try {
     // Query scheduled tasks that are due
     const tasks = db.prepare(`

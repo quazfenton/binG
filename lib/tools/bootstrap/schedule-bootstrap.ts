@@ -269,8 +269,72 @@ export async function registerDAGTask(
 }
 
 /**
+ * Register skill bootstrap task (trigger.md pattern #3)
+ *
+ * Extracts reusable skills from successful task executions.
+ *
+ * @param registry - Tool registry instance
+ * @param config - Bootstrap configuration
+ * @returns Number of tools registered
+ */
+export async function registerSkillBootstrapTask(
+  registry: ToolRegistry,
+  config: BootstrapConfig
+): Promise<number> {
+  try {
+    logger.debug('Registering skill bootstrap task...');
+
+    await registry.registerTool({
+      name: 'task.skill-bootstrap',
+      capability: 'task.skill-bootstrap',
+      provider: 'events',
+      handler: async (args: any, _context: any) => {
+        // Skill bootstrap - extract reusable skill from successful run
+        const { executeSkillBootstrapTask } = await import('@/lib/events/trigger');
+        
+        const result = await executeSkillBootstrapTask({
+          successfulRun: args.successfulRun,
+          abstractionLevel: args.abstractionLevel || 'moderate',
+          model: args.model,
+          storeSkill: args.storeSkill !== false,
+        });
+        
+        return result;
+      },
+      inputSchema: z.object({
+        successfulRun: z.object({
+          steps: z.array(z.object({
+            action: z.string(),
+            result: z.any(),
+            success: z.boolean(),
+          })),
+          totalDuration: z.number(),
+          userId: z.string(),
+        }).describe('Successful execution to extract skill from'),
+        abstractionLevel: z.enum(['simple', 'moderate', 'complex']).optional().describe('Level of abstraction'),
+        model: z.string().optional().describe('Model to use for extraction'),
+        storeSkill: z.boolean().optional().describe('Whether to store the extracted skill'),
+      }),
+      metadata: {
+        latency: 'high',
+        cost: 'medium',
+        reliability: 0.95,
+        tags: ['skill', 'bootstrap', 'extraction', 'learning', 'self-improvement'],
+      },
+      permissions: ['skill:extract', 'skill:store'],
+    });
+
+    logger.info('Skill bootstrap task registered');
+    return 1;
+  } catch (error: any) {
+    logger.error('Failed to register skill bootstrap task', error);
+    return 0;
+  }
+}
+
+/**
  * Register all schedule-related tools
- * 
+ *
  * @param registry - Tool registry instance
  * @param config - Bootstrap configuration
  * @returns Total tools registered
@@ -282,6 +346,7 @@ export async function registerAllScheduleTools(
   const basic = await registerScheduleTools(registry, config);
   const agentLoop = await registerAgentLoopTask(registry, config);
   const dag = await registerDAGTask(registry, config);
-  
-  return basic + agentLoop + dag;
+  const skillBootstrap = await registerSkillBootstrapTask(registry, config);
+
+  return basic + agentLoop + dag + skillBootstrap;
 }

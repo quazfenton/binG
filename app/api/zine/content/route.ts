@@ -120,6 +120,10 @@ export async function POST(request: NextRequest) {
       source: result.data.source,
       expiresAt: result.data.expiresAt,
       priority: result.data.priority,
+      // Preserve style, position, and animation fields from validated input
+      style: result.data.style,
+      position: result.data.position,
+      animation: result.data.animation,
     };
     
     contentStore.set(content.id, content);

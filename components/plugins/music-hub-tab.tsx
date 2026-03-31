@@ -417,10 +417,15 @@ const CachedThumbnailComponent: React.FC<CachedThumbnailProps> = ({
           const target = e.target as HTMLImageElement;
           const currentSrc = target.src;
           const proxiedThumbnail = getProxiedImageUrl(thumbnailUrl);
-          if (currentSrc !== proxiedThumbnail && currentSrc !== thumbnailUrl) {
-            target.src = proxiedThumbnail || thumbnailUrl;
-          } else if (currentSrc !== `https://img.youtube.com/vi/${videoId}/default.jpg`) {
-            target.src = `https://img.youtube.com/vi/${videoId}/default.jpg`;
+          const proxiedAbsolute = proxiedThumbnail
+            ? new URL(proxiedThumbnail, window.location.origin).href
+            : undefined;
+          const youtubeFallback = `https://img.youtube.com/vi/${videoId}/default.jpg`;
+          // Compare absolute URLs: browser normalises target.src to absolute
+          if (proxiedAbsolute && currentSrc !== proxiedAbsolute && currentSrc !== thumbnailUrl) {
+            target.src = proxiedThumbnail!;
+          } else if (currentSrc !== youtubeFallback) {
+            target.src = youtubeFallback;
           }
         }}
       />

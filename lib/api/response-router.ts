@@ -2010,7 +2010,7 @@ export class ResponseRouter {
 
       // Wait for primary response (needed for content)
       const primaryResult = await primaryPromise.catch(err => ({ success: false, error: err }))
-      
+
       // Always return primary response immediately
       if (!(primaryResult as any).success) {
         const err = (primaryResult as any).error
@@ -2019,20 +2019,29 @@ export class ResponseRouter {
       }
 
       const primaryData = (primaryResult as any).data
-      
-      // Return primary response immediately (full response, not just .data)
-      // This ensures content is properly passed through to the streaming pipeline
-      return primaryResult as UnifiedResponse
-      
-      chatLogger.debug('File system edits detected, running spec amplification', { 
+
+      // Detect if primary response contains code/file edits
+      const hasWriteDiffs = (primaryData.commands?.write_diffs?.length ?? 0) > 0
+      const hasFiles = (primaryData.data?.files?.length ?? 0) > 0
+      const hasCode = hasWriteDiffs || hasFiles
+
+      chatLogger.debug('Code detection for spec amplification', {
         requestId: request.requestId,
         writeDiffsCount: primaryData.commands?.write_diffs?.length ?? 0,
-        filesCount: primaryData.data?.files?.length ?? 0
+        filesCount: primaryData.data?.files?.length ?? 0,
+        hasCode
       })
 
       // Emit primary response immediately if emit is provided
       if (request.emit) {
         request.emit('primary_response', { content: primaryData.content, timestamp: Date.now() })
+      }
+
+      // Only run spec amplification if code was detected in the initial response
+      if (!hasCode) {
+        chatLogger.debug('No code detected in initial response, skipping spec amplification', { requestId: request.requestId })
+        // Return primary response without spec amplification
+        return primaryData as UnifiedResponse
       }
 
       // Start spec generation in background (don't await - run in parallel)
@@ -2052,8 +2061,8 @@ export class ResponseRouter {
         logger.error('Background refinement failed', { error: err })
       })
 
-      // Return primary response immediately
-      return primaryData
+      // Return primary response
+      return primaryData as UnifiedResponse
 
     } catch (error) {
       logger.error('Spec amplification failed', error)

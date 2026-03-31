@@ -150,7 +150,7 @@ export class AgentFSMount {
   // ---- Key-value operations ----
 
   async kvGet<T = any>(key: string): Promise<T | undefined> {
-    return this.agent.kv.get<T>(key);
+    return (this.agent.kv as any).get(key) as T | undefined;
   }
 
   async kvSet(key: string, value: any): Promise<void> {

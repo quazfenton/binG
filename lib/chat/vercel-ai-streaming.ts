@@ -479,6 +479,44 @@ export async function* streamWithVercelAI(
           break;
         }
 
+        case 'reasoning': {
+          // Handle reasoning chunks emitted as 'reasoning' (not just 'reasoning-start')
+          // Some providers emit reasoning as a continuous stream of 'reasoning' events
+          const reasoningText = (chunk as any).text ?? (chunk as any).delta ?? '';
+          reasoningContent += reasoningText;
+          yield {
+            content: '',
+            isComplete: false,
+            reasoning: reasoningText,
+            timestamp: new Date(),
+          };
+          break;
+        }
+
+        case 'reasoning-delta': {
+          // Handle reasoning-delta for providers that emit incremental reasoning
+          const reasoningText = (chunk as any).text ?? (chunk as any).delta ?? '';
+          reasoningContent += reasoningText;
+          yield {
+            content: '',
+            isComplete: false,
+            reasoning: reasoningText,
+            timestamp: new Date(),
+          };
+          break;
+        }
+
+        case 'reasoning-end': {
+          // Handle reasoning-end to mark reasoning completion
+          yield {
+            content: '',
+            isComplete: false,
+            reasoning: '',
+            timestamp: new Date(),
+          };
+          break;
+        }
+
         case 'tool-call': {
           yield {
             content: '',

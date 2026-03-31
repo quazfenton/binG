@@ -70,6 +70,7 @@ import ZineDisplayTab from "./top-panel/plugins/zine-display-tab";
 import CodePlaygroundTab from "./plugins/code-playground-tab";
 import { MonacoVFSEditor } from "./monaco-vfs-editor";
 import { BookmarksCurationPlugin } from "@/components/bookmarks/bookmarks-curation-plugin";
+import { MCPStore } from "@/components/mcp/mcp-store";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
@@ -428,6 +429,7 @@ const TAB_DEFS: TabDef[] = [
   { value: "broadway-deal-hunter", label: "Broadway", icon: Zap },
   { value: "model-comparison", label: "Model Compare", icon: Zap },
   { value: "zine-display", label: "Zine", icon: Palette },
+  { value: "mcp", label: "MCP Store", icon: Puzzle },
 ];
 
 // ---------------------------------------------------------------------------
@@ -1057,12 +1059,7 @@ export default function TopPanel() {
                     </TabErrorBoundary>
                   </TabsContent>
 
-                  {/* Workflow Visualizer */}
-                  <TabsContent value="workflows" className="h-full mt-0">
-                    <TabErrorBoundary tabName="Workflow Visualizer">
-                      <WorkflowVisualizer />
-                    </TabErrorBoundary>
-                  </TabsContent>
+                  {/* Workflows — duplicate removed; primary at line 986 */}
 
                   {/* Code Playground */}
                   <TabsContent value="code-playground" className="h-full mt-0">
@@ -1108,69 +1105,17 @@ export default function TopPanel() {
                     </TabErrorBoundary>
                   </TabsContent>
 
-                  {/* Events Panel */}
-                  <TabsContent value="events" className="h-full mt-0">
-                    <TabErrorBoundary tabName="Events Panel">
-                      <EventsPanel />
+                  <TabsContent value="mcp" className="h-full mt-0">
+                    <TabErrorBoundary tabName="MCP Store">
+                      <MCPStore />
                     </TabErrorBoundary>
                   </TabsContent>
 
-                  {/* Bookmarks Curation */}
-                  <TabsContent value="bookmarks" className="h-full mt-0">
-                    <TabErrorBoundary tabName="Bookmarks">
-                      <BookmarksCurationPlugin />
-                    </TabErrorBoundary>
-                  </TabsContent>
+                  {/* Events Panel — duplicate removed; primary at line 1048 */}
 
-                  {/* Workflow Visualizer */}
-                  <TabsContent value="workflows" className="h-full mt-0">
-                    <TabErrorBoundary tabName="Workflow Visualizer">
-                      <WorkflowVisualizer />
-                    </TabErrorBoundary>
-                  </TabsContent>
+                  {/* Bookmarks — duplicate removed; primary at line 1054 */}
 
-                  {/* Code Playground */}
-                  <TabsContent value="code-playground" className="h-full mt-0">
-                    <TabErrorBoundary tabName="Code Playground">
-                      <CodePlaygroundTab />
-                    </TabErrorBoundary>
-                  </TabsContent>
-
-                  {/* Monaco Editor */}
-                  <TabsContent value="monaco-editor" className="h-full mt-0">
-                    <TabErrorBoundary tabName="Monaco Editor">
-                      <MonacoVFSEditor 
-                        initialFilePath={monacoFilePath || undefined}
-                        onClose={() => {
-                          closeMonacoEditor();
-                          setTopPanelTab('news');
-                        }}
-                      />
-                    </TabErrorBoundary>
-                  </TabsContent>
-
-                  <TabsContent
-                    value="broadway-deal-hunter"
-                    className="h-full mt-0"
-                  >
-                    <TabErrorBoundary tabName="Broadway Deal Hunter">
-                      <BroadwayDealHunterTab />
-                    </TabErrorBoundary>
-                  </TabsContent>
-
-                  {/* Model Comparison */}
-                  <TabsContent value="model-comparison" className="h-full mt-0">
-                    <TabErrorBoundary tabName="Model Comparison">
-                      <ModelComparisonTab />
-                    </TabErrorBoundary>
-                  </TabsContent>
-
-                  {/* Zine Display */}
-                  <TabsContent value="zine-display" className="h-full mt-0">
-                    <TabErrorBoundary tabName="Zine Display">
-                      <ZineDisplayTab />
-                    </TabErrorBoundary>
-                  </TabsContent>
+                  {/* Workflows, Code Playground, Monaco Editor — duplicates removed; primaries at lines 986, 1068, 1075 */}
                 </Tabs>
               </div>
             </div>

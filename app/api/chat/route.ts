@@ -132,7 +132,8 @@ const PATH_TOO_MANY_DOTS_RE = /^\.{3,}/
 const PATH_TRAVERSAL_RE = /(?:^|\/)\.\.(?:\/|$)/
 const PATH_COMMAND_RE = /\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i
 // Additional: Reject paths that look like CSS classes, Vue directives, or code snippets
-const PATH_LOOKS_LIKE_CODE_RE = /^(?:hover:|@|:|\.|v-|:bind|@click|@submit)/i
+// Note: Removed \. to allow legitimate dotfiles like .env.example, .gitignore, .eslintrc
+const PATH_LOOKS_LIKE_CODE_RE = /^(?:hover:|@|:|v-|:bind|@click|@submit)/i
 // Additional: Reject paths with colons (CSS classes like hover:scale-105)
 const PATH_HAS_COLON_RE = /:/
 
@@ -2628,7 +2629,8 @@ function validateExtractedPath(raw: string, isFolder: boolean = false): string |
   // Reject paths with colons (CSS classes like hover:scale-105)
   if (PATH_HAS_COLON_RE.test(path)) return null;
   // Must have a valid file extension or be a directory name
-  if (!/^[a-zA-Z0-9._-]+(?:\/[a-zA-Z0-9._-]+)*\/?$/.test(path)) return null;
+  // Allow brackets [] for Next.js dynamic routes like app/blog/[slug]/page.tsx
+  if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) return null;
   
   // CRITICAL FIX: Use shared validation to reject JSON/object syntax in paths
   if (!isValidFilePath(path, isFolder)) return null;
@@ -3275,8 +3277,11 @@ export async function GET(request: NextRequest) {
   if (url.searchParams.get('warmup') === 'true') {
     // Timing-safe comparison to prevent timing attacks
     const headerValue = request.headers.get('x-admin-secret') || '';
-    const expectedSecret = process.env.CHAT_ADMIN_SECRET || '';
-    const isAdminAuth = headerValue.length === expectedSecret.length && 
+    const expectedSecret = process.env.CHAT_ADMIN_SECRET;
+    // SECURITY: Require CHAT_ADMIN_SECRET to be configured and non-empty
+    // In production, an empty secret means NO auth is configured, so reject all requests
+    const isAdminAuth = !!expectedSecret &&
+      headerValue.length === expectedSecret.length &&
       timingSafeEqual(Buffer.from(headerValue), Buffer.from(expectedSecret));
     const isDevOnly = process.env.NODE_ENV === 'development';
 
