@@ -394,6 +394,15 @@ export function useVirtualFilesystem(
 
         // Fetch fresh data for all affected paths
         for (const path of pendingPathsToRefresh) {
+          // CRITICAL FIX: Skip file paths - only directories should call listDirectory
+          // File paths (contain extension, no trailing slash) should use readFile instead
+          const isFilePath = path.includes('.') && !path.endsWith('/') && !path.endsWith('/.directory');
+          if (isFilePath) {
+            log(`[filesystem-updated] Skipping listDirectory for file path: "${path}" - invalidating cache only`);
+            invalidateSnapshotCache(path, ownerId);
+            continue;
+          }
+          
           // Use native fetch (bypassing the 'request' callback which is defined later)
           fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
             method: 'GET',

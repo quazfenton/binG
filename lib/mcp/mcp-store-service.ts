@@ -24,6 +24,25 @@ import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('MCP:Store');
 
+/**
+ * Result of server installation
+ */
+interface InstallResult {
+  success: boolean;
+  serverId?: string;
+  reason?: string;
+  error?: string;
+}
+
+/**
+ * Result of server uninstallation
+ */
+interface UninstallResult {
+  success: boolean;
+  reason?: string;
+  error?: string;
+}
+
 // ============================================================================
 // Types
 // ============================================================================

@@ -253,7 +253,7 @@ export interface MCPCapabilities {
 /**
  * MCP Transport types
  */
-export type MCPTransportType = 'stdio' | 'sse' | 'websocket'
+export type MCPTransportType = 'stdio' | 'sse' | 'websocket' | 'http'
 
 /**
  * MCP Transport configuration
