@@ -269,9 +269,17 @@ export async function POST(request: NextRequest) {
           ? { artist: playlistData.artist }
           : parseArtistAndAlbum(playlistData.title);
 
-        const playlistId = playlistData.playlist_id || 
-          playlistData.playlistId || 
+        const playlistId = playlistData.playlist_id ||
+          playlistData.playlistId ||
           extractPlaylistId(playlistData.link || playlistData.playlistUrl || '');
+
+        // Validate playlist ID is resolved
+        if (!playlistId) {
+          return NextResponse.json(
+            { success: false, error: 'Playlist ID or valid playlist URL is required' },
+            { status: 400, headers }
+          );
+        }
 
         // Check for duplicates
         const exists = playlists.some((p: any) => p.playlist_id === playlistId);

@@ -177,7 +177,7 @@ async function fetchSchedulerTasks(ownerId: string): Promise<ScheduledTask[]> {
 /**
  * Create a task via scheduler service
  */
-async function createSchedulerTask(task: Omit<ScheduledTask, 'id' | 'createdAt' | 'runCount'>): Promise<ScheduledTask | null> {
+async function createSchedulerTask(task: Omit<ScheduledTask, 'id' | 'createdAt' | 'runCount'>): Promise<ScheduledTask> {
   try {
     const response = await fetchWithTimeout(`${SCHEDULER_URL}/tasks`, {
       method: 'POST',
@@ -187,16 +187,16 @@ async function createSchedulerTask(task: Omit<ScheduledTask, 'id' | 'createdAt' 
     if (!response.ok) {
       const error = await response.text();
       console.error('[CronJobs] Scheduler create failed:', response.status, error);
-      return null;
+      throw new Error(`Scheduler service returned ${response.status}`);
     }
     return await response.json() as ScheduledTask;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       console.error('[CronJobs] Scheduler create timed out');
-      return null;
+      throw new Error('Scheduler service timeout');
     }
     console.error('[CronJobs] Failed to create task:', error);
-    return null;
+    throw error;
   }
 }
 
@@ -305,23 +305,26 @@ export async function POST(request: NextRequest) {
     }
 
     // Create task via scheduler service
-    const task = await createSchedulerTask({
-      name: parsed.data.name,
-      type: parsed.data.type,
-      schedule: parsed.data.schedule,
-      timezone: parsed.data.timezone,
-      payload: parsed.data.payload || {},
-      enabled: parsed.data.enabled,
-      maxRetries: parsed.data.maxRetries,
-      timeout: parsed.data.timeout,
-      ownerId: auth.ownerId,
-      tags: parsed.data.tags,
-    });
-
-    if (!task) {
+    let task: ScheduledTask;
+    try {
+      task = await createSchedulerTask({
+        name: parsed.data.name,
+        type: parsed.data.type,
+        schedule: parsed.data.schedule,
+        timezone: parsed.data.timezone,
+        payload: parsed.data.payload || {},
+        enabled: parsed.data.enabled,
+        maxRetries: parsed.data.maxRetries,
+        timeout: parsed.data.timeout,
+        ownerId: auth.ownerId,
+        tags: parsed.data.tags,
+      });
+    } catch (createError: any) {
+      console.error('[CronJobs API] Task creation failed:', createError);
+      const status = createError.message?.includes('timeout') ? 504 : 502;
       return NextResponse.json(
-        { error: 'Failed to create task in scheduler service' },
-        { status: 500 }
+        { error: createError.message || 'Failed to create task in scheduler service' },
+        { status }
       );
     }
 

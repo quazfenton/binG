@@ -2020,37 +2020,19 @@ export class ResponseRouter {
 
       const primaryData = (primaryResult as any).data
 
-      // Detect if primary response contains code/file edits
-      const hasWriteDiffs = (primaryData.commands?.write_diffs?.length ?? 0) > 0
-      const hasFiles = (primaryData.data?.files?.length ?? 0) > 0
-      const hasCode = hasWriteDiffs || hasFiles
-
-      chatLogger.debug('Code detection for spec amplification', {
-        requestId: request.requestId,
-        writeDiffsCount: primaryData.commands?.write_diffs?.length ?? 0,
-        filesCount: primaryData.data?.files?.length ?? 0,
-        hasCode
-      })
-
       // Emit primary response immediately if emit is provided
       if (request.emit) {
         request.emit('primary_response', { content: primaryData.content, timestamp: Date.now() })
       }
 
-      // Only run spec amplification if code was detected in the initial response
-      if (!hasCode) {
-        chatLogger.debug('No code detected in initial response, skipping spec amplification', { requestId: request.requestId })
-        // Return the FULL primary result (including stream generator for real-time streaming)
-        // NOT just primaryData which loses the stream
-        return primaryResult as UnifiedResponse
-      }
-
-      // CRITICAL FIX: If primary response has a stream generator, wait for it to complete
-      // before starting spec amplification. This ensures we have the FULL content.
+      // CRITICAL FIX: For streaming responses, consume the stream FIRST before detecting code
+      // This ensures we detect code that arrives during streaming, not just in initial response
       let completePrimaryContent = primaryData.content || '';
+      let hasStream = !!primaryData.stream;
+      
       if (primaryData.stream) {
         try {
-          chatLogger.debug('Waiting for primary stream to complete before spec amplification', { requestId: request.requestId });
+          chatLogger.debug('Consuming primary stream before code detection', { requestId: request.requestId });
           // Consume the stream generator to get complete content
           for await (const chunk of primaryData.stream) {
             if (typeof chunk === 'string') {
@@ -2061,9 +2043,35 @@ export class ResponseRouter {
           }
           chatLogger.debug('Primary stream completed, content length:', { length: completePrimaryContent.length });
         } catch (streamError) {
-          logger.warn('Failed to consume primary stream for spec amplification', { error: streamError });
-          // Continue with partial content if stream consumption fails
+          logger.warn('Failed to consume primary stream', { error: streamError });
         }
+      }
+
+      // NOW detect if primary response contains code/file edits (after stream is consumed)
+      // Check both the original commands/files AND the streamed content
+      const hasWriteDiffs = (primaryData.commands?.write_diffs?.length ?? 0) > 0;
+      const hasFiles = (primaryData.data?.files?.length ?? 0) > 0;
+      let hasCode = hasWriteDiffs || hasFiles;
+      
+      // Also check streamed content for file edit markers
+      if (!hasCode && completePrimaryContent.length > 0) {
+        const fileEditMarkers = ['<file_edit', '<file_write', 'WRITE ', '```', '<<<'];
+        hasCode = fileEditMarkers.some(marker => completePrimaryContent.includes(marker));
+      }
+
+      chatLogger.debug('Code detection for spec amplification (post-stream)', {
+        requestId: request.requestId,
+        writeDiffsCount: primaryData.commands?.write_diffs?.length ?? 0,
+        filesCount: primaryData.data?.files?.length ?? 0,
+        hasStream,
+        streamedContentLength: completePrimaryContent.length,
+        hasCode
+      })
+
+      // Only run spec amplification if code was detected
+      if (!hasCode) {
+        chatLogger.debug('No code detected, skipping spec amplification', { requestId: request.requestId })
+        return primaryResult as UnifiedResponse
       }
 
       // Start spec generation in background (don't await - run in parallel)
@@ -2245,7 +2253,14 @@ export class ResponseRouter {
           specScore,
           sectionsProcessed: chunks.length,
           hasFileWrites: fileWriteEdits.length > 0,
-          fileWrites: fileWriteEdits.map(w => ({ path: w.path, operation: 'write' }))
+          fileWrites: fileWriteEdits.map(w => ({ path: w.path, operation: 'write' })),
+          // CRITICAL FIX: Also emit fileEdits for frontend display
+          // Frontend uses this for enhanced-diff-viewer
+          fileEdits: fileWriteEdits.map(w => ({
+            path: w.path,
+            content: w.content,
+            operation: 'write',
+          }))
         }
 
         // Include filesystem metadata if edits were applied

@@ -733,13 +733,23 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // When a refinement task completes, create/update a message with the content
                   // Each task gets its own message to show progressive improvements
                   if (eventData.stage === 'task_complete' && eventData.content) {
-                    // Extract file edits from the content for enhanced-diff-viewer display
-                    // Note: Server already applied these edits via applyFilesystemEditsFromResponse
-                    // We just extract for UI display, not for re-applying
-                    const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
-                    const compactEdits = extractCompactFileEdits(eventData.content);
-                    const writeEdits = extractFileWriteEdits(eventData.content);
-                    const allEdits = [...compactEdits, ...writeEdits];
+                    // CRITICAL FIX: Use fileEdits from server if available, otherwise extract from content
+                    let allEdits: any[] = [];
+                    
+                    if (eventData.fileEdits && Array.isArray(eventData.fileEdits) && eventData.fileEdits.length > 0) {
+                      // Use server-provided file edits (already validated and complete)
+                      allEdits = eventData.fileEdits;
+                      console.log('[Chat] Using server-provided fileEdits for task:', allEdits.length, 'files');
+                    } else if (eventData.content) {
+                      // Fallback: extract from content (may fail with strict validation)
+                      const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
+                      const compactEdits = extractCompactFileEdits(eventData.content);
+                      const writeEdits = extractFileWriteEdits(eventData.content);
+                      allEdits = [...compactEdits, ...writeEdits];
+                      if (allEdits.length > 0) {
+                        console.log('[Chat] Extracted fileEdits from task content:', allEdits.length, 'files');
+                      }
+                    }
 
                     setMessages(prev => {
                       // Remove pending message if it exists
@@ -783,13 +793,24 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // When refinement completes, create/update summary message
                   // This happens regardless of filesystem edits
                   if (eventData.stage === 'complete') {
-                    // Extract file edits from the refined content for enhanced-diff-viewer display
-                    // Note: Server already applied these edits via applyFilesystemEditsFromResponse
-                    // We just extract for UI display, not for re-applying
-                    const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
-                    const compactEdits = extractCompactFileEdits(eventData.refinedContent || '');
-                    const writeEdits = extractFileWriteEdits(eventData.refinedContent || '');
-                    const allEdits = [...compactEdits, ...writeEdits];
+                    // CRITICAL FIX: Use fileEdits from server if available, otherwise extract from content
+                    // Server now emits fileEdits directly which is more reliable than client-side extraction
+                    let allEdits: any[] = [];
+                    
+                    if (eventData.fileEdits && Array.isArray(eventData.fileEdits) && eventData.fileEdits.length > 0) {
+                      // Use server-provided file edits (already validated and complete)
+                      allEdits = eventData.fileEdits;
+                      console.log('[Chat] Using server-provided fileEdits:', allEdits.length, 'files');
+                    } else if (eventData.refinedContent) {
+                      // Fallback: extract from content (may fail with strict validation)
+                      const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
+                      const compactEdits = extractCompactFileEdits(eventData.refinedContent);
+                      const writeEdits = extractFileWriteEdits(eventData.refinedContent);
+                      allEdits = [...compactEdits, ...writeEdits];
+                      if (allEdits.length > 0) {
+                        console.log('[Chat] Extracted fileEdits from content:', allEdits.length, 'files');
+                      }
+                    }
 
                     setMessages(prev => {
                       // Remove pending message if it exists

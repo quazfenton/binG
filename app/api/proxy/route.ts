@@ -90,7 +90,8 @@ function isPrivateIP(ip: string): boolean {
     }
     return false;
   } catch {
-    return false;
+    // Fail closed: treat errors as private/blocked for safety
+    return true;
   }
 }
 
