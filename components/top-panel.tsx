@@ -61,13 +61,14 @@ import PromptLabTab from "./plugins/prompt-lab-tab";
 import MusicVisualizerTab from "./plugins/music-visualizer-tab";
 import MusicHubTab from "./plugins/music-hub-tab";
 import ImmersiveView from "./plugins/immersive-view";
-import ZineFlowEngine from "./plugins/zine-flow-engine";
+import FlowEngine from "./plugins/flow-engine";
 import EventsPanel from "./plugins/events-panel";
 import WorkflowVisualizer from "./plugins/workflow-visualizer";
 import BroadwayDealHunterTab from "./top-panel/plugins/broadway-deal-hunter-tab";
 import ModelComparisonTab from "./top-panel/plugins/model-comparison-tab";
 import ZineDisplayTab from "./top-panel/plugins/zine-display-tab";
 import CodePlaygroundTab from "./plugins/code-playground-tab";
+import { MonacoVFSEditor } from "./monaco-vfs-editor";
 import { BookmarksCurationPlugin } from "@/components/bookmarks/bookmarks-curation-plugin";
 import { Badge } from "@/components/ui/badge";
 import { Input } from "@/components/ui/input";
@@ -76,7 +77,21 @@ import { toast } from "sonner";
 import { Copy } from "lucide-react";
 import { Search } from "lucide-react";
 
-// Tab definition type
+// Helper to ensure image URLs go through the proxy
+function getProxiedImageUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  // Already proxied
+  if (url.startsWith('/api/image-proxy')) return url;
+  // Data URLs (base64) - don't proxy
+  if (url.startsWith('data:')) return url;
+  // External URL - proxy it
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//')) {
+    const fullUrl = url.startsWith('//') ? `https:${url}` : url;
+    return `/api/image-proxy?url=${encodeURIComponent(fullUrl)}`;
+  }
+  // Local/relative paths - don't proxy
+  return url;
+}
 interface TabDef {
   value: TopPanelTab;
   label: string;
@@ -201,7 +216,7 @@ function NewsTab() {
             {article.imageUrl && (
               <div className="mb-3 rounded-lg overflow-hidden aspect-video bg-white/10">
                 <img
-                  src={article.imageUrl}
+                  src={getProxiedImageUrl(article.imageUrl)}
                   alt={article.title}
                   className="w-full h-full object-cover group-hover:scale-105 transition-transform duration-300"
                   onError={(e) => {
@@ -405,10 +420,11 @@ const TAB_DEFS: TabDef[] = [
   { value: "music", label: "Music", icon: Music },
   { value: "music-hub", label: "Music Hub", icon: Radio },
   { value: "immersive", label: "Immersive", icon: Aperture },
-  { value: "zine-flow", label: "Zine Flow", icon: Sparkles },
+  { value: "flow", label: "Flow", icon: Sparkles },
   { value: "events", label: "Events", icon: Activity },
   { value: "bookmarks", label: "Bookmarks", icon: Bookmark },
   { value: "code-playground", label: "Code", icon: Code },
+  { value: "monaco-editor", label: "Monaco Editor", icon: Code },
   { value: "broadway-deal-hunter", label: "Broadway", icon: Zap },
   { value: "model-comparison", label: "Model Compare", icon: Zap },
   { value: "zine-display", label: "Zine", icon: Palette },
@@ -677,6 +693,8 @@ export default function TopPanel() {
     closeTopPanel,
     setTopPanelTab,
     setTopPanelHovering,
+    monacoFilePath,
+    closeMonacoEditor,
   } = usePanel();
 
   const [isMaximized, setIsMaximized] = useState(false);
@@ -1021,9 +1039,72 @@ export default function TopPanel() {
                   </TabsContent>
 
                   {/* Zine Flow Engine */}
-                  <TabsContent value="zine-flow" className="h-full mt-0">
-                    <TabErrorBoundary tabName="Zine Flow Engine">
-                      <ZineFlowEngine />
+<TabsContent value="flow" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Flow">
+                      <FlowEngine />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  <TabsContent value="events" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Events">
+                      <EventsPanel />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  <TabsContent value="bookmarks" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Bookmarks">
+                      <BookmarksCurationPlugin />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  {/* Workflow Visualizer */}
+                  <TabsContent value="workflows" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Workflow Visualizer">
+                      <WorkflowVisualizer />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  {/* Code Playground */}
+                  <TabsContent value="code-playground" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Code Playground">
+                      <CodePlaygroundTab />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  {/* Monaco Editor */}
+                  <TabsContent value="monaco-editor" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Monaco Editor">
+                      <MonacoVFSEditor 
+                        initialFilePath={monacoFilePath || undefined}
+                        onClose={() => {
+                          closeMonacoEditor();
+                          setTopPanelTab('news');
+                        }}
+                      />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  <TabsContent
+                    value="broadway-deal-hunter"
+                    className="h-full mt-0"
+                  >
+                    <TabErrorBoundary tabName="Broadway Deal Hunter">
+                      <BroadwayDealHunterTab />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  <TabsContent
+                    value="model-comparison"
+                    className="h-full mt-0"
+                  >
+                    <TabErrorBoundary tabName="Model Comparison">
+                      <ModelComparisonTab />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  <TabsContent value="zine-display" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Zine Display">
+                      <ZineDisplayTab />
                     </TabErrorBoundary>
                   </TabsContent>
 
@@ -1054,6 +1135,20 @@ export default function TopPanel() {
                       <CodePlaygroundTab />
                     </TabErrorBoundary>
                   </TabsContent>
+
+                  {/* Monaco Editor */}
+                  <TabsContent value="monaco-editor" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Monaco Editor">
+                      <MonacoVFSEditor 
+                        initialFilePath={monacoFilePath || undefined}
+                        onClose={() => {
+                          closeMonacoEditor();
+                          setTopPanelTab('news');
+                        }}
+                      />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
                   <TabsContent
                     value="broadway-deal-hunter"
                     className="h-full mt-0"

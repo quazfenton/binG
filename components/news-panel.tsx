@@ -48,6 +48,22 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+// Helper to ensure image URLs go through the proxy
+function getProxiedImageUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  // Already proxied
+  if (url.startsWith('/api/image-proxy')) return url;
+  // Data URLs (base64) - don't proxy
+  if (url.startsWith('data:')) return url;
+  // External URL - proxy it
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//')) {
+    const fullUrl = url.startsWith('//') ? `https:${url}` : url;
+    return `/api/image-proxy?url=${encodeURIComponent(fullUrl)}`;
+  }
+  // Local/relative paths - don't proxy
+  return url;
+}
+
 interface NewsArticle {
   id: string;
   title: string;
@@ -256,7 +272,7 @@ function HeroCard({ article, onClick }: { article: NewsArticle; onClick?: (e: Re
       <div className="relative h-40 overflow-hidden">
         {article.imageUrl ? (
           <img
-            src={article.imageUrl}
+            src={getProxiedImageUrl(article.imageUrl)}
             alt={article.title}
             className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
           />
@@ -311,7 +327,7 @@ function CompactCard({ article, onClick }: { article: NewsArticle; onClick?: (e:
     >
       {article.imageUrl && (
         <div className="w-20 h-20 rounded-lg overflow-hidden flex-shrink-0">
-          <img src={article.imageUrl} alt={article.title} className="w-full h-full object-cover" />
+          <img src={getProxiedImageUrl(article.imageUrl)} alt={article.title} className="w-full h-full object-cover" />
         </div>
       )}
       <div className="flex-1 min-w-0">
@@ -342,7 +358,7 @@ function GridCard({ article, onClick }: { article: NewsArticle; onClick?: (e: Re
       <div className="aspect-video relative overflow-hidden">
         {article.imageUrl ? (
           <img
-            src={article.imageUrl}
+            src={getProxiedImageUrl(article.imageUrl)}
             alt={article.title}
             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
           />
@@ -412,7 +428,7 @@ function VideoCard({ article, onClick }: { article: NewsArticle; onClick?: (e: R
       <div className="relative aspect-video">
         {article.imageUrl ? (
           <img
-            src={article.imageUrl}
+            src={getProxiedImageUrl(article.imageUrl)}
             alt={article.title}
             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
           />
@@ -502,7 +518,7 @@ function LiveCard({ article, onClick }: { article: NewsArticle; onClick?: (e: Re
       
       {article.imageUrl && (
         <div className="w-20 h-20 rounded-lg overflow-hidden flex-shrink-0">
-          <img src={article.imageUrl} alt="" className="w-full h-full object-cover" />
+          <img src={getProxiedImageUrl(article.imageUrl)} alt="" className="w-full h-full object-cover" />
         </div>
       )}
     </motion.div>
@@ -540,7 +556,7 @@ function MasonryCard({ article, onClick, style = 'rich' }: { article: NewsArticl
       >
         {article.imageUrl ? (
           <img
-            src={article.imageUrl}
+            src={getProxiedImageUrl(article.imageUrl)}
             alt={article.title}
             className="w-full h-full object-cover transition-transform duration-500 group-hover:scale-110"
           />
@@ -569,7 +585,7 @@ function MasonryCard({ article, onClick, style = 'rich' }: { article: NewsArticl
       {article.imageUrl && (
         <div className="aspect-video relative overflow-hidden">
           <img
-            src={article.imageUrl}
+            src={getProxiedImageUrl(article.imageUrl)}
             alt={article.title}
             className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
           />
@@ -1134,7 +1150,7 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
                     className="relative aspect-video rounded-xl overflow-hidden mb-6"
                   >
                     <img
-                      src={expandedArticle.imageUrl}
+                      src={getProxiedImageUrl(expandedArticle.imageUrl)}
                       alt={expandedArticle.title}
                       className="w-full h-full object-cover"
                     />

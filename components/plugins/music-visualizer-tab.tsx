@@ -107,6 +107,22 @@ interface VisualizerMode {
 const MUSICBRAINZ_API = 'https://musicbrainz.org/ws/2';
 const COVERART_ARCHIVE_API = 'https://coverartarchive.org';
 
+// Helper to ensure image URLs go through the proxy
+function getProxiedImageUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  // Already proxied
+  if (url.startsWith('/api/image-proxy')) return url;
+  // Data URLs (base64) - don't proxy
+  if (url.startsWith('data:')) return url;
+  // External URL - proxy it
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//')) {
+    const fullUrl = url.startsWith('//') ? `https:${url}` : url;
+    return `/api/image-proxy?url=${encodeURIComponent(fullUrl)}`;
+  }
+  // Local/relative paths - don't proxy
+  return url;
+}
+
 // Default fallback tracks if API fails
 const DEFAULT_TRACKS: Track[] = [
   {
@@ -580,7 +596,7 @@ export default function MusicVisualizerTab() {
       {/* Now Playing Overlay */}
       <div className="absolute bottom-4 left-4 right-4 flex items-center gap-4">
         <img
-          src={currentTrack?.coverUrl || "https://picsum.photos/seed/default/300/300"}
+          src={getProxiedImageUrl(currentTrack?.coverUrl) || "https://picsum.photos/seed/default/300/300"}
           alt={currentTrack?.title || "Unknown"}
           className="w-16 h-16 rounded-lg shadow-lg"
         />
@@ -818,7 +834,7 @@ export default function MusicVisualizerTab() {
                   <CardContent className="p-3">
                     <div className="flex items-center gap-3">
                       <img
-                        src={track.coverUrl}
+                        src={getProxiedImageUrl(track.coverUrl)}
                         alt={track.title}
                         className="w-12 h-12 rounded"
                       />

@@ -352,11 +352,41 @@ export function formatUrlForDisplay(url: string, maxLength: number = 50): string
   try {
     const urlObj = new URL(url);
     const display = `${urlObj.hostname}${urlObj.pathname}`;
-    
+
     if (display.length <= maxLength) return display;
-    
+
     return `${display.substring(0, maxLength - 3)}...`;
   } catch {
     return `${url.substring(0, maxLength - 3)}...`;
+  }
+}
+
+/**
+ * Get secondary fallback URL when primary embed fails
+ * Tries alternative embed providers or direct URL
+ */
+export function getSecondaryFallbackUrl(embedUrl: string): string {
+  try {
+    const url = new URL(embedUrl);
+    const host = url.hostname;
+
+    // YouTube fallback: Try different embed parameters
+    if (host.includes('youtube.com')) {
+      return embedUrl.replace('?rel=0&autoplay=1', '?rel=0&modestbranding=1');
+    }
+
+    // Vimeo fallback: Try privacy-enhanced version
+    if (host.includes('vimeo.com')) {
+      return embedUrl.replace('player.vimeo.com', 'player.vimeo.com');
+    }
+
+    // Generic fallback: Try https if http, or remove www
+    if (embedUrl.startsWith('http://')) {
+      return embedUrl.replace('http://', 'https://');
+    }
+
+    return embedUrl.replace('www.', '');
+  } catch {
+    return embedUrl;
   }
 }

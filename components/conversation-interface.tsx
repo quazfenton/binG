@@ -245,14 +245,16 @@ export default function ConversationInterface() {
   
   // Track if LLM folder detection has already run for this session (one-time only)
   const [llmFolderDetected, setLlmFolderDetected] = useState(false);
+  // Store the detected folder name for immediate use in path resolution
+  const [detectedFolderName, setDetectedFolderName] = useState<string | null>(null);
   
   // Track pending approval required for existing session file edits
   const [pendingApprovalDiffs, setPendingApprovalDiffs] = useState<{ path: string; diff: string }[]>([]);
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
   
   const filesystemScopePath = useMemo(
-    () => `project/sessions/${filesystemSessionId}`,
-    [filesystemSessionId],
+    () => `project/sessions/${detectedFolderName || filesystemSessionId}`,
+    [filesystemSessionId, detectedFolderName],
   );
 
   const providerRef = useRef(currentProvider);
@@ -480,6 +482,8 @@ export default function ConversationInterface() {
       provider: providerRef.current,
       model: modelRef.current,
       stream: true,
+      mode: 'enhanced', // Enable spec amplification for enhanced responses
+      agentMode: 'v1', // Use V1 mode for spec amplification (V2 has its own planning)
       conversationId: filesystemSessionIdRef.current,
       filesystemContext: {
         attachedFiles: filesystemContextRef.current.attachedFiles.map((file) => ({
@@ -649,9 +653,15 @@ export default function ConversationInterface() {
     // LLM Folder Detection: Check if AI response indicates a new project with single folder structure
     // This only applies to NEW sessions (no prior messages/files) with multiple files under one folder
     // Only run once per session to avoid re-triggering
+    // CRITICAL: This MUST run BEFORE applying diffs to ensure files go to correct session folder
     const detectedFolder = !llmFolderDetected && detectNewProjectFolder(lastAssistant.content);
+    
     if (detectedFolder && messages.length === 0) {
       // Only apply for new sessions with no prior messages - use LLM-suggested folder name
+      // Set the detected folder name immediately for use in path resolution
+      setDetectedFolderName(detectedFolder);
+      
+      // Generate the official session name (handles conflicts, registers in usedNames, etc.)
       generateSessionName(detectedFolder, true, true).then((newSessionId) => {
         setFilesystemSessionId(newSessionId);
         setLlmFolderDetected(true); // Mark as detected to prevent re-triggering

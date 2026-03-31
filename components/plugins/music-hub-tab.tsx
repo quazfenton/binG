@@ -31,6 +31,22 @@ import {
 import { toast } from "sonner";
 import { PersistentCache } from "@/lib/cache";
 
+// Helper to ensure image URLs go through the proxy
+function getProxiedImageUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  // Already proxied
+  if (url.startsWith('/api/image-proxy')) return url;
+  // Data URLs (base64) - don't proxy
+  if (url.startsWith('data:')) return url;
+  // External URL - proxy it
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//')) {
+    const fullUrl = url.startsWith('//') ? `https:${url}` : url;
+    return `/api/image-proxy?url=${encodeURIComponent(fullUrl)}`;
+  }
+  // Local/relative paths - don't proxy
+  return url;
+}
+
 // ==================== Types (Strict TypeScript) ====================
 
 interface Song {
@@ -390,7 +406,7 @@ const CachedThumbnailComponent: React.FC<CachedThumbnailProps> = ({
       )}
       <img
         ref={imageRef}
-        src={cachedSrc || thumbnailUrl}
+        src={cachedSrc || getProxiedImageUrl(thumbnailUrl)}
         alt={alt}
         className={`w-full h-full object-cover transition-opacity duration-300 ${
           isLoading ? 'opacity-0' : 'opacity-100'
@@ -399,9 +415,11 @@ const CachedThumbnailComponent: React.FC<CachedThumbnailProps> = ({
         decoding="async"
         onError={(e) => {
           const target = e.target as HTMLImageElement;
-          if (target.src !== thumbnailUrl) {
-            target.src = thumbnailUrl;
-          } else {
+          const currentSrc = target.src;
+          const proxiedThumbnail = getProxiedImageUrl(thumbnailUrl);
+          if (currentSrc !== proxiedThumbnail && currentSrc !== thumbnailUrl) {
+            target.src = proxiedThumbnail || thumbnailUrl;
+          } else if (currentSrc !== `https://img.youtube.com/vi/${videoId}/default.jpg`) {
             target.src = `https://img.youtube.com/vi/${videoId}/default.jpg`;
           }
         }}

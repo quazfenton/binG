@@ -631,7 +631,7 @@ export class VirtualFilesystemService {
     // Strip common sandbox/workspace prefixes (single source of truth in scope-utils)
     // BUT preserve project/ prefix if it's already there - don't strip it away
     let strippedPath = stripWorkspacePrefixes(rawPath);
-    
+
     // Only strip project/ if it's at the beginning AND the stripped path doesn't start with project
     // This ensures consistent path format: always starts with 'project/'
     if (!strippedPath.startsWith('project/') && !strippedPath.startsWith('project$')) {
@@ -644,6 +644,22 @@ export class VirtualFilesystemService {
     // Handle empty path after stripping
     if (!strippedPath) {
       return this.workspaceRoot;
+    }
+
+    // CRITICAL VALIDATION: Reject composite IDs in session folder position
+    // This prevents paths like "project/sessions/anon:timestamp:001/file.ts"
+    // Session folder names must be simple: "001", "alpha", "001-1", etc.
+    const sessionsMatch = strippedPath.match(/^project\/sessions\/([^/]+)/i);
+    if (sessionsMatch) {
+      const sessionSegment = sessionsMatch[1];
+      if (sessionSegment.includes(':')) {
+        throw new Error(
+          `Invalid session folder in path: "${inputPath}". ` +
+          `Session folder names must be simple (e.g., "001", "alpha"), ` +
+          `not composite IDs like "${sessionSegment}". ` +
+          `Use normalizeSessionId() to extract the simple session name.`
+        );
+      }
     }
 
     const parts = strippedPath.split('/');

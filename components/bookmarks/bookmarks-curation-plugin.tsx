@@ -27,7 +27,6 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { parseLinks, parseLinksFromFile, type ParsedLink } from "@/lib/bookmarks/link-parser";
-
 import {
    Link,
    Upload,
@@ -36,21 +35,31 @@ import {
    ExternalLink,
    Trash2,
    RefreshCw,
-   Search,
-   Filter,
-   Grid3X3,
-   List,
-   Plus,
-   X,
-   Image as ImageIcon,
    Globe,
-   FolderArchive,
+   Search,
+   Download,
+   Edit,
+   Check,
+   X,
    FolderOpen,
-   Bookmark,
-   CheckCircle,
-   AlertCircle,
+   List,
+   Grid3X3,
    Loader2,
+   Plus,
+   Bookmark,
 } from "lucide-react";
+
+// Helper to ensure image URLs go through the proxy
+function getProxiedImageUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  if (url.startsWith('/api/image-proxy')) return url;
+  if (url.startsWith('data:')) return url;
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//')) {
+    const fullUrl = url.startsWith('//') ? `https:${url}` : url;
+    return `/api/image-proxy?url=${encodeURIComponent(fullUrl)}`;
+  }
+  return url;
+}
 
 // ============================================================================
 // Types
@@ -534,7 +543,7 @@ function BookmarkCard({
           >
             {bookmark.imageUrl && !imageError ? (
               <img
-                src={bookmark.imageUrl}
+                src={getProxiedImageUrl(bookmark.imageUrl)}
                 alt={bookmark.title || "Bookmark"}
                 className="w-full h-full object-cover"
                 onError={() => setImageError(true)}
@@ -616,7 +625,7 @@ function BookmarkCard({
       >
         {bookmark.imageUrl && !imageError ? (
           <img
-            src={bookmark.imageUrl}
+            src={getProxiedImageUrl(bookmark.imageUrl)}
             alt={bookmark.title || "Bookmark"}
             className="w-full h-full object-cover transition-transform group-hover:scale-105"
             onError={() => setImageError(true)}

@@ -268,9 +268,7 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
                       url={currentProject.embedUrl}
                       reason={failureReason || 'failed'}
                       errorMessage={errorMessage || undefined}
-                      onRetry={handleRetry}
-                      onTryFallback={handleFallback}
-                      onOpenExternal={() => window.open(currentProject.embedUrl, '_blank', 'noopener,noreferrer')}
+                      onRetry={handleRetry}onOpenExternal={() => window.open(currentProject.embedUrl, '_blank', 'noopener,noreferrer')}
                       onClose={() => { setCurrentProject(null); }}
                       autoRetryCount={retryCount}
                       maxRetries={3}

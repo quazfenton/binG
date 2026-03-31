@@ -20,6 +20,8 @@
  * - Cross-agent communication/specialization
  */
 
+import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
+
 import { createLogger } from '../utils/logger';
 import type { ExecutionPolicy } from '../sandbox/types';
 import { determineExecutionPolicy } from '../sandbox/types';
@@ -693,7 +695,8 @@ class TaskRouter {
       const { createOpenCodeEngine } = await import('../session/agent/opencode-engine-service');
       const engine = createOpenCodeEngine({
         model: process.env.OPENCODE_MODEL,
-        workingDir: `/workspace/users/${request.userId}/sessions/${request.conversationId}`,
+        // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
+        workingDir: `/workspace/users/${request.userId}/sessions/${normalizeSessionId(request.conversationId) || request.conversationId}`,
         enableBash: true,
         enableFileOps: true,
         enableCodegen: true,

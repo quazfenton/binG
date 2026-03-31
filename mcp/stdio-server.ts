@@ -18,10 +18,11 @@
  * ```
  */
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { createLogger } from '@/lib/utils/logger';
 import { registerMultiAgentTools } from '@/lib/mcp/multi-agent-tools';
+import type { AnySchema } from '@modelcontextprotocol/sdk/server/zod-compat.js';
 
 const logger = createLogger('MCP:StdioServer');
 
@@ -29,8 +30,8 @@ const logger = createLogger('MCP:StdioServer');
 const SERVER_NAME = 'binG';
 const SERVER_VERSION = '1.0.0';
 
-// Create MCP server instance
-const server = new Server(
+// Create MCP server instance using McpServer (high-level API)
+const server = new McpServer(
   {
     name: SERVER_NAME,
     version: SERVER_VERSION,
@@ -51,23 +52,25 @@ const server = new Server(
 registerMultiAgentTools(server);
 
 // Register tools
-server.tool(
+server.registerTool(
   'execute_command',
-  'Execute shell commands in isolated sandbox',
   {
-    command: { type: 'string', description: 'Command to execute' },
-    workingDir: { type: 'string', description: 'Working directory' },
+    description: 'Execute shell commands in isolated sandbox',
+    inputSchema: {
+      command: { type: 'string', description: 'Command to execute' },
+      workingDir: { type: 'string', description: 'Working directory' },
+    } as unknown as AnySchema,
   },
   async ({ command, workingDir }) => {
     try {
       const { exec } = await import('child_process');
-      
+
       return new Promise((resolve) => {
         exec(command, { cwd: workingDir || '/workspace', timeout: 30000 }, (error, stdout, stderr) => {
           resolve({
             content: [
               {
-                type: 'text',
+                type: 'text' as const,
                 text: error ? `Error: ${error.message}\n${stderr}` : stdout,
               },
             ],
@@ -77,54 +80,58 @@ server.tool(
       });
     } catch (error: any) {
       return {
-        content: [{ type: 'text', text: `Execution failed: ${error.message}` }],
+        content: [{ type: 'text' as const, text: `Execution failed: ${error.message}` }],
         isError: true,
       };
     }
   }
 );
 
-server.tool(
+server.registerTool(
   'write_file',
-  'Write files to sandbox workspace',
   {
-    path: { type: 'string', description: 'File path' },
-    content: { type: 'string', description: 'File content' },
+    description: 'Write files to sandbox workspace',
+    inputSchema: {
+      path: { type: 'string', description: 'File path' },
+      content: { type: 'string', description: 'File content' },
+    } as unknown as AnySchema,
   },
   async ({ path, content }) => {
     try {
       const { writeFile } = await import('fs/promises');
       await writeFile(path, content);
-      
+
       return {
-        content: [{ type: 'text', text: `Successfully wrote to ${path}` }],
+        content: [{ type: 'text' as const, text: `Successfully wrote to ${path}` }],
       };
     } catch (error: any) {
       return {
-        content: [{ type: 'text', text: `Write failed: ${error.message}` }],
+        content: [{ type: 'text' as const, text: `Write failed: ${error.message}` }],
         isError: true,
       };
     }
   }
 );
 
-server.tool(
+server.registerTool(
   'read_file',
-  'Read files from sandbox workspace',
   {
-    path: { type: 'string', description: 'File path' },
+    description: 'Read files from sandbox workspace',
+    inputSchema: {
+      path: { type: 'string', description: 'File path' },
+    } as unknown as AnySchema,
   },
   async ({ path }) => {
     try {
       const { readFile } = await import('fs/promises');
       const content = await readFile(path, 'utf-8');
-      
+
       return {
-        content: [{ type: 'text', text: content }],
+        content: [{ type: 'text' as const, text: content }],
       };
     } catch (error: any) {
       return {
-        content: [{ type: 'text', text: `Read failed: ${error.message}` }],
+        content: [{ type: 'text' as const, text: `Read failed: ${error.message}` }],
         isError: true,
       };
     }

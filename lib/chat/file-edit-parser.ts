@@ -485,6 +485,55 @@ export function extractMalformedFileEdits(content: string): FileEdit[] {
 }
 
 /**
+ * Find the end of a balanced JSON object starting at `startIndex` (which should point to '{').
+ * Accounts for string escaping, nested braces, and brackets.
+ * Returns the exclusive end index, or -1 if no balanced object is found.
+ */
+function findBalancedJsonObject(content: string, startIndex: number): number {
+  // Defensive: ensure startIndex points to an opening brace
+  if (startIndex < 0 || startIndex >= content.length || content[startIndex] !== '{') {
+    return -1;
+  }
+
+  let braceCount = 0;
+  let bracketCount = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = startIndex; i < content.length; i++) {
+    const char = content[i];
+
+    if (escape) {
+      escape = false;
+      continue;
+    }
+
+    if (char === '\\' && inString) {
+      escape = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (!inString) {
+      if (char === '{') braceCount++;
+      if (char === '}') braceCount--;
+      if (char === '[') bracketCount++;
+      if (char === ']') bracketCount--;
+
+      if (braceCount === 0 && bracketCount === 0) {
+        return i + 1;
+      }
+    }
+  }
+
+  return -1;
+}
+
+/**
  * Extract JSON format: { "ws_action": "CREATE", "path": "...", "content": "..." }
  * This is an alternative format used by some LLMs
  */
@@ -492,8 +541,6 @@ export function extractWsActionEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
 
   // Find JSON-like blocks by looking for ws_action pattern
-  // Use a more careful regex that accounts for nested braces in strings
-  // Match from ws_action backward to find the opening brace, then parse carefully
   const wsActionPattern = /"ws_action"\s*:\s*"CREATE"/gi;
   let match: RegExpExecArray | null;
 
@@ -502,44 +549,7 @@ export function extractWsActionEdits(content: string): FileEdit[] {
     const startIndex = content.lastIndexOf('{', match.index);
     if (startIndex === -1) continue;
 
-    // Find the matching closing brace by counting braces AND brackets (accounting for strings)
-    let braceCount = 0;
-    let bracketCount = 0;
-    let inString = false;
-    let escape = false;
-    let endIndex = -1;
-
-    for (let i = startIndex; i < content.length; i++) {
-      const char = content[i];
-
-      if (escape) {
-        escape = false;
-        continue;
-      }
-
-      if (char === '\\' && inString) {
-        escape = true;
-        continue;
-      }
-
-      if (char === '"') {
-        inString = !inString;
-        continue;
-      }
-
-      if (!inString) {
-        if (char === '{') braceCount++;
-        if (char === '}') braceCount--;
-        if (char === '[') bracketCount++;
-        if (char === ']') bracketCount--;
-
-        if (braceCount === 0 && bracketCount === 0) {
-          endIndex = i + 1;
-          break;
-        }
-      }
-    }
-
+    const endIndex = findBalancedJsonObject(content, startIndex);
     if (endIndex === -1) continue;
 
     const jsonStr = content.substring(startIndex, endIndex);
@@ -576,44 +586,7 @@ export function extractSimpleJsonFileEdits(content: string): FileEdit[] {
     const startIndex = content.lastIndexOf('{', match.index);
     if (startIndex === -1) continue;
 
-    // Find the matching closing brace by counting braces AND brackets (accounting for strings)
-    let braceCount = 0;
-    let bracketCount = 0;
-    let inString = false;
-    let escape = false;
-    let endIndex = -1;
-
-    for (let i = startIndex; i < content.length; i++) {
-      const char = content[i];
-
-      if (escape) {
-        escape = false;
-        continue;
-      }
-
-      if (char === '\\' && inString) {
-        escape = true;
-        continue;
-      }
-
-      if (char === '"') {
-        inString = !inString;
-        continue;
-      }
-
-      if (!inString) {
-        if (char === '{') braceCount++;
-        if (char === '}') braceCount--;
-        if (char === '[') bracketCount++;
-        if (char === ']') bracketCount--;
-
-        if (braceCount === 0 && bracketCount === 0) {
-          endIndex = i + 1;
-          break;
-        }
-      }
-    }
-
+    const endIndex = findBalancedJsonObject(content, startIndex);
     if (endIndex === -1) continue;
 
     const jsonStr = content.substring(startIndex, endIndex);
@@ -716,10 +689,28 @@ export function extractMarkdownCodeBlockFiles(content: string): FileEdit[] {
  * usually restatements or examples.
  */
 export function extractFileEdits(content: string): FileEdit[] {
+  // Fast-path: bail out if no file edit markers are present at all
+  // Avoids running all individual extractors (and their sub-operations like maskHeredocs)
+  // on content that contains no file edits — common in streaming parse windows
+  if (
+    !content.includes('<file_edit') &&
+    !content.includes('<file_write') &&
+    !content.includes('ws_action') &&
+    !content.includes('"file_edit"') &&
+    !content.includes('<!--') &&
+    !content.includes('<path>') &&
+    !content.includes('<<') &&
+    !content.includes('cat') &&
+    !content.includes('mkdir') &&
+    !content.includes('rm ') &&
+    !content.includes('sed')
+  ) {
+    return [];
+  }
+
   const allEdits: FileEdit[] = [];
 
-  // NEW: Try bash heredoc syntax first (preferred, more natural for LLMs)
-  // Now handles writes, mkdir, deletes, and patches
+  // Try bash heredoc syntax (writes, mkdir, deletes, patches)
   const bashEdits = extractBashFileEdits(content);
 
   // Process writes (default action is 'write')
@@ -1402,7 +1393,7 @@ export function extractReasoningContent(content: string): ReasoningParseResult {
   };
 }
 
-function stripHeredocMarkers(content: string): string {
+export function stripHeredocMarkers(content: string): string {
   let cleaned = content;
   cleaned = cleaned.replace(/^\s*(?:WRITE|PATCH)\s+\S+\s*\n/, '');
   cleaned = cleaned.replace(/^\s*<<<\s*\n?/, '');
@@ -1419,11 +1410,24 @@ interface IncrementalParseState {
   emittedEdits: Set<string>;
   /** Last processed position in buffer (for future optimization) */
   lastPosition: number;
+  /**
+   * Positions of unclosed opening tags detected in previous parses.
+   * On the next parse, the window extends back to the earliest of these
+   * so large edits (>12K chars) are found even when the closing tag
+   * lands far from the opening tag.
+   */
+  unclosedPositions: Set<number>;
 }
 
-// Re-scan a bounded suffix so tags that span chunk boundaries still match
-// without reparsing the full accumulated buffer on every streamed token.
-const INCREMENTAL_PARSE_OVERLAP_CHARS = 12000;
+// Default overlap for cross-chunk boundary matching.
+// Unclosed-tag tracking extends this dynamically when needed.
+const INCREMENTAL_PARSE_OVERLAP_CHARS = 2000;
+
+/**
+ * How many chars from the tail of the parse window to scan for unclosed tags.
+ * All supported opening markers are well under this length.
+ */
+const UNCLOSED_SCAN_TAIL_CHARS = 5000;
 
 /**
  * Create a new incremental parser state
@@ -1432,7 +1436,127 @@ export function createIncrementalParser(): IncrementalParseState {
   return {
     emittedEdits: new Set<string>(),
     lastPosition: 0,
+    unclosedPositions: new Set<number>(),
   };
+}
+
+/**
+ * Scan the tail of a parse window for opening markers that lack their
+ * closing counterpart.  Returns buffer-relative start positions of
+ * unclosed blocks.
+ *
+ * Cost: O(tailChars) — bounded constant, not proportional to buffer size.
+ */
+function detectUnclosedTags(
+  windowText: string,
+  windowStart: number,
+  tailChars: number
+): number[] {
+  const scanStart = Math.max(0, windowText.length - tailChars);
+  const tail = windowText.slice(scanStart);
+  const positions: number[] = [];
+
+  // <file_edit path="...">  or  <file_write path="...">  or  <apply_diff path="...">
+  const tagNames = ['file_edit', 'file_write', 'apply_diff'];
+  for (const tag of tagNames) {
+    const openRe = new RegExp(`<${tag}\\b`, 'gi');
+    let m: RegExpExecArray | null;
+    while ((m = openRe.exec(tail)) !== null) {
+      const closeRe = new RegExp(`</${tag}>`, 'gi');
+      closeRe.lastIndex = m.index + m[0].length;
+      if (!closeRe.test(tail)) {
+        positions.push(windowStart + scanStart + m.index);
+      }
+    }
+  }
+
+  // Incomplete opening tag at the very end of the buffer
+  // e.g., "<file_edit path="src/"  or  "<file_write"  (no closing '>')
+  if (/<(?:file_edit|file_write|apply_diff)\b[^>]*$/.test(tail)) {
+    const m = tail.match(/(<(?:file_edit|file_write|apply_diff)\b[^>]*)$/);
+    if (m) {
+      const idx = tail.lastIndexOf(m[1]);
+      if (idx !== -1) positions.push(windowStart + scanStart + idx);
+    }
+  }
+
+  // <file_edit> (multi-line format, no path attr)
+  if (/<file_edit>\s*$/.test(tail) || /<file_edit>\s*<path>\s*[^\s<]*$/.test(tail)) {
+    const idx = tail.lastIndexOf('<file_edit>');
+    if (idx !== -1 && !tail.includes('</file_edit>', idx)) {
+      positions.push(windowStart + scanStart + idx);
+    }
+  }
+
+  // <fs-actions> ... </fs-actions>
+  if (/<fs-actions>/.test(tail)) {
+    const idx = tail.lastIndexOf('<fs-actions>');
+    if (idx !== -1 && !tail.includes('</fs-actions>', idx)) {
+      positions.push(windowStart + scanStart + idx);
+    }
+  }
+
+  // Heredoc:  WRITE|PATCH|APPLY_DIFF path  <<<  (open but no >>>)
+  const heredocOpenRe = /^(?:WRITE|PATCH|APPLY_DIFF)\s+\S+/m;
+  const hIdx = tail.search(heredocOpenRe);
+  if (hIdx !== -1) {
+    const after = tail.slice(hIdx);
+    // Unclosed if <<< has no matching >>> after it
+    if (/<<</.test(after) && !/>>>/.test(after)) {
+      positions.push(windowStart + scanStart + hIdx);
+    }
+  }
+
+  // cat > file << 'EOF'  (open but no closing delimiter)
+  const catMatch = tail.match(/cat\s*>>?\s*\S+\s*<<\s*['"]?(\w+)['"]?\s*\n?/);
+  if (catMatch) {
+    const delimiter = catMatch[1];
+    const afterMatch = tail.slice(tail.indexOf(catMatch[0]) + catMatch[0].length);
+    if (!afterMatch.includes(delimiter)) {
+      const idx = tail.indexOf(catMatch[0]);
+      positions.push(windowStart + scanStart + idx);
+    }
+  }
+
+  // ```fs-actions or ```bash  (open fence but no closing ```)
+  const fenceRe = /```(?:fs-actions|bash)\s*\n?/g;
+  let fenceMatch: RegExpExecArray | null;
+  while ((fenceMatch = fenceRe.exec(tail)) !== null) {
+    const after = tail.slice(fenceMatch.index + fenceMatch[0].length);
+    if (!after.includes('```')) {
+      positions.push(windowStart + scanStart + fenceMatch.index);
+    }
+  }
+
+  // Generic ```  (open fence without close — for filename-hint blocks)
+  const genericFenceRe = /```\w*\s*\n?/g;
+  while ((fenceMatch = genericFenceRe.exec(tail)) !== null) {
+    // Skip if this was already caught by the specific fence check above
+    const after = tail.slice(fenceMatch.index + fenceMatch[0].length);
+    if (!after.includes('```')) {
+      // Avoid duplicate if already added by specific fence check
+      const pos = windowStart + scanStart + fenceMatch.index;
+      if (!positions.includes(pos)) {
+        positions.push(pos);
+      }
+    }
+  }
+
+  return positions;
+}
+
+/**
+ * Remove unclosed positions that fall at or after `bufferPos` because
+ * content has been re-parsed from that point and any tags there are
+ * now either closed or still unclosed (re-tracked on this pass).
+ */
+function resetUnclosedBefore(state: IncrementalParseState, bufferPos: number): void {
+  if (state.unclosedPositions.size === 0) return;
+  for (const pos of state.unclosedPositions) {
+    if (pos >= bufferPos) {
+      state.unclosedPositions.delete(pos);
+    }
+  }
 }
 
 /**
@@ -1453,13 +1577,56 @@ export function extractIncrementalFileEdits(
     return newEdits;
   }
 
-  const parseStart = Math.max(0, state.lastPosition - INCREMENTAL_PARSE_OVERLAP_CHARS);
+  // Determine parse window start:
+  // 1. Default overlap for cross-chunk boundaries
+  // 2. Extend to earliest unclosed tag position from previous passes
+  //    (handles edits larger than the default overlap)
+  let parseStart = Math.max(0, state.lastPosition - INCREMENTAL_PARSE_OVERLAP_CHARS);
+  if (state.unclosedPositions.size > 0) {
+    const earliestUnclosed = Math.min(...state.unclosedPositions);
+    parseStart = Math.min(parseStart, earliestUnclosed);
+  }
   const parseWindow = buffer.slice(parseStart);
 
-  // Parse only the recent suffix plus overlap. Individual extractors already
-  // bound block sizes, so a fixed overlap preserves cross-chunk matches while
-  // avoiding O(n^2) full-buffer rescans during streaming.
-  const allEdits = extractFileEdits(parseWindow);
+  // Collect all edits from supported formats on the parse window.
+  // Each extractor has its own fast-path check, so they bail out cheaply
+  // when their markers aren't present.
+  const allEdits: FileEdit[] = [...extractFileEdits(parseWindow)];
+
+  // fs-actions blocks (```fs-actions and <fs-actions>) with WRITE commands
+  for (const edit of extractFsActionWrites(parseWindow)) {
+    allEdits.push(edit);
+  }
+
+  // Top-level WRITE path <<<content>>> commands
+  for (const edit of extractTopLevelWrites(parseWindow)) {
+    allEdits.push(edit);
+  }
+
+  // Code blocks with filename hints (```typescript\n// path/to/file ...)
+  for (const edit of extractFilenameHintCodeBlocks(parseWindow)) {
+    allEdits.push(edit);
+  }
+
+  // Fenced diff blocks (```diff path\n...```)
+  for (const edit of extractFencedDiffEdits(parseWindow)) {
+    allEdits.push({ path: edit.path, content: edit.diff });
+  }
+
+  // Bash heredoc writes inside fenced ```bash blocks
+  for (const edit of extractBashHereDocWrites(parseWindow)) {
+    allEdits.push(edit);
+  }
+
+  // DELETE commands (single-line)
+  for (const edit of extractDeleteEdits(parseWindow)) {
+    allEdits.push({ path: edit.path, content: '', action: 'delete' });
+  }
+
+  // PATCH commands (PATCH path <<<diff>>>)
+  for (const edit of extractPatchEdits(parseWindow)) {
+    allEdits.push({ path: edit.path, content: edit.diff, action: 'patch' });
+  }
 
   // Filter to only new edits we haven't emitted yet
   // Use path + content hash to handle same-file multiple edits
@@ -1478,6 +1645,14 @@ export function extractIncrementalFileEdits(
       state.emittedEdits.add(editKey);
       newEdits.push(edit);
     }
+  }
+
+  // After parsing, detect any tags that are still open (no closing marker found).
+  // On the next call, the parse window will extend back to these positions.
+  resetUnclosedBefore(state, parseStart);
+  const unclosed = detectUnclosedTags(parseWindow, parseStart, UNCLOSED_SCAN_TAIL_CHARS);
+  for (const pos of unclosed) {
+    state.unclosedPositions.add(pos);
   }
 
   state.lastPosition = buffer.length;

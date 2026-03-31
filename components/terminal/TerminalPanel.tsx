@@ -112,10 +112,15 @@ function getAuthHeaders(): Record<string, string> {
   return headers;
 }
 
-const createMinimalProject = (scopePath: string = 'project'): LocalFileSystem => ({
-  [normalizeScopePath(scopePath)]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+const createMinimalProject = (scopePath: string = 'project'): LocalFileSystem => {
+  // Use parent sessions directory as root, not specific session folder
+  // This allows 'ls' to show all session folders (001, 002, web_app, etc.)
+  const parentScopePath = scopePath.replace(/\/sessions\/[^/]+$/, '') || 'project/sessions';
+  return {
+  [parentScopePath]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
   'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
-});
+  };
+};
 
 export default function TerminalPanel({
   userId,
@@ -162,10 +167,14 @@ export default function TerminalPanel({
   // Store the filesystem scope path for auto-cd on connect
   const filesystemScopePathRef = useRef<string | undefined>(filesystemScopePath);
   filesystemScopePathRef.current = filesystemScopePath;
-
+  
+  // Compute parent sessions path for terminal root (allows listing all sessions)
+  const parentSessionsPath = filesystemScopePath?.replace(/\/sessions\/[^/]+$/, '') || 'project/sessions';
+  
   // Use virtual filesystem to get real files instead of mock
   // autoLoad: false since TerminalPanel manages its own VFS sync lifecycle
-  const virtualFilesystem = useVirtualFilesystem(filesystemScopePath || 'project', { autoLoad: false });
+  // Use parent sessions path so terminal starts at project/sessions (not specific session)
+  const virtualFilesystem = useVirtualFilesystem(parentSessionsPath, { autoLoad: false });
   const {
     listDirectory: listVfsDirectory,
     readFile: readVfsFile,
@@ -233,7 +242,7 @@ export default function TerminalPanel({
          }
 
          // VFS is truly empty and we have no existing files - create minimal structure
-         localFileSystemRef.current = createMinimalProject(filesystemScopePath);
+         localFileSystemRef.current = createMinimalProject(parentSessionsPath);
          setIsVfsSynced(true);
          setVfsFileCount(0);
          console.log('[TerminalPanel] VFS is empty, using minimal project structure');
@@ -243,7 +252,7 @@ export default function TerminalPanel({
        // Use ONLY VFS files with their original paths
        const fs: LocalFileSystem = {
          'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
-         [filesystemScopePath]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() }
+         [parentSessionsPath]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() }
        };
 
        for (const file of files) {
@@ -405,13 +414,13 @@ export default function TerminalPanel({
           }
           
           log('[filesystem-updated] VFS empty, creating minimal project structure');
-          localFileSystemRef.current = createMinimalProject(normalizedScopePath);
+          localFileSystemRef.current = createMinimalProject(parentSessionsPath);
           return;
         }
 
         const fs: LocalFileSystem = {
           project: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
-          [normalizedScopePath]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+          [parentSessionsPath]: { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
         };
 
         let fileCount = 0;
@@ -833,7 +842,7 @@ export default function TerminalPanel({
         term?.terminal?.write(text + '\r\n');
       },
       getPrompt: getPrompt,
-      getCwd: (terminalId) => localShellCwdRef.current[terminalId] || normalizeScopePath(filesystemScopePathRef.current),
+      getCwd: (terminalId) => localShellCwdRef.current[terminalId] || parentSessionsPath,
       setCwd: (terminalId, cwd) => { localShellCwdRef.current[terminalId] = cwd },
       updateTerminalState: updateTerminalState,
       sendInput: sendInput,

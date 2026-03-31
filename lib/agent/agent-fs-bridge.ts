@@ -1,12 +1,13 @@
 /**
  * VFS ↔ Sandbox Bridge
- * 
+ *
  * Bidirectional synchronization between Virtual Filesystem and OpenSandbox workspace.
  * Ensures user's VFS files are available in sandbox and changes are synced back.
  */
 
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
 import { agentSessionManager } from '../session/agent/agent-session-manager';
+import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Agent:FSBridge');
@@ -39,7 +40,9 @@ class AgentFSBridge {
 
     try {
       const session = await agentSessionManager.getOrCreateSession(userId, conversationId);
-      const vfsPath = `project/sessions/${conversationId}`;
+      // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
+      const simpleSessionId = normalizeSessionId(conversationId) || conversationId; // Use original if normalize returns empty
+      const vfsPath = `project/sessions/${simpleSessionId}`;
       const sandboxPath = session.workspacePath;
 
       logger.debug(`Syncing VFS → Sandbox: ${vfsPath} → ${sandboxPath}`);
@@ -105,7 +108,9 @@ class AgentFSBridge {
 
     try {
       const session = await agentSessionManager.getOrCreateSession(userId, conversationId);
-      const vfsPath = `project/sessions/${conversationId}`;
+      // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
+      const simpleSessionId = normalizeSessionId(conversationId) || conversationId; // Use original if normalize returns empty
+      const vfsPath = `project/sessions/${simpleSessionId}`;
       const sandboxPath = session.workspacePath;
 
       logger.debug(`Syncing Sandbox → VFS: ${sandboxPath} → ${vfsPath}`);

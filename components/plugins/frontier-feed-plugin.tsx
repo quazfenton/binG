@@ -14,6 +14,22 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 
+// Helper to ensure image URLs go through the proxy
+function getProxiedImageUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  // Already proxied
+  if (url.startsWith('/api/image-proxy')) return url;
+  // Data URLs (base64) - don't proxy
+  if (url.startsWith('data:')) return url;
+  // External URL - proxy it
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//')) {
+    const fullUrl = url.startsWith('//') ? `https:${url}` : url;
+    return `/api/image-proxy?url=${encodeURIComponent(fullUrl)}`;
+  }
+  // Local/relative paths - don't proxy
+  return url;
+}
+
 interface FeedItem {
   id: string;
   title: string;
@@ -235,7 +251,7 @@ function FeedCard({ item, index, onRemove, onTogglePin, isPinned }: FeedCardProp
         {item.body && <p className="text-xs text-white/60 mb-3 leading-relaxed line-clamp-3 whitespace-pre-wrap">{item.body}</p>}
         {item.imageUrl && (
           <div className="mb-3 rounded-lg overflow-hidden border border-white/10">
-            <img src={item.imageUrl} alt={item.title} className="w-full h-32 object-cover opacity-80 hover:opacity-100 transition-opacity" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
+            <img src={getProxiedImageUrl(item.imageUrl)} alt={item.title} className="w-full h-32 object-cover opacity-80 hover:opacity-100 transition-opacity" loading="lazy" onError={(e) => { (e.target as HTMLImageElement).style.display = "none"; }} />
           </div>
         )}
         {item.tags.length > 0 && (

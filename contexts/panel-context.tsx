@@ -15,10 +15,11 @@ export type TopPanelTab =
   | "music" 
   | "music-hub" 
   | "immersive" 
-  | "zine-flow" 
+  | "flow" 
   | "events" 
   | "bookmarks"
   | "code-playground" 
+  | "monaco-editor"
   | "broadway-deal-hunter"
   | "model-comparison"
   | "zine-display";
@@ -40,6 +41,11 @@ interface PanelContextType {
   closeTopPanel: () => void;
   setTopPanelTab: (tab: TopPanelTab) => void;
   setTopPanelHovering: (hovering: boolean) => void;
+  
+  // Monaco editor state
+  monacoFilePath: string | null;
+  openMonacoEditor: (filePath: string) => void;
+  closeMonacoEditor: () => void;
 }
 
 const PanelContext = createContext<PanelContextType | undefined>(undefined);
@@ -104,6 +110,20 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
     setIsTopPanelHovering(hovering);
   }, []);
 
+  // Monaco editor state
+  const [monacoFilePath, setMonacoFilePath] = useState<string | null>(null);
+
+  const openMonacoEditor = useCallback((filePath: string) => {
+    setMonacoFilePath(filePath);
+    // Open top panel and switch to monaco-editor tab
+    setIsTopPanelOpen(true);
+    setTopPanelActiveTab("monaco-editor");
+  }, [setTopPanelActiveTab]);
+
+  const closeMonacoEditor = useCallback(() => {
+    setMonacoFilePath(null);
+  }, []);
+
   return (
     <PanelContext.Provider
       value={{
@@ -121,6 +141,9 @@ export function PanelProvider({ children }: { children: React.ReactNode }) {
         closeTopPanel,
         setTopPanelTab,
         setTopPanelHovering,
+        monacoFilePath,
+        openMonacoEditor,
+        closeMonacoEditor,
       }}
     >
       {children}

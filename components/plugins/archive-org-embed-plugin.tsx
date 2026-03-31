@@ -328,7 +328,6 @@ const ArchiveOrgEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                       reason={failureReason || 'failed'}
                       errorMessage={errorMessage || iframeError || undefined}
                       onRetry={handleRetry}
-                      onTryFallback={handleFallback}
                       onOpenExternal={handleOpenExternal}
                       onClose={onClose}
                       autoRetryCount={retryCount}

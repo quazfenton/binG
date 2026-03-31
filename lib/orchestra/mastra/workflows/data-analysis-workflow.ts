@@ -123,16 +123,19 @@ Output JSON format:
  */
 export const statisticalAnalyzerStep = createStep({
   id: 'statistical-analyzer',
-  inputSchema: z.object({
-    questions: z.array(z.string()),
+  inputSchema: DataAnalysisInput.extend({
     profile: DataProfile,
     ownerId: z.string(),
   }),
   outputSchema: z.object({
-    result: AnalysisResult,
+    analysis: AnalysisResult,
+    profile: DataProfile,
+    questions: z.array(z.string()),
+    dataset: z.string(),
+    ownerId: z.string(),
   }),
   execute: async ({ inputData }) => {
-    const { questions, profile, ownerId } = inputData;
+    const { questions, profile, ownerId, dataset } = inputData;
     const agent = getModel('reasoning');
 
     const response = await agent.generate([
@@ -167,9 +170,9 @@ Output JSON format:
       { role: 'user', content: `Questions: ${questions.join('\n')}\n\nData Profile: ${JSON.stringify(profile, null, 2)}` },
     ]);
 
-    const result = JSON.parse(response.text.trim());
+    const analysis = JSON.parse(response.text.trim());
 
-    return { result };
+    return { analysis, profile, questions, dataset, ownerId };
   },
   retries: 2,
 });
@@ -185,12 +188,19 @@ export const visualizationDesignerStep = createStep({
     questions: z.array(z.string()),
     profile: DataProfile,
     analysis: AnalysisResult,
+    dataset: z.string(),
+    ownerId: z.string(),
   }),
   outputSchema: z.object({
     specs: VisualizationSpec,
+    analysis: AnalysisResult,
+    profile: DataProfile,
+    questions: z.array(z.string()),
+    dataset: z.string(),
+    ownerId: z.string(),
   }),
   execute: async ({ inputData }) => {
-    const { questions, profile, analysis } = inputData;
+    const { questions, profile, analysis, dataset, ownerId } = inputData;
     const agent = getModel('reasoning');
 
     const response = await agent.generate([
@@ -226,7 +236,7 @@ Choose chart types appropriately:
 
     const specs = JSON.parse(response.text.trim());
 
-    return { specs };
+    return { specs, analysis, profile, questions, dataset, ownerId };
   },
   retries: 2,
 });
@@ -243,14 +253,21 @@ export const reportGeneratorStep = createStep({
     questions: z.array(z.string()),
     profile: DataProfile,
     analysis: AnalysisResult,
-    visualizations: VisualizationSpec,
+    specs: VisualizationSpec,
+    ownerId: z.string(),
   }),
   outputSchema: z.object({
     report: z.string(),
     executiveSummary: z.string(),
+    profile: DataProfile,
+    analysis: AnalysisResult,
+    specs: VisualizationSpec,
+    questions: z.array(z.string()),
+    dataset: z.string(),
+    ownerId: z.string(),
   }),
   execute: async ({ inputData }) => {
-    const { dataset, questions, profile, analysis, visualizations } = inputData;
+    const { dataset, questions, profile, analysis, specs, ownerId } = inputData;
     const agent = getModel('reasoning');
 
     const response = await agent.generate([
@@ -282,7 +299,7 @@ Generate a markdown report with:
 ## Limitations
 (Analysis limitations)`,
       },
-      { role: 'user', content: `Dataset: ${dataset}\nQuestions: ${questions.join('\n')}\n\nProfile: ${JSON.stringify(profile, null, 2)}\n\nAnalysis: ${JSON.stringify(analysis, null, 2)}\n\nVisualizations: ${JSON.stringify(visualizations, null, 2)}` },
+      { role: 'user', content: `Dataset: ${dataset}\nQuestions: ${questions.join('\n')}\n\nProfile: ${JSON.stringify(profile, null, 2)}\n\nAnalysis: ${JSON.stringify(analysis, null, 2)}\n\nVisualizations: ${JSON.stringify(specs, null, 2)}` },
     ]);
 
     // Extract executive summary (first section)
@@ -291,6 +308,12 @@ Generate a markdown report with:
     return {
       report: response.text,
       executiveSummary: executiveSummary.trim(),
+      profile,
+      analysis,
+      specs,
+      questions,
+      dataset,
+      ownerId,
     };
   },
   retries: 2,
@@ -302,14 +325,16 @@ Generate a markdown report with:
 
 export const dataAnalysisWorkflow = createWorkflow({
   id: 'data-analysis',
-  name: 'Data Analysis Workflow',
   inputSchema: DataAnalysisInput,
   outputSchema: z.object({
     profile: DataProfile,
     analysis: AnalysisResult,
-    visualizations: VisualizationSpec,
+    specs: VisualizationSpec,
     report: z.string(),
     executiveSummary: z.string(),
+    questions: z.array(z.string()),
+    dataset: z.string(),
+    ownerId: z.string(),
   }),
   retryConfig: {
     attempts: 2,

@@ -4,6 +4,7 @@ import { createLogger } from '../utils/logger';
 import { normalizeToolInvocation, type ToolInvocation } from '../types/tool-invocation';
 import type { ExecutionPolicy } from '../sandbox/types';
 import { determineExecutionPolicy } from '../sandbox/types';
+import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 
 const logger = createLogger('Agent:V2Executor');
 
@@ -371,7 +372,7 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
             })),
             errors: [],
             requestedFiles: [],
-            scopePath: `project/sessions/${options.conversationId}`,
+            scopePath: `project/sessions/${normalizeSessionId(options.conversationId) || options.conversationId}`,
           })));
         }
 

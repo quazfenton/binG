@@ -45,6 +45,22 @@ import {
 import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
 
+// Helper to ensure image URLs go through the proxy
+function getProxiedImageUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  // Already proxied
+  if (url.startsWith('/api/image-proxy')) return url;
+  // Data URLs (base64) - don't proxy
+  if (url.startsWith('data:')) return url;
+  // External URL - proxy it
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//')) {
+    const fullUrl = url.startsWith('//') ? `https:${url}` : url;
+    return `/api/image-proxy?url=${encodeURIComponent(fullUrl)}`;
+  }
+  // Local/relative paths - don't proxy
+  return url;
+}
+
 // Fetch images from API
 async function fetchImages(limit = 50, style?: string): Promise<GeneratedImage[]> {
   try {
@@ -429,7 +445,7 @@ export default function ArtGalleryTab() {
                 {/* Image */}
                 <div className={`relative ${viewMode === "list" ? "w-48 h-48 flex-shrink-0" : "aspect-square"}`}>
                   <img
-                    src={image.url}
+                    src={getProxiedImageUrl(image.url)}
                     alt={image.prompt}
                     className="w-full h-full object-cover"
                   />
@@ -507,7 +523,7 @@ export default function ArtGalleryTab() {
                 {/* Image */}
                 <div className="relative">
                   <img
-                    src={selectedImage.url}
+                    src={getProxiedImageUrl(selectedImage.url)}
                     alt={selectedImage.prompt}
                     className="w-full h-full object-contain max-h-[70vh]"
                   />

@@ -73,10 +73,13 @@ import {
   Monitor,
   Newspaper,
   Command,
+  StopCircle,
+  Settings,
 } from "lucide-react";
 import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";
 import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
+import { onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { useMultiRotatingStatements } from "@/hooks/use-rotating-statements";
 import { useReasoningUI } from "@/lib/chat/use-chat-hooks";
@@ -92,6 +95,217 @@ function ChatLoadingIndicator({ provider, model }: { provider: string; model: st
         <div>
           <p className="text-sm text-white/80">{statement}</p>
           <p className="text-[10px] text-white/50">Using {provider}/{model}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Enhanced Message Bubble Component (from enhanced-workspace-panel)
+// ============================================================================
+
+function MessageBubble({ message, isStreaming }: { message: Message; isStreaming?: boolean }) {
+  const [isCopied, setIsCopied] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setIsCopied(true);
+      toast.success("Message copied");
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (err) {
+      toast.error("Failed to copy");
+    }
+  }, [message.content]);
+
+  const isAssistant = message.role === "assistant";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`group relative p-3 rounded-lg mb-3 ${
+        isAssistant
+          ? "bg-white/5 border border-white/10"
+          : "bg-blue-500/10 border border-blue-400/30 ml-8"
+      }`}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          {isAssistant ? (
+            <Brain className="w-4 h-4 text-purple-400" />
+          ) : (
+            <MessageSquare className="w-4 h-4 text-blue-400" />
+          )}
+          <span className="text-xs font-medium text-white/70">
+            {isAssistant ? "Assistant" : "You"}
+          </span>
+          {isStreaming && (
+            <span className="text-[10px] text-purple-400 animate-pulse">
+              Generating...
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={handleCopy}
+            className="p-1 rounded hover:bg-white/10 text-white/60 hover:text-white"
+            title="Copy message"
+          >
+            {isCopied ? (
+              <CheckCircle className="w-3 h-3 text-green-400" />
+            ) : (
+              <Copy className="w-3 h-3" />
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className={`text-sm text-white/90 whitespace-pre-wrap break-words ${
+        !isExpanded && message.content.length > 500 ? "line-clamp-10" : ""
+      }`}>
+        {message.content}
+      </div>
+
+      {/* Expand for long messages */}
+      {!isExpanded && message.content.length > 500 && (
+        <button
+          onClick={() => setIsExpanded(true)}
+          className="mt-2 text-xs text-white/50 hover:text-white/80"
+        >
+          Show more...
+        </button>
+      )}
+
+      {/* Timestamp */}
+      <div className="mt-2 text-[10px] text-white/40">
+        {new Date(message.timestamp || Date.now()).toLocaleString()}
+      </div>
+    </motion.div>
+  );
+}
+
+// ============================================================================
+// Thread List Sidebar Component (from enhanced-workspace-panel)
+// ============================================================================
+
+function ThreadListSidebar({
+  threads,
+  activeThreadId,
+  onSelectThread,
+  onNewThread,
+  onDeleteThread,
+  isOpen,
+  onClose,
+}: {
+  threads: ChatThread[];
+  activeThreadId: string | null;
+  onSelectThread: (id: string) => void;
+  onNewThread: () => void;
+  onDeleteThread: (id: string) => void;
+  isOpen: boolean;
+  onClose: () => void;
+}) {
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredThreads = useMemo(() => {
+    if (!searchQuery) return threads;
+    const query = searchQuery.toLowerCase();
+    return threads.filter(
+      t => t.name.toLowerCase().includes(query) ||
+        t.messages.some(m => m.content.toLowerCase().includes(query))
+    );
+  }, [threads, searchQuery]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="absolute left-0 top-0 bottom-0 w-64 z-20 bg-black/95 border-r border-white/10 flex flex-col">
+      {/* Header */}
+      <div className="p-3 border-b border-white/10 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-white">Chat Threads</h3>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onNewThread}
+            className="h-7 w-7 text-white/70 hover:text-white hover:bg-white/10"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="h-7 w-7 text-white/70 hover:text-white hover:bg-white/10"
+          >
+            <X className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Search */}
+      <div className="p-3 border-b border-white/10">
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/40" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search conversations..."
+            className="pl-8 h-8 bg-white/5 border-white/20 text-xs"
+          />
+        </div>
+      </div>
+
+      {/* Thread List */}
+      <div className="flex-1 overflow-auto p-2">
+        <div className="space-y-1">
+          {filteredThreads.map(thread => (
+            <div
+              key={thread.id}
+              className={`group relative p-3 rounded-lg cursor-pointer transition-all ${
+                activeThreadId === thread.id
+                  ? "bg-white/10 border border-white/20"
+                  : "bg-transparent hover:bg-white/5 border border-transparent"
+              }`}
+              onClick={() => onSelectThread(thread.id)}
+            >
+              <div className="flex items-start gap-2">
+                <MessageSquare className={`w-4 h-4 mt-0.5 shrink-0 ${
+                  activeThreadId === thread.id ? "text-white" : "text-white/50"
+                }`} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium text-white truncate">
+                    {thread.name}
+                  </div>
+                  <div className="text-[10px] text-white/50 truncate">
+                    {thread.messages[0]?.content.slice(0, 50) || "No messages"}
+                  </div>
+                  <div className="text-[10px] text-white/40 mt-1">
+                    {new Date(thread.lastActiveAt || thread.createdAt).toLocaleDateString()}
+                  </div>
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteThread(thread.id);
+                  }}
+                  className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/20 text-white/40 hover:text-red-400 transition-all"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+          ))}
+          {filteredThreads.length === 0 && (
+            <div className="text-center py-8 text-white/40 text-xs">
+              {searchQuery ? "No matching conversations" : "No conversations yet"}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -443,7 +657,7 @@ const automationData: AutomationItem[] = [
 ];
 
 export function ExperimentalWorkspacePanel() {
-  const { isOpen, activeTab, closePanel, setTab } = usePanel();
+  const { isOpen, activeTab, closePanel, setTab, openMonacoEditor } = usePanel();
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   
@@ -467,7 +681,10 @@ export function ExperimentalWorkspacePanel() {
   
   // Code preview panel
   const [showCodePreview, setShowCodePreview] = useState(false);
-  
+
+  // Thread sidebar (from enhanced-workspace-panel)
+  const [showThreadSidebar, setShowThreadSidebar] = useState(false);
+
   // Voice input
   const { isListening, startListening, stopListening, transcript } = useVoiceInput();
   
@@ -495,9 +712,24 @@ export function ExperimentalWorkspacePanel() {
   const [isLoadingRepos, setIsLoadingRepos] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<{ owner: string; repo: string; branch: string } | null>(null);
   const [showUrlInput, setShowUrlInput] = useState(false);
-  
-  // Resizable panel width
-  const [panelWidth, setPanelWidth] = useState(400);
+
+  // Resizable panel width with localStorage persistence and snap points
+  const SNAP_POINTS = [350, 450, 550, 650, 750];
+  const [panelWidth, setPanelWidth] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('workspace-panel-width');
+      if (stored) {
+        const parsed = parseInt(stored);
+        if (parsed >= 300 && parsed <= 800) return parsed;
+      }
+    }
+    return 400;
+  });
+
+  // Save panel width to localStorage
+  useEffect(() => {
+    localStorage.setItem('workspace-panel-width', String(panelWidth));
+  }, [panelWidth]);
 
   // Close panel on Escape
   useEffect(() => {
@@ -514,14 +746,25 @@ export function ExperimentalWorkspacePanel() {
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartX = useRef(0);
   const resizeStartWidth = useRef(400);
-  
+
+  // Snap to nearest snap point
+  const snapToPoints = useCallback((width: number) => {
+    const snapThreshold = 30; // pixels
+    for (const snapPoint of SNAP_POINTS) {
+      if (Math.abs(width - snapPoint) < snapThreshold) {
+        return snapPoint;
+      }
+    }
+    return width;
+  }, []);
+
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsResizing(true);
     resizeStartX.current = e.clientX;
     resizeStartWidth.current = panelWidth;
   }, [panelWidth]);
-  
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
@@ -529,21 +772,25 @@ export function ExperimentalWorkspacePanel() {
       const newWidth = Math.max(300, Math.min(800, resizeStartWidth.current + delta));
       setPanelWidth(newWidth);
     };
-    
+
     const handleMouseUp = () => {
-      setIsResizing(false);
+      if (isResizing) {
+        // Snap to nearest point on release
+        setPanelWidth(prev => snapToPoints(prev));
+        setIsResizing(false);
+      }
     };
-    
+
     if (isResizing) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     }
-    
+
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isResizing]);
+  }, [isResizing, snapToPoints]);
 
   // Load chat threads from localStorage on mount
   useEffect(() => {
@@ -948,6 +1195,18 @@ export function ExperimentalWorkspacePanel() {
     };
     fetchSnapshot();
   }, [vfs.getSnapshot]);
+
+  // Listen for filesystem updates from Monaco editor saves
+  useEffect(() => {
+    const unsubscribe = onFilesystemUpdated(async (event) => {
+      // Refresh VFS snapshot when Monaco editor saves a file
+      const snapshot = await vfs.getSnapshot();
+      if (snapshot?.files) {
+        setVfsSnapshot(snapshot);
+      }
+    });
+    return () => unsubscribe();
+  }, [vfs]);
 
   // Build file tree from filesystem
   const fileTree = React.useMemo(() => {
@@ -1852,6 +2111,31 @@ export function ExperimentalWorkspacePanel() {
     setRenameValue("");
   }, []);
 
+  // Keyboard shortcuts for file operations
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle if a file is selected and we're in the file tree area
+      if (!selectedFile) return;
+      
+      const isInFileTree = document.activeElement?.closest('.file-tree') || 
+        document.activeElement?.closest('[data-file-tree]');
+      
+      // F2 to rename selected file
+      if (e.key === 'F2' && selectedFile) {
+        e.preventDefault();
+        handleRenameFile(selectedFile.path, selectedFile.name);
+      }
+      // Enter to open in Monaco editor
+      if (e.key === 'Enter' && selectedFile && isInFileTree) {
+        e.preventDefault();
+        openMonacoEditor(selectedFile.path);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedFile, handleRenameFile, openMonacoEditor]);
+
   // Drag and drop handlers
   const handleDragStart = useCallback((path: string) => {
     setDraggedFile(path);
@@ -1980,7 +2264,7 @@ export function ExperimentalWorkspacePanel() {
       const isDragTarget = dragOverFolder === node.path;
 
       return (
-        <div key={node.path} className="group" onDragOver={(e) => handleDragOver(e, node.path)} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, node.path)}>
+        <div key={node.path} className="group file-tree" onDragOver={(e) => handleDragOver(e, node.path)} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, node.path)}>
           <div className={`flex items-center rounded ${isDragTarget ? 'bg-cyan-500/30 border border-cyan-500/50' : ''}`}>
             <button
               onClick={() => toggleFolder(node.path)}
@@ -2059,7 +2343,7 @@ export function ExperimentalWorkspacePanel() {
         draggable
         onDragStart={() => handleDragStart(node.path)}
         onClick={() => handleFileSelect(node)}
-        onDoubleClick={() => handleRenameFile(node.path, node.name)}
+        onDoubleClick={() => openMonacoEditor(node.path)}
         onContextMenu={(e) => {
           e.preventDefault();
           setContextMenu({ x: e.clientX, y: e.clientY, path: node.path, isDirectory: false });
@@ -2407,13 +2691,13 @@ export function ExperimentalWorkspacePanel() {
                 </div>
 
                  {/* Explorer Tab */}
-                 <TabsContent value="explorer" className="flex-1 mt-0 h-full">
-                   <div className="h-full overflow-y-auto custom-scrollbar">
-                     <div className="p-4 space-y-2 max-w-full">
-                      <div className="flex items-center justify-between mb-4">
-                        <span className="text-xs text-white/60">File Explorer</span>
-                        <div className="flex gap-1">
-                          <Badge variant="secondary" className="text-[10px] bg-white/10">
+                  <TabsContent value="explorer" className="flex-1 mt-0 h-full" data-file-tree>
+                    <div className="h-full overflow-y-auto custom-scrollbar" style={{ overflowAnchor: 'auto' }}>
+                      <div className="p-4 space-y-2 max-w-full">
+                       <div className="flex items-center justify-between mb-4">
+                         <span className="text-xs text-white/60">File Explorer</span>
+                         <div className="flex gap-1">
+                           <Badge variant="secondary" className="text-[10px] bg-white/10">
                             {filesystem?.files?.length || 0} files
                           </Badge>
                           {/* Paste button when clipboard has content */}
@@ -2574,30 +2858,54 @@ export function ExperimentalWorkspacePanel() {
                 </TabsContent>
 
                 {/* Parallel Chat Tab */}
-                <TabsContent value="chat" className="flex-1 mt-0 flex flex-col overflow-hidden">
+                <TabsContent value="chat" className="flex-1 mt-0 flex flex-col overflow-hidden relative">
+                  {/* Thread Sidebar */}
+                  <ThreadListSidebar
+                    threads={chatThreads}
+                    activeThreadId={activeThreadId}
+                    onSelectThread={switchThread}
+                    onNewThread={createNewThread}
+                    onDeleteThread={deleteThread}
+                    isOpen={showThreadSidebar}
+                    onClose={() => setShowThreadSidebar(false)}
+                  />
+
                   {/* Chat Header */}
-                  <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/20">
+                  <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/20 shrink-0">
                     <div className="flex items-center gap-2 flex-1">
-                      <MessageSquare className="h-4 w-4 text-blue-400" />
+                      {/* Thread Sidebar Toggle */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setShowThreadSidebar(!showThreadSidebar)}
+                        className={`h-7 w-7 ${showThreadSidebar ? 'bg-white/10 text-white' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+                        title="Toggle thread list"
+                      >
+                        {showThreadSidebar ? (
+                          <ChevronLeft className="w-4 h-4" />
+                        ) : (
+                          <MessageSquare className="w-4 h-4" />
+                        )}
+                      </Button>
+
                       <span className="text-sm font-medium text-white/90">Parallel Chat</span>
                       <Badge variant="secondary" className="text-[10px] bg-blue-500/20 text-blue-300">
                         {chatMessages.length} messages
                       </Badge>
-                      
-                      {/* Provider/Model Selector */}
+
+                      {/* Provider/Model Selector - Improved */}
                       {availableProviders.filter((p: any) => (p as any).isAvailable !== false).length > 0 && (
                       <div className="flex items-center gap-1 ml-2">
                         <select
                           value={chatProvider}
                           onChange={(e) => {
                             setChatProvider(e.target.value);
-                            // Reset to first model of new provider
                             const provider = availableProviders.find(p => p.id === e.target.value);
                             if (provider?.models?.[0]) {
                               setChatModel(provider.models[0]);
                             }
                           }}
-                          className="text-xs bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50"
+                          className="text-xs bg-white/5 border border-white/10 rounded px-1.5 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50 cursor-pointer"
                           title="Select provider"
                         >
                           {availableProviders.filter((p: any) => (p as any).isAvailable !== false).map(provider => (
@@ -2609,24 +2917,24 @@ export function ExperimentalWorkspacePanel() {
                         <select
                           value={chatModel}
                           onChange={(e) => setChatModel(e.target.value)}
-                          className="text-xs bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50 max-w-[140px]"
+                          className="text-xs bg-white/5 border border-white/10 rounded px-1.5 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50 max-w-[120px] cursor-pointer"
                           title="Select model"
                         >
                           {(availableProviders.find(p => p.id === chatProvider)?.models || []).slice(0, 8).map(model => (
                             <option key={model} value={model} className="bg-gray-900">
-                              {model.split(':')[0]}
+                              {model.length > 25 ? model.slice(0, 25) + '...' : model}
                             </option>
                           ))}
                         </select>
                       </div>
                       )}
-                      
-                      {/* Thread Selector */}
+
+                      {/* Thread Selector Dropdown */}
                       <div className="flex items-center gap-1 ml-4">
                         <select
                           value={activeThreadId || ''}
                           onChange={(e) => switchThread(e.target.value)}
-                          className="text-xs bg-white/5 border border-white/10 rounded px-2 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50"
+                          className="text-xs bg-white/5 border border-white/10 rounded px-2 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50 cursor-pointer"
                           title="Select chat thread"
                         >
                           {chatThreads.map(thread => (
@@ -2901,30 +3209,18 @@ export function ExperimentalWorkspacePanel() {
                         <p className="text-xs mt-1">Start a new conversation</p>
                       </div>
                     ) : (
-                      chatMessages.map((msg) => (
-                        <div
+                      chatMessages.map((msg, index) => (
+                        <MessageBubble
                           key={msg.id}
-                          className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                        >
-                          <div
-                            className={`max-w-[80%] p-3 rounded-lg text-sm ${
-                              msg.role === "user"
-                                ? "bg-blue-500/20 border border-blue-500/30 text-white/90"
-                                : "bg-white/10 border border-white/20 text-white/80"
-                            }`}
-                          >
-                            <p>{msg.content}</p>
-                            <p className="text-[10px] text-white/40 mt-1">
-                              {new Date(msg.timestamp || Date.now()).toLocaleTimeString()}
-                            </p>
-                          </div>
-                        </div>
+                          message={msg}
+                          isStreaming={isChatLoading && index === chatMessages.length - 1 && msg.role === "assistant"}
+                        />
                       ))
                     )}
                     {isChatLoading && (
-                      <ChatLoadingIndicator 
-                        provider={chatProvider} 
-                        model={chatModel.split(':')[0]} 
+                      <ChatLoadingIndicator
+                        provider={chatProvider}
+                        model={chatModel.split(':')[0]}
                       />
                     )}
                     <div ref={chatEndRef} />
@@ -3976,6 +4272,17 @@ export function ExperimentalWorkspacePanel() {
             >
               <FileText className="h-3 w-3 text-purple-400" /> Rename
             </button>
+            {!contextMenu.isDirectory && (
+              <button
+                onClick={() => {
+                  openMonacoEditor(contextMenu.path);
+                  setContextMenu(null);
+                }}
+                className="w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-white/10 flex items-center gap-2"
+              >
+                <Code className="h-3 w-3 text-cyan-400" /> Open in Editor
+              </button>
+            )}
           </div>
         </>
       )}

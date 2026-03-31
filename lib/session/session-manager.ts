@@ -736,7 +736,9 @@ export class SessionManager {
     config: SessionConfig,
   ): Promise<Session> {
     try {
-      const workspacePath = config.workspaceDir || `/workspace/users/${userId}/sessions/${conversationId}`;
+      // CRITICAL FIX: Normalize conversationId to prevent composite IDs in workspace paths
+      const simpleSessionId = normalizeSessionId(conversationId) || conversationId; // Use original if normalize returns empty
+      const workspacePath = config.workspaceDir || `/workspace/users/${userId}/sessions/${simpleSessionId}`;
 
       // Determine execution policy
       let executionPolicy: ExecutionPolicy;

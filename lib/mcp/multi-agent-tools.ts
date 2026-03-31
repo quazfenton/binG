@@ -10,8 +10,9 @@
  * @module mcp/multi-agent-tools
  */
 
-import { Server } from '@modelcontextprotocol/sdk/server/index.js';
+import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { createLogger } from '@/lib/utils/logger';
+import type { AnySchema } from '@modelcontextprotocol/sdk/server/zod-compat.js';
 
 const logger = createLogger('MCP:MultiAgent');
 
@@ -40,32 +41,34 @@ export interface AgentInfo {
 /**
  * Register multi-agent MCP tools
  */
-export function registerMultiAgentTools(server: Server): void {
+export function registerMultiAgentTools(server: McpServer): void {
   logger.info('Registering multi-agent MCP tools');
 
   // Create agent session
-  server.tool(
+  server.registerTool(
     'create_agent_session',
-    'Create a new multi-agent session for complex task coordination',
     {
-      goal: { type: 'string', description: 'Overall goal for the agent session' },
-      mode: {
-        type: 'string',
-        description: 'Coordination mode: sequential, parallel, debate, consensus',
-        enum: ['sequential', 'parallel', 'debate', 'consensus'],
-      },
-      agents: {
-        type: 'array',
-        description: 'Agent roles to create',
-        items: {
-          type: 'object',
-          properties: {
-            role: { type: 'string', description: 'Agent role (planner, executor, critic, etc.)' },
-            model: { type: 'string', description: 'LLM model for this agent' },
-          },
-          required: ['role'],
+      description: 'Create a new multi-agent session for complex task coordination',
+      inputSchema: {
+        goal: { type: 'string', description: 'Overall goal for the agent session' },
+        mode: {
+          type: 'string',
+          description: 'Coordination mode: sequential, parallel, debate, consensus',
+          enum: ['sequential', 'parallel', 'debate', 'consensus'],
         },
-      },
+        agents: {
+          type: 'array',
+          description: 'Agent roles to create',
+          items: {
+            type: 'object',
+            properties: {
+              role: { type: 'string', description: 'Agent role (planner, executor, critic, etc.)' },
+              model: { type: 'string', description: 'LLM model for this agent' },
+            },
+            required: ['role'],
+          },
+        },
+      } as unknown as AnySchema,
     },
     async ({ goal, mode = 'sequential', agents = [] }) => {
       try {
@@ -126,7 +129,7 @@ export function registerMultiAgentTools(server: Server): void {
         return {
           content: [
             {
-              type: 'text',
+              type: 'text' as const,
               text: JSON.stringify({
                 success: true,
                 sessionId,
@@ -141,7 +144,7 @@ export function registerMultiAgentTools(server: Server): void {
         return {
           content: [
             {
-              type: 'text',
+              type: 'text' as const,
               text: `Failed to create session: ${error.message}`,
             },
           ],
@@ -152,11 +155,13 @@ export function registerMultiAgentTools(server: Server): void {
   );
 
   // Get session status
-  server.tool(
+  server.registerTool(
     'get_agent_session_status',
-    'Get status of a multi-agent session',
     {
-      sessionId: { type: 'string', description: 'Session ID' },
+      description: 'Get status of a multi-agent session',
+      inputSchema: {
+        sessionId: { type: 'string', description: 'Session ID' },
+      } as unknown as AnySchema,
     },
     async ({ sessionId }) => {
       try {
@@ -166,7 +171,7 @@ export function registerMultiAgentTools(server: Server): void {
           return {
             content: [
               {
-                type: 'text',
+                type: 'text' as const,
                 text: `Session not found: ${sessionId}`,
               },
             ],
@@ -202,7 +207,7 @@ export function registerMultiAgentTools(server: Server): void {
         return {
           content: [
             {
-              type: 'text',
+              type: 'text' as const,
               text: JSON.stringify({
                 sessionId: session.id,
                 goal: session.goal,
@@ -222,7 +227,7 @@ export function registerMultiAgentTools(server: Server): void {
         return {
           content: [
             {
-              type: 'text',
+              type: 'text' as const,
               text: `Failed to get status: ${error.message}`,
             },
           ],
@@ -233,17 +238,19 @@ export function registerMultiAgentTools(server: Server): void {
   );
 
   // Coordinate agents (send task to multiple agents)
-  server.tool(
+  server.registerTool(
     'coordinate_agents',
-    'Send coordinated task to multiple agents in a session',
     {
-      sessionId: { type: 'string', description: 'Session ID' },
-      task: { type: 'string', description: 'Task to coordinate' },
-      coordinationMode: {
-        type: 'string',
-        description: 'How to coordinate: broadcast, sequential, parallel',
-        enum: ['broadcast', 'sequential', 'parallel'],
-      },
+      description: 'Send coordinated task to multiple agents in a session',
+      inputSchema: {
+        sessionId: { type: 'string', description: 'Session ID' },
+        task: { type: 'string', description: 'Task to coordinate' },
+        coordinationMode: {
+          type: 'string',
+          description: 'How to coordinate: broadcast, sequential, parallel',
+          enum: ['broadcast', 'sequential', 'parallel'],
+        },
+      } as unknown as AnySchema,
     },
     async ({ sessionId, task, coordinationMode = 'broadcast' }) => {
       try {
@@ -253,7 +260,7 @@ export function registerMultiAgentTools(server: Server): void {
           return {
             content: [
               {
-                type: 'text',
+                type: 'text' as const,
                 text: `Session not found: ${sessionId}`,
               },
             ],
@@ -310,7 +317,7 @@ export function registerMultiAgentTools(server: Server): void {
         return {
           content: [
             {
-              type: 'text',
+              type: 'text' as const,
               text: JSON.stringify({
                 sessionId,
                 coordinationMode,
@@ -324,7 +331,7 @@ export function registerMultiAgentTools(server: Server): void {
         return {
           content: [
             {
-              type: 'text',
+              type: 'text' as const,
               text: `Failed to coordinate: ${error.message}`,
             },
           ],
@@ -335,12 +342,14 @@ export function registerMultiAgentTools(server: Server): void {
   );
 
   // Get agent result
-  server.tool(
+  server.registerTool(
     'get_agent_result',
-    'Get result from a specific agent in a session',
     {
-      sessionId: { type: 'string', description: 'Session ID' },
-      agentId: { type: 'string', description: 'Agent ID' },
+      description: 'Get result from a specific agent in a session',
+      inputSchema: {
+        sessionId: { type: 'string', description: 'Session ID' },
+        agentId: { type: 'string', description: 'Agent ID' },
+      } as unknown as AnySchema,
     },
     async ({ sessionId, agentId }) => {
       try {
@@ -350,7 +359,7 @@ export function registerMultiAgentTools(server: Server): void {
           return {
             content: [
               {
-                type: 'text',
+                type: 'text' as const,
                 text: `Session not found: ${sessionId}`,
               },
             ],
@@ -364,7 +373,7 @@ export function registerMultiAgentTools(server: Server): void {
           return {
             content: [
               {
-                type: 'text',
+                type: 'text' as const,
                 text: `Agent not found: ${agentId}`,
               },
             ],
@@ -381,7 +390,7 @@ export function registerMultiAgentTools(server: Server): void {
           return {
             content: [
               {
-                type: 'text',
+                type: 'text' as const,
                 text: `Agent status unavailable: ${agentId}`,
               },
             ],
@@ -392,7 +401,7 @@ export function registerMultiAgentTools(server: Server): void {
         return {
           content: [
             {
-              type: 'text',
+              type: 'text' as const,
               text: JSON.stringify({
                 sessionId,
                 agentId,
@@ -409,7 +418,7 @@ export function registerMultiAgentTools(server: Server): void {
         return {
           content: [
             {
-              type: 'text',
+              type: 'text' as const,
               text: `Failed to get result: ${error.message}`,
             },
           ],
@@ -420,13 +429,15 @@ export function registerMultiAgentTools(server: Server): void {
   );
 
   // Multi-agent debate/consensus
-  server.tool(
+  server.registerTool(
     'agent_debate',
-    'Facilitate debate between agents to reach consensus on a topic',
     {
-      sessionId: { type: 'string', description: 'Session ID' },
-      topic: { type: 'string', description: 'Topic to debate' },
-      rounds: { type: 'number', description: 'Number of debate rounds', default: 3 },
+      description: 'Facilitate debate between agents to reach consensus on a topic',
+      inputSchema: {
+        sessionId: { type: 'string', description: 'Session ID' },
+        topic: { type: 'string', description: 'Topic to debate' },
+        rounds: { type: 'number', description: 'Number of debate rounds', default: 3 },
+      } as unknown as AnySchema,
     },
     async ({ sessionId, topic, rounds = 3 }) => {
       try {
@@ -436,7 +447,7 @@ export function registerMultiAgentTools(server: Server): void {
           return {
             content: [
               {
-                type: 'text',
+                type: 'text' as const,
                 text: `Session not found: ${sessionId}`,
               },
             ],
@@ -484,7 +495,7 @@ export function registerMultiAgentTools(server: Server): void {
         return {
           content: [
             {
-              type: 'text',
+              type: 'text' as const,
               text: JSON.stringify({
                 sessionId,
                 topic,
@@ -500,7 +511,7 @@ export function registerMultiAgentTools(server: Server): void {
         return {
           content: [
             {
-              type: 'text',
+              type: 'text' as const,
               text: `Failed to debate: ${error.message}`,
             },
           ],
