@@ -10,7 +10,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { z } from 'zod';
 import { auth0 } from '@/lib/auth0';
 import { getDatabase } from '@/lib/database/connection';
 import { decryptApiKey, encryptApiKey } from '@/lib/database/connection';
@@ -19,21 +18,6 @@ import { isFigmaConfigured, getFigmaRedirectUri } from '@/lib/figma/config';
 import { generateCodeVerifier, generateCodeChallenge, generateState, generateAuthUrl } from '@/lib/figma/oauth';
 
 export const runtime = 'nodejs';
-
-// ============================================================================
-// Types
-// ============================================================================
-
-interface FigmaConnection {
-  id: number;
-  userId: number;
-  provider: 'figma';
-  accessToken: string;
-  refreshToken: string;
-  tokenExpiresAt: Date | null;
-  scopes: string[];
-  isActive: boolean;
-}
 
 // ============================================================================
 // Database Helpers
@@ -110,61 +94,6 @@ async function getFigmaToken(userId: number): Promise<string | null> {
   } catch (error) {
     console.error('[Figma] Error getting token:', error);
     return null;
-  }
-}
-
-/**
- * Save Figma token to database
- */
-async function saveFigmaToken(params: {
-  userId: number;
-  accessToken: string;
-  refreshToken: string;
-  expiresAt: Date;
-  scopes: string[];
-}): Promise<boolean> {
-  try {
-    const db = getDatabase();
-    if (!db) return false;
-
-    const stmt = db.prepare(`
-      INSERT OR REPLACE INTO external_connections (
-        user_id,
-        provider,
-        provider_account_id,
-        provider_display_name,
-        access_token_encrypted,
-        refresh_token_encrypted,
-        token_expires_at,
-        scopes,
-        is_active,
-        updated_at
-      ) VALUES (
-        ?,
-        'figma',
-        'figma_oauth',
-        'Figma',
-        ?,
-        ?,
-        datetime('now', '+' || ? || ' seconds'),
-        ?,
-        TRUE,
-        CURRENT_TIMESTAMP
-      )
-    `);
-
-    stmt.run(
-      params.userId,
-      encryptApiKey(params.accessToken),
-      encryptApiKey(params.refreshToken),
-      params.expiresAt.getTime() / 1000 - Date.now() / 1000,
-      params.scopes.join(' ')
-    );
-
-    return true;
-  } catch (error) {
-    console.error('[Figma] Error saving token:', error);
-    return false;
   }
 }
 

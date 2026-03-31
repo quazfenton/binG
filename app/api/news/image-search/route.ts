@@ -110,17 +110,43 @@ export async function GET(request: NextRequest) {
 // POST handler - batch search for multiple articles
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    
+    let body;
+    try {
+      body = await request.json();
+    } catch (jsonError: any) {
+      console.warn('[ImageSearch] Invalid JSON:', jsonError.message);
+      return NextResponse.json(
+        { success: false, error: 'Invalid JSON in request body' },
+        { status: 400 }
+      );
+    }
+
+    console.log('[ImageSearch] Received request:', JSON.stringify(body, null, 2).slice(0, 500));
+
     const schema = z.object({
       articles: z.array(z.object({
         id: z.string(),
         title: z.string(),
-      })).min(1).max(20),
+      })).min(1).max(50),
     });
-    
-    const { articles } = schema.parse(body);
-    
+
+    const parseResult = schema.safeParse(body);
+    if (!parseResult.success) {
+      console.warn('[ImageSearch] Validation error:', parseResult.error.errors);
+      return NextResponse.json(
+        { 
+          success: false, 
+          error: parseResult.error.errors[0]?.message || 'Invalid request format',
+          received: Object.keys(body || {}),
+          articlesCount: Array.isArray(body?.articles) ? body.articles.length : 'not-an-array',
+        },
+        { status: 400 }
+      );
+    }
+
+    const { articles } = parseResult.data;
+    console.log('[ImageSearch] Processing', articles.length, 'articles');
+
     // Search images for each article
     const results = await Promise.all(
       articles.map(async (article) => {
@@ -132,22 +158,18 @@ export async function POST(request: NextRequest) {
         };
       })
     );
-    
+
+    console.log('[ImageSearch] Found images for', results.length, 'articles');
+
     return NextResponse.json({
       success: true,
       results,
     });
-    
-  } catch (error) {
-    if (error instanceof z.ZodError) {
-      return NextResponse.json(
-        { success: false, error: error.errors[0].message },
-        { status: 400 }
-      );
-    }
-    
+
+  } catch (error: any) {
+    console.error('[ImageSearch] Unexpected error:', error);
     return NextResponse.json(
-      { success: false, error: 'Failed to search images' },
+      { success: false, error: error.message || 'Failed to search images' },
       { status: 500 }
     );
   }

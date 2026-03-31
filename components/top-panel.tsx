@@ -701,7 +701,7 @@ export default function TopPanel() {
 
   const [isMaximized, setIsMaximized] = useState(false);
   const [panelWidth, setPanelWidth] = useState(100); // Percentage of available space (40-100)
-  const [panelHeightOffset, setPanelHeightOffset] = useState(520); // Pixels from bottom (default 520px)
+  const [panelHeightOffset, setPanelHeightOffset] = useState(360); // Pixels from bottom (default 360px)
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartY = useRef(0);
   const resizeStartHeightOffset = useRef(520);

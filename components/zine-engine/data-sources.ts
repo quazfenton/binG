@@ -1,6 +1,6 @@
 /**
  * Zine Engine Data Source Integrations
- * 
+ *
  * Provides connectors for various data sources:
  * - RSS feeds
  * - Webhooks
@@ -15,202 +15,145 @@
 import type { ZineContent, DataSource } from "./index";
 
 // ============================================================================
-// RSS Feed Parser (Production-Ready)
+// RSS Feed Parser (Node.js Compatible)
 // ============================================================================
+
+/**
+ * Simple regex-based RSS parser for Node.js compatibility
+ * Avoids DOMParser which is not available in server-side runtime
+ */
+function parseRSSXML(xml: string, sourceUrl: string): ZineContent[] {
+  const contents: ZineContent[] = [];
+
+  try {
+    // Extract item elements
+    const itemMatches = xml.match(/<item[^>]*>[\s\S]*?<\/item>/gi) || [];
+
+    for (const itemXml of itemMatches.slice(0, 20)) {
+      try {
+        // Extract title
+        const titleMatch = itemXml.match(/<title[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/title>|<title[^>]*>([\s\S]*?)<\/title>/i);
+        const title = titleMatch ? (titleMatch[1] || titleMatch[2] || '').trim() : '';
+
+        // Extract link
+        const linkMatch = itemXml.match(/<link[^>]*>([\s\S]*?)<\/link>/i);
+        const url = linkMatch ? linkMatch[1].trim() : '';
+
+        // Skip if no title or URL
+        if (!title || !url) continue;
+
+        // Extract description
+        const descMatch = itemXml.match(/<description[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/description>|<description[^>]*>([\s\S]*?)<\/description>/i);
+        let description = descMatch ? (descMatch[1] || descMatch[2] || '').trim() : '';
+        description = description.replace(/<[^>]+>/g, '').substring(0, 300);
+
+        // Extract pubDate
+        let publishedAt = Date.now();
+        const pubDateMatch = itemXml.match(/<pubDate[^>]*>([\s\S]*?)<\/pubDate>/i);
+        if (pubDateMatch) {
+          const date = new Date(pubDateMatch[1].trim());
+          if (!isNaN(date.getTime())) {
+            publishedAt = date.getTime();
+          }
+        }
+
+        // Extract image
+        let imageUrl: string | undefined;
+        const enclosureMatch = itemXml.match(/<enclosure[^>]*type="image[^"]*"[^>]*url="([^"]*)"/i) ||
+                             itemXml.match(/<media:content[^>]*url="([^"]*)"[^>]*type="image/i) ||
+                             itemXml.match(/<media:thumbnail[^>]*url="([^"]*)"/i);
+        if (enclosureMatch) {
+          imageUrl = enclosureMatch[1];
+        }
+
+        // Try to extract image from content
+        if (!imageUrl) {
+          const contentMatch = itemXml.match(/<content:encoded[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/content:encoded>|<content:encoded[^>]*>([\s\S]*?)<\/content:encoded>/i);
+          if (contentMatch) {
+            const content = contentMatch[1] || contentMatch[2] || '';
+            const imgMatch = content.match(/<img[^>]*src="([^"]*)"/i);
+            if (imgMatch) {
+              imageUrl = imgMatch[1];
+            }
+          }
+        }
+
+        // Extract author
+        const authorMatch = itemXml.match(/<author[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/author>|<author[^>]*>([\s\S]*?)<\/author>/i) ||
+                           itemXml.match(/<dc:creator[^>]*><!\[CDATA\[([\s\S]*?)\]\]><\/dc:creator>|<dc:creator[^>]*>([\s\S]*?)<\/dc:creator>/i);
+        const author = authorMatch ? (authorMatch[1] || authorMatch[2] || '').trim() : 'Unknown';
+
+        contents.push({
+          id: `rss-${btoa(url).substring(0, 20)}`,
+          title,
+          url,
+          description,
+          publishedAt,
+          imageUrl,
+          author,
+          source: sourceUrl,
+          type: 'article',
+          metadata: {
+            contentType: 'rss',
+          },
+        });
+      } catch (itemError) {
+        console.warn("Error parsing RSS item:", itemError);
+        continue;
+      }
+    }
+  } catch (error) {
+    console.warn("RSS XML parse error:", error);
+  }
+
+  return contents;
+}
 
 export async function fetchRSSFeed(url: string, limit = 20): Promise<ZineContent[]> {
   try {
     // Use our API proxy for CORS bypass and SSRF protection
     const proxyUrl = `/api/zine/rss-proxy?url=${encodeURIComponent(url)}`;
-    
+
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000); // 10s timeout
-    
+
     const response = await fetch(proxyUrl, {
       signal: controller.signal,
       headers: {
         "Accept": "application/rss+xml, application/xml, text/xml, application/atom+xml",
       },
     });
-    
+
     clearTimeout(timeoutId);
-    
+
     if (!response.ok) {
       throw new Error(`RSS feed returned ${response.status}`);
     }
-    
+
     const xml = await response.text();
-    
-    // Parse XML
-    const parser = new DOMParser();
-    const xmlDoc = parser.parseFromString(xml, "text/xml");
-    
-    // Check for parse errors
-    const parseError = xmlDoc.querySelector("parsererror");
-    if (parseError) {
-      throw new Error("Invalid XML format");
-    }
-    
-    // Get items (RSS 2.0 or Atom)
-    const items = Array.from(xmlDoc.querySelectorAll("item, entry")).slice(0, limit);
-    const contents: ZineContent[] = [];
-    
-    for (const item of items) {
-      try {
-        const content = parseRSSItem(item, url);
-        if (content) {
-          contents.push(content);
-        }
-      } catch (itemError) {
-        console.warn("Error parsing RSS item:", itemError);
-        // Continue with next item
-      }
-    }
-    
-    return contents;
+
+    // Parse XML using regex-based parser (Node.js compatible)
+    const contents = parseRSSXML(xml, url);
+
+    return contents.slice(0, limit);
   } catch (error) {
     console.error("Error fetching RSS feed:", error);
-    
+
     // Return empty array on error (don't break the app)
     return [];
   }
 }
 
 /**
- * Parse individual RSS item
- */
-function parseRSSItem(item: Element, sourceUrl: string): ZineContent | null {
-  // Extract common fields
-  const title = item.querySelector("title")?.textContent?.trim() || "Untitled";
-  const linkElement = item.querySelector("link");
-  const link = linkElement?.getAttribute("href") || linkElement?.textContent?.trim() || "";
-  
-  // Get description/content
-  const description = 
-    item.querySelector("description")?.textContent ||
-    item.querySelector("summary")?.textContent ||
-    item.querySelector("content\\:encoded")?.textContent ||
-    "";
-  
-  // Get publication date
-  const pubDateStr = 
-    item.querySelector("pubDate")?.textContent ||
-    item.querySelector("published")?.textContent ||
-    item.querySelector("updated")?.textContent ||
-    "";
-  
-  const pubDate = pubDateStr ? new Date(pubDateStr).getTime() : Date.now();
-  
-  // Get media (enclosures, attachments, media:content)
-  const media: string[] = [];
-  
-  // RSS enclosure
-  const enclosure = item.querySelector("enclosure");
-  if (enclosure?.getAttribute("url")) {
-    media.push(enclosure.getAttribute("url")!);
-  }
-  
-  // Media:content
-  const mediaContent = item.querySelector("media\\:content, content");
-  if (mediaContent?.getAttribute("url")) {
-    media.push(mediaContent.getAttribute("url")!);
-  }
-  
-  // Atom attachments
-  const attachments = item.querySelectorAll("link[rel='enclosure'], link[type^='image/'], link[type^='video/']");
-  attachments.forEach(att => {
-    const href = att.getAttribute("href");
-    if (href) media.push(href);
-  });
-  
-  // Get author
-  const author = 
-    item.querySelector("author")?.textContent ||
-    item.querySelector("dc\\:creator")?.textContent ||
-    item.querySelector("source")?.textContent ||
-    "";
-  
-  // Get categories/tags
-  const categories = Array.from(item.querySelectorAll("category"))
-    .map(cat => cat.textContent || cat.getAttribute("term") || "")
-    .filter(Boolean);
-  
-  // Determine content type
-  const contentType: ZineContent["type"] = media.length > 0 
-    ? (media.some(m => /\.(mp4|webm|ogg)$/i.test(m)) ? "video" : "mixed")
-    : "text";
-  
-  // Calculate priority based on recency and content
-  const hoursSincePublication = (Date.now() - pubDate) / (1000 * 60 * 60);
-  let priority = 5;
-  if (hoursSincePublication < 1) priority = 8; // Very recent
-  else if (hoursSincePublication < 6) priority = 7;
-  else if (hoursSincePublication < 24) priority = 6;
-  
-  if (media.length > 0) priority += 1;
-  if (categories.some(c => /breaking|urgent|important/i.test(c))) priority += 2;
-  
-  // Simple hash function for URL to create compact identifier
-  const urlHash = sourceUrl.split('').reduce((acc, char) => ((acc << 5) - acc) + char.charCodeAt(0), 0) >>> 0;
-  return {
-    id: `rss-${urlHash}-${pubDate}-${Math.random().toString(36).slice(2, 9)}`,
-    type: contentType,
-    title,
-    subtitle: author ? `By ${author}` : undefined,
-    body: stripHtml(description).slice(0, 500), // Limit body length
-    media,
-    metadata: {
-      link,
-      pubDate: new Date(pubDate).toISOString(),
-      source: "rss",
-      author,
-      categories,
-      originalUrl: sourceUrl,
-    },
-    source: sourceUrl,
-    createdAt: pubDate,
-    expiresAt: Date.now() + 3600000, // 1 hour default
-    priority,
-    position: { zone: getRandomZone() },
-  };
-}
-
-/**
- * Strip HTML tags from string
+ * Strip HTML tags from string (Node.js compatible)
  */
 function stripHtml(html: string): string {
   if (!html) return "";
-  const tmp = document.createElement("div");
-  tmp.innerHTML = html;
-  return tmp.textContent || tmp.innerText || "";
+  return html.replace(/<[^>]+>/g, '');
 }
-
-/**
- * Get random zone for content positioning
- */
-function getRandomZone(): ZineContent["position"]["zone"] {
-  const zones: ZineContent["position"]["zone"][] = [
-    "top-left", "top-right", "bottom-left", "bottom-right", "center"
-  ];
-  return zones[Math.floor(Math.random() * zones.length)];
-}
-
-/**
- * String hashCode helper
- */
-// @ts-ignore
-String.prototype.hashCode = function(): number {
-  let hash = 0;
-  for (let i = 0; i < this.length; i++) {
-    const char = this.charCodeAt(i);
-    hash = ((hash << 5) - hash) + char;
-    hash = hash & hash;
-  }
-  return Math.abs(hash);
-};
 
 // ============================================================================
-// Webhook Handler
+// Webhook Data Source
 // ============================================================================
 
 export function createWebhookHandler(
