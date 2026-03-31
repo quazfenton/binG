@@ -146,6 +146,7 @@ const PLATFORM_TO_AUTH0: Record<string, string> = {
   'twitter': AUTH0_CONN.TWITTER,
   'linkedin': AUTH0_CONN.LINKEDIN,
   'microsoft': AUTH0_CONN.MICROSOFT,
+  'figma': 'figma', // Figma OAuth connection
 };
 
 /**

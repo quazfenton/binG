@@ -22,7 +22,7 @@ const ConversationInterface = dynamic(
 )
 
 const TopPanel = dynamic(
-  () => import("../../components/top-panel"),
+  () => import("@/components/top-panel"),
   { ssr: false, loading: () => null }
 )
 

@@ -18,6 +18,19 @@ class BadRequestError extends Error {
   }
 }
 
+// Helper to validate JSON request body
+async function parseJsonBody(request: NextRequest): Promise<{ body: Record<string, unknown> } | { error: string }> {
+  try {
+    const body = await request.json();
+    if (!body || typeof body !== 'object' || Array.isArray(body)) {
+      return { error: 'Request body must be a JSON object' };
+    }
+    return { body };
+  } catch {
+    return { error: 'Invalid JSON in request body' };
+  }
+}
+
 // Mutex for preventing concurrent writes (proper implementation)
 let promptsLock: Promise<void> = Promise.resolve();
 
@@ -38,11 +51,28 @@ async function withPromptsLock<T>(fn: () => Promise<T>): Promise<T> {
 
 // Atomic update helper to prevent race conditions
 // Read-modify-write happens INSIDE the write queue for true atomicity
+// Uses direct file read to avoid deadlock from loadPrompts -> savePrompts re-enqueue
 async function updatePromptsAtomically(mutate: (prompts: Prompt[]) => Prompt[]): Promise<void> {
   return new Promise<void>((resolve, reject) => {
     writeQueue.push(async () => {
       try {
-        const prompts = await loadPrompts();
+        // Read file directly to avoid deadlock from loadPrompts -> savePrompts re-enqueue
+        await ensureDataDir();
+        let prompts: Prompt[];
+        try {
+          const data = await readFile(PROMPTS_FILE, 'utf-8');
+          const parsed: unknown = JSON.parse(data);
+          if (!Array.isArray(parsed)) {
+            throw new Error('Prompts file does not contain an array');
+          }
+          prompts = parsed.filter(isValidPrompt);
+        } catch (error: any) {
+          if (error.code === 'ENOENT') {
+            prompts = DEFAULT_PROMPTS;
+          } else {
+            throw error;
+          }
+        }
         const updated = mutate(prompts);
         await writeFile(PROMPTS_FILE, JSON.stringify(updated, null, 2));
         resolve();
@@ -317,11 +347,14 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { title, content, category, tags } = body;
+    const bodyResult = await parseJsonBody(request);
+    if ('error' in bodyResult) {
+      return NextResponse.json({ error: bodyResult.error }, { status: 400 });
+    }
+    const { title, content, category, tags } = bodyResult.body as { title?: unknown; content?: unknown; category?: unknown; tags?: unknown };
 
     // Validate required fields
-    if (!title || !content || !category) {
+    if (typeof title !== 'string' || !title || typeof content !== 'string' || !content || typeof category !== 'string' || !category) {
       return NextResponse.json(
         { error: 'Title, content, and category are required' },
         { status: 400 }
@@ -373,8 +406,11 @@ export async function POST(request: NextRequest) {
  */
 export async function PUT(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { id, action, apiKey, author } = body;
+    const bodyResult = await parseJsonBody(request);
+    if ('error' in bodyResult) {
+      return NextResponse.json({ error: bodyResult.error }, { status: 400 });
+    }
+    const { id, action, apiKey, author } = bodyResult.body;
 
     if (!id || !action) {
       return NextResponse.json(
@@ -419,10 +455,10 @@ export async function PUT(request: NextRequest) {
             throw new Error('Forbidden: Only the author can edit this prompt');
           }
 
-          const { title, content, category, tags } = body;
-          if (title) prompts[index].title = title;
-          if (content) prompts[index].content = content;
-          if (category && CATEGORIES.includes(category)) {
+          const { title, content, category, tags } = bodyResult.body as { title?: unknown; content?: unknown; category?: unknown; tags?: unknown };
+          if (typeof title === 'string') prompts[index].title = title;
+          if (typeof content === 'string') prompts[index].content = content;
+          if (typeof category === 'string' && CATEGORIES.includes(category)) {
             prompts[index].category = category;
           }
           if (Array.isArray(tags)) prompts[index].tags = tags;
@@ -486,8 +522,11 @@ export async function PUT(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
-    const body = await request.json();
-    const { id, apiKey, author } = body;
+    const bodyResult = await parseJsonBody(request);
+    if ('error' in bodyResult) {
+      return NextResponse.json({ error: bodyResult.error }, { status: 400 });
+    }
+    const { id, apiKey, author } = bodyResult.body;
 
     if (!id) {
       return NextResponse.json(

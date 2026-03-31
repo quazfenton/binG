@@ -78,6 +78,8 @@ export const AUTH0_CONNECTIONS = {
   TWITTER: 'twitter',
   LINKEDIN: 'linkedin',
   MICROSOFT: 'windowslive',
+  SLACK: 'slack',
+  FIGMA: 'figma', // Figma OAuth connection
   APPLE: 'apple',
   AMAZON: 'amazon',
   INSTAGRAM: 'instagram',
@@ -85,7 +87,6 @@ export const AUTH0_CONNECTIONS = {
   YAHOO: 'yahoo',
   BOX: 'box',
   SALESFORCE: 'salesforce',
-  SLACK: 'slack',
 } as const;
 
 /**
@@ -102,4 +103,5 @@ export const PROVIDER_CONNECTION_MAP: Record<string, string> = {
   'instagram': 'instagram',
   'bitbucket': 'bitbucket',
   'slack': 'slack',
+  'figma': 'figma',
 };

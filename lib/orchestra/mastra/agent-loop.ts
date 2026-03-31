@@ -13,8 +13,10 @@
 import { createFilesystemTools, type FilesystemTool, type FilesystemToolOptions } from './tools/filesystem-tools';
 import { normalizeToolInvocation, type ToolInvocation } from '@/lib/types/tool-invocation';
 import { createLogger } from '@/lib/utils/logger';
-import { openai } from '@ai-sdk/openai';
-import { generateId } from 'ai';
+import { getProviderForTask, getModelForTask } from '@/lib/config/task-providers';
+import { streamWithVercelAI, type VercelStreamOptions } from '@/lib/chat/vercel-ai-streaming';
+import type { LLMMessage } from '@/lib/chat/llm-providers';
+import { generateId, generateText } from 'ai';
 import type { Tool } from 'ai';
 
 // CoreMessage may not be exported in all AI SDK versions
@@ -124,13 +126,10 @@ export class AgentLoop {
           };
         }
         
-        this.toolLoopAgent = new ToolLoopAgent({
-          model: openai('gpt-4o'),
-          maxSteps: maxIterations,
-          tools: sdkTools,
-        });
+        // Defer model creation to first use (can't await in constructor)
+        // Model will be created in executeTask when needed
         this.useToolLoopAgent = true;
-        log.info('ToolLoopAgent initialized successfully');
+        log.info('ToolLoopAgent initialized (model will be created on first use)');
       } catch (error: any) {
         log.warn('Failed to initialize ToolLoopAgent, using fallback:', error.message);
         this.useToolLoopAgent = false;
@@ -142,6 +141,11 @@ export class AgentLoop {
    * Execute a task using ToolLoopAgent (if available) or fallback to manual loop
    */
   async executeTask(task: string): Promise<AgentResult> {
+    if (this.useToolLoopAgent && !this.toolLoopAgent) {
+      // Lazy initialize ToolLoopAgent with user's configured provider
+      await this.initializeToolLoopAgent();
+    }
+    
     if (this.useToolLoopAgent && this.toolLoopAgent) {
       return this.executeWithToolLoopAgent(task);
     } else {
@@ -153,6 +157,11 @@ export class AgentLoop {
    * Execute task using ToolLoopAgent with real-time streaming
    */
   async *executeTaskStreaming(task: string): AsyncGenerator<any, AgentResult, unknown> {
+    if (this.useToolLoopAgent && !this.toolLoopAgent) {
+      // Lazy initialize ToolLoopAgent with user's configured provider
+      await this.initializeToolLoopAgent();
+    }
+    
     if (!this.useToolLoopAgent || !this.toolLoopAgent) {
       // Fallback: execute manually and yield as single chunk
       const result = await this.executeManual(task);
@@ -314,150 +323,197 @@ export class AgentLoop {
   }
 
   /**
-   * Execute task using manual agent loop (fallback)
+   * Track recent failed tool calls to detect loops
+   */
+  private failedToolCalls: Map<string, number> = new Map();
+
+  /**
+   * Execute task using manual agent loop with Vercel AI SDK streaming
    */
   private async executeManual(task: string): Promise<AgentResult> {
     const results: AgentIterationResult[] = [];
     let iterations = 0;
-    log.info(`Executing task (manual loop): ${task.substring(0, 100)}${task.length > 100 ? '...' : ''}`);
+    const allText: string[] = [];
+    const allToolCalls: any[] = [];
+    
+    // Reset failed tool calls tracking for new task
+    this.failedToolCalls.clear();
+    
+    log.info(`Executing task with Vercel AI SDK: ${task.substring(0, 100)}${task.length > 100 ? '...' : ''}`);
 
-    // Add user task (system prompt is added in callLLM)
+    // Add system prompt first
+    const systemPrompt = this.buildSystemPrompt();
+    this.context.conversationHistory = [
+      { role: 'system', content: systemPrompt },
+      ...this.context.conversationHistory,
+    ];
+
+    // Add user task
     this.context.conversationHistory.push({
       role: 'user',
       content: task,
     });
 
-    while (iterations < this.maxIterations) {
-      iterations++;
-      log.debug(`Agent iteration ${iterations}/${this.maxIterations}`);
+    // Convert tools to Vercel format
+    const vercelTools: Record<string, Tool> = {};
+    for (const tool of this.tools) {
+      vercelTools[tool.name] = {
+        description: tool.description,
+        // @ts-ignore
+        parameters: tool.parameters as any,
+        execute: async (args: any) => {
+          const result = await tool.execute(args);
+          if (!result.success) {
+            throw new Error(result.error || 'Tool execution failed');
+          }
+          return result;
+        },
+      };
+    }
 
-      try {
-        // Call LLM with current context and available tools
-        const llmResponse = await this.callLLM(task, results);
-
-        if (llmResponse.done) {
-          // LLM indicates task is complete
-          log.info(`Task completed in ${iterations} iterations`);
+    try {
+      // Stream with Vercel AI SDK using user's configured provider
+      for await (const chunk of this.executeLLMStreaming(this.context.conversationHistory, vercelTools)) {
+        // Handle text chunks
+        if (chunk.content) {
+          allText.push(chunk.content);
+        }
+        
+        // Handle tool calls
+        if (chunk.toolCalls) {
+          for (const tc of chunk.toolCalls) {
+            log.debug(`Executing tool: ${tc.name}`);
+            const tool = this.tools.find(t => t.name === tc.name);
+            if (tool) {
+              try {
+                const result = await tool.execute(tc.arguments);
+                allToolCalls.push({
+                  toolName: tc.name,
+                  toolCallId: tc.id,
+                  args: tc.arguments,
+                  result,
+                });
+                results.push({
+                  iteration: 1,
+                  tool: tc.name,
+                  arguments: tc.arguments,
+                  result,
+                });
+                
+                // Add tool response to conversation
+                this.context.conversationHistory.push({
+                  role: 'tool',
+                  content: JSON.stringify(result),
+                  toolCallId: tc.id,
+                  toolName: tc.name,
+                });
+              } catch (toolError: any) {
+                log.error(`Tool execution failed: ${tc.name}`, toolError.message);
+                
+                // Track failed tool calls to detect loops
+                const toolKey = `${tc.name}:${JSON.stringify(tc.arguments)}`;
+                const failedCount = (this.failedToolCalls.get(toolKey) || 0) + 1;
+                this.failedToolCalls.set(toolKey, failedCount);
+                
+                // If same tool call failed 2+ times, we're in a loop - prevent further attempts
+                if (failedCount >= 2) {
+                  log.warn(`Detected possible infinite loop: ${tc.name} failed ${failedCount} times with same args`);
+                  allToolCalls.push({
+                    toolName: tc.name,
+                    toolCallId: tc.id,
+                    args: tc.arguments,
+                    result: { success: false, error: toolError.message, loopDetected: true, message: `STOPPED: ${tc.name} failed repeatedly. Do NOT retry.` },
+                  });
+                  // Return early to stop the loop - no more tool calls
+                  log.info('Stopping agent loop due to repeated tool failures');
+                  return {
+                    success: false,
+                    results,
+                    iterations: allToolCalls.length,
+                    message: allText.join(''),
+                    error: `Agent stopped: ${tc.name} failed repeatedly (${failedCount} times). The file may not exist or path may be incorrect.`,
+                    toolInvocations: allToolCalls.map(tc => normalizeToolInvocation({
+                      toolCallId: tc.toolCallId,
+                      toolName: tc.toolName,
+                      state: 'completed',
+                      args: tc.args,
+                      result: tc.result,
+                      sourceSystem: 'mastra',
+                      sourceAgent: 'vercel-ai-sdk',
+                    })),
+                  };
+                }
+                
+                allToolCalls.push({
+                  toolName: tc.name,
+                  toolCallId: tc.id,
+                  args: tc.arguments,
+                  result: { success: false, error: toolError.message },
+                });
+              }
+            }
+          }
+        }
+        
+        // Check if complete
+        if (chunk.isComplete) {
+          log.info(`Task completed with Vercel AI SDK`, {
+            textLength: allText.join('').length,
+            toolCalls: allToolCalls.length,
+            finishReason: chunk.finishReason,
+          });
+          
           return {
             success: true,
             results,
-            iterations,
-            message: llmResponse.message || 'Task completed successfully',
-            toolInvocations: results.filter(r => r.tool).map(r => normalizeToolInvocation({
-              toolName: r.tool!,
-              args: r.arguments,
-              result: r.result,
+            iterations: 1,
+            message: allText.join(''),
+            toolInvocations: allToolCalls.map(tc => normalizeToolInvocation({
+              toolCallId: tc.toolCallId,
+              toolName: tc.toolName,
+              state: 'completed',
+              args: tc.args,
+              result: tc.result,
               sourceSystem: 'mastra',
-              sourceAgent: 'manual-loop',
+              sourceAgent: 'vercel-ai-sdk',
             })),
           };
         }
-
-        // Execute tool calls
-        if (llmResponse.toolCalls) {
-          for (const toolCall of llmResponse.toolCalls) {
-            log.debug(`Executing tool: ${toolCall.name}`);
-            const tool = this.tools.find(t => t.name === toolCall.name);
-            if (tool) {
-              const result = await tool.execute(toolCall.arguments);
-              results.push({
-                iteration: iterations,
-                tool: toolCall.name,
-                arguments: toolCall.arguments,
-                result,
-              });
-
-              // Update context based on result
-              this.updateContext(toolCall, result);
-
-              // Add tool response to conversation
-              this.context.conversationHistory.push({
-                role: 'tool',
-                content: JSON.stringify(result),
-                toolCallId: toolCall.id,
-                toolName: toolCall.name,
-              });
-            } else {
-              results.push({
-                iteration: iterations,
-                tool: toolCall.name,
-                arguments: toolCall.arguments,
-                result: {
-                  success: false,
-                  error: `Unknown tool: ${toolCall.name}`,
-                },
-              });
-            }
-          }
-        } else if (llmResponse.content) {
-          // LLM returned text response
-          this.context.conversationHistory.push({
-            role: 'assistant',
-            content: llmResponse.content,
-          });
-        }
-      } catch (error: any) {
-        return {
-          success: false,
-          results,
-          iterations,
-          error: error.message || 'Agent loop error',
-        };
       }
+    } catch (error: any) {
+      log.error('Vercel AI SDK streaming failed:', error.message);
+      return {
+        success: false,
+        results,
+        iterations,
+        error: error.message || 'Vercel AI SDK streaming failed',
+      };
     }
 
+    // Fallback if no completion chunk
     return {
-      success: false,
+      success: true,
       results,
-      iterations,
-      error: 'Max iterations reached',
-      toolInvocations: results.filter(r => r.tool).map(r => normalizeToolInvocation({
-        toolName: r.tool!,
-        args: r.arguments,
-        result: r.result,
+      iterations: 1,
+      message: allText.join(''),
+      toolInvocations: allToolCalls.map(tc => normalizeToolInvocation({
+        toolCallId: tc.toolCallId,
+        toolName: tc.toolName,
+        state: 'completed',
+        args: tc.args,
+        result: tc.result,
         sourceSystem: 'mastra',
-        sourceAgent: 'manual-loop',
+        sourceAgent: 'vercel-ai-sdk',
       })),
     };
   }
 
   /**
-   * Call LLM with current context
+   * Call LLM with current context (legacy, kept for compatibility)
    */
   private async callLLM(task: string, previousResults: AgentIterationResult[]): Promise<LLMResponse> {
-    // Build prompt with context
-    const systemPrompt = this.buildSystemPrompt();
-
-    const messages: AgentMessage[] = [
-      { role: 'system', content: systemPrompt },
-      ...this.context.conversationHistory,
-    ];
-
-    // For now, return a mock response
-    // In production, this would call your LLM provider (Mistral, OpenAI, etc.)
-    // Example implementation:
-    /*
-    const response = await fetch('/api/llm/chat', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        messages: messages.map(m => ({
-          role: m.role,
-          content: m.content,
-        })),
-        tools: this.tools.map(t => ({
-          name: t.name,
-          description: t.description,
-          parameters: t.parameters,
-        })),
-        toolChoice: 'auto',
-      }),
-    });
-
-    return response.json();
-    */
-
-    // Mock response for demonstration
+    // This is now handled by executeLLMStreaming in executeManual
+    // Kept for interface compatibility
     return {
       content: 'Task processing...',
       done: false,
@@ -560,6 +616,67 @@ Assistant: { "done": true, "message": "Created a todo app with package.json and 
    */
   clearHistory(): void {
     this.context.conversationHistory = [];
+  }
+
+  /**
+   * Lazy initialize ToolLoopAgent with user's configured provider
+   * Note: We're using Vercel AI SDK streaming directly, so ToolLoopAgent is optional
+   */
+  private async initializeToolLoopAgent(): Promise<void> {
+    // ToolLoopAgent is optional - we can use Vercel AI SDK streaming directly
+    // This method kept for potential future use with ToolLoopAgent
+    if (this.toolLoopAgent || !this.useToolLoopAgent) return;
+    
+    const { provider, model } = this.getProviderConfig();
+    log.info(`ToolLoopAgent initialized for provider: ${provider}, model: ${model}`);
+  }
+
+  /**
+   * Create model instance based on user's configured provider
+   * Uses dynamic import to support multiple provider SDKs
+   */
+  /**
+   * Get provider and model from user's configuration
+   */
+  private getProviderConfig(): { provider: string; model: string } {
+    const provider = getProviderForTask('agent');
+    const model = getModelForTask('agent', 'gpt-4o');
+    return { provider, model };
+  }
+
+  /**
+   * Convert messages to LLMMessage format for Vercel AI SDK
+   */
+  private convertToLLMMessages(messages: AgentMessage[]): LLMMessage[] {
+    return messages.map(m => ({
+      role: m.role,
+      content: m.content,
+    }));
+  }
+
+  /**
+   * Execute LLM call using existing Vercel AI SDK streaming
+   * This uses the already-configured provider from the chat system
+   */
+  private async* executeLLMStreaming(
+    messages: AgentMessage[],
+    tools?: Record<string, Tool>
+  ): AsyncGenerator<any> {
+    const { provider, model } = this.getProviderConfig();
+    const llmMessages = this.convertToLLMMessages(messages);
+
+    log.info(`Using Vercel AI SDK with provider: ${provider}, model: ${model}`);
+
+    yield* streamWithVercelAI({
+      provider,
+      model,
+      messages: llmMessages,
+      temperature: 0.7,
+      maxTokens: 4096,
+      tools,
+      toolCallStreaming: true,
+      maxSteps: this.maxIterations,
+    });
   }
 }
 

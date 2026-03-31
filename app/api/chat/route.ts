@@ -675,6 +675,24 @@ export async function POST(request: NextRequest) {
 
               const result = await processUnifiedAgentRequest(config);
               sendStep('Start agentic pipeline', result.success ? 'completed' : 'failed');
+              
+              // FIX: Final parse after stream completes to catch any remaining edits
+              // The closing >>> may have arrived in the last chunk
+              // CRITICAL: Clear BOTH emittedEdits AND unclosedPositions for proper re-parsing
+              if (streamingContentBuffer.trim().length > 0) {
+                fileEditParserState.emittedEdits.clear();
+                fileEditParserState.unclosedPositions.clear();
+                const finalEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
+                for (const edit of finalEdits) {
+                  chatLogger.debug('Final parse file edit detected', { path: edit.path });
+                  emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                    path: edit.path,
+                    status: 'detected',
+                    timestamp: Date.now(),
+                  });
+                }
+              }
+              
               emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
                 content: result.response,
@@ -685,16 +703,36 @@ export async function POST(request: NextRequest) {
                 },
                 data: result,
               });
-              
+
               // Cleanup: Clear streaming buffer to free memory
               streamingContentBuffer = '';
               fileEditParserState.emittedEdits.clear();
+              fileEditParserState.unclosedPositions.clear();
             } catch (error: any) {
+              // FINAL PARSE ON ERROR TOO: Try to extract any complete edits before clearing
+              if (streamingContentBuffer.trim().length > 0) {
+                try {
+                  fileEditParserState.emittedEdits.clear();
+                  fileEditParserState.unclosedPositions.clear();
+                  const finalEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
+                  for (const edit of finalEdits) {
+                    emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                      path: edit.path,
+                      status: 'detected',
+                      timestamp: Date.now(),
+                    });
+                  }
+                } catch (parseError) {
+                  // Ignore parse errors during error handling
+                }
+              }
+              
               emit(SSE_EVENT_TYPES.ERROR, { message: error.message || 'Agentic execution failed' });
 
               // Cleanup on error too
               streamingContentBuffer = '';
               fileEditParserState.emittedEdits.clear();
+              fileEditParserState.unclosedPositions.clear();
             } finally {
               controller.close();
             }
@@ -1121,7 +1159,27 @@ export async function POST(request: NextRequest) {
         // NEW: Check if we have LLM stream generator from enhancedLLMService (real-time LLM token streaming)
         const hasLLMStreamGenerator = unifiedResponse.stream && 
           typeof unifiedResponse.stream === 'object' && 
-          Symbol.asyncIterator in unifiedResponse.stream;
+          Symbol.asyncIterator in (unifiedResponse.stream as any);
+
+        // DEBUG: Log stream detection for debugging
+        chatLogger.debug('Stream detection', { 
+          requestId, 
+          hasStream: !!unifiedResponse.stream,
+          streamType: typeof unifiedResponse.stream,
+          isAsyncIterable: unifiedResponse.stream && Symbol.asyncIterator in (unifiedResponse.stream as any),
+          contentLength: unifiedResponse.content?.length || 0,
+        });
+
+        // If no stream generator but we have content, we need to stream it
+        // This happens when spec amplification was skipped but we have actual LLM response
+        if (!hasLLMStreamGenerator && unifiedResponse.content && unifiedResponse.content.length > 0) {
+          chatLogger.info('No stream generator but have content, will use fallback streaming with actual response', { 
+            requestId, 
+            contentLength: unifiedResponse.content.length 
+          });
+          // Update clientResponse with actual content so fallback can stream it
+          clientResponse.content = unifiedResponse.content;
+        }
 
         if (hasLLMStreamGenerator) {
           // Handle real-time LLM streaming with progressive parsing
@@ -1268,6 +1326,8 @@ export async function POST(request: NextRequest) {
                     const streamedContent = streamingContentBuffer;
                     if (enableFilesystemEdits && streamedContent.trim()) {
                       try {
+                        // FIX: Pass forceExtract=true to ensure we catch ALL edits including those
+                        // that may have been missed during incremental parsing (e.g., last file)
                         const streamedEdits = await applyFilesystemEditsFromResponse({
                           ownerId: filesystemOwnerId,
                           conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
@@ -1280,6 +1340,7 @@ export async function POST(request: NextRequest) {
                           attachedPaths: attachedFilesystemFiles.map((file) => file.path),
                           responseContent: streamedContent,
                           commands: unifiedResponse.commands,
+                          forceExtract: true,
                         });
                         // Emit applied file edits
                         if (streamedEdits?.applied?.length) {
@@ -2722,9 +2783,15 @@ export async function applyFilesystemEditsFromResponse(input: {
     request_files?: string[];
     write_diffs?: Array<{ path: string; diff: string }>;
   };
+  /** Force extraction even if previously emitted (for final parse after stream completes) */
+  forceExtract?: boolean;
 }): Promise<FilesystemEditResult> {
-  const parsedResponse = parseFilesystemResponse(input.responseContent || '');
+  // FIX: If forceExtract is true, bypass deduplication to catch all edits including those
+  // that may have been skipped during incremental parsing (e.g., last file with unclosed heredoc)
+  const parsedResponse = parseFilesystemResponse(input.responseContent || '', input.forceExtract ?? false);
   const folderCreateOps = extractFolderCreateTags(input.responseContent || '');
+  
+  // If forceExtract, we still need to deduplicate within the response but not skip based on prior emits
   const combinedWriteEdits = [
     ...parsedResponse.writes.map(edit => ({ path: edit.path, content: edit.content })),
   ].map(edit => ({

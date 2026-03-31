@@ -129,7 +129,11 @@ async function fetchSchedulerJobCount(ownerId: string): Promise<number> {
       throw new Error(`Scheduler service returned ${response.status}`);
     }
     const data = await response.json() as { count: number };
-    return data.count || 0;
+    if (typeof data.count !== 'number' || !Number.isFinite(data.count)) {
+      console.error('[CronJobs] Scheduler returned invalid count:', data);
+      throw new Error('Scheduler service returned malformed response');
+    }
+    return data.count;
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       console.error('[CronJobs] Scheduler count fetch timed out');
@@ -154,8 +158,12 @@ async function fetchSchedulerTasks(ownerId: string): Promise<ScheduledTask[]> {
       throw new Error(`Scheduler service returned ${response.status}`);
     }
     const data = await response.json() as { tasks: ScheduledTask[] };
+    if (!Array.isArray(data.tasks)) {
+      console.error('[CronJobs] Scheduler returned invalid tasks (not an array):', data);
+      throw new Error('Scheduler service returned malformed response');
+    }
     // Filter by ownerId
-    return (data.tasks || []).filter((t: ScheduledTask) => t.ownerId === ownerId);
+    return data.tasks.filter((t: ScheduledTask) => t.ownerId === ownerId);
   } catch (error) {
     if (error instanceof Error && error.name === 'AbortError') {
       console.error('[CronJobs] Scheduler fetch timed out');

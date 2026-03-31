@@ -65,7 +65,6 @@ async function executeLocally(
     sandboxId: payload.sandboxId,
     userId: payload.userId,
     conversationHistory: payload.conversationHistory,
-    maxSteps: payload.maxSteps || 15,
   });
 }
 

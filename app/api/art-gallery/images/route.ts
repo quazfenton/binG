@@ -282,6 +282,14 @@ export async function POST(request: NextRequest) {
           );
         }
 
+        const exists = currentImages.some(img => img.id === image.id);
+        if (!exists) {
+          return NextResponse.json(
+            { success: false, error: 'Image not found' },
+            { status: 404 }
+          );
+        }
+
         const filtered = currentImages.filter(img => img.id !== image.id);
         await writeImages(filtered);
 

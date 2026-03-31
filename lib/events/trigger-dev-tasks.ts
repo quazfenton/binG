@@ -31,7 +31,6 @@ export {
   scheduleReflection,
   scheduleDAGExecution,
   scheduleSkillBootstrap,
-  isTriggerAvailable,
   getExecutionMode,
 } from './trigger';
 

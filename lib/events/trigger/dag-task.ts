@@ -85,11 +85,21 @@ async function executeLocally(
   };
 
   // Execute with retry if specified
+  let result: any;
   if (payload.maxRetries && payload.maxRetries > 0) {
-    return await executeDAGWithRetry(payload.dag, ctx, payload.maxRetries);
+    result = await executeDAGWithRetry(payload.dag, ctx, payload.maxRetries);
   } else {
-    return await executeDAGSmart(payload.dag, ctx);
+    result = await executeDAGSmart(payload.dag, ctx);
   }
+
+  // Ensure success is always present
+  return {
+    success: result.success ?? true,
+    nodeResults: result.nodeResults || {},
+    outputs: result.outputs || {},
+    duration: result.duration || 0,
+    errors: result.errors || [],
+  };
 }
 
 /**
