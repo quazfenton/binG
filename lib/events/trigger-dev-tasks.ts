@@ -1,21 +1,39 @@
 /**
  * Trigger.dev Task Definitions
- * 
+ *
  * Advanced trigger.dev patterns for persistent agent cognition.
  * Based on trigger.md design - unlocks behaviors that can't be faked with ad-hoc code.
- * 
+ *
  * These tasks provide:
  * - Persistent agent loops (background cognition)
  * - Multi-agent negotiation protocols
  * - Skill bootstrapping (self-extending agents)
  * - Reflection + self-improvement loops
  * - Autonomous tool discovery
- * 
+ *
  * Integration: When @trigger.dev/sdk is installed, these definitions
  * can be registered with the Trigger.dev runtime.
+ *
+ * @see lib/events/trigger/ - Trigger.dev wrappers with fallback
  */
 
 import { z } from 'zod';
+
+// Re-export trigger task wrappers for backward compatibility
+export {
+  executeAgentLoopTask,
+  executeConsensusTask,
+  executeResearchTask,
+  executeReflectionTask,
+  executeDAGTask,
+  executeSkillBootstrapTask,
+  scheduleAgentLoop,
+  scheduleReflection,
+  scheduleDAGExecution,
+  scheduleSkillBootstrap,
+  isTriggerAvailable,
+  getExecutionMode,
+} from './trigger';
 
 // ============================================================================
 // Common Event Types (for trigger.dev event triggers)

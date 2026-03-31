@@ -324,16 +324,17 @@ function useOAuthNotifications(
            github: '🐙',
            twitter: '🐦',
          };
-         const icon = sourceIcons[notif.source] || '📌';        const fragment = createFragment(
+         const icon = sourceIcons[notif.source] || '📌';
+         const fragment = createFragment(
           `${icon} ${notif.content}`,
           'notification',
           (notif.source || 'manual') as any,
           notif.priority === 'high' ? 'drop' : 'fade-in',
           template,
-          (notif.author || undefined) as any,
+          (notif.source || 'manual') as any, // Use source as zone instead of author
           { url: notif.url, timestamp: notif.timestamp },
         );
- 
+
          pushNotification(fragment, 12000, 'top-right');
        }
      } catch (err) {
@@ -824,7 +825,7 @@ function ContentZone({
               isPaused={isPaused}
               template={template}
               bounded={false}
-              responsiveConfig={(template as any).fragmentConfig}
+              responsiveConfig={responsiveConfig}
             />
           ))}
         </AnimatePresence>
@@ -862,7 +863,7 @@ function ContentZone({
                 isPaused={isPaused}
                 template={template}
                 bounded={true}
-                responsiveConfig={(template as any).fragmentConfig}
+                responsiveConfig={responsiveConfig}
               />
             ))}
           </AnimatePresence>
@@ -2193,7 +2194,7 @@ export default function ZineDisplayTab() {
                     onRemove={removeFragment}
                     isPaused={isPaused}
                     template={template}
-                    responsiveConfig={(template as any).fragmentConfig}
+                    responsiveConfig={fragmentConfig}
                   />
                 </div>
               );
@@ -2215,7 +2216,7 @@ export default function ZineDisplayTab() {
                         onRemove={removeFragment}
                         isPaused={isPaused}
                         template={template}
-                        responsiveConfig={(template as any).fragmentConfig}
+                        responsiveConfig={fragmentConfig}
                       />
                     );
                   })}
@@ -2236,7 +2237,7 @@ export default function ZineDisplayTab() {
                   onRemove={removeFragment}
                   isPaused={isPaused}
                   template={template}
-                  responsiveConfig={(template as any).fragmentConfig}
+                  responsiveConfig={fragmentConfig}
                 />
               );
             })}

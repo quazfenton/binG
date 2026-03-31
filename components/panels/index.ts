@@ -24,10 +24,6 @@ export {
 
 // Enhanced panel implementations
 export {
-  EnhancedTopPanel,
-} from "./enhanced-top-panel";
-
-export {
   EnhancedWorkspacePanel,
 } from "./enhanced-workspace-panel";
 

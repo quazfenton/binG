@@ -90,24 +90,42 @@ export class LocalCommandExecutor {
     // Initialize cwd - use external cwd if available, otherwise default
     const extCwd = this.getExtCwd?.()
     const defaultCwd = 'project/sessions'
-    
+
     // Use external cwd if provided and valid, otherwise use default
     // FIX: Validate that the CWD actually exists in the filesystem - if not, fall back to default
+    // Also ensure defaultCwd exists, or create it
     let initialCwd = extCwd && extCwd.trim() ? extCwd : defaultCwd
-    
+
     // Check if the directory exists in filesystem, if not use default
     const fs = this.getExtFileSystem?.() || this.fileSystem
-    if (!fs[initialCwd] || fs[initialCwd]?.type !== 'directory') {
-      initialCwd = defaultCwd
-    }
     
+    // If initialCwd doesn't exist, try defaultCwd
+    if (!fs[initialCwd] || fs[initialCwd]?.type !== 'directory') {
+      // Check if defaultCwd exists
+      if (fs[defaultCwd] && fs[defaultCwd]?.type === 'directory') {
+        initialCwd = defaultCwd;
+      } else {
+        // Neither exists - create the default directory structure
+        initialCwd = defaultCwd;
+        const fsWithDefaults: Record<string, LocalFilesystemEntry> = {
+          'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+          'project/sessions': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
+        };
+        // Merge with existing filesystem
+        this.fileSystem = { ...fs, ...fsWithDefaults };
+        this.saveToExternal();
+      }
+    }
+
     this.cwd[this.terminalId] = initialCwd
 
-    // Ensure project root exists
+    // Ensure project root exists (fallback if not created above)
     if (!this.fileSystem['project']) {
       this.fileSystem = {
+        ...this.fileSystem,
         'project': { type: 'directory', createdAt: Date.now(), modifiedAt: Date.now() },
       }
+      this.saveToExternal();
     }
   }
 

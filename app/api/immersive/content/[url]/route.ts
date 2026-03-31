@@ -62,6 +62,14 @@ interface ExtractedContent {
 // Check rate limit
 function checkRateLimit(identifier: string): { allowed: boolean; remaining: number } {
   const now = Date.now();
+  
+  // Prune expired entries to prevent unbounded memory growth
+  for (const [key, value] of rateLimitStore) {
+    if (now > value.resetTime) {
+      rateLimitStore.delete(key);
+    }
+  }
+  
   const record = rateLimitStore.get(identifier);
 
   if (!record || now > record.resetTime) {

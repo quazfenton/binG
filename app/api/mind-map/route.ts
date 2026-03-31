@@ -6,62 +6,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-
-export interface MindMap {
-  id: string;
-  title: string;
-  nodes: MindMapNode[];
-  createdAt: number;
-  updatedAt: number;
-  isPublic: boolean;
-}
-
-export interface MindMapNode {
-  id: string;
-  text: string;
-  parentId?: string;
-  x: number;
-  y: number;
-  color?: string;
-  icon?: string;
-}
-
-// In-memory store (use database in production)
-const mindMaps = new Map<string, MindMap>();
-
-// Seed with sample mind maps
-mindMaps.set('sample-1', {
-  id: 'sample-1',
-  title: 'Project Planning',
-  nodes: [
-    { id: 'root', text: 'Project Goals', x: 400, y: 300, color: '#8B5CF6' },
-    { id: 'node-1', text: 'Research', parentId: 'root', x: 200, y: 150, color: '#3B82F6' },
-    { id: 'node-2', text: 'Development', parentId: 'root', x: 600, y: 150, color: '#10B981' },
-    { id: 'node-3', text: 'Testing', parentId: 'root', x: 400, y: 450, color: '#F59E0B' },
-    { id: 'node-4', text: 'Market Analysis', parentId: 'node-1', x: 100, y: 50, color: '#3B82F6' },
-    { id: 'node-5', text: 'Competitor Research', parentId: 'node-1', x: 300, y: 50, color: '#3B82F6' },
-    { id: 'node-6', text: 'Frontend', parentId: 'node-2', x: 500, y: 50, color: '#10B981' },
-    { id: 'node-7', text: 'Backend', parentId: 'node-2', x: 700, y: 50, color: '#10B981' },
-  ],
-  createdAt: Date.now() - 86400000 * 5,
-  updatedAt: Date.now() - 86400000 * 2,
-  isPublic: true,
-});
-
-mindMaps.set('sample-2', {
-  id: 'sample-2',
-  title: 'Learning Path',
-  nodes: [
-    { id: 'root', text: 'Web Development', x: 400, y: 300, color: '#EC4899' },
-    { id: 'node-1', text: 'HTML/CSS', parentId: 'root', x: 200, y: 150, color: '#F97316' },
-    { id: 'node-2', text: 'JavaScript', parentId: 'root', x: 600, y: 150, color: '#FACC15' },
-    { id: 'node-3', text: 'React', parentId: 'node-2', x: 500, y: 50, color: '#3B82F6' },
-    { id: 'node-4', text: 'Node.js', parentId: 'node-2', x: 700, y: 50, color: '#10B981' },
-  ],
-  createdAt: Date.now() - 86400000 * 10,
-  updatedAt: Date.now() - 86400000 * 7,
-  isPublic: true,
-});
+import { mindMaps, type MindMap, type MindMapNode } from './store';
 
 /**
  * GET /api/mind-map - List mind maps

@@ -169,7 +169,11 @@ export default function TerminalPanel({
   filesystemScopePathRef.current = filesystemScopePath;
   
   // Compute parent sessions path for terminal root (allows listing all sessions)
-  const parentSessionsPath = filesystemScopePath?.replace(/\/sessions\/[^/]+$/, '') || 'project/sessions';
+  // Keep "project/sessions" even when scopePath is deeper like "project/sessions/001/sub"
+  const parentSessionsPath =
+    filesystemScopePath && /\/sessions(\/.*)?$/.test(filesystemScopePath)
+      ? filesystemScopePath.replace(/(\/sessions)\/?.*$/, '$1')
+      : 'project/sessions';
   
   // Use virtual filesystem to get real files instead of mock
   // autoLoad: false since TerminalPanel manages its own VFS sync lifecycle
@@ -815,7 +819,8 @@ export default function TerminalPanel({
     // FIX: Start at parent sessions directory, not specific session folder
     // Session folders (001, 002, etc.) are only created when LLM generates files
     // Starting at project/sessions avoids "directory doesn't exist" errors
-    const parentScopePath = filesystemScopePathRef.current?.replace(/\/sessions\/[^/]+$/, '') || 'project/sessions';
+    // CORRECTED: Keep project/sessions, not just project
+    const parentScopePath = filesystemScopePathRef.current?.replace(/(\/sessions)\/[^/]+$/, '$1') || 'project/sessions';
     localShellCwdRef.current[id] = parentScopePath;
     reconnectCooldownUntilRef.current[id] = 0;
     commandQueueRef.current[id] = [];

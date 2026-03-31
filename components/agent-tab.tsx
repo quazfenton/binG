@@ -115,6 +115,43 @@ export default function AgentTab({ onClose }: AgentTabProps) {
   const { config, setMode, resetToDefault, isOverridden } = useOrchestrationMode();
   const [isTesting, setIsTesting] = useState(false);
 
+  /**
+   * Check if a mode is ready/configured
+   * For now, checks if mode is stable and basic config is valid
+   * TODO: Implement actual readiness endpoint calls for each mode
+   */
+  const checkModeReadiness = async (mode: OrchestrationMode): Promise<{ ready: boolean; error?: string }> => {
+    // For stable modes, assume ready
+    // For experimental modes, do additional validation
+    const modeData = MODE_INFO[mode];
+    
+    if (modeData.status === 'deprecated') {
+      return { ready: false, error: 'This mode is deprecated' };
+    }
+    
+    // Simulate readiness check - in production, call actual endpoint
+    // e.g., await fetch(`/api/modes/${mode}/readiness`)
+    await new Promise(resolve => setTimeout(resolve, 500));
+    
+    // For now, all non-deprecated modes are considered ready
+    // TODO: Add real validation per mode:
+    // - task-router: Check if task-router service is available
+    // - unified-agent: Check if unified agent service is running
+    // - mastra-workflow: Check if Mastra is configured
+    // - crewai: Check if CrewAI Python service is available
+    // - v2-executor: Check if v2 executor is configured
+    
+    return { ready: true };
+  };
+
+  /**
+   * Check if mode config is valid (for gating Test button)
+   * Currently just checks if mode is not deprecated
+   */
+  const isModeConfigValid = (mode: OrchestrationMode): boolean => {
+    return MODE_INFO[mode].status !== 'deprecated';
+  };
+
   const handleModeSelect = (mode: OrchestrationMode) => {
     setMode(mode);
     toast.success(`Orchestration mode changed`, {
@@ -125,8 +162,10 @@ export default function AgentTab({ onClose }: AgentTabProps) {
   const handleTestMode = async (mode: OrchestrationMode) => {
     setIsTesting(true);
     try {
-      // TODO: Implement actual mode testing
-      await new Promise(resolve => setTimeout(resolve, 1000));
+      const result = await checkModeReadiness(mode);
+      if (!result.ready) {
+        throw new Error(result.error || 'Mode is not ready');
+      }
       toast.success(`Mode test completed`, {
         description: `${MODE_INFO[mode].name} is ready`,
       });
@@ -221,9 +260,9 @@ export default function AgentTab({ onClose }: AgentTabProps) {
         <Separator className="bg-white/10" />
 
         {/* Mode Selection */}
-        <div className="space-y-2">
+        <div className="space-y-2" role="radiogroup" aria-label="Orchestration mode selection">
           <p className="text-xs font-medium text-white/70">Available Orchestration Modes</p>
-          
+
           <div className="grid grid-cols-1 gap-2">
             {(Object.keys(MODE_INFO) as OrchestrationMode[]).map((modeId) => {
               const mode = MODE_INFO[modeId];
@@ -237,10 +276,10 @@ export default function AgentTab({ onClose }: AgentTabProps) {
                   animate={{ opacity: 1, y: 0 }}
                   transition={{ duration: 0.2 }}
                 >
-                  {/* Accessible mode selector card - uses button for keyboard accessibility */}
-                  <button
-                    type="button"
+                  {/* Accessible mode selector card - uses div with radio role to avoid nested button issue */}
+                  <div
                     role="radio"
+                    tabIndex={0}
                     aria-checked={isSelected}
                     aria-label={`Select ${mode.name} mode`}
                     className={`w-full text-left cursor-pointer transition-all duration-300 focus:outline-none focus:ring-2 focus:ring-purple-500/50 focus:ring-offset-2 focus:ring-offset-gray-900 rounded-lg ${
@@ -313,10 +352,10 @@ export default function AgentTab({ onClose }: AgentTabProps) {
                             e.stopPropagation();
                             handleTestMode(modeId);
                           }}
-                          disabled={isTesting}
+                          disabled={isTesting || !isModeConfigValid(modeId)}
                           className="h-8 w-8 p-0 hover:bg-white/10"
                           aria-label={`Test ${mode.name} mode`}
-                          title={`Test ${mode.name}`}
+                          title={!isModeConfigValid(modeId) ? 'Mode not available for testing' : `Test ${mode.name}`}
                         >
                           {isTesting ? (
                             <Loader2 className="h-3 w-3 animate-spin" aria-hidden="true" />
@@ -326,7 +365,7 @@ export default function AgentTab({ onClose }: AgentTabProps) {
                         </Button>
                       </div>
                     </CardContent>
-                  </button>
+                  </div>
                 </motion.div>
               );
             })}

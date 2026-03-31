@@ -55,21 +55,27 @@ const BLOCKED_PATTERNS = [
 
 /**
  * Check if IP address is private/internal (SSRF protection)
+ * Handles IPv4, IPv6, and IPv4-mapped IPv6 addresses (::ffff:127.0.0.1)
  */
 function isPrivateIP(ip: string): boolean {
   try {
-    // Simple pattern matching for common private IP ranges
+    // Normalize IPv4-mapped IPv6 addresses (::ffff:127.0.0.1 -> 127.0.0.1)
+    const normalizedIp = ip.toLowerCase();
+    const mappedIpv4 = normalizedIp.match(/^::ffff:(\d+\.\d+\.\d+\.\d+)$/)?.[1];
+    const candidate = mappedIpv4 ?? normalizedIp;
+    
+    // Check against private/internal IP ranges
     if (
-      ip === '127.0.0.1' || ip === '::1' ||
-      ip.startsWith('10.') || ip.startsWith('192.168.') ||
-      ip.startsWith('172.16.') || ip.startsWith('172.17.') || ip.startsWith('172.18.') ||
-      ip.startsWith('172.19.') || ip.startsWith('172.20.') || ip.startsWith('172.21.') ||
-      ip.startsWith('172.22.') || ip.startsWith('172.23.') || ip.startsWith('172.24.') ||
-      ip.startsWith('172.25.') || ip.startsWith('172.26.') || ip.startsWith('172.27.') ||
-      ip.startsWith('172.28.') || ip.startsWith('172.29.') || ip.startsWith('172.30.') ||
-      ip.startsWith('172.31.') ||
-      ip.startsWith('169.254.') || ip.startsWith('100.100.') ||
-      ip.startsWith('fc') || ip.startsWith('fd') || ip.startsWith('fe80:')
+      candidate === '127.0.0.1' || candidate === '::1' || candidate === '0.0.0.0' ||
+      candidate.startsWith('10.') || candidate.startsWith('192.168.') ||
+      candidate.startsWith('172.16.') || candidate.startsWith('172.17.') || candidate.startsWith('172.18.') ||
+      candidate.startsWith('172.19.') || candidate.startsWith('172.20.') || candidate.startsWith('172.21.') ||
+      candidate.startsWith('172.22.') || candidate.startsWith('172.23.') || candidate.startsWith('172.24.') ||
+      candidate.startsWith('172.25.') || candidate.startsWith('172.26.') || candidate.startsWith('172.27.') ||
+      candidate.startsWith('172.28.') || candidate.startsWith('172.29.') || candidate.startsWith('172.30.') ||
+      candidate.startsWith('172.31.') ||
+      candidate.startsWith('169.254.') || candidate.startsWith('100.100.') ||
+      candidate.startsWith('fc') || candidate.startsWith('fd') || candidate.startsWith('fe80:')
     ) {
       return true;
     }
@@ -110,14 +116,13 @@ async function validateProxyUrl(urlStr: string): Promise<{ valid: boolean; error
     return { valid: false, error: 'Blocked unsafe URL (internal network or cloud metadata)' };
   }
 
-  // DNS resolution check
+  // DNS resolution check - must validate ALL answers to prevent SSRF via
+  // multi-record hosts (a public record passes validation, fetch uses private)
   try {
     const { lookup } = await import('dns/promises');
-    const resolved = await lookup(hostname, { family: 0 });
-    const ips = Array.isArray(resolved) ? resolved : [resolved];
-    for (const entry of ips) {
-      const ip = typeof entry === 'string' ? entry : entry.address;
-      if (isPrivateIP(ip)) {
+    const resolved = await lookup(hostname, { family: 0, all: true });
+    for (const entry of resolved) {
+      if (isPrivateIP(entry.address)) {
         return { valid: false, error: 'Blocked unsafe URL (resolves to internal network)' };
       }
     }

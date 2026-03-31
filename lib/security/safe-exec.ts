@@ -312,8 +312,8 @@ export async function safeExec(
     }
 
     return {
-      stdout: result.stdout,
-      stderr: result.stderr,
+      stdout: typeof result.stdout === 'string' ? result.stdout : result.stdout.toString('utf-8'),
+      stderr: typeof result.stderr === 'string' ? result.stderr : result.stderr.toString('utf-8'),
       exitCode: 0,
       duration,
     };

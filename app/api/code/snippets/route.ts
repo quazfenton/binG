@@ -7,7 +7,7 @@
  */
 
 import { NextRequest, NextResponse } from "next/server";
-import { readFile, writeFile, mkdir, rename } from "fs/promises";
+import { readFile, writeFile, mkdir, rename, unlink } from "fs/promises";
 import { join } from "path";
 import { existsSync } from "fs";
 import { createHash, randomUUID } from "crypto";
@@ -80,10 +80,10 @@ let isWriting = false;
 
 async function processWriteQueue(): Promise<void> {
   if (isWriting || writeQueue.length === 0) return;
-  
+
   isWriting = true;
   const task = writeQueue.shift();
-  
+
   try {
     await task?.();
   } finally {
@@ -92,9 +92,26 @@ async function processWriteQueue(): Promise<void> {
   }
 }
 
+// Atomic update helper - read-modify-write inside the queue to prevent race conditions
+async function updateSnippetsAtomically(mutate: (snippets: any[]) => any[]): Promise<void> {
+  return new Promise<void>((resolve, reject) => {
+    writeQueue.push(async () => {
+      try {
+        const snippets = await readSnippets();
+        const updated = mutate(snippets);
+        await writeSnippets(updated);
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+    processWriteQueue();
+  });
+}
+
 async function writeSnippets(snippets: any[]): Promise<void> {
   await ensureDataDir();
-  
+
   // Write to temp file first, then rename for atomic operation
   const tempPath = `${SNIPPETS_PATH}.tmp.${Date.now()}-${createHash('md5').update(Math.random().toString()).digest('hex').slice(0, 8)}`;
   
@@ -104,8 +121,10 @@ async function writeSnippets(snippets: any[]): Promise<void> {
   } catch (error) {
     // Clean up temp file on error
     try {
-      await writeFile(tempPath, '[]');
-    } catch {}
+      await unlink(tempPath);
+    } catch (cleanupError) {
+      console.error('[Snippets API] Failed to remove temp file:', tempPath, cleanupError);
+    }
     throw error;
   }
 }
@@ -174,8 +193,6 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { action, snippet, snippets: newSnippets } = body;
 
-    const currentSnippets = await readSnippets();
-
     switch (action) {
       case 'save': {
         // Validate required fields
@@ -211,8 +228,11 @@ export async function POST(request: NextRequest) {
           likes: 0,
         };
 
-        currentSnippets.unshift(newSnippet);
-        await queueWriteSnippets(currentSnippets);
+        // Use atomic update to prevent race conditions
+        await updateSnippetsAtomically((currentSnippets) => {
+          currentSnippets.unshift(newSnippet);
+          return currentSnippets;
+        });
 
         return NextResponse.json({
           success: true,
@@ -228,8 +248,10 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        const filtered = currentSnippets.filter(s => s.id !== snippet.id);
-        await queueWriteSnippets(filtered);
+        // Use atomic update to prevent race conditions
+        await updateSnippetsAtomically((currentSnippets) => {
+          return currentSnippets.filter(s => s.id !== snippet.id);
+        });
 
         return NextResponse.json({
           success: true,
@@ -245,7 +267,40 @@ export async function POST(request: NextRequest) {
           );
         }
 
-        await queueWriteSnippets(newSnippets);
+        // Validate each snippet in the array
+        for (const s of newSnippets) {
+          if (!s.name || typeof s.name !== 'string') {
+            return NextResponse.json(
+              { success: false, error: 'All snippets must have a valid name' },
+              { status: 400 }
+            );
+          }
+          if (!s.language || typeof s.language !== 'string') {
+            return NextResponse.json(
+              { success: false, error: 'All snippets must have a valid language' },
+              { status: 400 }
+            );
+          }
+          if (!s.code || typeof s.code !== 'string') {
+            return NextResponse.json(
+              { success: false, error: 'All snippets must have valid code' },
+              { status: 400 }
+            );
+          }
+        }
+
+        // Use atomic write (no read needed for replace)
+        await new Promise<void>((resolve, reject) => {
+          writeQueue.push(async () => {
+            try {
+              await writeSnippets(newSnippets);
+              resolve();
+            } catch (error) {
+              reject(error);
+            }
+          });
+          processWriteQueue();
+        });
 
         return NextResponse.json({
           success: true,

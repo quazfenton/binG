@@ -74,7 +74,7 @@ const WEBMCP_MANIFEST: WebMCPManifest = {
   tools: [
     {
       name: 'execute_command',
-      description: 'Execute shell commands in isolated sandbox',
+      description: 'Execute shell commands (host system - use with trusted clients only)',
       inputSchema: {
         type: 'object',
         properties: {
@@ -299,6 +299,11 @@ async function invokeTool(toolName: string, args: any): Promise<any> {
     }
 
     case 'create_agent': {
+      // Validate task argument
+      if (!args.task || typeof args.task !== 'string' || args.task.trim() === '') {
+        throw new Error('task is required and must be a non-empty string');
+      }
+
       // Import from correct path
       const { createAgent, getRecommendedAgent } = await import('@/lib/spawn');
       const recommendedType = getRecommendedAgent(args.task);
@@ -312,9 +317,6 @@ async function invokeTool(toolName: string, args: any): Promise<any> {
         case 'amp':
           agent = (await createAgent('amp', { workspaceDir: '/workspace' })) as any;
           break;
-        case 'opencode':
-          agent = (await createAgent('opencode', { workspaceDir: '/workspace' })) as any;
-          break;
         default:
           throw new Error(`Unsupported agent type: ${recommendedType}`);
       }
@@ -322,6 +324,11 @@ async function invokeTool(toolName: string, args: any): Promise<any> {
     }
 
     case 'get_agent_status': {
+      // Validate agentId argument
+      if (!args.agentId || typeof args.agentId !== 'string' || args.agentId.trim() === '') {
+        throw new Error('agentId is required and must be a non-empty string');
+      }
+
       const { getAgentServiceManager } = await import('@/lib/spawn/agent-service-manager');
       const manager = getAgentServiceManager();
       const agent = manager.getAgent(args.agentId);
@@ -332,8 +339,20 @@ async function invokeTool(toolName: string, args: any): Promise<any> {
     }
 
     case 'stop_agent': {
+      // Validate agentId argument
+      if (!args.agentId || typeof args.agentId !== 'string' || args.agentId.trim() === '') {
+        return { success: false, error: 'agentId is required' };
+      }
+
       const { getAgentServiceManager } = await import('@/lib/spawn/agent-service-manager');
       const manager = getAgentServiceManager();
+      
+      // Check if agent exists before stopping
+      const agent = manager.getAgent(args.agentId);
+      if (!agent) {
+        return { success: false, error: 'agent_not_found' };
+      }
+      
       await manager.stopAgent(args.agentId);
       return { success: true };
     }

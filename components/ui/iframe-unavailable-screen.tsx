@@ -23,6 +23,7 @@ import {
   Shield,
   AlertTriangle,
   Globe,
+  Lock,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -119,7 +120,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
     switch (reason) {
       case 'x-frame-options':
         return {
-          icon: Lock,
+          icon: Lock as React.ComponentType<{ className?: string }>,
           title: 'Frame Embedding Blocked',
           description: 'This website does not allow embedding in iframes (X-Frame-Options header)',
           color: 'text-red-400',
@@ -128,7 +129,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
         };
       case 'csp-blocked':
         return {
-          icon: Shield,
+          icon: Shield as React.ComponentType<{ className?: string }>,
           title: 'Content Security Policy Block',
           description: 'The website\'s CSP policy prevents iframe embedding',
           color: 'text-orange-400',
@@ -137,7 +138,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
         };
       case 'timeout':
         return {
-          icon: Clock,
+          icon: Clock as React.ComponentType<{ className?: string }>,
           title: 'Connection Timeout',
           description: 'The website took too long to respond',
           color: 'text-yellow-400',
@@ -146,7 +147,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
         };
       case 'blocked':
         return {
-          icon: AlertTriangle,
+          icon: AlertTriangle as React.ComponentType<{ className?: string }>,
           title: 'Access Restricted',
           description: 'Access to this website is temporarily restricted',
           color: 'text-red-400',
@@ -155,7 +156,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
         };
       case 'header-detected':
         return {
-          icon: Info,
+          icon: Info as React.ComponentType<{ className?: string }>,
           title: 'Restrictive Headers Detected',
           description: 'The website has headers that prevent embedding',
           color: 'text-orange-400',

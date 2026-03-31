@@ -350,6 +350,7 @@ export default function WorkflowsTab() {
   const [workflows, setWorkflows] = useState<Workflow[]>(DEFAULT_WORKFLOWS);
   const [executions, setExecutions] = useState<WorkflowExecution[]>(DEFAULT_EXECUTIONS);
   const [isConnected, setIsConnected] = useState(false);
+  const [hasAttemptedConnection, setHasAttemptedConnection] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [selectedWorkflow, setSelectedWorkflow] = useState<Workflow | null>(null);
   const [showSettings, setShowSettings] = useState(false);
@@ -456,10 +457,11 @@ export default function WorkflowsTab() {
       toast.error('Please enter n8n URL and API key');
       return;
     }
-    
+
+    setHasAttemptedConnection(true);
     toast.info('Testing connection...');
     const success = await testN8nConnection(settings.n8nUrl, settings.apiKey);
-    
+
     if (success) {
       setIsConnected(true);
       toast.success('Connected to n8n successfully!');
@@ -524,7 +526,7 @@ export default function WorkflowsTab() {
           <div>
             <h3 className="text-lg font-semibold text-white">n8n Workflows</h3>
             <p className="text-xs text-white/60">
-              {isConfigured ? 'Connected to n8n' : 'Setup required - Automation & Workflow Management'}
+              {isConnected ? 'Connected to n8n' : isConfigured && hasAttemptedConnection ? 'Connection failed' : isConfigured ? 'Configured - test connection' : 'Setup required - Automation & Workflow Management'}
             </p>
           </div>
         </div>
@@ -631,8 +633,8 @@ export default function WorkflowsTab() {
         </motion.div>
       )}
 
-      {/* Connection Status Banner - Show when configured but not connected */}
-      {isConfigured && !isConnected && !isLoading && (
+      {/* Connection Status Banner - Show when configured but connection was attempted and failed */}
+      {isConfigured && !isConnected && hasAttemptedConnection && !isLoading && (
         <motion.div
           initial={{ opacity: 0, y: -20 }}
           animate={{ opacity: 1, y: 0 }}

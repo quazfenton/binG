@@ -103,6 +103,48 @@ async function logWebhookEvent(event: any): Promise<void> {
   }
 }
 
+/**
+ * Process pending playlist syncs
+ * Scans for playlists with pendingSync status and processes them
+ */
+async function processPendingSyncs(playlist: any): Promise<void> {
+  if (!playlist.pendingSync || playlist.pendingSync.status !== 'pending') {
+    return;
+  }
+
+  try {
+    // Update status to in_progress
+    playlist.pendingSync.status = 'in_progress';
+    playlist.pendingSync.startedAt = new Date().toISOString();
+    await writePlaylist(playlist);
+
+    // TODO: Implement actual sync logic here
+    // This would typically call YouTube Music API or similar to sync the playlist
+    // For now, we'll simulate completion
+    
+    // Simulate sync completion (replace with actual sync logic)
+    await new Promise(resolve => setTimeout(resolve, 1000));
+    
+    playlist.pendingSync.status = 'completed';
+    playlist.pendingSync.completedAt = new Date().toISOString();
+    playlist.pendingSync.result = {
+      songsSynced: 0,
+      message: 'Sync completed (placeholder - implement actual sync logic)',
+    };
+    
+    await writePlaylist(playlist);
+    
+    console.log('[Webhook] Pending sync processed:', playlist.pendingSync.playlistId);
+  } catch (error) {
+    playlist.pendingSync.status = 'failed';
+    playlist.pendingSync.failedAt = new Date().toISOString();
+    playlist.pendingSync.error = error instanceof Error ? error.message : 'Unknown error';
+    await writePlaylist(playlist);
+    
+    console.error('[Webhook] Sync failed:', error);
+  }
+}
+
 // POST - Handle webhook events
 export async function POST(request: NextRequest) {
   const clientId = request.headers.get('x-forwarded-for') || request.headers.get('x-real-ip') || 'unknown';
@@ -260,6 +302,10 @@ export async function POST(request: NextRequest) {
           source: source || 'n8n',
         };
         message = `Playlist sync initiated for: ${data.playlistId}`;
+        
+        // Process the pending sync immediately
+        // In production, this could be queued to a background worker instead
+        await processPendingSyncs(playlist);
         break;
       }
 

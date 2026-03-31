@@ -1,6 +1,6 @@
 import type { z } from 'zod';
 
-export type IntegrationProvider = 'arcade' | 'nango' | 'composio' | 'tambo' | 'mcp' | 'smithery';
+export type IntegrationProvider = 'arcade' | 'nango' | 'composio' | 'tambo' | 'mcp' | 'smithery' | 'builtin';
 
 export interface ToolConfig {
   provider: IntegrationProvider;

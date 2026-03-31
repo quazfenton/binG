@@ -125,7 +125,7 @@ export const researcherStep = createStep({
   execute: async ({ inputData }) => {
     const { topic, plan, ownerId, questions } = inputData;
     const agent = getModel('fast');
-    const analyses: typeof SourceAnalysis[] = [];
+    const analyses: Array<{ url: string; summary: string; keyPoints: string[]; credibility: number; relevance: number }> = [];
 
     // Simulate source analysis (in production, would fetch actual URLs)
     for (const source of plan.sources.slice(0, 5)) {

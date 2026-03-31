@@ -185,6 +185,24 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
         stream: false,
         preferredAgent: 'nullclaw',
       });
+    } else if (options.preferredAgent === 'advanced') {
+      // Note: 'advanced' agent is not yet implemented
+      // For now, fall through to opencode path with a warning
+      console.warn('[V2Executor] preferredAgent "advanced" is not yet implemented, using opencode path');
+      const toolManager = getToolManager();
+      const session = await agentSessionManager.getOrCreateSession(
+        options.userId,
+        options.conversationId,
+        { enableMCP: true, mode: 'opencode', executionPolicy },
+      );
+      const { runOpenCodeDirect } = await import('./opencode-direct');
+      result = await runOpenCodeDirect({
+        userId: options.userId,
+        conversationId: options.conversationId,
+        task: taskWithContext,
+        executionPolicy,
+        toolManager,
+      });
     } else {
       const toolManager = getToolManager();
 

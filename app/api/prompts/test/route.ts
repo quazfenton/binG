@@ -11,6 +11,14 @@ import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Prompts:Test');
 
+// Custom error class for validation errors
+class PromptValidationError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'PromptValidationError';
+  }
+}
+
 // POST - Test prompt
 export async function POST(request: NextRequest) {
   try {
@@ -56,15 +64,15 @@ export async function POST(request: NextRequest) {
       ...result,
     });
   } catch (error: any) {
-    // Distinguish between validation errors and internal errors
-    if (error instanceof Error && error.message.includes('Invalid')) {
+    // Use proper error class detection instead of brittle string matching
+    if (error instanceof PromptValidationError || error.name === 'PromptValidationError') {
       logger.warn('Validation error in prompt test:', error.message);
       return NextResponse.json(
         { error: error.message },
         { status: 400 }
       );
     }
-    
+
     logger.error('Failed to test prompt:', error);
     return NextResponse.json(
       { error: 'Failed to test prompt' },
@@ -78,8 +86,14 @@ export async function GET(request: NextRequest) {
   try {
     const searchParams = request.nextUrl.searchParams;
     const templateId = searchParams.get('templateId') || undefined;
+    
+    // Parse limit with proper NaN handling
+    let limit = parseInt(searchParams.get('limit') || '50', 10);
+    if (isNaN(limit) || limit < 1) {
+      limit = 50;
+    }
     // Cap limit to prevent excessive data retrieval (max 100)
-    const limit = Math.min(parseInt(searchParams.get('limit') || '50'), 100);
+    limit = Math.min(limit, 100);
 
     const history = await getTestHistory(templateId, limit);
 

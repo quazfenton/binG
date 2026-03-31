@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
     // Fetch the URL with timeout
     const controller = new AbortController();
     const timeoutId = setTimeout(() => controller.abort(), 10000);
-    
+
     let response: Response;
     try {
       response = await fetch(url, {
@@ -53,7 +53,6 @@ export async function POST(request: NextRequest) {
         },
       });
     } catch (fetchError) {
-      clearTimeout(timeoutId);
       if (fetchError instanceof Error && fetchError.name === 'AbortError') {
         return NextResponse.json(
           { error: 'Request timed out' },
@@ -65,11 +64,11 @@ export async function POST(request: NextRequest) {
         { status: 500 }
       );
     }
-    clearTimeout(timeoutId);
 
     // Validate content type before fetching
     const contentType = response.headers.get('content-type');
     if (contentType && !contentType.includes('text/html') && !contentType.includes('application/xhtml+xml')) {
+      clearTimeout(timeoutId);
       return NextResponse.json(
         { error: 'URL does not point to an HTML page' },
         { status: 400 }
@@ -89,19 +88,24 @@ export async function POST(request: NextRequest) {
     let totalLength = 0;
     const MAX_SIZE = 1024 * 1024; // 1MB limit
 
-    while (true) {
-      const { done, value } = await reader.read();
-      if (done) break;
+    try {
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
 
-      totalLength += value.length;
-      if (totalLength > MAX_SIZE) {
-        await reader.cancel();
-        return NextResponse.json(
-          { error: 'Response too large (max 1MB)' },
-          { status: 400 }
-        );
+        totalLength += value.length;
+        if (totalLength > MAX_SIZE) {
+          await reader.cancel();
+          return NextResponse.json(
+            { error: 'Response too large (max 1MB)' },
+            { status: 400 }
+          );
+        }
+        chunks.push(value);
       }
-      chunks.push(value);
+    } finally {
+      // Clear timeout after stream is fully consumed or cancelled
+      clearTimeout(timeoutId);
     }
 
     // Concatenate chunks and decode

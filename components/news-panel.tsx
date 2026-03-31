@@ -788,7 +788,7 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
             <div className="grid grid-cols-1 gap-4">
               {filteredArticles.slice(0, 3).map((article) => (
                 <HeroCard
-                  key={`${article.url}-hero`}
+                  key={article.id || article.url}
                   article={article}
                   onClick={(e) => handleArticleClick(article, e)}
                 />
@@ -798,7 +798,7 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
               <h3 className="text-xs font-medium text-white/50 uppercase tracking-wider">More Stories</h3>
               {filteredArticles.slice(3).map((article) => (
                 <CompactCard
-                  key={`${article.url}-compact`}
+                  key={article.id || article.url}
                   article={article}
                   onClick={(e) => handleArticleClick(article, e)}
                 />
@@ -812,7 +812,7 @@ export function NewsPanel({ onClose }: NewsPanelProps) {
           <div className={`grid ${getGridClass()} gap-3`}>
             {filteredArticles.map((article) => (
               <MasonryCard
-                key={article.url}
+                key={article.id || article.url}
                 article={article}
                 style={layoutConfig.cardStyle}
                 onClick={(e) => handleArticleClick(article, e)}

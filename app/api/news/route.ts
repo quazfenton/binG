@@ -195,10 +195,12 @@ export async function GET(request: NextRequest) {
       }));
     }
 
-    // Proxy images for all articles
+    // Proxy images for all articles (only if not already proxied)
     allArticles = allArticles.map(article => ({
       ...article,
-      imageUrl: article.imageUrl || proxyImageUrl(article.imageUrl),
+      imageUrl: article.imageUrl?.startsWith('/api/image-proxy?url=') 
+        ? article.imageUrl 
+        : proxyImageUrl(article.imageUrl),
     }));
 
     // Sort by date (newest first)
@@ -241,9 +243,18 @@ export async function GET(request: NextRequest) {
  */
 export async function POST(request: NextRequest) {
   try {
-    // Simple auth check - in production, use proper auth
+    // Fail closed when NEWS_API_SECRET is missing
+    const secret = process.env.NEWS_API_SECRET;
+    if (!secret) {
+      console.error('[News API] NEWS_API_SECRET is not configured');
+      return NextResponse.json(
+        { error: 'Server misconfigured' },
+        { status: 500 }
+      );
+    }
+
     const authHeader = request.headers.get('authorization');
-    if (authHeader !== `Bearer ${process.env.NEWS_API_SECRET}`) {
+    if (authHeader !== `Bearer ${secret}`) {
       return NextResponse.json(
         { error: 'Unauthorized' },
         { status: 401 }
@@ -251,7 +262,7 @@ export async function POST(request: NextRequest) {
     }
 
     feedCache.clear();
-    
+
     return NextResponse.json({
       success: true,
       message: 'News cache cleared',

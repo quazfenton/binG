@@ -1,6 +1,6 @@
 "use client";
 
-import React, { useState, useCallback } from "react";
+import React, { useState, useCallback, useRef, useEffect } from "react";
 import { motion } from "framer-motion";
 import { ScrollArea } from "@/components/ui/scroll-area";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
@@ -162,12 +162,32 @@ export default function OrchestrationVisualizer({
   onAgentReject,
   onRefresh,
 }: OrchestrationVisualizerProps) {
-  const [selectedAgent, setSelectedAgent] = useState<AgentNode | null>(null);
+  // Store selected agent ID instead of object to stay in sync with live updates
+  const [selectedAgentId, setSelectedAgentId] = useState<string | null>(null);
+  const selectedAgent = agents.find((agent) => agent.id === selectedAgentId) ?? null;
   const [showLogs, setShowLogs] = useState(true);
   const [zoom, setZoom] = useState(1);
   const [nudgeInput, setNudgeInput] = useState('');
   const [rejectReason, setRejectReason] = useState('');
   const [showRejectDialog, setShowRejectDialog] = useState(false);
+  const cancelButtonRef = useRef<HTMLButtonElement>(null);
+
+  // Focus management and Escape key for reject dialog
+  useEffect(() => {
+    if (showRejectDialog && cancelButtonRef.current) {
+      cancelButtonRef.current.focus();
+    }
+  }, [showRejectDialog]);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (showRejectDialog && e.key === 'Escape') {
+        setShowRejectDialog(false);
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [showRejectDialog]);
 
   const getAgentColor = useCallback((status: AgentNode['status']) => {
     switch (status) {
@@ -242,23 +262,23 @@ export default function OrchestrationVisualizer({
           )}
         </div>
         <div className="flex items-center gap-2">
-          <Button variant="ghost" size="sm" onClick={() => setShowLogs(!showLogs)} className="text-white/60">
-            <Terminal className="w-4 h-4 mr-1" />
+          <Button variant="ghost" size="sm" onClick={() => setShowLogs(!showLogs)} className="text-white/60" aria-label="Toggle logs">
+            <Terminal className="w-4 h-4 mr-1" aria-hidden="true" />
             Logs
           </Button>
-          <Button variant="ghost" size="sm" onClick={onRefresh} className="text-white/60">
-            <RotateCcw className="w-4 h-4" />
+          <Button variant="ghost" size="sm" onClick={onRefresh} className="text-white/60" aria-label="Refresh">
+            <RotateCcw className="w-4 h-4" aria-hidden="true" />
           </Button>
           <div className="flex items-center gap-1 border-l border-white/10 pl-2">
-            <Button variant="ghost" size="icon" onClick={() => setZoom(z => Math.max(0.5, z - 0.1))} className="text-white/60">
-              <ZoomOut className="w-3 h-3" />
+            <Button variant="ghost" size="icon" onClick={() => setZoom(z => Math.max(0.5, z - 0.1))} className="text-white/60" aria-label="Zoom out">
+              <ZoomOut className="w-3 h-3" aria-hidden="true" />
             </Button>
             <span className="text-xs text-white/40 w-10 text-center">{Math.round(zoom * 100)}%</span>
-            <Button variant="ghost" size="icon" onClick={() => setZoom(z => Math.min(2, z + 0.1))} className="text-white/60">
-              <ZoomIn className="w-3 h-3" />
+            <Button variant="ghost" size="icon" onClick={() => setZoom(z => Math.min(2, z + 0.1))} className="text-white/60" aria-label="Zoom in">
+              <ZoomIn className="w-3 h-3" aria-hidden="true" />
             </Button>
-            <Button variant="ghost" size="icon" onClick={() => setZoom(1)} className="text-white/60">
-              <Maximize className="w-3 h-3" />
+            <Button variant="ghost" size="icon" onClick={() => setZoom(1)} className="text-white/60" aria-label="Reset zoom">
+              <Maximize className="w-3 h-3" aria-hidden="true" />
             </Button>
           </div>
         </div>
@@ -307,7 +327,7 @@ export default function OrchestrationVisualizer({
 
             {/* Agent Nodes */}
             {agents.map(agent => (
-              <motion.div
+              <motion.button
                 key={agent.id}
                 initial={{ opacity: 0, scale: 0.8 }}
                 animate={{ opacity: 1, scale: 1 }}
@@ -320,7 +340,15 @@ export default function OrchestrationVisualizer({
                   borderColor: getAgentColor(agent.status),
                   background: 'rgba(0, 0, 0, 0.6)',
                 }}
-                onClick={() => setSelectedAgent(agent)}
+                onClick={() => setSelectedAgentId(agent.id)}
+                onKeyDown={(e) => {
+                  if (e.key === 'Enter' || e.key === ' ') {
+                    e.preventDefault();
+                    setSelectedAgentId(agent.id);
+                  }
+                }}
+                aria-pressed={selectedAgent?.id === agent.id}
+                aria-label={`Agent: ${agent.name}, Status: ${agent.status}`}
               >
                 {/* Status Indicator */}
                 <div
@@ -359,7 +387,7 @@ export default function OrchestrationVisualizer({
                     {agent.logs.length}
                   </Badge>
                 )}
-              </motion.div>
+              </motion.button>
             ))}
           </div>
         </div>
@@ -378,10 +406,11 @@ export default function OrchestrationVisualizer({
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={() => setSelectedAgent(null)}
+                    onClick={() => setSelectedAgentId(null)}
                     className="h-6 w-6 text-white/60"
+                    aria-label="Close agent details"
                   >
-                    <XCircle className="w-3 h-3" />
+                    <XCircle className="w-3 h-3" aria-hidden="true" />
                   </Button>
                 </div>
               </CardHeader>
@@ -514,16 +543,22 @@ export default function OrchestrationVisualizer({
 
       {/* Reject Dialog */}
       {showRejectDialog && selectedAgent && (
-        <div className="fixed inset-0 bg-black/80 flex items-center justify-center z-50">
+        <div 
+          className="fixed inset-0 bg-black/80 flex items-center justify-center z-50"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="reject-dialog-title"
+          aria-describedby="reject-dialog-description"
+        >
           <Card className="w-[400px] bg-black/90 border-white/20">
             <CardHeader>
-              <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+              <h4 id="reject-dialog-title" className="text-sm font-semibold text-white flex items-center gap-2">
                 <XOctagon className="w-4 h-4 text-red-400" />
                 Reject Agent Execution
               </h4>
             </CardHeader>
             <CardContent className="space-y-3">
-              <p className="text-xs text-white/60">
+              <p id="reject-dialog-description" className="text-xs text-white/60">
                 Provide a reason for rejecting {selectedAgent.name}'s current action:
               </p>
               <Textarea
@@ -531,9 +566,11 @@ export default function OrchestrationVisualizer({
                 onChange={(e) => setRejectReason(e.target.value)}
                 placeholder="E.g., 'This approach will cause issues with...'"
                 className="min-h-[100px] bg-black/30 border-white/10 text-white/90 placeholder:text-white/40 text-xs resize-none"
+                autoFocus
               />
               <div className="flex gap-2">
                 <Button
+                  ref={cancelButtonRef}
                   variant="ghost"
                   onClick={() => setShowRejectDialog(false)}
                   className="flex-1 text-white/60"

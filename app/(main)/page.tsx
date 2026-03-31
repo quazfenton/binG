@@ -1,7 +1,6 @@
 "use client"
 
 import { useState, useEffect } from "react"
-import { ThemeProvider } from "../../components/theme-provider"
 import FallbackUI from "../../components/fallback-ui"
 import { startCacheCleanup } from "../../lib/cache"
 import dynamic from "next/dynamic"
@@ -78,11 +77,9 @@ export default function ChatBox() {
 
   return (
     <TamboWrapper>
-      <ThemeProvider attribute="class" defaultTheme="dark" enableSystem disableTransitionOnChange>
-        <TopPanel />
-        <ConversationInterface />
-        <PWAInstallPrompt />
-      </ThemeProvider>
+      <TopPanel />
+      <ConversationInterface />
+      <PWAInstallPrompt />
     </TamboWrapper>
   )
 }

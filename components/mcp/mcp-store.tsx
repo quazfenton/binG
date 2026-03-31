@@ -210,15 +210,17 @@ function MCPServerCard({
           <div className="flex items-center gap-1">
             {server.installed ? (
               <>
-                <Button
-                  variant="ghost"
-                  size="icon"
-                  className="h-8 w-8"
-                  onClick={() => onManageApiKeys(server)}
-                  title="Manage API keys"
-                >
-                  <Key className="w-4 h-4" />
-                </Button>
+                {server.apiKeys && server.apiKeys.length > 0 && (
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="h-8 w-8"
+                    onClick={() => onManageApiKeys(server)}
+                    title="Manage API keys"
+                  >
+                    <Key className="w-4 h-4" />
+                  </Button>
+                )}
                 <Button
                   variant="ghost"
                   size="icon"
@@ -489,6 +491,13 @@ export function MCPStore() {
   const handleSync = async () => {
     setIsSyncing(true);
     try {
+      const config = mcpStoreService.getConfig();
+      if (!config.smitheryApiKey) {
+        toast.error("Smithery API key is not configured");
+        setIsSyncing(false);
+        return;
+      }
+      
       const newServers = await mcpStoreService.syncWithSmithery();
       toast.success(`Synced ${newServers.length} servers from Smithery`);
       loadServers();

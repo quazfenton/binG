@@ -10,15 +10,24 @@ import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { existsSync } from 'fs';
 
+// Custom error for bad requests (400)
+class BadRequestError extends Error {
+  constructor(message: string) {
+    super(message);
+    this.name = 'BadRequestError';
+  }
+}
+
 // Mutex for preventing concurrent writes (proper implementation)
 let promptsLock: Promise<void> = Promise.resolve();
 
 async function withPromptsLock<T>(fn: () => Promise<T>): Promise<T> {
   const previousLock = promptsLock;
   let releaseLock!: () => void;
-  promptsLock = new Promise<void>((resolve) => {
+  const newLock = new Promise<void>((resolve) => {
     releaseLock = resolve;
   });
+  promptsLock = newLock;
   await previousLock;
   try {
     return await fn();
@@ -28,11 +37,20 @@ async function withPromptsLock<T>(fn: () => Promise<T>): Promise<T> {
 }
 
 // Atomic update helper to prevent race conditions
+// Read-modify-write happens INSIDE the write queue for true atomicity
 async function updatePromptsAtomically(mutate: (prompts: Prompt[]) => Prompt[]): Promise<void> {
-  return withPromptsLock(async () => {
-    const prompts = await loadPrompts();
-    const updated = mutate(prompts);
-    await savePrompts(updated);
+  return new Promise<void>((resolve, reject) => {
+    writeQueue.push(async () => {
+      try {
+        const prompts = await loadPrompts();
+        const updated = mutate(prompts);
+        await writeFile(PROMPTS_FILE, JSON.stringify(updated, null, 2));
+        resolve();
+      } catch (error) {
+        reject(error);
+      }
+    });
+    processWriteQueue();
   });
 }
 
@@ -356,21 +374,12 @@ export async function POST(request: NextRequest) {
 export async function PUT(request: NextRequest) {
   try {
     const body = await request.json();
-    const { id, action, apiKey } = body;
+    const { id, action, apiKey, author } = body;
 
     if (!id || !action) {
       return NextResponse.json(
         { error: 'Prompt ID and action are required' },
         { status: 400 }
-      );
-    }
-
-    // Require API key for edit operations (upvote/download are public)
-    const expectedApiKey = process.env.PROMPTS_API_KEY;
-    if (action === 'edit' && (!apiKey || apiKey !== expectedApiKey)) {
-      return NextResponse.json(
-        { error: 'Unauthorized. API key required for editing prompts' },
-        { status: 401 }
       );
     }
 
@@ -383,18 +392,33 @@ export async function PUT(request: NextRequest) {
         throw new Error('Prompt not found');
       }
 
+      const prompt = prompts[index];
+
       switch (action) {
         case 'upvote':
+          // Upvotes are public - no auth required
           prompts[index].upvotes++;
           prompts[index].updatedAt = Date.now();
           break;
 
         case 'download':
+          // Downloads are public - no auth required
           prompts[index].downloads++;
           prompts[index].updatedAt = Date.now();
           break;
 
-        case 'edit':
+        case 'edit': {
+          // Require API key for edit operations
+          const expectedApiKey = process.env.PROMPTS_API_KEY;
+          if (!apiKey || apiKey !== expectedApiKey) {
+            throw new Error('Unauthorized');
+          }
+
+          // Verify ownership - only author can edit
+          if (prompt.author && author && prompt.author !== author) {
+            throw new Error('Forbidden: Only the author can edit this prompt');
+          }
+
           const { title, content, category, tags } = body;
           if (title) prompts[index].title = title;
           if (content) prompts[index].content = content;
@@ -404,9 +428,11 @@ export async function PUT(request: NextRequest) {
           if (Array.isArray(tags)) prompts[index].tags = tags;
           prompts[index].updatedAt = Date.now();
           break;
+        }
 
         default:
-          throw new Error('Invalid action. Use: upvote, download, or edit');
+          // Return 400 for invalid actions instead of 500
+          throw new BadRequestError('Invalid action. Use: upvote, download, or edit');
       }
 
       updatedPrompt = prompts[index];
@@ -422,6 +448,24 @@ export async function PUT(request: NextRequest) {
       return NextResponse.json(
         { error: 'Prompt not found' },
         { status: 404 }
+      );
+    }
+    if (error instanceof BadRequestError) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 400 }
+      );
+    }
+    if (error.message === 'Unauthorized') {
+      return NextResponse.json(
+        { error: 'Unauthorized. API key required for editing prompts' },
+        { status: 401 }
+      );
+    }
+    if (error.message.includes('Forbidden')) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 403 }
       );
     }
     // Only log detailed errors in development
@@ -442,9 +486,8 @@ export async function PUT(request: NextRequest) {
  */
 export async function DELETE(request: NextRequest) {
   try {
-    const searchParams = request.nextUrl.searchParams;
-    const id = searchParams.get('id');
-    const apiKey = searchParams.get('apiKey');
+    const body = await request.json();
+    const { id, apiKey, author } = body;
 
     if (!id) {
       return NextResponse.json(
@@ -470,6 +513,13 @@ export async function DELETE(request: NextRequest) {
         throw new Error('Prompt not found');
       }
 
+      const prompt = prompts[index];
+
+      // Verify ownership - only author can delete
+      if (prompt.author && author && prompt.author !== author) {
+        throw new Error('Forbidden: Only the author can delete this prompt');
+      }
+
       prompts.splice(index, 1);
       return prompts;
     });
@@ -483,6 +533,18 @@ export async function DELETE(request: NextRequest) {
       return NextResponse.json(
         { error: 'Prompt not found' },
         { status: 404 }
+      );
+    }
+    if (error.message.includes('Forbidden')) {
+      return NextResponse.json(
+        { error: error.message },
+        { status: 403 }
+      );
+    }
+    if (error.message === 'Unauthorized') {
+      return NextResponse.json(
+        { error: 'Unauthorized. API key required for deleting prompts' },
+        { status: 401 }
       );
     }
     // Only log detailed errors in development

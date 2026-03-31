@@ -349,9 +349,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       }
     }, 30000); // 30 second timeout
 
+    // Buffer for accumulating partial SSE chunks across boundaries
+    let sseBuffer = '';
+
     try {
       const parser = createNDJSONParser();
-      
+
       while (true) {
         const { done, value } = await reader.read();
 
@@ -363,61 +366,65 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           break;
         }
 
-        // Decode chunk and parse complete NDJSON lines
+        // Decode chunk and append to buffer for proper SSE parsing across chunk boundaries
         const chunk = decoder.decode(value, { stream: true });
-        
-        // Handle SSE format (event: / data: / \n\n)
-        const lines = chunk.split('\n');
-        
-        for (const line of lines) {
-          if (line.trim() === '') {
-            // Empty line indicates end of event
-            currentEventType = '';
-            continue;
-          }
+        sseBuffer += chunk;
 
-          // Handle event type declarations
-          if (line.startsWith('event: ')) {
-            currentEventType = line.slice(7).trim();
-            continue;
-          }
+        // Process complete SSE events (delimited by \n\n)
+        let eventEndIndex: number;
+        while ((eventEndIndex = sseBuffer.indexOf('\n\n')) >= 0) {
+          // Extract complete event
+          const eventText = sseBuffer.slice(0, eventEndIndex);
+          sseBuffer = sseBuffer.slice(eventEndIndex + 2);
 
-          // Handle data lines
-          if (line.startsWith('data: ')) {
-            const dataString = line.slice(6).trim();
-            if (!dataString) continue;
+          // Parse event lines
+          const lines = eventText.split('\n');
+          let eventType = '';
+          let dataString = '';
 
-            // Debug: Log raw data in dev mode
-            if (process.env.NODE_ENV === 'development') {
-              console.log('[SSE] Raw data:', dataString.substring(0, 80), 'event:', currentEventType);
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7).trim();
+            } else if (line.startsWith('data: ')) {
+              // Accumulate data from multiple data: lines
+              dataString += line.slice(6).trim();
             }
+          }
 
-            // SSE data is a single JSON object, not NDJSON
-            // Try JSON.parse first, then fallback to NDJSON parser
-            let parsedObjects: any[];
+          // Skip events without data
+          if (!dataString) continue;
+
+          // Debug: Log raw data in dev mode
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[SSE] Raw data:', dataString.substring(0, 80), 'event:', eventType);
+          }
+
+          // Parse JSON data
+          let parsedObjects: any[];
+          try {
+            const parsed = JSON.parse(dataString);
+            parsedObjects = [parsed];
+          } catch {
+            // Fallback to NDJSON parser for edge cases
             try {
-              const parsed = JSON.parse(dataString);
-              parsedObjects = [parsed];
-            } catch {
-              // Fallback to NDJSON parser for edge cases
-              try {
-                parsedObjects = parser.parse(dataString + '\n');
-              } catch (parseError) {
-                console.warn('[SSE] Parse error:', parseError);
-                continue;
-              }
+              parsedObjects = parser.parse(dataString + '\n');
+            } catch (parseError) {
+              console.warn('[SSE] Parse error:', parseError);
+              continue;
+            }
+          }
+
+          // Process each parsed object
+          for (const eventData of parsedObjects) {
+            // Debug: Log parsed content
+            if (process.env.NODE_ENV === 'development' && eventData.content) {
+              console.log('[SSE] Content received:', eventData.content.substring(0, 50));
             }
 
-            for (const eventData of parsedObjects) {
-              // Debug: Log parsed content
-              if (process.env.NODE_ENV === 'development' && eventData.content) {
-                console.log('[SSE] Content received:', eventData.content.substring(0, 50));
-              }
+            // Determine event type from event header or data payload
+            const determinedType = eventType || eventData.type || 'token';
 
-              // Determine event type from current context or data
-              const eventType = currentEventType || eventData.type || 'token';
-
-              switch (eventType) {
+              switch (determinedType) {
                 case 'init':
                   // Initialization event - update agent status
                   console.log('Chat stream initialized:', eventData);
@@ -979,14 +986,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // Update agent activity
                   setAgentActivity(prev => ({
                     ...prev,
-                    status: eventData.status === 'started' ? 'executing' : 
+                    status: eventData.status === 'started' ? 'executing' :
                             eventData.status === 'completed' ? 'completed' : prev.status,
                     currentAction: eventData.status === 'started' ? eventData.step : prev.currentAction,
                     processingSteps: [...prev.processingSteps, {
                       id: Date.now().toString(),
                       step: eventData.step,
                       status: eventData.status,
-                      stepIndex: eventData.stepIndex || prev.processingSteps.length,
+                      // Use nullish coalescing to preserve valid index 0
+                      stepIndex: eventData.stepIndex ?? prev.processingSteps.length,
                       timestamp: Date.now(),
                     }],
                   }));
@@ -1074,26 +1082,20 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }
                   break;
               }
-            } // End for loop
+            } // End for (const eventData of parsedObjects)
+          } // End while (eventEndIndex >= 0)
+        } // End while (true) - reader loop
 
-            // Handle other SSE fields (id, retry) - ignore them
-            if (line.startsWith('id: ') || line.startsWith('retry: ')) {
-              continue;
-            }
-          } // End if (line.startsWith('data: '))
-        } // End for (const line of lines)
-      } // End while (true)
+        // If we reach here without a 'done' event, consider it complete
+        clearTimeout(timeoutId);
+        setIsLoading(false);
 
-      // If we reach here without a 'done' event, consider it complete
-      clearTimeout(timeoutId);
-      setIsLoading(false);
-      
-      if (options.onFinish && currentMessageRef.current) {
-        options.onFinish({
-          ...currentMessageRef.current,
-          content: accumulatedContent
-        });
-      }
+        if (options.onFinish && currentMessageRef.current) {
+          options.onFinish({
+            ...currentMessageRef.current,
+            content: accumulatedContent
+          });
+        }
     } catch (streamError) {
       clearTimeout(timeoutId);
       if (streamError instanceof Error && streamError.name !== 'AbortError') {
@@ -1103,7 +1105,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       reader.releaseLock();
       abortControllerRef.current = null;
     }
-  };
+    };
 
   // Helper function to retry with v1 mode, reusing handleStreamingResponse
   const handleV1Fallback = async (

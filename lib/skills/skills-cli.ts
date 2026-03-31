@@ -10,12 +10,20 @@
  * - npx skills import <file> - Import skill data
  * - npx skills test <name> - Test skill execution
  * - npx skills analytics <name> - Show skill analytics
+ * - npx skills enable <name> - Enable a skill
+ * - npx skills disable <name> - Disable a skill
+ *
+ * Manual Skill Installation:
+ * - Global skills: Place skill folder in .agents/skills/global/ directory (project-wide)
+ * - User skills: Place skill folder in .agents/skills/user/ directory (per-user instance)
+ * - Each skill must have SKILL.md and optional workflows/ directory
  */
 
 import { Command } from 'commander';
 import { skillsManager } from './skills-manager';
+import { skillsRegistry } from './skills-registry';
 import { promptEngineeringService } from './prompt-engineering';
-import { readFile, writeFile } from 'fs/promises';
+import { readFile, writeFile, mkdir } from 'fs/promises';
 import { join } from 'path';
 import { createLogger } from '@/lib/utils/logger';
 
@@ -93,11 +101,21 @@ program
   .option('--json', 'Output as JSON')
   .action(async (options) => {
     try {
-      await skillsManager.loadAllSkills();
-      const skills = skillsManager.getAllSkills();
+      // Initialize registry to load all skills
+      await skillsRegistry.initialize();
+      const skills = skillsRegistry.getAllSkills();
 
       if (options.json) {
-        console.log(JSON.stringify(skills.map(s => s.metadata), null, 2));
+        console.log(JSON.stringify(skills.map(s => ({
+          name: s.config.metadata.name,
+          description: s.config.metadata.description,
+          tags: s.config.metadata.tags,
+          location: s.location.type,
+          enabled: s.enabled,
+          version: s.config.metadata.version,
+          executions: s.config.reinforcement.totalExecutions,
+          successRate: s.config.reinforcement.avgSuccessRate,
+        })), null, 2));
         return;
       }
 
@@ -105,16 +123,17 @@ program
       console.log('─'.repeat(80));
 
       for (const skill of skills) {
-        const { name, description, tags, version } = skill.metadata;
-        const { avgSuccessRate, trend, totalExecutions } = skill.reinforcement;
+        const { name, description, tags, version } = skill.config.metadata;
+        const { avgSuccessRate, totalExecutions, weights } = skill.config.reinforcement;
 
-        console.log(`\n📦 ${name} v${version}`);
+        console.log(`\n📦 ${name} v${version} ${skill.location.type === 'global' ? '(global)' : '(user)'}`);
         console.log(`   ${description}`);
         console.log(`   Tags: ${tags.join(', ') || 'none'}`);
         console.log(`   Executions: ${totalExecutions}`);
         console.log(`   Success Rate: ${(avgSuccessRate * 100).toFixed(1)}%`);
-        console.log(`   Trend: ${trend.toUpperCase()}`);
-        console.log(`   Workflows: ${skill.workflows.length}`);
+        console.log(`   Trend: ${weights.trend.toUpperCase()}`);
+        console.log(`   Workflows: ${skill.config.workflows.length}`);
+        console.log(`   ${skill.enabled ? '✅ Enabled' : '❌ Disabled'}`);
       }
 
       console.log('\n' + '─'.repeat(80));
@@ -133,57 +152,58 @@ program
   .command('show <name>')
   .description('Show skill details')
   .option('-o, --output <dir>', 'Skills directory', '.agents/skills')
-  .action(async (name) => {
+  .action(async (name, options) => {
     try {
-      await skillsManager.loadAllSkills();
-      const skill = skillsManager.getAllSkills().find(s => s.metadata.name === name);
+      // Initialize registry to load all skills
+      await skillsRegistry.initialize();
+      const skill = skillsRegistry.getSkill(name);
 
       if (!skill) {
         console.log(`\n❌ Skill "${name}" not found\n`);
         process.exit(1);
       }
 
-      console.log(`\n📦 Skill: ${skill.metadata.name}\n`);
+      console.log(`\n📦 Skill: ${skill.config.metadata.name}\n`);
       console.log('─'.repeat(80));
 
       console.log(`\n📝 Metadata:`);
-      console.log(`   Name: ${skill.metadata.name}`);
-      console.log(`   Description: ${skill.metadata.description}`);
-      console.log(`   Version: ${skill.metadata.version}`);
-      console.log(`   Tags: ${skill.metadata.tags.join(', ') || 'none'}`);
-      console.log(`   Created: ${new Date(skill.metadata.createdAt).toLocaleDateString()}`);
-      console.log(`   Updated: ${new Date(skill.metadata.updatedAt).toLocaleDateString()}`);
+      console.log(`   Name: ${skill.config.metadata.name}`);
+      console.log(`   Description: ${skill.config.metadata.description}`);
+      console.log(`   Version: ${skill.config.metadata.version}`);
+      console.log(`   Tags: ${skill.config.metadata.tags.join(', ') || 'none'}`);
+      console.log(`   Location: ${skill.location.type} (${skill.location.path})`);
+      console.log(`   ${skill.enabled ? '✅ Enabled' : '❌ Disabled'}`);
 
       console.log(`\n🎯 System Prompt:`);
-      console.log(`   ${skill.systemPrompt.split('\n').slice(0, 5).join('\n   ')}...`);
+      console.log(`   ${skill.config.systemPrompt.split('\n').slice(0, 5).join('\n   ')}...`);
 
-      console.log(`\n🔄 Workflows (${skill.workflows.length}):`);
-      for (const workflow of skill.workflows) {
+      console.log(`\n🔄 Workflows (${skill.config.workflows.length}):`);
+      for (const workflow of skill.config.workflows) {
         console.log(`   • ${workflow.name}`);
         console.log(`     Trigger: ${workflow.trigger}`);
         console.log(`     Steps: ${workflow.steps.length}`);
       }
 
       console.log(`\n📊 Reinforcement Data:`);
-      console.log(`   Total Executions: ${skill.reinforcement.totalExecutions}`);
-      console.log(`   Successful: ${skill.reinforcement.successfulExecutions}`);
-      console.log(`   Failed: ${skill.reinforcement.failedExecutions}`);
-      console.log(`   Success Rate: ${(skill.reinforcement.avgSuccessRate * 100).toFixed(1)}%`);
-      console.log(`   Trend: ${skill.reinforcement.weights.trend.toUpperCase()}`);
+      console.log(`   Total Executions: ${skill.config.reinforcement.totalExecutions}`);
+      console.log(`   Successful: ${skill.config.reinforcement.successfulExecutions}`);
+      console.log(`   Failed: ${skill.config.reinforcement.failedExecutions}`);
+      console.log(`   Success Rate: ${(skill.config.reinforcement.avgSuccessRate * 100).toFixed(1)}%`);
+      console.log(`   Trend: ${skill.config.reinforcement.weights.trend.toUpperCase()}`);
 
       console.log(`\n⚖️ Weights:`);
-      console.log(`   Overall: ${skill.reinforcement.weights.overall.toFixed(2)}`);
+      console.log(`   Overall: ${skill.config.reinforcement.weights.overall.toFixed(2)}`);
       console.log(`   By Agent Type:`);
-      for (const [agentType, weight] of Object.entries(skill.reinforcement.weights.byAgentType)) {
+      for (const [agentType, weight] of Object.entries(skill.config.reinforcement.weights.byAgentType)) {
         console.log(`     ${agentType}: ${weight.toFixed(2)}`);
       }
       console.log(`   By Workflow:`);
-      for (const [workflow, weight] of Object.entries(skill.reinforcement.weights.byWorkflow)) {
+      for (const [workflow, weight] of Object.entries(skill.config.reinforcement.weights.byWorkflow)) {
         console.log(`     ${workflow}: ${weight.toFixed(2)}`);
       }
 
-      console.log(`\n💡 Recent Feedback (${skill.reinforcement.recentFeedback.length}):`);
-      const recent = skill.reinforcement.recentFeedback.slice(-5);
+      console.log(`\n💡 Recent Feedback (${skill.config.reinforcement.recentFeedback.length}):`);
+      const recent = skill.config.reinforcement.recentFeedback.slice(-5);
       for (const feedback of recent) {
         const icon = feedback.success ? '✅' : '❌';
         console.log(`   ${icon} ${feedback.agentType}/${feedback.workflowName || 'general'} - ${feedback.notes || 'No notes'}`);
@@ -469,6 +489,58 @@ program
 
       console.log('\n' + '─'.repeat(80));
       console.log(`\n💡 Use "npx skills weight ${name}" to adjust weights\n`);
+    } catch (error: any) {
+      console.error(`\n❌ Error: ${error.message}\n`);
+      process.exit(1);
+    }
+  });
+
+// ============================================================================
+// Enable Command
+// ============================================================================
+
+program
+  .command('enable <name>')
+  .description('Enable a skill')
+  .option('-o, --output <dir>', 'Skills directory', '.agents/skills')
+  .action(async (name, options) => {
+    try {
+      await skillsRegistry.initialize();
+      const skill = skillsRegistry.getSkill(name);
+
+      if (!skill) {
+        console.log(`\n❌ Skill "${name}" not found\n`);
+        process.exit(1);
+      }
+
+      skillsRegistry.setSkillEnabled(name, true);
+      console.log(`\n✅ Skill "${name}" enabled\n`);
+    } catch (error: any) {
+      console.error(`\n❌ Error: ${error.message}\n`);
+      process.exit(1);
+    }
+  });
+
+// ============================================================================
+// Disable Command
+// ============================================================================
+
+program
+  .command('disable <name>')
+  .description('Disable a skill')
+  .option('-o, --output <dir>', 'Skills directory', '.agents/skills')
+  .action(async (name, options) => {
+    try {
+      await skillsRegistry.initialize();
+      const skill = skillsRegistry.getSkill(name);
+
+      if (!skill) {
+        console.log(`\n❌ Skill "${name}" not found\n`);
+        process.exit(1);
+      }
+
+      skillsRegistry.setSkillEnabled(name, false);
+      console.log(`\n✅ Skill "${name}" disabled\n`);
     } catch (error: any) {
       console.error(`\n❌ Error: ${error.message}\n`);
       process.exit(1);
