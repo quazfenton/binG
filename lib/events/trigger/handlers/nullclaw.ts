@@ -5,11 +5,19 @@
  */
 
 import { z } from 'zod';
-import type { NULLCLAW_AGENT_EVENT } from '../../schema';
+
+// Nullclaw agent event schema
+const NullclawAgentEventSchema = z.object({
+  userId: z.string(),
+  prompt: z.string(),
+  model: z.string().optional(),
+  tools: z.array(z.string()).optional(),
+  context: z.record(z.any()).optional(),
+});
 
 const NULLCLAW_URL = process.env.NULLCLAW_URL || 'http://nullclaw:3000';
 
-export async function handleNullclawAgent(event: z.infer<typeof NULLCLAW_AGENT_EVENT>) {
+export async function handleNullclawAgent(event: z.infer<typeof NullclawAgentEventSchema>) {
   console.log(`[NullclawHandler] Starting agent task for user ${event.userId}`);
   
   try {

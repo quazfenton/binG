@@ -5,7 +5,7 @@
  * Enables LLM tools to emit events for background processing.
  */
 
-import { emitEvent } from './bus';
+import { emitEvent, emitEventWithOptions } from './bus';
 import { AnyEvent } from './schema';
 import { z } from 'zod';
 
@@ -81,7 +81,9 @@ export async function scheduleTask(input: unknown): Promise<ScheduleTaskResult> 
   
   try {
     if (schedule.type === 'immediate') {
-      const result = await emitEvent(eventPayload);
+      const userId = 'system';
+      const sessionId = (eventPayload as any).sessionId;
+      const result = await emitEvent(eventPayload, userId, sessionId);
       return {
         success: true,
         taskId: result.eventId,
@@ -91,10 +93,12 @@ export async function scheduleTask(input: unknown): Promise<ScheduleTaskResult> 
     }
     
     if (schedule.type === 'delay' && schedule.delayMs) {
+      const userId = 'system';
+      const sessionId = (eventPayload as any).sessionId;
       const result = await emitEventWithOptions(eventPayload, {
         priority: metadata?.priority,
         delay: schedule.delayMs,
-      });
+      }, userId, sessionId);
       return {
         success: true,
         taskId: result.eventId,
@@ -105,7 +109,9 @@ export async function scheduleTask(input: unknown): Promise<ScheduleTaskResult> 
     }
     
     if (schedule.type === 'cron' && schedule.expression) {
-      const result = await emitEvent(eventPayload);
+      const userId = 'system';
+      const sessionId = (eventPayload as any).sessionId;
+      const result = await emitEvent(eventPayload, userId, sessionId);
       return {
         success: true,
         taskId: result.eventId,
@@ -139,26 +145,22 @@ function buildEventPayload(
   payload: Record<string, any>,
   userId: string
 ): AnyEvent | null {
-  switch (taskType) {
-    case 'HACKER_NEWS_DAILY':
-      return { type: 'HACKER_NEWS_DAILY', userId, destination: payload.destination };
-    case 'RESEARCH_TASK':
-      return { type: 'RESEARCH_TASK', userId, query: payload.query, depth: payload.depth || 3, sources: payload.sources };
-    case 'REPO_DIGEST':
-      return { type: 'REPO_DIGEST', userId, repo: payload.repo, interval: payload.interval || 'daily' };
-    case 'SEND_EMAIL':
-      return { type: 'SEND_EMAIL', userId, to: payload.to, subject: payload.subject, body: payload.body };
-    case 'WEBHOOK':
-      return { type: 'WEBHOOK', userId, url: payload.url, method: payload.method || 'POST', body: payload.body, headers: payload.headers };
-    case 'SANDBOX_COMMAND':
-      return { type: 'SANDBOX_COMMAND', userId, command: payload.command, cwd: payload.cwd, timeout: payload.timeout };
-    case 'NULLCLAW_AGENT':
-      return { type: 'NULLCLAW_AGENT', userId, prompt: payload.prompt, model: payload.model, tools: payload.tools, context: payload.context };
-    case 'CUSTOM_DAG':
-      return { type: 'WEBHOOK', userId, url: payload.url || 'internal://dag', method: 'POST', body: payload };
-    default:
-      return null;
-  }
+  // Map task types to valid SCHEDULED_TASK taskType enum values
+  const validTaskTypes = ['HACKER_NEWS_DAILY', 'RESEARCH_TASK', 'SEND_EMAIL', 'CUSTOM'] as const;
+  
+  // Handle custom task types not in the enum
+  const normalizedTaskType = validTaskTypes.includes(taskType as any) 
+    ? taskType as typeof validTaskTypes[number]
+    : 'CUSTOM';
+
+  return {
+    type: 'SCHEDULED_TASK',
+    taskType: normalizedTaskType,
+    userId,
+    payload,
+    cronExpression: undefined,
+    scheduledAt: undefined,
+  };
 }
 
 // Task Status & Management
@@ -166,20 +168,20 @@ export async function getTaskStatus(taskId: string): Promise<{
   exists: boolean;
   status?: string;
   type?: string;
-  createdAt?: number;
-  processedAt?: number;
+  createdAt?: string;
+  completedAt?: string;
   error?: string;
 }> {
   try {
-    const { getEvent } = await import('./store');
-    const event = await getEvent(taskId);
+    const { getEventById } = await import('./store');
+    const event = await getEventById(taskId);
     if (!event) return { exists: false };
     return {
       exists: true,
       status: event.status,
       type: event.type,
       createdAt: event.createdAt,
-      processedAt: event.processedAt,
+      completedAt: event.completedAt,
       error: event.error,
     };
   } catch (error: any) {
@@ -189,7 +191,7 @@ export async function getTaskStatus(taskId: string): Promise<{
 
 export async function cancelTask(taskId: string): Promise<{ success: boolean; error?: string }> {
   try {
-    const { cancelEvent } = await import('./store');
+    const { cancelEvent } = await import('./router');
     await cancelEvent(taskId);
     return { success: true };
   } catch (error: any) {

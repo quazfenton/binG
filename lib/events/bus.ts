@@ -78,6 +78,28 @@ export async function emitEvent(
 }
 
 /**
+ * Emit an event with additional options (priority, delay)
+ * This is a wrapper around emitEvent for delayed/priority events
+ */
+export async function emitEventWithOptions(
+  input: unknown,
+  options: {
+    priority?: 'low' | 'normal' | 'high';
+    delay?: number;
+  },
+  userId: string,
+  sessionId?: string
+): Promise<EmitEventResult> {
+  // For now, delay is handled by the scheduler, not here
+  // Priority is passed through if the event schema supports it
+  const eventWithOptions = {
+    ...(input as object),
+    priority: options.priority || 'normal',
+  };
+  return emitEvent(eventWithOptions, userId, sessionId);
+}
+
+/**
  * Emit event and wait for completion
  *
  * Useful for human-in-the-loop scenarios where you need to wait
