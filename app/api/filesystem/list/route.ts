@@ -33,10 +33,14 @@ const logError = (...args: any[]) => console.error(`${COLORS.bright}${COLORS.red
 /**
  * Track request frequency to detect polling loops
  */
-function trackRequest(path: string): { isPolling: boolean; requestCount: number; windowMs: number } {
+function trackRequest(path: string): { isPolling: boolean; requestCount: number; windowMs: number; isFilePath: boolean } {
   const now = Date.now();
   const key = path;
 
+  // CRITICAL FIX: Detect file paths (contain extension and no trailing slash)
+  // File paths should NOT be polled - they should use readFile instead
+  const isFilePath = path.includes('.') && !path.endsWith('/') && !path.endsWith('/.directory');
+  
   // Cleanup old entries to prevent unbounded growth
   for (const [trackedKey, tracked] of requestTracker.entries()) {
     if (now - tracked.lastRequest > REQUEST_WINDOW_MS * 2) {
@@ -55,7 +59,7 @@ function trackRequest(path: string): { isPolling: boolean; requestCount: number;
 
   if (!requestTracker.has(key)) {
     requestTracker.set(key, { count: 1, lastRequest: now, firstRequest: now });
-    return { isPolling: false, requestCount: 1, windowMs: 0 };
+    return { isPolling: false, requestCount: 1, windowMs: 0, isFilePath };
   }
 
   const tracker = requestTracker.get(key)!;
@@ -64,14 +68,14 @@ function trackRequest(path: string): { isPolling: boolean; requestCount: number;
   // Reset if outside window
   if (windowMs > REQUEST_WINDOW_MS) {
     requestTracker.set(key, { count: 1, lastRequest: now, firstRequest: now });
-    return { isPolling: false, requestCount: 1, windowMs: 0 };
+    return { isPolling: false, requestCount: 1, windowMs: 0, isFilePath };
   }
 
   tracker.count++;
   tracker.lastRequest = now;
 
   const isPolling = tracker.count > 3; // More than 3 requests in 5s = polling
-  return { isPolling, requestCount: tracker.count, windowMs };
+  return { isPolling, requestCount: tracker.count, windowMs, isFilePath };
 }
 
 /**
@@ -110,6 +114,15 @@ export async function GET(req: NextRequest) {
     
     // Track request frequency
     const tracking = trackRequest(path);
+
+    // CRITICAL FIX: Block polling on file paths - files should use readFile, not listDirectory
+    if (tracking.isFilePath && tracking.requestCount > 2) {
+      logWarn(`${COLORS.yellow}FILE PATH POLLING BLOCKED:${COLORS.reset} ${tracking.requestCount} list requests for FILE path "${COLORS.blue}${path}${COLORS.reset}" - use readFile instead`);
+      return NextResponse.json(
+        { success: false, error: 'listDirectory called on file path - use readFile instead', nodes: [] },
+        { status: 400 },
+      );
+    }
 
     // Rate limit aggressive polling — return 429 after threshold
     if (tracking.isPolling && tracking.requestCount > 6) {
