@@ -88,12 +88,14 @@ export class AgentLoop {
   private tools: FilesystemTool[];
   private toolLoopAgent: any | null = null;
   private useToolLoopAgent: boolean = false;
+  private configuredModel?: string;
 
   constructor(
     userId: string,
     workspacePath: string,
     maxIterations: number = 10,
     toolOptions: FilesystemToolOptions = {},
+    model?: string,
   ) {
     this.context = {
       userId,
@@ -101,6 +103,7 @@ export class AgentLoop {
       conversationHistory: [],
     };
     this.maxIterations = maxIterations;
+    this.configuredModel = model;
     this.tools = createFilesystemTools(userId, {
       ...toolOptions,
       workspacePath,
@@ -637,10 +640,12 @@ Assistant: { "done": true, "message": "Created a todo app with package.json and 
    */
   /**
    * Get provider and model from user's configuration
+   * Uses the model passed to constructor, or falls back to DEFAULT_MODEL env var
    */
   private getProviderConfig(): { provider: string; model: string } {
     const provider = getProviderForTask('agent');
-    const model = getModelForTask('agent', 'gpt-4o');
+    // Use configured model if provided, otherwise use env var or widely-available default
+    const model = this.configuredModel || getModelForTask('agent', process.env.DEFAULT_MODEL || 'mistral-small-latest');
     return { provider, model };
   }
 
@@ -688,6 +693,7 @@ export function createAgentLoop(
   workspacePath: string,
   maxIterations?: number,
   toolOptions?: FilesystemToolOptions,
+  model?: string,
 ): AgentLoop {
-  return new AgentLoop(userId, workspacePath, maxIterations, toolOptions);
+  return new AgentLoop(userId, workspacePath, maxIterations, toolOptions, model);
 }

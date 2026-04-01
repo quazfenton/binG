@@ -119,7 +119,7 @@ export function createStreamingEvents(
     })
   }
 
-  // Filesystem changes
+  // Filesystem changes - emit filesystem event
   if (includeFilesystem && response.data?.files?.length) {
     events.push(sseEncode('filesystem', {
       requestId,
@@ -198,6 +198,9 @@ export function createStreamingEvents(
     source: response.source,
     metadata: response.metadata,
     messageMetadata: response.data?.messageMetadata || response.metadata?.messageMetadata,
+    // Include filesystem metadata for enhanced-diff-viewer
+    filesystem: response.metadata?.filesystem,
+    fileEdits: response.metadata?.fileEdits,
     // Include usage breakdown if available
     usage: response.data?.usage ? {
       promptTokens: response.data.usage.promptTokens || response.data.usage.prompt_tokens || 0,
