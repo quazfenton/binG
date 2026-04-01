@@ -20,6 +20,7 @@ import { timingSafeEqual } from "crypto";
 
 const DATA_DIR = join(process.cwd(), "data");
 const PLAYLIST_PATH = join(DATA_DIR, "playlists.json");
+const TITLE_CACHE_PATH = join(DATA_DIR, "video-titles-cache.json");
 
 // Rate limiting configuration
 const RATE_LIMIT = {
@@ -142,16 +143,129 @@ async function writePlaylists(playlists: any[]): Promise<void> {
   await writeFile(PLAYLIST_PATH, JSON.stringify(playlists, null, 2));
 }
 
+// In-memory title cache, persisted to disk
+let titleCache: Record<string, string> = {};
+let titleCacheLoaded = false;
+
+async function loadTitleCache(): Promise<void> {
+  if (titleCacheLoaded) return;
+  try {
+    if (existsSync(TITLE_CACHE_PATH)) {
+      const raw = await readFile(TITLE_CACHE_PATH, 'utf-8');
+      titleCache = JSON.parse(raw);
+    }
+  } catch {
+    titleCache = {};
+  }
+  titleCacheLoaded = true;
+}
+
+async function saveTitleCache(): Promise<void> {
+  try {
+    await ensureDataDir();
+    await writeFile(TITLE_CACHE_PATH, JSON.stringify(titleCache, null, 2));
+  } catch {
+    // Non-critical, ignore
+  }
+}
+
+/**
+ * Fetch video title from YouTube oEmbed (no API key needed).
+ * Returns cached title or fetched title, falls back to null.
+ */
+async function fetchVideoTitle(videoId: string): Promise<string | null> {
+  if (titleCache[videoId]) return titleCache[videoId];
+  try {
+    const res = await fetch(
+      `https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`,
+      { signal: AbortSignal.timeout(5000) }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    if (data.title) {
+      titleCache[videoId] = data.title;
+      return data.title;
+    }
+  } catch {
+    // Timeout or network error, use fallback
+  }
+  return null;
+}
+
+/**
+ * Fetch titles for all video IDs in parallel with concurrency limit
+ */
+async function fetchTitlesForPlaylist(videoIds: string[]): Promise<void> {
+  const uncached = videoIds.filter(id => !titleCache[id]);
+  if (uncached.length === 0) return;
+
+  // Fetch in batches of 10
+  const batchSize = 10;
+  for (let i = 0; i < uncached.length; i += batchSize) {
+    const batch = uncached.slice(i, i + batchSize);
+    await Promise.all(batch.map(fetchVideoTitle));
+  }
+}
+
+/**
+ * Fetch playlist thumbnail from YouTube oEmbed (no API key needed).
+ * Uses the first video's thumbnail since playlist oEmbed is unreliable.
+ * Returns cached thumbnail or fetched thumbnail, falls back to generated URL.
+ */
+async function fetchPlaylistThumbnail(playlistId: string, title: string, firstVideoId?: string): Promise<string> {
+  const cacheKey = `thumb:${playlistId}`;
+  
+  // Check title cache first
+  if (titleCache[cacheKey]) return titleCache[cacheKey];
+  
+  // If we have a first video ID, fetch its thumbnail via oEmbed
+  if (firstVideoId) {
+    try {
+      const videoUrl = `https://www.youtube.com/watch?v=${firstVideoId}`;
+      const res = await fetch(
+        `https://www.youtube.com/oembed?url=${encodeURIComponent(videoUrl)}&format=json`,
+        { signal: AbortSignal.timeout(5000) }
+      );
+      
+      if (res.ok) {
+        const data = await res.json();
+        if (data.thumbnail_url) {
+          titleCache[cacheKey] = data.thumbnail_url;
+          await saveTitleCache();
+          return data.thumbnail_url;
+        }
+      }
+    } catch {
+      // Timeout or network error, use fallback
+    }
+  }
+  
+  // Fallback: Use YouTube's max resolution thumbnail URL directly
+  if (firstVideoId) {
+    const directThumbnail = `https://img.youtube.com/vi/${firstVideoId}/maxresdefault.jpg`;
+    titleCache[cacheKey] = directThumbnail;
+    await saveTitleCache();
+    return directThumbnail;
+  }
+  
+  // Last resort: generated placeholder
+  return generateCoverUrl(playlistId, title);
+}
+
 /**
  * Convert a playlist entry to the enriched format with songs
  */
-function enrichPlaylist(playlist: any): any {
+async function enrichPlaylist(playlist: any): Promise<any> {
   const { artist } = playlist.artist
     ? { artist: playlist.artist }
     : parseArtistAndAlbum(playlist.title || '');
 
   const playlistId = playlist.playlist_id;
+  const firstVideoId = (playlist.videos || [])[0];
   
+  // Fetch thumbnail from oEmbed or direct YouTube URL (with caching)
+  const coverUrl = await fetchPlaylistThumbnail(playlistId, playlist.title, firstVideoId);
+
   return {
     id: playlist.playlist_id,
     playlist_id: playlistId,
@@ -161,10 +275,10 @@ function enrichPlaylist(playlist: any): any {
     discovered_at: playlist.discovered_at,
     isNew: isRecent(playlist.discovered_at),
     isFeatured: playlist.isFeatured || false,
-    coverUrl: playlist.coverUrl || generateCoverUrl(playlistId, playlist.title),
+    coverUrl: coverUrl,
     songs: (playlist.videos || []).map((videoId: string, index: number) => ({
       id: `song-${playlistId}-${index}`,
-      title: `Track ${index + 1}`,
+      title: titleCache[videoId] || `Track ${index + 1}`,
       artist: artist,
       album: playlist.title,
       videoId: videoId,
@@ -204,12 +318,16 @@ export async function GET(request: NextRequest) {
     console.log('[MusicHub API] Reading playlists from:', PLAYLIST_PATH);
     const playlists = await readPlaylists();
     console.log('[MusicHub API] Read', playlists.length, 'playlists from file');
-    console.log('[MusicHub API] First playlist sample:', playlists[0]?.playlist_id, playlists[0]?.title);
 
-    // Enrich playlists with additional metadata
-    const enrichedPlaylists = playlists.map(enrichPlaylist);
-    console.log('[MusicHub API] Enriched playlists, first one:', enrichedPlaylists[0]?.playlist_id, enrichedPlaylists[0]?.songs?.length, 'songs');
-    console.log('[MusicHub API] Enriched playlists, total songs:', enrichedPlaylists.reduce((sum, p) => sum + (p.songs?.length || 0), 0));
+    // Load title cache and fetch any missing video titles
+    await loadTitleCache();
+    const allVideoIds = playlists.flatMap((p: any) => p.videos || []);
+    await fetchTitlesForPlaylist(allVideoIds);
+    await saveTitleCache();
+
+    // Enrich playlists with additional metadata (titles now populated from cache)
+    const enrichedPlaylists = await Promise.all(playlists.map(enrichPlaylist));
+    console.log('[MusicHub API] Enriched', enrichedPlaylists.length, 'playlists, total songs:', enrichedPlaylists.reduce((sum: number, p: any) => sum + (p.songs?.length || 0), 0));
 
     return NextResponse.json(
       {

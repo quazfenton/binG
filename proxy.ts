@@ -109,25 +109,24 @@ export async function proxy(request: NextRequest) {
   const isDev = process.env.NODE_ENV !== 'production';
 
   if (isDev) {
-    // Development CSP - more permissive for debugging, allows iframe embedding
-    // MUST include ws: and wss: for Next.js HMR WebSocket connections
+    // Development CSP - permissive for debugging
+    // frame-src https: allows plugin iframes (YouTube, OpenStreetMap, HuggingFace, etc.)
     response.headers.set(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https://fonts.gstatic.com; frame-src 'self' https://www.youtube.com https://youtube.com https://www.youtube-nocookie.com; frame-ancestors 'self' https://www.youtube.com https://youtube.com https://www.youtube-nocookie.com; base-uri 'self'; form-action 'self';"
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';"
     );
   } else {
-    // Production CSP - RELAXED for Next.js compatibility
-    // Next.js uses its own script loading mechanism that doesn't support nonces
+    // Production CSP - relaxed for Next.js compatibility
     response.headers.set(
       'Content-Security-Policy',
-      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: wss: blob:; font-src 'self' data: https://fonts.gstatic.com; frame-src 'self' https://www.youtube.com https://youtube.com https://www.youtube-nocookie.com; frame-ancestors 'self' https://www.youtube.com https://youtube.com https://www.youtube-nocookie.com; base-uri 'self'; form-action 'self';"
+      "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' blob: https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: wss: blob:; font-src 'self' data: https:; frame-src 'self' https:; frame-ancestors 'self'; base-uri 'self'; form-action 'self';"
     );
   }
 
   // Permissions Policy - restrict browser features
   response.headers.set(
     'Permissions-Policy',
-    'camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()'
+    'camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self "https://www.youtube.com"), accelerometer=(self "https://www.youtube.com")'
   );
 
   // Strict Transport Security - enforce HTTPS
