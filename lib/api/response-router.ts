@@ -114,6 +114,8 @@ export interface RouterRequest {
   conversationId?: string
   /** When true, the Vercel AI SDK handles tool calling natively — skip regex intent parsing */
   nativeToolCalling?: boolean
+  /** Spec amplification mode: 'normal' (disabled), 'enhanced', or 'max' */
+  mode?: 'normal' | 'enhanced' | 'max'
 }
 
 export interface RouterResponse {

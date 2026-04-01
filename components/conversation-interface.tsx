@@ -268,6 +268,11 @@ export default function ConversationInterface() {
   const chatHistorySavedRef = useRef<string | null>(null);
   const lastProcessedAssistantDiffSignatureRef = useRef<string>('');
   const diffApplyQueueRef = useRef<Promise<void>>(Promise.resolve());
+  
+  // Track permanently rejected diffs to prevent infinite retry loops
+  // Key: "resolvedPath::diff_hash", Value: failure count
+  const rejectedDiffsRef = useRef<Map<string, number>>(new Map());
+  const MAX_RETRY_ATTEMPTS = 2;  // After this many failures, permanently reject
 
   useEffect(() => {
     providerRef.current = currentProvider;
@@ -1238,11 +1243,22 @@ export default function ConversationInterface() {
       filesystemSessionId,
     });
 
+    // Create simple hash for diff tracking
+    function hashDiff(diff: string): string {
+      return diff.length.toString(36) + '-' + diff.slice(0, 20).replace(/\s/g, '');
+    }
+
     // Client-side path validation to prevent retry loops on invalid paths
-    // Matches server-side validation in app/api/filesystem/read/route.ts
+    // Matches server-side validation and pre-filter validation
     function isValidFilePath(path: string): boolean {
       const lastSegment = path.split('/').pop() || path;
-      
+
+      // CRITICAL: Reject paths ending with quotes (JSX/HTML fragments)
+      if (path.endsWith('"') || path.endsWith("'") || path.endsWith('`')) {
+        console.warn('[applyDiffsToFilesystem] Rejecting path ending with quote (JSX fragment):', path);
+        return false;
+      }
+
       // Reject CSS values, SCSS variables, operators, etc.
       if (/^[0-9.]+[a-z]*$/i.test(lastSegment)) return false;  // "0.3s", "10px"
       if (/^\$/.test(lastSegment)) return false;  // SCSS variables
@@ -1251,16 +1267,33 @@ export default function ConversationInterface() {
       if (/^v-/.test(lastSegment)) return false;  // Vue directives
       if (/[,\s]$/.test(lastSegment)) return false;  // Trailing comma/space
       
+      // Reject paths with spaces in filename
+      if (/\s/.test(lastSegment)) return false;
+
       return true;
     }
 
     for (const entry of entries) {
       const resolvedPath = resolveScopedPath(entry.path, scopePath);
       
+      // Check if this diff has been permanently rejected (exceeded retry limit)
+      const diffKey = `${resolvedPath}::${hashDiff(entry.diff)}`;
+      const failureCount = rejectedDiffsRef.current.get(diffKey) || 0;
+      if (failureCount >= MAX_RETRY_ATTEMPTS) {
+        console.warn('[applyDiffsToFilesystem] Skipping permanently rejected diff (exceeded retry limit):', {
+          path: resolvedPath,
+          failureCount,
+          diffLength: entry.diff.length,
+        });
+        continue;  // Skip this diff permanently
+      }
+
       // CRITICAL FIX: Skip obviously invalid paths BEFORE attempting read
       // This prevents infinite retry loops on CSS values, SCSS variables, etc.
       if (!isValidFilePath(resolvedPath)) {
         console.warn('[applyDiffsToFilesystem] Skipping invalid path (CSS value, SCSS var, etc.):', resolvedPath);
+        // Mark as permanently rejected to prevent retry
+        rejectedDiffsRef.current.set(diffKey, MAX_RETRY_ATTEMPTS);
         failed[entry.path] = failed[entry.path] || [];
         failed[entry.path].push(entry.diff);
         continue;
@@ -1294,6 +1327,8 @@ export default function ConversationInterface() {
         } else if (readResponse.status === 400 || readResponse.status === 429) {
           // Invalid path or rate limited - skip this file to prevent retry loop
           console.warn('[applyDiffsToFilesystem] Skipping path due to server rejection:', resolvedPath, 'status:', readResponse.status);
+          // Mark as permanently rejected for 429 (rate limit) or 400 (invalid path)
+          rejectedDiffsRef.current.set(diffKey, MAX_RETRY_ATTEMPTS);
           failed[entry.path] = failed[entry.path] || [];
           failed[entry.path].push(entry.diff);
           continue;
@@ -1308,6 +1343,9 @@ export default function ConversationInterface() {
       const nextContent = applyDiffToContent(currentContent, entry.path, entry.diff);
 
       if (nextContent == null) {
+        // Track failure for retry limit
+        rejectedDiffsRef.current.set(diffKey, failureCount + 1);
+        
         failed[entry.path] = failed[entry.path] || [];
         failed[entry.path].push(entry.diff);
         console.warn('[applyDiffsToFilesystem] Diff application returned null', {
@@ -1320,6 +1358,8 @@ export default function ConversationInterface() {
           suggestion: readErrorMsg
             ? 'File may not exist or read error occurred'
             : 'Diff may not match current content or is malformed',
+          failureCount: failureCount + 1,
+          willRetry: failureCount + 1 < MAX_RETRY_ATTEMPTS,
         });
         continue;
       }
@@ -1365,12 +1405,17 @@ export default function ConversationInterface() {
           newContentLength: nextContent.length,
         });
       } catch (writeError: any) {
+        // Track failure for retry limit
+        rejectedDiffsRef.current.set(diffKey, failureCount + 1);
+        
         failed[entry.path] = failed[entry.path] || [];
         failed[entry.path].push(entry.diff);
         console.warn('[applyDiffsToFilesystem] Write failed', {
           path: resolvedPath,
           error: writeError.message,
           nextContentLength: nextContent.length,
+          failureCount: failureCount + 1,
+          willRetry: failureCount + 1 < MAX_RETRY_ATTEMPTS,
         });
       }
     }
