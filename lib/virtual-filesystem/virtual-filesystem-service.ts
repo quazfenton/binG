@@ -794,17 +794,20 @@ export class VirtualFilesystemService {
   private async persistWorkspace(ownerId: string, workspace: WorkspaceState): Promise<void> {
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
     const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
-    
+
+    // Get GitVFS instance and disable auto-commit during persist to prevent commit loops
+    this.enableBatchMode(normalizedOwnerId);
+
     // DEBUG: Log what's being persisted
     console.log('[VFS persistWorkspace] Saving', workspace.files.size, 'files for owner:', normalizedOwnerId);
-    
+
     const serialized: PersistedWorkspace = {
       root: this.workspaceRoot,
       version: workspace.version,
       updatedAt: workspace.updatedAt,
       files: Array.from(workspace.files.values()).sort((a, b) => a.path.localeCompare(b.path)),
     };
-    
+
     // DEBUG: Log file paths being saved
     if (serialized.files.length > 0) {
       console.log('[VFS persistWorkspace] File paths:', serialized.files.map(f => f.path).slice(0, 5));
@@ -821,12 +824,15 @@ export class VirtualFilesystemService {
 
           await fs.writeFile(tmpFilePath, JSON.stringify(serialized, null, 2), 'utf8');
           await fs.rename(tmpFilePath, storageFilePath);
+          
+          // Re-enable auto-commit after persist completes
+          await this.flushBatchMode(normalizedOwnerId);
         } catch (error: any) {
           // Cleanup temp file if rename failed
           try {
             await fs.unlink(tmpFilePath).catch(() => { /* ignore cleanup errors */ });
           } catch {}
-          
+
           console.error('[VFS] Persist failed:', {
             ownerId: normalizedOwnerId,
             storageDir: this.storageDir,
@@ -834,6 +840,9 @@ export class VirtualFilesystemService {
             error: error.message,
             platform: process.platform,
           });
+          
+          // Re-enable auto-commit even on error
+          await this.flushBatchMode(normalizedOwnerId);
           throw error;
         }
       });
@@ -1127,6 +1136,22 @@ class GitBackedVFSProxy {
   async clearWorkspace(ownerId: string): Promise<void> {
     // Delegate to the proper clear (wipes in-memory map + diff tracker + disk file)
     await (this as any).vfs.clearWorkspace(ownerId);
+  }
+
+  // Batch mode helpers for preventing circular commits during bulk operations
+  enableBatchMode(ownerId: string): void {
+    const gitVFS = this.forOwner(ownerId);
+    (gitVFS as any).enableBatchMode(ownerId);
+  }
+
+  async flushBatchMode(ownerId: string): Promise<any> {
+    const gitVFS = this.forOwner(ownerId);
+    return await (gitVFS as any).flushBatch();
+  }
+
+  disableBatchMode(ownerId: string): void {
+    const gitVFS = this.forOwner(ownerId);
+    (gitVFS as any).disableBatchMode();
   }
 }
 

@@ -12,7 +12,7 @@
  * - Diff tracking between versions
  */
 
-import { VirtualFilesystemService, type FilesystemChangeEvent, virtualFilesystem } from './virtual-filesystem-service';
+import { VirtualFilesystemService, type FilesystemChangeEvent } from './virtual-filesystem-service';
 import type { VirtualFile } from './filesystem-types';
 import { ShadowCommitManager, type CommitResult, type TransactionEntry } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { createLogger } from '@/lib/utils/logger';
@@ -63,7 +63,7 @@ export class GitBackedVFS {
     this.vfs = vfs;
     this.shadowCommitManager = new ShadowCommitManager();
     this.options = {
-      autoCommit: options.autoCommit ?? false,  // DISABLED by default to prevent commit loops during bulk operations
+      autoCommit: options.autoCommit ?? true,  // Enabled by default for immediate feedback
       commitMessage: options.commitMessage ?? 'VFS auto-commit',
       sessionId: options.sessionId ?? 'default',
       enableShadowCommits: options.enableShadowCommits ?? true,
@@ -73,11 +73,14 @@ export class GitBackedVFS {
     this.vfs.onFileChange(this.handleFileChange.bind(this));
   }
 
+  // Track if we're currently in a persist operation to avoid commit loops
+  private isPersisting = false;
+
   /**
    * Handle VFS file change events
    */
   private handleFileChange(event: FilesystemChangeEvent): void {
-    if (!this.options.autoCommit) return;
+    if (!this.options.autoCommit || this.isPersisting) return;
 
     const change: GitVFSChange = {
       path: event.path,
@@ -88,6 +91,25 @@ export class GitBackedVFS {
 
     this.changeBuffer.push(change);
     logger.debug(`[GitVFS] Buffered change: ${event.type} ${event.path} v${event.version}`);
+  }
+
+  /**
+   * Temporarily disable auto-commit during bulk operations
+   * Call before bulk writes, then call enableAutoCommit when done
+   */
+  disableAutoCommit(): void {
+    this.isPersisting = true;
+  }
+
+  /**
+   * Re-enable auto-commit and commit any buffered changes
+   */
+  async enableAutoCommit(ownerId: string): Promise<CommitResult> {
+    this.isPersisting = false;
+    if (this.changeBuffer.length > 0) {
+      return this.commitChanges(ownerId, 'Bulk write complete');
+    }
+    return { success: true, committedFiles: 0 };
   }
 
   // Batch mode: temporarily disable auto-commit for bulk operations
@@ -139,6 +161,17 @@ export class GitBackedVFS {
   }
 
   /**
+   * Disable batch mode without committing (for error recovery)
+   */
+  disableBatchMode(): void {
+    if (this.batchModeEnabled) {
+      this.options.autoCommit = this.originalAutoCommit;
+      this.batchModeEnabled = false;
+      this.batchModeOwnerId = null;
+    }
+  }
+
+  /**
    * Write file with automatic git commit
    * In batch mode, only tracks changes without committing
    */
@@ -171,9 +204,9 @@ export class GitBackedVFS {
       newContent: file.content, // Use actual stored content, not input parameter
     });
 
-    // Auto-commit if enabled AND NOT in batch mode
-    // FIX: In batch mode, skip individual commits - will commit all at once via flushBatch()
-    if (this.options.autoCommit && !this.batchModeEnabled) {
+    // Auto-commit if enabled AND NOT in batch mode AND NOT persisting
+    // In batch mode or during persist, skip individual commits - will commit all at once via flushBatch()
+    if (this.options.autoCommit && !this.batchModeEnabled && !this.isPersisting) {
       await this.commitChanges(ownerId, `Write ${filePath}`);
     }
 
@@ -205,8 +238,8 @@ export class GitBackedVFS {
       originalContent: previousContent,
     });
 
-    // Auto-commit if enabled AND NOT in batch mode
-    if (this.options.autoCommit && !this.batchModeEnabled) {
+    // Auto-commit if enabled AND NOT in batch mode AND NOT persisting
+    if (this.options.autoCommit && !this.batchModeEnabled && !this.isPersisting) {
       await this.commitChanges(ownerId, `Delete ${filePath}`);
     }
   }
@@ -562,15 +595,18 @@ export class GitBackedVFS {
 
 // Export batch mode helpers for use in chat route
 export function enableVFSBatchMode(ownerId: string) {
-  (virtualFilesystem as any).enableBatchMode(ownerId);
+  const { virtualFilesystem } = require('./virtual-filesystem-service');
+  virtualFilesystem.enableBatchMode(ownerId);
 }
 
-export async function flushVFSBatchMode() {
-  return await (virtualFilesystem as any).flushBatch();
+export async function flushVFSBatchMode(ownerId: string) {
+  const { virtualFilesystem } = require('./virtual-filesystem-service');
+  return await virtualFilesystem.flushBatchMode(ownerId);
 }
 
-export function disableVFSBatchMode() {
-  (virtualFilesystem as any).disableBatchMode();
+export function disableVFSBatchMode(ownerId: string) {
+  const { virtualFilesystem } = require('./virtual-filesystem-service');
+  virtualFilesystem.disableBatchMode(ownerId);
 }
 
 /**
