@@ -218,24 +218,16 @@ function getVercelModel(
       const openai = createOpenAI({
         apiKey: apiKey || currentEnv[config.apiKeyEnv],
         baseURL: baseURL || config.baseURL,
-        // CRITICAL FIX: Use compatibility mode to force Chat Completions API format
-        // This prevents "Invalid Responses API request" errors with models that don't support it
-        compatibility: config.compatibility || 'strict',
       });
-      chatLogger.debug('Created OpenAI-compatible provider', { 
-        provider, 
-        baseURL: openai['baseURL'],
-        compatibility: config.compatibility || 'strict',
-      });
+      chatLogger.debug('Created OpenAI-compatible provider', { provider, baseURL: openai['baseURL'] });
       return openai(model);
     }
 
-    // Unknown provider, try OpenAI as fallback with compatibility mode
+    // Unknown provider, try OpenAI as fallback
     chatLogger.warn('Unknown provider, using OpenAI as fallback', { provider, model });
     const openai = createOpenAI({
       apiKey: apiKey || currentEnv.OPENAI_API_KEY,
       baseURL: baseURL || currentEnv.OPENAI_BASE_URL,
-      compatibility: 'compatible',  // Safe default for unknown providers
     });
     return openai(model);
   }
@@ -727,20 +719,22 @@ export async function* streamWithVercelAI(
       // Retry with compatibility mode forced
       useCompatibilityFallback = true;
       
-      // Create model with explicit compatibility mode
+      // Create model for fallback
       const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
       const { createOpenAI } = await import('@ai-sdk/openai');
       const fallbackModel = createOpenAI({
         apiKey: key || currentEnv.OPENROUTER_API_KEY,
         baseURL: url || process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
-        compatibility: 'compatible',  // Force Chat Completions format
       });
-      
+
       // Retry the stream with fallback model
       try {
+        // Convert messages for fallback (need to extract system prompt)
+        const { chatMessages: fallbackChatMessages, systemPrompt: fallbackSystemPrompt } = convertMessages(msgs);
+        
         const fallbackStreamOptions: any = {
           model: fallbackModel as any,
-          messages: chatMessages,
+          messages: fallbackChatMessages,
           temperature: temp,
           maxOutputTokens: maxT,
           maxRetries: 0,
@@ -753,8 +747,8 @@ export async function* streamWithVercelAI(
             metadata: { provider, model: modelName, fallback: 'compatibility' },
           },
         };
-        
-        if (systemPrompt) fallbackStreamOptions.system = systemPrompt;
+
+        if (fallbackSystemPrompt) fallbackStreamOptions.system = fallbackSystemPrompt;
         if (tools && Object.keys(tools).length > 0) fallbackStreamOptions.tools = tools;
         
         const fallbackResult = streamText(fallbackStreamOptions);

@@ -2071,6 +2071,10 @@ export function extractIncrementalFileEdits(
   // This prevents emitting incomplete edits during streaming
   const unclosed = detectUnclosedTags(parseWindow, parseStart, UNCLOSED_SCAN_TAIL_CHARS);
 
+  // OPTIMIZATION: Pre-compute minimum unclosed position for O(1) lookup per edit
+  // This reduces complexity from O(edits × unclosed) to O(unclosed + edits)
+  const minUnclosedPos = unclosed.length > 0 ? Math.min(...unclosed) : Infinity;
+
   // Filter to only new edits we haven't emitted yet
   // Use path + content hash to handle same-file multiple edits
   for (const edit of allEdits) {
@@ -2088,7 +2092,8 @@ export function extractIncrementalFileEdits(
       // Check if this edit's path appears after an unclosed tag position
       // If so, it's likely from an incomplete block - skip it
       const editPathInBuffer = buffer.indexOf(edit.path, parseStart);
-      const isInUnclosedRegion = unclosed.some(pos => editPathInBuffer >= pos);
+      // OPTIMIZATION: O(1) comparison with pre-computed minimum instead of O(unclosed) array scan
+      const isInUnclosedRegion = editPathInBuffer >= minUnclosedPos;
       if (isInUnclosedRegion) {
         continue;
       }
