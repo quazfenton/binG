@@ -14,9 +14,12 @@ export default defineConfig({
     setupFiles: ['./test/setup.ts'],
     include: [
       'test/**/*.test.ts',
+      'test/**/*.test.tsx',
       'tests/e2e/**/*.test.ts',
       'lib/**/*.test.ts',
+      'lib/**/*.test.tsx',
       '__tests__/**/*.test.ts',
+      '__tests__/**/*.test.tsx',
     ],
     exclude: [
       'node_modules',
