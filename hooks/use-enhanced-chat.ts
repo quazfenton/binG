@@ -329,13 +329,18 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     const decoder = new TextDecoder();
     let accumulatedContent = '';
     let currentEventType = '';
+    let tokenCount = 0;  // Track token events for debugging
 
     // Set up a timeout to ensure we don't get stuck
     const timeoutId = setTimeout(() => {
+      console.warn('[Chat] Streaming timeout after 30s, finalizing with accumulated content', {
+        accumulatedContentLength: accumulatedContent?.length,
+        tokenCount,
+      });
       if (accumulatedContent.trim()) {
         // If we have some content, finalize it
-        setMessages(prev => prev.map(msg => 
-          msg.id === assistantMessage.id 
+        setMessages(prev => prev.map(msg =>
+          msg.id === assistantMessage.id
             ? { ...msg, content: accumulatedContent }
             : msg
         ));
@@ -503,14 +508,50 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 case 'done':
-                  if (eventData.messageMetadata) {
-                    const metadata = eventData.messageMetadata;
-                    setMessages(prev => prev.map(msg =>
-                      msg.id === assistantMessage.id
-                        ? { ...msg, metadata: { ...(msg.metadata || {}), ...metadata } }
-                        : msg
-                    ));
+                  // Update message with metadata and content from done event
+                  // CRITICAL FIX: Use done event content as PRIMARY (it has the complete content)
+                  // accumulatedContent may be incomplete if stream parsing got stuck
+                  const doneContent = eventData.content || accumulatedContent || '';
+
+                  // Debug: Log if done event content differs from accumulated (indicates streaming issue)
+                  const contentSource = eventData.content ? 'done-event' : 'accumulated';
+                  const hasContentMismatch = eventData.content && accumulatedContent &&
+                    eventData.content.length !== accumulatedContent.length;
+                  if (process.env.NODE_ENV === 'development') {
+                    console.log('[Chat] Done event received:', {
+                      contentSource,
+                      hasEventDataContent: !!eventData.content,
+                      hasAccumulatedContent: !!accumulatedContent,
+                      doneContentLength: doneContent?.length,
+                      eventDataContentLength: eventData.content?.length,
+                      accumulatedContentLength: accumulatedContent?.length,
+                      contentMismatch: hasContentMismatch,
+                      messageMetadata: eventData.messageMetadata,
+                      hasFilesystem: !!eventData.filesystem,
+                      filesystemApplied: eventData.filesystem?.applied?.length || 0,
+                    });
                   }
+                  // Build metadata from done event
+                  const doneMetadata: any = eventData.messageMetadata || {};
+                  // Also include filesystem info if present
+                  if (eventData.filesystem) {
+                    doneMetadata.filesystem = eventData.filesystem;
+                  }
+                  // Also include fileEdits if present (for enhanced-diff-viewer)
+                  if (eventData.fileEdits && Array.isArray(eventData.fileEdits)) {
+                    doneMetadata.fileEdits = eventData.fileEdits;
+                  }
+                  // ALWAYS update message with done content and metadata
+                  // This ensures complete content even if streaming accumulation got stuck
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === assistantMessage.id
+                      ? {
+                          ...msg,
+                          metadata: { ...(msg.metadata || {}), ...doneMetadata },
+                          content: doneContent // CRITICAL: Always use complete done content
+                        }
+                      : msg
+                  ));
                   // Update version if provided
                   if (eventData.version) {
                     setCurrentVersion(eventData.version);
@@ -522,8 +563,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   if (options.onFinish && currentMessageRef.current) {
                     options.onFinish({
                       ...currentMessageRef.current,
-                      content: accumulatedContent,
-                      metadata: eventData.messageMetadata
+                      content: doneContent,
+                      metadata: doneMetadata
                     });
                   }
                   return;
@@ -651,7 +692,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                 case 'file_edit':
                   // Progressive file edit detected during streaming
-                  // eventData contains: { path, status, operation, timestamp }
+                  // eventData contains: { path, status, operation, content, diff, timestamp }
                   if (eventData.path) {
                     // Update agent activity with progressive file edit
                     setAgentActivity(prev => ({
@@ -662,8 +703,32 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         path: eventData.path,
                         status: eventData.status || 'detected',
                         operation: eventData.operation,
+                        content: eventData.content,  // Include content for diff viewer
+                        diff: eventData.diff,  // Include diff for diff viewer
                         timestamp: eventData.timestamp || Date.now(),
                       }],
+                    }));
+
+                    // ALSO store in message metadata for enhanced-diff-viewer display
+                    setMessages(prev => prev.map(msg => {
+                      if (msg.id === assistantMessage.id) {
+                        const existingFileEdits = (msg.metadata as any)?.fileEdits || [];
+                        const newFileEdit = {
+                          path: eventData.path,
+                          content: eventData.content || '',  // Use actual content from event
+                          diff: eventData.diff,  // Include diff from event
+                          operation: eventData.operation || 'write',
+                          timestamp: eventData.timestamp || Date.now(),
+                        };
+                        return {
+                          ...msg,
+                          metadata: {
+                            ...(msg.metadata || {}),
+                            fileEdits: [...existingFileEdits, newFileEdit],
+                          },
+                        };
+                      }
+                      return msg;
                     }));
 
                     if (process.env.NODE_ENV === 'development') {
@@ -735,7 +800,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   if (eventData.stage === 'task_complete' && eventData.content) {
                     // CRITICAL FIX: Use fileEdits from server if available, otherwise extract from content
                     let allEdits: any[] = [];
-                    
+
                     if (eventData.fileEdits && Array.isArray(eventData.fileEdits) && eventData.fileEdits.length > 0) {
                       // Use server-provided file edits (already validated and complete)
                       allEdits = eventData.fileEdits;
@@ -748,8 +813,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       allEdits = [...compactEdits, ...writeEdits];
                       if (allEdits.length > 0) {
                         console.log('[Chat] Extracted fileEdits from task content:', allEdits.length, 'files');
+                      } else {
+                        console.log('[Chat] No fileEdits extracted, content length:', eventData.content.length);
                       }
                     }
+
+                    console.log('[Chat] Creating refinement message, edits:', allEdits.length, 'content length:', eventData.content?.length);
 
                     setMessages(prev => {
                       // Remove pending message if it exists
@@ -765,7 +834,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       const refinementMessage: Message = {
                         id: `refinement-${eventData.taskId || Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                         role: 'assistant',
-                        content: eventData.content,
+                        content: eventData.content || '',
                         metadata: {
                           isRefinement: true,
                           taskId: eventData.taskId,
@@ -782,10 +851,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         // Update existing task message
                         const updated = [...withoutPending];
                         updated[existingTaskIndex] = refinementMessage;
+                        console.log('[Chat] Updated existing refinement message at index:', existingTaskIndex);
                         return updated;
                       }
 
                       // Add new task message
+                      console.log('[Chat] Adding new refinement message');
                       return withoutPending.concat(refinementMessage);
                     });
                   }
@@ -796,7 +867,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     // CRITICAL FIX: Use fileEdits from server if available, otherwise extract from content
                     // Server now emits fileEdits directly which is more reliable than client-side extraction
                     let allEdits: any[] = [];
-                    
+
                     if (eventData.fileEdits && Array.isArray(eventData.fileEdits) && eventData.fileEdits.length > 0) {
                       // Use server-provided file edits (already validated and complete)
                       allEdits = eventData.fileEdits;
@@ -811,6 +882,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         console.log('[Chat] Extracted fileEdits from content:', allEdits.length, 'files');
                       }
                     }
+
+                    console.log('[Chat] Creating refinement summary message, edits:', allEdits.length, 'content length:', eventData.refinedContent?.length);
 
                     setMessages(prev => {
                       // Remove pending message if it exists
@@ -842,10 +915,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         // Update existing summary
                         const updated = [...withoutPending];
                         updated[existingSummaryIndex] = refinementMessage;
+                        console.log('[Chat] Updated existing refinement summary at index:', existingSummaryIndex);
                         return updated;
                       }
 
                       // Add new summary message
+                      console.log('[Chat] Adding new refinement summary message');
                       return withoutPending.concat(refinementMessage);
                     });
                   }

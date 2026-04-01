@@ -199,8 +199,9 @@ export function applyDiffMatchPatch(currentContent: string, diffBody: string): s
  * IMPROVED: Now handles both diff format AND full file content from LLM responses
  */
 export function applyDiffToContent(currentContent: string, path: string, diffBody: string): string | null {
+  // CRITICAL FIX: Reject empty diffs immediately to prevent infinite loops
   if (!diffBody || diffBody.trim().length === 0) {
-    console.warn('[applyDiffToContent] Empty diff body');
+    console.debug('[applyDiffToContent] Empty diff body - skipping (prevents infinite loop)');
     return null;
   }
 

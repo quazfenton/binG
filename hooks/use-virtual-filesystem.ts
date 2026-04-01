@@ -12,6 +12,7 @@ import type {
 import { opfsAdapter, OPFSAdapter } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
 import { opfsCore } from '@/lib/virtual-filesystem/opfs/opfs-core';
 import { onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
+import { sanitizeExtractedPath } from '@/lib/chat/file-edit-parser';
 
 export interface AttachedVirtualFile {
   path: string;
@@ -301,6 +302,13 @@ export function useVirtualFilesystem(
     return () => clearInterval(interval);
   }, [useOPFS]);
 
+  // Rate limit backoff state - persists across debounce cycles
+  const rateLimitBackoffRef = useRef<{ path: string; retryAfter: number; retryCount: number }>({
+    path: '',
+    retryAfter: 0,
+    retryCount: 0,
+  });
+
   // Listen for filesystem-updated events from other panels (code-preview-panel, conversation-interface, etc.)
   // and invalidate the snapshot cache AND trigger immediate re-fetch to ensure fresh data
   // Note: We define a local fetch function here since 'request' is defined after this useEffect
@@ -312,6 +320,75 @@ export function useVirtualFilesystem(
     // CRITICAL: Keep one shared set across all events to accumulate paths
     // This prevents losing paths when rapid events clear the timer
     const pendingPathsToRefresh = new Set<string>();
+    
+    // Helper function to actually fetch and update directory listing
+    const fetchAndUpdateDirectory = (path: string, ownerId: string) => {
+      fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
+        method: 'GET',
+        headers: buildApiHeaders({ json: false }),
+        credentials: 'include',
+      })
+      .then(res => {
+        // Handle rate limiting (429) with exponential backoff
+        if (res.status === 429) {
+          const retryAfterHeader = res.headers.get('Retry-After') || res.headers.get('X-RateLimit-Reset');
+          let retryAfterMs = 2000; // default 2s
+          
+          if (retryAfterHeader) {
+            const parsed = parseInt(retryAfterHeader, 10);
+            if (!isNaN(parsed)) {
+              retryAfterMs = parsed > Date.now() ? parsed - Date.now() : parsed * 1000;
+            }
+          }
+          
+          // Check response body for retryAfter
+          return res.json().then(body => {
+            if (body?.retryAfter) {
+              retryAfterMs = body.retryAfter * 1000;
+            }
+            
+            logWarn(`[filesystem-updated] Rate limited on "${path}", backing off for ${retryAfterMs}ms`);
+            
+            // Set backoff state using ref
+            rateLimitBackoffRef.current = {
+              path,
+              retryAfter: Date.now() + retryAfterMs,
+              retryCount: rateLimitBackoffRef.current.retryCount + 1,
+            };
+            
+            // Schedule retry with backoff
+            if (rateLimitBackoffRef.current.retryCount <= 3) {
+              setTimeout(() => {
+                log(`[filesystem-updated] Retrying rate-limited path "${path}" (attempt ${rateLimitBackoffRef.current.retryCount})`);
+                fetchAndUpdateDirectory(path, ownerId);
+              }, retryAfterMs);
+            }
+            
+            return { success: false, rateLimited: true };
+          }).catch(() => ({ success: false, rateLimited: true }));
+        }
+        
+        // Sync session ID with server to prevent fragmentation
+        syncAnonymousSessionId(res);
+        return res.json();
+      })
+      .then((payload: any) => {
+        if (payload?.success && payload?.data) {
+          const data = payload.data;
+          log(`[filesystem-updated] Refreshed directory: "${data.path}", ${data.nodes.length} entries`);
+          setCachedList(path, ownerId, data.nodes);
+          // Update UI state if this is the current path
+          if (path === currentPathRef.current) {
+            setNodes(data.nodes);
+          }
+        } else if (payload?.rateLimited) {
+          logWarn(`[filesystem-updated] Rate limited response for "${path}"`);
+        }
+      })
+      .catch(err => {
+        logWarn(`[filesystem-updated] Failed to refresh "${path}":`, err);
+      });
+    };
 
     const unsubscribe = onFilesystemUpdated((event) => {
       const detail = event.detail;
@@ -322,14 +399,24 @@ export function useVirtualFilesystem(
 
       // Determine which paths need refresh (deduplicate)
       // Add to the SHARED pending set, not a local one
+      const addRefreshPath = (rawPath?: string) => {
+        if (!rawPath) return;
+        const path = sanitizeExtractedPath(rawPath, { isFolder: true });
+        if (!path) {
+          logWarn(`[filesystem-updated] Ignoring invalid refresh path: "${rawPath}"`);
+          return;
+        }
+        pendingPathsToRefresh.add(path);
+      };
+
       if (detail.scopePath) {
-        pendingPathsToRefresh.add(detail.scopePath);
+        addRefreshPath(detail.scopePath);
       }
       if (detail.path) {
-        pendingPathsToRefresh.add(detail.path);
+        addRefreshPath(detail.path);
       }
       if (detail.paths && detail.paths.length > 0) {
-        detail.paths.forEach(p => pendingPathsToRefresh.add(p));
+        detail.paths.forEach(addRefreshPath);
       }
 
       // CRITICAL FIX: Sync session ID from event detail to prevent fragmentation
@@ -411,31 +498,19 @@ export function useVirtualFilesystem(
             continue;
           }
           
-          // Use native fetch (bypassing the 'request' callback which is defined later)
-          fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
-            method: 'GET',
-            headers: buildApiHeaders({ json: false }),
-            credentials: 'include',
-          })
-          .then(res => {
-            // Sync session ID with server to prevent fragmentation
-            syncAnonymousSessionId(res);
-            return res.json();
-          })
-          .then((payload: any) => {
-            if (payload?.success && payload?.data) {
-              const data = payload.data;
-              log(`[filesystem-updated] Refreshed directory: "${data.path}", ${data.nodes.length} entries`);
-              setCachedList(path, ownerId, data.nodes);
-              // Update UI state if this is the current path
-              if (path === currentPathRef.current) {
-                setNodes(data.nodes);
-              }
+          // Check if this path is currently rate limited using the ref
+          if (rateLimitBackoffRef.current.path === path && rateLimitBackoffRef.current.retryCount > 0) {
+            if (Date.now() < rateLimitBackoffRef.current.retryAfter) {
+              log(`[filesystem-updated] Skipping rate-limited path "${path}", retry after ${rateLimitBackoffRef.current.retryAfter - Date.now()}ms`);
+              continue;
+            } else {
+              // Backoff expired, reset retry count for this path
+              rateLimitBackoffRef.current.retryCount = 0;
             }
-          })
-          .catch(err => {
-            logWarn(`[filesystem-updated] Failed to refresh "${path}":`, err);
-          });
+          }
+          
+          // Use the helper function to fetch and update directory
+          fetchAndUpdateDirectory(path, ownerId);
         }
 
         // Clear the pending set AFTER all fetches are scheduled

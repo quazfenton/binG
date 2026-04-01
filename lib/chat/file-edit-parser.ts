@@ -31,38 +31,139 @@ export { stripHeredocBodies } from './bash-file-commands';
 import { stripHeredocBodies as maskHeredocs } from './bash-file-commands';
 
 /**
+ * Check if a path segment looks like a CSS value (e.g., "0.3s", "10px")
+ */
+function looksLikeCssValueSegment(segment: string): boolean {
+  return /^(?:\d*\.\d+|\d+[a-z%]+)$/i.test(segment);
+}
+
+/**
  * Validate file path - must be a valid filesystem path
  * CRITICAL: Prevents AI from generating malformed paths like 'project/sessions/003/{'
- * 
+ * Also rejects CSS values, SCSS variables, and code snippets
+ *
  * NOTE: Trailing slashes ARE allowed for directory paths (e.g., "src/", "components/")
  */
 export function isValidFilePath(path: string, isFolder: boolean = false): boolean {
   if (!path || path.length === 0) return false;
-  
+
+  // CRITICAL: Check the last segment of the path (the actual filename)
+  // This catches "project/sessions/002/0.3s" where "0.3s" is the invalid part
+  const pathSegments = path.split('/');
+  const lastSegment = pathSegments[pathSegments.length - 1] || path;
+
+  // Reject paths that are clearly CSS values or code snippets (check last segment)
+  if (looksLikeCssValueSegment(lastSegment)) return false;  // e.g., "0.3s", "10px"
+  if (/^[,;:!?()\[\]{}\/]+$/.test(lastSegment)) return false;  // e.g., ",", "/", "("
+  if (/^[+\-*/%&|^~<>]+$/.test(lastSegment)) return false;  // e.g., "=", "+", "-"
+
   // Paths should NOT contain JSON/object syntax
-  if (path.includes('{') || path.includes('}') || 
+  if (path.includes('{') || path.includes('}') ||
       path.includes('[') || path.includes(']')) {
     return false;
   }
-  
+
   // For files: should NOT end with special characters
   // For folders: trailing slash is OK (e.g., "src/", "components/")
   if (!isFolder) {
-    if (path.endsWith('/') || path.endsWith(':') || 
+    if (path.endsWith('/') || path.endsWith(':') ||
         path.endsWith(',') || path.endsWith('{') ||
         path.endsWith('<') || path.endsWith('>')) {
       return false;
     }
   }
-  
+
   // Paths should NOT start with special characters (except . for relative paths)
+  // This rejects SCSS variables ($var), CSS selectors (.class, #id), decorators (@import), etc.
   if (path.startsWith('<') || path.startsWith('>') ||
       path.startsWith('{') || path.startsWith('}') ||
-      path.startsWith('[') || path.startsWith(']')) {
+      path.startsWith('[') || path.startsWith(']') ||
+      path.startsWith('$') ||  // SCSS/SASS variables like $transition-fast
+      path.startsWith('@') ||  // CSS imports, decorators like @import
+      path.startsWith('#')) {  // CSS IDs like #header
     return false;
   }
-  
+
+  // Must have valid path format (alphanumeric, dots, dashes, underscores, slashes)
+  if (!/^[a-zA-Z0-9_./\-\\]+$/.test(path)) return false;
+
   return true;
+}
+
+export function sanitizeExtractedPath(
+  rawPath: string,
+  options: { isFolder?: boolean } = {},
+): string | null {
+  let path = (rawPath || '').trim();
+  if (!path) return null;
+
+  path = path
+    .replace(/^path\s*[:=]\s*/i, '')
+    .replace(/^['"`]+/, '')
+    .replace(/['"`]+$/, '')
+    .replace(/,+$/, '')
+    .trim();
+
+  if (!path) return null;
+
+  if (options.isFolder) {
+    path = path.replace(/\/+$/, '');
+    return isValidFilePath(path, true) ? path : null;
+  }
+
+  return isValidExtractedPath(path) ? path : null;
+}
+
+export function parseStructuredPathList(
+  rawList: string,
+  options: { isFolder?: boolean } = {},
+): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | '`' | null = null;
+
+  for (let i = 0; i < rawList.length; i += 1) {
+    const char = rawList[i];
+    const previous = i > 0 ? rawList[i - 1] : '';
+
+    if (quote) {
+      if (char === quote && previous !== '\\') {
+        quote = null;
+        continue;
+      }
+      current += char;
+      continue;
+    }
+
+    if (char === '"' || char === '\'' || char === '`') {
+      quote = char;
+      continue;
+    }
+
+    if (char === ',' || char === '\n') {
+      tokens.push(current);
+      current = '';
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current.trim()) {
+    tokens.push(current);
+  }
+
+  const seen = new Set<string>();
+  const paths: string[] = [];
+
+  for (const token of tokens) {
+    const path = sanitizeExtractedPath(token, options);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    paths.push(path);
+  }
+
+  return paths;
 }
 
 /**
@@ -373,13 +474,19 @@ export function extractCompactFileEdits(content: string): FileEdit[] {
     const filePath = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!filePath) continue;
-    
+
     // CRITICAL: Validate path before adding
     // Rejects CSS values (0.3s,), Vue directives (@submit...), operators (=), etc.
     if (!isValidExtractedPath(filePath)) {
       continue;
     }
-    
+
+    // CRITICAL FIX: Skip edits with empty content - likely incomplete streaming tags
+    // This prevents infinite loops from applying empty diffs
+    if (!fileContent || fileContent.trim().length === 0) {
+      continue;
+    }
+
     edits.push({ path: filePath, content: fileContent.trim() });
   }
 
@@ -405,13 +512,18 @@ export function extractFileWriteEdits(content: string): FileEdit[] {
     // Clean up leading/trailing whitespace
     fileContent = fileContent.replace(/^\n+/, '').replace(/\n+$/, '');
     if (!filePath) continue;
-    
+
     // CRITICAL: Validate path before adding
     // Rejects CSS values, Vue directives, operators, and other non-path patterns
     if (!isValidExtractedPath(filePath)) {
       continue;
     }
-    
+
+    // CRITICAL FIX: Skip edits with empty content - likely incomplete streaming tags
+    if (!fileContent || fileContent.trim().length === 0) {
+      continue;
+    }
+
     edits.push({ path: filePath, content: fileContent });
   }
 
@@ -431,16 +543,21 @@ export function extractMultiLineFileEdits(content: string): FileEdit[] {
     const filePath = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!filePath) continue;
-    
+
     // CRITICAL FIX: Validate path before adding
     // Skip paths with JSON/object syntax or ending with special chars
-    if (filePath.includes('{') || filePath.includes('}') || 
+    if (filePath.includes('{') || filePath.includes('}') ||
         filePath.includes('[') || filePath.includes(']') ||
         filePath.endsWith('/') || filePath.endsWith(':') ||
         filePath.endsWith(',') || filePath.endsWith('{')) {
       continue;
     }
-    
+
+    // CRITICAL FIX: Skip edits with empty content - likely incomplete streaming tags
+    if (!fileContent || fileContent.trim().length === 0) {
+      continue;
+    }
+
     edits.push({ path: filePath, content: fileContent.trim() });
   }
 
@@ -454,10 +571,16 @@ export function extractMultiLineFileEdits(content: string): FileEdit[] {
  * <file Edit> or <file_edit> (as closing marker)
  *
  * This handles cases where LLM doesn't properly wrap content in <file_edit> tags
+ * 
+ * CRITICAL: Skips <path> tags that appear to be SVG elements (inside <svg>...</svg>)
+ * to prevent extracting SVG path data as file paths.
  */
 export function extractMalformedFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
 
+  // Check if content contains SVG - if so, we need to be more careful
+  const hasSvgContent = content.includes('<svg') && content.includes('</svg>');
+  
   // Match: <path>path</path> followed by content, ending with <file Edit> or <file_edit> or next <path>
   // Handles variations: <file Edit>, <file_edit>, <FILE_EDIT>, <File_Edit>, etc. (case insensitive)
   const regex = /<path>\s*([^\s<]+?)\s*<\/path>\s*([\s\S]*?)(?=<path>|<file\s*edit>|$)/gi;
@@ -470,6 +593,29 @@ export function extractMalformedFileEdits(content: string): FileEdit[] {
     // Skip if path looks invalid or contains tags
     if (!filePath || filePath.includes('<') || filePath.includes('>')) continue;
 
+    // CRITICAL FIX: Skip <path> tags that are inside SVG content
+    // SVG <path> elements have d="..." attributes, not file paths
+    if (hasSvgContent) {
+      // Check if this <path> is likely inside an <svg> block
+      const matchIndex = match.index;
+      // Search from start of content for more accurate SVG detection
+      const precedingContent = content.slice(0, matchIndex);
+      const followingContent = content.slice(matchIndex);
+      
+      // If there's an <svg> tag before and </svg> after, skip this <path>
+      const lastSvgOpen = precedingContent.lastIndexOf('<svg');
+      const nextSvgClose = followingContent.indexOf('</svg>');
+      if (lastSvgOpen !== -1 && nextSvgClose !== -1) {
+        continue;
+      }
+      
+      // Also skip if path looks like SVG path data (starts with M, L, C, Q, etc.)
+      // SVG path commands: M(move), L(line), C(curve), Q(quad), S(smooth), H(horizontal), V(vertical), T(quad smooth), A(arc), Z(close)
+      if (/^[MLCQSZHVTAmlcqs][0-9.\s,\-]*$/.test(filePath)) {
+        continue;
+      }
+    }
+
     // CRITICAL FIX: Detect if <path> tag contains JSON/object instead of actual path
     // If content after </path> starts with { or [, the <path> tag was likely misused for JSON
     const trimmedContent = fileContent.trim();
@@ -480,13 +626,13 @@ export function extractMalformedFileEdits(content: string): FileEdit[] {
 
     // CRITICAL FIX: Skip paths that contain JSON/object syntax
     // Valid file paths should NOT contain: { } [ ] : , (unless encoded)
-    if (filePath.includes('{') || filePath.includes('}') || 
+    if (filePath.includes('{') || filePath.includes('}') ||
         filePath.includes('[') || filePath.includes(']')) {
       continue;
     }
 
     // Skip paths that end with special characters (likely parsing errors)
-    if (filePath.endsWith('/') || filePath.endsWith(':') || 
+    if (filePath.endsWith('/') || filePath.endsWith(':') ||
         filePath.endsWith(',') || filePath.endsWith('{')) {
       continue;
     }
@@ -579,6 +725,9 @@ export function extractWsActionEdits(content: string): FileEdit[] {
       // Only process CREATE actions with valid path (must be string) and content
       if (obj.ws_action !== 'CREATE' || typeof obj.path !== 'string' || !obj.path.trim()) continue;
 
+      // CRITICAL FIX: Skip edits with empty content
+      if (!obj.content || obj.content.trim().length === 0) continue;
+
       edits.push({ path: obj.path.trim(), content: obj.content ?? '' });
     } catch {
       // Skip malformed JSON blocks
@@ -615,6 +764,9 @@ export function extractSimpleJsonFileEdits(content: string): FileEdit[] {
 
       // Process if file_edit path exists and is a string
       if (typeof obj.file_edit !== 'string' || !obj.file_edit.trim()) continue;
+
+      // CRITICAL FIX: Skip edits with empty content
+      if (!obj.content || obj.content.trim().length === 0) continue;
 
       edits.push({ path: obj.file_edit.trim(), content: obj.content ?? '' });
     } catch {
@@ -824,20 +976,23 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
   while ((match = regex.exec(content)) !== null) {
     const targetPath = match[1]?.trim();
     const diff = match[2] ?? '';
-    
+
     if (!targetPath) continue;
-    
+
     // CRITICAL FIX: Detect if the path itself is a raw git diff header
     // The LLM may output: ```diff\ndiff --git a/path b/path\n...``` instead of ```diff\npath\n...```
     // In this case, BOTH group 1 (targetPath) AND group 2 (diff content) contain "diff --git"
     // We need to check BOTH to properly detect raw git diff output
     const isRawGitDiff = /^diff --git/m.test(targetPath) || /^diff --git/m.test(diff);
-    
+
     if (isRawGitDiff) {
       console.warn('[extractFencedDiffEdits] Skipping raw git diff output (should use diff parser):', targetPath);
       continue;
     }
-    
+
+    // CRITICAL FIX: Skip edits with empty diff content
+    if (!diff || diff.trim().length === 0) continue;
+
     edits.push({ path: targetPath, diff: diff.trim() });
   }
 
@@ -890,7 +1045,7 @@ function isValidExtractedPath(path: string): boolean {
   if (path.includes(':') && !/^[a-zA-Z]:/.test(path)) return false;
 
   // Reject paths that look like CSS values (0.3s, 10px, etc.)
-  if (/^\d+\.?\d*(?:px|em|rem|%|s|ms|vh|vw|pt)$/.test(path)) return false;
+  if (looksLikeCssValueSegment(path)) return false;
 
   // Reject paths that look like event handlers or expressions
   if (/[=(].*[)]/.test(path)) return false;
@@ -936,6 +1091,10 @@ export function extractFsActionWrites(content: string): FileEdit[] {
       if (!isValidExtractedPath(path)) {
         continue;
       }
+      // CRITICAL FIX: Skip edits with empty content
+      if (!fileContent || fileContent.trim().length === 0) {
+        continue;
+      }
       writes.push({ path, content: fileContent });
     }
   }
@@ -955,6 +1114,8 @@ export function extractFsActionWrites(content: string): FileEdit[] {
       if (!path) continue;
       // Validate path before adding
       if (!isValidExtractedPath(path)) continue;
+      // CRITICAL FIX: Skip edits with empty content
+      if (!fileContent || fileContent.trim().length === 0) continue;
       writes.push({ path, content: fileContent });
     }
   }
@@ -974,6 +1135,8 @@ export function extractFsActionWrites(content: string): FileEdit[] {
       if (!path) continue;
       // Validate path before adding
       if (!isValidExtractedPath(path)) continue;
+      // CRITICAL FIX: Skip edits with empty content
+      if (!fileContent || fileContent.trim().length === 0) continue;
       writes.push({ path, content: fileContent });
     }
   }
@@ -1007,6 +1170,8 @@ export function extractTopLevelWrites(content: string): FileEdit[] {
     if (!path) continue;
     // Validate path before adding
     if (!isValidExtractedPath(path)) continue;
+    // CRITICAL FIX: Skip edits with empty content
+    if (!fileContent || fileContent.trim().length === 0) continue;
     // Deduplicate - check if we already have this exact edit
     if (!writes.some(w => w.path === path && w.content === fileContent)) {
       writes.push({ path, content: fileContent });
@@ -1021,6 +1186,8 @@ export function extractTopLevelWrites(content: string): FileEdit[] {
     if (!path) continue;
     // Validate path before adding
     if (!isValidExtractedPath(path)) continue;
+    // CRITICAL FIX: Skip edits with empty content
+    if (!fileContent || fileContent.trim().length === 0) continue;
     if (!writes.some(w => w.path === path && w.content === fileContent)) {
       writes.push({ path, content: fileContent });
     }
@@ -1064,6 +1231,10 @@ export function extractPatchEdits(content: string): PatchEdit[] {
     const path = match[1]?.trim();
     const diff = match[2] ?? '';
     if (!path) continue;
+    // Validate path before adding
+    if (!isValidExtractedPath(path)) continue;
+    // CRITICAL FIX: Skip edits with empty diff content
+    if (!diff || diff.trim().length === 0) continue;
     patches.push({ path, diff });
   }
 
@@ -1211,6 +1382,8 @@ export function extractBashHereDocWrites(content: string): FileEdit[] {
       const path = hereDocMatch[1]?.trim();
       const fileContent = hereDocMatch[2] ?? '';
       if (!path) continue;
+      // CRITICAL FIX: Skip edits with empty content
+      if (!fileContent || fileContent.trim().length === 0) continue;
       writes.push({ path, content: fileContent });
     }
   }
@@ -1233,11 +1406,16 @@ export function extractFilenameHintCodeBlocks(content: string): FileEdit[] {
     const path = match[1]?.trim();
     let fileContent = match[2] ?? '';
     if (!path) continue;
-    
+
     // CRITICAL FIX: Validate path before adding
-    if (!isValidFilePath(path)) continue;
-    
+    // Reject SCSS variables, CSS selectors, and other non-file paths
+    if (!isValidFilePath(path)) {
+      continue;
+    }
+
     fileContent = stripHeredocMarkers(fileContent);
+    // CRITICAL FIX: Skip edits with empty content
+    if (!fileContent || fileContent.trim().length === 0) continue;
     writes.push({ path, content: fileContent });
   }
 
@@ -1757,9 +1935,32 @@ export function extractIncrementalFileEdits(
     allEdits.push({ path: edit.path, content: edit.diff, action: 'patch' });
   }
 
+  // CRITICAL FIX: Detect unclosed tags BEFORE filtering/emitting edits
+  // This prevents emitting incomplete edits during streaming
+  const unclosed = detectUnclosedTags(parseWindow, parseStart, UNCLOSED_SCAN_TAIL_CHARS);
+
   // Filter to only new edits we haven't emitted yet
   // Use path + content hash to handle same-file multiple edits
   for (const edit of allEdits) {
+    // CRITICAL FIX: Skip edits with empty content (incomplete streaming tags)
+    // This prevents emitting partial edits before closing tag arrives
+    if (!edit.content || edit.content.trim().length === 0) {
+      continue;
+    }
+
+    // CRITICAL FIX: Skip edits from unclosed tag regions
+    // If an opening tag exists without its closing tag, skip edits from that region
+    // This prevents emitting incomplete edits during streaming
+    if (unclosed.length > 0) {
+      // Check if this edit's path appears after an unclosed tag position
+      // If so, it's likely from an incomplete block - skip it
+      const editPathInBuffer = buffer.indexOf(edit.path, parseStart);
+      const isInUnclosedRegion = unclosed.some(pos => editPathInBuffer >= pos);
+      if (isInUnclosedRegion) {
+        continue;
+      }
+    }
+
     // Create unique key from path + simple content hash
     // Use full content for short files (< 100 chars), otherwise hash first/last 50 chars + length
     let contentSignature: string;
@@ -1769,7 +1970,7 @@ export function extractIncrementalFileEdits(
       contentSignature = `${edit.content.length}-${edit.content.slice(0, 50)}-${edit.content.slice(-50)}`;
     }
     const editKey = `${edit.path}::${contentSignature}`;
-    
+
     if (!state.emittedEdits.has(editKey)) {
       state.emittedEdits.add(editKey);
       newEdits.push(edit);
@@ -1779,7 +1980,6 @@ export function extractIncrementalFileEdits(
   // After parsing, detect any tags that are still open (no closing marker found).
   // On the next call, the parse window will extend back to these positions.
   pruneStaleUnclosed(state, parseStart);
-  const unclosed = detectUnclosedTags(parseWindow, parseStart, UNCLOSED_SCAN_TAIL_CHARS);
   for (const pos of unclosed) {
     state.unclosedPositions.add(pos);
   }

@@ -119,6 +119,13 @@ export function useDiffsPoller(options: UseDiffsPollerOptions = {}): UseDiffsPol
       });
 
       if (!response.ok) {
+        // Handle rate limiting - don't treat as error, just skip this poll
+        if (response.status === 429) {
+          const retryAfter = response.headers.get('Retry-After');
+          console.debug('[DiffsPoller] Rate limited, will retry after', retryAfter, 'seconds');
+          // Don't set error state for rate limiting - it's expected behavior
+          return;
+        }
         throw new Error(`Poll failed: ${response.status} ${response.statusText}`);
       }
 
@@ -171,7 +178,7 @@ export function useDiffsPoller(options: UseDiffsPollerOptions = {}): UseDiffsPol
     } catch (err) {
       // Ignore abort errors
       if (err instanceof Error && err.name === 'AbortError') return;
-      
+
       if (isMountedRef.current) {
         setError(err instanceof Error ? err : new Error('Poll failed'));
         setPollCount(prev => prev + 1);

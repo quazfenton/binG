@@ -137,25 +137,32 @@ export default function MessageBubble({
   const fileEditInfo = useMemo(() => {
     // First check for filesystem transaction (standard chat flow)
     const metadataFilesystem = (message.metadata as any)?.filesystem;
+    const metadataFileEdits = (message.metadata as any)?.fileEdits;
+    
     if (metadataFilesystem && typeof metadataFilesystem === "object") {
       // FIX: Show diff viewer even when transactionId is null but files were applied
       // This handles "auto_applied" status where no transaction is needed
       const txId = typeof metadataFilesystem.transactionId === "string" ? metadataFilesystem.transactionId : "";
       const applied = Array.isArray(metadataFilesystem.applied) ? metadataFilesystem.applied : [];
-      
+
       if (txId || applied.length > 0) {
+        // CRITICAL FIX: Use fileEdits if available (has content for diff viewer)
+        // Otherwise fall back to filesystem.applied (no content, just paths)
+        const usedApplied = (metadataFileEdits && Array.isArray(metadataFileEdits) && metadataFileEdits.length > 0)
+          ? metadataFileEdits
+          : applied;
+
         return {
           transactionId: txId || undefined,
-          applied: applied,
+          applied: usedApplied,
           errors: Array.isArray(metadataFilesystem.errors) ? metadataFilesystem.errors : [],
           status: typeof metadataFilesystem.status === "string" ? metadataFilesystem.status : "auto_applied",
           isSpecEnhancement: false,
         };
       }
     }
-    
+
     // Check for spec enhancement file edits (stored directly in metadata.fileEdits)
-    const metadataFileEdits = (message.metadata as any)?.fileEdits;
     if (metadataFileEdits && Array.isArray(metadataFileEdits) && metadataFileEdits.length > 0) {
       // Spec enhancement edits are already applied server-side, just for display
       return {
@@ -172,7 +179,7 @@ export default function MessageBubble({
         isSpecEnhancement: true, // Flag for UI handling
       };
     }
-    
+
     return null;
   }, [message.metadata]);
 

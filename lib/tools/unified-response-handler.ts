@@ -4,6 +4,7 @@
  */
 
 import { normalizeToolInvocations, type ToolInvocation } from '@/lib/types/tool-invocation';
+import { parseStructuredPathList } from '@/lib/chat/file-edit-parser';
 
 export interface UnifiedResponse {
   success: boolean;
@@ -203,18 +204,51 @@ export class UnifiedResponseHandler {
       if (!match) return undefined;
 
       const block = match[1];
+      const extractArraySection = (source: string, key: string): string | null => {
+        const sectionMatch = source.match(new RegExp(`${key}:\\s*\\[`));
+        if (!sectionMatch || sectionMatch.index === undefined) return null;
+
+        const startIdx = source.indexOf('[', sectionMatch.index);
+        let bracketDepth = 0;
+        let activeQuote: '"' | "'" | '`' | null = null;
+
+        for (let i = startIdx + 1; i < source.length; i += 1) {
+          const char = source[i];
+          const previous = i > 0 ? source[i - 1] : '';
+
+          if (activeQuote) {
+            if (char === activeQuote && previous !== '\\') {
+              activeQuote = null;
+            }
+            continue;
+          }
+
+          if (char === '"' || char === '\'' || char === '`') {
+            activeQuote = char;
+            continue;
+          }
+
+          if (char === '[') bracketDepth += 1;
+          else if (char === ']') {
+            if (bracketDepth === 0) {
+              return source.substring(startIdx + 1, i);
+            }
+            bracketDepth -= 1;
+          }
+        }
+
+        return null;
+      };
       
       // Parse request_files
-      const reqMatch = block.match(/request_files:\s*\[(.*?)\]/s);
-      const request_files = reqMatch
-        ? JSON.parse(`[${reqMatch[1]}]`.replace(/([a-zA-Z0-9_./-]+)(?=\s*[\],])/g, '"$1"'))
-        : [];
+      const requestFilesContent = extractArraySection(block, 'request_files');
+      const request_files = requestFilesContent ? parseStructuredPathList(requestFilesContent) : [];
 
       // Parse write_diffs
       let write_diffs: Array<{ path: string; diff: string }> = [];
-      const diffsMatch = block.match(/write_diffs:\s*\[([\s\S]*?)\]/);
-      if (diffsMatch) {
-        const items = diffsMatch[1]
+      const diffsContent = extractArraySection(block, 'write_diffs');
+      if (diffsContent !== null) {
+        const items = diffsContent
           .split(/},/)
           .map(s => (s.endsWith('}') ? s : s + '}'))
           .map(s => s.trim())

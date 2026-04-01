@@ -10,6 +10,20 @@ const requestTracker = new Map<string, { count: number; lastRequest: number; fir
 const REQUEST_WINDOW_MS = 5000; // 5 second window for tracking
 const MAX_TRACKED_PATHS = 1000;
 
+// Ban list for paths that hit rate limits (prevent persistent polling)
+const RATE_LIMIT_BAN = new Map<string, number>();
+const BAN_DURATION_MS = 30000; // 30 second ban for rate-limited paths
+
+// Cleanup expired bans every 5 minutes
+setInterval(() => {
+  const now = Date.now();
+  for (const [path, timestamp] of RATE_LIMIT_BAN.entries()) {
+    if (now - timestamp > BAN_DURATION_MS) {
+      RATE_LIMIT_BAN.delete(path);
+    }
+  }
+}, 5 * 60 * 1000);
+
 // Debug flag
 const DEBUG = process.env.DEBUG_VFS === 'true' || process.env.NODE_ENV === 'development';
 
@@ -30,6 +44,10 @@ const log = (...args: any[]) => DEBUG && console.log(`${COLORS.bright}${COLORS.c
 const logWarn = (...args: any[]) => console.warn(`${COLORS.bright}${COLORS.yellow}[VFS LIST WARN]${COLORS.reset}`, ...args);
 const logError = (...args: any[]) => console.error(`${COLORS.bright}${COLORS.red}[VFS LIST ERROR]${COLORS.reset}`, ...args);
 
+function looksLikeCssValueSegment(segment: string): boolean {
+  return /^(?:\d*\.\d+|\d+[a-z%]+)$/i.test(segment);
+}
+
 /**
  * Track request frequency to detect polling loops
  */
@@ -41,6 +59,17 @@ function trackRequest(path: string): { isPolling: boolean; requestCount: number;
   // File paths should NOT be polled - they should use readFile instead
   const isFilePath = path.includes('.') && !path.endsWith('/') && !path.endsWith('/.directory');
   
+  // CRITICAL FIX: Detect invalid file paths (CSS values, SCSS variables, etc.)
+  // These should NEVER be polled - return immediately with isPolling=true to trigger rate limiting
+  const trimmedPath = path.split('/').pop() || path;
+  if (looksLikeCssValueSegment(trimmedPath) ||  // CSS values like "0.3s", "10px"
+      /^\$/.test(trimmedPath) ||  // SCSS variables like "$transition"
+      /^[@.#:]/.test(trimmedPath) ||  // CSS selectors
+      /^[,;:!?()\[\]{}\/]+$/.test(trimmedPath)) {  // Operators
+    logWarn(`Invalid path being polled: ${path}`);
+    return { isPolling: true, requestCount: 999, windowMs: 0, isFilePath: true };
+  }
+
   // Cleanup old entries to prevent unbounded growth
   for (const [trackedKey, tracked] of requestTracker.entries()) {
     if (now - tracked.lastRequest > REQUEST_WINDOW_MS * 2) {
@@ -106,12 +135,35 @@ const listRequestSchema = z.object({
 export async function GET(req: NextRequest) {
   const startTime = Date.now();
   const requestId = Math.random().toString(36).slice(2, 8);
-  
+
   try {
     const url = new URL(req.url);
     const path = url.searchParams.get('path') || 'project';
     const ownerIdFromQuery = url.searchParams.get('ownerId');
-    
+
+    // CRITICAL FIX: Check ban list for rate-limited paths
+    if (RATE_LIMIT_BAN.has(path)) {
+      const banAge = Date.now() - RATE_LIMIT_BAN.get(path)!;
+      if (banAge < BAN_DURATION_MS) {
+        const retryAfter = Math.ceil((BAN_DURATION_MS - banAge) / 1000);
+        logWarn(`Blocked banned path: ${path} (retry after ${retryAfter}s)`);
+        return NextResponse.json(
+          {
+            success: false,
+            error: 'Path temporarily blocked due to rate limiting',
+            retryAfter,
+            banned: true,
+          },
+          {
+            status: 429,
+            headers: { 'Retry-After': String(retryAfter) },
+          },
+        );
+      } else {
+        RATE_LIMIT_BAN.delete(path);
+      }
+    }
+
     // Track request frequency
     const tracking = trackRequest(path);
 
@@ -125,11 +177,31 @@ export async function GET(req: NextRequest) {
     }
 
     // Rate limit aggressive polling — return 429 after threshold
+    // Add to ban list to prevent persistent retry loops
     if (tracking.isPolling && tracking.requestCount > 6) {
       logWarn(`${COLORS.yellow}RATE LIMITED:${COLORS.reset} ${tracking.requestCount} requests in ${tracking.windowMs}ms for path "${COLORS.blue}${path}${COLORS.reset}"`);
+      // Add to ban list to prevent retries
+      RATE_LIMIT_BAN.set(path, Date.now());
+      // Calculate exponential backoff based on request count
+      const retryAfter = Math.min(Math.pow(2, tracking.requestCount - 6), 30);
       return NextResponse.json(
-        { success: false, error: 'Too many requests — slow down' },
-        { status: 429, headers: { 'Retry-After': '2' } },
+        {
+          success: false,
+          error: 'Too many requests — slow down',
+          rateLimited: true,
+          retryAfter: retryAfter,
+          banned: true,
+          banDuration: BAN_DURATION_MS,
+        },
+        {
+          status: 429,
+          headers: {
+            'Retry-After': String(retryAfter),
+            'X-RateLimit-Limit': '6',
+            'X-RateLimit-Remaining': '0',
+            'X-RateLimit-Reset': String(Date.now() + retryAfter * 1000),
+          }
+        },
       );
     }
 

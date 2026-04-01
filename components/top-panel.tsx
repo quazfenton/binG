@@ -321,7 +321,10 @@ function PluginsTab() {
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setSelectedPlugin(null)}
+              onClick={(e) => {
+                e.stopPropagation();
+                setSelectedPlugin(null);
+              }}
               className="text-white/60 hover:text-white"
             >
               <X className="w-4 h-4" />
@@ -958,7 +961,10 @@ export default function TopPanel() {
                   <Button
                     variant="ghost"
                     size="icon"
-                    onClick={closeTopPanel}
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      closeTopPanel();
+                    }}
                     className="h-8 w-8 text-white/60 hover:text-white hover:bg-white/10"
                     title="Close"
                   >

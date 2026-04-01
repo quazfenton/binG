@@ -72,6 +72,7 @@ export async function pollWithBackoff<T>(
 
 /**
  * Build client-visible unified response
+ * Preserves filesystem metadata for enhanced-diff-viewer display
  */
 export function buildClientVisibleUnifiedResponse(response: any, visibleContent: string): any {
   return {
@@ -84,6 +85,9 @@ export function buildClientVisibleUnifiedResponse(response: any, visibleContent:
     metadata: {
       ...(response?.metadata || {}),
       sanitized: true,
+      // Preserve filesystem metadata for enhanced-diff-viewer
+      filesystem: response?.metadata?.filesystem,
+      fileEdits: response?.metadata?.fileEdits,
     },
   };
 }

@@ -1415,8 +1415,9 @@ export function ExperimentalWorkspacePanel() {
         
         for (const line of lines) {
           // Parse SSE format: "event: type\ndata: {json}"
+          let eventType = '';
           if (line.startsWith('event: ')) {
-            const eventType = line.slice(7).trim();
+            eventType = line.slice(7).trim();
             continue;
           }
           
@@ -1427,7 +1428,8 @@ export function ExperimentalWorkspacePanel() {
             try {
               const data = JSON.parse(dataStr);
               
-              switch (data.type) {
+              // Use eventType from the event line, not data.type (which doesn't exist in the payload)
+              switch (eventType || data.type) {
                 case SSE_EVENT_TYPES.TOKEN:
                   // Streaming token - update message in real-time
                   if (data.data?.content) {
