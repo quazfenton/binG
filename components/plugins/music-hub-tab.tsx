@@ -26,7 +26,7 @@ import {
   Shuffle, Repeat, Heart, Maximize2, Minimize2, ListMusic,
   Activity, Zap, Radio, Disc, RefreshCw, ExternalLink,
   Download, Layers, Loader2, AlertCircle, Wifi,
-  WifiOff, CheckCircle, Signal, Database, Trash2, Settings, Info,
+  WifiOff, CheckCircle, Database, Trash2, Settings, Info,
 } from "lucide-react";
 
 import { toast } from "sonner";
@@ -132,15 +132,74 @@ class MemoryCache<K, V> {
 
 const activeThumbnailCache = new MemoryCache<string, string>(50);
 
+// oEmbed cache for YouTube thumbnail metadata
+const oembedCache = new PersistentCache('music_hub_oembed_', 7 * 24 * 60 * 60 * 1000);
+
+/**
+ * Fetch YouTube oEmbed data for a video or playlist
+ * Returns thumbnail URL and other metadata
+ * Uses disk-cached results when available
+ */
+async function fetchYouTubeOEmbed(url: string): Promise<{ thumbnail_url?: string; title?: string; author_name?: string } | null> {
+  try {
+    // Check cache first
+    const cacheKey = `oembed:${url}`;
+    const cached = oembedCache.get<{ thumbnail_url?: string; title?: string; author_name?: string; timestamp: number }>(cacheKey);
+    
+    if (cached && Date.now() - cached.timestamp < 7 * 24 * 60 * 60 * 1000) {
+      return { thumbnail_url: cached.thumbnail_url, title: cached.title, author_name: cached.author_name };
+    }
+
+    // Fetch from YouTube oEmbed endpoint
+    const oembedUrl = `https://www.youtube.com/oembed?url=${encodeURIComponent(url)}&format=json`;
+    const response = await fetch(oembedUrl, { signal: AbortSignal.timeout(5000) });
+    
+    if (!response.ok) {
+      return null;
+    }
+
+    const data = await response.json();
+    
+    // Cache the result
+    oembedCache.set(cacheKey, {
+      thumbnail_url: data.thumbnail_url,
+      title: data.title,
+      author_name: data.author_name,
+      timestamp: Date.now(),
+    });
+
+    return { thumbnail_url: data.thumbnail_url, title: data.title, author_name: data.author_name };
+  } catch (error) {
+    console.warn('Failed to fetch YouTube oEmbed:', error);
+    return null;
+  }
+}
+
 // ==================== Constants ====================
+
+// YouTube Player States (from YouTube IFrame API)
+const YTPlayerState = {
+  UNSTARTED: -1,
+  ENDED: 0,
+  PLAYING: 1,
+  PAUSED: 2,
+  BUFFERING: 3,
+  CUED: 5,
+};
 
 const EMBED_SOURCES = [
   {
     id: 'primary',
     name: 'Primary',
-    buildUrl: (videoId: string, autoplay: boolean, playlistId?: string, index?: number) => {
-      // Try direct video embed first (more reliable than playlist embed)
-      const baseUrl = `https://www.youtube.com/embed/${videoId}?rel=0&modestbranding=1&controls=1&enablejsapi=1`;
+    buildUrl: (videoId: string, autoplay: boolean, _playlistId?: string, _index?: number) => {
+      // Direct video embed with IFrame API parameters
+      const params = new URLSearchParams({
+        rel: '0',
+        modestbranding: '1',
+        controls: '1',
+        enablejsapi: '1',
+      });
+      const baseUrl = `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
       return autoplay ? `${baseUrl}&autoplay=1` : baseUrl;
     },
     priority: 1,
@@ -149,13 +208,42 @@ const EMBED_SOURCES = [
     id: 'with-playlist',
     name: 'With Playlist',
     buildUrl: (videoId: string, autoplay: boolean, playlistId?: string, index?: number) => {
-      // Fallback to playlist embed
-      const baseUrl = `https://www.youtube.com/embed/videoseries?list=${playlistId}&index=${index || 1}&rel=0&modestbranding=1&controls=1&enablejsapi=1`;
+      // Fallback to playlist embed with IFrame API parameters
+      const params = new URLSearchParams({
+        list: playlistId || '',
+        index: String(index || 1),
+        rel: '0',
+        modestbranding: '1',
+        controls: '1',
+        enablejsapi: '1',
+      });
+      // Remove empty list param
+      if (!playlistId) params.delete('list');
+      const baseUrl = `https://www.youtube.com/embed/videoseries?${params.toString()}`;
       return autoplay ? `${baseUrl}&autoplay=1` : baseUrl;
     },
     priority: 2,
   },
 ];
+
+// Load YouTube IFrame API script
+function loadYouTubeIFrameAPI(): Promise<void> {
+  return new Promise((resolve) => {
+    if ((window as any).YT && (window as any).YT.Player) {
+      resolve();
+      return;
+    }
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    const firstScriptTag = document.getElementsByTagName('script')[0];
+    firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
+    
+    // Wait for API to be ready
+    (window as any).onYouTubeIframeAPIReady = () => {
+      resolve();
+    };
+  });
+}
 
 // ==================== Default Playlist (Fallback) ====================
 
@@ -382,7 +470,7 @@ const CachedThumbnailComponent: React.FC<CachedThumbnailProps> = ({
     <div className={`relative overflow-hidden ${className}`}>
       {isLoading && (
         <div className="absolute inset-0 flex items-center justify-center bg-gray-900">
-          <Loader2 className="w-4 h-4 animate-spin text-purple-400" />
+          <Loader2 className="w-4 h-4 animate-spin text-gray-400" />
         </div>
       )}
       {error && !cachedSrc && (
@@ -448,263 +536,48 @@ const YouTubePlayerComponent: React.FC<YouTubePlayerProps> = ({
   preload = false,
   isPlaying = false,
 }) => {
-  const [currentSourceIndex, setCurrentSourceIndex] = useState(0);
   const [isLoading, setIsLoading] = useState(true);
-  const [loadAttempts, setLoadAttempts] = useState({ attempts: 0, lastError: '' });
-  const [connectionQuality, setConnectionQuality] = useState<'good' | 'fair' | 'poor'>('good');
   const iframeRef = useRef<HTMLIFrameElement>(null);
-  const loadTimeoutRef = useRef<NodeJS.Timeout | null>(null);
 
-  const MAX_RETRIES_PER_SOURCE = 3;
-  const LOAD_TIMEOUT = 15000;
-
-  // Log videoId changes for debugging
-  useEffect(() => {
-    console.log('[YouTubePlayer] Video ID:', videoId, 'Playlist ID:', playlistId, 'Autoplay:', autoplay, 'IsPlaying:', isPlaying);
-  }, [videoId, playlistId, autoplay, isPlaying]);
-
-  const getRetryDelay = useCallback((attempt: number): number => {
-    return Math.min(1000 * Math.pow(2, attempt), 10000);
-  }, []);
-
-  // Connection quality monitoring
-  useEffect(() => {
-    const updateConnectionQuality = () => {
-      const connection = (navigator as any).connection;
-      if (connection) {
-        const effectiveType = connection.effectiveType;
-        if (effectiveType === '4g' || effectiveType === 'wifi') {
-          setConnectionQuality('good');
-        } else if (effectiveType === '3g') {
-          setConnectionQuality('fair');
-        } else {
-          setConnectionQuality('poor');
-        }
-      }
-    };
-
-    updateConnectionQuality();
-    window.addEventListener('online', updateConnectionQuality);
-    window.addEventListener('offline', () => setConnectionQuality('poor'));
-
-    return () => {
-      window.removeEventListener('online', updateConnectionQuality);
-      window.removeEventListener('offline', () => setConnectionQuality('poor'));
-    };
-  }, []);
-
-  // Reset on videoId change
-  useEffect(() => {
-    console.log('[YouTubePlayer] Video ID changed:', videoId);
-    setIsLoading(true);
-    setCurrentSourceIndex(0);
-    setLoadAttempts({ attempts: 0, lastError: '' });
-
-    if (loadTimeoutRef.current) {
-      clearTimeout(loadTimeoutRef.current);
-    }
-
-    // Longer timeout for playlist embeds
-    loadTimeoutRef.current = setTimeout(() => {
-      if (isLoading) {
-        console.warn('[YouTubePlayer] Load timeout after', LOAD_TIMEOUT, 'ms');
-        handleLoadError('Load timeout');
-      }
-    }, LOAD_TIMEOUT);
-
-    return () => {
-      if (loadTimeoutRef.current) {
-        clearTimeout(loadTimeoutRef.current);
-      }
-    };
-  }, [videoId, playlistId, songIndex]);
-
-  const handleLoadError = useCallback((errorMessage: string) => {
-    console.warn(`[YouTubePlayer] Error: ${errorMessage}, Source: ${EMBED_SOURCES[currentSourceIndex].id}`);
-
-    setLoadAttempts(prev => ({
-      attempts: prev.attempts + 1,
-      lastError: errorMessage,
-    }));
-
-    if (loadAttempts.attempts < MAX_RETRIES_PER_SOURCE) {
-      const delay = getRetryDelay(loadAttempts.attempts);
-      setTimeout(() => {
-        setIsLoading(true);
-      }, delay);
-    } else {
-      if (currentSourceIndex < EMBED_SOURCES.length - 1) {
-        const nextIndex = currentSourceIndex + 1;
-        setCurrentSourceIndex(nextIndex);
-        onSourceChange(EMBED_SOURCES[nextIndex].name);
-        setLoadAttempts({ attempts: 0, lastError: '' });
-        toast.info(`Switched to ${EMBED_SOURCES[nextIndex].name} fallback`);
-      } else {
-        setIsLoading(false);
-        onError(`All embed sources failed: ${errorMessage}`, EMBED_SOURCES[currentSourceIndex].name);
-      }
-    }
-  }, [currentSourceIndex, loadAttempts, getRetryDelay, onError, onSourceChange]);
+  const embedUrl = useMemo(() => {
+    const params = new URLSearchParams({
+      rel: '0',
+      modestbranding: '1',
+      controls: '1',
+    });
+    if (autoplay && isPlaying) params.set('autoplay', '1');
+    return `https://www.youtube.com/embed/${videoId}?${params.toString()}`;
+  }, [videoId, autoplay, isPlaying]);
 
   const handleIframeLoad = useCallback(() => {
-    console.log('[YouTubePlayer] Iframe element loaded, checking content...');
-    
-    // Give YouTube time to render, then check if content actually loaded
-    setTimeout(() => {
-      if (iframeRef.current) {
-        const iframe = iframeRef.current;
-        // Check if iframe has content or if it's showing an error
-        try {
-          // If we can access the iframe document, check for YouTube content
-          const iframeDoc = iframe.contentDocument || iframe.contentWindow?.document;
-          if (iframeDoc) {
-            const hasYouTubeContent = iframeDoc.querySelector('ytd-player') || 
-                                       iframeDoc.querySelector('#movie_player') ||
-                                       iframeDoc.title?.includes('YouTube');
-            
-            if (hasYouTubeContent) {
-              console.log('[YouTubePlayer] YouTube content detected');
-              setIsLoading(false);
-              if (loadTimeoutRef.current) {
-                clearTimeout(loadTimeoutRef.current);
-                loadTimeoutRef.current = null;
-              }
-              onReady();
-            } else {
-              console.warn('[YouTubePlayer] No YouTube content detected, may be blocked');
-              handleLoadError('Content blocked - no YouTube player detected');
-            }
-          } else {
-            // Can't access iframe content (cross-origin), assume success
-            console.log('[YouTubePlayer] Cannot check iframe content (cross-origin), assuming success');
-            setIsLoading(false);
-            if (loadTimeoutRef.current) {
-              clearTimeout(loadTimeoutRef.current);
-              loadTimeoutRef.current = null;
-            }
-            onReady();
-          }
-        } catch (err) {
-          // Cross-origin restriction, assume success
-          console.log('[YouTubePlayer] Cross-origin access restricted, assuming success');
-          setIsLoading(false);
-          if (loadTimeoutRef.current) {
-            clearTimeout(loadTimeoutRef.current);
-            loadTimeoutRef.current = null;
-          }
-          onReady();
-        }
-      }
-    }, 2000); // Wait 2 seconds for YouTube to render
+    setIsLoading(false);
+    onReady();
   }, [onReady]);
 
-  const handleIframeError = useCallback(() => {
-    console.error('[YouTubePlayer] Iframe failed to load');
-    handleLoadError('Iframe failed to load - check browser console for details');
-  }, []);
-
-  const currentSource = EMBED_SOURCES[currentSourceIndex];
-  const embedUrl = currentSource.buildUrl(videoId, autoplay && isPlaying, playlistId, songIndex);
-  const iframeKey = `${videoId}-${playlistId || 'no-list'}-${songIndex}-${currentSourceIndex}-${loadAttempts.attempts}`;
-  
-  // Log embed URL for debugging
+  // Reset loading state when videoId changes
   useEffect(() => {
-    console.log('[YouTubePlayer] Embed URL:', embedUrl);
-  }, [embedUrl]);
+    setIsLoading(true);
+  }, [videoId]);
 
   return (
     <div className="relative w-full h-full bg-black rounded-lg overflow-hidden">
       {isLoading && (
         <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/80 z-10">
-          <Loader2 className="w-8 h-8 animate-spin text-purple-400 mb-3" />
-          <p className="text-xs text-white/60">Loading from {currentSource.name}...</p>
-          {loadAttempts.attempts > 0 && (
-            <p className="text-[10px] text-white/40 mt-1">
-              Attempt {loadAttempts.attempts + 1}/{MAX_RETRIES_PER_SOURCE}
-            </p>
-          )}
-          <div className="flex items-center gap-1 mt-3">
-            <Signal className={`w-3 h-3 ${
-              connectionQuality === 'good' ? 'text-green-400' :
-              connectionQuality === 'fair' ? 'text-yellow-400' : 'text-red-400'
-            }`} />
-            <span className="text-[10px] text-white/40 capitalize">{connectionQuality}</span>
-          </div>
-          {/* Manual fallback button if video doesn't load */}
-          <Button
-            variant="outline"
-            size="sm"
-            onClick={() => {
-              const watchUrl = `https://www.youtube.com/watch?v=${videoId}&list=${playlistId}`;
-              window.open(watchUrl, '_blank');
-            }}
-            className="mt-4 border-white/20 text-white/80 hover:bg-white/10 text-[10px]"
-          >
-            <ExternalLink className="w-3 h-3 mr-1" />
-            Open Video in New Tab
-          </Button>
+          <Loader2 className="w-8 h-8 animate-spin text-gray-400 mb-3" />
+          <p className="text-xs text-white/60">Loading video...</p>
         </div>
       )}
 
       <iframe
-        key={iframeKey}
         ref={iframeRef}
+        key={videoId}
         src={embedUrl}
         title="Video Player"
         className="w-full h-full"
         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture; fullscreen"
         allowFullScreen
         onLoad={handleIframeLoad}
-        onError={handleIframeError}
-        loading={preload ? 'eager' : 'lazy'}
-        referrerPolicy="strict-origin-when-cross-origin"
       />
-
-      {!isLoading && currentSourceIndex === EMBED_SOURCES.length - 1 && loadAttempts.attempts >= MAX_RETRIES_PER_SOURCE && (
-        <div className="absolute inset-0 flex flex-col items-center justify-center bg-gradient-to-br from-purple-900/40 to-black z-20">
-          <AlertCircle className="w-12 h-12 mx-auto text-red-400/60 mb-3" />
-          <p className="text-sm text-white/60 text-center px-4 mb-4">
-            Unable to load video
-          </p>
-          <div className="flex gap-2">
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                const watchUrl = `https://www.youtube.com/watch?v=${videoId}&list=${playlistId}`;
-                window.open(watchUrl, '_blank');
-              }}
-              className="border-white/20 text-white/80 hover:bg-white/10"
-            >
-              <ExternalLink className="w-4 h-4 mr-2" />
-              Open Video
-            </Button>
-            <Button
-              variant="outline"
-              size="sm"
-              onClick={() => {
-                setCurrentSourceIndex(0);
-                setLoadAttempts({ attempts: 0, lastError: '' });
-              }}
-              className="border-white/20 text-white/80 hover:bg-white/10"
-            >
-              <RefreshCw className="w-4 h-4 mr-2" />
-              Retry
-            </Button>
-          </div>
-        </div>
-      )}
-
-      {/* Show error message when iframe fails to load */}
-      {!isLoading && loadAttempts.lastError && (
-        <div className="absolute bottom-2 left-2 px-2 py-1 bg-red-900/60 backdrop-blur-sm rounded text-[10px] text-red-200 border border-red-500/30">
-          Load error: {loadAttempts.lastError}
-        </div>
-      )}
-
-      <div className="absolute top-2 left-2 px-2 py-1 bg-black/60 backdrop-blur-sm rounded text-[10px] text-white/60 border border-white/10">
-        {currentSource.name}
-      </div>
     </div>
   );
 };
@@ -738,9 +611,9 @@ export default function MusicHubTab() {
   // UI state
   const [isFullscreen, setIsFullscreen] = useState(false);
   const [showPlaylist, setShowPlaylist] = useState(true);
-  const [viewMode, setViewMode] = useState<"grid" | "list">("grid");
   const [webhookStatus, setWebhookStatus] = useState<"disconnected" | "connecting" | "connected">("disconnected");
   const [currentEmbedSource, setCurrentEmbedSource] = useState<string>('Primary');
+  const [searchQuery, setSearchQuery] = useState('');
 
   // Preload state
   const [preloadProgress, setPreloadProgress] = useState(0);
@@ -758,6 +631,34 @@ export default function MusicHubTab() {
     console.log('[MusicHub] All songs:', songs.length, 'Songs from albums:', playlist.albums.length);
     return songs;
   }, [playlist.albums]);
+
+  // Filtered results based on search query
+  const filteredResults = useMemo(() => {
+    if (!searchQuery.trim()) {
+      return { albums: playlist.albums, songs: [] as Array<{ song: any; album: any; songIndex: number }> };
+    }
+
+    const query = searchQuery.toLowerCase();
+    
+    // Filter albums by title
+    const matchingAlbums = playlist.albums.filter(album => 
+      album.title.toLowerCase().includes(query) ||
+      album.artist.toLowerCase().includes(query)
+    );
+
+    // Filter songs by title
+    const matchingSongs: Array<{ song: any; album: any; songIndex: number }> = [];
+    playlist.albums.forEach((album, albumIndex) => {
+      album.songs.forEach((song, songIndex) => {
+        if (song.title.toLowerCase().includes(query) || song.artist.toLowerCase().includes(query)) {
+          matchingSongs.push({ song, album, songIndex });
+        }
+      });
+    });
+
+    return { albums: matchingAlbums, songs: matchingSongs };
+  }, [playlist.albums, searchQuery]);
+
   const currentAlbum = useMemo(() => {
     const album = playlist.albums[currentAlbumIndex];
     console.log('[MusicHub] Current album:', currentAlbumIndex, album?.title, 'Songs:', album?.songs?.length, 'PlaylistId:', album?.playlistId);
@@ -1088,13 +989,13 @@ export default function MusicHubTab() {
     }>
       <div
         data-music-hub-container
-        className="h-full flex flex-col bg-gradient-to-b from-black via-purple-950/20 to-black"
+        className="h-full flex flex-col bg-gradient-to-b from-black via-gray-950/50 to-black"
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-gradient-to-r from-purple-900/30 via-pink-900/30 to-blue-900/30">
+        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-gradient-to-r from-gray-900/50 via-gray-800/30 to-gray-900/50">
           <div className="flex items-center gap-3">
             <motion.div
-              className="p-2 bg-gradient-to-br from-purple-600 to-pink-600 rounded-lg"
+              className="p-2 bg-gradient-to-br from-gray-700 to-gray-800 rounded-lg"
               animate={{ rotate: isPlaying ? 360 : 0 }}
               transition={{ duration: 3, repeat: isPlaying ? Infinity : 0, ease: "linear" }}
             >
@@ -1163,19 +1064,8 @@ export default function MusicHubTab() {
             <Button
               variant="ghost"
               size="icon"
-              onClick={() => setViewMode(prev => prev === "grid" ? "list" : "grid")}
-              className="text-white/60 hover:text-white"
-              title={`${viewMode === "grid" ? "List" : "Grid"} view`}
-              aria-label="Toggle view mode"
-            >
-              {viewMode === "grid" ? <ListMusic className="w-4 h-4" /> : <Grid3X3 className="w-4 h-4" />}
-            </Button>
-
-            <Button
-              variant="ghost"
-              size="icon"
               onClick={() => setShowPlaylist(prev => !prev)}
-              className={showPlaylist ? "text-purple-400" : "text-white/60"}
+              className={showPlaylist ? "text-gray-400" : "text-white/60"}
               title={showPlaylist ? "Hide playlist" : "Show playlist"}
               aria-label="Toggle playlist"
             >
@@ -1263,7 +1153,7 @@ export default function MusicHubTab() {
                       variant="ghost"
                       size="icon"
                       onClick={() => handleToggleLike(currentAlbum.id, currentSong.id)}
-                      className={currentSong.liked ? "text-pink-400" : "text-white/60"}
+                      className={currentSong.liked ? "text-red-400" : "text-white/60"}
                       aria-label={currentSong.liked ? "Unlike" : "Like"}
                     >
                       <Heart className={`w-5 h-5 ${currentSong.liked ? "fill-current" : ""}`} />
@@ -1314,7 +1204,7 @@ export default function MusicHubTab() {
               <CardContent className="p-4 space-y-4">
                 {/* Preload Indicator */}
                 {preloadProgress > 0 && preloadProgress < 100 && nextSongId && (
-                  <div className="flex items-center gap-2 text-xs text-purple-400">
+                  <div className="flex items-center gap-2 text-xs text-gray-400">
                     <RefreshCw className="w-3 h-3 animate-spin" />
                     <span>Preloading next track... {preloadProgress}%</span>
                   </div>
@@ -1332,7 +1222,7 @@ export default function MusicHubTab() {
                     variant="ghost"
                     size="icon"
                     onClick={() => setIsShuffle(!isShuffle)}
-                    className={isShuffle ? "text-purple-400" : "text-white/60"}
+                    className={isShuffle ? "text-gray-400" : "text-white/60"}
                     title="Shuffle"
                     aria-pressed={isShuffle}
                   >
@@ -1349,7 +1239,7 @@ export default function MusicHubTab() {
                   </Button>
                   <Button
                     onClick={handlePlayPause}
-                    className="w-14 h-14 bg-gradient-to-r from-purple-600 to-pink-600 hover:from-purple-700 hover:to-pink-700 rounded-full shadow-lg shadow-purple-500/30"
+                    className="w-14 h-14 bg-gradient-to-r from-gray-700 to-gray-800 hover:from-gray-600 hover:to-gray-700 rounded-full shadow-lg shadow-gray-500/20"
                     title={isPlaying ? "Pause" : "Play"}
                     aria-label={isPlaying ? "Pause" : "Play"}
                   >
@@ -1372,7 +1262,7 @@ export default function MusicHubTab() {
                     variant="ghost"
                     size="icon"
                     onClick={() => setRepeatMode(repeatMode === "off" ? "all" : repeatMode === "all" ? "one" : "off")}
-                    className={repeatMode !== "off" ? "text-purple-400" : "text-white/60"}
+                    className={repeatMode !== "off" ? "text-gray-400" : "text-white/60"}
                     aria-label={`Repeat ${repeatMode}`}
                   >
                     <Repeat className="w-4 h-4" />
@@ -1406,124 +1296,28 @@ export default function MusicHubTab() {
                 </div>
               </CardContent>
             </Card>
-          </div>
 
-          {/* Playlist Panel */}
-          {showPlaylist && (
-            <ScrollArea className="col-span-1">
-              <div className="space-y-4">
-                {/* Album List */}
-                <div className="flex items-center justify-between">
-                  <h4 className="text-sm font-semibold text-white flex items-center gap-2">
-                    <ListMusic className="w-4 h-4" />
-                    New Releases
-                  </h4>
-                  <Badge variant="outline" className="text-[10px] border-white/20">
-                    {playlist.albums.length} albums
-                  </Badge>
-                </div>
-
-                {viewMode === "grid" ? (
-                  <div className="grid grid-cols-2 gap-3">
-                    {playlist.albums.map((album, albumIndex) => (
-                      <motion.div
-                        key={album.id}
-                        whileHover={{ scale: 1.05 }}
-                        whileTap={{ scale: 0.95 }}
-                        onClick={() => {
-                          setCurrentAlbumIndex(albumIndex);
-                          setCurrentSongIndex(0);
-                          setIsPlaying(true);
-                        }}
-                        className={`p-3 rounded-lg cursor-pointer transition-all ${
-                          currentAlbumIndex === albumIndex
-                            ? "bg-purple-500/20 border-purple-500/30"
-                            : "bg-white/5 border-white/10 hover:bg-white/10"
-                        } border`}
-                        role="button"
-                        tabIndex={0}
-                        onKeyDown={(e) => {
-                          if (e.key === 'Enter' || e.key === ' ') {
-                            setCurrentAlbumIndex(albumIndex);
-                            setCurrentSongIndex(0);
-                            setIsPlaying(true);
-                          }
-                        }}
-                      >
-                        <CachedThumbnail
-                          videoId={album.songs[0]?.videoId || album.id}
-                          thumbnailUrl={album.coverUrl}
-                          alt={album.title}
-                          className="w-full aspect-square rounded-md mb-2"
-                        />
-                        <p className="text-xs font-medium text-white truncate">{album.title}</p>
-                        <p className="text-[10px] text-white/40 truncate">{album.artist}</p>
-                        {album.isNew && (
-                          <Badge className="mt-1 text-[9px] bg-pink-500/20 text-pink-300 border-pink-500/30">
-                            NEW
-                          </Badge>
-                        )}
-                      </motion.div>
-                    ))}
+            {/* Current Album Songs - Under video player */}
+            {currentAlbum && !searchQuery && (
+              <Card className="bg-white/5 border-white/10 backdrop-blur-sm">
+                <CardContent className="p-4">
+                  <div className="flex items-center justify-between mb-3">
+                    <h5 className="text-sm font-semibold text-white/80 flex items-center gap-2">
+                      <ListMusic className="w-4 h-4" />
+                      {currentAlbum.title}
+                    </h5>
+                    <Badge variant="outline" className="text-[10px] border-white/20">
+                      {currentAlbum.songs.length} tracks
+                    </Badge>
                   </div>
-                ) : (
-                  <div className="space-y-2">
-                    {playlist.albums.map((album, albumIndex) => (
-                      <Card
-                        key={album.id}
-                        className={`bg-white/5 border-white/10 cursor-pointer transition-all ${
-                          currentAlbumIndex === albumIndex
-                            ? "border-purple-500/30 bg-purple-500/10"
-                            : "hover:bg-white/10"
-                        }`}
-                        onClick={() => {
-                          setCurrentAlbumIndex(albumIndex);
-                          setCurrentSongIndex(0);
-                          setIsPlaying(true);
-                        }}
-                      >
-                        <CardContent className="p-3">
-                          <div className="flex items-center gap-3">
-                            <CachedThumbnail
-                              videoId={album.songs[0]?.videoId || album.id}
-                              thumbnailUrl={album.coverUrl}
-                              alt={album.title}
-                              className="w-12 h-12 rounded"
-                            />
-                            <div className="flex-1 min-w-0">
-                              <p className="text-sm font-medium text-white truncate">{album.title}</p>
-                              <p className="text-xs text-white/40 truncate">{album.artist}</p>
-                            </div>
-                            {album.isNew && (
-                              <Badge className="text-[9px] bg-pink-500/20 text-pink-300 border-pink-500/30">
-                                NEW
-                              </Badge>
-                            )}
-                          </div>
-                        </CardContent>
-                      </Card>
-                    ))}
-                  </div>
-                )}
 
-                {/* Current Album Songs */}
-                {currentAlbum && (
-                  <div className="space-y-2">
-                    <div className="flex items-center justify-between">
-                      <h5 className="text-xs font-semibold text-white/80">
-                        {currentAlbum.title} - Tracks
-                      </h5>
-                      <Badge variant="outline" className="text-[10px] border-white/20">
-                        {currentAlbum.songs.length} tracks
-                      </Badge>
-                    </div>
-
+                  <div className="space-y-1">
                     {currentAlbum.songs.map((song, songIndex) => (
                       <Card
                         key={song.id}
                         className={`bg-white/5 border-white/10 cursor-pointer transition-all ${
                           currentSongIndex === songIndex
-                            ? "border-purple-500/30 bg-purple-500/10"
+                            ? "border-gray-500/30 bg-gray-500/10"
                             : "hover:bg-white/10"
                         }`}
                         onClick={() => {
@@ -1535,7 +1329,7 @@ export default function MusicHubTab() {
                       >
                         <CardContent className="p-2">
                           <div className="flex items-center gap-3">
-                            <div className="w-8 h-8 rounded bg-gradient-to-br from-purple-600 to-pink-600 flex items-center justify-center text-xs font-bold text-white">
+                            <div className="w-6 h-6 rounded bg-gradient-to-br from-gray-600/50 to-gray-700/50 flex items-center justify-center text-xs font-bold text-white">
                               {songIndex + 1}
                             </div>
                             <div className="flex-1 min-w-0">
@@ -1550,7 +1344,7 @@ export default function MusicHubTab() {
                                 handleToggleLike(currentAlbum.id, song.id);
                               }}
                               className={`h-6 w-6 ${
-                                song.liked ? "text-pink-400" : "text-white/40 hover:text-white"
+                                song.liked ? "text-red-400" : "text-white/40 hover:text-white"
                               }`}
                               aria-label={song.liked ? "Unlike" : "Like"}
                             >
@@ -1561,6 +1355,133 @@ export default function MusicHubTab() {
                       </Card>
                     ))}
                   </div>
+                </CardContent>
+              </Card>
+            )}
+          </div>
+
+          {/* Playlist Panel */}
+          {showPlaylist && (
+            <ScrollArea className="col-span-1">
+              <div className="space-y-4">
+                {/* Search Input */}
+                <div className="relative">
+                  <input
+                    type="text"
+                    placeholder="Search albums or songs..."
+                    value={searchQuery}
+                    onChange={(e) => setSearchQuery(e.target.value)}
+                    className="w-full px-3 py-2 bg-white/5 border border-white/10 rounded-lg text-sm text-white placeholder:text-white/40 focus:outline-none focus:border-gray-500/50"
+                  />
+                  {searchQuery && (
+                    <button
+                      onClick={() => setSearchQuery('')}
+                      className="absolute right-2 top-1/2 -translate-y-1/2 text-white/40 hover:text-white"
+                      aria-label="Clear search"
+                    >
+                      <RefreshCw className="w-3 h-3" />
+                    </button>
+                  )}
+                </div>
+
+                {/* Album List */}
+                <div className="flex items-center justify-between">
+                  <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                    <ListMusic className="w-4 h-4" />
+                    {searchQuery ? `Search Results (${filteredResults.albums.length} albums, ${filteredResults.songs.length} songs)` : 'Albums'}
+                  </h4>
+                  {!searchQuery && (
+                    <Badge variant="outline" className="text-[10px] border-white/20">
+                      {playlist.albums.length} albums
+                    </Badge>
+                  )}
+                </div>
+
+                {/* Search Results - Songs */}
+                {searchQuery && filteredResults.songs.length > 0 && (
+                  <div className="space-y-2">
+                    <h5 className="text-xs font-semibold text-white/60">Songs</h5>
+                    {filteredResults.songs.slice(0, 20).map(({ song, album, songIndex }) => (
+                      <Card
+                        key={`${album.id}-${song.id}`}
+                        className="bg-white/5 border-white/10 cursor-pointer hover:bg-white/10"
+                        onClick={() => {
+                          setCurrentAlbumIndex(playlist.albums.findIndex(a => a.id === album.id));
+                          setCurrentSongIndex(songIndex);
+                          setIsPlaying(true);
+                        }}
+                      >
+                        <CardContent className="p-2">
+                          <div className="flex items-center gap-3">
+                            <CachedThumbnail
+                              videoId={song.videoId}
+                              thumbnailUrl={song.thumbnailUrl}
+                              alt={song.title}
+                              className="w-10 h-10 rounded"
+                            />
+                            <div className="flex-1 min-w-0">
+                              <p className="text-xs font-medium text-white truncate">{song.title}</p>
+                              <p className="text-[10px] text-white/40 truncate">{album.title} • {song.artist}</p>
+                            </div>
+                          </div>
+                        </CardContent>
+                      </Card>
+                    ))}
+                  </div>
+                )}
+
+                {/* No Results */}
+                {searchQuery && filteredResults.albums.length === 0 && filteredResults.songs.length === 0 && (
+                  <div className="text-center py-8 text-white/40">
+                    <p className="text-sm">No results found for "{searchQuery}"</p>
+                  </div>
+                )}
+
+                {/* Album Grid - 4 per row */}
+                {(!searchQuery || filteredResults.albums.length > 0) && (
+                  <>
+                    {searchQuery && (
+                      <h5 className="text-xs font-semibold text-white/60 col-span-4">Albums</h5>
+                    )}
+                    <div className="grid grid-cols-4 gap-3">
+                      {filteredResults.albums.map((album) => {
+                        const originalIndex = playlist.albums.findIndex(a => a.id === album.id);
+                        return (
+                          <motion.div
+                            key={album.id}
+                            whileHover={{ scale: 1.05 }}
+                            whileTap={{ scale: 0.95 }}
+                            onClick={() => {
+                              setCurrentAlbumIndex(originalIndex);
+                              setCurrentSongIndex(0);
+                              setIsPlaying(true);
+                            }}
+                            className={`p-2 rounded-lg cursor-pointer transition-all ${
+                              currentAlbumIndex === originalIndex
+                                ? "border-gray-500/30 bg-gray-500/10"
+                                : "bg-white/5 border-white/10 hover:bg-white/10"
+                            } border`}
+                            role="button"
+                            tabIndex={0}
+                          >
+                            <CachedThumbnail
+                              videoId={album.songs[0]?.videoId || album.id}
+                              thumbnailUrl={album.coverUrl}
+                              alt={album.title}
+                              className="w-full aspect-square rounded-md mb-2"
+                            />
+                            <p className="text-xs font-medium text-white truncate">{album.title}</p>
+                            <p className="text-[10px] text-white/40 truncate">{album.artist}</p>
+                            {album.isNew && (
+                              <Badge className="mt-1 text-[9px] bg-gray-500/20 text-gray-300 border-gray-500/30">
+                                NEW
+                              </Badge>
+                            )}
+                          </motion.div>
+                        );
+                      })}
+                    </div>
+                  </>
                 )}
 
                 {/* Playlist Info */}
