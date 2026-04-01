@@ -69,59 +69,78 @@ export interface VercelStreamOptions {
 
 /**
  * Provider configuration for OpenAI-compatible providers
+ * 
+ * NOTE: OpenRouter requires compatibility mode to use Chat Completions API
+ * instead of the new Responses API (which some models don't support)
  */
 interface OpenAICompatibleConfig {
   baseURL: string;
   apiKeyEnv: string;
+  compatibility?: 'compatible' | 'strict';  // 'compatible' for Chat Completions API
 }
 
 /**
  * Configuration for all OpenAI-compatible providers
+ * 
+ * Compatibility modes:
+ * - 'compatible': Use Chat Completions API format (legacy, widely supported)
+ * - 'strict': Use Responses API format (new, not all models support it)
  */
 const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
   chutes: {
     baseURL: process.env.CHUTES_BASE_URL || 'https://llm.chutes.ai/v1',
     apiKeyEnv: 'CHUTES_API_KEY',
+    compatibility: 'compatible',  // Chutes uses Chat Completions format
   },
   github: {
     baseURL: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com',
     apiKeyEnv: 'GITHUB_MODELS_API_KEY',
+    compatibility: 'compatible',
   },
   zen: {
     baseURL: process.env.ZEN_BASE_URL || 'https://api.zen.ai/v1',
     apiKeyEnv: 'ZEN_API_KEY',
+    compatibility: 'compatible',
   },
   nvidia: {
     baseURL: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
     apiKeyEnv: 'NVIDIA_API_KEY',
+    compatibility: 'compatible',  // NVIDIA requires Chat Completions format
   },
   together: {
     baseURL: process.env.TOGETHER_BASE_URL || 'https://api.together.xyz/v1',
     apiKeyEnv: 'TOGETHER_API_KEY',
+    compatibility: 'compatible',
   },
   groq: {
     baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
     apiKeyEnv: 'GROQ_API_KEY',
+    compatibility: 'compatible',
   },
   fireworks: {
     baseURL: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/inference/v1',
     apiKeyEnv: 'FIREWORKS_API_KEY',
+    compatibility: 'compatible',
   },
   anyscale: {
     baseURL: process.env.ANYSCALE_BASE_URL || 'https://api.endpoints.anyscale.com/v1',
     apiKeyEnv: 'ANYSCALE_API_KEY',
+    compatibility: 'compatible',
   },
   deepinfra: {
     baseURL: process.env.DEEPINFRA_BASE_URL || 'https://api.deepinfra.com/v1/openai',
     apiKeyEnv: 'DEEPINFRA_API_KEY',
+    compatibility: 'compatible',
   },
   lepton: {
     baseURL: process.env.LEPTON_BASE_URL || 'https://models.lepton.ai/v1',
     apiKeyEnv: 'LEPTON_API_KEY',
+    compatibility: 'compatible',
   },
   openrouter: {
     baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
     apiKeyEnv: 'OPENROUTER_API_KEY',
+    compatibility: 'compatible',  // CRITICAL: OpenRouter needs Chat Completions format for some models
   },
 };
 
@@ -132,6 +151,9 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
  * 1. Direct Vercel AI SDK providers (OpenAI, Anthropic, Google, Mistral)
  * 2. OpenAI-compatible providers (NVIDIA, GitHub, Groq, etc.)
  * 3. Custom providers via compatibility wrapper (Zo, etc.)
+ * 
+ * FIX: Added better error handling and provider validation for ToolLoopAgent compatibility
+ * Also validates that model name doesn't look like a provider name
  */
 function getVercelModel(
   provider: VercelProvider | string,
@@ -140,6 +162,40 @@ function getVercelModel(
   baseURL?: string
 ) {
   const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
+
+  // Validate model name - catch common mistakes where provider is passed as model
+  const providerNames = ['openai', 'anthropic', 'google', 'mistral', 'openrouter', 'groq', 'together', 'chutes'];
+  if (providerNames.includes(model.toLowerCase())) {
+    chatLogger.error('Model name appears to be a provider name', {
+      provider,
+      model,
+      hint: `Did you mean to use a specific model like 'gpt-4o', 'claude-sonnet-4-5', or 'mistral-large-latest'?`,
+    });
+    // Don't throw - let it fail naturally if the provider accepts it
+  }
+
+  // Validate provider is configured (has API key)
+  const requiredEnvVars: Record<string, string> = {
+    'openai': 'OPENAI_API_KEY',
+    'anthropic': 'ANTHROPIC_API_KEY',
+    'google': 'GOOGLE_API_KEY',
+    'mistral': 'MISTRAL_API_KEY',
+    'openrouter': 'OPENROUTER_API_KEY',
+    'chutes': 'CHUTES_API_KEY',
+    'github': 'GITHUB_MODELS_API_KEY',
+    'nvidia': 'NVIDIA_API_KEY',
+    'together': 'TOGETHER_API_KEY',
+    'groq': 'GROQ_API_KEY',
+    'fireworks': 'FIREWORKS_API_KEY',
+    'anyscale': 'ANYSCALE_API_KEY',
+    'deepinfra': 'DEEPINFRA_API_KEY',
+    'lepton': 'LEPTON_API_KEY',
+  };
+
+  const requiredEnvVar = requiredEnvVars[provider.toLowerCase()];
+  if (requiredEnvVar && !apiKey && !currentEnv[requiredEnvVar]) {
+    chatLogger.warn(`Provider ${provider} may not be configured (missing ${requiredEnvVar})`);
+  }
 
   // Check for custom providers requiring compatibility wrapper first
   if (provider === 'zo') {
@@ -162,13 +218,24 @@ function getVercelModel(
       const openai = createOpenAI({
         apiKey: apiKey || currentEnv[config.apiKeyEnv],
         baseURL: baseURL || config.baseURL,
+        // CRITICAL FIX: Use compatibility mode to force Chat Completions API format
+        // This prevents "Invalid Responses API request" errors with models that don't support it
+        compatibility: config.compatibility || 'strict',
+      });
+      chatLogger.debug('Created OpenAI-compatible provider', { 
+        provider, 
+        baseURL: openai['baseURL'],
+        compatibility: config.compatibility || 'strict',
       });
       return openai(model);
     }
-    // Unknown provider, try OpenAI as fallback
+
+    // Unknown provider, try OpenAI as fallback with compatibility mode
+    chatLogger.warn('Unknown provider, using OpenAI as fallback', { provider, model });
     const openai = createOpenAI({
       apiKey: apiKey || currentEnv.OPENAI_API_KEY,
       baseURL: baseURL || currentEnv.OPENAI_BASE_URL,
+      compatibility: 'compatible',  // Safe default for unknown providers
     });
     return openai(model);
   }
@@ -180,6 +247,7 @@ function getVercelModel(
         apiKey: apiKey || currentEnv.OPENAI_API_KEY,
         baseURL: baseURL || currentEnv.OPENAI_BASE_URL,
       });
+      chatLogger.debug('Created OpenAI provider', { baseURL: openai['baseURL'] });
       return openai(model);
     }
 
@@ -188,6 +256,7 @@ function getVercelModel(
         apiKey: apiKey || currentEnv.ANTHROPIC_API_KEY,
         baseURL: baseURL || currentEnv.ANTHROPIC_BASE_URL,
       });
+      chatLogger.debug('Created Anthropic provider');
       return anthropic(model);
     }
 
@@ -195,6 +264,7 @@ function getVercelModel(
       const google = createGoogleGenerativeAI({
         apiKey: apiKey || currentEnv.GOOGLE_API_KEY,
       });
+      chatLogger.debug('Created Google provider');
       return google(model);
     }
 
@@ -203,11 +273,14 @@ function getVercelModel(
         apiKey: apiKey || currentEnv.MISTRAL_API_KEY,
         baseURL: baseURL || currentEnv.MISTRAL_BASE_URL,
       });
+      chatLogger.debug('Created Mistral provider');
       return mistral(model);
     }
 
     default:
-      throw new Error(`Unsupported provider for Vercel AI SDK: ${provider}`);
+      const error = new Error(`Unsupported provider for Vercel AI SDK: ${provider}`);
+      chatLogger.error('Unsupported provider', { provider, model });
+      throw error;
   }
 }
 
@@ -333,6 +406,7 @@ export async function* streamWithVercelAI(
 
   const startTime = Date.now();
   const requestId = `vercel-ai-${Date.now()}`;
+  let useCompatibilityFallback = false;
 
   try {
     const vercelModel = getVercelModel(provider, modelName, key, url);
@@ -632,6 +706,104 @@ export async function* streamWithVercelAI(
     if (error.name === 'AbortError') {
       chatLogger.info('Vercel AI SDK streaming aborted', { requestId, provider, model: modelName });
       return;
+    }
+
+    // Check if this is a Responses API error that might work with Chat Completions format
+    const isResponsesApiError = 
+      error.message?.includes('Responses API') ||
+      error.message?.includes('Invalid Responses API request') ||
+      error.message?.includes('expected string, received array') ||
+      error.message?.includes('expected reasoning_text') ||
+      (error.statusCode === 400 && error.message?.includes('Invalid'));
+
+    if (isResponsesApiError && !useCompatibilityFallback && provider === 'openrouter') {
+      chatLogger.warn('Responses API failed, retrying with Chat Completions format', {
+        requestId,
+        provider,
+        model: modelName,
+        error: error.message,
+      });
+      
+      // Retry with compatibility mode forced
+      useCompatibilityFallback = true;
+      
+      // Create model with explicit compatibility mode
+      const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
+      const { createOpenAI } = await import('@ai-sdk/openai');
+      const fallbackModel = createOpenAI({
+        apiKey: key || currentEnv.OPENROUTER_API_KEY,
+        baseURL: url || process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
+        compatibility: 'compatible',  // Force Chat Completions format
+      });
+      
+      // Retry the stream with fallback model
+      try {
+        const fallbackStreamOptions: any = {
+          model: fallbackModel as any,
+          messages: chatMessages,
+          temperature: temp,
+          maxOutputTokens: maxT,
+          maxRetries: 0,
+          maxSteps,
+          abortSignal: signal,
+          toolCallStreaming,
+          experimental_telemetry: {
+            isEnabled: false,
+            functionId: 'llm-stream-fallback',
+            metadata: { provider, model: modelName, fallback: 'compatibility' },
+          },
+        };
+        
+        if (systemPrompt) fallbackStreamOptions.system = systemPrompt;
+        if (tools && Object.keys(tools).length > 0) fallbackStreamOptions.tools = tools;
+        
+        const fallbackResult = streamText(fallbackStreamOptions);
+        
+        // Yield all chunks from fallback (simplified - same as main stream)
+        for await (const chunk of fallbackResult.fullStream) {
+          if (signal?.aborted) return;
+          
+          if (chunk.type === 'text-delta') {
+            yield { content: (chunk as any).text, isComplete: false, timestamp: new Date() };
+          } else if (chunk.type === 'tool-call') {
+            yield {
+              content: '',
+              isComplete: false,
+              toolCalls: [{
+                id: (chunk as any).toolCallId,
+                name: (chunk as any).toolName,
+                arguments: (chunk as any).args || (chunk as any).arguments || {},
+              }],
+              timestamp: new Date(),
+            };
+          } else if (chunk.type === 'finish') {
+            const usage = await fallbackResult.usage;
+            yield {
+              content: '',
+              isComplete: true,
+              finishReason: (await fallbackResult.finishReason) || 'stop',
+              tokensUsed: usage?.totalTokens || 0,
+              usage: {
+                promptTokens: (usage as any).inputTokens || 0,
+                completionTokens: (usage as any).outputTokens || 0,
+                totalTokens: usage?.totalTokens || 0,
+              },
+              timestamp: new Date(),
+              metadata: { vercelAI: true, provider, model: modelName, fallback: 'compatibility' },
+            };
+          }
+        }
+        return;
+      } catch (fallbackError: any) {
+        chatLogger.error('Fallback streaming also failed', {
+          requestId,
+          provider,
+          model: modelName,
+          error: fallbackError.message,
+        });
+        // Throw original error
+        throw error;
+      }
     }
 
     chatLogger.error('Vercel AI SDK streaming failed', { requestId, provider, model: modelName }, {

@@ -27,11 +27,19 @@ const log = createLogger('MastraAgent');
 
 // ToolLoopAgent is available in AI SDK 6.0+
 // If not available, falls back to manual agent loop
+// 
+// NOTE: ToolLoopAgent requires Vercel AI SDK 6.0+ and may not work with all provider wrappers.
+// For best compatibility, use direct Vercel AI SDK providers (openai, anthropic, google, mistral)
+// or OpenAI-compatible providers with proper API keys configured.
 let ToolLoopAgent: any = null;
 try {
   ToolLoopAgent = require('ai').ToolLoopAgent;
-} catch {
-  log.warn('ToolLoopAgent not available, using fallback agent loop');
+  log.info('ToolLoopAgent loaded from Vercel AI SDK');
+} catch (error: any) {
+  log.warn('ToolLoopAgent not available, using fallback agent loop', {
+    error: error.message,
+    aiSdkVersion: require('ai/package.json')?.version || 'unknown',
+  });
 }
 
 export interface AgentContext {
@@ -624,14 +632,130 @@ Assistant: { "done": true, "message": "Created a todo app with package.json and 
   /**
    * Lazy initialize ToolLoopAgent with user's configured provider
    * Note: We're using Vercel AI SDK streaming directly, so ToolLoopAgent is optional
+   * 
+   * FIX: Added better error handling for ToolLoopAgent initialization
+   * Some provider wrappers may not be compatible with ToolLoopAgent
    */
   private async initializeToolLoopAgent(): Promise<void> {
     // ToolLoopAgent is optional - we can use Vercel AI SDK streaming directly
     // This method kept for potential future use with ToolLoopAgent
     if (this.toolLoopAgent || !this.useToolLoopAgent) return;
+
+    try {
+      const { provider, model } = this.getProviderConfig();
+      
+      // Check if provider is compatible with ToolLoopAgent
+      // ToolLoopAgent works best with direct Vercel AI SDK providers
+      const compatibleProviders = ['openai', 'anthropic', 'google', 'mistral', 'openrouter'];
+      const isCompatible = compatibleProviders.includes(provider.toLowerCase());
+      
+      if (!isCompatible) {
+        log.warn('Provider may not be fully compatible with ToolLoopAgent', {
+          provider,
+          model,
+          recommendedProviders: compatibleProviders.join(', '),
+        });
+        // Continue anyway - may still work with OpenAI-compatible providers
+      }
+      
+      // Create ToolLoopAgent instance with configured model
+      const vercelModel = await this.createModelInstance(provider, model);
+      
+      this.toolLoopAgent = new ToolLoopAgent({
+        model: vercelModel,
+        tools: Object.keys(this.tools).reduce((acc, toolName) => {
+          acc[toolName] = this.tools.find(t => t.name === toolName);
+          return acc;
+        }, {} as Record<string, any>),
+      });
+      
+      log.info('ToolLoopAgent initialized successfully', { provider, model, isCompatible });
+    } catch (error: any) {
+      log.error('Failed to initialize ToolLoopAgent', {
+        error: error.message,
+        stack: error.stack,
+      });
+      this.useToolLoopAgent = false;
+    }
+  }
+
+  /**
+   * Create model instance for ToolLoopAgent
+   * Uses the same logic as vercel-ai-streaming.ts for consistency
+   */
+  private async createModelInstance(provider: string, model: string): Promise<any> {
+    // Import vercel-ai-streaming to reuse model creation logic
+    const { streamWithVercelAI } = await import('@/lib/chat/vercel-ai-streaming');
     
-    const { provider, model } = this.getProviderConfig();
-    log.info(`ToolLoopAgent initialized for provider: ${provider}, model: ${model}`);
+    // We can't directly access getVercelModel, so we'll use a workaround
+    // by creating a minimal stream and extracting the model
+    // For now, just return the provider/model pair for ToolLoopAgent to handle
+    
+    // FIX: Use dynamic import to get the model creator
+    const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
+    
+    switch (provider.toLowerCase()) {
+      case 'openai':
+      case 'openrouter':
+      case 'chutes':
+      case 'github':
+      case 'nvidia':
+      case 'together':
+      case 'groq':
+      case 'fireworks':
+      case 'anyscale':
+      case 'deepinfra':
+      case 'lepton': {
+        const { createOpenAI } = await import('@ai-sdk/openai');
+        const config = {
+          openrouter: { baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1', apiKeyEnv: 'OPENROUTER_API_KEY' },
+          chutes: { baseURL: process.env.CHUTES_BASE_URL || 'https://llm.chutes.ai/v1', apiKeyEnv: 'CHUTES_API_KEY' },
+          github: { baseURL: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com', apiKeyEnv: 'GITHUB_MODELS_API_KEY' },
+          nvidia: { baseURL: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1', apiKeyEnv: 'NVIDIA_API_KEY' },
+          together: { baseURL: process.env.TOGETHER_BASE_URL || 'https://api.together.xyz/v1', apiKeyEnv: 'TOGETHER_API_KEY' },
+          groq: { baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1', apiKeyEnv: 'GROQ_API_KEY' },
+          fireworks: { baseURL: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/inference/v1', apiKeyEnv: 'FIREWORKS_API_KEY' },
+          anyscale: { baseURL: process.env.ANYSCALE_BASE_URL || 'https://api.endpoints.anyscale.com/v1', apiKeyEnv: 'ANYSCALE_API_KEY' },
+          deepinfra: { baseURL: process.env.DEEPINFRA_BASE_URL || 'https://api.deepinfra.com/v1/openai', apiKeyEnv: 'DEEPINFRA_API_KEY' },
+          lepton: { baseURL: process.env.LEPTON_BASE_URL || 'https://models.lepton.ai/v1', apiKeyEnv: 'LEPTON_API_KEY' },
+        }[provider.toLowerCase()] || { baseURL: currentEnv.OPENAI_BASE_URL, apiKeyEnv: 'OPENAI_API_KEY' };
+        
+        const openai = createOpenAI({
+          apiKey: currentEnv[config.apiKeyEnv],
+          baseURL: config.baseURL,
+        });
+        return openai(model);
+      }
+      
+      case 'anthropic': {
+        const { createAnthropic } = await import('@ai-sdk/anthropic');
+        const anthropic = createAnthropic({
+          apiKey: currentEnv.ANTHROPIC_API_KEY,
+          baseURL: currentEnv.ANTHROPIC_BASE_URL,
+        });
+        return anthropic(model);
+      }
+      
+      case 'google': {
+        const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
+        const google = createGoogleGenerativeAI({
+          apiKey: currentEnv.GOOGLE_API_KEY,
+        });
+        return google(model);
+      }
+      
+      case 'mistral': {
+        const { createMistral } = await import('@ai-sdk/mistral');
+        const mistral = createMistral({
+          apiKey: currentEnv.MISTRAL_API_KEY,
+          baseURL: currentEnv.MISTRAL_BASE_URL,
+        });
+        return mistral(model);
+      }
+      
+      default:
+        throw new Error(`Unsupported provider for ToolLoopAgent: ${provider}`);
+    }
   }
 
   /**
@@ -641,11 +765,18 @@ Assistant: { "done": true, "message": "Created a todo app with package.json and 
   /**
    * Get provider and model from user's configuration
    * Uses the model passed to constructor, or falls back to DEFAULT_MODEL env var
+   * 
+   * FIX: Use widely available model instead of provider name
+   * mistral-small-latest is available on Mistral direct and via OpenRouter
    */
   private getProviderConfig(): { provider: string; model: string } {
     const provider = getProviderForTask('agent');
+    
     // Use configured model if provided, otherwise use env var or widely-available default
-    const model = this.configuredModel || getModelForTask('agent', process.env.DEFAULT_MODEL || 'mistral-small-latest');
+    // Priority: constructor model > AGENT_MODEL env > DEFAULT_MODEL env > sensible default
+    const defaultModel = process.env.AGENT_MODEL || process.env.DEFAULT_MODEL || 'mistral-small-latest';
+    const model = this.configuredModel || getModelForTask('agent', defaultModel);
+    
     return { provider, model };
   }
 

@@ -7,6 +7,7 @@ import type { Message } from '@/types';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { buildApiHeaders } from '@/lib/utils';
 import type { AgentType, AgentStatus } from '@/components/agent-status-display';
+import { isValidExtractedPath } from '@/lib/chat/file-edit-parser';  // NEW: Server-side validation
 
 export interface UseChatOptions {
   api: string;
@@ -47,6 +48,39 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | undefined>();
+  
+  // Rate limiting for invalid path warnings (prevents log spam from malformed LLM output)
+  const invalidPathWarningCount = useRef(0);
+  const lastInvalidPathWarning = useRef(0);
+  const INVALID_PATH_WARNING_LIMIT = 10;  // Max warnings per 30 seconds
+  const INVALID_PATH_WARNING_WINDOW = 30000;  // 30 seconds
+  
+  const shouldShowInvalidPathWarning = useCallback((path: string) => {
+    const now = Date.now();
+    // Reset counter if window has passed
+    if (now - lastInvalidPathWarning.current > INVALID_PATH_WARNING_WINDOW) {
+      invalidPathWarningCount.current = 0;
+    }
+    lastInvalidPathWarning.current = now;
+    
+    // Show warning if under limit
+    if (invalidPathWarningCount.current < INVALID_PATH_WARNING_LIMIT) {
+      invalidPathWarningCount.current++;
+      return true;
+    }
+    
+    // Log summary instead of individual warnings when limit exceeded
+    if (invalidPathWarningCount.current === INVALID_PATH_WARNING_LIMIT) {
+      console.warn('[Chat] Rate limit reached for invalid path warnings. Further invalid paths will be silently skipped.', {
+        path,
+        limit: INVALID_PATH_WARNING_LIMIT,
+        windowMs: INVALID_PATH_WARNING_WINDOW,
+      });
+      invalidPathWarningCount.current++;
+    }
+    
+    return false;
+  }, []);
   
   // Agent status state
   const [agentType, setAgentType] = useState<AgentType>('single');
@@ -693,47 +727,105 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 case 'file_edit':
                   // Progressive file edit detected during streaming
                   // eventData contains: { path, status, operation, content, diff, timestamp }
-                  if (eventData.path) {
-                    // Update agent activity with progressive file edit
-                    setAgentActivity(prev => ({
-                      ...prev,
-                      status: 'executing',
-                      currentAction: `Editing ${eventData.path}...`,
-                      fileEdits: [...(prev.fileEdits || []), {
-                        path: eventData.path,
-                        status: eventData.status || 'detected',
-                        operation: eventData.operation,
-                        content: eventData.content,  // Include content for diff viewer
-                        diff: eventData.diff,  // Include diff for diff viewer
-                        timestamp: eventData.timestamp || Date.now(),
-                      }],
-                    }));
+                  // CRITICAL FIX: Handle corrected data format from backend
+                  // - WRITE operations: eventData.content = full file content, eventData.diff = undefined
+                  // - PATCH operations: eventData.diff = unified diff, eventData.content = full content (optional)
 
-                    // ALSO store in message metadata for enhanced-diff-viewer display
+                  // CRITICAL FIX #1: Validate path exists
+                  if (!eventData.path) {
+                    console.warn('[Chat] Skipping file_edit event: missing path');
+                    break;
+                  }
+
+                  // CRITICAL FIX #2: Reject empty content/diff to prevent infinite loops
+                  const editContent = eventData.content || eventData.diff || '';
+                  if (!editContent || editContent.trim().length === 0) {
+                    console.warn('[Chat] Skipping file_edit event: empty diff/content (prevents infinite loop)', {
+                      path: eventData.path,
+                    });
+                    break;
+                  }
+
+                  // CRITICAL FIX #3: Reject obviously invalid paths using server-side validation
+                  // This ensures consistency between client and server path validation
+                  if (!isValidExtractedPath(eventData.path)) {
+                    // Rate limit warnings to prevent log spam (malformed LLM output can trigger many)
+                    if (shouldShowInvalidPathWarning(eventData.path)) {
+                      console.warn('[Chat] Skipping file_edit event: invalid path (failed server-side validation)', {
+                        path: eventData.path,
+                      });
+                    }
+                    break;
+                  }
+
+                  // CRITICAL FIX #4: Determine operation type and prepare data for diff viewer
+                  // For WRITE operations without diff, we'll send full content and let EnhancedDiffViewer handle it
+                  const isPatch = eventData.operation === 'patch' || !!eventData.diff;
+                  const fileEditData = {
+                    path: eventData.path,
+                    status: eventData.status || 'detected',
+                    operation: eventData.operation || (isPatch ? 'patch' : 'write'),
+                    content: eventData.content || '',  // Full file content for WRITE operations
+                    diff: eventData.diff || '',  // Unified diff for PATCH operations (empty for WRITE)
+                    timestamp: eventData.timestamp || Date.now(),
+                    isFinal: eventData.isFinal || false,  // Mark edits from final parse
+                  };
+
+                  // Update agent activity with progressive file edit
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: 'executing',
+                    currentAction: `Editing ${eventData.path}...`,
+                    fileEdits: [...(prev.fileEdits || []), fileEditData],
+                  }));
+
+                  // ALSO store in message metadata for enhanced-diff-viewer display
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id === assistantMessage.id) {
+                      const existingFileEdits = (msg.metadata as any)?.fileEdits || [];
+                      return {
+                        ...msg,
+                        metadata: {
+                          ...(msg.metadata || {}),
+                          fileEdits: [...existingFileEdits, fileEditData],
+                        },
+                      };
+                    }
+                    return msg;
+                  }));
+
+                  // CRITICAL FIX #5: Handle isFinal edits - ensure stream completion logic waits
+                  // When isFinal=true, this is from the post-stream parse, so we should NOT
+                  // wait for more streaming content before showing the diff viewer
+                  if (eventData.isFinal) {
+                    if (process.env.NODE_ENV === 'development') {
+                      console.log('[Chat] Final file edit received - stream should complete soon', {
+                        path: eventData.path,
+                      });
+                    }
+                    // Mark the assistant message as having received final edits
+                    // This helps the UI know to show the diff viewer even if stream hasn't formally closed
                     setMessages(prev => prev.map(msg => {
                       if (msg.id === assistantMessage.id) {
-                        const existingFileEdits = (msg.metadata as any)?.fileEdits || [];
-                        const newFileEdit = {
-                          path: eventData.path,
-                          content: eventData.content || '',  // Use actual content from event
-                          diff: eventData.diff,  // Include diff from event
-                          operation: eventData.operation || 'write',
-                          timestamp: eventData.timestamp || Date.now(),
-                        };
                         return {
                           ...msg,
                           metadata: {
                             ...(msg.metadata || {}),
-                            fileEdits: [...existingFileEdits, newFileEdit],
+                            hasReceivedFinalEdits: true,
                           },
                         };
                       }
                       return msg;
                     }));
+                  }
 
-                    if (process.env.NODE_ENV === 'development') {
-                      console.log('[Chat] Progressive file edit detected:', eventData.path);
-                    }
+                  if (process.env.NODE_ENV === 'development') {
+                    console.log('[Chat] Progressive file edit detected:', {
+                      path: eventData.path,
+                      operation: fileEditData.operation,
+                      hasDiff: !!fileEditData.diff,
+                      contentLength: fileEditData.content?.length,
+                    });
                   }
                   break;
 
@@ -802,8 +894,33 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     let allEdits: any[] = [];
 
                     if (eventData.fileEdits && Array.isArray(eventData.fileEdits) && eventData.fileEdits.length > 0) {
-                      // Use server-provided file edits (already validated and complete)
-                      allEdits = eventData.fileEdits;
+                      // CRITICAL FIX: Validate server-provided file edits (don't trust blindly)
+                      allEdits = eventData.fileEdits.filter((edit: any) => {
+                        // Check path exists
+                        if (!edit.path) {
+                          console.warn('[Chat] Filtering out fileEdit with missing path');
+                          return false;
+                        }
+                        // Check content/diff is not empty
+                        const content = edit.content || edit.diff || '';
+                        if (!content || content.trim().length === 0) {
+                          console.warn('[Chat] Filtering out fileEdit with empty content (prevents infinite loop)', {
+                            path: edit.path,
+                          });
+                          return false;
+                        }
+                        // Validate path format using server-side validation
+                        if (!isValidExtractedPath(edit.path)) {
+                          // Rate limit warnings
+                          if (shouldShowInvalidPathWarning(edit.path)) {
+                            console.warn('[Chat] Filtering out fileEdit with invalid path (failed server-side validation)', {
+                              path: edit.path,
+                            });
+                          }
+                          return false;
+                        }
+                        return true;
+                      });
                       console.log('[Chat] Using server-provided fileEdits for task:', allEdits.length, 'files');
                     } else if (eventData.content) {
                       // Fallback: extract from content (may fail with strict validation)
@@ -869,8 +986,33 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     let allEdits: any[] = [];
 
                     if (eventData.fileEdits && Array.isArray(eventData.fileEdits) && eventData.fileEdits.length > 0) {
-                      // Use server-provided file edits (already validated and complete)
-                      allEdits = eventData.fileEdits;
+                      // CRITICAL FIX: Validate server-provided file edits (don't trust blindly)
+                      allEdits = eventData.fileEdits.filter((edit: any) => {
+                        // Check path exists
+                        if (!edit.path) {
+                          console.warn('[Chat] Filtering out fileEdit with missing path');
+                          return false;
+                        }
+                        // Check content/diff is not empty
+                        const content = edit.content || edit.diff || '';
+                        if (!content || content.trim().length === 0) {
+                          console.warn('[Chat] Filtering out fileEdit with empty content (prevents infinite loop)', {
+                            path: edit.path,
+                          });
+                          return false;
+                        }
+                        // Validate path format using server-side validation
+                        if (!isValidExtractedPath(edit.path)) {
+                          // Rate limit warnings
+                          if (shouldShowInvalidPathWarning(edit.path)) {
+                            console.warn('[Chat] Filtering out fileEdit with invalid path (failed server-side validation)', {
+                              path: edit.path,
+                            });
+                          }
+                          return false;
+                        }
+                        return true;
+                      });
                       console.log('[Chat] Using server-provided fileEdits:', allEdits.length, 'files');
                     } else if (eventData.refinedContent) {
                       // Fallback: extract from content (may fail with strict validation)
