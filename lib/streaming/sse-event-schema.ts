@@ -133,9 +133,7 @@ export interface SSEFileEditPayload {
   timestamp: number;
   /** New content for write/patch operations (for diff viewer) */
   content?: string;
-  /** Previous content for diff generation */
-  oldContent?: string;
-  /** Unified diff string (alternative to content/oldContent) */
+  /** Unified diff string (alternative to content) */
   diff?: string;
 }
 

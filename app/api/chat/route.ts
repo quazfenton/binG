@@ -667,7 +667,7 @@ export async function POST(request: NextRequest) {
                     status: 'detected',
                     timestamp: Date.now(),
                     content: edit.content,
-                    diff: edit.diff,
+                    diff: edit.diff || edit.content,  // Use diff if available, fallback to content
                   });
                   chatLogger.debug('Progressive file edit detected', { path: edit.path }, {});
                 }
@@ -800,7 +800,7 @@ export async function POST(request: NextRequest) {
                           operation: edit.operation || 'write',
                           timestamp: Date.now(),
                           content: edit.content,
-                          diff: edit.diff,
+                          diff: edit.diff || edit.content,  // Use diff if available, fallback to content
                         });
                       }
                       chatLogger.info('Final parse: applied filesystem edits', {
@@ -836,7 +836,7 @@ export async function POST(request: NextRequest) {
                       status: 'detected',
                       timestamp: Date.now(),
                       content: edit.content,
-                      diff: edit.diff,
+                      diff: edit.diff || edit.content,  // Use diff if available, fallback to content
                     });
                   }
                 }
@@ -1230,26 +1230,40 @@ export async function POST(request: NextRequest) {
           // Continue with normal response even if agent tools fail
         }
       }
-      
-      const filesystemEdits =
-        !enableFilesystemEdits
-          ? null
-          : await applyFilesystemEditsFromResponse({
-              ownerId: filesystemOwnerId,
-              conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
-              requestId: requestId || generateSecureId('req'),
-              scopePath: requestedScopePath,
-              lastUserMessage: (() => {
-                const content =
-                  [...messages].reverse().find((message) => message.role === 'user')
-                    ?.content;
-                return typeof content === 'string' ? content : '';
-              })(),
-              attachedPaths: attachedFilesystemFiles.map((file) => file.path),
-              responseContent: rawResponseContent,
-              commands: unifiedResponse.commands,
-            });
-      chatLogger.debug('Filesystem edits processed', { requestId, appliedCount: filesystemEdits?.applied?.length || 0 });
+
+      // Enable batch mode to prevent circular Git commits during bulk file writes
+      const { enableVFSBatchMode, flushVFSBatchMode, disableVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
+      enableVFSBatchMode(filesystemOwnerId);
+
+      let filesystemEdits = null;
+      try {
+        filesystemEdits =
+          !enableFilesystemEdits
+            ? null
+            : await applyFilesystemEditsFromResponse({
+                ownerId: filesystemOwnerId,
+                conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                requestId: requestId || generateSecureId('req'),
+                scopePath: requestedScopePath,
+                lastUserMessage: (() => {
+                  const content =
+                    [...messages].reverse().find((message) => message.role === 'user')
+                      ?.content;
+                  return typeof content === 'string' ? content : '';
+                })(),
+                attachedPaths: attachedFilesystemFiles.map((file) => file.path),
+                responseContent: rawResponseContent,
+                commands: unifiedResponse.commands,
+              });
+        chatLogger.debug('Filesystem edits processed', { requestId, appliedCount: filesystemEdits?.applied?.length || 0 });
+
+        // Flush batch mode to commit all changes at once
+        await flushVFSBatchMode(filesystemOwnerId);
+      } catch (error) {
+        // Disable batch mode on error to prevent stuck state
+        disableVFSBatchMode(filesystemOwnerId);
+        throw error;
+      }
 
       // SPEC AMPLIFICATION: Trigger after ToolLoopAgent completes (non-streaming path)
       if (agentToolResults && !clientResponse.metadata?.specAmplificationRun) {
@@ -1501,7 +1515,7 @@ export async function POST(request: NextRequest) {
                         status: 'detected',
                         timestamp: Date.now(),
                         content: edit.content,
-                        diff: edit.diff,
+                        diff: edit.diff || edit.content,  // Use diff if available, fallback to content
                       });
                       chatLogger.debug('Progressive file edit detected during LLM stream', { path: edit.path });
                     }
@@ -1582,6 +1596,10 @@ export async function POST(request: NextRequest) {
                     const streamedContent = streamingContentBuffer;
                     if (enableFilesystemEdits && streamedContent.trim()) {
                       try {
+                        // Enable batch mode to prevent circular Git commits
+                        const { enableVFSBatchMode, flushVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
+                        enableVFSBatchMode(filesystemOwnerId);
+
                         // FIX: Pass forceExtract=true to ensure we catch ALL edits including those
                         // that may have been missed during incremental parsing (e.g., last file)
                         const streamedEdits = await applyFilesystemEditsFromResponse({
@@ -1598,6 +1616,10 @@ export async function POST(request: NextRequest) {
                           commands: unifiedResponse.commands,
                           forceExtract: true,
                         });
+
+                        // Flush batch mode to commit all changes at once
+                        await flushVFSBatchMode(filesystemOwnerId);
+
                         // Emit applied file edits
                         if (streamedEdits?.applied?.length) {
                           for (const edit of streamedEdits.applied) {
@@ -1617,17 +1639,20 @@ export async function POST(request: NextRequest) {
                               operation: edit.operation || 'write',
                               timestamp: Date.now(),
                               content: edit.content,
-                              diff: edit.diff,
+                              diff: edit.diff || edit.content,  // Use diff if available, fallback to content
                             });
                           }
                         }
-                        
+
                         // CRITICAL: Add fallback message if sanitized content is empty but files were applied
                         // This applies to post-stream edits that may not have been caught earlier
                         if (!sanitizedResponseContent.trim() && streamedEdits && streamedEdits.applied.length > 0) {
                           sanitizedResponseContent = `Applied filesystem changes to ${streamedEdits.applied.length} file(s).`;
                         }
                       } catch (editErr: any) {
+                        // Disable batch mode on error
+                        const { disableVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
+                        disableVFSBatchMode(filesystemOwnerId);
                         chatLogger.warn('Post-stream filesystem edits failed', { requestId: streamRequestId, error: editErr.message });
                       }
                     }
@@ -1990,6 +2015,41 @@ export async function POST(request: NextRequest) {
 
         // Fallback: Standard streaming (non-agent or ToolLoopAgent not available)
         // Create streaming events from unified response with faster initial text display
+        
+        // Process filesystem edits for streaming path
+        let filesystemEdits: Awaited<ReturnType<typeof applyFilesystemEditsFromResponse>> | null = null;
+        if (enableFilesystemEdits) {
+          try {
+            // Enable batch mode to prevent circular Git commits during bulk file writes
+            const { enableVFSBatchMode, flushVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
+            enableVFSBatchMode(filesystemOwnerId);
+            
+            filesystemEdits = await applyFilesystemEditsFromResponse({
+              ownerId: filesystemOwnerId,
+              conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+              requestId: streamRequestId,
+              scopePath: requestedScopePath,
+              lastUserMessage: (() => {
+                const content = [...messages].reverse().find((message) => message.role === 'user')?.content;
+                return typeof content === 'string' ? content : '';
+              })(),
+              attachedPaths: attachedFilesystemFiles.map((file) => file.path),
+              responseContent: clientResponse.content || unifiedResponse.content || '',
+              commands: unifiedResponse.commands,
+            });
+            
+            // Flush batch mode to commit all changes at once
+            await flushVFSBatchMode(filesystemOwnerId);
+            
+            chatLogger.debug('Filesystem edits processed (streaming path)', { 
+              requestId: streamRequestId, 
+              appliedCount: filesystemEdits?.applied?.length || 0 
+            });
+          } catch (error) {
+            chatLogger.warn('Filesystem edits failed (streaming path)', { error });
+          }
+        }
+        
         const events = responseRouter.createStreamingEvents(clientResponse, streamRequestId, {
           includeReasoning: true,
           includeToolState: true,

@@ -1943,8 +1943,9 @@ export function extractIncrementalFileEdits(
   // Use path + content hash to handle same-file multiple edits
   for (const edit of allEdits) {
     // CRITICAL FIX: Skip edits with empty content (incomplete streaming tags)
-    // This prevents emitting partial edits before closing tag arrives
-    if (!edit.content || edit.content.trim().length === 0) {
+    // Check both content and diff fields since some edits use diff
+    const editContent = edit.content || edit.diff || '';
+    if (!editContent || editContent.trim().length === 0) {
       continue;
     }
 
@@ -1964,10 +1965,10 @@ export function extractIncrementalFileEdits(
     // Create unique key from path + simple content hash
     // Use full content for short files (< 100 chars), otherwise hash first/last 50 chars + length
     let contentSignature: string;
-    if (edit.content.length <= 100) {
-      contentSignature = edit.content;
+    if (editContent.length <= 100) {
+      contentSignature = editContent;
     } else {
-      contentSignature = `${edit.content.length}-${edit.content.slice(0, 50)}-${edit.content.slice(-50)}`;
+      contentSignature = `${editContent.length}-${editContent.slice(0, 50)}-${editContent.slice(-50)}`;
     }
     const editKey = `${edit.path}::${contentSignature}`;
 
