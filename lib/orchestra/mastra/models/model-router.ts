@@ -24,20 +24,22 @@ export type ModelTier = 'fast' | 'reasoning' | 'coder' | 'costEffective';
  * NEW: Added memory integration for conversation history
  */
 // Get user's configured model for agent tasks
-const defaultModel = getModelForTask('agent', 'gpt-4o');
+// Use mistral-small-latest as default (widely available) instead of gpt-4o
+const defaultModel = getModelForTask('agent', process.env.DEFAULT_MODEL || 'mistral-small-latest');
 
 /**
  * Model configuration based on user's provider settings
  * Uses environment-configured models for each tier
  */
 function getModelConfig(tier: string): string {
+  const defaultModelValue = process.env.DEFAULT_MODEL || 'mistral-small-latest';
   const modelMap: Record<string, string> = {
-    fast: getModelForTask('fast', 'gpt-4o-mini'),
-    reasoning: getModelForTask('reasoning', 'gpt-4o'),
-    coder: getModelForTask('coder', 'claude-sonnet-4-20250514'),
-    costEffective: getModelForTask('cost-effective', 'gemini-2.0-flash'),
+    fast: getModelForTask('fast', defaultModelValue),
+    reasoning: getModelForTask('reasoning', defaultModelValue),
+    coder: getModelForTask('coder', defaultModelValue),
+    costEffective: getModelForTask('cost-effective', defaultModelValue),
   };
-  
+
   return modelMap[tier] || defaultModel;
 }
 

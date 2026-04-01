@@ -221,11 +221,18 @@ async function getNextStockName(): Promise<string> {
  */
 async function checkNameExistsInFilesystem(name: string): Promise<boolean> {
   try {
-    const response = await fetch(`${getBaseUrl()}/api/filesystem/list?path=${encodeURIComponent(`project/sessions/${name}`)}`);
+    // Check if the directory itself exists by listing parent and finding the name
+    const response = await fetch(`${getBaseUrl()}/api/filesystem/list?path=${encodeURIComponent('project/sessions')}`);
 
     if (response.ok) {
       const payload = await response.json().catch(() => null);
-      return !!(payload?.success && payload?.data?.nodes?.length > 0);
+      if (payload?.success && Array.isArray(payload?.data?.nodes)) {
+        // Check if any node matches our name (case-insensitive)
+        const nameLower = name.toLowerCase();
+        return payload.data.nodes.some((node: any) => 
+          node.name && node.name.toLowerCase() === nameLower
+        );
+      }
     }
   } catch (error) {
     logger.warn(`Failed to check name in filesystem: ${error}`);

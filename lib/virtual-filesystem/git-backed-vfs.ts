@@ -12,7 +12,7 @@
  * - Diff tracking between versions
  */
 
-import { VirtualFilesystemService, type FilesystemChangeEvent } from './virtual-filesystem-service';
+import { VirtualFilesystemService, type FilesystemChangeEvent, virtualFilesystem } from './virtual-filesystem-service';
 import type { VirtualFile } from './filesystem-types';
 import { ShadowCommitManager, type CommitResult, type TransactionEntry } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 import { createLogger } from '@/lib/utils/logger';
@@ -63,7 +63,7 @@ export class GitBackedVFS {
     this.vfs = vfs;
     this.shadowCommitManager = new ShadowCommitManager();
     this.options = {
-      autoCommit: options.autoCommit ?? true,
+      autoCommit: options.autoCommit ?? false,  // DISABLED by default to prevent commit loops during bulk operations
       commitMessage: options.commitMessage ?? 'VFS auto-commit',
       sessionId: options.sessionId ?? 'default',
       enableShadowCommits: options.enableShadowCommits ?? true,
@@ -558,6 +558,19 @@ export class GitBackedVFS {
     this.changeBuffer = [];
     logger.debug('[GitVFS] Flushed pending changes');
   }
+}
+
+// Export batch mode helpers for use in chat route
+export function enableVFSBatchMode(ownerId: string) {
+  (virtualFilesystem as any).enableBatchMode(ownerId);
+}
+
+export async function flushVFSBatchMode() {
+  return await (virtualFilesystem as any).flushBatch();
+}
+
+export function disableVFSBatchMode() {
+  (virtualFilesystem as any).disableBatchMode();
 }
 
 /**

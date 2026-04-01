@@ -34,7 +34,11 @@ import { chatLogger } from '@/lib/chat/chat-logger'
 import { normalizeToolInvocations, type ToolInvocation } from '@/lib/types/tool-invocation'
 import { quotaManager } from '@/lib/management/quota-manager'
 import { detectRequestType } from '@/lib/utils/request-type-detector'
-import { extractFsActionWrites, extractReasoningContent } from '@/lib/chat/file-edit-parser'
+import {
+  extractFsActionWrites,
+  extractReasoningContent,
+  parseStructuredPathList,
+} from '@/lib/chat/file-edit-parser'
 
 // Import router services
 import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from '@/lib/chat/fast-agent-service'
@@ -1142,31 +1146,48 @@ export class ResponseRouter {
    */
   private parseStructuredCommands(block: string): { request_files?: string[]; write_diffs?: Array<{ path: string; diff: string }> } | undefined {
     try {
-      const reqMatch = block.match(/request_files:\s*\[(.*?)\]/s)
-      const request_files = reqMatch
-        ? JSON.parse(`[${reqMatch[1]}]`.replace(/([a-zA-Z0-9_./-]+)(?=\s*[\],])/g, '"$1"'))
-        : []
+      const extractArraySection = (source: string, key: string): string | null => {
+        const match = source.match(new RegExp(`${key}:\\s*\\[`))
+        if (!match || match.index === undefined) return null
 
-      let write_diffs: Array<{ path: string; diff: string }> = []
-      // Bug #8 fix: Use bracket counting to find the end of the array properly
-      const diffsSectionMatch = block.match(/write_diffs:\s*\[/)
-      if (diffsSectionMatch) {
-        const startIdx = block.indexOf('[', diffsSectionMatch.index)
+        const startIdx = source.indexOf('[', match.index)
         let bracketDepth = 0
-        let endIdx = startIdx + 1
-        
-        for (let i = startIdx + 1; i < block.length; i++) {
-          if (block[i] === '[') bracketDepth++
-          else if (block[i] === ']') {
-            if (bracketDepth === 0) {
-              endIdx = i
-              break
+        let activeQuote: '"' | "'" | '`' | null = null
+
+        for (let i = startIdx + 1; i < source.length; i += 1) {
+          const char = source[i]
+          const previous = i > 0 ? source[i - 1] : ''
+
+          if (activeQuote) {
+            if (char === activeQuote && previous !== '\\') {
+              activeQuote = null
             }
-            bracketDepth--
+            continue
+          }
+
+          if (char === '"' || char === '\'' || char === '`') {
+            activeQuote = char
+            continue
+          }
+
+          if (char === '[') bracketDepth += 1
+          else if (char === ']') {
+            if (bracketDepth === 0) {
+              return source.substring(startIdx + 1, i)
+            }
+            bracketDepth -= 1
           }
         }
-        
-        const diffsContent = block.substring(startIdx + 1, endIdx)
+
+        return null
+      }
+
+      const requestFilesContent = extractArraySection(block, 'request_files')
+      const request_files = requestFilesContent ? parseStructuredPathList(requestFilesContent) : []
+
+      let write_diffs: Array<{ path: string; diff: string }> = []
+      const diffsContent = extractArraySection(block, 'write_diffs')
+      if (diffsContent !== null) {
         const items = diffsContent
           .split(/\},\s*\{/)
           .map(s => s.trim())
@@ -2025,80 +2046,15 @@ export class ResponseRouter {
         request.emit('primary_response', { content: primaryData.content, timestamp: Date.now() })
       }
 
-      // CRITICAL FIX: For streaming responses, consume the stream FIRST before detecting code
-      // This ensures we detect code that arrives during streaming, not just in initial response
-      let completePrimaryContent = primaryData.content || '';
-      let hasStream = !!primaryData.stream;
-      
-      if (primaryData.stream) {
-        try {
-          chatLogger.debug('Consuming primary stream before code detection', { requestId: request.requestId });
-          // Consume the stream generator to get complete content
-          for await (const chunk of primaryData.stream) {
-            if (typeof chunk === 'string') {
-              completePrimaryContent += chunk;
-            } else if (chunk?.content) {
-              completePrimaryContent += chunk.content;
-            }
-          }
-          chatLogger.debug('Primary stream completed, content length:', { length: completePrimaryContent.length });
-        } catch (streamError) {
-          logger.warn('Failed to consume primary stream', { error: streamError });
-        }
-      }
-
-      // NOW detect if primary response contains code/file edits (after stream is consumed)
-      // Check both the original commands/files AND the streamed content
-      const hasWriteDiffs = (primaryData.commands?.write_diffs?.length ?? 0) > 0;
-      const hasFiles = (primaryData.data?.files?.length ?? 0) > 0;
-      let hasCode = hasWriteDiffs || hasFiles;
-      
-      // Also check streamed content for file edit markers
-      if (!hasCode && completePrimaryContent.length > 0) {
-        const fileEditMarkers = ['<file_edit', '<file_write', 'WRITE ', '```', '<<<'];
-        hasCode = fileEditMarkers.some(marker => completePrimaryContent.includes(marker));
-      }
-
-      chatLogger.debug('Code detection for spec amplification (post-stream)', {
-        requestId: request.requestId,
-        writeDiffsCount: primaryData.commands?.write_diffs?.length ?? 0,
-        filesCount: primaryData.data?.files?.length ?? 0,
-        hasStream,
-        streamedContentLength: completePrimaryContent.length,
-        hasCode
-      })
-
-      // Only run spec amplification if code was detected
-      if (!hasCode) {
-        chatLogger.debug('No code detected, skipping spec amplification', { requestId: request.requestId })
-        return primaryResult as UnifiedResponse
-      }
-
-      // Start spec generation in background (don't await - run in parallel)
-      const specGenerationPromise = specPromise
-        .then(res => ({ success: true, data: res }))
-        .catch(err => ({ success: false, error: err }))
-
-      // Return primary response immediately, start background refinement
-      // Background refinement will emit events that appear as new chat messages
-      // Use completePrimaryContent which has the full streamed content
-      this.runBackgroundRefinement({
-        primaryData: { ...primaryData, content: completePrimaryContent },
-        specGenerationPromise,
-        request,
-        fastModel,
-        startTime
-      }).catch(err => {
-        logger.error('Background refinement failed', { error: err })
-      })
-
-      // Return primary response
+      // Return primary response immediately
+      // Note: For ToolLoopAgent execution, code is generated during streaming
+      // Spec amplification should be triggered post-stream in the unified pipeline
       return primaryData as UnifiedResponse
 
     } catch (error) {
       logger.error('Spec amplification failed', error)
       recordEndpointUsage('spec-generation', Date.now() - startTime, false)
-      
+
       // Fallback to normal routing
       return await this.routeAndFormat(request)
     } finally {

@@ -136,6 +136,9 @@ const PATH_COMMAND_RE = /\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i
 const PATH_LOOKS_LIKE_CODE_RE = /^(?:hover:|@|:|v-|:bind|@click|@submit)/i
 // Additional: Reject paths with colons (CSS classes like hover:scale-105)
 const PATH_HAS_COLON_RE = /:/
+// Additional: Reject CSS values and SCSS variables in last path segment
+const PATH_CSS_VALUE_RE = /[\/\\](?:\d*\.\d+|\d+[a-z%]+)$/i  // Matches "/0.3s" or "\10px" at end
+const PATH_SCSS_VAR_RE = /[\/\\]\$/  // Matches "/$" or "\$" (SCSS variable)
 
 // FIX 9: Pre-compiled RegExp for requiresThirdPartyOAuth
 const THIRD_PARTY_OAUTH_RE =
@@ -641,17 +644,30 @@ export async function POST(request: NextRequest) {
               config.onStreamChunk = (chunk: string) => {
                 // Emit token as before
                 emit(SSE_EVENT_TYPES.TOKEN, { content: chunk, timestamp: Date.now() });
-                
+
                 // Progressive file edit detection
                 streamingContentBuffer += chunk;
                 const newFileEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
-                
-                // Emit file_edit events for newly detected edits
+
+                // Emit file_edit events for newly detected edits (filter invalid paths and empty diffs)
                 for (const edit of newFileEdits) {
+                  // CRITICAL FIX: Use proper isValidFilePath validation instead of simple regex
+                  // This catches CSS values (0.3s), code snippets (with, submission), etc.
+                  if (!isValidFilePath(edit.path)) {
+                    chatLogger.debug('Skipping invalid progressive file edit path (failed isValidFilePath)', { path: edit.path });
+                    continue;
+                  }
+                  // CRITICAL FIX: Skip empty diffs to prevent infinite loops
+                  if (!edit.diff || edit.diff.trim().length === 0) {
+                    chatLogger.debug('Skipping empty diff (prevents infinite loop):', edit.path);
+                    continue;
+                  }
                   emit(SSE_EVENT_TYPES.FILE_EDIT, {
                     path: edit.path,
                     status: 'detected',
                     timestamp: Date.now(),
+                    content: edit.content,
+                    diff: edit.diff,
                   });
                   chatLogger.debug('Progressive file edit detected', { path: edit.path }, {});
                 }
@@ -768,16 +784,33 @@ export async function POST(request: NextRequest) {
                     // Emit applied edits
                     if (appliedEdits?.applied?.length) {
                       for (const edit of appliedEdits.applied) {
+                        // Validate path before emitting
+                        if (!isValidFilePath(edit.path)) {
+                          chatLogger.debug('Skipping invalid path from appliedEdits', { path: edit.path });
+                          continue;
+                        }
+                        // CRITICAL FIX: Skip empty diffs to prevent infinite loops
+                        if (!edit.diff || edit.diff.trim().length === 0) {
+                          chatLogger.debug('Skipping empty diff from appliedEdits (prevents infinite loop):', edit.path);
+                          continue;
+                        }
                         emit(SSE_EVENT_TYPES.FILE_EDIT, {
                           path: edit.path,
                           status: 'applied',
                           operation: edit.operation || 'write',
                           timestamp: Date.now(),
+                          content: edit.content,
+                          diff: edit.diff,
                         });
                       }
                       chatLogger.info('Final parse: applied filesystem edits', {
                         count: appliedEdits.applied.length
                       });
+
+                      // CRITICAL: Add fallback message if content is empty but files were applied
+                      if (!streamingContentBuffer.trim() && appliedEdits.applied.length > 0) {
+                        streamingContentBuffer = `Applied filesystem changes to ${appliedEdits.applied.length} file(s).`;
+                      }
                     }
                   } catch (editErr: any) {
                     chatLogger.warn('Final parse: filesystem edit application failed', {
@@ -787,11 +820,23 @@ export async function POST(request: NextRequest) {
                 } else {
                   // Just emit events if no filesystem owner
                   for (const edit of finalEdits) {
+                    // Validate path before emitting
+                    if (!isValidFilePath(edit.path)) {
+                      chatLogger.debug('Skipping invalid path from finalEdits (no owner)', { path: edit.path });
+                      continue;
+                    }
+                    // CRITICAL FIX: Skip empty diffs to prevent infinite loops
+                    if (!edit.diff || edit.diff.trim().length === 0) {
+                      chatLogger.debug('Skipping empty diff from finalEdits (prevents infinite loop):', edit.path);
+                      continue;
+                    }
                     chatLogger.debug('Final parse file edit detected', { path: edit.path });
                     emit(SSE_EVENT_TYPES.FILE_EDIT, {
                       path: edit.path,
                       status: 'detected',
                       timestamp: Date.now(),
+                      content: edit.content,
+                      diff: edit.diff,
                     });
                   }
                 }
@@ -799,7 +844,7 @@ export async function POST(request: NextRequest) {
 
               emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
-                content: result.response,
+                content: streamingContentBuffer || result.response?.content,
                 messageMetadata: {
                   agent: 'unified',
                   mode: result.mode,
@@ -820,6 +865,16 @@ export async function POST(request: NextRequest) {
                   fileEditParserState.unclosedPositions.clear();
                   const finalEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
                   for (const edit of finalEdits) {
+                    // Validate path before emitting (even in error handler)
+                    if (!isValidFilePath(edit.path)) {
+                      chatLogger.debug('Skipping invalid path from finalEdits (error handler)', { path: edit.path });
+                      continue;
+                    }
+                    // CRITICAL FIX: Skip empty diffs to prevent infinite loops (even in error handler)
+                    if (!edit.diff || edit.diff.trim().length === 0) {
+                      chatLogger.debug('Skipping empty diff from finalEdits (error handler, prevents infinite loop):', edit.path);
+                      continue;
+                    }
                     emit(SSE_EVENT_TYPES.FILE_EDIT, {
                       path: edit.path,
                       status: 'detected',
@@ -1013,28 +1068,26 @@ export async function POST(request: NextRequest) {
 
       // Spec amplification only works with V1 mode (regular LLM calls)
       // V2 agent mode has its own planning system
+      // CRITICAL: Use standard routing - spec amplification handled post-stream for ToolLoopAgent
       if (agentMode === 'v2') {
         chatLogger.debug('V2 agent mode, using standard routing without spec amplification', { requestId })
         unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
       } else if (stream && SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED) {
-        // NEW: For streaming with spec amplification, we need special handling
-        // The response will contain a stream generator that we consume in real-time
-        chatLogger.debug('V1 mode with streaming, using routeWithSpecAmplification with emit', { requestId })
-        unifiedResponse = await responseRouter.routeWithSpecAmplification({
+        // For streaming, use standard routing - spec amplification triggered post-stream if code detected
+        chatLogger.debug('V1 mode with streaming, using standard routing (post-stream spec amplification)', { requestId })
+        unifiedResponse = await responseRouter.routeAndFormat({
           ...routerRequest,
           emit: placeholderEmit
         })
-        
+
         // Check if response has streaming generator (real-time LLM streaming)
         if (unifiedResponse.stream && typeof unifiedResponse.stream === 'object' && Symbol.asyncIterator in unifiedResponse.stream) {
           chatLogger.info('Received streaming response with generator, will consume chunks in real-time', { requestId })
           // The stream generator will be consumed below in the streaming section
         }
       } else {
-        // V1 mode or auto - use spec amplification if enabled (non-streaming)
-        unifiedResponse = await responseRouter.routeWithSpecAmplification({
-          ...routerRequest,
-        })
+        // V1 mode or auto - use standard routing (spec amplification handled post-stream)
+        unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
       }
 
       // Extract actual provider/model from response metadata (after fallbacks)
@@ -1118,6 +1171,7 @@ export async function POST(request: NextRequest) {
                 : undefined,
               workspacePath: sandboxSession?.workspacePath || requestedScopePath,
             },
+            actualModel, // Pass user's selected model
           );
 
           // Check if agent supports streaming (ToolLoopAgent integration)
@@ -1196,8 +1250,60 @@ export async function POST(request: NextRequest) {
               commands: unifiedResponse.commands,
             });
       chatLogger.debug('Filesystem edits processed', { requestId, appliedCount: filesystemEdits?.applied?.length || 0 });
-      
+
+      // SPEC AMPLIFICATION: Trigger after ToolLoopAgent completes (non-streaming path)
+      if (agentToolResults && !clientResponse.metadata?.specAmplificationRun) {
+        const hasCodeMarkers = ['<file_edit', '<file_write', 'WRITE ', '```', '<<<'].some(
+          marker => rawResponseContent.includes(marker)
+        );
+        // Spec amplification runs in 'enhanced' or 'max' mode
+        const isSpecAmplificationMode = request.mode === 'enhanced' || request.mode === 'max';
+        const shouldRunSpecAmplification = hasCodeMarkers && isSpecAmplificationMode;
+
+        chatLogger.info('Spec amplification check (non-streaming)', {
+          requestId,
+          hasCodeMarkers,
+          mode: request.mode,
+          isSpecAmplificationMode,
+          specAmplificationRun: clientResponse.metadata?.specAmplificationRun,
+          shouldRunSpecAmplification,
+          rawResponseContentLength: rawResponseContent.length,
+        });
+
+        if (shouldRunSpecAmplification) {
+          chatLogger.info('Code detected after ToolLoopAgent (non-streaming), triggering spec amplification', {
+            requestId,
+            contentLength: rawResponseContent.length,
+          });
+
+          // Trigger spec amplification in background (don't wait)
+          const { responseRouter } = await import('@/lib/api/response-router');
+          const specRequest = {
+            ...request,
+            messages: [
+              ...messages,
+              { role: 'assistant' as const, content: rawResponseContent },
+            ],
+            mode: 'enhanced' as const,
+          };
+
+          responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
+            chatLogger.warn('Post-stream spec amplification failed', { error: err?.message });
+          });
+        } else {
+          chatLogger.debug('Spec amplification NOT triggered (non-streaming)', {
+            requestId,
+            reason: !hasCodeMarkers ? 'no code markers' :
+                    !isSpecAmplificationMode ? `mode is ${request.mode}` :
+                    clientResponse.metadata?.specAmplificationRun ? 'already run' : 'unknown',
+          });
+        }
+      }
+
       let sanitizedResponseContent = sanitizeAssistantDisplayContent(rawResponseContent);
+      
+      // CRITICAL: Add fallback message when content is empty but files were applied
+      // This ensures users see feedback even when AI only makes file changes without explanation
       if (
         !sanitizedResponseContent.trim() &&
         filesystemEdits &&
@@ -1206,6 +1312,7 @@ export async function POST(request: NextRequest) {
         sanitizedResponseContent =
           `Applied filesystem changes to ${filesystemEdits.applied.length} file(s).`;
       }
+      
       const clientResponse = buildClientVisibleUnifiedResponse(
         unifiedResponse,
         sanitizedResponseContent,
@@ -1233,10 +1340,36 @@ export async function POST(request: NextRequest) {
             };
           });
 
+        // CRITICAL FIX: Build fileEdits array with content for enhanced-diff-viewer
+        // This merges filesystemEdits.applied with requestedFiles to include actual content
+        // Filter out invalid paths and empty diffs
+        const fileEdits = filesystemEdits.applied
+          .filter((edit) => {
+            // Skip invalid paths
+            if (!isValidFilePath(edit.path)) return false;
+            // Skip empty diffs
+            if (!edit.diff || edit.diff.trim().length === 0) return false;
+            return true;
+          })
+          .map((edit) => {
+            const requestedFile = filesystemEdits.requestedFiles.find(f => f.path === edit.path);
+            return {
+              path: edit.path,
+              operation: edit.operation || 'write',
+              content: requestedFile?.content || edit.content || '',
+              diff: edit.diff,
+              language: requestedFile?.language,
+              version: edit.version,
+              previousVersion: edit.previousVersion,
+            };
+          });
+
         if (codeArtifacts.length > 0) {
           clientResponse.metadata = {
             ...clientResponse.metadata,
             codeArtifacts,
+            // CRITICAL: Include fileEdits with content for enhanced-diff-viewer
+            fileEdits,
             // Add filesystem metadata for frontend message-bubble.tsx
             filesystem: {
               transactionId: filesystemEdits.transactionId,
@@ -1350,11 +1483,25 @@ export async function POST(request: NextRequest) {
                     streamingContentBuffer += streamChunk.content;
                     const newFileEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
 
+                    // Filter out invalid paths and empty diffs to prevent UI polling loops
                     for (const edit of newFileEdits) {
+                      // CRITICAL FIX: Use proper isValidFilePath validation instead of simple regex
+                      // This catches CSS values (0.3s), code snippets (with, submission), etc.
+                      if (!isValidFilePath(edit.path)) {
+                        chatLogger.debug('Skipping invalid progressive file edit path (failed isValidFilePath)', { path: edit.path });
+                        continue;
+                      }
+                      // CRITICAL FIX: Skip empty diffs to prevent infinite loops
+                      if (!edit.diff || edit.diff.trim().length === 0) {
+                        chatLogger.debug('Skipping empty diff (prevents infinite loop):', edit.path);
+                        continue;
+                      }
                       realEmit('file_edit', {
                         path: edit.path,
                         status: 'detected',
                         timestamp: Date.now(),
+                        content: edit.content,
+                        diff: edit.diff,
                       });
                       chatLogger.debug('Progressive file edit detected during LLM stream', { path: edit.path });
                     }
@@ -1397,6 +1544,11 @@ export async function POST(request: NextRequest) {
                   // Handle files if present
                   if (streamChunk.files && streamChunk.files.length > 0) {
                     for (const file of streamChunk.files) {
+                      // Validate path to prevent invalid file edits
+                      if (!isValidFilePath(file.path)) {
+                        chatLogger.debug('Skipping invalid file path from streamChunk.files', { path: file.path });
+                        continue;
+                      }
                       realEmit('file_edit', {
                         path: file.path,
                         status: file.operation === 'delete' ? 'deleted' : 'detected',
@@ -1449,27 +1601,93 @@ export async function POST(request: NextRequest) {
                         // Emit applied file edits
                         if (streamedEdits?.applied?.length) {
                           for (const edit of streamedEdits.applied) {
+                            // Validate path before emitting
+                            if (!isValidFilePath(edit.path)) {
+                              chatLogger.debug('Skipping invalid path from streamedEdits', { path: edit.path });
+                              continue;
+                            }
+                            // CRITICAL FIX: Skip empty diffs to prevent infinite loops
+                            if (!edit.diff || edit.diff.trim().length === 0) {
+                              chatLogger.debug('Skipping empty diff from streamedEdits (prevents infinite loop):', edit.path);
+                              continue;
+                            }
                             realEmit('file_edit', {
                               path: edit.path,
                               status: 'applied',
                               operation: edit.operation || 'write',
                               timestamp: Date.now(),
+                              content: edit.content,
+                              diff: edit.diff,
                             });
                           }
+                        }
+                        
+                        // CRITICAL: Add fallback message if sanitized content is empty but files were applied
+                        // This applies to post-stream edits that may not have been caught earlier
+                        if (!sanitizedResponseContent.trim() && streamedEdits && streamedEdits.applied.length > 0) {
+                          sanitizedResponseContent = `Applied filesystem changes to ${streamedEdits.applied.length} file(s).`;
                         }
                       } catch (editErr: any) {
                         chatLogger.warn('Post-stream filesystem edits failed', { requestId: streamRequestId, error: editErr.message });
                       }
                     }
 
-                    realEmit('done', {
+                    // Include filesystem metadata in done event for EnhancedDiffViewer
+                    const doneEventData = {
                       requestId: streamRequestId,
                       timestamp: Date.now(),
                       success: true,
                       finishReason: streamChunk.finishReason,
                       tokensUsed: streamChunk.tokensUsed,
                       usage: streamChunk.usage,
-                    });
+                    };
+                    
+                    // Add filesystem metadata if files were applied
+                    if (filesystemEdits && filesystemEdits.applied.length > 0) {
+                      // CRITICAL FIX: Build fileEdits array with content for enhanced-diff-viewer
+                      // Filter out invalid paths and empty diffs
+                      const fileEdits = filesystemEdits.applied
+                        .filter((edit) => {
+                          // Skip invalid paths
+                          if (!isValidFilePath(edit.path)) return false;
+                          // Skip empty diffs
+                          if (!edit.diff || edit.diff.trim().length === 0) return false;
+                          return true;
+                        })
+                        .map((edit) => {
+                          const requestedFile = filesystemEdits.requestedFiles.find(f => f.path === edit.path);
+                          return {
+                            path: edit.path,
+                            operation: edit.operation || 'write',
+                            content: requestedFile?.content || edit.content || '',
+                            diff: edit.diff,
+                            language: requestedFile?.language,
+                            version: edit.version,
+                            previousVersion: edit.previousVersion,
+                          };
+                        });
+
+                      (doneEventData as any).filesystem = {
+                        transactionId: filesystemEdits.transactionId,
+                        status: filesystemEdits.status,
+                        applied: filesystemEdits.applied,
+                        errors: filesystemEdits.errors,
+                        requestedFiles: filesystemEdits.requestedFiles,
+                        scopePath: filesystemEdits.scopePath,
+                        workspaceVersion: filesystemEdits.workspaceVersion,
+                        commitId: filesystemEdits.commitId,
+                        sessionId: filesystemEdits.sessionId,
+                      };
+                      // CRITICAL: Include fileEdits with content for enhanced-diff-viewer
+                      (doneEventData as any).fileEdits = fileEdits;
+                    }
+                    
+                    // Add fallback message if sanitized content is empty but files were applied
+                    if (!sanitizedResponseContent.trim() && filesystemEdits && filesystemEdits.applied.length > 0) {
+                      (doneEventData as any).fallbackMessage = `Applied filesystem changes to ${filesystemEdits.applied.length} file(s).`;
+                    }
+                    
+                    realEmit('done', doneEventData);
                     break; // Exit loop when complete
                   }
                 }
@@ -1584,6 +1802,8 @@ export async function POST(request: NextRequest) {
                   // as background refinement progresses (no longer pre-captured)
 
                   // Now stream tool invocations and reasoning in real-time
+                  // Capture the final result to include content in done event
+                  let finalContent = '';
                   for await (const chunk of agentLoop.executeTaskStreaming(task)) {
                     if (request.signal?.aborted) return;
 
@@ -1609,22 +1829,49 @@ export async function POST(request: NextRequest) {
                       controller.enqueue(encoderRef.encode(reasoningEvent));
                       chunkCount++;
                     } else if (chunk.type === 'text-delta') {
-                      // Stream text response
+                      // Stream text response as 'token' event for frontend compatibility
                       const tokenEvent = `event: token\ndata: ${JSON.stringify({
                         content: chunk.textDelta,
                         timestamp: Date.now(),
                       })}\n\n`;
                       controller.enqueue(encoderRef.encode(tokenEvent));
                       chunkCount++;
+                      // Accumulate content for done event
+                      finalContent += chunk.textDelta;
                     }
 
                   }
 
-                  // Send completion event
-                  const doneEvent = `event: done\ndata: ${JSON.stringify({
+                  // Send completion event with accumulated content AND filesystem metadata
+                  const doneEventData: any = {
                     requestId: streamRequestId,
                     timestamp: Date.now(),
-                  })}\n\n`;
+                    content: finalContent,
+                  };
+
+                  // Include filesystem metadata if files were applied
+                  if (filesystemEdits && filesystemEdits.applied.length > 0) {
+                    doneEventData.filesystem = {
+                      transactionId: filesystemEdits.transactionId,
+                      status: filesystemEdits.status,
+                      applied: filesystemEdits.applied,
+                      errors: filesystemEdits.errors,
+                      requestedFiles: filesystemEdits.requestedFiles,
+                      scopePath: filesystemEdits.scopePath,
+                      workspaceVersion: filesystemEdits.workspaceVersion,
+                      commitId: filesystemEdits.commitId,
+                      sessionId: filesystemEdits.sessionId,
+                    };
+                    
+                    // Also include fileEdits array for enhanced-diff-viewer
+                    doneEventData.fileEdits = filesystemEdits.applied.map(edit => ({
+                      path: edit.path,
+                      operation: edit.operation || 'write',
+                      content: filesystemEdits.requestedFiles?.find(f => f.path === edit.path)?.content || '',
+                    }));
+                  }
+
+                  const doneEvent = `event: done\ndata: ${JSON.stringify(doneEventData)}\n\n`;
                   controller.enqueue(encoderRef.encode(doneEvent));
                   chunkCount++;
                 })();
@@ -1640,6 +1887,56 @@ export async function POST(request: NextRequest) {
                   chunkCount,
                   latencyMs: streamDuration,
                 });
+
+                // SPEC AMPLIFICATION: Trigger after ToolLoopAgent completes
+                // Check if code was generated and spec amplification should run
+                const hasCodeMarkers = ['<file_edit', '<file_write', 'WRITE ', '```', '<<<'].some(
+                  marker => finalContent.includes(marker)
+                );
+                // Spec amplification runs in 'enhanced' or 'max' mode
+                const isSpecAmplificationMode = request.mode === 'enhanced' || request.mode === 'max';
+                const shouldRunSpecAmplification = hasCodeMarkers &&
+                  isSpecAmplificationMode &&
+                  !clientResponse.metadata?.specAmplificationRun;
+
+                chatLogger.info('Spec amplification check', {
+                  requestId: streamRequestId,
+                  hasCodeMarkers,
+                  mode: request.mode,
+                  isSpecAmplificationMode,
+                  specAmplificationRun: clientResponse.metadata?.specAmplificationRun,
+                  shouldRunSpecAmplification,
+                  finalContentLength: finalContent.length,
+                });
+
+                if (shouldRunSpecAmplification) {
+                  chatLogger.info('Code detected after ToolLoopAgent, triggering spec amplification', {
+                    requestId: streamRequestId,
+                    contentLength: finalContent.length,
+                  });
+
+                  // Trigger spec amplification in background (don't wait)
+                  const { responseRouter } = await import('@/lib/api/response-router');
+                  const specRequest = {
+                    ...request,
+                    messages: [
+                      ...messages,
+                      { role: 'assistant' as const, content: finalContent },
+                    ],
+                    mode: 'enhanced' as const,
+                  };
+
+                  responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
+                    chatLogger.warn('Post-stream spec amplification failed', { error: err?.message });
+                  });
+                } else {
+                  chatLogger.debug('Spec amplification NOT triggered', {
+                    requestId: streamRequestId,
+                    reason: !hasCodeMarkers ? 'no code markers' :
+                            !isSpecAmplificationMode ? `mode is ${request.mode}` :
+                            clientResponse.metadata?.specAmplificationRun ? 'already run' : 'unknown',
+                  });
+                }
 
                 controller.close();
               } catch (error) {
@@ -1710,6 +2007,11 @@ export async function POST(request: NextRequest) {
         const fileEditEvents: string[] = [];
         if (filesystemEdits && filesystemEdits.applied.length > 0) {
           for (const edit of filesystemEdits.applied) {
+            // Validate path before emitting file edit events
+            if (!isValidFilePath(edit.path)) {
+              chatLogger.debug('Skipping invalid path from filesystemEdits.applied', { path: edit.path });
+              continue;
+            }
             fileEditEvents.push(`event: file_edit\ndata: ${JSON.stringify({
               requestId: streamRequestId,
               path: edit.path,
@@ -2793,13 +3095,17 @@ function validateExtractedPath(raw: string, isFolder: boolean = false): string |
   if (PATH_LOOKS_LIKE_CODE_RE.test(path)) return null;
   // Reject paths with colons (CSS classes like hover:scale-105)
   if (PATH_HAS_COLON_RE.test(path)) return null;
+  // CRITICAL FIX: Reject CSS values and SCSS variables in last path segment
+  // This catches "project/sessions/002/0.3s" where "0.3s" is invalid
+  if (PATH_CSS_VALUE_RE.test(path)) return null;  // CSS values like "/0.3s"
+  if (PATH_SCSS_VAR_RE.test(path)) return null;  // SCSS variables like "/$var"
   // Must have a valid file extension or be a directory name
   // Allow brackets [] for Next.js dynamic routes like app/blog/[slug]/page.tsx
   if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) return null;
-  
+
   // CRITICAL FIX: Use shared validation to reject JSON/object syntax in paths
   if (!isValidFilePath(path, isFolder)) return null;
-  
+
   return path;
 }
 
@@ -2894,7 +3200,10 @@ export async function applyFilesystemEditsFromResponse(input: {
   // that may have been skipped during incremental parsing (e.g., last file with unclosed heredoc)
   const parsedResponse = parseFilesystemResponse(input.responseContent || '', input.forceExtract ?? false);
   const folderCreateOps = extractFolderCreateTags(input.responseContent || '');
-  
+
+  // Track invalid paths to detect when ALL paths are invalid (prevents infinite retry loops)
+  const invalidPathErrors: string[] = [];
+
   // If forceExtract, we still need to deduplicate within the response but not skip based on prior emits
   const combinedWriteEdits = [
     ...parsedResponse.writes.map(edit => ({ path: edit.path, content: edit.content })),
@@ -2905,6 +3214,7 @@ export async function applyFilesystemEditsFromResponse(input: {
   })).filter(edit => {
     const validPath = validateExtractedPath(edit.path);
     if (!validPath) {
+      invalidPathErrors.push(`Invalid path: ${edit.path.substring(0, 100)}`);
       console.warn('[applyFilesystemEdits] Rejected invalid write path:', edit.path.substring(0, 80));
       return false;
     }
@@ -2917,6 +3227,7 @@ export async function applyFilesystemEditsFromResponse(input: {
   ].filter(op => {
     const validPath = validateExtractedPath(op.path);
     if (!validPath) {
+      invalidPathErrors.push(`Invalid diff path: ${op.path.substring(0, 100)}`);
       console.warn('[applyFilesystemEdits] Rejected invalid diff path:', op.path.substring(0, 80));
       return false;
     }
@@ -2926,6 +3237,7 @@ export async function applyFilesystemEditsFromResponse(input: {
   const applyDiffOperations = parsedResponse.applyDiffs.filter(op => {
     const validPath = validateExtractedPath(op.path);
     if (!validPath) {
+      invalidPathErrors.push(`Invalid apply_diff path: ${op.path.substring(0, 100)}`);
       console.warn('[applyFilesystemEdits] Rejected invalid apply_diff path:', op.path.substring(0, 80));
       return false;
     }
@@ -2937,24 +3249,59 @@ export async function applyFilesystemEditsFromResponse(input: {
   ].map((p) => {
     const validPath = validateExtractedPath(p);
     if (!validPath) {
+      invalidPathErrors.push(`Invalid delete path: ${p.substring(0, 100)}`);
       console.warn('[applyFilesystemEdits] Rejected invalid delete path:', p.substring(0, 80));
       return null;
     }
     return validPath;
   }).filter((p): p is string => !!p);
-  
+
   // Validate folder paths from parsed response (trailing slashes OK for folders)
   const validatedParsedFolders = parsedResponse.folders.map((folderPath) => {
     const validPath = validateExtractedPath(folderPath, true); // isFolder = true
     if (!validPath) {
+      invalidPathErrors.push(`Invalid folder path: ${folderPath.substring(0, 100)}`);
       console.warn('[applyFilesystemEdits] Rejected invalid folder path:', folderPath.substring(0, 80));
       return null;
     }
     return validPath;
   }).filter((p): p is string => !!p);
-  
+
   const folderCreateTargets = [...new Set([...validatedParsedFolders, ...folderCreateOps])];
-  const requestFiles = input.commands?.request_files || [];
+  const requestFiles = (input.commands?.request_files || []).map((requestedPath) => {
+    const validPath = validateExtractedPath(requestedPath);
+    if (!validPath) {
+      invalidPathErrors.push(`Invalid requested read path: ${requestedPath.substring(0, 100)}`);
+      console.warn('[applyFilesystemEdits] Rejected invalid requested read path:', requestedPath.substring(0, 80));
+      return null;
+    }
+    return validPath;
+  }).filter((p): p is string => !!p);
+
+  // CRITICAL FIX: If ALL paths were invalid, return explicit error to prevent infinite retry loop
+  const totalRequestedPaths = parsedResponse.writes.length + parsedResponse.diffs.length + 
+                               parsedResponse.applyDiffs.length + parsedResponse.deletes.length;
+  const totalValidPaths = combinedWriteEdits.length + combinedDiffOperations.length + 
+                          applyDiffOperations.length + deleteTargets.length;
+  
+  if (totalRequestedPaths > 0 && totalValidPaths === 0 && invalidPathErrors.length > 0) {
+    chatLogger.error('[applyFilesystemEdits] ALL paths were invalid - returning explicit error to prevent infinite retry', {
+      requestId: input.requestId,
+      totalRequestedPaths,
+      invalidPathCount: invalidPathErrors.length,
+      sampleErrors: invalidPathErrors.slice(0, 5),
+    });
+    
+    return {
+      transactionId: null,
+      status: 'none',
+      applied: [],
+      errors: invalidPathErrors,
+      requestedFiles: [],
+      scopePath: input.scopePath,
+      sessionId: extractSessionIdFromPath(input.scopePath) || input.conversationId,
+    };
+  }
 
   // Only create transaction if there are mutating operations (write/patch/delete/apply_diff)
   // This prevents memory leaks from accumulating no-op transactions

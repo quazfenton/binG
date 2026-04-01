@@ -705,6 +705,10 @@ export default function ConversationInterface() {
               // Malformed payload - treat as error
               throw new Error('Invalid filesystem list response');
             }
+          } else if (listResponse.status === 429) {
+            // Rate limited - skip conflict check, use attached files as fallback
+            console.warn('[ConflictCheck] Rate limited, using cached filesystem state');
+            existingFilePaths = Object.keys(attachedFilesystemFiles);
           } else {
             // Non-OK response - treat as error
             throw new Error(`Filesystem list failed: ${listResponse.status}`);
@@ -1170,8 +1174,41 @@ export default function ConversationInterface() {
       filesystemSessionId,
     });
 
+    // Client-side path validation to prevent retry loops on invalid paths
+    // Matches server-side validation in app/api/filesystem/read/route.ts
+    function isValidFilePath(path: string): boolean {
+      const lastSegment = path.split('/').pop() || path;
+      
+      // Reject CSS values, SCSS variables, operators, etc.
+      if (/^[0-9.]+[a-z]*$/i.test(lastSegment)) return false;  // "0.3s", "10px"
+      if (/^\$/.test(lastSegment)) return false;  // SCSS variables
+      if (/^[@.#:]/.test(lastSegment)) return false;  // CSS selectors
+      if (/^[,;:!?()\[\]{}\/]+$/.test(lastSegment)) return false;  // Operators
+      if (/^v-/.test(lastSegment)) return false;  // Vue directives
+      if (/[,\s]$/.test(lastSegment)) return false;  // Trailing comma/space
+      
+      return true;
+    }
+
     for (const entry of entries) {
       const resolvedPath = resolveScopedPath(entry.path, scopePath);
+      
+      // CRITICAL FIX: Skip obviously invalid paths BEFORE attempting read
+      // This prevents infinite retry loops on CSS values, SCSS variables, etc.
+      if (!isValidFilePath(resolvedPath)) {
+        console.warn('[applyDiffsToFilesystem] Skipping invalid path (CSS value, SCSS var, etc.):', resolvedPath);
+        failed[entry.path] = failed[entry.path] || [];
+        failed[entry.path].push(entry.diff);
+        continue;
+      }
+      
+      // CRITICAL FIX: Skip empty diffs entirely - don't add to failed list, just ignore
+      // This prevents infinite loops on malformed LLM output
+      if (!entry.diff || entry.diff.trim().length === 0) {
+        console.debug('[applyDiffsToFilesystem] Skipping empty diff (prevents infinite loop):', resolvedPath);
+        continue;
+      }
+      
       let currentContent = "";
       let readErrorMsg: string | null = null;
       try {
@@ -1190,6 +1227,12 @@ export default function ConversationInterface() {
           // Set empty content and let diff/create logic handle it
           currentContent = "";
           readErrorMsg = null; // Clear error for 404 - it's expected for new files
+        } else if (readResponse.status === 400 || readResponse.status === 429) {
+          // Invalid path or rate limited - skip this file to prevent retry loop
+          console.warn('[applyDiffsToFilesystem] Skipping path due to server rejection:', resolvedPath, 'status:', readResponse.status);
+          failed[entry.path] = failed[entry.path] || [];
+          failed[entry.path].push(entry.diff);
+          continue;
         } else {
           readErrorMsg = `Read failed with status ${readResponse.status}`;
         }
@@ -1269,14 +1312,22 @@ export default function ConversationInterface() {
     }
 
     if (appliedCount > 0) {
-      emitFilesystemUpdated({
-        scopePath: filesystemScopePath || "project",
-        paths: entries.map((entry) => resolveScopedPath(entry.path, scopePath)),
-        source: "command-diff",
-        workspaceVersion: lastWriteMetadata?.workspaceVersion,
-        commitId: lastWriteMetadata?.commitId,
-        sessionId: lastWriteMetadata?.sessionId || filesystemSessionId,
+      // CRITICAL FIX: Don't emit filesystem event for self-applied diffs
+      // This prevents infinite read loops where:
+      // 1. We apply diffs → emit event → trigger refresh → re-read files → apply diffs again
+      // The files are already updated in the VFS, no need to trigger refresh
+      console.debug('[applyDiffsToFilesystem] Skipping emitFilesystemUpdated for self-applied diffs (prevents infinite loop)', {
+        appliedCount,
+        scopePath: filesystemScopePath,
       });
+      // emitFilesystemUpdated({
+      //   scopePath: filesystemScopePath || "project",
+      //   paths: entries.map((entry) => resolveScopedPath(entry.path, scopePath)),
+      //   source: "command-diff",
+      //   workspaceVersion: lastWriteMetadata?.workspaceVersion,
+      //   commitId: lastWriteMetadata?.commitId,
+      //   sessionId: lastWriteMetadata?.sessionId || filesystemSessionId,
+      // });
     }
 
     setCommandsByFile((prev) => {
