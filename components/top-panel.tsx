@@ -1026,8 +1026,8 @@ export default function TopPanel() {
                     </TabErrorBoundary>
                   </TabsContent>
 
-                  {/* Music Hub */}
-                  <TabsContent value="music-hub" className="h-full mt-0">
+                  {/* Music Hub - forceMount keeps playback alive when switching tabs */}
+                  <TabsContent value="music-hub" className="h-full mt-0" forceMount>
                     <TabErrorBoundary tabName="Music Hub">
                       <MusicHubTab />
                     </TabErrorBoundary>

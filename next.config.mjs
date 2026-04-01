@@ -266,26 +266,6 @@ const nextConfig = {
 
     return [
       {
-        // Apply cross-origin isolation headers to ALL routes including static assets
-        // This is required for WebContainer API (SharedArrayBuffer support)
-        source: "/:path*",
-        headers: [
-          {
-            key: "Cross-Origin-Embedder-Policy",
-            value: "require-corp",
-          },
-          {
-            key: "Cross-Origin-Opener-Policy",
-            value: "same-origin",
-          },
-          // Additional headers for full cross-origin isolation
-          {
-            key: "Cross-Origin-Resource-Policy",
-            value: "cross-origin",
-          },
-        ],
-      },
-      {
         source: "/api/:path*",
         headers: [
           { key: "Access-Control-Allow-Origin", value: "*" },
@@ -297,8 +277,6 @@ const nextConfig = {
             key: "Access-Control-Allow-Headers",
             value: "Content-Type, Authorization",
           },
-          { key: "Cross-Origin-Embedder-Policy", value: "require-corp" },
-          { key: "Cross-Origin-Opener-Policy", value: "same-origin" },
           { key: "Cross-Origin-Resource-Policy", value: "cross-origin" },
         ],
       },
