@@ -937,6 +937,20 @@ export class VirtualFilesystemService {
   getGitBackedVFS(ownerId: string, options?: GitVFSOptions): GitBackedVFS {
     return getGitBackedVFSForOwner(ownerId, this, options);
   }
+
+  // Batch mode helpers for preventing circular commits during bulk operations
+  // Note: VirtualFilesystemService doesn't have Git integration, so these are no-ops
+  enableBatchMode(ownerId: string): void {
+    // No-op for non-Git-backed VFS
+  }
+
+  async flushBatchMode(ownerId: string): Promise<void> {
+    // No-op for non-Git-backed VFS
+  }
+
+  disableBatchMode(ownerId: string): void {
+    // No-op for non-Git-backed VFS
+  }
 }
 
 // =============================================================================
@@ -1136,22 +1150,6 @@ class GitBackedVFSProxy {
   async clearWorkspace(ownerId: string): Promise<void> {
     // Delegate to the proper clear (wipes in-memory map + diff tracker + disk file)
     await (this as any).vfs.clearWorkspace(ownerId);
-  }
-
-  // Batch mode helpers for preventing circular commits during bulk operations
-  enableBatchMode(ownerId: string): void {
-    const gitVFS = this.forOwner(ownerId);
-    (gitVFS as any).enableBatchMode(ownerId);
-  }
-
-  async flushBatchMode(ownerId: string): Promise<any> {
-    const gitVFS = this.forOwner(ownerId);
-    return await (gitVFS as any).flushBatch();
-  }
-
-  disableBatchMode(ownerId: string): void {
-    const gitVFS = this.forOwner(ownerId);
-    (gitVFS as any).disableBatchMode();
   }
 }
 

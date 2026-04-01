@@ -21,19 +21,17 @@ import { toast } from "sonner";
 import type { LLMProvider } from "@/lib/chat/llm-providers";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
-import { setCurrentMode, detectNewProjectFolder } from "@/lib/chat/mode-manager";
-import {
-  createInputContext,
-  processSafeContent,
-  shouldGenerateDiffsForContext,
-  debugContentProcessing
-} from "@/lib/input-response-separator";
 import { useAuth } from "@/contexts/auth-context";
 import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from "@/lib/utils";
 import { generateSessionName, checkFileConflicts } from "@/lib/session-naming";
 import type { AttachedVirtualFile } from "@/hooks/use-virtual-filesystem";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
+import {
+  parseFilesystemResponse,
+  detectNewProjectFolder,
+  type FileOperation,
+} from '@/lib/chat/file-edit-parser';
 
 /**
  * Render the main conversation interface with chat, filesystem attachments, providers/models selection,
@@ -347,10 +345,8 @@ export default function ConversationInterface() {
 
   const [activeTab, setActiveTab] = useState<"chat" | "extras" | "integrations" | "shell">("chat");
 
-  // Update mode manager when active tab changes
+  // Update active tab and trigger side effects
   useEffect(() => {
-    setCurrentMode(activeTab);
-
     // Auto-open and auto-connect terminal when shell tab is selected
     if (activeTab === 'shell') {
       if (!showTerminal) {
@@ -629,26 +625,39 @@ export default function ConversationInterface() {
   // Extract and persist streamed COMMANDS blocks into a per-file map
   useEffect(() => {
     if (messages.length === 0) return;
-    
+
     const lastAssistant = [...messages]
       .reverse()
       .find((m) => m.role === "assistant");
     if (!lastAssistant || typeof lastAssistant.content !== "string") return;
-    const assistantSignature = `${lastAssistant.id}:${lastAssistant.content}`;
+    
+    // CRITICAL FIX: Track last processed message ID to prevent re-processing the same message
+    const assistantSignature = `${lastAssistant.id}:${lastAssistant.content.length}`;
     if (lastProcessedAssistantDiffSignatureRef.current === assistantSignature) {
-      return;
+      return; // Already processed this message
     }
     lastProcessedAssistantDiffSignatureRef.current = assistantSignature;
     
-    // Create context for API response processing
-    const responseContext = createInputContext('assistant');
-    const processedResponse = processSafeContent(lastAssistant.content, responseContext);
+    // Create context for API response processing (simplified - no longer need input-response-separator)
+    // Directly parse the response using file-edit-parser
+    const parsedResponse = parseFilesystemResponse(lastAssistant.content);
     
-    // Debug content processing in development
-    debugContentProcessing(lastAssistant.content, responseContext, processedResponse);
-    
-    // Only process diffs if context allows it
-    if (!shouldGenerateDiffsForContext(lastAssistant.content, responseContext) || !processedResponse.fileDiffs) return;
+    // Convert to legacy format for compatibility with existing code
+    const processedResponse = {
+      mode: parsedResponse.writes.length > 0 || parsedResponse.diffs.length > 0 ? 'code' as const : 'chat' as const,
+      content: lastAssistant.content,
+      codeBlocks: [],
+      fileDiffs: [
+        ...parsedResponse.writes.map(w => ({ path: w.path, diff: w.content, type: 'create' as const })),
+        ...parsedResponse.diffs.map(d => ({ path: d.path, diff: d.diff, type: 'modify' as const })),
+      ],
+      shouldShowDiffs: parsedResponse.writes.length > 0 || parsedResponse.diffs.length > 0,
+      shouldOpenCodePreview: parsedResponse.writes.length > 0 || parsedResponse.diffs.length > 0,
+      isInputParsing: false,
+    };
+
+    // Only process diffs if we have file edits
+    if (!processedResponse.shouldShowDiffs || !processedResponse.fileDiffs.length) return;
 
     // LLM Folder Detection: Check if AI response indicates a new project with single folder structure
     // This only applies to NEW sessions (no prior messages/files) with multiple files under one folder
@@ -674,7 +683,62 @@ export default function ConversationInterface() {
       diff: fileDiff.diff,
     }));
 
-    if (newEntries.length === 0) return;
+    // CRITICAL FIX: Filter out obviously invalid paths BEFORE conflict detection
+    // This prevents infinite loops on malformed LLM output (JSX attributes, CSS values, etc.)
+    const validEntries = newEntries.filter(entry => {
+      const path = entry.path?.trim();
+      if (!path) {
+        console.warn('[ConversationInterface] Filtering out entry with empty path');
+        return false;
+      }
+      
+      // Reject paths ending with quotes (likely extracted from JSX/HTML attributes)
+      if (path.endsWith('"') || path.endsWith("'") || path.endsWith('`')) {
+        console.warn('[ConversationInterface] Filtering out path ending with quote (JSX/HTML fragment):', path);
+        return false;
+      }
+      
+      // Reject paths with spaces in the last segment (likely not a real file path)
+      const lastSegment = path.split('/').pop() || path;
+      if (/\s/.test(lastSegment)) {
+        console.warn('[ConversationInterface] Filtering out path with space in filename:', path);
+        return false;
+      }
+      
+      // Reject paths that are too short or too long
+      if (path.length < 3 || path.length > 500) {
+        console.warn('[ConversationInterface] Filtering out path with invalid length:', path);
+        return false;
+      }
+      
+      // Reject paths containing obvious code fragments
+      const codeFragmentPatterns = [
+        /["']\s*[>,)]\s*$/,  // Ends with quote followed by JSX/JS punctuation
+        /^\s*[<{]/,          // Starts with JSX/JS opening brackets
+        /[;}]\s*$/,          // Ends with JS closing brace/semicolon
+        /^\s*import\s+/,     // Import statement fragment
+        /^\s*export\s+/,     // Export statement fragment
+        /^\s*const\s+/,      // Variable declaration
+        /^\s*function\s+/,   // Function declaration
+      ];
+      if (codeFragmentPatterns.some(pattern => pattern.test(path))) {
+        console.warn('[ConversationInterface] Filtering out path that looks like code fragment:', path);
+        return false;
+      }
+      
+      return true;
+    });
+
+    if (validEntries.length === 0) {
+      console.log('[ConversationInterface] All entries filtered out as invalid - skipping diff application');
+      return;
+    }
+    
+    if (validEntries.length !== newEntries.length) {
+      console.log(`[ConversationInterface] Filtered from ${newEntries.length} to ${validEntries.length} valid entries`);
+    }
+
+    if (validEntries.length === 0) return;
 
     // Rule #2: For existing sessions, check if edits would overwrite existing files
     // SMART CONFLICT DETECTION:
@@ -719,58 +783,58 @@ export default function ConversationInterface() {
           existingFilePaths = Object.keys(attachedFilesystemFiles);
         }
 
-        const newFilePaths = newEntries.map(e => e.path);
-        
+        const newFilePaths = validEntries.map(e => e.path);
+
         // SMART CONFLICT LOGIC:
         // 1. Check if ALL new files are editing existing files (expected behavior - auto-apply)
         // 2. Check if ANY new files would create conflicts with different content (require approval)
-        const allFilesExist = newFilePaths.every(newPath => 
+        const allFilesExist = newFilePaths.every(newPath =>
           existingFilePaths.some(existingPath => existingPath.toLowerCase() === newPath.toLowerCase())
         );
-        
+
         // If all files being edited already exist, this is expected behavior - auto-apply
         // This allows AI to fix bugs, update code, etc. in existing sessions
         if (allFilesExist && newFilePaths.length > 0) {
           console.log('[ConflictCheck] All files exist - this is an edit operation, auto-applying');
-          queueCommandDiffs(newEntries);
+          queueCommandDiffs(validEntries);
           // Auto-apply the detected diffs immediately
           if (applyDiffsRef.current) {
-            void applyDiffsRef.current(newEntries);
+            void applyDiffsRef.current(validEntries);
           }
           return;
         }
-        
+
         // Some files are new, check for actual conflicts
         const conflictCheck = checkFileConflicts(existingFilePaths, newFilePaths, true);
 
         if (conflictCheck.needsApproval) {
           // Store pending diffs for approval instead of auto-applying
-          setPendingApprovalDiffs(newEntries);
+          setPendingApprovalDiffs(validEntries);
           setShowApprovalDialog(true);
           toast.info(`${conflictCheck.existingFiles.length} file(s) would be overwritten. Review required.`);
 
           // Still store in commandsByFile for manual review
-          queueCommandDiffs(newEntries);
+          queueCommandDiffs(validEntries);
           return; // Don't auto-apply - require approval
         }
 
         // Auto-apply the detected diffs immediately to trigger filesystem event for MessageBubble UI
         // The diffs will also be stored in commandsByFile for manual review/revert
-        queueCommandDiffs(newEntries);
+        queueCommandDiffs(validEntries);
         if (applyDiffsRef.current) {
-          void applyDiffsRef.current(newEntries);
+          void applyDiffsRef.current(validEntries);
         }
       };
-      
+
       void checkConflicts();
       return;
     }
 
     // Auto-apply the detected diffs immediately to trigger filesystem event for MessageBubble UI
     // The diffs will also be stored in commandsByFile for manual review/revert
-    queueCommandDiffs(newEntries);
+    queueCommandDiffs(validEntries);
     if (applyDiffsRef.current) {
-      void applyDiffsRef.current(newEntries);
+      void applyDiffsRef.current(validEntries);
     }
   }, [messages, attachedFilesystemFiles, currentConversationId, filesystemScopePath, queueCommandDiffs]);
 

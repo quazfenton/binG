@@ -169,10 +169,11 @@ export default function MessageBubble({
         transactionId: undefined, // No transaction for spec enhancement
         applied: metadataFileEdits.map((edit: any, index: number) => ({
           path: edit.path,
-          operation: 'write',
+          operation: edit.operation || 'write',
           version: typeof edit.version === 'number' ? edit.version : index + 1,
           existedBefore: false,
           content: edit.content, // Store full content for diff viewer
+          diff: edit.diff, // Include diff for PATCH operations
         })),
         errors: [],
         status: 'auto_applied', // Already applied server-side
@@ -1071,17 +1072,28 @@ export default function MessageBubble({
                   )}
                 </div>
                 <div className="space-y-2 max-h-[600px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/5 scrollbar-track-transparent hover:scrollbar-thumb-white/20">
-                  {(showAllFiles ? fileEditInfo.applied : fileEditInfo.applied.slice(0, 3)).map((edit: any) => (
-                    <EnhancedDiffViewer
-                      key={`${edit.path}-${edit.version}`}
-                      path={edit.path}
-                      serverContent={edit.content || edit.diff || ''}
-                      compareWithLocal={false}
-                      compareWithGit={false}
-                      showUnsynced={false}
-                      isFullContent={!edit.diff} // If no diff, treat as full content
-                    />
-                  ))}
+                  {(showAllFiles ? fileEditInfo.applied : fileEditInfo.applied.slice(0, 3)).map((edit: any) => {
+                    // CRITICAL FIX: ROBUST detection of unified diff vs full content
+                    // Don't rely on operation field or diff field alone
+                    // LLM may return: diffs in <file_edit>, full content for existing files, etc.
+                    // EnhancedDiffViewer has isDiffFormat() to auto-detect
+                    const hasUnifiedDiff = edit.diff && 
+                                           edit.diff.trim().length > 0 && 
+                                           edit.diff.startsWith('---') &&
+                                           edit.diff.includes('+++');
+                    
+                    return (
+                      <EnhancedDiffViewer
+                        key={`${edit.path}-${edit.version}`}
+                        path={edit.path}
+                        serverContent={hasUnifiedDiff ? edit.diff : (edit.content || '')}
+                        compareWithLocal={false}
+                        compareWithGit={false}
+                        showUnsynced={false}
+                        isFullContent={!hasUnifiedDiff} // Let EnhancedDiffViewer auto-detect if unsure
+                      />
+                    );
+                  })}
                 </div>
               </div>
             )}

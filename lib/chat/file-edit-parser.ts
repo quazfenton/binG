@@ -1,27 +1,29 @@
 /**
  * File Edit Parser
- * 
+ *
  * PURPOSE: Parse LLM text responses to extract file edit commands.
  * This module is NOT for applying edits - only for extracting edit commands
  * from unstructured LLM output text.
- * 
+ *
  * ARCHITECTURE LAYER: Response Parsing (LLM output → structured commands)
- * 
+ *
  * USE CASES:
  * - Server-side (api/chat/route.ts): Extracts edits from LLM responses for
  *   server-side application and response sanitization
- * - Client-side (message-bubble.tsx): Sanitizes display by removing edit tags
- * - Mode-aware processing (mode-manager.ts): Detects file operations in responses
- * 
+ * - Client-side (message-bubble.tsx, conversation-interface.tsx): Sanitizes display
+ *   and detects file operations in responses
+ *
  * NOT THIS MODULE'S JOB:
  * - tool-executor.ts: Applies structured diffs to VFS/sandbox (different layer)
  * - safe-diff-operations.ts: Enterprise validation of structured DiffOperation[]
  *   (receives structured objects, not LLM text)
- * 
+ *
  * Supported formats:
  * - <file_edit path="...">content</file_edit> (compact)
  * - <file_edit>\n<path>...</path>\ncontent\n</file_edit> (multi-line)
  * - ```diff path\ncontent\n``` (fenced diff blocks)
+ * - cat > file << 'EOF' ... EOF (bash heredoc)
+ * - mkdir -p path, rm -rf path, sed -i 's/old/new/' path (bash commands)
  */
 
 export { isFullFileContent } from './file-diff-utils';
@@ -352,6 +354,7 @@ export interface FileEdit {
   content: string;
   action?: 'write' | 'delete' | 'patch' | 'mkdir'; // Optional action type for bash commands
   flags?: string; // For sed patches with flags (g, i, m)
+  diff?: string; // Optional unified diff for patch operations
 }
 
 export interface DiffEdit {
@@ -958,7 +961,7 @@ export function extractFileEdits(content: string): FileEdit[] {
 
 /**
  * Extract fenced diff blocks: ```diff path\ncontent\n```
- * 
+ *
  * FIX: Now correctly distinguishes between:
  * - ```diff path\n<unified diff content>``` (diff patch for a file)
  * - ```diff\ndiff --git a/path b/path\n...``` (raw git diff output - should NOT be parsed as file edit)
@@ -990,6 +993,13 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
       continue;
     }
 
+    // CRITICAL FIX: Validate path to reject JSX/HTML fragments, CSS values, etc.
+    // This prevents paths like "project/sessions/002/Input'" from being extracted
+    if (!isValidExtractedPath(targetPath)) {
+      console.warn('[extractFencedDiffEdits] Skipping invalid path:', targetPath);
+      continue;
+    }
+
     // CRITICAL FIX: Skip edits with empty diff content
     if (!diff || diff.trim().length === 0) continue;
 
@@ -1003,15 +1013,21 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
  * Validate path to reject invalid patterns
  * Rejects: paths with command names (WRITE, PATCH, etc.), JSON syntax, malformed paths,
  * CSS values, Vue directives, operators, and other non-path patterns.
+ * 
+ * EXPORTED for use in client-side validation (hooks/use-enhanced-chat.ts)
  */
-function isValidExtractedPath(path: string): boolean {
+export function isValidExtractedPath(path: string): boolean {
   if (!path || path.length === 0 || path.length > 300) return false;
+
+  // CRITICAL: Reject control characters and null bytes (security)
+  if (/[\0-\x1F\u202A-\u202E]/.test(path)) return false;
 
   // Reject single-character paths (except valid single-char filenames like 'a')
   if (path.length === 1 && !/^[a-zA-Z0-9_]$/.test(path)) return false;
-  
+
   // Reject paths that are just operators or punctuation
-  if (/^[=+\-*/%<>!&|^~?:,;]+$/.test(path)) return false;
+  // NOTE: Removed : and . to allow valid paths like "./src/file.ts" or Windows "C:/path"
+  if (/^[=+\-*/%<>!&|^~,;]+$/.test(path)) return false;
 
   // Reject paths containing command names (WRITE, PATCH, APPLY_DIFF, DELETE)
   if (/\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i.test(path)) return false;
@@ -1027,12 +1043,12 @@ function isValidExtractedPath(path: string): boolean {
       path.endsWith('=') || path.endsWith(';')) return false;
 
   // Reject paths starting with special characters (except . for relative paths)
+  // NOTE: Allow . for relative paths like "./src/file.ts"
   if (path.startsWith('<') || path.startsWith('>') ||
       path.startsWith('{') || path.startsWith('}') ||
       path.startsWith('@') || path.startsWith('=') ||
       path.startsWith('+') || path.startsWith('-') ||
-      path.startsWith('*') || path.startsWith('/') ||
-      path.startsWith('#')) return false;
+      path.startsWith('*') || path.startsWith('#')) return false;
 
   // Reject paths with heredoc markers
   if (path.includes('<<<') || path.includes('>>>') || path.includes('===')) return false;
@@ -1041,8 +1057,8 @@ function isValidExtractedPath(path: string): boolean {
   if (/^(?:hover:|@|:|v-|:bind|@click|@submit|@keyup|@change|@input|@focus|@blur)/i.test(path)) return false;
 
   // Reject paths with colons (CSS classes like hover:scale-105)
-  // Allow Windows drive letters like C:/
-  if (path.includes(':') && !/^[a-zA-Z]:/.test(path)) return false;
+  // Allow Windows drive letters like C:/ and URL protocols like https://
+  if (path.includes(':') && !/^[a-zA-Z]:[\/\\]/.test(path) && !/^https?:\/\//.test(path)) return false;
 
   // Reject paths that look like CSS values (0.3s, 10px, etc.)
   if (looksLikeCssValueSegment(path)) return false;
@@ -1050,9 +1066,9 @@ function isValidExtractedPath(path: string): boolean {
   // Reject paths that look like event handlers or expressions
   if (/[=(].*[)]/.test(path)) return false;
 
-  // Must have valid path format - start with alphanumeric or dot
+  // Must have valid path format - start with alphanumeric or dot (for relative paths)
   if (!/^[a-zA-Z0-9._]/.test(path)) return false;
-  
+
   // Must contain at least one path separator or file extension for multi-segment paths
   if (path.includes('/') && !/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) return false;
 
@@ -1436,6 +1452,122 @@ function extractFolderCreateEdits(content: string): string[] {
 
   return folders;
 }
+
+// ---------------------------------------------------------------------------
+// Folder Structure Detection (moved from mode-manager.ts for consolidation)
+// ---------------------------------------------------------------------------
+
+export interface DetectedFolderStructure {
+  isSingleFolder: boolean
+  folderName: string | null
+  totalFiles: number
+  filesInFolder: number
+  filesOutsideFolder: string[]
+  isNewProject: boolean
+}
+
+export interface FileOperation {
+  type: 'create' | 'modify' | 'delete'
+  path: string
+  content?: string
+  diff?: string
+}
+
+/** Minimum number of files in a folder for it to be treated as a new project. */
+const NEW_PROJECT_MIN_FILES = parseInt(process.env.NEW_PROJECT_MIN_FILES || '2', 10)
+
+/**
+ * Detect folder structure from file operations
+ * Moved from mode-manager.ts to consolidate all file parsing logic
+ */
+export function detectFolderStructure(fileOperations: FileOperation[]): DetectedFolderStructure {
+  if (fileOperations.length === 0) {
+    return {
+      isSingleFolder: false,
+      folderName: null,
+      totalFiles: 0,
+      filesInFolder: 0,
+      filesOutsideFolder: [],
+      isNewProject: false,
+    }
+  }
+
+  const paths = fileOperations.map(op => op.path)
+  const folderNames = new Set<string>()
+  const filesOutsideAnyFolder: string[] = []
+
+  for (const path of paths) {
+    const parts = path.split('/').filter(Boolean)
+    if (parts.length >= 2) {
+      folderNames.add(parts[0])
+    } else {
+      filesOutsideAnyFolder.push(path)
+    }
+  }
+
+  const folderNameArray = Array.from(folderNames)
+  const isSingleFolder = folderNameArray.length === 1
+  const singleFolderName = isSingleFolder ? folderNameArray[0] : null
+
+  const filesInFolder =
+    isSingleFolder && singleFolderName
+      ? paths.filter(p => p.startsWith(singleFolderName + '/')).length
+      : 0
+
+  const isNewProject =
+    isSingleFolder || (paths.length > 1 && filesOutsideAnyFolder.length === 0)
+
+  return {
+    isSingleFolder,
+    folderName: singleFolderName,
+    totalFiles: paths.length,
+    filesInFolder,
+    filesOutsideFolder: filesOutsideAnyFolder,
+    isNewProject,
+  }
+}
+
+/**
+ * Detect if response indicates a new project with single folder structure
+ * Moved from mode-manager.ts to consolidate all file parsing logic
+ * 
+ * @param content - LLM response content to analyze
+ * @returns Folder name if a single-folder project structure is detected, null otherwise
+ */
+export function detectNewProjectFolder(content: string): string | null {
+  const parsed = parseFilesystemResponse(content)
+  
+  // Build file operations from all detected edit types
+  const fileOperations: FileOperation[] = [
+    // <file_edit> tags and other XML-style edits (includes bash heredocs)
+    ...parsed.writes.map(w => ({
+      type: w.action === 'write' && w.content ? ('create' as const) : ('modify' as const),
+      path: w.path,
+      content: w.content
+    })),
+    // Diff-based edits
+    ...parsed.diffs.map(d => ({ type: 'modify' as const, path: d.path, diff: d.diff })),
+    // Folder creation (mkdir)
+    ...parsed.folders.map(f => ({ type: 'create' as const, path: f })),
+  ]
+
+  const structure = detectFolderStructure(fileOperations)
+
+  if (
+    structure.isSingleFolder &&
+    structure.folderName &&
+    structure.filesInFolder >= NEW_PROJECT_MIN_FILES &&
+    structure.filesOutsideFolder.length === 0
+  ) {
+    return structure.folderName
+  }
+
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Main Parser Function
+// ---------------------------------------------------------------------------
 
 export function parseFilesystemResponse(content: string, forceExtract: boolean = false): ParsedFilesystemResponse {
   const writes = new Map<string, FileEdit>();
