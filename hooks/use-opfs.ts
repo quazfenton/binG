@@ -116,6 +116,13 @@ export function useOPFS(
     }
   }, []);
 
+  // Update sync status (defined early to avoid hoisting issues)
+  const updateSyncStatus = useCallback(() => {
+    const status = opfsAdapter.getSyncStatus();
+    setSyncStatus(status);
+    setIsSyncing(status.isSyncing);
+  }, []);
+
   // Auto-enable on mount
   useEffect(() => {
     if (!autoEnable || initializedRef.current || !supportInfo.supported) {
@@ -126,15 +133,18 @@ export function useOPFS(
 
     const enableOPFS = async () => {
       try {
-        await opfsAdapter.enable(ownerId, workspaceIdRef.current);
-        setIsEnabled(true);
-        setIsReady(true);
-        
-        // Initial stats
-        await refreshStats();
-        
-        // Update sync status
-        updateSyncStatus();
+        // Only enable if not already enabled
+        if (!isEnabled) {
+          await opfsAdapter.enable(ownerId, workspaceIdRef.current);
+          setIsEnabled(true);
+          setIsReady(true);
+
+          // Initial stats
+          await refreshStats();
+
+          // Update sync status
+          updateSyncStatus();
+        }
       } catch (error) {
         console.error('[useOPFS] Failed to enable:', error);
         onError?.(error as Error);
@@ -142,7 +152,7 @@ export function useOPFS(
     };
 
     enableOPFS();
-  }, [autoEnable, ownerId, supportInfo.supported, onError]);
+  }, [autoEnable, ownerId, supportInfo.supported, onError, isEnabled, updateSyncStatus]);
 
   // Periodic sync status update
   useEffect(() => {
@@ -153,14 +163,7 @@ export function useOPFS(
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [isEnabled]);
-
-  // Update sync status
-  const updateSyncStatus = useCallback(() => {
-    const status = opfsAdapter.getSyncStatus();
-    setSyncStatus(status);
-    setIsSyncing(status.isSyncing);
-  }, []);
+  }, [isEnabled, updateSyncStatus]);
 
   // Initialize OPFS
   const initialize = useCallback(async () => {
@@ -184,6 +187,12 @@ export function useOPFS(
       throw new Error('OPFS not supported in this browser');
     }
 
+    // Only enable if not already enabled
+    if (isEnabled) {
+      console.log('[useOPFS] Already enabled, skipping enable call');
+      return;
+    }
+
     try {
       const wsId = customWorkspaceId || ownerId;
       await opfsAdapter.enable(ownerId, wsId);
@@ -194,7 +203,7 @@ export function useOPFS(
       onError?.(error as Error);
       throw error;
     }
-  }, [ownerId, supportInfo.supported, onError]);
+  }, [ownerId, supportInfo.supported, onError, isEnabled]);
 
   // Disable OPFS
   const disable = useCallback(async () => {

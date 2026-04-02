@@ -49,12 +49,21 @@ export function CheckpointManager({
     setIsDesktop(isDesktopMode());
   }, []);
 
+  // FIX: Track loading state to prevent race conditions (declared before use)
+  const [isLoadingCheckpoints, setIsLoadingCheckpoints] = useState(false);
+
   const loadCheckpoints = async () => {
     if (!isDesktop) {
       setError('Checkpoint manager is only available in desktop mode');
       return;
     }
 
+    // Prevent concurrent loading operations
+    if (isLoadingCheckpoints) {
+      return;
+    }
+
+    setIsLoadingCheckpoints(true);
     setLoading(true);
     setError(null);
     try {
@@ -64,6 +73,7 @@ export function CheckpointManager({
       setError(err.message || 'Failed to load checkpoints');
     } finally {
       setLoading(false);
+      setIsLoadingCheckpoints(false);
     }
   };
 
@@ -72,7 +82,12 @@ export function CheckpointManager({
     setError(null);
     try {
       const name = newCheckpointName.trim() || undefined;
-      await tauriInvoke.createCheckpoint(sandboxId, name);
+      // FIX: Validate create result - don't silently ignore failures
+      const result = await tauriInvoke.createCheckpoint(sandboxId, name);
+      if (!result) {
+        setError('Failed to create checkpoint - operation returned null/false');
+        return;
+      }
       setNewCheckpointName('');
       await loadCheckpoints();
     } catch (err: any) {
@@ -89,6 +104,8 @@ export function CheckpointManager({
       const success = await tauriInvoke.restoreCheckpoint(sandboxId, checkpointId);
       if (success) {
         onCheckpointRestored?.(checkpointId);
+        // FIX: Refresh checkpoint list after successful restore
+        await loadCheckpoints();
         setOpen(false);
       } else {
         setError('Failed to restore checkpoint');
@@ -102,7 +119,12 @@ export function CheckpointManager({
 
   const handleDelete = async (checkpointId: string) => {
     try {
-      await tauriInvoke.deleteCheckpoint(sandboxId, checkpointId);
+      // FIX: Validate delete result - don't silently ignore failures
+      const result = await tauriInvoke.deleteCheckpoint(sandboxId, checkpointId);
+      if (!result) {
+        setError('Failed to delete checkpoint - operation returned false');
+        return;
+      }
       setDeleteConfirm(null);
       await loadCheckpoints();
     } catch (err: any) {

@@ -1843,7 +1843,7 @@ root.render(<App />);`,
         // Stub out server-only function calls to prevent runtime errors
         // Escape special regex characters in binding names (e.g., $render, render$)
         for (const binding of serverBindings) {
-          const escapedBinding = binding.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
+          const escapedBinding = binding.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
           transformed = transformed.replace(
             new RegExp(`\\b${escapedBinding}\\s*\\([^)]*\\)`, 'g'),
             "/* SSR not available in browser */ ({ body: '', head: '' })"

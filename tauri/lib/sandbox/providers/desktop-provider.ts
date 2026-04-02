@@ -56,25 +56,6 @@ function warnIfDangerous(command: string): void {
   }
 }
 
-/**
- * Validate sandbox ID to prevent path traversal attacks
- * Only allow alphanumeric characters, hyphens, and underscores
- */
-function validateSandboxId(sandboxId: string): void {
-  if (!sandboxId || typeof sandboxId !== 'string') {
-    throw new Error('Invalid sandbox ID: must be a non-empty string');
-  }
-  if (!/^[a-zA-Z0-9_-]+$/.test(sandboxId)) {
-    throw new Error('Invalid sandbox ID: contains invalid characters');
-  }
-  if (sandboxId.includes('..') || sandboxId.includes('/') || sandboxId.includes('\\')) {
-    throw new Error('Invalid sandbox ID: path traversal not allowed');
-  }
-  if (sandboxId.length > 100) {
-    throw new Error('Invalid sandbox ID: too long');
-  }
-}
-
 export class DesktopProvider implements SandboxProvider {
   readonly name = 'desktop';
   private workspaceRoot: string;
@@ -117,9 +98,6 @@ export class DesktopProvider implements SandboxProvider {
   }
 
   async getSandbox(sandboxId: string): Promise<SandboxHandle> {
-    // Validate sandbox ID to prevent path traversal
-    validateSandboxId(sandboxId);
-    
     const cached = this.sandboxes.get(sandboxId);
     if (cached) return cached;
 
@@ -136,9 +114,6 @@ export class DesktopProvider implements SandboxProvider {
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
-    // Validate sandbox ID to prevent path traversal
-    validateSandboxId(sandboxId);
-    
     this.sandboxes.delete(sandboxId);
     const workspaceDir = path.join(this.workspaceRoot, sandboxId);
     try {
@@ -164,7 +139,18 @@ export class DesktopSandboxHandle implements SandboxHandle {
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
     warnIfDangerous(command);
     const { shell, flag } = getShell();
-    const effectiveCwd = cwd || this.workspaceDir;
+    
+    // Security: Validate cwd is within workspace
+    let effectiveCwd = this.workspaceDir;
+    if (cwd) {
+      const resolvedCwd = path.resolve(cwd);
+      const resolvedWorkspace = path.resolve(this.workspaceDir);
+      if (!resolvedCwd.startsWith(resolvedWorkspace + path.sep) && resolvedCwd !== resolvedWorkspace) {
+        return { success: false, error: 'Working directory must be within workspace', blocked: true };
+      }
+      effectiveCwd = resolvedCwd;
+    }
+    
     const effectiveTimeout = timeout || DEFAULT_TIMEOUT;
 
     log.debug('Executing command', { command: command.slice(0, 200), cwd: effectiveCwd });
@@ -202,30 +188,52 @@ export class DesktopSandboxHandle implements SandboxHandle {
     });
   }
 
+  /**
+   * Validate that a resolved path is within workspace directory
+   * Prevents path traversal attacks
+   */
+  private validatePathWithinWorkspace(filePath: string): string {
+    const fullPath = path.resolve(this.workspaceDir, filePath);
+    const resolvedWorkspace = path.resolve(this.workspaceDir);
+    if (!fullPath.startsWith(resolvedWorkspace + path.sep) && fullPath !== resolvedWorkspace) {
+      throw new Error('Path traversal detected: path must be within workspace');
+    }
+    return fullPath;
+  }
+
   async writeFile(filePath: string, content: string): Promise<ToolResult> {
     try {
-      const fullPath = path.resolve(this.workspaceDir, filePath);
+      // Security: Validate path to prevent traversal
+      const fullPath = this.validatePathWithinWorkspace(filePath);
       await fs.mkdir(path.dirname(fullPath), { recursive: true });
       await fs.writeFile(fullPath, content, 'utf-8');
       return { success: true, output: `File written: ${filePath}` };
     } catch (err: any) {
+      if (err.message.includes('Path traversal')) {
+        return { success: false, error: err.message, blocked: true };
+      }
       return { success: false, error: `Failed to write file: ${err.message}` };
     }
   }
 
   async readFile(filePath: string): Promise<ToolResult> {
     try {
-      const fullPath = path.resolve(this.workspaceDir, filePath);
+      // Security: Validate path to prevent traversal
+      const fullPath = this.validatePathWithinWorkspace(filePath);
       const content = await fs.readFile(fullPath, 'utf-8');
       return { success: true, content, output: content };
     } catch (err: any) {
+      if (err.message.includes('Path traversal')) {
+        return { success: false, error: err.message, blocked: true };
+      }
       return { success: false, error: `Failed to read file: ${err.message}` };
     }
   }
 
   async listDirectory(dirPath: string): Promise<ToolResult> {
     try {
-      const fullPath = path.resolve(this.workspaceDir, dirPath || '.');
+      // Security: Validate path to prevent traversal
+      const fullPath = this.validatePathWithinWorkspace(dirPath || '.');
       const entries = await fs.readdir(fullPath, { withFileTypes: true });
       const listing = entries.map((e) => {
         const suffix = e.isDirectory() ? '/' : '';
@@ -233,6 +241,9 @@ export class DesktopSandboxHandle implements SandboxHandle {
       });
       return { success: true, output: listing.join('\n') };
     } catch (err: any) {
+      if (err.message.includes('Path traversal')) {
+        return { success: false, error: err.message, blocked: true };
+      }
       return { success: false, error: `Failed to list directory: ${err.message}` };
     }
   }

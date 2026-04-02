@@ -20,6 +20,16 @@ import { sandboxEvents } from '../sandbox/sandbox-events'
 const rateLimiter = createSandboxRateLimiter()
 
 function getSystemPrompt(workspaceDir: string): string {
+  const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+  if (isDesktop) {
+    const platform = process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux';
+    return `You are an expert software engineer running on the user's ${platform} desktop.
+You have direct access to the local filesystem and shell. You can execute any commands natively.
+The workspace is at ${workspaceDir}/.
+You can use bash/shell commands, git, npm/pnpm/yarn, python, and any tools installed on this machine.
+Always write files before trying to run them.
+Report results clearly and concisely.`
+  }
   return `You are an expert software engineer with access to a Linux sandbox workspace.
 You can execute shell commands, write files, read files, list directories, run code, use git, and more.
 The workspace is at ${workspaceDir}/.
@@ -143,12 +153,23 @@ async function executeToolOnSandbox(
         }
         const execEval = evaluateActiveWorkflow('exec_shell', validated, approvalContext)
 
+        // HITL Enforcement: Block command if approval is required and enforcement is enabled
+        const enforceHitl = process.env.ENFORCE_HITL === 'true';
         if (execEval.requiresApproval) {
+          if (enforceHitl) {
+            return {
+              success: false,
+              output: `Command blocked: requires approval (rule: ${execEval.matchedRule?.name || 'default'}). ${execEval.reason || ''}`,
+              error: 'HITL enforcement: command requires approval',
+              blocked: true,
+              requiresApproval: true,
+              approvalRule: execEval.matchedRule?.name,
+            };
+          }
+          // Log only if enforcement is disabled (default behavior)
           console.log(
-            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${execEval.matchedRule?.name || 'default'})`,
-          )
-          // In a real implementation, this would suspend and wait for approval
-          // For now, we just log and proceed (HITL disabled by default)
+            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${execEval.matchedRule?.name || 'default'}) - proceeding anyway (ENFORCE_HITL not set)`,
+          );
         }
 
         // Record successful validation for rate limiting
@@ -178,11 +199,22 @@ async function executeToolOnSandbox(
         }
         const writeEval = evaluateActiveWorkflow('write_file', validated, approvalContext)
 
+        // HITL Enforcement: Block file write if approval is required and enforcement is enabled
+        const enforceHitl = process.env.ENFORCE_HITL === 'true';
         if (writeEval.requiresApproval) {
+          if (enforceHitl) {
+            return {
+              success: false,
+              output: `File write blocked: requires approval (rule: ${writeEval.matchedRule?.name || 'default'}). ${writeEval.reason || ''}`,
+              error: 'HITL enforcement: file write requires approval',
+              blocked: true,
+              requiresApproval: true,
+              approvalRule: writeEval.matchedRule?.name,
+            };
+          }
           console.log(
-            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${writeEval.matchedRule?.name || 'default'})`,
-          )
-          // In a real implementation, this would suspend and wait for approval
+            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${writeEval.matchedRule?.name || 'default'}) - proceeding anyway (ENFORCE_HITL not set)`,
+          );
         }
 
         await rateLimiter.record(rateLimitKey, 'fileOps')
@@ -286,45 +318,55 @@ async function executeToolOnSandbox(
           return { success: false, output: 'Repository URL is required', exitCode: 1 }
         }
 
-        // Validate URL to prevent command injection
-        const urlRegex = /^https?:\/\/[a-zA-Z0-9._\-/]+(?:\.git)?$/
-        if (!urlRegex.test(url)) {
-          return { success: false, output: 'Invalid repository URL format', exitCode: 1 }
+        // STRICT URL validation - allow only https URLs with safe characters
+        const urlPattern = /^https:\/\/[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?(?:\.git)?$/;
+        if (!urlPattern.test(url)) {
+          return { success: false, output: 'Invalid repository URL format - only HTTPS URLs allowed', exitCode: 1 }
         }
 
         const clonePath = path || getRepoNameFromUrl(url)
 
-        // Validate clone path
-        if (!/^[a-zA-Z0-9._\-/]+$/.test(clonePath)) {
-          return { success: false, output: 'Invalid path format', exitCode: 1 }
+        // Strict path validation - alphanumeric, dots, hyphens, underscores only
+        if (!/^[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?$/.test(clonePath)) {
+          return { success: false, output: 'Invalid path format - use alphanumeric, dots, hyphens, underscores only', exitCode: 1 }
+        }
+
+        // Branch validation if provided
+        if (branch && !/^[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?$/.test(branch)) {
+          return { success: false, output: 'Invalid branch name', exitCode: 1 }
+        }
+
+        // Depth validation if provided
+        if (depth !== undefined) {
+          const depthNum = parseInt(String(depth), 10)
+          if (isNaN(depthNum) || depthNum < 1 || depthNum > 100) {
+            return { success: false, output: 'Depth must be between 1 and 100', exitCode: 1 }
+          }
         }
 
         // Use git credential helper instead of embedding credentials in URL
+        // Build command using argument arrays when possible to avoid shell injection
         let cloneCmd: string
         if (username && password) {
-          // Configure git credential helper for this operation only
-          // This avoids exposing credentials in process listings
-          const escapedUrl = url.replace(/'/g, "'\\''")
-          cloneCmd = `cd ${sandbox.workspaceDir} && git config --local credential.helper store && echo "password='${password.replace(/'/g, "'\\''")}'" | git credential approve && git clone ${escapedUrl} ${clonePath} && git config --local --unset credential.helper`
-
-          if (branch) {
-            const escapedBranch = branch.replace(/'/g, "'\\''")
-            cloneCmd = `cd ${sandbox.workspaceDir} && GIT_ASKPASS=/bin/echo git clone -b ${escapedBranch} ${escapedUrl} ${clonePath}`
+          // Sanitize username and password - reject if they contain shell metacharacters
+          if (/[;&|`$()]/.test(username) || /[;&|`$()]/.test(password)) {
+            return { success: false, output: 'Username/password contains invalid characters', exitCode: 1 }
           }
+          // Use git's stdin credential input which is safer than echo
+          cloneCmd = `cd '${sandbox.workspaceDir}' && git config --local credential.helper store && printf '%s\n' 'username='"'${username}'" 'password='"'${password}'"' | git credential approve && git clone '${url}' '${clonePath}' && git config --local --unset credential.helper`
         } else {
-          cloneCmd = `cd ${sandbox.workspaceDir} && git clone ${url} ${clonePath}`
-
-          if (branch) {
-            const escapedBranch = branch.replace(/'/g, "'\\''")
-            cloneCmd = `cd ${sandbox.workspaceDir} && git clone -b ${escapedBranch} ${url} ${clonePath}`
-          }
+          cloneCmd = `cd '${sandbox.workspaceDir}' && git clone '${url}' '${clonePath}'`
         }
 
+        // Add branch if specified
+        if (branch) {
+          // Branch is already validated above
+          cloneCmd = `cd '${sandbox.workspaceDir}' && git clone -b '${branch}' '${url}' '${clonePath}'`
+        }
+
+        // Add depth if specified
         if (depth) {
-          const depthNum = parseInt(depth, 10)
-          if (!isNaN(depthNum) && depthNum > 0) {
-            cloneCmd += ` --depth ${depthNum}`
-          }
+          cloneCmd += ` --depth ${parseInt(String(depth), 10)}`
         }
 
         await rateLimiter.record(rateLimitKey, 'gitOps')

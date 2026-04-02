@@ -452,7 +452,8 @@ export class ToolExecutor {
     // Only support TypeScript/JavaScript files
     const supportedExtensions = ['.ts', '.tsx', '.js', '.jsx'];
     const fileExt = path.split('.').pop()?.toLowerCase();
-    if (!fileExt || !supportedExtensions.includes(fileExt)) {
+    // FIX: fileExt doesn't include the leading dot, so add it for comparison
+    if (!fileExt || !supportedExtensions.includes('.' + fileExt)) {
       return {
         success: false,
         error: `AST diff only supports TypeScript/JavaScript files. Got: ${fileExt}`,
@@ -542,6 +543,11 @@ export class ToolExecutor {
     }
 
     if (!this.context.sandboxHandle) {
+      // In desktop mode, execute directly via local shell
+      const { isDesktopMode } = await import('@/lib/utils/desktop-env');
+      if (isDesktopMode()) {
+        return this.executeLocalShell(command, cwd);
+      }
       return {
         success: false,
         error: 'SandboxHandle required for execShell',
@@ -550,6 +556,81 @@ export class ToolExecutor {
     }
 
     return this.context.sandboxHandle.executeCommand(command, cwd);
+  }
+
+  /**
+   * Execute a command directly on the local machine (desktop mode only)
+   * Security: Validates command against blocked patterns before execution
+   */
+  private async executeLocalShell(command: string, cwd?: string): Promise<ToolResult> {
+    // Security: Block dangerous commands
+    const blockedPatterns = [
+      /^rm\s+-rf\s+\/$/,
+      /^mkfs/,
+      /^dd\s+if=/,
+      /:\(\)\{\s*:\|\:&\s*\};:/,
+      /\/dev\/(sd|hd)[a-z]/,
+      /^curl\s+.*\|\s*sh/i,
+      /^wget\s+.*\|\s*sh/i,
+    ];
+
+    for (const pattern of blockedPatterns) {
+      if (pattern.test(command)) {
+        return {
+          success: false,
+          error: `Blocked dangerous command: ${command.slice(0, 50)}...`,
+          blocked: true,
+        };
+      }
+    }
+
+    // Validate cwd is within allowed workspace
+    if (cwd) {
+      const { getDesktopConfig } = await import('@/lib/utils/desktop-env');
+      const config = getDesktopConfig();
+      const resolvedCwd = require('path').resolve(cwd);
+      const workspaceRoot = require('path').resolve(config.workspaceRoot);
+      if (!resolvedCwd.startsWith(workspaceRoot)) {
+        return {
+          success: false,
+          error: 'Working directory must be within workspace',
+          blocked: true,
+        };
+      }
+    }
+
+    const { spawn } = await import('child_process');
+    const { getShellCommand } = await import('@/lib/utils/desktop-env');
+    const { shell, args } = getShellCommand();
+
+    // Use spawn with shell:false to avoid shell interpretation
+    return new Promise<ToolResult>((resolve) => {
+      const child = spawn(shell, [...args, command], {
+        cwd: cwd || process.cwd(),
+        timeout: 120_000,
+        env: { ...process.env, TERM: 'xterm-256color' },
+        shell: false,
+      });
+
+      let stdout = '';
+      let stderr = '';
+
+      child.stdout?.on('data', (data: Buffer) => { stdout += data.toString(); });
+      child.stderr?.on('data', (data: Buffer) => { stderr += data.toString(); });
+
+      child.on('close', (exitCode: number | null) => {
+        const output = stdout + (stderr ? `\n--- stderr ---\n${stderr}` : '');
+        resolve({
+          success: exitCode === 0,
+          output: output.trim(),
+          error: exitCode !== 0 ? `Command exited with code ${exitCode}` : undefined,
+        });
+      });
+
+      child.on('error', (err: Error) => {
+        resolve({ success: false, error: `Failed to execute: ${err.message}` });
+      });
+    });
   }
 
   private async executeSyntaxCheck({ paths }: { paths: string[] }): Promise<ToolResult> {
