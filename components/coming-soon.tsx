@@ -104,7 +104,7 @@ export function ComingSoon({
         {process.env.NEXT_PUBLIC_DEV_MODE === 'true' && (
           <div className="pt-4 mt-4 border-t border-yellow-500/20">
             <p className="text-xs text-yellow-500/70">
-              🛠 Dev Mode: Real content is available
+              [DEV] Dev Mode: Real content is available
             </p>
           </div>
         )}

@@ -273,8 +273,13 @@ export class VFSBatchOperations {
         errors.push({ operation: index, message: 'Path cannot be empty' });
       }
 
+      // Validate path format - reject directory traversal attempts
+      if (op.path && /(^|\/|\\)\.\.(\/|\\|$)/.test(op.path)) {
+        errors.push({ operation: index, message: 'Invalid path: directory traversal not allowed' });
+      }
+
       // Allow empty string content (empty files are valid), but reject undefined/null
-      if ((op.type === 'create' || op.type === 'update') && op.content === undefined) {
+      if ((op.type === 'create' || op.type === 'update') && op.content == null) {
         errors.push({ operation: index, message: 'Content is required for create/update' });
       }
     });

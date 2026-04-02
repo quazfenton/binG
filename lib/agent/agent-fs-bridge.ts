@@ -163,15 +163,32 @@ class AgentFSBridge {
       // This ensures components update after V2 agent writes files
       if (syncedFiles.length > 0) {
         // Map sandbox paths back to VFS paths for correct UI updates
-        const vfsPaths = syncedFiles.map((file) => file.replace(`${sandboxPath}/`, `${vfsPath}/`));
-        
-        emitFilesystemUpdated({
-          scopePath: vfsPath,
-          sessionId: simpleSessionId,
-          paths: vfsPaths,  // Use VFS paths, not sandbox paths
-          type: 'update',
-          source: 'v2-agent',
+        // Normalize paths to handle different separators and trailing slashes
+        const normalizedSandboxPath = sandboxPath.replace(/\\/g, '/').replace(/\/+$/, '');
+        const normalizedVfsPath = vfsPath.replace(/\\/g, '/').replace(/\/+$/, '');
+        const vfsPaths = syncedFiles.map((file) => {
+          const normalizedFile = file.replace(/\\/g, '/');
+          // Only replace if sandbox path is a true prefix
+          if (!normalizedFile.startsWith(`${normalizedSandboxPath}/`)) {
+            return normalizedFile;
+          }
+          return `${normalizedVfsPath}/${normalizedFile.slice(normalizedSandboxPath.length + 1)}`;
         });
+
+        // Emit filesystem update event with error handling
+        try {
+          emitFilesystemUpdated({
+            scopePath: vfsPath,
+            sessionId: simpleSessionId,
+            paths: vfsPaths,  // Use VFS paths, not sandbox paths
+            type: 'update',
+            source: 'v2-agent',
+          });
+          logger.debug('Filesystem update event emitted successfully');
+        } catch (emitError: any) {
+          logger.warn('Failed to emit filesystem update event', emitError);
+          // Don't fail the entire sync for event emission failure
+        }
       }
 
       return {

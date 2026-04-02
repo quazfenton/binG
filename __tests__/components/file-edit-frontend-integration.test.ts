@@ -542,7 +542,9 @@ describe('Frontend Path Validation', () => {
                              path.includes('{') ||
                              path.includes('[') ||
                              path.endsWith('/') ||
-                             path.endsWith(':');
+                             path.endsWith(':') ||
+                             path === '=' ||
+                             path === ',';
 
       // Invalid paths should fail validation
       expect(isValid).toBe(false);

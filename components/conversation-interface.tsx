@@ -225,7 +225,7 @@ export default function ConversationInterface() {
     return () => {
       cancelled = true;
     };
-  }, []); // Empty deps - only run once on mount
+  }, [filesystemSessionId]); // Re-run when filesystemSessionId is cleared to regenerate
 
   // Persist filesystemSessionId to sessionStorage so page refresh restores it
   useEffect(() => {
@@ -667,7 +667,13 @@ export default function ConversationInterface() {
       .find((m) => m.role === "assistant");
     if (!lastAssistant || typeof lastAssistant.content !== "string") return;
 
-    // Skip if already processed this message ID
+    // CRITICAL FIX: Don't process while streaming - wait for complete content
+    // This ensures we parse complete file diffs, not partial content
+    if (isLoading) {
+      return;
+    }
+
+    // Skip if already processed this message ID (after streaming complete)
     if (processedMessageIdsRef.current.has(lastAssistant.id)) {
       return;
     }
@@ -876,7 +882,7 @@ export default function ConversationInterface() {
     if (applyDiffsRef.current) {
       void applyDiffsRef.current(validEntries);
     }
-  }, [messages, attachedFilesystemFiles, currentConversationId, filesystemScopePath, queueCommandDiffs]);
+  }, [messages, attachedFilesystemFiles, currentConversationId, filesystemScopePath, queueCommandDiffs, isLoading]);
 
   // Reset processed message tracking when switching conversations
   useEffect(() => {

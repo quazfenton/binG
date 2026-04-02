@@ -1823,15 +1823,30 @@ root.render(<App />);`,
     // Svelte SSR Removal
     // ============================================================================
     if (framework === 'svelte') {
-      // Remove svelte/server imports (SSR package)
-      transformed = transformed.replace(
-        /import\s*\{\s*[^}]+\s*\}\s*from\s*['"]svelte\/server['"];?\s*/g,
-        '// svelte/server removed for browser preview\n'
+      // Remove svelte/server imports (SSR package) and stub out the bindings
+      const svelteServerImport = transformed.match(
+        /import\s*\{\s*([^}]+)\s*\}\s*from\s*['"]svelte\/server['"];?\s*/
       );
 
-      // Note: We don't remove render() calls generically as that would break
-      // client-side code. The svelte/server import removal is sufficient since
-      // the SSR render function comes from that package.
+      if (svelteServerImport) {
+        const serverBindings = svelteServerImport[1]
+          .split(',')
+          .map(specifier => specifier.trim().split(/\s+as\s+/).pop()?.trim())
+          .filter((binding): binding is string => Boolean(binding));
+
+        transformed = transformed.replace(
+          svelteServerImport[0],
+          '// svelte/server removed for browser preview\n'
+        );
+
+        // Stub out server-only function calls to prevent runtime errors
+        for (const binding of serverBindings) {
+          transformed = transformed.replace(
+            new RegExp(`\\b${binding}\\s*\\([^)]*\\)`, 'g'),
+            "/* SSR not available in browser */ ({ body: '', head: '' })"
+          );
+        }
+      }
     }
 
     // ============================================================================

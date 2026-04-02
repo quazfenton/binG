@@ -1091,6 +1091,7 @@ export default function MessageBubble({
                         compareWithGit={false}
                         showUnsynced={false}
                         isFullContent={!hasUnifiedDiff} // Let EnhancedDiffViewer auto-detect if unsure
+                        fullyExpanded={true} // Always show full content (no "Show all" button)
                       />
                     );
                   })}

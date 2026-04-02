@@ -543,16 +543,26 @@ export class OPFSAdapter {
       // CRITICAL FIX: Initialize OPFS core if not already initialized (prevents "OPFS not initialized" errors)
       if (!this.core.isInitialized()) {
         console.log('[OPFS] OPFS core not initialized, initializing before sync...');
+        // Use tracked workspaceId to maintain consistency with enable() tracking
+        const workspaceId = this.currentWorkspaceId ?? ownerId;
         try {
-          // Use the ownerId as workspaceId for initialization
-          await this.core.initialize(ownerId);
+          await this.core.initialize(workspaceId);
           console.log('[OPFS] Core initialization successful');
         } catch (initError: any) {
           console.warn('[OPFS] Core initialization failed, enabling IndexedDB fallback:', initError.message);
           // TRULY enable fallback by calling enableFallback to initialize IndexedDB backend
           try {
-            await this.enableFallback(ownerId, ownerId);
+            await this.enableFallback(ownerId, workspaceId);
             console.log('[OPFS] IndexedDB fallback enabled successfully');
+            // Return immediately to prevent continuing into OPFS writes
+            return {
+              success: true,
+              filesSynced: 0,
+              bytesTransferred: 0,
+              conflicts: [],
+              errors: [],
+              duration: Date.now() - startTime,
+            };
           } catch (fallbackError: any) {
             console.error('[OPFS] Failed to enable IndexedDB fallback:', fallbackError.message);
             return {

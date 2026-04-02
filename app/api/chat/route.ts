@@ -374,7 +374,8 @@ export async function POST(request: NextRequest) {
       resolvedConversationId,
     });
 
-    const requestedScopePath = sanitizeScopePath(rawScopePath);
+    // Make it 'let' so it can be updated when session is renamed
+    let requestedScopePath = sanitizeScopePath(rawScopePath);
 
     // Log sanitized result
     chatLogger.debug('Sanitized scope path:', {
@@ -792,6 +793,8 @@ export async function POST(request: NextRequest) {
                       // Update resolvedConversationId for future operations
                       const previousId = resolvedConversationId;
                       resolvedConversationId = detectedFolder;
+                      // CRITICAL: Update scope path to match renamed session
+                      requestedScopePath = `project/sessions/${detectedFolder}`;
 
                       chatLogger.info('Session folder renamed based on detected project structure', {
                         previousId,
@@ -1382,7 +1385,6 @@ export async function POST(request: NextRequest) {
       if (agentToolResults && !clientResponse?.metadata?.specAmplificationRun) {
         const hasFileEdits = filesystemEdits && filesystemEdits.applied.length > 0;
         const hasCodeContent = rawResponseContent && (
-          rawResponseContent.length > 100 ||
           ['```', '<file_edit', 'WRITE ', 'import ', 'export ', 'function ', 'const ', 'interface '].some(m => rawResponseContent.includes(m))
         );
         // Spec amplification runs in 'enhanced' or 'max' mode
@@ -1912,7 +1914,6 @@ export async function POST(request: NextRequest) {
                 const effectiveEdits = allEdits || streamedEdits || filesystemEdits;
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
                 const hasCodeContent = streamingContentBuffer && (
-                  streamingContentBuffer.length > 100 ||
                   ['```', '<file_edit', 'WRITE ', 'import ', 'export ', 'function ', 'const ', 'interface '].some(m => streamingContentBuffer.includes(m))
                 );
                 const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
@@ -2286,7 +2287,6 @@ export async function POST(request: NextRequest) {
                 const effectiveEdits = allEdits || filesystemEdits;
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
                 const hasCodeContent = finalContent && (
-                  finalContent.length > 100 ||
                   ['```', '<file_edit', 'WRITE ', 'import ', 'export ', 'function ', 'const ', 'interface '].some(m => finalContent.includes(m))
                 );
                 const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';

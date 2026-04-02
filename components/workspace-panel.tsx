@@ -1999,7 +1999,7 @@ export function ExperimentalWorkspacePanel() {
     } catch (err: any) {
       toast.error(`Operation failed: ${err.message}`);
     }
-  }, [emitFilesystemUpdated, filesystem?.sessionId, vfs?.currentPath, listDirectory, writeFile, buildApiHeaders, resolveScopedPath]);
+  }, [emitFilesystemUpdated, filesystem?.sessionId, vfs?.currentPath, listDirectory, writeFile, buildApiHeaders, resolveScopedPath, clipboard]);
 
   const handleRenameFile = useCallback((path: string, currentName: string) => {
     setRenamingFile(path);
@@ -2762,27 +2762,38 @@ export function ExperimentalWorkspacePanel() {
                     className="flex-1 mt-0 h-full overflow-visible" 
                     data-file-tree
                     onWheel={(e) => {
-                      console.log('[Explorer TabsContent] Wheel event:', { deltaY: e.deltaY, target: (e.target as HTMLElement)?.tagName });
+                      if (process.env.NODE_ENV !== 'production') {
+                        console.log('[Explorer TabsContent] Wheel event:', { deltaY: e.deltaY, target: (e.target as HTMLElement)?.tagName });
+                      }
                     }}
                     onPointerDown={(e) => {
-                      console.log('[Explorer TabsContent] Pointer down:', { target: (e.target as HTMLElement)?.tagName, pointerType: e.pointerType });
+                      if (process.env.NODE_ENV !== 'production') {
+                        console.log('[Explorer TabsContent] Pointer down:', { target: (e.target as HTMLElement)?.tagName, pointerType: e.pointerType });
+                      }
                     }}
                   >
                     <div 
                       className="h-full overflow-y-auto custom-scrollbar" 
                       style={{ overflowAnchor: 'auto', pointerEvents: 'auto', touchAction: 'pan-y' }}
                       onWheel={(e) => {
-                        console.log('[Files Tab] Wheel event detected:', { deltaY: e.deltaY, target: (e.target as HTMLElement)?.tagName, currentTarget: (e.currentTarget as HTMLElement)?.tagName });
+                        if (process.env.NODE_ENV !== 'production') {
+                          console.log('[Files Tab] Wheel event detected:', { deltaY: e.deltaY, target: (e.target as HTMLElement)?.tagName, currentTarget: (e.currentTarget as HTMLElement)?.tagName });
+                        }
                       }}
                       onScroll={(e) => {
-                        console.log('[Files Tab] Scroll event detected:', { scrollTop: e.currentTarget.scrollTop, scrollHeight: e.currentTarget.scrollHeight, clientHeight: e.currentTarget.clientHeight });
+                        if (process.env.NODE_ENV !== 'production') {
+                          console.log('[Files Tab] Scroll event detected:', { scrollTop: e.currentTarget.scrollTop, scrollHeight: e.currentTarget.scrollHeight, clientHeight: e.currentTarget.clientHeight });
+                        }
                       }}
                       onPointerDown={(e) => {
-                        console.log('[Files Tab] Pointer down:', { target: (e.target as HTMLElement)?.tagName, pointerType: e.pointerType });
+                        if (process.env.NODE_ENV !== 'production') {
+                          console.log('[Files Tab] Pointer down:', { target: (e.target as HTMLElement)?.tagName, pointerType: e.pointerType });
+                        }
                       }}
                       onKeyDown={(e) => {
-                        // Arrow key navigation for accessibility
-                        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        // Arrow key navigation for accessibility - ONLY when container is focused
+                        // Don't intercept arrow keys when child inputs/components are focused
+                        if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && e.target === e.currentTarget) {
                           e.preventDefault();
                           const scrollAmount = 40;
                           const container = e.currentTarget;
@@ -2791,7 +2802,9 @@ export function ExperimentalWorkspacePanel() {
                           } else {
                             container.scrollTop -= scrollAmount;
                           }
-                          console.log('[Files Tab] Arrow key scroll:', { key: e.key, newScrollTop: container.scrollTop });
+                          if (process.env.NODE_ENV !== 'production') {
+                            console.log('[Files Tab] Arrow key scroll:', { key: e.key, newScrollTop: container.scrollTop });
+                          }
                         }
                       }}
                       // Drag-to-scroll for mobile
@@ -2799,14 +2812,18 @@ export function ExperimentalWorkspacePanel() {
                         const container = e.currentTarget;
                         (container as any)._dragStartY = e.touches[0].clientY;
                         (container as any)._dragStartScrollTop = container.scrollTop;
-                        console.log('[Files Tab] Touch start:', { startY: (container as any)._dragStartY });
+                        if (process.env.NODE_ENV !== 'production') {
+                          console.log('[Files Tab] Touch start:', { startY: (container as any)._dragStartY });
+                        }
                       }}
                       onTouchMove={(e) => {
                         const container = e.currentTarget;
                         if ((container as any)._dragStartY !== undefined) {
                           const deltaY = (container as any)._dragStartY - e.touches[0].clientY;
                           container.scrollTop = (container as any)._dragStartScrollTop + deltaY;
-                          console.log('[Files Tab] Touch drag:', { deltaY, scrollTop: container.scrollTop });
+                          if (process.env.NODE_ENV !== 'production') {
+                            console.log('[Files Tab] Touch drag:', { deltaY, scrollTop: container.scrollTop });
+                          }
                         }
                       }}
                       onTouchEnd={() => {
@@ -2814,7 +2831,9 @@ export function ExperimentalWorkspacePanel() {
                         if (container) {
                           (container as any)._dragStartY = undefined;
                           (container as any)._dragStartScrollTop = undefined;
-                          console.log('[Files Tab] Touch end');
+                          if (process.env.NODE_ENV !== 'production') {
+                            console.log('[Files Tab] Touch end');
+                          }
                         }
                       }}
                       tabIndex={0}  // Make focusable for keyboard navigation

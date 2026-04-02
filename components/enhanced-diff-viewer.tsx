@@ -67,6 +67,8 @@ export interface EnhancedDiffViewerProps {
   maxHeight?: number;
   /** Start in expanded state by default (default: true) */
   defaultExpanded?: boolean;
+  /** Expand to show all content regardless of line count (overrides maxLines) */
+  fullyExpanded?: boolean;
 }
 
 /**
@@ -251,6 +253,7 @@ export function EnhancedDiffViewer({
   enableDragScroll = true,
   maxHeight = 800, // Increased from 384px (max-h-96) to 800px
   defaultExpanded = true, // Start expanded by default for better UX
+  fullyExpanded = false, // If true, always show all content (no truncation)
 }: EnhancedDiffViewerProps) {
   const [activeTab, setActiveTab] = useState<'server-local' | 'server-git' | 'local-git'>('server-local');
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
@@ -374,15 +377,15 @@ export function EnhancedDiffViewer({
     };
   }, [activeDiff]);
 
-  // Check if content is truncated
+  // Check if content is truncated (only when not fullyExpanded)
   const isTruncated = useMemo(() => {
-    if (!activeDiff) return false;
+    if (!activeDiff || fullyExpanded) return false;
     const totalLines = activeDiff.hunks.flat().length;
     return !isExpanded && totalLines > maxLines;
-  }, [activeDiff, maxLines, isExpanded]);
+  }, [activeDiff, maxLines, isExpanded, fullyExpanded]);
 
-  // Get displayed lines based on expanded state
-  const displayedLines = isExpanded ? Infinity : maxLines;
+  // Get displayed lines based on expanded state (always show all when fullyExpanded)
+  const displayedLines = fullyExpanded || isExpanded ? Infinity : maxLines;
 
   // Drag-to-scroll handlers
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -531,14 +534,14 @@ export function EnhancedDiffViewer({
       </div>
 
       {/* Diff content - Removed internal scroll, content flows naturally */}
-      <div 
+      <div
         ref={contentRef}
         className={`
           scrollbar-thin scrollbar-thumb-white/10 scrollbar-track-transparent
           ${enableDragScroll ? 'cursor-grab active:cursor-grabbing' : ''}
         `}
-        style={{ 
-          maxHeight: isExpanded ? 'none' : `${maxHeight}px`,
+        style={{
+          maxHeight: (isExpanded || fullyExpanded) ? 'none' : `${maxHeight}px`,
           overflowY: 'auto',
         }}
         onMouseDown={enableDragScroll ? handleDragStart : undefined}

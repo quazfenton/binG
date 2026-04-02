@@ -46,6 +46,8 @@
     "docs",
     "examples",
     "registry_original_backup.ts",
-    "enhanced-code-system"
+    "enhanced-code-system",
+    "desktop",
+    "tauri"
   ]
 }
