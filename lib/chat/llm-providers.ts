@@ -131,13 +131,68 @@ export interface LLMResponse {
     completion_tokens: number
     total_tokens: number
   }
+  // Additional fields for enhanced responses
+  reasoning?: string
+  toolCalls?: Array<{
+    id: string
+    name: string
+    arguments: Record<string, any>
+  }>
+  toolInvocations?: Array<{
+    toolCallId: string
+    toolName: string
+    state: 'call' | 'result'
+    args: Record<string, any>
+    result?: any
+  }>
+  files?: Array<{
+    path: string
+    content: string
+    operation: 'create' | 'update' | 'delete'
+  }>
+  commands?: {
+    request_files?: string[]
+    write_diffs?: Array<{ path: string; diff: string }>
+  }
 }
 
 export interface StreamingResponse {
   content: string
   isComplete: boolean
   finishReason?: string
-  usage?: any
+  usage?: {
+    promptTokens: number
+    completionTokens: number
+    totalTokens: number
+  }
+  // All fields from LLMResponse for parity
+  tokensUsed?: number
+  timestamp?: Date
+  provider?: string
+  metadata?: Record<string, any>
+  // Enhanced streaming fields
+  reasoning?: string
+  toolCalls?: Array<{
+    id: string
+    name: string
+    arguments: Record<string, any> | string
+  }>
+  toolInvocations?: Array<{
+    toolCallId: string
+    toolName: string
+    state: 'call' | 'result'
+    args: Record<string, any> | string
+    result?: any
+  }>
+  files?: Array<{
+    path: string
+    content: string
+    operation: 'create' | 'update' | 'delete'
+  }>
+  commands?: {
+    request_files?: string[]
+    write_diffs?: Array<{ path: string; diff: string }>
+  }
 }
 
 export interface ProviderConfig {
@@ -219,7 +274,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'openrouter',
     name: 'OpenRouter',
     models: [
-      'qwen/qwen3-4b:free',
+      'qwen/qwen3-30b-a3b:free',
       'qwen/qwen3-coder:free',
       'openai/gpt-oss-120b:free',
       'z-ai/glm-4.5-air:free',
@@ -320,7 +375,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'portkey',
     name: 'Portkey AI Gateway',
     models: ['openrouter/auto',
-      'qwen/qwen3-4b:free',
+      'qwen/qwen3-30b-a3b:free',
       'chutes/gemini-1.5-flash:free',
       'chutes/openrouter-auto:free',
       'chutes/grok-beta:free',
@@ -409,13 +464,69 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'nvidia',
     name: 'NVIDIA NIM',
     models: [
+      // NVIDIA Nemotron models
+      'nvidia/nemotron-4-340b-instruct',
+      'nvidia/nemotron-4-340b-reward',
+      'nvidia/nemotron-3-super-120b-a12b',
+      'nvidia/nemotron-3-nano-30b-a3b:free',
+      'nvidia/nemotron-nano-12b-v2-vl:free',
+      // DeepSeek models
       'deepseek-ai/deepseek-v3.2',
-      'deepseek-ai/deepseek-v3.1-terminus',
       'deepseek-ai/deepseek-v3.1',
+      'deepseek-ai/deepseek-v3.1-terminus',
+      'deepseek-ai/deepseek-r1-distill-llama-8b',
+      'deepseek-ai/deepseek-r1-distill-qwen-7b',
+      'deepseek-ai/deepseek-r1-distill-qwen-14b',
+      'deepseek-ai/deepseek-r1-distill-qwen-32b',
+      'deepseek-ai/deepseek-coder-6.7b-instruct',
+      // Meta Llama models
+      'meta/llama-4-maverick-17b-128e-instruct',
+      'meta/llama-3.3-70b-instruct',
+      'meta/llama2-70b',
+      // Mistral models
+      'mistralai/mistral-large-2-instruct',
+      'mistralai/mistral-large-3-675b-instruct-2512',
+      'mistralai/mistral-large',
+      'mistralai/mistral-medium-3-instruct',
+      'mistralai/mistral-7b-instruct-v0.3',
+      'mistralai/mistral-7b-instruct-v0.2',
+      'mistralai/codestral-22b-instruct-v0.1',
+      'mistralai/devstral-2-123b-instruct-2512',
+      'mistralai/magistral-small-2506',
+      'mistralai/mamba-codestral-7b-v0.1',
+      'mistralai/mathstral-7b-v0.1',
+      'mistralai/ministral-14b-instruct-2512',
+      // Google models
+      'google/gemma-3-27b-it',
+      // Baichuan models
+      'baichuan-inc/baichuan2-13b-chat',
+      // BigCode models
+      'bigcode/starcoder2-15b',
+      // Microsoft models
+      'microsoft/phi-4-multimodal-instruct',
+      // Qwen models
+      'qwen/qwen3.5-122b-a10b',
+      // TII Falcon models
+      'tiiuae/falcon3-7b-instruct',
+      // Writer models
+      'writer/palmyra-creative-122b',
+      // OpenAI models
+      'openai/gpt-oss-120b',
+      // Moonshot models
+      'moonshotai/kimi-k2-instruct',
+      'moonshotai/kimi-k2-instruct-0905',
+      'moonshotai/kimi-k2-thinking',
+      'moonshotai/kimi-k2.5',
+      // MiniMax models
+      'minimaxai/minimax-m2.5',
+      // IBM models
+      'ibm/granite-guardian-3.0-8b',
+      // iGenius models
+      'igenius/colosseum_355b_instruct_16k',
     ],
     supportsStreaming: true,
     maxTokens: 128000,
-    description: 'NVIDIA NIM - DeepSeek models optimized for NVIDIA GPUs'
+    description: 'NVIDIA NIM - Enterprise AI models optimized for NVIDIA GPUs'
   },
   zo: {
     id: 'zo',
@@ -1560,13 +1671,67 @@ class LLMService {
       stream: true,
     })
 
+    let toolCalls: StreamingResponse['toolCalls'] = [];
+    let toolInvocations: StreamingResponse['toolInvocations'] = [];
+
     for await (const chunk of stream) {
-      const delta = chunk.choices[0]?.delta?.content || ''
-      if (delta) {
-        yield { content: delta, isComplete: false }
+      const delta = chunk.choices[0]?.delta;
+      
+      // Stream content tokens
+      if (delta?.content) {
+        yield { 
+          content: delta.content, 
+          isComplete: false,
+          timestamp: new Date(),
+        };
+      }
+      
+      // Collect tool calls (streamed in parts, accumulate them)
+      if (delta?.tool_calls && delta.tool_calls.length > 0) {
+        for (const toolCallDelta of delta.tool_calls) {
+          const index = toolCallDelta.index || toolCalls.length;
+          
+          if (!toolCalls[index]) {
+            toolCalls[index] = {
+              id: toolCallDelta.id || `tool-${index}`,
+              name: toolCallDelta.function?.name || '',
+              arguments: {},
+            };
+          }
+          
+          // Accumulate function arguments (streamed in chunks)
+          if (toolCallDelta.function?.arguments) {
+            const existingArgs = toolCalls[index].arguments || {};
+            const argsStr = typeof existingArgs === 'string' ? existingArgs : JSON.stringify(existingArgs);
+            try {
+              toolCalls[index].arguments = JSON.parse(argsStr + toolCallDelta.function.arguments);
+            } catch {
+              // Partial JSON, keep accumulating
+              toolCalls[index].arguments = argsStr + toolCallDelta.function.arguments;
+            }
+          }
+        }
+        
+        // Emit tool calls as they're detected
+        if (toolCalls.length > 0) {
+          yield {
+            content: '',
+            isComplete: false,
+            toolCalls: [...toolCalls],
+            timestamp: new Date(),
+          };
+        }
       }
     }
-    yield { content: '', isComplete: true }
+    
+    // Final chunk with completion status
+    yield { 
+      content: '', 
+      isComplete: true,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      toolInvocations: toolInvocations.length > 0 ? toolInvocations : undefined,
+      timestamp: new Date(),
+    };
   }
 
   private async *streamAnthropicResponse(
@@ -1596,12 +1761,61 @@ class LLMService {
       max_tokens: maxTokens,
     })
 
+    let toolCalls: StreamingResponse['toolCalls'] = [];
+    let toolInvocations: StreamingResponse['toolInvocations'] = [];
+
     for await (const chunk of stream) {
+      // Handle content deltas (text streaming)
       if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'text_delta') {
-        yield { content: chunk.delta.text, isComplete: false }
+        yield { 
+          content: chunk.delta.text, 
+          isComplete: false,
+          timestamp: new Date(),
+        };
+      }
+      
+      // Handle tool use blocks (Anthropic calls them "tool_use" not "tool_calls")
+      if (chunk.type === 'content_block_start' && chunk.content_block?.type === 'tool_use') {
+        const toolBlock = chunk.content_block;
+        toolCalls.push({
+          id: toolBlock.id || `tool-${toolCalls.length}`,
+          name: toolBlock.name || '',
+          arguments: toolBlock.input || {},
+        });
+        
+        yield {
+          content: '',
+          isComplete: false,
+          toolCalls: [...toolCalls],
+          timestamp: new Date(),
+        };
+      }
+      
+      // Handle tool input deltas (arguments streamed in chunks)
+      if (chunk.type === 'content_block_delta' && chunk.delta?.type === 'input_json_delta') {
+        // Update last tool call with accumulated JSON
+        const lastToolCall = toolCalls[toolCalls.length - 1];
+        if (lastToolCall) {
+          const existingArgs = typeof lastToolCall.arguments === 'string' 
+            ? lastToolCall.arguments 
+            : JSON.stringify(lastToolCall.arguments || {});
+          try {
+            lastToolCall.arguments = JSON.parse(existingArgs + (chunk.delta.partial_json || ''));
+          } catch {
+            // Partial JSON, keep accumulating
+            lastToolCall.arguments = existingArgs + (chunk.delta.partial_json || '');
+          }
+        }
       }
     }
-    yield { content: '', isComplete: true }
+    
+    yield { 
+      content: '', 
+      isComplete: true,
+      toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
+      toolInvocations: toolInvocations.length > 0 ? toolInvocations : undefined,
+      timestamp: new Date(),
+    };
   }
 
   private async *streamGoogleResponse(
@@ -1629,7 +1843,7 @@ class LLMService {
     })
 
     for await (const chunk of result.stream) {
-      const text = chunk.text()
+      const text = typeof chunk.text === 'function' ? chunk.text() : (chunk.candidates?.[0]?.content?.parts?.[0]?.text || '')
       if (text) {
         yield { content: text, isComplete: false }
       }

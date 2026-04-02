@@ -136,8 +136,16 @@ export async function POST(req: NextRequest) {
     const resolvedSessionId = requestedSessionId || extractSessionIdFromPath(filePath);
 
     // Emit filesystem updated event for UI panels
+    // Extract scopePath from file path (e.g., "project/sessions/001-1/package.json" -> "project/sessions/001-1")
+    const pathParts = file.path.split('/');
+    const scopePath = pathParts.length > 2 
+      ? pathParts.slice(0, pathParts.length - 1).join('/')  
+      : pathParts[0] || 'project';
+    
     emitFilesystemUpdated({
       path: file.path,
+      paths: [file.path],  // Include paths array for batch-aware refresh
+      scopePath,           // Critical for client to know which directory to refresh
       type: existedBefore ? 'update' : 'create',
       sessionId: resolvedSessionId,
       workspaceVersion,

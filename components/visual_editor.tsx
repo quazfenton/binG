@@ -49,6 +49,22 @@ import React, {
 } from "react";
 import { toast } from "sonner";
 
+// Helper to ensure image URLs go through the proxy
+function getProxiedImageUrl(url: string | undefined): string | undefined {
+  if (!url) return undefined;
+  // Already proxied
+  if (url.startsWith('/api/image-proxy')) return url;
+  // Data URLs (base64) - don't proxy
+  if (url.startsWith('data:')) return url;
+  // External URL - proxy it
+  if (url.startsWith('http://') || url.startsWith('https://') || url.startsWith('//')) {
+    const fullUrl = url.startsWith('//') ? `https:${url}` : url;
+    return `/api/image-proxy?url=${encodeURIComponent(fullUrl)}`;
+  }
+  // Local/relative paths - don't proxy
+  return url;
+}
+
 // ─── Craft.js ────────────────────────────────────────────────────────────────
 import { Editor, Frame, Element, useEditor, useNode } from "@craftjs/core";
 import { Layers } from "@craftjs/layers";
@@ -104,6 +120,7 @@ import {
   Grip,
   PanelLeft,
   PanelRight,
+  Figma,
 } from "lucide-react";
 
 import { createDebugLogger } from "@/config/features";
@@ -1513,7 +1530,7 @@ export function TestimonialCardCraft({
       >
         <p style={{ margin: "0 0 16px", color: "#cbd5e1", fontSize: "14px", fontStyle: "italic" }}>"{quote}"</p>
         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
-          <img src={avatar} alt={author} style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
+          <img src={getProxiedImageUrl(avatar)} alt={author} style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
           <div>
             <p style={{ margin: 0, color: "#f8fafc", fontSize: "14px", fontWeight: 600 }}>{author}</p>
             <p style={{ margin: 0, color: "#94a3b8", fontSize: "12px" }}>{role}</p>
@@ -1704,7 +1721,7 @@ export function AppHeaderCraft({ title = "Profile", avatar = "https://i.pravatar
           ...toStyle(styles),
         }}
       >
-        <img src={avatar} alt="avatar" style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
+        <img src={getProxiedImageUrl(avatar)} alt="avatar" style={{ width: 40, height: 40, borderRadius: "50%", objectFit: "cover" }} />
         <h2 style={{ margin: 0, color: "#000", fontSize: "18px", fontWeight: 600 }}>{title}</h2>
       </div>
     </SelectionWrapper>
@@ -5411,6 +5428,8 @@ function EditorToolbar({
   isSaving,
   saveStatus,
   projectName,
+  onFigmaImport,
+  onFigmaExport,
 }: {
   editorMode: "design" | "code" | "split";
   onModeChange: (m: "design" | "code" | "split") => void;
@@ -5421,6 +5440,8 @@ function EditorToolbar({
   isSaving: boolean;
   saveStatus: "idle" | "saved" | "error";
   projectName: string;
+  onFigmaImport: () => void;
+  onFigmaExport: () => void;
 }) {
   const { actions, canUndo, canRedo } = useEditor((state, query) => ({
     canUndo: query.history.canUndo(),
@@ -5505,10 +5526,32 @@ function EditorToolbar({
         >
           <Redo2 className="w-3.5 h-3.5" />
         </button>
+        
+        {/* Figma divider */}
+        <div className="w-px h-4 bg-[#30363d] mx-1" />
+        
+        {/* Figma Import */}
+        <button
+          onClick={onFigmaImport}
+          title="Import from Figma"
+          className="w-7 h-7 flex items-center justify-center rounded text-[#8b949e] hover:text-[#A054F2] hover:bg-[#21262d] transition-all"
+        >
+          <Figma className="w-3.5 h-3.5" />
+        </button>
       </div>
 
       {/* Right */}
       <div className="flex items-center gap-2">
+        {/* Figma Export */}
+        <button
+          onClick={onFigmaExport}
+          title="Export to Figma"
+          className="flex items-center gap-1.5 px-2.5 h-7 bg-[#A054F2]/10 hover:bg-[#A054F2]/20 text-[#A054F2] text-[11px] font-semibold rounded-lg transition-colors border border-[#A054F2]/30"
+        >
+          <Upload className="w-3 h-3" />
+          Export
+        </button>
+        
         {saveStatus === "saved" && (
           <span className="flex items-center gap-1 text-[11px] text-green-400">
             <CheckCircle className="w-3 h-3" /> Saved
@@ -5931,6 +5974,10 @@ export function VisualEditorMain({
   const [showLayers, setShowLayers] = useState(true);
   const [showProps, setShowProps] = useState(true);
   const [showComponents, setShowComponents] = useState(true);
+  
+  // Figma import state
+  const [showFigmaModal, setShowFigmaModal] = useState(false);
+  const [isImportingFigma, setIsImportingFigma] = useState(false);
 
   // Parse JSX files to create initial Craft.js nodes
   const initialNodes = useMemo(() => {
@@ -6017,6 +6064,92 @@ export function VisualEditorMain({
     log(`[handleSave] completed`);
   }, [files, onSave, editorMode, project]);
 
+  // Figma import handler
+  const handleFigmaImport = useCallback(async () => {
+    // Check for Figma import data from plugin
+    try {
+      const importDataStr = localStorage.getItem('figmaImportData');
+      if (!importDataStr) {
+        toast.error('No Figma import data found. Please select nodes in the Figma plugin first.');
+        setShowFigmaModal(true);
+        return;
+      }
+
+      const importData = JSON.parse(importDataStr);
+      if (!importData.nodes || !Array.isArray(importData.nodes)) {
+        toast.error('Invalid Figma import data');
+        return;
+      }
+
+      setIsImportingFigma(true);
+
+      // Import the convertFigmaToCraft function dynamically
+      const { convertFigmaNodesToCraft } = await import('@/lib/figma/converter');
+      
+      // Convert Figma nodes to Craft.js format
+      const result = convertFigmaNodesToCraft(importData.nodes, {
+        fileKey: importData.file?.key,
+        fileName: importData.file?.name,
+      });
+
+      if (result.warnings.length > 0) {
+        console.warn('[Figma Import] Warnings:', result.warnings);
+        toast.info(`Imported with ${result.warnings.length} warnings`);
+      }
+
+      // Merge with existing craft nodes
+      const existingNodes = craftJsonRef.current as Record<string, any>;
+      const mergedNodes = {
+        ...existingNodes,
+        ...result.nodes,
+      };
+
+      // Update the craft nodes ref
+      craftJsonRef.current = mergedNodes;
+
+      // Force a re-render by updating state
+      setEditorMode(prev => prev);
+
+      toast.success(`Imported ${result.metadata.nodeCount} nodes from Figma`);
+      
+      // Clear the import data
+      localStorage.removeItem('figmaImportData');
+      setShowFigmaModal(false);
+
+    } catch (error) {
+      console.error('[Figma Import] Error:', error);
+      toast.error('Failed to import from Figma');
+    } finally {
+      setIsImportingFigma(false);
+    }
+  }, []);
+
+  // Figma export handler
+  const handleFigmaExport = useCallback(async () => {
+    try {
+      const craftNodes = craftJsonRef.current as Record<string, any>;
+      if (!craftNodes || Object.keys(craftNodes).length <= 1) {
+        toast.error('No design to export');
+        return;
+      }
+
+      setIsImportingFigma(true);
+
+      // Convert Craft.js nodes to JSX for export
+      const jsxString = craftNodesToJSX(craftNodes);
+      
+      // Copy JSX to clipboard for manual import to Figma
+      await navigator.clipboard.writeText(jsxString);
+      
+      toast.success('Design copied to clipboard as JSX. Paste into Figma plugin or save as file.');
+    } catch (error) {
+      console.error('[Figma Export] Error:', error);
+      toast.error('Failed to export design');
+    } finally {
+      setIsImportingFigma(false);
+    }
+  }, []);
+
   return (
     <Editor
       resolver={getResolver()}
@@ -6061,6 +6194,8 @@ export function VisualEditorMain({
           isSaving={isSaving}
           saveStatus={saveStatus}
           projectName={project.name ?? "Untitled"}
+          onFigmaImport={handleFigmaImport}
+          onFigmaExport={handleFigmaExport}
         />
 
         {/* ── BODY ── */}
@@ -6219,6 +6354,73 @@ export function VisualEditorMain({
           </div>
         </div>
       </div>
+
+      {/* Figma Import Modal */}
+      {showFigmaModal && (
+        <div className="fixed inset-0 bg-black/50 backdrop-blur-sm flex items-center justify-center z-50">
+          <div className="bg-[#161b22] border border-[#30363d] rounded-xl shadow-2xl max-w-md w-full mx-4 overflow-hidden">
+            <div className="p-4 border-b border-[#30363d] flex items-center justify-between">
+              <div className="flex items-center gap-3">
+                <div className="w-8 h-8 rounded-lg bg-gradient-to-br from-purple-500 to-pink-500 flex items-center justify-center">
+                  <Figma className="w-5 h-5 text-white" />
+                </div>
+                <h3 className="font-semibold text-white">Import from Figma</h3>
+              </div>
+              <button
+                onClick={() => setShowFigmaModal(false)}
+                className="w-6 h-6 flex items-center justify-center text-[#8b949e] hover:text-white"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
+            
+            <div className="p-6 space-y-4">
+              <div className="text-center space-y-3">
+                <div className="w-16 h-16 rounded-2xl bg-[#A054F2]/10 border border-[#A054F2]/30 flex items-center justify-center mx-auto">
+                  <Figma className="w-8 h-8 text-[#A054F2]" />
+                </div>
+                
+                <div>
+                  <h4 className="font-medium text-white mb-1">Open Figma Plugin</h4>
+                  <p className="text-sm text-[#8b949e]">
+                    Select frames in the Figma plugin first, then click "Import to Editor"
+                  </p>
+                </div>
+              </div>
+              
+              <div className="bg-[#0d1117] rounded-lg p-4 space-y-2">
+                <p className="text-xs text-[#8b949e] font-medium uppercase tracking-wider">Steps:</p>
+                <ol className="text-sm text-[#8b949e] space-y-1.5 list-decimal list-inside">
+                  <li>Open the Figma plugin from plugin marketplace</li>
+                  <li>Connect your Figma account</li>
+                  <li>Browse and select frames to import</li>
+                  <li>Click "Import to Editor"</li>
+                  <li>Return here and your design will be loaded</li>
+                </ol>
+              </div>
+            </div>
+            
+            <div className="p-4 border-t border-[#30363d] flex gap-2">
+              <button
+                onClick={() => setShowFigmaModal(false)}
+                className="flex-1 px-4 py-2 bg-[#21262d] hover:bg-[#30363d] text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={() => {
+                  setShowFigmaModal(false);
+                  // Open plugin marketplace or Figma plugin directly
+                  window.open('/?openPlugin=figma', '_blank');
+                }}
+                className="flex-1 px-4 py-2 bg-[#A054F2] hover:bg-[#8B46D4] text-white text-sm font-medium rounded-lg transition-colors"
+              >
+                Open Figma Plugin
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </Editor>
   );
 }

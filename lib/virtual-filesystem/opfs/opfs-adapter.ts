@@ -120,7 +120,7 @@ export class OPFSAdapter {
    * @param ownerId - Owner/session identifier
    * @param workspaceId - Workspace identifier (defaults to ownerId)
    */
-  private pendingEnableResolve: (() => void) | null = null;
+  private pendingEnablePromise: Promise<void> | null = null;
 
   async enable(ownerId: string, workspaceId?: string): Promise<void> {
     const wsId = workspaceId || ownerId;
@@ -129,70 +129,74 @@ export class OPFSAdapter {
     if (this.enabled && this.currentWorkspaceId === wsId) {
       this.enableCount++;
       console.log('[OPFS] Already enabled for workspace, incrementing ref count to:', this.enableCount);
-      return;
+      return Promise.resolve();
     }
 
     // If another enable() is in progress, wait for it to complete
-    if (this.pendingEnableResolve) {
-      await new Promise<void>(resolve => {
-        const originalResolve = this.pendingEnableResolve!;
-        this.pendingEnableResolve = () => {
-          originalResolve();
-          resolve();
-        };
+    if (this.pendingEnablePromise) {
+      return this.pendingEnablePromise.then(() => {
+        // After waiting, check again in case it completed for the same workspace
+        if (this.enabled && this.currentWorkspaceId === wsId) {
+          this.enableCount++;
+          console.log('[OPFS] Concurrent enable completed, incrementing ref count to:', this.enableCount);
+          return;
+        }
+        // Otherwise, start a new enable for this workspace
+        return this.enable(ownerId, wsId);
       });
-      // After waiting, check again in case it completed for the same workspace
-      if (this.enabled && this.currentWorkspaceId === wsId) {
-        this.enableCount++;
-        console.log('[OPFS] Concurrent enable completed, incrementing ref count to:', this.enableCount);
-        return;
-      }
     }
 
     // Mark that we're in the process of enabling
-    let finished = false;
-    this.pendingEnableResolve = () => { finished = true; };
     this.enableCount = 1;
+    this.pendingEnablePromise = this.performEnable(ownerId, wsId).finally(() => {
+      this.pendingEnablePromise = null;
+    });
+    
+    return this.pendingEnablePromise;
+  }
 
+  /**
+   * Internal enable implementation
+   */
+  private async performEnable(ownerId: string, workspaceId: string): Promise<void> {
     try {
       // Try OPFS first
       if (OPFSCore.isSupported()) {
         try {
           // If enabled for a different workspace, we need to reinitialize
-          if (this.enabled && this.currentWorkspaceId !== wsId) {
-            console.log('[OPFS] Switching workspace from', this.currentWorkspaceId, 'to', wsId);
+          if (this.enabled && this.currentWorkspaceId !== workspaceId) {
+            console.log('[OPFS] Switching workspace from', this.currentWorkspaceId, 'to', workspaceId);
             await this.core.close();
           }
 
-          await this.core.initialize(wsId);
+          await this.core.initialize(workspaceId);
           this.enabled = true;
           this.usingFallback = false;
           this.ownerId = ownerId;
-          this.currentWorkspaceId = wsId;
-          console.log('[OPFS] Enabled with OPFS backend for workspace:', wsId);
+          this.currentWorkspaceId = workspaceId;
+          console.log('[OPFS] Enabled with OPFS backend for workspace:', workspaceId);
         } catch (opfsError) {
           // OPFS failed, fall back to IndexedDB
           console.warn('[OPFS] Initialization failed, falling back to IndexedDB:', opfsError);
-          await this.enableFallback(ownerId, wsId);
+          await this.enableFallback(ownerId, workspaceId);
         }
       } else {
         // OPFS not supported, use IndexedDB
         console.log('[OPFS] Not supported, using IndexedDB fallback');
-        await this.enableFallback(ownerId, wsId);
+        await this.enableFallback(ownerId, workspaceId);
       }
     } catch (enableError) {
       this.enableCount = 0;
       this.enabled = false;
+      this.pendingEnablePromise = null;
       throw enableError;
-    } finally {
-      if (finished) this.pendingEnableResolve = null;
     }
 
     // Set up online/offline handler
     if (typeof window !== 'undefined') {
       this.onlineHandler = () => {
         if (navigator.onLine && this.options.autoSync) {
-          this.flushWriteQueue(ownerId).catch(console.error);
+          this.flushWriteQueue(this.ownerId!).catch(console.error);
         }
       };
 
@@ -203,7 +207,7 @@ export class OPFSAdapter {
     this.startBackgroundSyncLoop();
 
     // Initial sync from server (non-blocking)
-    this.syncFromServer(ownerId).catch(err => {
+    this.syncFromServer(this.ownerId!).catch(err => {
       console.warn('[OPFS] Initial sync failed:', err);
     });
 
@@ -268,26 +272,42 @@ export class OPFSAdapter {
    * Uses reference counting - only truly disables when all components have called disable()
    */
   async disable(): Promise<void> {
-    // Guard against negative reference count - allow graceful handling in React strict mode
+    // If enable() is still in progress, wait for it to complete before disabling
+    if (this.pendingEnablePromise) {
+      await this.pendingEnablePromise;
+    }
+
+    // Guard against negative reference count
     if (this.enableCount <= 0) {
-      // Don't warn in production or if already disabled - this is expected in React strict mode
       if (this.enabled) {
-        console.log('[OPFS] disable() called with non-positive ref count while still enabled, ignoring');
+        console.log('[OPFS] disable() called with ref count', this.enableCount, 'but still enabled - forcing disable');
+        // Force disable since we're in inconsistent state
+        this.performDisable();
+      } else {
+        console.log('[OPFS] disable() called with non-positive ref count, ignoring');
       }
       return;
     }
-    
+
     this.enableCount--;
-    
+
     // Only disable if all components have called disable
     if (this.enableCount > 0) {
       console.log('[OPFS] Postponing disable, ref count now:', this.enableCount);
       return;
     }
 
+    this.performDisable();
+  }
+
+  /**
+   * Internal disable implementation
+   */
+  private performDisable(): void {
     this.enabled = false;
     this.ownerId = null;
     this.currentWorkspaceId = null;
+    this.enableCount = 0; // Reset to 0
     this.stopBackgroundSync();
 
     // Remove event listeners
@@ -296,7 +316,11 @@ export class OPFSAdapter {
       this.onlineHandler = null;
     }
 
-    await this.core.close();
+    // Close OPFS core (non-blocking)
+    this.core.close().catch(err => {
+      console.warn('[OPFS] Failed to close core:', err);
+    });
+    
     console.log('[OPFS] Disabled');
   }
 

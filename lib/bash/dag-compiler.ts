@@ -73,34 +73,140 @@ export function parsePipeline(command: string): string[] {
 
 /**
  * Extract output redirection from command
+ *
+ * Handles:
+ * - Both > (overwrite) and >> (append) patterns
+ * - Quoted filenames (single and double quotes)
+ * - Multiple redirections (returns the last output redirect)
+ * - Commands with < input redirection combined with > output
+ *
+ * Limitations: Does not handle heredocs (<<) or process substitution (>(...))
  */
 export function extractRedirect(command: string): { command: string; outputFile?: string } {
-  // Match > or >> patterns
-  const match = command.match(/(.+?)>\s*(.+)/);
-  
-  if (!match) {
+  // Skip if command contains heredoc syntax (too complex for simple parsing)
+  if (command.includes('<<')) {
     return { command };
   }
 
+  // Remove quoted strings temporarily to avoid matching > inside quotes
+  const quotedStrings: string[] = [];
+  let placeholderIndex = 0;
+  const placeholderChar = '\x00'; // Use null byte as placeholder
+  
+  // Replace quoted strings with placeholders
+  const unquotedCommand = command.replace(/(["'])(?:(?!\1).)*\1/g, (match) => {
+    quotedStrings[placeholderIndex] = match;
+    return `${placeholderChar}${placeholderIndex++}${placeholderChar}`;
+  });
+
+  // Match output redirection: > or >> (but not >> as part of other operators)
+  // We want the LAST output redirect in case of multiple redirects
+  const redirectRegex = /([^|;&]+)(>>?)\s*([^\s|;&]+)/g;
+  let lastMatch: RegExpExecArray | null = null;
+  let match: RegExpExecArray | null;
+  
+  while ((match = redirectRegex.exec(unquotedCommand)) !== null) {
+    // Skip if this looks like a comparison operator (e.g., a > b in test context)
+    const beforeMatch = unquotedCommand.slice(0, match.index).trimEnd();
+    if (beforeMatch.endsWith("'") || beforeMatch.endsWith('test') ||
+        beforeMatch.endsWith('-gt') || beforeMatch.endsWith('-lt')) {
+      continue; // Skip shell test comparisons
+    }
+    lastMatch = match;
+  }
+
+  if (!lastMatch) {
+    return { command };
+  }
+
+  // Restore quoted strings in the command part
+  let cmdPart = lastMatch[1].replace(
+    new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
+    (_, idx) => quotedStrings[parseInt(idx)] || ''
+  );
+
+  // Restore quoted strings in the file part
+  let filePart = lastMatch[3].replace(
+    new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
+    (_, idx) => quotedStrings[parseInt(idx)] || ''
+  );
+
+  // Reconstruct command by removing only the redirect operator and file
+  // Keep the original command part before the redirect
+  const commandWithoutRedirect = cmdPart.trim();
+
+  // Restore quoted strings in the command
+  const finalCommand = commandWithoutRedirect.replace(
+    new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
+    (_, idx) => quotedStrings[parseInt(idx)] || ''
+  );
+
+  logger.debug('Extracted redirect', {
+    original: command,
+    command: finalCommand.trim(),
+    outputFile: filePart,
+  });
+
   return {
-    command: match[1].trim(),
-    outputFile: match[2].trim(),
+    command: finalCommand.trim(),
+    outputFile: filePart.trim(),
   };
 }
 
 /**
  * Extract input redirection from command
+ *
+ * Handles:
+ * - < input redirection
+ * - Quoted filenames (single and double quotes)
+ * - Skips heredoc syntax (<<)
  */
 export function extractInputRedirect(command: string): { command: string; inputFile?: string } {
-  const match = command.match(/(.+?)<\s*(.+)/);
+  // Skip heredoc syntax (too complex for simple parsing)
+  if (command.includes('<<')) {
+    return { command };
+  }
+
+  // Remove quoted strings temporarily to avoid matching < inside quotes
+  const quotedStrings: string[] = [];
+  let placeholderIndex = 0;
+  const placeholderChar = '\x00';
   
+  const unquotedCommand = command.replace(/(["'])(?:(?!\1).)*\1/g, (match) => {
+    quotedStrings[placeholderIndex] = match;
+    return `${placeholderChar}${placeholderIndex++}${placeholderChar}`;
+  });
+
+  // Match input redirection: < (but not <<)
+  const match = unquotedCommand.match(/([^|;&<]+)<\s*([^\s|;&<]+)/);
+
   if (!match) {
     return { command };
   }
 
+  // Restore quoted strings
+  const cmdPart = match[1].replace(
+    new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
+    (_, idx) => quotedStrings[parseInt(idx)] || ''
+  );
+  
+  const filePart = match[2].replace(
+    new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
+    (_, idx) => quotedStrings[parseInt(idx)] || ''
+  );
+
+  // Reconstruct command without the input redirect
+  const commandWithoutRedirect = unquotedCommand
+    .slice(0, match.index) + unquotedCommand.slice(match.index + match[0].length);
+  
+  const finalCommand = commandWithoutRedirect.replace(
+    new RegExp(`${placeholderChar}(\\d+)${placeholderChar}`, 'g'),
+    (_, idx) => quotedStrings[parseInt(idx)] || ''
+  );
+
   return {
-    command: match[1].trim(),
-    inputFile: match[2].trim(),
+    command: finalCommand.trim(),
+    inputFile: filePart.trim(),
   };
 }
 
@@ -217,6 +323,8 @@ export function compileBashToDAG(command: string, agentId: string = 'default'): 
 
 /**
  * Optimize DAG by merging consecutive bash nodes
+ * 
+ * FIX: Creates new unique IDs and filters internal dependencies to avoid self-references
  */
 export function mergeConsecutiveNodes(dag: DAG): DAG {
   if (dag.nodes.length <= 1) {
@@ -225,68 +333,104 @@ export function mergeConsecutiveNodes(dag: DAG): DAG {
 
   const mergedNodes: DAGNode[] = [];
   let currentGroup: DAGNode[] = [];
+  // Track mapping from old node IDs to new merged node IDs for downstream reference updates
+  const idMapping = new Map<string, string>();
 
-  for (const node of dag.nodes) {
-    if (node.type === 'bash' && 
-        currentGroup.length > 0 && 
-        currentGroup[currentGroup.length - 1].type === 'bash') {
-      // Group consecutive bash nodes
-      currentGroup.push(node);
+  const flushGroup = () => {
+    if (currentGroup.length === 0) return;
+    
+    if (currentGroup.length === 1) {
+      // No merging needed
+      const node = currentGroup[0];
+      idMapping.set(node.id, node.id);
+      mergedNodes.push(node);
     } else {
-      // Flush current group
-      if (currentGroup.length > 0) {
-        if (currentGroup.length === 1) {
-          mergedNodes.push(currentGroup[0]);
-        } else {
-          // Merge into single node
-          const mergedCommand = currentGroup.map(n => n.command).join(' | ');
-          const mergedNode = createDAGNode(
-            currentGroup[0].id,
-            'bash',
-            mergedCommand,
-            currentGroup[0].dependsOn
-          );
-          mergedNode.outputs = currentGroup[currentGroup.length - 1].outputs;
-          mergedNode.metadata = {
-            ...currentGroup[0].metadata,
-            mergedFrom: currentGroup.map(n => n.id),
-          };
-          mergedNodes.push(mergedNode);
+      // Merge into single node with NEW unique ID
+      const mergedCommand = currentGroup.map(n => n.command).join(' | ');
+      const mergedNodeId = `merged-${currentGroup[0].id}`;
+      
+      // Build dependency set, filtering out internal dependencies
+      const allDeps = new Set<string>();
+      const internalIds = new Set(currentGroup.map(n => n.id));
+      
+      for (const n of currentGroup) {
+        if (n.dependsOn) {
+          for (const dep of n.dependsOn) {
+            // Only add external dependencies (not from nodes being merged)
+            if (!internalIds.has(dep)) {
+              allDeps.add(dep);
+            }
+          }
         }
       }
-      currentGroup = [node];
-    }
-  }
-
-  // Flush last group
-  if (currentGroup.length > 0) {
-    if (currentGroup.length === 1) {
-      mergedNodes.push(currentGroup[0]);
-    } else {
-      const mergedCommand = currentGroup.map(n => n.command).join(' | ');
+      
       const mergedNode = createDAGNode(
-        currentGroup[0].id,
+        mergedNodeId,
         'bash',
         mergedCommand,
-        currentGroup[0].dependsOn
+        Array.from(allDeps)
       );
       mergedNode.outputs = currentGroup[currentGroup.length - 1].outputs;
       mergedNode.metadata = {
         ...currentGroup[0].metadata,
         mergedFrom: currentGroup.map(n => n.id),
       };
+      
+      // Map all old IDs to new merged ID
+      for (const n of currentGroup) {
+        idMapping.set(n.id, mergedNodeId);
+      }
+      
       mergedNodes.push(mergedNode);
+    }
+    currentGroup = [];
+  };
+
+  for (const node of dag.nodes) {
+    if (node.type === 'bash' &&
+        currentGroup.length > 0 &&
+        currentGroup[currentGroup.length - 1].type === 'bash') {
+      // Group consecutive bash nodes
+      currentGroup.push(node);
+    } else {
+      // Flush current group before processing non-bash node
+      flushGroup();
+      currentGroup = [node];
     }
   }
 
+  // Flush last group
+  flushGroup();
+
+  // Update downstream nodes to reference new merged node IDs
+  const updatedNodes = mergedNodes.map(node => {
+    if (!node.dependsOn || node.dependsOn.length === 0) {
+      return node;
+    }
+    
+    // Update dependsOn array with mapped IDs
+    const updatedDeps = node.dependsOn.map(depId => idMapping.get(depId) || depId);
+    
+    // Only create new object if dependencies changed
+    if (updatedDeps.every((dep, i) => dep === node.dependsOn[i])) {
+      return node;
+    }
+    
+    return {
+      ...node,
+      dependsOn: updatedDeps,
+    };
+  });
+
   logger.debug('DAG optimized - merged nodes', {
     before: dag.nodes.length,
-    after: mergedNodes.length,
+    after: updatedNodes.length,
+    mergedGroups: mergedNodes.filter(n => n.metadata?.mergedFrom).length,
   });
 
   return {
     ...dag,
-    nodes: mergedNodes,
+    nodes: updatedNodes,
     metadata: {
       ...dag.metadata,
       optimized: true,
@@ -326,12 +470,15 @@ export function identifyParallelism(dag: DAG): string[][] {
 
 /**
  * Reorder DAG for optimal parallel execution
+ * 
+ * Groups nodes by dependency level to maximize parallel execution opportunities
  */
 export function optimizeForParallelism(dag: DAG): DAG {
   const levels = identifyParallelism(dag);
-  
-  if (levels.length <= dag.nodes.length) {
-    // Already optimal or close to it
+
+  // Only reorder if we have multiple levels (parallelism opportunities)
+  if (levels.length <= 1) {
+    // No parallelism opportunities - all nodes are sequential
     return dag;
   }
 

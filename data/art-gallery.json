@@ -1,0 +1,41 @@
+[
+  {
+    "id": "img-1",
+    "prompt": "Cyberpunk cityscape at night with neon lights and flying cars",
+    "url": "https://picsum.photos/seed/cyber1/1024/1024",
+    "style": "cyberpunk",
+    "model": "flux-1",
+    "createdAt": 1774850667789,
+    "likes": 234,
+    "downloads": 89,
+    "width": 1024,
+    "height": 1024,
+    "seed": 42
+  },
+  {
+    "id": "img-2",
+    "prompt": "Serene mountain landscape with aurora borealis",
+    "url": "https://picsum.photos/seed/nature1/1024/768",
+    "style": "realistic",
+    "model": "sdxl",
+    "createdAt": 1774847067789,
+    "likes": 567,
+    "downloads": 234,
+    "width": 1024,
+    "height": 768,
+    "seed": 123
+  },
+  {
+    "id": "img-3",
+    "prompt": "Abstract geometric patterns in vibrant colors",
+    "url": "https://picsum.photos/seed/abstract1/768/768",
+    "style": "abstract",
+    "model": "midjourney",
+    "createdAt": 1774839867789,
+    "likes": 189,
+    "downloads": 67,
+    "width": 768,
+    "height": 768,
+    "seed": 999
+  }
+]

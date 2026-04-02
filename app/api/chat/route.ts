@@ -1,5 +1,4 @@
 import { NextRequest, NextResponse } from "next/server";
-import { z } from 'zod';
 import { PROVIDERS } from "@/lib/chat/llm-providers";
 import { errorHandler } from "@/lib/chat/error-handler";
 import { responseRouter } from "@/lib/api/response-router";
@@ -13,9 +12,9 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-s
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
-import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil } from '@/lib/virtual-filesystem/scope-utils';
+import { extractSessionIdFromPath, resolveScopedPath as resolveScopeUtil, sanitizeScopePath, extractScopePath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
-import type { LLMMessage } from "@/lib/chat/llm-providers";
+import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
 import { executeV2Task, executeV2TaskStreaming } from '@/lib/agent/v2-executor';
@@ -25,20 +24,38 @@ import { workforceManager } from '@/lib/agent/workforce-manager';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
+import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@/lib/agent/orchestration-mode-handler';
 import {
-  sanitizeFileEditTags, 
-  extractFileEdits,
-  extractFileWriteEdits,
-  extractFencedDiffEdits as extractFencedDiffEditsShared,
-  extractFsActionWrites,
-  extractTopLevelWrites,
+  sanitizeAssistantDisplayContent,
+  parseFilesystemResponse,
   createIncrementalParser,
   extractIncrementalFileEdits,
+  stripHeredocMarkers,
 } from '@/lib/chat/file-edit-parser';
+import { isValidFilePath } from '@/lib/chat/file-edit-parser';
 import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
+import { generateSessionName, sessionNameExists } from '@/lib/session-naming';
+import { timingSafeEqual } from 'node:crypto';
+import { buildSupplementalAgenticEvents } from '@/lib/api/streaming-events';
+import { sandboxBridge } from '@/lib/sandbox';
+import { determineExecutionPolicy } from '@/lib/sandbox/types';
+import {
+  applySearchReplace,
+  pollWithBackoff,
+  buildClientVisibleUnifiedResponse,
+  chatMessageSchema,
+  chatRequestSchema,
+} from './chat-helpers';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
+
+// Build-time compilation for faster cold starts
+// Route code is pre-compiled at build time, but executes dynamically per-request
+export const dynamic = 'force-dynamic';
+
+// Ensure route is compiled at build time
+export const dynamicParams = true;
 
 // LLM Agent Tools Configuration
 const LLM_AGENT_TOOLS_ENABLED = process.env.LLM_AGENT_TOOLS_ENABLED !== 'false';
@@ -62,6 +79,8 @@ const VALIDATION_CACHE_TTL_MS = 30000;
 
 // FIX 4: Cap pendingEvents to prevent memory leaks
 const MAX_PENDING_EVENTS = 64;
+const SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED =
+  process.env.SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED !== 'false';
 
 // FIX 2: Pre-compiled RegExp for isCodeOrAgenticRequest (module-level, not per request)
 const STRONG_CODE_PATTERN =
@@ -112,61 +131,18 @@ const PATH_BAD_START_RE = /^[^\w./]/
 const PATH_TOO_MANY_DOTS_RE = /^\.{3,}/
 const PATH_TRAVERSAL_RE = /(?:^|\/)\.\.(?:\/|$)/
 const PATH_COMMAND_RE = /\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i
-
-// FIX 7: Helper for safe search/replace (avoids RegExp special char issues)
-function applySearchReplace(content: string, search: string, replace: string): string {
-  const idx = content.indexOf(search)
-  if (idx === -1) return content
-  return content.slice(0, idx) + replace + content.slice(idx + search.length)
-}
-
-// FIX 8: Polling helper with exponential backoff
-async function pollWithBackoff<T>(
-  fetcher: () => Promise<T | null>,
-  isDone: (v: T) => boolean,
-  options: { maxWaitMs: number; initialIntervalMs?: number; maxIntervalMs?: number },
-): Promise<T> {
-  const { maxWaitMs, initialIntervalMs = 500, maxIntervalMs = 5_000 } = options
-  const deadline = Date.now() + maxWaitMs
-  let interval = initialIntervalMs
-
-  while (Date.now() < deadline) {
-    const result = await fetcher()
-    if (result !== null && isDone(result)) return result
-    await new Promise(resolve => setTimeout(resolve, interval))
-    interval = Math.min(interval * 1.5, maxIntervalMs)
-  }
-
-  throw new Error('Polling timed out')
-}
+// Additional: Reject paths that look like CSS classes, Vue directives, or code snippets
+// Note: Removed \. to allow legitimate dotfiles like .env.example, .gitignore, .eslintrc
+const PATH_LOOKS_LIKE_CODE_RE = /^(?:hover:|@|:|v-|:bind|@click|@submit)/i
+// Additional: Reject paths with colons (CSS classes like hover:scale-105)
+const PATH_HAS_COLON_RE = /:/
+// Additional: Reject CSS values and SCSS variables in last path segment
+const PATH_CSS_VALUE_RE = /[\/\\](?:\d*\.\d+|\d+[a-z%]+)$/i  // Matches "/0.3s" or "\10px" at end
+const PATH_SCSS_VAR_RE = /[\/\\]\$/  // Matches "/$" or "\$" (SCSS variable)
 
 // FIX 9: Pre-compiled RegExp for requiresThirdPartyOAuth
 const THIRD_PARTY_OAUTH_RE =
   /\b(my\s+)?gmail|(my\s+)?google\s+(drive|sheets|docs|calendar)|slack|discord|twitter|x\s*api|notion|zoom|hubspot|salesforce|shopify|stripe|pipedrive|airtable|jira|confluence|trello|dropbox|onedrive|box\s*file|aws\s*s3|s3\s*bucket|heroku|vercel|netlify|railway|render\s*static|cloudflare\s*pages|figma|miro|miroboard|(my|our)\s+github\s+(repo|branch|pr|issue|organization|team)/i
-
-const chatMessageSchema = z.object({
-  role: z.enum(['user', 'assistant', 'system']),
-  content: z.union([z.string(), z.array(z.any())]),
-}).passthrough();
-
-const chatRequestSchema = z.object({
-  messages: z.array(chatMessageSchema).min(1, 'Messages array cannot be empty'),
-  provider: z.string().min(1, 'Provider is required'),
-  model: z.string().min(1, 'Model is required'),
-  temperature: z.number().min(0).refine((val) => val <= 2, 'Temperature must be at most 2').optional().default(0.7),
-  maxTokens: z.number().int().min(1).refine((val) => val <= 200000, 'Max tokens must be at most 200000').optional().default(100096),
-  stream: z.boolean().optional().default(true),
-  apiKeys: z.record(z.string()).optional().default({}),
-  requestId: z.string().optional(),
-  conversationId: z.string().optional(),
-  agentMode: z.enum(['v1', 'v2', 'auto']).optional().default('auto'),
-  mode: z.enum(['normal', 'enhanced', 'max']).optional().default('max'),
-  filesystemContext: z.object({
-    attachedFiles: z.any().optional(),
-    applyFileEdits: z.boolean().optional(),
-    scopePath: z.string().optional(),
-  }).optional(),
-});
 
 export async function POST(request: NextRequest) {
   const requestStartTime = Date.now();
@@ -355,15 +331,56 @@ export async function POST(request: NextRequest) {
       m => m === model || m.startsWith(`${model}:`)
     ) || model;
     const attachedFilesystemFiles = normalizeFilesystemContext(filesystemContext?.attachedFiles);
-    const resolvedConversationId =
-      typeof conversationId === 'string' && conversationId.trim()
-        ? conversationId.trim()
-        : `session_${authResult.userId || 'anon'}_${new Date().toISOString().slice(0, 10)}`;
+    
+    // Resolve the session folder name - use sequential naming (001, 002) instead of composite IDs
+    let resolvedConversationId: string;
+    const rawConversationId = typeof conversationId === 'string' && conversationId.trim() ? conversationId.trim() : null;
+    
+    if (rawConversationId) {
+      // Check if provided conversationId is already a valid sequential session name (e.g., '001')
+      const isSequentialName = /^\d{3}$/.test(rawConversationId);
+      
+      if (isSequentialName) {
+        // Direct sequential name - use it as-is
+        resolvedConversationId = rawConversationId;
+      } else {
+        // Non-sequential ID provided - check if folder exists, otherwise generate new sequential name
+        const folderExists = await sessionNameExists(rawConversationId);
+        if (folderExists) {
+          // Use existing folder (might be legacy composite ID folder)
+          resolvedConversationId = rawConversationId;
+        } else {
+          // Folder doesn't exist - generate new sequential name
+          resolvedConversationId = await generateSessionName();
+        }
+      }
+    } else {
+      // No conversationId provided - generate new sequential session name
+      resolvedConversationId = await generateSessionName();
+    }
+    
     const defaultScopePath = `project/sessions/${sanitizePathSegment(resolvedConversationId)}`;
-    const requestedScopePath =
-      typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
-        ? filesystemContext.scopePath.trim()
-        : defaultScopePath;
+    // Sanitize scopePath to ensure folder names are not corrupted with ownerId prefix
+    // e.g., "project/sessions/anon:1774710784761_6TB03h8Ow:002" -> "project/sessions/002"
+    const rawScopePath = typeof filesystemContext?.scopePath === 'string' && filesystemContext.scopePath.trim()
+      ? filesystemContext.scopePath.trim()
+      : defaultScopePath;
+    
+    // Log scopePath for debugging session folder naming issues
+    chatLogger.debug('Scope path handling:', {
+      rawScopePath,
+      defaultScopePath,
+      fromClient: !!filesystemContext?.scopePath,
+      resolvedConversationId,
+    });
+
+    const requestedScopePath = sanitizeScopePath(rawScopePath);
+
+    // Log sanitized result
+    chatLogger.debug('Sanitized scope path:', {
+      before: rawScopePath,
+      after: requestedScopePath,
+    });
     // SECURITY: Use persistent anonymous session ID from cookie if available
     // Sanitize to prevent path traversal attacks (e.g., ".." or "/" in cookie value)
     // Use resolveFilesystemOwner for consistent anonymous session handling
@@ -392,7 +409,7 @@ export async function POST(request: NextRequest) {
       ),
       // Build workspace session context (only if filesystem edits are enabled)
       enableFilesystemEdits
-        ? buildWorkspaceSessionContext(filesystemOwnerId, requestedScopePath, {
+        ? buildWorkspaceSessionContext(filesystemOwnerId, sanitizeScopePath(requestedScopePath), {
             useContextPack: shouldUseContextPackFinal,
             maxTokens: body.maxTokens,
           })
@@ -627,19 +644,42 @@ export async function POST(request: NextRequest) {
               config.onStreamChunk = (chunk: string) => {
                 // Emit token as before
                 emit(SSE_EVENT_TYPES.TOKEN, { content: chunk, timestamp: Date.now() });
-                
+
                 // Progressive file edit detection
                 streamingContentBuffer += chunk;
                 const newFileEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
-                
-                // Emit file_edit events for newly detected edits
+
+                // Filter out invalid paths and empty content to prevent UI polling loops
                 for (const edit of newFileEdits) {
+                  // CRITICAL FIX: Use proper isValidFilePath validation instead of simple regex
+                  // This catches CSS values (0.3s), code snippets (with, submission), etc.
+                  if (!isValidFilePath(edit.path)) {
+                    chatLogger.debug('Skipping invalid progressive file edit path (failed isValidFilePath)', { path: edit.path });
+                    continue;
+                  }
+                  // CRITICAL FIX: Skip empty content to prevent infinite loops
+                  const editContent = edit.content || edit.diff || '';
+                  if (!editContent || editContent.trim().length === 0) {
+                    chatLogger.debug('Skipping empty edit content (prevents infinite loop)', { path: edit.path });
+                    continue;
+                  }
+                  // CRITICAL FIX: Determine operation type and send correct data format
+                  // - For WRITE operations: send full content, operation='write', NO diff field
+                  // - For PATCH operations: send unified diff in diff field, operation='patch'
+                  const isPatch = edit.action === 'patch' || !!edit.diff;
                   emit(SSE_EVENT_TYPES.FILE_EDIT, {
                     path: edit.path,
                     status: 'detected',
+                    operation: isPatch ? 'patch' : 'write',
                     timestamp: Date.now(),
+                    content: edit.content || '',  // Always send full content for WRITE operations
+                    diff: isPatch ? (edit.diff || '') : undefined,  // Only send diff for PATCH operations
                   });
-                  chatLogger.debug('Progressive file edit detected', { path: edit.path }, {});
+                  chatLogger.debug('Progressive file edit detected', { 
+                    path: edit.path,
+                    operation: isPatch ? 'patch' : 'write',
+                    hasDiff: !!edit.diff,
+                  });
                 }
               };
               config.onToolExecution = (toolName: string, args: any, result: any) => {
@@ -661,9 +701,242 @@ export async function POST(request: NextRequest) {
 
               const result = await processUnifiedAgentRequest(config);
               sendStep('Start agentic pipeline', result.success ? 'completed' : 'failed');
+
+              // FIX: Final parse after stream completes to catch any remaining edits
+              // The closing >>> may have arrived in the last chunk
+              // CRITICAL: Clear BOTH emittedEdits AND unclosedPositions for proper re-parsing
+              if (streamingContentBuffer.trim().length > 0) {
+                fileEditParserState.emittedEdits.clear();
+                fileEditParserState.unclosedPositions.clear();
+                const finalEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
+                
+                // CRITICAL FIX: Emit FILE_EDIT events for final edits caught in post-stream parse
+                // This ensures frontend receives edits that were stuck in "unclosed" regions during streaming
+                if (finalEdits && finalEdits.length > 0) {
+                  chatLogger.debug('Emitting final file edits from post-stream parse', {
+                    requestId,
+                    editCount: finalEdits.length,
+                    paths: finalEdits.map(e => e.path).join(', ')
+                  });
+                  try {
+                    for (const edit of finalEdits) {
+                      // Validate path and content before emitting
+                      if (!isValidFilePath(edit.path)) {
+                        chatLogger.debug('Skipping invalid path from finalEdits (post-stream)', { path: edit.path });
+                        continue;
+                      }
+                      const editContent = edit.content || edit.diff || '';
+                      if (!editContent || editContent.trim().length === 0) {
+                        chatLogger.debug('Skipping empty edit from finalEdits (post-stream)', { path: edit.path });
+                        continue;
+                      }
+                      // CRITICAL FIX: Determine operation type and send correct data format
+                      const isPatch = edit.action === 'patch' || !!edit.diff;
+                      emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                        path: edit.path,
+                        status: 'detected',
+                        operation: isPatch ? 'patch' : 'write',
+                        timestamp: Date.now(),
+                        content: edit.content || '',
+                        diff: isPatch ? (edit.diff || '') : undefined,
+                        isFinal: true,  // Mark as final parse edit for frontend
+                      });
+                    }
+                  } catch (error) {
+                    chatLogger.warn('Failed to emit final file edits', {
+                      requestId,
+                      error: error instanceof Error ? error.message : String(error),
+                    });
+                    // Continue anyway - don't break stream completion
+                  }
+                }
+
+                // SESSION NAMING: Detect if this is a new single-folder project
+                // If so, rename the session folder to match the project folder
+                const responseContent = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
+                const { detectSingleFolderFromResponse } = await import('@/lib/session-naming');
+                const detectedFolder = detectSingleFolderFromResponse(responseContent);
+                
+                // Check if we should rename: new session (sequential ID) with single detected folder
+                const isSequentialSession = /^\d{3}$/.test(resolvedConversationId);
+                const isNewSession = isSequentialSession && !result.metadata?.isExistingSession;
+                
+                if (detectedFolder && isNewSession && detectedFolder !== resolvedConversationId) {
+                  // Check if detected folder name is available
+                  const { sessionNameExists } = await import('@/lib/session-naming');
+                  const folderExists = await sessionNameExists(detectedFolder);
+                  
+                  if (!folderExists) {
+                    // Rename session folder by moving contents
+                    const oldPath = `project/sessions/${resolvedConversationId}`;
+                    const newPath = `project/sessions/${detectedFolder}`;
+                    
+                    try {
+                      const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service');
+                      // List files in old session
+                      const listing = await virtualFilesystem.listDirectory(filesystemOwnerId, oldPath);
+                      
+                      if (listing.nodes.length > 0) {
+                        // Move each file to new folder
+                        // Note: VFS doesn't support rename, so we'd need to copy+delete
+                        // For now, skip file moving - session rename is cosmetic only
+                        chatLogger.info('Session folder name updated (files would need manual migration)', {
+                          oldPath,
+                          newPath,
+                          filesToMove: listing.nodes.length,
+                        });
+                        // TODO: Implement file migration when VFS supports rename/move operations
+                        /*
+                        for (const node of listing.nodes) {
+                          const oldFilePath = node.path;
+                          const newFilePath = newPath + node.path.substring(oldPath.length);
+                          try {
+                            const readResult = await virtualFilesystem.readFile(filesystemOwnerId, oldFilePath);
+                            const fileContent = typeof readResult === 'string' ? readResult : (readResult as any).content || '';
+                            await virtualFilesystem.writeFile(
+                              filesystemOwnerId,
+                              newFilePath,
+                              fileContent,
+                              (node as any).language
+                            );
+                            // VFS doesn't have deleteFile, would need to use low-level OPFS
+                          } catch (moveError: any) {
+                            chatLogger.warn('Failed to move file during session rename', {
+                              oldPath: oldFilePath,
+                              newPath: newFilePath,
+                              error: moveError.message,
+                            });
+                          }
+                        }
+                        */
+                        
+                        // Update resolvedConversationId for future operations
+                        const previousId = resolvedConversationId;
+                        resolvedConversationId = detectedFolder;
+                        
+                        chatLogger.info('Session folder renamed based on detected project structure', {
+                          previousId,
+                          newId: detectedFolder,
+                          filesMoved: listing.nodes.length,
+                        });
+                        
+                        // Emit filesystem updated event for UI
+                        emit(SSE_EVENT_TYPES.FILESYSTEM, {
+                          previousId,
+                          newId: detectedFolder,
+                          reason: 'single-folder-project',
+                        });
+                      }
+                    } catch (renameError: any) {
+                      chatLogger.warn('Failed to rename session folder', {
+                        error: renameError.message,
+                        detectedFolder,
+                      });
+                    }
+                  }
+                }
+
+                // Apply filesystem edits if any were detected
+                if (finalEdits.length > 0 && filesystemOwnerId) {
+                  try {
+                    const { applyFilesystemEditsFromResponse } = await import('./route');
+                    const appliedEdits = await applyFilesystemEditsFromResponse({
+                      ownerId: filesystemOwnerId,
+                      conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                      requestId,
+                      scopePath: requestedScopePath,
+                      lastUserMessage: task,
+                      attachedPaths: attachedFilesystemFiles.map(f => f.path),
+                      responseContent: streamingContentBuffer,
+                      commands: {},
+                      forceExtract: true,
+                    });
+
+                    // Emit applied edits
+                    if (appliedEdits?.applied?.length) {
+                      for (const edit of appliedEdits.applied) {
+                        // Validate path before emitting
+                        if (!isValidFilePath(edit.path)) {
+                          chatLogger.debug('Skipping invalid path from appliedEdits', { path: edit.path });
+                          continue;
+                        }
+                        // CRITICAL FIX: Skip empty content to prevent infinite loops
+                        const editContent = edit.content || edit.diff || '';
+                        if (!editContent || editContent.trim().length === 0) {
+                          chatLogger.debug('Skipping empty edit from appliedEdits (prevents infinite loop)', { path: edit.path });
+                          continue;
+                        }
+                        // CRITICAL FIX: Determine operation type and send correct data format
+                        // Check for diff field to determine if it's a patch operation
+                        const hasDiff = !!edit.diff;
+                        const isPatch = edit.operation === 'patch' || hasDiff;
+                        emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                          path: edit.path,
+                          status: 'applied',
+                          operation: isPatch ? 'patch' : (edit.operation || 'write'),
+                          timestamp: Date.now(),
+                          content: edit.content || '',
+                          diff: isPatch ? (edit.diff || '') : undefined,
+                        });
+                      }
+                      chatLogger.info('Final parse: applied filesystem edits', {
+                        count: appliedEdits.applied.length
+                      });
+
+                      // CRITICAL FIX Bug #2: Emit filesystem-updated CustomEvent for ToolLoopAgent path
+                      // This ensures components listening to CustomEvent update (not just SSE recipients)
+                      emitFilesystemUpdated({
+                        scopePath: requestedScopePath,
+                        sessionId: resolvedConversationId,
+                        applied: appliedEdits.applied,
+                        source: 'toolLoopAgent',
+                      });
+
+                      // CRITICAL: Add fallback message if content is empty but files were applied
+                      if (!streamingContentBuffer.trim() && appliedEdits.applied.length > 0) {
+                        streamingContentBuffer = `Applied filesystem changes to ${appliedEdits.applied.length} file(s).`;
+                      }
+                    }
+                  } catch (editErr: any) {
+                    chatLogger.warn('Final parse: filesystem edit application failed', {
+                      error: editErr.message
+                    });
+                  }
+                } else {
+                  // Just emit events if no filesystem owner
+                  for (const edit of finalEdits) {
+                    // Validate path before emitting
+                    if (!isValidFilePath(edit.path)) {
+                      chatLogger.debug('Skipping invalid path from finalEdits (no owner)', { path: edit.path });
+                      continue;
+                    }
+                    // CRITICAL FIX: Skip empty content to prevent infinite loops
+                    const editContent = edit.content || edit.diff || '';
+                    if (!editContent || editContent.trim().length === 0) {
+                      chatLogger.debug('Skipping empty edit from finalEdits (prevents infinite loop)', { path: edit.path });
+                      continue;
+                    }
+                    // CRITICAL FIX: Determine operation type and send correct data format
+                    const isPatch = edit.action === 'patch' || !!edit.diff;
+                    chatLogger.debug('Final parse file edit detected', { 
+                      path: edit.path,
+                      operation: isPatch ? 'patch' : 'write',
+                    });
+                    emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                      path: edit.path,
+                      status: 'detected',
+                      operation: isPatch ? 'patch' : 'write',
+                      timestamp: Date.now(),
+                      content: edit.content || '',
+                      diff: isPatch ? (edit.diff || '') : undefined,
+                    });
+                  }
+                }
+              }
+
               emit(SSE_EVENT_TYPES.DONE, {
                 success: result.success,
-                content: result.response,
+                content: streamingContentBuffer || (typeof result.response === 'string' ? result.response : ''),
                 messageMetadata: {
                   agent: 'unified',
                   mode: result.mode,
@@ -671,16 +944,52 @@ export async function POST(request: NextRequest) {
                 },
                 data: result,
               });
-              
+
               // Cleanup: Clear streaming buffer to free memory
               streamingContentBuffer = '';
               fileEditParserState.emittedEdits.clear();
+              fileEditParserState.unclosedPositions.clear();
             } catch (error: any) {
+              // FINAL PARSE ON ERROR TOO: Try to extract any complete edits before clearing
+              if (streamingContentBuffer.trim().length > 0) {
+                try {
+                  fileEditParserState.emittedEdits.clear();
+                  fileEditParserState.unclosedPositions.clear();
+                  const finalEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
+                  for (const edit of finalEdits) {
+                    // Validate path before emitting (even in error handler)
+                    if (!isValidFilePath(edit.path)) {
+                      chatLogger.debug('Skipping invalid path from finalEdits (error handler)', { path: edit.path });
+                      continue;
+                    }
+                    // CRITICAL FIX: Skip empty content to prevent infinite loops (even in error handler)
+                    const editContent = edit.content || edit.diff || '';
+                    if (!editContent || editContent.trim().length === 0) {
+                      chatLogger.debug('Skipping empty edit from finalEdits (error handler, prevents infinite loop)', { path: edit.path });
+                      continue;
+                    }
+                    // CRITICAL FIX: Determine operation type and send correct data format
+                    const isPatch = edit.action === 'patch' || !!edit.diff;
+                    emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                      path: edit.path,
+                      status: 'detected',
+                      operation: isPatch ? 'patch' : 'write',
+                      timestamp: Date.now(),
+                      content: edit.content || '',
+                      diff: isPatch ? (edit.diff || '') : undefined,
+                    });
+                  }
+                } catch (parseError) {
+                  // Ignore parse errors during error handling
+                }
+              }
+
               emit(SSE_EVENT_TYPES.ERROR, { message: error.message || 'Agentic execution failed' });
 
               // Cleanup on error too
               streamingContentBuffer = '';
               fileEditParserState.emittedEdits.clear();
+              fileEditParserState.unclosedPositions.clear();
             } finally {
               controller.close();
             }
@@ -690,6 +999,80 @@ export async function POST(request: NextRequest) {
         return new Response(streamBody, { headers: SSE_RESPONSE_HEADERS });
       }
 
+      // Check if custom orchestration mode is selected via header
+      // This applies to ALL chat requests, not just integration pipeline requests
+      const orchestrationMode = getOrchestrationModeFromRequest(request);
+
+      if (orchestrationMode !== 'task-router') {
+        // User has selected a custom orchestration mode
+        chatLogger.info('Custom orchestration mode selected', { 
+          mode: orchestrationMode,
+          requestId,
+        });
+
+        const orchestrationResult = await executeWithOrchestrationMode(orchestrationMode, {
+          task: context ? `${context}\n\nTASK:\n${task}` : task,
+          sessionId: resolvedConversationId,
+          ownerId: authenticatedUserId,
+          stream: stream === true,
+        });
+
+        if (stream === true) {
+          // Return streaming response for custom orchestration modes
+          const encoder = new TextEncoder();
+          const streamBody = new ReadableStream({
+            async start(controller) {
+              try {
+                // Send initial metadata
+                controller.enqueue(encoder.encode(
+                  `event: metadata\ndata: ${JSON.stringify({
+                    mode: orchestrationMode,
+                    agentType: orchestrationResult.metadata?.agentType,
+                  })}\n\n`
+                ));
+
+                // Send response content
+                if (orchestrationResult.response) {
+                  controller.enqueue(encoder.encode(
+                    `event: content\ndata: ${JSON.stringify({
+                      content: orchestrationResult.response,
+                    })}\n\n`
+                  ));
+                }
+
+                // Send completion
+                controller.enqueue(encoder.encode(
+                  `event: done\ndata: ${JSON.stringify({
+                    success: orchestrationResult.success,
+                    metadata: orchestrationResult.metadata,
+                  })}\n\n`
+                ));
+
+                controller.close();
+              } catch (error: any) {
+                controller.enqueue(encoder.encode(
+                  `event: error\ndata: ${JSON.stringify({
+                    message: error.message,
+                  })}\n\n`
+                ));
+                controller.close();
+              }
+            },
+          });
+
+          return new Response(streamBody, { headers: SSE_RESPONSE_HEADERS });
+        }
+
+        // Non-streaming response
+        return NextResponse.json({
+          success: orchestrationResult.success,
+          content: orchestrationResult.response,
+          data: orchestrationResult,
+        });
+      }
+
+      // Default: Use existing unified agent flow (task-router mode)
+      // This is the fallback when no custom orchestration mode is selected
       const result = await processUnifiedAgentRequest(config);
       return NextResponse.json({
         success: result.success,
@@ -711,6 +1094,13 @@ export async function POST(request: NextRequest) {
     }
 
     // PRIORITY-BASED ROUTING - Routes through Fast-Agent → n8n → Custom Fallback → Original System
+    // Providers that use Vercel AI SDK and support native tool calling
+    const VERCEL_AI_PROVIDERS = new Set([
+      'openai', 'anthropic', 'google', 'mistral', 'openrouter',
+      'chutes', 'github', 'zen', 'nvidia', 'together', 'groq',
+      'fireworks', 'anyscale', 'deepinfra', 'lepton',
+    ]);
+
     const routerRequest = {
       messages: contextualMessages,
       provider,
@@ -732,6 +1122,8 @@ export async function POST(request: NextRequest) {
       enableSandbox: requestType === 'sandbox' ? !!authenticatedUserId : undefined,
       enableComposio: requestType === 'tool' ? !!authenticatedUserId : undefined,
       mode: body.mode || 'enhanced', // Add mode from request
+      // When Vercel AI SDK handles tool calling natively, skip regex intent parsing
+      nativeToolCalling: VERCEL_AI_PROVIDERS.has(provider) && !!authenticatedUserId,
     };
 
     chatLogger.debug('Routing request through priority chain', { requestId, provider, model }, {
@@ -749,6 +1141,7 @@ export async function POST(request: NextRequest) {
 
     // Use a mutable ref for emit - will be set when stream starts
     const emitRef: { current: ((event: string, data: any) => void) | null } = { current: null };
+    let acceptDeferredEvents = true;
 
     // Placeholder emit that stores events until real emit is available
     interface PendingEvent {
@@ -758,6 +1151,9 @@ export async function POST(request: NextRequest) {
     }
     const pendingEvents: PendingEvent[] = [];
     const placeholderEmit = (event: string, data: any) => {
+      if (!acceptDeferredEvents) {
+        return;
+      }
       if (emitRef.current) {
         emitRef.current(event, data);
       } else if (pendingEvents.length < MAX_PENDING_EVENTS) {
@@ -770,27 +1166,39 @@ export async function POST(request: NextRequest) {
 
       // Spec amplification only works with V1 mode (regular LLM calls)
       // V2 agent mode has its own planning system
+      // CRITICAL: Use standard routing - spec amplification handled post-stream for ToolLoopAgent
       if (agentMode === 'v2') {
         chatLogger.debug('V2 agent mode, using standard routing without spec amplification', { requestId })
         unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
+      } else if (stream && SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED) {
+        // For streaming, use standard routing - spec amplification triggered post-stream if code detected
+        chatLogger.debug('V1 mode with streaming, using standard routing (post-stream spec amplification)', { requestId })
+        unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
+
+        // Check if response has streaming generator (real-time LLM streaming)
+        if (unifiedResponse.stream && typeof unifiedResponse.stream === 'object' && Symbol.asyncIterator in unifiedResponse.stream) {
+          chatLogger.info('Received streaming response with generator, will consume chunks in real-time', { requestId })
+          // The stream generator will be consumed below in the streaming section
+        }
       } else {
-        // V1 mode or auto - use spec amplification if enabled
-        // Only pass emit for streaming requests to avoid memory leak from pendingEvents accumulation
-        unifiedResponse = await responseRouter.routeWithSpecAmplification({
-          ...routerRequest,
-          ...(stream ? { emit: placeholderEmit } : {})
-        })
+        // V1 mode or auto - use standard routing (spec amplification handled post-stream)
+        unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
       }
 
       // Extract actual provider/model from response metadata (after fallbacks)
       actualProvider = unifiedResponse.metadata?.actualProvider || unifiedResponse.source;
       actualModel = unifiedResponse.metadata?.actualModel || routerRequest.model;
 
-      chatLogger.info('Request handled by response router', { requestId, provider: actualProvider, model: actualModel }, {
-        source: unifiedResponse.source,
-        priority: unifiedResponse.priority,
-        fallbackChain: unifiedResponse.metadata?.fallbackChain,
-      });
+      // Note: Provider/model logging happens in streaming and non-streaming response paths
+      // to show the actual LLM provider used (not 'original-system' which is just the router source)
+      // Log fallback chain for debugging provider failover
+      if (unifiedResponse.metadata?.fallbackChain && unifiedResponse.metadata.fallbackChain.length > 0) {
+        chatLogger.debug('Provider fallback chain used', { 
+          requestId, 
+          fallbackChain: unifiedResponse.metadata.fallbackChain,
+          finalProvider: actualProvider 
+        });
+      }
 
       chatLogger.debug('Starting filesystem edits processing', { requestId });
 
@@ -807,21 +1215,84 @@ export async function POST(request: NextRequest) {
 
       let rawResponseContent = unifiedResponse.content || '';
 
-      // LLM Agent Tools: Execute filesystem tools if enabled and user is authenticated
+      // CRITICAL FIX: Declare filesystemEdits at function scope to avoid "before initialization" errors
+      // This variable is used in both streaming and non-streaming paths, including fallback scenarios
+      let filesystemEdits: Awaited<ReturnType<typeof applyFilesystemEditsFromResponse>> | null = null;
+      
+      // CRITICAL FIX: Declare streamedEdits at function scope for regular LLM streaming path
+      // This is assigned inside the stream completion handler and used in spec amp check
+      let streamedEdits: Awaited<ReturnType<typeof applyFilesystemEditsFromResponse>> | null = null;
+      
+      // CRITICAL FIX: Declare finalContent at function scope for ToolLoopAgent streaming path
+      // This is assigned inside the ToolLoopAgent stream and used in spec amp check
+      let finalContent: string = '';
+      
+      // CRITICAL FIX: Declare allEdits at function scope for both streaming paths
+      // This is assigned during final parse and used in done event + spec amp check
+      let allEdits: Awaited<ReturnType<typeof applyFilesystemEditsFromResponse>> | null = null;
+      
+      // CRITICAL FIX: Declare clientResponse early to avoid "used before declaration" errors
+      // It's needed for spec amplification checks that run before the build call
+      let clientResponse: any = null;
+      
+      const lastUserMessage =
+        [...messages].reverse().find((m) => m.role === 'user')?.content;
+      const v1AgentTask = typeof lastUserMessage === 'string'
+        ? lastUserMessage
+        : JSON.stringify(lastUserMessage || '');
+      const v1AgentContext = buildAgenticContext(contextualMessages);
+      const v1AgentPrompt = v1AgentContext
+        ? `${v1AgentContext}\n\nTASK:\n${v1AgentTask}`
+        : v1AgentTask;
+
+      // V1 agentic tools: reuse existing Mastra tool loop for coding/tool requests.
       let agentToolResults = null;
       let agentToolStreamingResult: any = null;
       
-      if (LLM_AGENT_TOOLS_ENABLED && authenticatedUserId && requestType === 'tool') {
+      const shouldRunV1AgentLoop =
+        LLM_AGENT_TOOLS_ENABLED &&
+        enableFilesystemEdits &&
+        !!v1AgentTask &&
+        (requestType === 'tool' || (agentMode !== 'v2' && isCodeRequest));
+
+      if (shouldRunV1AgentLoop) {
         try {
-          chatLogger.info('Executing filesystem tools', { requestId, userId: authenticatedUserId }, {
+          const effectiveAgentUserId = authenticatedUserId || filesystemOwnerId;
+          const executionPolicy = determineExecutionPolicy({
+            task: v1AgentTask,
+            requiresBash:
+              requestType === 'sandbox' ||
+              /\b(run|execute|test|build|install|start|serve|bash|shell|terminal|pnpm|npm|yarn|pip)\b/i.test(v1AgentTask),
+            requiresFileWrite: isCodeRequest,
+            requiresBackend: /\b(api|server|backend|database|migration|postgres|mysql|redis)\b/i.test(v1AgentTask),
+          });
+
+          let sandboxSession: Awaited<ReturnType<typeof sandboxBridge.getOrCreateSession>> | null = null;
+          if (authenticatedUserId && executionPolicy !== 'local-safe') {
+            sandboxSession = await sandboxBridge.getOrCreateSession(authenticatedUserId);
+          }
+
+          chatLogger.info('Executing v1 agentic tools', { requestId, userId: effectiveAgentUserId }, {
             scopePath: requestedScopePath,
             maxIterations: LLM_AGENT_TOOLS_MAX_ITERATIONS,
+            requestType,
+            isCodeRequest,
+            executionPolicy,
+            hasSandbox: !!sandboxSession,
           });
 
           const agentLoop = createAgentLoop(
-            authenticatedUserId,
+            effectiveAgentUserId,
             requestedScopePath || 'workspace',
-            LLM_AGENT_TOOLS_MAX_ITERATIONS
+            LLM_AGENT_TOOLS_MAX_ITERATIONS,
+            {
+              sandboxId: sandboxSession?.sandboxId,
+              sandboxProvider: sandboxSession?.sandboxId
+                ? sandboxBridge.inferProviderFromSandboxId(sandboxSession.sandboxId) || undefined
+                : undefined,
+              workspacePath: sandboxSession?.workspacePath || requestedScopePath,
+            },
+            actualModel, // Pass user's selected model
           );
 
           // Check if agent supports streaming (ToolLoopAgent integration)
@@ -834,14 +1305,14 @@ export async function POST(request: NextRequest) {
             // Store streaming result for later processing in stream handler
             agentToolStreamingResult = {
               agentLoop,
-              task: rawResponseContent,
+              task: v1AgentPrompt,
               timeout: LLM_AGENT_TOOLS_TIMEOUT_MS,
             };
           } else {
             // Use non-streaming execution (backward compatible)
             // Set timeout for agent execution with proper cleanup
             let agentTimeoutId: NodeJS.Timeout | null = null;
-            const agentPromise = agentLoop.executeTask(rawResponseContent);
+            const agentPromise = agentLoop.executeTask(v1AgentPrompt);
             const timeoutPromise = new Promise((_, reject) => {
               agentTimeoutId = setTimeout(() => reject(new Error('Agent tools timeout')), LLM_AGENT_TOOLS_TIMEOUT_MS);
             });
@@ -858,45 +1329,126 @@ export async function POST(request: NextRequest) {
               resultsCount: agentToolResults.results?.length,
             });
 
-            // Append agent tool results to response
-            if (agentToolResults.success && agentToolResults.results?.length > 0) {
-              const toolSummary = agentToolResults.results
-                .map((r: any) => `${r.tool}: ${JSON.stringify(r.result)}`)
-                .join('\n');
-              unifiedResponse.content = `${rawResponseContent}\n\n[Agent Tools Executed]\n${toolSummary}`;
-              // Sync rawResponseContent so subsequent rendering uses updated content
-              rawResponseContent = unifiedResponse.content;
+            if (agentToolResults.success) {
+              unifiedResponse.data = {
+                ...(unifiedResponse.data || {}),
+                toolInvocations: [
+                  ...(((unifiedResponse.data as any)?.toolInvocations as any[]) || []),
+                  ...(agentToolResults.toolInvocations || []),
+                ],
+                agentToolResults,
+              };
+              if (!rawResponseContent.trim() && agentToolResults.message) {
+                unifiedResponse.content = agentToolResults.message;
+                rawResponseContent = unifiedResponse.content;
+              }
             }
           }
         } catch (error: any) {
-          chatLogger.error('Agent tools execution failed', { requestId }, {
+          chatLogger.error('V1 agentic tools execution failed', { requestId }, {
             error: error.message,
           });
           // Continue with normal response even if agent tools fail
         }
       }
-      
-      const filesystemEdits =
-        !enableFilesystemEdits
-          ? null
-          : await applyFilesystemEditsFromResponse({
-              ownerId: filesystemOwnerId,
-              conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
-              requestId: requestId || generateSecureId('req'),
-              scopePath: requestedScopePath,
-              lastUserMessage: (() => {
-                const content =
-                  [...messages].reverse().find((message) => message.role === 'user')
-                    ?.content;
-                return typeof content === 'string' ? content : '';
-              })(),
-              attachedPaths: attachedFilesystemFiles.map((file) => file.path),
-              responseContent: rawResponseContent,
-              commands: unifiedResponse.commands,
-            });
-      chatLogger.debug('Filesystem edits processed', { requestId, appliedCount: filesystemEdits?.applied?.length || 0 });
-      
+
+      // Enable batch mode to prevent circular Git commits during bulk file writes
+      const { enableVFSBatchMode, flushVFSBatchMode, disableVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
+      enableVFSBatchMode(filesystemOwnerId);
+
+      try {
+        filesystemEdits =
+          !enableFilesystemEdits
+            ? null
+            : await applyFilesystemEditsFromResponse({
+                ownerId: filesystemOwnerId,
+                conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                requestId: requestId || generateSecureId('req'),
+                scopePath: requestedScopePath,
+                lastUserMessage: (() => {
+                  const content =
+                    [...messages].reverse().find((message) => message.role === 'user')
+                      ?.content;
+                  return typeof content === 'string' ? content : '';
+                })(),
+                attachedPaths: attachedFilesystemFiles.map((file) => file.path),
+                responseContent: rawResponseContent,
+                commands: unifiedResponse.commands,
+              });
+        chatLogger.debug('Filesystem edits processed', { requestId, appliedCount: filesystemEdits?.applied?.length || 0 });
+
+        // Flush batch mode to commit all changes at once
+        await flushVFSBatchMode(filesystemOwnerId);
+
+        // CRITICAL FIX Bug #1: Emit filesystem-updated event for non-streaming path
+        // This ensures components update after non-streaming file edits
+        if (filesystemEdits && filesystemEdits.applied.length > 0) {
+          emitFilesystemUpdated({
+            scopePath: requestedScopePath,
+            sessionId: resolvedConversationId,
+            workspaceVersion: filesystemEdits.workspaceVersion,
+            applied: filesystemEdits.applied,
+            errors: filesystemEdits.errors,
+            source: 'non-streaming',
+          });
+        }
+      } catch (error) {
+        // Disable batch mode on error to prevent stuck state
+        disableVFSBatchMode(filesystemOwnerId);
+        throw error;
+      }
+
+      // SPEC AMPLIFICATION: Trigger after ToolLoopAgent completes (non-streaming path)
+      // Runs AFTER filesystem edits are applied (line ~1242)
+      // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
+      if (agentToolResults && !clientResponse.metadata?.specAmplificationRun) {
+        const hasFileEdits = filesystemEdits && filesystemEdits.applied.length > 0;
+        // Spec amplification runs in 'enhanced' or 'max' mode
+        const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
+        const shouldRunSpecAmplification = hasFileEdits && isSpecAmplificationMode;
+
+        chatLogger.info('Spec amplification check (non-streaming)', {
+          requestId,
+          hasFileEdits,
+          mode: routerRequest.mode,
+          isSpecAmplificationMode,
+          specAmplificationRun: clientResponse.metadata?.specAmplificationRun,
+          shouldRunSpecAmplification,
+        });
+
+        if (shouldRunSpecAmplification) {
+          chatLogger.info('File edits detected, triggering spec amplification (non-streaming)', {
+            requestId,
+          });
+
+          // Trigger spec amplification in background (don't wait)
+          const { responseRouter } = await import('@/lib/api/response-router');
+          const specRequest = {
+            ...routerRequest,
+            messages: [
+              ...messages,
+              { role: 'assistant' as const, content: rawResponseContent },
+            ],
+            mode: 'enhanced' as const,
+          };
+
+          responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
+            chatLogger.warn('Post-stream spec amplification failed', { error: err?.message });
+          });
+        } else {
+          chatLogger.debug('Spec amplification NOT triggered (non-streaming)', {
+            requestId,
+            reason: !hasFileEdits ? 'no filesystem edits' :
+                    !isSpecAmplificationMode ? `mode is ${routerRequest.mode}` :
+                    clientResponse.metadata?.specAmplificationRun ? 'already run' : 'unknown',
+          });
+        }
+      }
+
       let sanitizedResponseContent = sanitizeAssistantDisplayContent(rawResponseContent);
+      
+      // CRITICAL: Add fallback message when content is empty but files were applied
+      // This ensures users see feedback even when AI only makes file changes without explanation
       if (
         !sanitizedResponseContent.trim() &&
         filesystemEdits &&
@@ -905,7 +1457,9 @@ export async function POST(request: NextRequest) {
         sanitizedResponseContent =
           `Applied filesystem changes to ${filesystemEdits.applied.length} file(s).`;
       }
-      const clientResponse = buildClientVisibleUnifiedResponse(
+
+      // Build client-visible response (assign to early-declared variable)
+      clientResponse = buildClientVisibleUnifiedResponse(
         unifiedResponse,
         sanitizedResponseContent,
       );
@@ -932,10 +1486,46 @@ export async function POST(request: NextRequest) {
             };
           });
 
+        // CRITICAL FIX: Build fileEdits array with content for enhanced-diff-viewer
+        // This merges filesystemEdits.applied with requestedFiles to include actual content
+        // ROBUSTNESS: Don't assume WRITE=content, PATCH=diff
+        // Filter out invalid paths and empty content/diff
+        const fileEdits = filesystemEdits.applied
+          .filter((edit) => {
+            // Skip invalid paths
+            if (!isValidFilePath(edit.path)) return false;
+            // CRITICAL FIX: Check for content (WRITE ops) OR diff (PATCH ops)
+            // Don't reject WRITE operations that don't have a diff field
+            const hasContent = edit.content && edit.content.trim().length > 0;
+            const hasDiff = edit.diff && edit.diff.trim().length > 0;
+            if (!hasContent && !hasDiff) return false;
+            return true;
+          })
+          .map((edit) => {
+            const requestedFile = filesystemEdits.requestedFiles.find(f => f.path === edit.path);
+            // Determine what to send:
+            // - If edit.diff exists and looks like unified diff, send it
+            // - Otherwise send full content (EnhancedDiffViewer will auto-detect)
+            const diffToUse = edit.diff && edit.diff.trim().length > 0 && edit.diff.startsWith('---')
+              ? edit.diff
+              : undefined;
+            return {
+              path: edit.path,
+              operation: edit.operation || 'write',
+              content: requestedFile?.content || edit.content || '',
+              diff: diffToUse,  // Only send if it's actual unified diff format
+              language: requestedFile?.language,
+              version: edit.version,
+              previousVersion: edit.previousVersion,
+            };
+          });
+
         if (codeArtifacts.length > 0) {
           clientResponse.metadata = {
             ...clientResponse.metadata,
             codeArtifacts,
+            // CRITICAL: Include fileEdits with content for enhanced-diff-viewer
+            fileEdits,
             // Add filesystem metadata for frontend message-bubble.tsx
             filesystem: {
               transactionId: filesystemEdits.transactionId,
@@ -958,6 +1548,477 @@ export async function POST(request: NextRequest) {
         const streamRequestId = requestId || generateSecureId('stream');
         const streamStartTime = Date.now();
         let chunkCount = 0;
+
+        // NEW: Check if we have LLM stream generator from enhancedLLMService (real-time LLM token streaming)
+        const hasLLMStreamGenerator = unifiedResponse.stream && 
+          typeof unifiedResponse.stream === 'object' && 
+          Symbol.asyncIterator in (unifiedResponse.stream as any);
+
+        // DEBUG: Log stream detection for debugging
+        chatLogger.debug('Stream detection', { 
+          requestId, 
+          hasStream: !!unifiedResponse.stream,
+          streamType: typeof unifiedResponse.stream,
+          isAsyncIterable: unifiedResponse.stream && Symbol.asyncIterator in (unifiedResponse.stream as any),
+          contentLength: unifiedResponse.content?.length || 0,
+        });
+
+        // If no stream generator but we have content, we need to stream it
+        // This happens when spec amplification was skipped but we have actual LLM response
+        if (!hasLLMStreamGenerator && unifiedResponse.content && unifiedResponse.content.length > 0) {
+          chatLogger.info('No stream generator but have content, will use fallback streaming with actual response', { 
+            requestId, 
+            contentLength: unifiedResponse.content.length 
+          });
+          // Update clientResponse with actual content so fallback can stream it
+          clientResponse.content = unifiedResponse.content;
+        }
+
+        if (hasLLMStreamGenerator) {
+          // Handle real-time LLM streaming with progressive parsing
+          chatLogger.info('Streaming with LLM generator (real-time token streaming)', { requestId: streamRequestId, provider: actualProvider, model: actualModel });
+
+          const encoder = new TextEncoder();
+          let encoderRef = encoder;
+          let streamingContentBuffer = '';
+          const fileEditParserState = createIncrementalParser();
+
+          const readableStream = new ReadableStream({
+            async start(controller) {
+              const realEmit = (eventType: string, data: any) => {
+                if (request.signal?.aborted) return;
+                const eventStr = `event: ${eventType}\ndata: ${JSON.stringify(data)}\n\n`;
+                controller.enqueue(encoderRef.encode(eventStr));
+                chunkCount++;
+              };
+
+              emitRef.current = realEmit;
+
+              // Send initial 'init' event to establish stream connection immediately
+              // This helps client-side rendering detect the stream has started
+              realEmit('init', {
+                requestId: streamRequestId,
+                timestamp: Date.now(),
+              });
+
+              // Flush any pending events
+              for (const pending of pendingEvents) {
+                realEmit(pending.event, { requestId: streamRequestId, ...pending.data, timestamp: pending.timestamp });
+              }
+              pendingEvents.length = 0;
+
+              const cleanup = () => {
+                encoderRef = null;
+                emitRef.current = null;
+                streamingContentBuffer = '';
+                fileEditParserState.emittedEdits.clear();
+              };
+
+              if (request.signal) {
+                request.signal.addEventListener('abort', () => {
+                  cleanup();
+                  chatLogger.warn('LLM stream cancelled by client', { requestId: streamRequestId });
+                });
+              }
+
+              try {
+                // Consume the LLM stream generator in real-time
+                // This is where TRUE streaming happens - tokens as they're generated by the LLM
+                // Token batching: accumulate tokens and emit every ~50ms to reduce SSE overhead
+                let tokenBuffer = '';
+                let lastTokenEmitTime = Date.now();
+                const TOKEN_EMIT_INTERVAL_MS = 50;  // Batch tokens for 50ms before emitting
+
+                const emitBufferedTokens = () => {
+                  if (tokenBuffer.length > 0) {
+                    realEmit('token', {
+                      content: tokenBuffer,
+                      timestamp: Date.now(),
+                      type: 'token'
+                    });
+                    tokenBuffer = '';
+                    lastTokenEmitTime = Date.now();
+                  }
+                };
+
+                for await (const streamChunk of unifiedResponse.stream as AsyncGenerator<StreamingResponse>) {
+                  if (request.signal?.aborted) break;
+
+                  // Accumulate token content
+                  if (streamChunk.content) {
+                    tokenBuffer += streamChunk.content;
+
+                    // Progressive file edit detection from streaming content
+                    streamingContentBuffer += streamChunk.content;
+                    const newFileEdits = extractIncrementalFileEdits(streamingContentBuffer, fileEditParserState);
+
+                    // Filter out invalid paths and empty content to prevent UI polling loops
+                    for (const edit of newFileEdits) {
+                      // CRITICAL FIX: Use proper isValidFilePath validation instead of simple regex
+                      // This catches CSS values (0.3s), code snippets (with, submission), etc.
+                      if (!isValidFilePath(edit.path)) {
+                        chatLogger.debug('Skipping invalid progressive file edit path (failed isValidFilePath)', { path: edit.path });
+                        continue;
+                      }
+                      // CRITICAL FIX: Skip empty content to prevent infinite loops
+                      const editContent = edit.content || edit.diff || '';
+                      if (!editContent || editContent.trim().length === 0) {
+                        chatLogger.debug('Skipping empty edit content (prevents infinite loop)', { path: edit.path });
+                        continue;
+                      }
+                      // CRITICAL FIX: Determine operation type and send correct data format
+                      // - For WRITE operations: send full content, operation='write', NO diff field
+                      // - For PATCH operations: send unified diff in diff field, operation='patch'
+                      const isPatch = edit.action === 'patch' || !!edit.diff;
+                      realEmit('file_edit', {
+                        path: edit.path,
+                        status: 'detected',
+                        operation: isPatch ? 'patch' : 'write',
+                        timestamp: Date.now(),
+                        content: edit.content || '',  // Always send full content for WRITE operations     
+                        diff: isPatch ? (edit.diff || '') : undefined,  // Only send diff for PATCH operations
+                      });
+                      chatLogger.debug('Progressive file edit detected during LLM stream', {
+                        path: edit.path,
+                        operation: isPatch ? 'patch' : 'write',
+                        hasDiff: !!edit.diff,
+                      });
+                    }
+
+                    // Emit buffered tokens if interval has passed
+                    const now = Date.now();
+                    if (now - lastTokenEmitTime >= TOKEN_EMIT_INTERVAL_MS) {
+                      emitBufferedTokens();
+                    }
+                  }
+
+                  // Handle reasoning traces if present (for models that support it)
+                  if (streamChunk.reasoning) {
+                    realEmit('reasoning', {
+                      reasoning: streamChunk.reasoning,
+                      timestamp: Date.now(),
+                    });
+                  }
+
+                  // Handle tool calls if present
+                  if (streamChunk.toolCalls && streamChunk.toolCalls.length > 0) {
+                    for (const toolCall of streamChunk.toolCalls) {
+                      realEmit('tool_call', {
+                        toolCallId: toolCall.id,
+                        toolName: toolCall.name,
+                        args: toolCall.arguments,
+                        timestamp: Date.now(),
+                      });
+                    }
+                  }
+
+                  // Handle tool invocations if present
+                  if (streamChunk.toolInvocations && streamChunk.toolInvocations.length > 0) {
+                    for (const toolInvocation of streamChunk.toolInvocations) {
+                      realEmit('tool_invocation', {
+                        toolCallId: toolInvocation.toolCallId,
+                        toolName: toolInvocation.toolName,
+                        state: toolInvocation.state,
+                        args: toolInvocation.args,
+                        result: toolInvocation.result,
+                        timestamp: Date.now(),
+                      });
+                    }
+                  }
+
+                  // Handle files if present
+                  if (streamChunk.files && streamChunk.files.length > 0) {
+                    for (const file of streamChunk.files) {
+                      // Validate path to prevent invalid file edits
+                      if (!isValidFilePath(file.path)) {
+                        chatLogger.debug('Skipping invalid file path from streamChunk.files', { path: file.path });
+                        continue;
+                      }
+                      // CRITICAL FIX: Determine if this is a patch operation (has diff) or regular file operation
+                      // Note: StreamingResponse.files operation type is 'create' | 'update' | 'delete'
+                      // We check for diff field to determine if it's actually a patch/diff operation
+                      const hasDiff = !!(file as any).diff;
+                      realEmit('file_edit', {
+                        path: file.path,
+                        status: file.operation === 'delete' ? 'deleted' : 'detected',
+                        operation: hasDiff ? 'patch' : file.operation,
+                        content: file.content || '',
+                        diff: hasDiff ? ((file as any).diff || '') : undefined,
+                        timestamp: Date.now(),
+                      });
+                    }
+                  }
+
+                  // Handle commands if present
+                  if (streamChunk.commands) {
+                    if (streamChunk.commands.request_files) {
+                      realEmit('request_files', {
+                        paths: streamChunk.commands.request_files,
+                        timestamp: Date.now(),
+                      });
+                    }
+                    if (streamChunk.commands.write_diffs) {
+                      realEmit('diffs', {
+                        files: streamChunk.commands.write_diffs,
+                        timestamp: Date.now(),
+                      });
+                    }
+                  }
+
+                  // Handle finish reason at end of stream
+                  if (streamChunk.isComplete) {
+                    // Post-processing: run filesystem edits on accumulated stream content
+                    // This ensures WRITE/APPLY_DIFF from streamed output reaches the VFS
+                    const streamedContent = streamingContentBuffer;
+                    if (enableFilesystemEdits && streamedContent.trim()) {
+                      try {
+                        // Enable batch mode to prevent circular Git commits
+                        const { enableVFSBatchMode, flushVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
+                        enableVFSBatchMode(filesystemOwnerId);
+
+                        // FIX: Pass forceExtract=true to ensure we catch ALL edits including those
+                        // that may have been missed during incremental parsing (e.g., last file)
+                        streamedEdits = await applyFilesystemEditsFromResponse({
+                          ownerId: filesystemOwnerId,
+                          conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                          requestId: streamRequestId,
+                          scopePath: requestedScopePath,
+                          lastUserMessage: (() => {
+                            const c = [...messages].reverse().find((m) => m.role === 'user')?.content;
+                            return typeof c === 'string' ? c : '';
+                          })(),
+                          attachedPaths: attachedFilesystemFiles.map((file) => file.path),
+                          responseContent: streamedContent,
+                          commands: unifiedResponse.commands,
+                          forceExtract: true,
+                        });
+
+                        // Flush batch mode to commit all changes at once
+                        await flushVFSBatchMode(filesystemOwnerId);
+
+                        // Emit applied file edits
+                        if (streamedEdits?.applied?.length) {
+                          for (const edit of streamedEdits.applied) {
+                            // Validate path before emitting
+                            if (!isValidFilePath(edit.path)) {
+                              chatLogger.debug('Skipping invalid path from streamedEdits', { path: edit.path });
+                              continue;
+                            }
+                            // CRITICAL FIX: Skip empty content to prevent infinite loops
+                            const editContent = edit.content || edit.diff || '';
+                            if (!editContent || editContent.trim().length === 0) {
+                              chatLogger.debug('Skipping empty edit from streamedEdits (prevents infinite loop)', { path: edit.path });
+                              continue;
+                            }
+                            // CRITICAL FIX: Determine operation type and send correct data format
+                            // Check for diff field to determine if it's a patch operation
+                            const hasDiff = !!edit.diff;
+                            const isPatch = edit.operation === 'patch' || hasDiff;
+                            realEmit('file_edit', {
+                              path: edit.path,
+                              status: 'applied',
+                              operation: isPatch ? 'patch' : (edit.operation || 'write'),
+                              timestamp: Date.now(),
+                              content: edit.content || '',
+                              diff: isPatch ? (edit.diff || '') : undefined,
+                            });
+                          }
+                        }
+
+                        // CRITICAL: Add fallback message if sanitized content is empty but files were applied
+                        // This applies to post-stream edits that may not have been caught earlier
+                        if (!sanitizedResponseContent.trim() && streamedEdits && streamedEdits.applied.length > 0) {
+                          sanitizedResponseContent = `Applied filesystem changes to ${streamedEdits.applied.length} file(s).`;
+                        }
+                      } catch (editErr: any) {
+                        // Disable batch mode on error
+                        const { disableVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
+                        disableVFSBatchMode(filesystemOwnerId);
+                        chatLogger.warn('Post-stream filesystem edits failed', { requestId: streamRequestId, error: editErr.message });
+                      }
+                    }
+
+                    // Include filesystem metadata in done event for EnhancedDiffViewer
+                    const doneEventData = {
+                      requestId: streamRequestId,
+                      timestamp: Date.now(),
+                      success: true,
+                      finishReason: streamChunk.finishReason,
+                      tokensUsed: streamChunk.tokensUsed,
+                      usage: streamChunk.usage,
+                    };
+
+                    // Add filesystem metadata if files were applied
+                    // CRITICAL FIX: Check BOTH filesystemEdits (pre-stream) AND streamedEdits (final parse)
+                    allEdits = streamedEdits && streamedEdits.applied.length > 0
+                      ? streamedEdits
+                      : filesystemEdits;
+
+                    if (allEdits && allEdits.applied.length > 0) {
+                      // CRITICAL FIX: Build fileEdits array with content for enhanced-diff-viewer
+                      // ROBUSTNESS: Don't assume WRITE=content, PATCH=diff
+                      // LLM may return diffs in <file_edit> tags or full content for existing files
+                      // Let EnhancedDiffViewer detect format using isDiffFormat()
+                      const fileEdits = allEdits.applied
+                        .filter((edit) => {
+                          // Skip invalid paths
+                          if (!isValidFilePath(edit.path)) return false;
+                          // Skip empty content/diff
+                          const hasContent = edit.content && edit.content.trim().length > 0;
+                          const hasDiff = edit.diff && edit.diff.trim().length > 0;
+                          if (!hasContent && !hasDiff) return false;
+                          return true;
+                        })
+                        .map((edit) => {
+                          const requestedFile = allEdits.requestedFiles.find(f => f.path === edit.path);
+                          // Determine what to send:
+                          // - If edit.diff exists and looks like unified diff, send it
+                          // - Otherwise send full content (EnhancedDiffViewer will auto-detect format)
+                          const diffToUse = edit.diff && edit.diff.trim().length > 0 && edit.diff.startsWith('---')
+                            ? edit.diff
+                            : undefined;
+                          const contentToUse = requestedFile?.content || edit.content || '';
+
+                          return {
+                            path: edit.path,
+                            operation: edit.operation || 'write',
+                            content: contentToUse,
+                            diff: diffToUse,  // Only send if it's actual unified diff format
+                            language: requestedFile?.language,
+                            version: edit.version,
+                            previousVersion: edit.previousVersion,
+                          };
+                        });
+
+                      (doneEventData as any).filesystem = {
+                        transactionId: allEdits.transactionId,
+                        status: allEdits.status,
+                        applied: allEdits.applied,
+                        errors: allEdits.errors,
+                        requestedFiles: allEdits.requestedFiles,
+                        scopePath: allEdits.scopePath,
+                        workspaceVersion: allEdits.workspaceVersion,
+                        commitId: allEdits.commitId,
+                        sessionId: allEdits.sessionId,
+                      };
+                      // CRITICAL: Include fileEdits with content for enhanced-diff-viewer
+                      (doneEventData as any).fileEdits = fileEdits;
+                    }
+
+                    // Add fallback message if sanitized content is empty but files were applied
+                    if (!sanitizedResponseContent.trim() && allEdits && allEdits.applied.length > 0) {
+                      (doneEventData as any).fallbackMessage = `Applied filesystem changes to ${allEdits.applied.length} file(s).`;
+                    }
+
+                    // Emit any remaining buffered tokens before done event
+                    emitBufferedTokens();
+
+                    realEmit('done', doneEventData);
+                    break; // Exit loop when complete
+                  }
+                }
+
+                // Emit any remaining buffered tokens (in case loop exited without hitting isComplete)
+                emitBufferedTokens();
+
+                // SPEC AMPLIFICATION: Trigger after regular LLM streaming completes
+                // Runs AFTER final parse (line ~1684) and FILE_EDIT events (line ~1715)
+                // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
+                const hasFileEdits = (filesystemEdits?.applied?.length || 0) > 0 ||
+                                     (streamedEdits?.applied?.length || 0) > 0;
+                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
+                const shouldRunSpecAmplification = hasFileEdits &&
+                  isSpecAmplificationMode &&
+                  !clientResponse.metadata?.specAmplificationRun;
+
+                chatLogger.info('Spec amplification check (regular LLM stream)', {
+                  requestId: streamRequestId,
+                  hasFileEdits,
+                  mode: routerRequest.mode,
+                  isSpecAmplificationMode,
+                  specAmplificationRun: clientResponse.metadata?.specAmplificationRun,
+                  shouldRunSpecAmplification,
+                });
+
+                if (shouldRunSpecAmplification) {
+                  chatLogger.info('Code/file edits detected, triggering spec amplification (regular LLM path)', {
+                    requestId: streamRequestId,
+                    contentLength: streamingContentBuffer.length,
+                  });
+
+                  // Trigger spec amplification in background - events stream via emitRef.current
+                  const { responseRouter } = await import('@/lib/api/response-router');
+                  const specRequest = {
+                    ...routerRequest,
+                    messages: [
+                      ...messages,
+                      { role: 'assistant' as const, content: streamingContentBuffer },
+                    ],
+                    mode: 'enhanced' as const,
+                    emit: emitRef.current,  // CRITICAL: Pass emit function so spec amp events reach client
+                  };
+
+                  responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
+                    chatLogger.warn('Post-stream spec amplification failed', { error: err?.message });
+                  });
+                } else {
+                  chatLogger.debug('Spec amplification NOT triggered (regular LLM path)', {
+                    requestId: streamRequestId,
+                    reason: !hasFileEdits ? 'no filesystem edits' :
+                            !isSpecAmplificationMode ? `mode is ${routerRequest.mode}` :
+                            clientResponse.metadata?.specAmplificationRun ? 'already run' : 'unknown',
+                  });
+                }
+
+                cleanup();
+              } catch (streamError) {
+                chatLogger.error('LLM stream error', { requestId: streamRequestId }, {
+                  error: streamError instanceof Error ? streamError.message : String(streamError),
+                });
+
+                if (!request.signal?.aborted) {
+                  realEmit('error', {
+                    message: 'LLM streaming error',
+                    error: streamError instanceof Error ? streamError.message : String(streamError),
+                  });
+                }
+                cleanup();
+              } finally {
+                controller.close();
+              }
+            },
+            cancel() {
+              const streamDuration = Date.now() - streamStartTime;
+              chatLogger.warn('LLM stream cancelled (cancel callback)', { requestId: streamRequestId }, {
+                chunkCount,
+                latencyMs: streamDuration,
+              });
+            }
+          });
+
+          return new Response(readableStream, {
+            headers: {
+              'Content-Type': 'text/event-stream',
+              'Cache-Control': 'no-cache, no-store, must-revalidate',
+              Pragma: 'no-cache',
+              Expires: '0',
+              Connection: 'keep-alive',
+              'X-Accel-Buffering': 'no',
+              'Access-Control-Allow-Origin': process.env.NEXT_PUBLIC_APP_URL || request.headers.get('origin') || '',
+              'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+              'Access-Control-Allow-Headers': 'Content-Type, Authorization, x-anonymous-session-id',
+              'Vary': 'Origin',
+              ...(anonSessionIdToSet ? {
+                'Set-Cookie': `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${process.env.NODE_ENV === 'production' ? '; Secure' : ''}`,
+              } : {}),
+            },
+          });
+        }
+
+        // NOTE: Spec amplification trigger moved to inside each streaming path's completion handler
+        // - Regular LLM streaming: line ~1825 (after streamingContentBuffer is finalized)
+        // - ToolLoopAgent streaming: line ~2155 (after finalContent is finalized)
+        // This ensures content is available and emitRef.current is properly set
 
         // Check if we have ToolLoopAgent streaming available
         const hasToolLoopStreaming = agentToolStreamingResult && stream;
@@ -991,6 +2052,7 @@ export async function POST(request: NextRequest) {
               const cleanup = () => {
                 encoderRef = null;
                 emitRef.current = null;
+                acceptDeferredEvents = false;
               };
 
               if (request.signal) {
@@ -1017,13 +2079,35 @@ export async function POST(request: NextRequest) {
                     if (request.signal?.aborted) return;
                     controller.enqueue(encoderRef.encode(event));
                     chunkCount++;
-                    await new Promise(resolve => setTimeout(resolve, 30));
                   }
 
                   // Note: spec amplification events will now be streamed via emitRef.current
                   // as background refinement progresses (no longer pre-captured)
 
                   // Now stream tool invocations and reasoning in real-time
+                  // Capture the final result to include content in done event
+                  // Note: finalContent is declared at function scope (line ~1209)
+                  
+                  // Token batching for ToolLoopAgent - accumulate and emit every 50ms
+                  // This reduces SSE overhead while maintaining smooth streaming
+                  let tokenBuffer = '';
+                  let lastTokenEmitTime = Date.now();
+                  const TOKEN_EMIT_INTERVAL_MS = 50;
+                  
+                  const emitBufferedTokens = () => {
+                    if (tokenBuffer.length > 0) {
+                      const tokenEvent = `event: token\ndata: ${JSON.stringify({
+                        content: tokenBuffer,
+                        timestamp: Date.now(),
+                      })}\n\n`;
+                      controller.enqueue(encoderRef.encode(tokenEvent));
+                      chunkCount++;
+                      finalContent += tokenBuffer;
+                      tokenBuffer = '';
+                      lastTokenEmitTime = Date.now();
+                    }
+                  };
+                  
                   for await (const chunk of agentLoop.executeTaskStreaming(task)) {
                     if (request.signal?.aborted) return;
 
@@ -1049,24 +2133,147 @@ export async function POST(request: NextRequest) {
                       controller.enqueue(encoderRef.encode(reasoningEvent));
                       chunkCount++;
                     } else if (chunk.type === 'text-delta') {
-                      // Stream text response
-                      const tokenEvent = `event: token\ndata: ${JSON.stringify({
-                        content: chunk.textDelta,
-                        timestamp: Date.now(),
-                      })}\n\n`;
-                      controller.enqueue(encoderRef.encode(tokenEvent));
-                      chunkCount++;
+                      // Accumulate text deltas and emit in batches
+                      tokenBuffer += chunk.textDelta;
+                      
+                      // Emit if interval has passed
+                      const now = Date.now();
+                      if (now - lastTokenEmitTime >= TOKEN_EMIT_INTERVAL_MS) {
+                        emitBufferedTokens();
+                      }
                     }
+                  }
+                  
+                  // Emit any remaining buffered tokens before done event
+                  emitBufferedTokens();
 
-                    // Minimal delay for faster streaming (reduced from 30ms)
-                    await new Promise(resolve => setTimeout(resolve, 5));
+                  // FINAL PARSE: Run filesystem edits on accumulated stream content
+                  // This MUST run BEFORE the done event so filesystem metadata is included
+                  // Same as regular LLM path (line ~1755)
+                  allEdits = filesystemEdits;
+                  const streamedContent = finalContent;
+                  if (enableFilesystemEdits && streamedContent.trim()) {
+                    try {
+                      // Enable batch mode to prevent circular Git commits
+                      const { enableVFSBatchMode, flushVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
+                      enableVFSBatchMode(filesystemOwnerId);
+
+                      // FIX: Pass forceExtract=true to ensure we catch ALL edits including those
+                      // that may have been missed during incremental parsing (e.g., last file)
+                      const streamedEdits = await applyFilesystemEditsFromResponse({
+                        ownerId: filesystemOwnerId,
+                        conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                        requestId: streamRequestId,
+                        scopePath: requestedScopePath,
+                        lastUserMessage: (() => {
+                          const c = [...messages].reverse().find((m) => m.role === 'user')?.content;
+                          return typeof c === 'string' ? c : '';
+                        })(),
+                        attachedPaths: attachedFilesystemFiles.map((file) => file.path),
+                        responseContent: streamedContent,
+                        commands: unifiedResponse.commands,
+                        forceExtract: true,
+                      });
+
+                      // Flush batch mode to commit all changes at once
+                      await flushVFSBatchMode(filesystemOwnerId);
+
+                      // Use streamedEdits if it has edits, otherwise use filesystemEdits
+                      allEdits = streamedEdits && streamedEdits.applied.length > 0 ? streamedEdits : filesystemEdits;
+
+                      // Emit applied file edits
+                      if (streamedEdits?.applied?.length) {
+                        for (const edit of streamedEdits.applied) {
+                          // Validate path before emitting
+                          if (!isValidFilePath(edit.path)) {
+                            chatLogger.debug('Skipping invalid path from streamedEdits', { path: edit.path });
+                            continue;
+                          }
+                          // CRITICAL FIX: Skip empty content to prevent infinite loops
+                          const editContent = edit.content || edit.diff || '';
+                          if (!editContent || editContent.trim().length === 0) {
+                            chatLogger.debug('Skipping empty edit from streamedEdits (prevents infinite loop)', { path: edit.path });
+                            continue;
+                          }
+                          // CRITICAL FIX: Determine operation type and send correct data format
+                          const hasDiff = !!edit.diff;
+                          const isPatch = edit.operation === 'patch' || hasDiff;
+                          realEmit('file_edit', {
+                            path: edit.path,
+                            status: 'applied',
+                            operation: isPatch ? 'patch' : 'write',
+                            timestamp: Date.now(),
+                            content: edit.content || '',
+                            diff: isPatch ? (edit.diff || '') : undefined,
+                          });
+                        }
+                        chatLogger.info('Final parse: applied filesystem edits', {
+                          requestId: streamRequestId,
+                          count: streamedEdits.applied.length,
+                        });
+                      }
+                    } catch (editErr: any) {
+                      // Disable batch mode on error
+                      const { disableVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
+                      disableVFSBatchMode(filesystemOwnerId);
+                      chatLogger.warn('Post-stream filesystem edits failed', { requestId: streamRequestId, error: editErr.message });
+                    }
                   }
 
-                  // Send completion event
-                  const doneEvent = `event: done\ndata: ${JSON.stringify({
+                  // Send completion event with accumulated content AND filesystem metadata
+                  const doneEventData: any = {
                     requestId: streamRequestId,
                     timestamp: Date.now(),
-                  })}\n\n`;
+                    content: finalContent,
+                  };
+
+                  // Include filesystem metadata if files were applied
+                  // CRITICAL FIX: Check BOTH filesystemEdits (pre-stream) AND streamedEdits (final parse)
+                  if (allEdits && allEdits.applied.length > 0) {
+                    doneEventData.filesystem = {
+                      transactionId: allEdits.transactionId,
+                      status: allEdits.status,
+                      applied: allEdits.applied,
+                      errors: allEdits.errors,
+                      requestedFiles: allEdits.requestedFiles,
+                      scopePath: allEdits.scopePath,
+                      workspaceVersion: allEdits.workspaceVersion,
+                      commitId: allEdits.commitId,
+                      sessionId: allEdits.sessionId,
+                    };
+
+                    // CRITICAL FIX: Also include fileEdits array for enhanced-diff-viewer
+                    // ROBUSTNESS: Don't assume WRITE=content, PATCH=diff
+                    // Let EnhancedDiffViewer detect format using isDiffFormat()
+                    doneEventData.fileEdits = allEdits.applied
+                      .filter((edit) => {
+                        // Skip invalid paths
+                        if (!isValidFilePath(edit.path)) return false;
+                        // Skip empty content/diff
+                        const hasContent = edit.content && edit.content.trim().length > 0;
+                        const hasDiff = edit.diff && edit.diff.trim().length > 0;
+                        if (!hasContent && !hasDiff) return false;
+                        return true;
+                      })
+                      .map(edit => {
+                        // Determine what to send:
+                        // - If edit.diff exists and looks like unified diff, send it
+                        // - Otherwise send full content (EnhancedDiffViewer will auto-detect)
+                        const diffToUse = edit.diff && edit.diff.trim().length > 0 && edit.diff.startsWith('---')
+                          ? edit.diff
+                          : undefined;
+                        return {
+                          path: edit.path,
+                          operation: edit.operation || 'write',
+                          content: edit.content || '',
+                          diff: diffToUse,
+                          version: edit.version,
+                          previousVersion: edit.previousVersion,
+                        };
+                      });
+                  }
+
+                  const doneEvent = `event: done\ndata: ${JSON.stringify(doneEventData)}\n\n`;
                   controller.enqueue(encoderRef.encode(doneEvent));
                   chunkCount++;
                 })();
@@ -1082,6 +2289,55 @@ export async function POST(request: NextRequest) {
                   chunkCount,
                   latencyMs: streamDuration,
                 });
+
+                // SPEC AMPLIFICATION: Trigger after ToolLoopAgent streaming completes
+                // Runs AFTER final parse (inside stream callback) and FILE_EDIT events
+                // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
+                // Note: allEdits is set by final parse inside stream callback (line ~2155)
+                const hasFileEdits = (allEdits?.applied?.length || 0) > 0;
+                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
+                const shouldRunSpecAmplification = hasFileEdits &&
+                  isSpecAmplificationMode &&
+                  !clientResponse.metadata?.specAmplificationRun;
+
+                chatLogger.info('Spec amplification check (ToolLoopAgent stream)', {
+                  requestId: streamRequestId,
+                  hasFileEdits,
+                  mode: routerRequest.mode,
+                  isSpecAmplificationMode,
+                  specAmplificationRun: clientResponse.metadata?.specAmplificationRun,
+                  shouldRunSpecAmplification,
+                });
+
+                if (shouldRunSpecAmplification) {
+                  chatLogger.info('Code/file edits detected, triggering spec amplification (ToolLoopAgent path)', {
+                    requestId: streamRequestId,
+                    finalContentLength: finalContent.length,
+                  });
+
+                  // Trigger spec amplification in background - events stream via emitRef.current
+                  const { responseRouter } = await import('@/lib/api/response-router');
+                  const specRequest = {
+                    ...routerRequest,
+                    messages: [
+                      ...messages,
+                      { role: 'assistant' as const, content: finalContent },
+                    ],
+                    mode: 'enhanced' as const,
+                    emit: emitRef.current,  // CRITICAL: Pass emit function so spec amp events reach client
+                  };
+
+                  responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
+                    chatLogger.warn('Post-stream spec amplification failed', { error: err?.message });
+                  });
+                } else {
+                  chatLogger.debug('Spec amplification NOT triggered (ToolLoopAgent path)', {
+                    requestId: streamRequestId,
+                    reason: !hasFileEdits ? 'no filesystem edits' :
+                            !isSpecAmplificationMode ? `mode is ${routerRequest.mode}` :
+                            clientResponse.metadata?.specAmplificationRun ? 'already run' : 'unknown',
+                  });
+                }
 
                 controller.close();
               } catch (error) {
@@ -1134,8 +2390,50 @@ export async function POST(request: NextRequest) {
         }
 
         // Fallback: Standard streaming (non-agent or ToolLoopAgent not available)
-        // Create streaming events from unified response
-        const events = responseRouter.createStreamingEvents(clientResponse, streamRequestId);
+        // Create streaming events from unified response with faster initial text display
+
+        // Process filesystem edits for streaming path
+        // Note: filesystemEdits already declared at function scope (line ~1120)
+        if (enableFilesystemEdits) {
+          try {
+            // Enable batch mode to prevent circular Git commits during bulk file writes
+            const { enableVFSBatchMode, flushVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
+            enableVFSBatchMode(filesystemOwnerId);
+
+            filesystemEdits = await applyFilesystemEditsFromResponse({
+              ownerId: filesystemOwnerId,
+              conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+              requestId: streamRequestId,
+              scopePath: requestedScopePath,
+              lastUserMessage: (() => {
+                const content = [...messages].reverse().find((message) => message.role === 'user')?.content;
+                return typeof content === 'string' ? content : '';
+              })(),
+              attachedPaths: attachedFilesystemFiles.map((file) => file.path),
+              responseContent: clientResponse.content || unifiedResponse.content || '',
+              commands: unifiedResponse.commands,
+            });
+            
+            // Flush batch mode to commit all changes at once
+            await flushVFSBatchMode(filesystemOwnerId);
+            
+            chatLogger.debug('Filesystem edits processed (streaming path)', { 
+              requestId: streamRequestId, 
+              appliedCount: filesystemEdits?.applied?.length || 0 
+            });
+          } catch (error) {
+            chatLogger.warn('Filesystem edits failed (streaming path)', { error });
+          }
+        }
+        
+        const events = responseRouter.createStreamingEvents(clientResponse, streamRequestId, {
+          includeReasoning: true,
+          includeToolState: true,
+          includeFilesystem: true,
+          includeDiffs: true,
+          chunkSize: 8, // Smaller chunks for smoother progressive display
+          emitPrimaryContentImmediately: true, // NEW: Show first 16 chars immediately for faster perceived response
+        });
         const supplementalAgenticEvents = buildSupplementalAgenticEvents(clientResponse, streamRequestId, events);
         if (supplementalAgenticEvents.length > 0) {
           events.splice(Math.max(0, events.length - 1), 0, ...supplementalAgenticEvents);
@@ -1145,11 +2443,22 @@ export async function POST(request: NextRequest) {
         const fileEditEvents: string[] = [];
         if (filesystemEdits && filesystemEdits.applied.length > 0) {
           for (const edit of filesystemEdits.applied) {
+            // Validate path before emitting file edit events
+            if (!isValidFilePath(edit.path)) {
+              chatLogger.debug('Skipping invalid path from filesystemEdits.applied', { path: edit.path });
+              continue;
+            }
+            // CRITICAL FIX: Determine operation type and send correct data format
+            // Check for diff field to determine if it's a patch operation
+            const hasDiff = !!(edit as any).diff;
+            const isPatch = edit.operation === 'patch' || hasDiff;
             fileEditEvents.push(`event: file_edit\ndata: ${JSON.stringify({
               requestId: streamRequestId,
               path: edit.path,
               status: 'detected',
-              operation: edit.operation,
+              operation: isPatch ? 'patch' : edit.operation,
+              content: (edit as any).content || '',
+              diff: isPatch ? ((edit as any).diff || '') : undefined,
               timestamp: Date.now(),
             })}\n\n`);
           }
@@ -1274,7 +2583,7 @@ export async function POST(request: NextRequest) {
                 e.includes('event: sandbox_output') ||
                 e.includes('event: spec_amplification')  // Include spec amplification progress
               );
-              const tokenEvents = events.filter(e => e.includes('event: token') && e.includes('"type":"token"'));
+              const tokenEvents = events.filter(e => e.includes('event: token'));
               const doneEvent = events.find(e => e.includes('event: done'));
 
               // Send metadata events first (quick succession)
@@ -1285,7 +2594,6 @@ export async function POST(request: NextRequest) {
                 }
                 controller.enqueue(encoderRef.encode(event));
                 chunkCount++;
-                await new Promise(resolve => setTimeout(resolve, 5)); // Minimal delay for metadata
               }
 
               // Send FILE_EDIT events for VFS sync (before content tokens)
@@ -1296,15 +2604,13 @@ export async function POST(request: NextRequest) {
                 }
                 controller.enqueue(encoderRef.encode(fileEditEvent));
                 chunkCount++;
-                await new Promise(resolve => setTimeout(resolve, 10)); // Small delay between file edits
               }
 
-              // Stream content tokens with progressive delay for natural feel
               const totalTokens = tokenEvents.length;
 
-              // Calculate optimal delay based on token count for consistent streaming duration
-              // Target: 10-30 seconds of streaming depending on response length
-              const baseDelay = totalTokens > 200 ? 25 : totalTokens > 100 ? 35 : 50;
+              // OPTIMIZED: Faster streaming for better perceived performance
+              // Reduced delays while maintaining natural "typing" rhythm
+              const baseDelay = totalTokens > 500 ? 0 : totalTokens > 200 ? 1 : totalTokens > 100 ? 2 : 3;
 
               for (let i = 0; i < totalTokens; i++) {
                 if (request.signal?.aborted || streamClosed) {
@@ -1320,23 +2626,26 @@ export async function POST(request: NextRequest) {
                 controller.enqueue(encoderRef.encode(event));
                 chunkCount++;
 
-                // Progressive delay: faster start, slower middle, fast end
-                // Creates natural "thinking and typing" rhythm
+                // OPTIMIZED: Minimal delays for faster text display
+                // First 10 tokens: almost instant (feels responsive)
+                // Middle section: slight rhythm (feels natural)
+                // Final tokens: fast completion
                 let delay: number;
-                if (i < 5) {
-                  delay = baseDelay * 0.6; // Quick start to show response is beginning
-                } else if (i < 20) {
-                  delay = baseDelay; // Steady pace
-                } else if (i < totalTokens * 0.8) {
-                  delay = baseDelay * 1.2 + Math.sin(i / 10) * 15; // Natural variation in middle
+                if (i < 10) {
+                  delay = 0; // No delay for initial tokens - instant gratification
+                } else if (i < 50) {
+                  delay = baseDelay; // Minimal delay for early streaming
+                } else if (i < totalTokens * 0.7) {
+                  delay = baseDelay + 1; // Slight rhythm in middle
                 } else {
-                  delay = baseDelay * 0.7; // Speed up at end for snappy finish
+                  delay = 0; // Fast finish at the end
                 }
 
-                // Cap delays to prevent excessive waiting
-                delay = Math.max(15, Math.min(delay, 80));
+                delay = Math.max(0, Math.min(delay, 3)); // Cap at 3ms max
 
-                await new Promise(resolve => setTimeout(resolve, delay));
+                if (delay > 0) {
+                  await new Promise(resolve => setTimeout(resolve, delay));
+                }
               }
 
               // Send primary_done event for PRIMARY response completion
@@ -1350,7 +2659,11 @@ export async function POST(request: NextRequest) {
               }
 
               const streamDuration = Date.now() - streamStartTime;
-              chatLogger.info('Primary response stream completed, waiting for background refinement', { 
+              chatLogger.info(
+                SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED
+                  ? 'Primary response stream completed, waiting for background refinement'
+                  : 'Primary response stream completed',
+                {
                 requestId: streamRequestId, 
                 provider: actualProvider, 
                 model: actualModel 
@@ -1371,6 +2684,17 @@ export async function POST(request: NextRequest) {
                 });
               }
 
+              if (!SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED) {
+                streamClosed = true;
+                controller.close();
+                cleanup();
+                return;
+              }
+
+              // SPEC AMPLIFICATION: Will be triggered after primary response completes
+              // Check happens inside the stream callback where streamingContentBuffer is available
+              // See line ~2520 for spec amplification trigger (inside stream callback)
+
               // Stream stays open for background refinement events
               // The emit function will close the stream when refinement completes
               // Add timeout fallback in case refinement never completes
@@ -1383,7 +2707,7 @@ export async function POST(request: NextRequest) {
                   controller.close();
                   cleanup();
                 }
-              }, 30000); // 30 second timeout for refinement
+              }, 180000); // 180 second timeout for refinement (matches DAG time budget)
 
             } catch (error) {
               const streamDuration = Date.now() - streamStartTime;
@@ -1516,6 +2840,7 @@ export async function POST(request: NextRequest) {
       // Only clear pendingEvents and emitter for non-streaming responses
       // Streaming responses handle cleanup in the stream's finally block
       if (!(stream && selectedProvider.supportsStreaming)) {
+        acceptDeferredEvents = false;
         pendingEvents.length = 0;
         emitRef.current = null;
       }
@@ -1594,81 +2919,6 @@ export async function POST(request: NextRequest) {
       { status: 500 }, // Internal Server Error - indicates server-side issue
     ));
   }
-}
-
-function sanitizeAssistantDisplayContent(content: string): string {
-  if (!content) return '';
-  let next = content;
-
-  // Remove explicit command envelopes
-  next = next.replace(/===\s*COMMANDS_START\s*===([\s\S]{0,5000}?)===\s*COMMANDS_END\s*===/gi, '');
-  next = next.replace(/```fs-actions\s*[\s\S]{0,5000}?```/gi, '');
-  // Remove file_edit tags using shared parser
-  next = sanitizeFileEditTags(next);
-
-  // Remove <fs-actions>...</fs-actions> XML tag blocks (LLM sometimes uses XML instead of code blocks)
-  next = next.replace(/<fs-actions>[\s\S]{0,5000}?<\/fs-actions>/gi, '');
-
-  // Remove raw WRITE/PATCH/APPLY_DIFF heredoc command blocks that leak into visible output
-  // Enhanced regex to handle more edge cases: no whitespace, different line breaks, nested markers
-  // Using line-start anchors (^) with /m flag to avoid matching inside code blocks
-  
-  // Pattern 1: Standard format with optional newlines between path and <<<
-  // FIX: Limit match scope to prevent catastrophic backtracking
-  next = next.replace(/(?:^|\n)\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+(?:\n\s*){0,3}<<<[\s\S]{0,5000}?>>>(?=\n|$)/gim, '\n');
-
-  // Pattern 2: Handle cases where <<< is on same line as path (WRITE path<<< content >>>)
-  // Only match at line start to avoid false positives in code blocks
-  next = next.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]+<<<[\s\S]{0,5000}?>>>/gim, '');
-  
-  // Pattern 3: Remove DELETE commands (line start only)
-  next = next.replace(/^\s*DELETE\s+[^\n]+(?=\n|$)/gim, '\n');
-  
-  // Pattern 4: Remove <apply_diff> XML tags with content
-  // FIX: Limit match scope to prevent catastrophic backtracking
-  next = next.replace(/<apply_diff\s+path=["'][^"']+["']\s*>[\s\S]{0,5000}?<\/apply_diff>/gi, '');
-
-  // Pattern 5: Handle any remaining fs-actions style commands (outside of code blocks)
-  // Match WRITE/PATCH/APPLY_DIFF at start of line with heredoc markers anywhere
-  next = next.replace(/^\s*(WRITE|PATCH|APPLY_DIFF)\s+[^\n]*\n?\s*<<<[\s\S]{0,5000}?>>>/gim, '');
-  
-  // Pattern 5.5: Remove tool_call XML tags that leak into display
-  if (next.includes('tool_call')) {
-    // FIX: Limit match scope to prevent catastrophic backtracking
-    next = next.replace(/<tool_call>[\s\S]{0,5000}?<\/tool_call>/gi, '');
-    next = next.replace(/<\/tool_call>/gi, '');
-  }
-
-  // Pattern 5.6: Remove leaked project/artifact XML tags and continuation markers
-  // Use lookahead (?=[\s/>]) to avoid matching hyphenated tag names like <artifact-link>
-  next = next.replace(/<\/?project(?=[\s/>])[^>]*>/gi, '');
-  next = next.replace(/<\/?artifact(?=[\s/>])[^>]*>/gi, '');
-  next = next.replace(/\[CONTINUE_REQUESTED\]/gi, '');
-
-  // Pattern 6: Clean up leftover <<< and >>> markers that weren't properly paired
-  next = next.replace(/^\s*<<<\s*$/gm, '');
-  next = next.replace(/^\s*>>>\s*$/gm, '');
-
-  // Pattern 7: Remove bare heredoc blocks (<<<...>>>) without command prefix
-  // These are malformed LLM outputs that should not appear in the display
-  // FIX: Limit match scope to prevent catastrophic backtracking
-  next = next.replace(/(?:^|\n)\s*<<<[\s\S]{0,5000}?>>>\s*(?=\n|$)/gim, '\n');
-
-  // Normalize leftover spacing
-  next = next.replace(/\n{3,}/g, '\n\n').trim();
-  
-  return next;
-}
-
-function buildClientVisibleUnifiedResponse(response: any, visibleContent: string): any {
-  return {
-    ...response,
-    content: visibleContent,
-    data: {
-      ...(response?.data || {}),
-      content: visibleContent,
-    },
-  };
 }
 
 interface ChatFilesystemFileContext {
@@ -2136,6 +3386,13 @@ function appendFilesystemContextMessages(
         ? [
             'For file changes, prefer one of these parseable schemas:',
             '',
+            'CAPABILITY CHOICE:',
+            '- For modifying an existing file, use APPLY_DIFF first.',
+            '- For creating a brand-new file, use WRITE or <file_edit path="...">...</file_edit>.',
+            '- For deleting a file, use DELETE <path>.',
+            '- For reading or referring to existing workspace content, use <file_read path="..." /> when needed.',
+            '- For shell/runtime instructions meant for the user terminal, emit a single ```bash block.',
+            '',
             'FOR EXISTING FILES, prefer surgical edits (APPLY_DIFF) over full rewrites:',
             '  <apply_diff path="src/utils.ts">',
             '    <search>function oldName() {',
@@ -2170,6 +3427,19 @@ function appendFilesystemContextMessages(
             'IMPORTANT: For edits to existing files, ALWAYS use APPLY_DIFF instead of WRITE.',
             'APPLY_DIFF only replaces the exact block you specify, preventing context truncation.',
             'Use WRITE only when creating new files or when a complete rewrite is explicitly needed.',
+            'Do not rewrite whole existing files unless the user explicitly wants a full rewrite.',
+            '',
+            'DIFF AUTHORING RULES:',
+            '- The <search> block or APPLY_DIFF search section must match the existing code exactly, including spacing and punctuation.',
+            '- Keep each diff surgical and minimal; prefer multiple small APPLY_DIFF operations over one large rewrite.',
+            '- Include enough surrounding context in the search block to uniquely identify the target.',
+            '- If multiple files are involved, emit one operation per file rather than mixing contents.',
+            '',
+            'DIFF-BASED SELF-HEALING:',
+            '- If an edit might fail because surrounding code may have drifted, first read/reference the latest file content and then emit a narrower APPLY_DIFF.',
+            '- If a search block is large, brittle, or repeated, reduce it to the smallest unique exact block.',
+            '- If an earlier attempted patch likely failed, do not repeat the same broad patch; emit a corrected APPLY_DIFF with fresher exact context.',
+            '- Prefer preserving user code and making the minimum viable edit rather than replacing entire functions or files.',
             'Prefer concrete multi-file edits when user requests full project scaffolding.',
             '',
             'To read a file from the workspace, use: <file_read path="..." />',
@@ -2177,6 +3447,7 @@ function appendFilesystemContextMessages(
             'When the user asks how to run code, include shell commands in ```bash blocks.',
             'The user has a terminal that can execute these commands.',
             'For multi-step setups, provide all commands in a single bash block so they can be run together.',
+            'Use bash blocks for user-facing commands only; use filesystem edit schemas for file mutations.',
             'If a task is too large for a single response, end with the exact token: [CONTINUE_REQUESTED]',
             'Example: ```bash',
             'npm install',
@@ -2251,231 +3522,11 @@ function buildAgenticContext(messages: LLMMessage[]): string {
   return parts.join('\n\n');
 }
 
-// Use shared extractors from file-edit-parser.ts
-function extractTaggedFileEdits(content: string): Array<{ path: string; content: string }> {
-  return extractFileEdits(content).map(edit => ({ path: edit.path, content: edit.content }));
-}
-
-function extractFencedDiffEdits(content: string): Array<{ path: string; diff: string }> {
-  return extractFencedDiffEditsShared(content);
-}
-
-// Note: extractFsActionWrites and extractTopLevelWrites are now imported from file-edit-parser.ts
-
-function extractTopLevelDeletes(content: string): string[] {
-  const deletes: string[] = [];
-
-  const deleteRegex = /^DELETE\s+([^\n]+)/gim;
-  let match: RegExpExecArray | null;
-  while ((match = deleteRegex.exec(content)) !== null) {
-    const path = match[1]?.trim();
-    if (path) deletes.push(path);
-  }
-
-  return deletes;
-}
-
-function extractTopLevelPatches(content: string): Array<{ path: string; diff: string }> {
-  const patches: Array<{ path: string; diff: string }> = [];
-
-  const patchRegex = /^PATCH\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]{0,5000}?)\s*>>>/gim;
-  let match: RegExpExecArray | null;
-  while ((match = patchRegex.exec(content)) !== null) {
-    const path = match[1]?.trim();
-    const diff = match[2] ?? '';
-    if (!path) continue;
-    patches.push({ path, diff });
-  }
-
-  return patches;
-}
-
-function extractFsActionDeletes(content: string): string[] {
-  const deletes: string[] = [];
-
-  // Extract from ```fs-actions ... ``` code blocks
-  const blockRegex = /```fs-actions\s*([\s\S]{0,5000}?)```/gi;
-  let blockMatch: RegExpExecArray | null;
-
-  while ((blockMatch = blockRegex.exec(content)) !== null) {
-    const blockContent = blockMatch[1] || '';
-    const deleteRegex = /DELETE\s+([^\n]+)/gi;
-    let deleteMatch: RegExpExecArray | null;
-    while ((deleteMatch = deleteRegex.exec(blockContent)) !== null) {
-      const path = deleteMatch[1]?.trim();
-      if (path) deletes.push(path);
-    }
-  }
-
-  // Also extract from <fs-actions>...</fs-actions> XML tags
-  const xmlBlockRegex = /<fs-actions>([\s\S]{0,5000}?)<\/fs-actions>/gi;
-  let xmlBlockMatch: RegExpExecArray | null;
-
-  while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
-    const blockContent = xmlBlockMatch[1] || '';
-    const deleteRegex = /DELETE\s+([^\n]+)/gi;
-    let deleteMatch: RegExpExecArray | null;
-    while ((deleteMatch = deleteRegex.exec(blockContent)) !== null) {
-      const path = deleteMatch[1]?.trim();
-      if (path) deletes.push(path);
-    }
-  }
-
-  return deletes;
-}
-
-function extractFsActionPatches(content: string): Array<{ path: string; diff: string }> {
-  const patches: Array<{ path: string; diff: string }> = [];
-
-  // Extract from ```fs-actions ... ``` code blocks
-  const blockRegex = /```fs-actions\s*([\s\S]{0,5000}?)```/gi;
-  let blockMatch: RegExpExecArray | null;
-
-  while ((blockMatch = blockRegex.exec(content)) !== null) {
-    const blockContent = blockMatch[1] || '';
-    // FIX: Support both "PATCH path <<<" and "PATCH path\n<<<" formats
-    const patchRegex = /PATCH\s+([^\s<]+)\s*<<<\s*([\s\S]{0,5000}?)\s*>>>/gi;
-    let patchMatch: RegExpExecArray | null;
-    while ((patchMatch = patchRegex.exec(blockContent)) !== null) {
-      const path = patchMatch[1]?.trim();
-      const diff = patchMatch[2] ?? '';
-      if (!path) continue;
-      patches.push({ path, diff });
-    }
-  }
-
-  // Also extract from <fs-actions>...</fs-actions> XML tags
-  const xmlBlockRegex = /<fs-actions>([\s\S]{0,5000}?)<\/fs-actions>/gi;
-  let xmlBlockMatch: RegExpExecArray | null;
-
-  while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
-    const blockContent = xmlBlockMatch[1] || '';
-    // FIX: Support both "PATCH path <<<" and "PATCH path\n<<<" formats
-    const patchRegex = /PATCH\s+([^\s<]+)\s*<<<\s*([\s\S]{0,5000}?)\s*>>>/gi;
-    let patchMatch: RegExpExecArray | null;
-    while ((patchMatch = patchRegex.exec(blockContent)) !== null) {
-      const path = patchMatch[1]?.trim();
-      const diff = patchMatch[2] ?? '';
-      if (!path) continue;
-      patches.push({ path, diff });
-    }
-  }
-
-  return patches;
-}
-
-function extractApplyDiffOperations(content: string): Array<{ path: string; search: string; replace: string; thought?: string }> {
-  const diffs: Array<{ path: string; search: string; replace: string; thought?: string }> = [];
-
-  // Extract from ```fs-actions ... ``` blocks: APPLY_DIFF path <<< search === replace >>>
-  const blockRegex = /```fs-actions\s*([\s\S]{0,5000}?)```/gi;
-  let blockMatch: RegExpExecArray | null;
-
-  while ((blockMatch = blockRegex.exec(content)) !== null) {
-    const blockContent = blockMatch[1] || '';
-    const diffRegex = /APPLY_DIFF\s+([^\s<]+)\s*<<<\s*([\s\S]{0,5000}?)\s*===\s*([\s\S]{0,5000}?)\s*>>>/gi;
-    let diffMatch: RegExpExecArray | null;
-    while ((diffMatch = diffRegex.exec(blockContent)) !== null) {
-      const path = diffMatch[1]?.trim();
-      const search = diffMatch[2] ?? '';
-      const replace = diffMatch[3] ?? '';
-      if (!path || !search) continue;
-      diffs.push({ path, search, replace });
-    }
-  }
-
-  // Extract from <fs-actions>...</fs-actions> XML tags
-  const xmlBlockRegex = /<fs-actions>([\s\S]{0,5000}?)<\/fs-actions>/gi;
-  let xmlBlockMatch: RegExpExecArray | null;
-
-  while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
-    const blockContent = xmlBlockMatch[1] || '';
-    const diffRegex = /APPLY_DIFF\s+([^\s<]+)\s*<<<\s*([\s\S]{0,5000}?)\s*===\s*([\s\S]{0,5000}?)\s*>>>/gi;
-    let diffMatch: RegExpExecArray | null;
-    while ((diffMatch = diffRegex.exec(blockContent)) !== null) {
-      const path = diffMatch[1]?.trim();
-      const search = diffMatch[2] ?? '';
-      const replace = diffMatch[3] ?? '';
-      if (!path || !search) continue;
-      diffs.push({ path, search, replace });
-    }
-  }
-
-  // Extract from <apply_diff> XML tags: <apply_diff path="..."><search>...</search><replace>...</replace></apply_diff>
-  const xmlDiffRegex = /<apply_diff\s+path=["']([^"']+)["']\s*>\s*<search>([\s\S]{0,5000}?)<\/search>\s*<replace>([\s\S]{0,5000}?)<\/replace>\s*(?:<thought>([\s\S]{0,5000}?)<\/thought>\s*)?<\/apply_diff>/gi;
-  let xmlDiffMatch: RegExpExecArray | null;
-
-  while ((xmlDiffMatch = xmlDiffRegex.exec(content)) !== null) {
-    const path = xmlDiffMatch[1]?.trim();
-    const search = xmlDiffMatch[2] ?? '';
-    const replace = xmlDiffMatch[3] ?? '';
-    const thought = xmlDiffMatch[4]?.trim();
-    if (!path || !search) continue;
-    diffs.push({ path, search, replace, thought });
-  }
-
-  // Extract top-level APPLY_DIFF commands (outside containers)
-  // Matches: APPLY_DIFF path\n<<<\nsearch\n===\nreplace\n>>>
-  // Note: Uses literal === and >>> on their own lines to delimit the search/replace sections,
-  // not when they appear inside the content.
-  const topLevelDiffRegex = /^\s*APPLY_DIFF\s+([^\s<]+)\s*(?:\n\s*)?<<<\s*\n([\s\S]{0,5000}?)\n===\s*\n([\s\S]{0,5000}?)\n>>>/gim;
-  let topLevelMatch: RegExpExecArray | null;
-  while ((topLevelMatch = topLevelDiffRegex.exec(content)) !== null) {
-    const path = topLevelMatch[1]?.trim();
-    const search = topLevelMatch[2] ?? '';
-    const replace = topLevelMatch[3] ?? '';
-    if (!path || !search) continue;
-    // Deduplicate against already-found diffs
-    if (!diffs.some(d => d.path === path && d.search === search && d.replace === replace)) {
-      diffs.push({ path, search, replace });
-    }
-  }
-
-  return diffs;
-}
-
-function extractBashHereDocWrites(content: string): Array<{ path: string; content: string }> {
-  const writes: Array<{ path: string; content: string }> = [];
-  const bashBlockRegex = /```bash\s*([\s\S]{0,5000}?)```/gi;
-  let bashMatch: RegExpExecArray | null;
-
-  while ((bashMatch = bashBlockRegex.exec(content)) !== null) {
-    const block = bashMatch[1] || '';
-    const hereDocRegex = /cat\s*>\s*([^\s]+)\s*<<['"]?EOF['"]?\n([\s\S]{0,5000}?)\nEOF/g;
-    let hereDocMatch: RegExpExecArray | null;
-    while ((hereDocMatch = hereDocRegex.exec(block)) !== null) {
-      const path = hereDocMatch[1]?.trim();
-      const fileContent = hereDocMatch[2] ?? '';
-      if (!path) continue;
-      writes.push({ path, content: fileContent });
-    }
-  }
-
-  return writes;
-}
-
-function extractFilenameHintCodeBlocks(content: string): Array<{ path: string; content: string }> {
-  const writes: Array<{ path: string; content: string }> = [];
-  const regex = /```[^\n`]*\b(?:file|path|filename)\s*[:=]\s*([^\n]+)\n([\s\S]{0,5000}?)```/gi;
-  let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(content)) !== null) {
-    const path = match[1]?.trim();
-    let fileContent = match[2] ?? '';
-    if (!path) continue;
-    // Strip heredoc markers that may wrap the content (WRITE path <<< content >>>)
-    fileContent = stripHeredocMarkers(fileContent);
-    writes.push({ path, content: fileContent });
-  }
-
-  return writes;
-}
-
 /**
  * Validate an extracted file path to prevent garbage paths from being written.
  * Rejects paths containing heredoc markers, control chars, or command names.
  */
-function validateExtractedPath(raw: string): string | null {
+function validateExtractedPath(raw: string, isFolder: boolean = false): string | null {
   const path = (raw || '').trim().replace(/^['"`]|['"`]$/g, '');
   if (!path) return null;
   if (path.length > 300) return null;
@@ -2486,36 +3537,31 @@ function validateExtractedPath(raw: string): string | null {
   if (PATH_TOO_MANY_DOTS_RE.test(path)) return null;
   if (PATH_TRAVERSAL_RE.test(path)) return null;
   if (PATH_COMMAND_RE.test(path)) return null;
+  // Reject paths that look like CSS classes, Vue directives, or code snippets
+  if (PATH_LOOKS_LIKE_CODE_RE.test(path)) return null;
+  // Reject paths with colons (CSS classes like hover:scale-105)
+  if (PATH_HAS_COLON_RE.test(path)) return null;
+  // CRITICAL FIX: Reject CSS values and SCSS variables in last path segment
+  // This catches "project/sessions/002/0.3s" where "0.3s" is invalid
+  if (PATH_CSS_VALUE_RE.test(path)) return null;  // CSS values like "/0.3s"
+  if (PATH_SCSS_VAR_RE.test(path)) return null;  // SCSS variables like "/$var"
+  // Must have a valid file extension or be a directory name
+  // Allow brackets [] for Next.js dynamic routes like app/blog/[slug]/page.tsx
+  if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) return null;
+
+  // CRITICAL FIX: Use shared validation to reject JSON/object syntax in paths
+  if (!isValidFilePath(path, isFolder)) return null;
+
   return path;
 }
 
 /**
- * Strip heredoc markers (<<<, >>>) that may wrap file content.
- * Also strips a leading WRITE/PATCH command line if present.
+ * Extract folder_create tags from content.
  */
-function stripHeredocMarkers(content: string): string {
-  let cleaned = content;
-  // Remove leading "WRITE path" or "PATCH path" line if the whole block is a command
-  cleaned = cleaned.replace(/^\s*(?:WRITE|PATCH)\s+\S+\s*\n/, '');
-  // Strip leading <<< marker (with optional whitespace/newline)
-  cleaned = cleaned.replace(/^\s*<<<\s*\n?/, '');
-  // Strip trailing >>> marker (with optional whitespace/newline)
-  cleaned = cleaned.replace(/\n?\s*>>>\s*$/, '');
-  return cleaned;
-}
-
-function extractFileWriteFolderCreateTags(content: string): {
-  writes: Array<{ path: string; content: string }>;
-  folders: string[];
-} {
-  // Use shared parser for file_write tags
-  const fileWrites = extractFileWriteEdits(content);
-  const writes: Array<{ path: string; content: string }> = fileWrites.map(w => ({
-    path: w.path,
-    content: w.content
-  }));
-
+function extractFolderCreateTags(content: string): string[] {
   const folders: string[] = []
+
+  if (!content.includes('folder_create')) return folders;
 
   // Extract folder_create tags
   const folderCreateRegex = /<folder_create\s+path\s*=\s*["']([^"']+)["']\s*\/?>/gi
@@ -2533,11 +3579,15 @@ function extractFileWriteFolderCreateTags(content: string): {
     folders.push(validPath)
   }
 
-  return { writes, folders }
+  return folders
 }
 
 function sanitizePathSegment(input: string): string {
-  return input.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'session';
+  // CRITICAL FIX: Use normalizeSessionId to extract simple session name from composite IDs
+  // This prevents "anon:timestamp:001" from becoming "anon-timestamp-001"
+  // If normalizeSessionId returns empty (invalid input), fall back to 'session'
+  const simpleSessionId = normalizeSessionId(input);
+  return simpleSessionId.replace(/[^a-zA-Z0-9._-]+/g, '-').replace(/^-+|-+$/g, '') || 'session';
 }
 
 function resolveScopedPath(input: {
@@ -2577,119 +3627,6 @@ function resolveScopedPath(input: {
   return resolveScopeUtil(normalizedRelative, input.scopePath);
 }
 
-function buildSupplementalAgenticEvents(response: any, requestId: string, existingEvents: string[] = []): string[] {
-  const events: string[] = [];
-  const hasReasoningEvent = existingEvents.some((event) => String(event).startsWith('event: reasoning'));
-  const hasToolInvocationEvent = existingEvents.some((event) => String(event).startsWith('event: tool_invocation'));
-
-  const reasoning = response?.data?.reasoning || response?.metadata?.reasoning;
-  const toolInvocations = Array.isArray(response?.data?.toolInvocations)
-    ? response.data.toolInvocations
-    : [];
-
-  if (!hasReasoningEvent && typeof reasoning === 'string' && reasoning.trim()) {
-    events.push(`event: reasoning\ndata: ${JSON.stringify({
-      requestId,
-      reasoning: reasoning.trim(),
-      timestamp: Date.now(),
-    })}\n\n`);
-  }
-
-  if (!hasToolInvocationEvent && toolInvocations.length > 0) {
-    const startedAt = new Map<string, number>();
-    for (const invocation of toolInvocations) {
-      const now = Date.now();
-      const toolCallId = invocation?.toolCallId || `tool-${generateSecureId('call')}`;
-      if (invocation?.state === 'call') {
-        startedAt.set(toolCallId, now);
-      }
-      const latencyMs =
-        invocation?.state === 'result'
-          ? now - (startedAt.get(toolCallId) || now)
-          : undefined;
-
-      const payload = {
-        ...invocation,
-        toolCallId,
-        requestId,
-        timestamp: now,
-        ...(typeof latencyMs === 'number' ? { latencyMs } : {}),
-      };
-
-      events.push(`event: tool_invocation\ndata: ${JSON.stringify(payload)}\n\n`);
-      events.push(`event: step_metric\ndata: ${JSON.stringify({
-        requestId,
-        toolCallId,
-        toolName: invocation?.toolName,
-        state: invocation?.state,
-        timestamp: now,
-        ...(typeof latencyMs === 'number' ? { latencyMs } : {}),
-      })}\n\n`);
-    }
-  }
-
-  const sandboxChunks = extractSandboxOutputChunks(toolInvocations);
-  for (const chunk of sandboxChunks) {
-    events.push(`event: sandbox_output\ndata: ${JSON.stringify({
-      requestId,
-      ...chunk,
-      timestamp: Date.now(),
-    })}\n\n`);
-  }
-
-  return events;
-}
-
-function extractSandboxOutputChunks(
-  invocations: Array<{ result?: any; args?: any }>,
-): Array<{ stream: 'stdout' | 'stderr'; chunk: string; toolCallId?: string }> {
-  const chunks: Array<{ stream: 'stdout' | 'stderr'; chunk: string; toolCallId?: string }> = [];
-
-  for (const invocation of invocations) {
-    const result = invocation?.result || {};
-    const output = result?.output;
-    const error = result?.error;
-
-    if (typeof output === 'string' && output.trim()) {
-      for (const part of chunkText(output, 800)) {
-        chunks.push({ stream: 'stdout', chunk: part, toolCallId: (invocation as any)?.toolCallId });
-      }
-    } else if (output && typeof output === 'object') {
-      if (typeof output.stdout === 'string' && output.stdout.trim()) {
-        for (const part of chunkText(output.stdout, 800)) {
-          chunks.push({ stream: 'stdout', chunk: part, toolCallId: (invocation as any)?.toolCallId });
-        }
-      }
-      if (typeof output.stderr === 'string' && output.stderr.trim()) {
-        for (const part of chunkText(output.stderr, 800)) {
-          chunks.push({ stream: 'stderr', chunk: part, toolCallId: (invocation as any)?.toolCallId });
-        }
-      }
-    }
-
-    if (typeof error === 'string' && error.trim()) {
-      for (const part of chunkText(error, 800)) {
-        chunks.push({ stream: 'stderr', chunk: part, toolCallId: (invocation as any)?.toolCallId });
-      }
-    } else if (error && typeof error === 'object' && typeof error.stderr === 'string' && error.stderr.trim()) {
-      for (const part of chunkText(error.stderr, 800)) {
-        chunks.push({ stream: 'stderr', chunk: part, toolCallId: (invocation as any)?.toolCallId });
-      }
-    }
-  }
-
-  return chunks;
-}
-
-function chunkText(input: string, size: number): string[] {
-  const chunks: string[] = [];
-  const normalized = String(input || '');
-  for (let i = 0; i < normalized.length; i += size) {
-    chunks.push(normalized.slice(i, i + size));
-  }
-  return chunks;
-}
-
 export async function applyFilesystemEditsFromResponse(input: {
   ownerId: string;
   conversationId: string;
@@ -2702,16 +3639,20 @@ export async function applyFilesystemEditsFromResponse(input: {
     request_files?: string[];
     write_diffs?: Array<{ path: string; diff: string }>;
   };
+  /** Force extraction even if previously emitted (for final parse after stream completes) */
+  forceExtract?: boolean;
 }): Promise<FilesystemEditResult> {
-  // Extract all operations first to check if there's anything to do
-  const fileWriteFolderCreateOps = extractFileWriteFolderCreateTags(input.responseContent || '');
+  // FIX: If forceExtract is true, bypass deduplication to catch all edits including those
+  // that may have been skipped during incremental parsing (e.g., last file with unclosed heredoc)
+  const parsedResponse = parseFilesystemResponse(input.responseContent || '', input.forceExtract ?? false);
+  const folderCreateOps = extractFolderCreateTags(input.responseContent || '');
+
+  // Track invalid paths to detect when ALL paths are invalid (prevents infinite retry loops)
+  const invalidPathErrors: string[] = [];
+
+  // If forceExtract, we still need to deduplicate within the response but not skip based on prior emits
   const combinedWriteEdits = [
-    ...extractTaggedFileEdits(input.responseContent || ''),
-    ...extractFsActionWrites(input.responseContent || ''),
-    ...extractTopLevelWrites(input.responseContent || ''),
-    ...extractBashHereDocWrites(input.responseContent || ''),
-    ...extractFilenameHintCodeBlocks(input.responseContent || ''),
-    ...fileWriteFolderCreateOps.writes.map(w => ({ path: w.path, content: w.content })),
+    ...parsedResponse.writes.map(edit => ({ path: edit.path, content: edit.content })),
   ].map(edit => ({
     ...edit,
     // Universal sanitization: strip any leaked heredoc markers from all extractors
@@ -2719,6 +3660,7 @@ export async function applyFilesystemEditsFromResponse(input: {
   })).filter(edit => {
     const validPath = validateExtractedPath(edit.path);
     if (!validPath) {
+      invalidPathErrors.push(`Invalid path: ${edit.path.substring(0, 100)}`);
       console.warn('[applyFilesystemEdits] Rejected invalid write path:', edit.path.substring(0, 80));
       return false;
     }
@@ -2726,22 +3668,22 @@ export async function applyFilesystemEditsFromResponse(input: {
     return true;
   });
   const combinedDiffOperations = [
-    ...extractFencedDiffEdits(input.responseContent || ''),
-    ...extractFsActionPatches(input.responseContent || ''),
-    ...extractTopLevelPatches(input.responseContent || ''),
+    ...parsedResponse.diffs,
     ...(input.commands?.write_diffs || []),
   ].filter(op => {
     const validPath = validateExtractedPath(op.path);
     if (!validPath) {
+      invalidPathErrors.push(`Invalid diff path: ${op.path.substring(0, 100)}`);
       console.warn('[applyFilesystemEdits] Rejected invalid diff path:', op.path.substring(0, 80));
       return false;
     }
     op.path = validPath;
     return true;
   });
-  const applyDiffOperations = extractApplyDiffOperations(input.responseContent || '').filter(op => {
+  const applyDiffOperations = parsedResponse.applyDiffs.filter(op => {
     const validPath = validateExtractedPath(op.path);
     if (!validPath) {
+      invalidPathErrors.push(`Invalid apply_diff path: ${op.path.substring(0, 100)}`);
       console.warn('[applyFilesystemEdits] Rejected invalid apply_diff path:', op.path.substring(0, 80));
       return false;
     }
@@ -2749,18 +3691,63 @@ export async function applyFilesystemEditsFromResponse(input: {
     return true;
   });
   const deleteTargets = [
-    ...extractFsActionDeletes(input.responseContent || ''),
-    ...extractTopLevelDeletes(input.responseContent || ''),
+    ...parsedResponse.deletes,
   ].map((p) => {
     const validPath = validateExtractedPath(p);
     if (!validPath) {
+      invalidPathErrors.push(`Invalid delete path: ${p.substring(0, 100)}`);
       console.warn('[applyFilesystemEdits] Rejected invalid delete path:', p.substring(0, 80));
       return null;
     }
     return validPath;
   }).filter((p): p is string => !!p);
-  const folderCreateTargets = fileWriteFolderCreateOps.folders; // Separate folder creation targets
-  const requestFiles = input.commands?.request_files || [];
+
+  // Validate folder paths from parsed response (trailing slashes OK for folders)
+  const validatedParsedFolders = parsedResponse.folders.map((folderPath) => {
+    const validPath = validateExtractedPath(folderPath, true); // isFolder = true
+    if (!validPath) {
+      invalidPathErrors.push(`Invalid folder path: ${folderPath.substring(0, 100)}`);
+      console.warn('[applyFilesystemEdits] Rejected invalid folder path:', folderPath.substring(0, 80));
+      return null;
+    }
+    return validPath;
+  }).filter((p): p is string => !!p);
+
+  const folderCreateTargets = [...new Set([...validatedParsedFolders, ...folderCreateOps])];
+  const requestFiles = (input.commands?.request_files || []).map((requestedPath) => {
+    const validPath = validateExtractedPath(requestedPath);
+    if (!validPath) {
+      invalidPathErrors.push(`Invalid requested read path: ${requestedPath.substring(0, 100)}`);
+      console.warn('[applyFilesystemEdits] Rejected invalid requested read path:', requestedPath.substring(0, 80));
+      return null;
+    }
+    return validPath;
+  }).filter((p): p is string => !!p);
+
+  // CRITICAL FIX: If ALL paths were invalid, return explicit error to prevent infinite retry loop
+  const totalRequestedPaths = parsedResponse.writes.length + parsedResponse.diffs.length + 
+                               parsedResponse.applyDiffs.length + parsedResponse.deletes.length;
+  const totalValidPaths = combinedWriteEdits.length + combinedDiffOperations.length + 
+                          applyDiffOperations.length + deleteTargets.length;
+  
+  if (totalRequestedPaths > 0 && totalValidPaths === 0 && invalidPathErrors.length > 0) {
+    chatLogger.error('[applyFilesystemEdits] ALL paths were invalid - returning explicit error to prevent infinite retry', {
+      requestId: input.requestId,
+      totalRequestedPaths,
+      invalidPathCount: invalidPathErrors.length,
+      sampleErrors: invalidPathErrors.slice(0, 5),
+    });
+    
+    return {
+      transactionId: null,
+      status: 'none',
+      applied: [],
+      errors: invalidPathErrors,
+      requestedFiles: [],
+      scopePath: input.scopePath,
+      sessionId: extractSessionIdFromPath(input.scopePath) || input.conversationId,
+    };
+  }
 
   // Only create transaction if there are mutating operations (write/patch/delete/apply_diff)
   // This prevents memory leaks from accumulating no-op transactions
@@ -2839,6 +3826,8 @@ export async function applyFilesystemEditsFromResponse(input: {
         // Emits 'create' for new files, 'update' for existing files
         emitFilesystemUpdated({
           path: file.path,
+          paths: [file.path],
+          scopePath: extractScopePath(file.path),
           type: existedBefore ? 'update' : 'create',
           sessionId: input.conversationId,
         });
@@ -2910,6 +3899,8 @@ export async function applyFilesystemEditsFromResponse(input: {
         if (existedBefore) {
           emitFilesystemUpdated({
             path: file.path,
+            paths: [file.path],
+            scopePath: extractScopePath(file.path),
             type: 'update',
             sessionId: input.conversationId,
           });
@@ -2977,6 +3968,8 @@ export async function applyFilesystemEditsFromResponse(input: {
           // Emit event for new file creation
           emitFilesystemUpdated({
             path: file.path,
+            paths: [file.path],
+            scopePath: extractScopePath(file.path),
             type: 'create',
             sessionId: input.conversationId,
           });
@@ -3014,6 +4007,8 @@ export async function applyFilesystemEditsFromResponse(input: {
         // This ensures existing file changes are reflected in the file editor
         emitFilesystemUpdated({
           path: file.path,
+          paths: [file.path],
+          scopePath: extractScopePath(file.path),
           type: 'update',
           sessionId: input.conversationId,
         });
@@ -3237,8 +4232,49 @@ export async function applyFilesystemEditsFromResponse(input: {
 }
 
 export async function GET(request: NextRequest) {
-  // Redirect to dedicated /api/providers endpoint
-  // This avoids duplicating provider listing logic
+  // Precompile warmup: Initialize LLM providers on first GET request
+  // This ensures the route is ready for subsequent POST requests without cold start
+  const url = new URL(request.url);
+
+  // If called with ?warmup=true, trigger provider initialization
+  // SECURITY: Only allow in development or with admin auth header
+  if (url.searchParams.get('warmup') === 'true') {
+    // Timing-safe comparison to prevent timing attacks
+    const headerValue = request.headers.get('x-admin-secret') || '';
+    const expectedSecret = process.env.CHAT_ADMIN_SECRET;
+    // SECURITY: Require CHAT_ADMIN_SECRET to be configured and non-empty
+    // In production, an empty secret means NO auth is configured, so reject all requests
+    const isAdminAuth = !!expectedSecret &&
+      headerValue.length === expectedSecret.length &&
+      timingSafeEqual(Buffer.from(headerValue), Buffer.from(expectedSecret));
+    const isDevOnly = process.env.NODE_ENV === 'development';
+
+    if (!isAdminAuth && !isDevOnly) {
+      return NextResponse.json(
+        { error: 'Unauthorized: warmup requires admin auth or dev mode' },
+        { status: 401 }
+      );
+    }
+    
+    try {
+      const { llmService } = await import("@/lib/chat/llm-providers");
+      await llmService.warmupProviders();
+
+      return NextResponse.json({
+        success: true,
+        message: "Chat API pre-warmed and ready",
+        timestamp: Date.now(),
+      });
+    } catch (error) {
+      console.error("Chat API warmup error:", error);
+      return NextResponse.json(
+        { success: false, error: "Warmup failed" },
+        { status: 500 }
+      );
+    }
+  }
+
+  // Default: Redirect to providers endpoint
   return NextResponse.redirect(new URL('/api/providers', request.url));
 }
 

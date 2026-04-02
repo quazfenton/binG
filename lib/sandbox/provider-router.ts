@@ -398,6 +398,17 @@ const PROVIDER_PROFILES: ProviderProfile[] = [
     gpuSupport: true, // H100, A100, A10G, T4, L4, A10
     // NOTE: Full implementation complete - command execution, filesystem, tunnels, PTY all implemented
   },
+  {
+    type: 'agentfs',
+    services: ['persistent-fs'],
+    bestFor: ['persistent-service', 'general'],
+    costTier: 'low',
+    latencyTier: 'low',
+    persistenceSupport: true, // SQLite/Turso-backed
+    gpuSupport: false,
+    // AgentFS is a storage provider, not a container runtime
+    // Use alongside daytona/e2b for persistent state across sandbox cycles
+  },
 ];
 
 /**

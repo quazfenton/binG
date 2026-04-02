@@ -81,14 +81,33 @@ export function emitFilesystemUpdated(detail: FilesystemUpdatedDetail = {}): voi
     
     // Also emit to server-side subscribers via fetch (for other sessions/users)
     // This handles cross-browser-tab and cross-session scenarios
+    // NOTE: This is optional - failure doesn't affect local functionality
+    // Auth errors (401) are expected for anonymous users and can be safely ignored
     fetch('/api/filesystem/events/push', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify(normalizedDetail),
       credentials: 'include', // Include cookies for auth
-    }).catch(() => {
-      // Silently fail - local events are sufficient for single-session scenarios
-    });
+    })
+      .then((response) => {
+        if (!response.ok && response.status !== 401) {
+          // Only log errors that aren't auth-related (401 is expected for anonymous)
+          console.warn('[sync-events] Failed to push filesystem update', {
+            status: response.status,
+            eventId: normalizedDetail.eventId,
+          });
+        }
+      })
+      .catch((error) => {
+        // Silently ignore network errors - this is a best-effort sync optimization
+        // Only log in development for debugging
+        if (process.env.NODE_ENV === 'development') {
+          console.debug('[sync-events] Push failed (non-critical)', {
+            eventId: normalizedDetail.eventId,
+            error: error.message,
+          });
+        }
+      });
   } catch (err) {
     console.warn('[sync-events] Failed to dispatch filesystem-updated event:', err);
   }
@@ -113,8 +132,8 @@ export function onFilesystemUpdated(
   const channel = getBroadcastChannel();
   const broadcastListener = (event: MessageEvent) => {
     if (event.data?.type === FILESYSTEM_UPDATED_EVENT && event.data?.detail) {
-      // Re-emit as a CustomEvent for consistency
-      window.dispatchEvent(new CustomEvent(FILESYSTEM_UPDATED_EVENT, { detail: event.data.detail }));
+      // Call handler directly to avoid N×N re-dispatch via window
+      handler(new CustomEvent(FILESYSTEM_UPDATED_EVENT, { detail: event.data.detail }));
     }
   };
   

@@ -1,5 +1,6 @@
 import yaml from 'js-yaml';
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
+import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('Agent:WorkforceState');
@@ -33,7 +34,9 @@ const DEFAULT_STATE: WorkforceState = {
 };
 
 function getStatePath(conversationId: string): string {
-  return `project/sessions/${conversationId}/STATE.yaml`;
+  // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
+  const simpleSessionId = normalizeSessionId(conversationId) || '001'; // Fallback to '001' only if truly invalid
+  return `project/sessions/${simpleSessionId}/STATE.yaml`;
 }
 
 export async function loadState(userId: string, conversationId: string): Promise<WorkforceState> {

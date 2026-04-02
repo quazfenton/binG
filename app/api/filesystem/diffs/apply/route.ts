@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
-import { resolveScopedPath } from '@/lib/virtual-filesystem/scope-utils';
+import { resolveScopedPath, normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { parsePatch, applyPatch } from 'diff';
 import { verifyAuth } from '@/lib/auth/jwt';
 
@@ -72,7 +72,9 @@ export async function POST(request: NextRequest) {
     // SECURITY: Verify user identity with JWT (never trust client headers)
     const userId = await getUserIdFromRequest(request);
     const sessionId = getSessionId(request, bodySessionId);
-    const effectiveScopePath = scopePath || `project/sessions/${sessionId}`;
+    // CRITICAL FIX: Normalize sessionId to prevent composite IDs in paths
+    const simpleSessionId = normalizeSessionId(sessionId) || sessionId; // Use original if normalize returns empty
+    const effectiveScopePath = scopePath || `project/sessions/${simpleSessionId}`;
 
     // Log for audit trail (without exposing sensitive data)
     console.log('[DiffsApply] Processing diffs for authenticated user:', {

@@ -6,7 +6,7 @@
  */
 
 import type { ToolRegistry } from '../registry';
-import type { BootstrapConfig } from './index';
+import type { BootstrapConfig } from '../bootstrap';
 import { createLogger } from '../../utils/logger';
 import { bashToolExecutor } from '../tool-integration/bash-tool';
 import { z } from 'zod';
@@ -53,11 +53,15 @@ export async function registerBashTool(
       }),
       handler: async (args: any, context: any) => {
         return bashToolExecutor.execute({
-          params: args,
-          ownerId: config.userId,
+          userId: config.userId,
+          params: {
+            command: args.command,
+            cwd: args.cwd,
+            timeout: args.timeout,
+            enableHealing: args.enableHealing,
+          },
           sandboxId: context.sandboxId,
           sandboxProvider: context.sandboxProvider,
-          cwd: context.cwd,
         });
       },
       metadata: {
@@ -73,7 +77,7 @@ export async function registerBashTool(
     return 1;
   } catch (error: any) {
     logger.error('Failed to register bash tool', error);
-    return 0;
+    throw error; // Re-throw to signal bootstrap failure
   }
 }
 

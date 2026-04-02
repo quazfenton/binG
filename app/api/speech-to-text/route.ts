@@ -33,12 +33,12 @@ export async function POST(req: NextRequest) {
     // For direct audio transcription, we'd use a service like:
     // - OpenAI Whisper API
     // - LiveKit's Whisper (if in a room)
-    // For now, return a placeholder as direct transcription requires additional setup
-    
+    // For now, return unimplemented error as direct transcription requires additional setup
+
     return NextResponse.json({
       error: 'Direct audio transcription not implemented. Use LiveKit room transcription.',
       suggestion: 'Connect to a LiveKit room for real-time transcription'
-    });
+    }, { status: 501 }); // 501 Not Implemented
 
   } catch (error: any) {
     console.error('[Speech-to-Text API] Error:', error);

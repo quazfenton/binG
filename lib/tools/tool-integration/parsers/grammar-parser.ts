@@ -26,13 +26,17 @@ export class GrammarToolCallParser {
       }
     }
 
-    // Also parse mkdir commands
-    const mkdirRegex = /mkdir\s+(-p\s+)?([^\s&|;<>]+)/gi;
+    // Also parse mkdir commands (supports multiple paths: mkdir -p path1 path2)
+    // FIX: Don't capture across newlines to avoid parsing subsequent commands as paths
+    const mkdirRegex = /mkdir\s+(-p\s+)?([^\n&|;<>]+)/gi;
     let mkdirMatch: RegExpExecArray | null;
     
     while ((mkdirMatch = mkdirRegex.exec(content)) !== null) {
-      const [, , dirpath] = mkdirMatch;
-      if (dirpath && !dirpath.startsWith('-')) {
+      const pathsStr = mkdirMatch[2]?.trim();
+      if (!pathsStr) continue;
+      
+      const dirpaths = pathsStr.split(/\s+/).filter(p => p && !p.startsWith('-'));
+      for (const dirpath of dirpaths) {
         calls.push({
           name: 'filesystem.create_directory',
           arguments: {

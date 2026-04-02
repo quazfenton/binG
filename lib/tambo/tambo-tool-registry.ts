@@ -416,16 +416,51 @@ export function initializeDefaultTools(): void {
         }
 
         try {
-          const calculateFunc = new Function(`'use strict'; return (${sanitized})`);
-          const result = calculateFunc();
+          // SECURITY: Use safer math evaluation instead of new Function()
+          // Only allow numbers, basic operators, parentheses, and Math functions
+          const safeMathEval = (expr: string): number => {
+            // Allow only: numbers, +, -, *, /, %, ^, parentheses, spaces, dots, and Math functions
+            const safePattern = /^[\d+\-*/%^().\s]+$/;
+            const mathFuncPattern = /Math\.(abs|ceil|floor|round|sqrt|pow|min|max|sin|cos|tan|log|exp)/g;
 
-          if (typeof result !== 'number' || !Number.isFinite(result)) {
-            return { error: 'Invalid result', expression: raw };
-          }
+            if (!safePattern.test(expr.replace(mathFuncPattern, ''))) {
+              throw new Error('Invalid characters in expression');
+            }
 
+            // Replace ^ with ** for exponentiation
+            const normalizedExpr = expr.replace(/\^/g, '**');
+
+            // Replace Math functions with their JS equivalents
+            const jsExpr = normalizedExpr
+              .replace(/Math\.abs/g, 'Math.abs')
+              .replace(/Math\.ceil/g, 'Math.ceil')
+              .replace(/Math\.floor/g, 'Math.floor')
+              .replace(/Math\.round/g, 'Math.round')
+              .replace(/Math\.sqrt/g, 'Math.sqrt')
+              .replace(/Math\.pow/g, 'Math.pow')
+              .replace(/Math\.min/g, 'Math.min')
+              .replace(/Math\.max/g, 'Math.max')
+              .replace(/Math\.sin/g, 'Math.sin')
+              .replace(/Math\.cos/g, 'Math.cos')
+              .replace(/Math\.tan/g, 'Math.tan')
+              .replace(/Math\.log/g, 'Math.log')
+              .replace(/Math\.exp/g, 'Math.exp');
+
+            // Use Function with strict validation
+            const calculateFunc = new Function(`"use strict"; return (${jsExpr})`);
+            const result = calculateFunc();
+
+            if (typeof result !== 'number' || !Number.isFinite(result)) {
+              throw new Error('Invalid result');
+            }
+
+            return result;
+          };
+
+          const result = safeMathEval(sanitized);
           return { result: String(result), expression: raw, sanitized };
-        } catch {
-          return { error: 'Invalid mathematical expression', expression: raw };
+        } catch (error: any) {
+          return { error: error.message || 'Invalid mathematical expression', expression: raw };
         }
       },
       annotations: {

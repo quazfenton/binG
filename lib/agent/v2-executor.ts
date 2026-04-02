@@ -4,6 +4,7 @@ import { createLogger } from '../utils/logger';
 import { normalizeToolInvocation, type ToolInvocation } from '../types/tool-invocation';
 import type { ExecutionPolicy } from '../sandbox/types';
 import { determineExecutionPolicy } from '../sandbox/types';
+import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 
 const logger = createLogger('Agent:V2Executor');
 
@@ -52,29 +53,40 @@ function removeBashHeredocBlocks(content: string): string {
   const output: string[] = [];
   let insideHeredoc = false;
   let heredocDelimiter: string | null = null;
+  let heredocLineCount = 0;
+  const MAX_HEREDOC_LINES = 5000;
 
   for (const line of lines) {
     if (!insideHeredoc) {
-      // Detect start of bash heredoc: cat > file << 'EOF' or cat >> file << EOF
       const trimmed = line.trim();
       const heredocMatch = trimmed.match(/^cat\s*(?:>>?)\s*[^\s<>&|]+\s*<<\s*['"]?(\w+)['"]?\s*$/i);
       
       if (heredocMatch) {
         insideHeredoc = true;
         heredocDelimiter = heredocMatch[1];
-        continue; // Skip the heredoc start line
+        heredocLineCount = 0;
+        continue;
       }
       
       output.push(line);
     } else {
-      // Inside heredoc — look for closing delimiter
+      heredocLineCount++;
+      if (heredocLineCount > MAX_HEREDOC_LINES) {
+        insideHeredoc = false;
+        heredocDelimiter = null;
+        output.push(line);
+        continue;
+      }
       const trimmed = line.trim();
       if (heredocDelimiter && trimmed === heredocDelimiter) {
         insideHeredoc = false;
         heredocDelimiter = null;
       }
-      // Drop all lines inside the heredoc block
     }
+  }
+
+  if (insideHeredoc && output.length > 0) {
+    output.push('');
   }
 
   return output.join('\n');
@@ -88,37 +100,44 @@ function removeHeredocBlocks(content: string): string {
   const lines = content.split('\n');
   const output: string[] = [];
   let insideHeredoc = false;
+  let heredocLineCount = 0;
+  const MAX_HEREDOC_LINES = 5000;
 
   for (const line of lines) {
     if (!insideHeredoc) {
-      // Detect start of heredoc block
       const trimmed = line.trim();
       if (/^(WRITE|PATCH|APPLY_DIFF)\s+\S+.*<<</.test(trimmed) ||
           /^(WRITE|PATCH|APPLY_DIFF)\s+\S+/.test(trimmed)) {
-        // Look ahead: if the line itself ends with <<<, heredoc starts inline
         if (trimmed.endsWith('<<<') || /<<<\s*$/.test(trimmed)) {
           insideHeredoc = true;
+          heredocLineCount = 0;
         }
-        // Either way, drop the command line
         continue;
       }
       if (/^DELETE\s+\S+/.test(trimmed)) {
-        // Single-line DELETE — drop it
         continue;
       }
-      // Standalone <<< (deferred heredoc open)
       if (/^\s*<<<\s*$/.test(line)) {
         insideHeredoc = true;
+        heredocLineCount = 0;
         continue;
       }
       output.push(line);
     } else {
-      // Inside heredoc — look for closing >>>
+      heredocLineCount++;
+      if (heredocLineCount > MAX_HEREDOC_LINES) {
+        insideHeredoc = false;
+        output.push(line);
+        continue;
+      }
       if (/^\s*>>>\s*$/.test(line)) {
         insideHeredoc = false;
       }
-      // Drop all lines inside the heredoc block
     }
+  }
+
+  if (insideHeredoc && output.length > 0) {
+    output.push('');
   }
 
   return output.join('\n');
@@ -139,7 +158,7 @@ export interface V2ExecuteOptions {
   task: string;
   context?: string;
   stream?: boolean;
-  preferredAgent?: 'opencode' | 'nullclaw' | 'cli';
+  preferredAgent?: 'opencode' | 'nullclaw' | 'cli' | 'advanced';
   executionPolicy?: ExecutionPolicy;
   cliCommand?: { command: string; args?: string[] };
 }
@@ -166,6 +185,24 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
         stream: false,
         preferredAgent: 'nullclaw',
       });
+    } else if (options.preferredAgent === 'advanced') {
+      // Note: 'advanced' agent is not yet implemented
+      // For now, fall through to opencode path with a warning
+      console.warn('[V2Executor] preferredAgent "advanced" is not yet implemented, using opencode path');
+      const toolManager = getToolManager();
+      const session = await agentSessionManager.getOrCreateSession(
+        options.userId,
+        options.conversationId,
+        { enableMCP: true, mode: 'opencode', executionPolicy },
+      );
+      const { runOpenCodeDirect } = await import('./opencode-direct');
+      result = await runOpenCodeDirect({
+        userId: options.userId,
+        conversationId: options.conversationId,
+        task: taskWithContext,
+        executionPolicy,
+        toolManager,
+      });
     } else {
       const toolManager = getToolManager();
 
@@ -190,12 +227,14 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
 
       // FIX (Bug 8): use the session we already have rather than a second
       // non-async lookup that may miss an as-yet-uncached session.
-      const sanitizedContent = sanitizeV2ResponseContent(result.response || result.content || '');
+      const rawContent = result.response || result.content || '';
+      const sanitizedContent = sanitizeV2ResponseContent(rawContent);
 
       return {
         success: result.success ?? true,
         data: result,
         content: sanitizedContent,
+        rawContent,
         sessionId: session.id,
         conversationId: session.conversationId,
         workspacePath: session.workspacePath,
@@ -209,12 +248,14 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
 
   // Nullclaw path: session may not exist
   const session = agentSessionManager.getSession(options.userId, options.conversationId);
-  const sanitizedContent = sanitizeV2ResponseContent(result.response || result.content || '');
+  const rawContent = result.response || result.content || '';
+  const sanitizedContent = sanitizeV2ResponseContent(rawContent);
 
   return {
     success: result.success ?? true,
     data: result,
     content: sanitizedContent,
+    rawContent,
     sessionId: session?.id,
     conversationId: session?.conversationId,
     workspacePath: session?.workspacePath,
@@ -349,15 +390,17 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
             })),
             errors: [],
             requestedFiles: [],
-            scopePath: `project/sessions/${options.conversationId}`,
+            scopePath: `project/sessions/${normalizeSessionId(options.conversationId) || options.conversationId}`,
           })));
         }
 
-        const sanitizedContent = sanitizeV2ResponseContent(result.response || result.content || '');
+        const rawContent = result.response || result.content || '';
+        const sanitizedContent = sanitizeV2ResponseContent(rawContent);
 
         controller.enqueue(encoder.encode(formatEvent('done', {
           success: result.success ?? true,
           content: sanitizedContent,
+          rawContent,
           messageMetadata: {
             agent: result.agent || 'opencode',
             sessionId: session?.id,

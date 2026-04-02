@@ -40,7 +40,6 @@ import { Prism as SyntaxHighlighter } from "react-syntax-highlighter";
 import { oneDark } from "react-syntax-highlighter/dist/esm/styles/prism";
 import JSZip from "jszip";
 import type { Message } from "../types/index";
-import { parsePatch, applyPatch } from "diff";
 import { useVirtualFilesystem } from "../hooks/use-virtual-filesystem";
 import { normalizeScopePath, resolveScopedPath, stripWorkspacePrefixes } from "@/lib/virtual-filesystem/scope-utils";
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
@@ -53,6 +52,7 @@ import { createDebugLogger } from "@/config/features";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { checkFileConflicts } from "@/lib/session-naming";
 import { buildApiHeaders } from "@/lib/utils";
+import { usePanel } from "@/contexts/panel-context";
 
 // Import live preview offloading functions
 import {
@@ -69,6 +69,10 @@ import { PreviewErrorBoundary } from "./preview-error-boundary";
 
 // Lazy load Sandpack to avoid SSR issues
 // React.lazy requires default export, so we remap the named export
+// NOTE: Sandpack uses iframes with allow-scripts + allow-same-origin which triggers
+// browser security warnings ("An iframe which has both allow-scripts and allow-same-origin...").
+// This is expected behavior - Sandpack requires both permissions to execute user code in an
+// isolated environment while maintaining access to bundled resources. The warning can be safely ignored.
 const Sandpack = lazy(() =>
   import('@codesandbox/sandpack-react')
     .then(mod => ({ default: mod.Sandpack }))
@@ -190,6 +194,7 @@ export default function CodePreviewPanel({
   onApplyPolledDiffs,
   onClearPolledDiffs,
 }: CodePreviewPanelProps) {
+  const { openMonacoEditor } = usePanel();
   const [detectedFramework] = useState<"react" | "vue" | "vanilla">("vanilla");
 
   const { log, error: logError, warn: logWarn } = previewLogger;
@@ -206,7 +211,6 @@ export default function CodePreviewPanel({
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const dragStartX = useRef(0);
   const dragStartWidth = useRef(0);
-  const [, setDiffErrors] = useState<string[]>([]);
   const pendingFiles = useMemo(
     () => Object.keys(commandsByFile || {}),
     [commandsByFile],
@@ -1443,11 +1447,10 @@ export default function CodePreviewPanel({
     };
   }, [filesystemScopePath, writeFilesystemFile, listFilesystemDirectory, selectedTab, handleManualPreview, normalizeProjectPath]);
 
+  const parsedCodeData = useMemo(() => parseCodeBlocksFromMessages(messages), [messages]);
+
   // Extract code blocks from messages using centralized parser
-  const codeBlocks = useMemo(() => {
-    const parsedData = parseCodeBlocksFromMessages(messages);
-    return parsedData.codeBlocks;
-  }, [messages]);
+  const codeBlocks = parsedCodeData.codeBlocks;
 
   // Reset selectedFileIndex when codeBlocks change
   useEffect(() => {
@@ -1596,6 +1599,7 @@ export default function CodePreviewPanel({
   const filesystemCurrentPathRef = useRef(filesystemCurrentPath);
   const filesystemScopePathRef = useRef(filesystemScopePath);
   const lastWorkspaceVersionRef = useRef(0);
+  const pendingRefreshRef = useRef(false);
 
   useEffect(() => {
     filesystemCurrentPathRef.current = filesystemCurrentPath;
@@ -1607,7 +1611,7 @@ export default function CodePreviewPanel({
 
   // Debounce ref for directory listing to prevent polling storms
   const lastDirectoryListRef = useRef<{ path: string; timestamp: number } | null>(null);
-  const DIRECTORY_LIST_DEBOUNCE_MS = 500;
+  const DIRECTORY_LIST_DEBOUNCE_MS = 1000;
 
   // Debounced list directory function to prevent excessive API calls
   const debouncedListDirectory = useCallback(async (path: string) => {
@@ -1622,11 +1626,12 @@ export default function CodePreviewPanel({
     lastDirectoryListRef.current = { path, timestamp: now };
     await listFilesystemDirectory(path);
   }, [listFilesystemDirectory, log]);
-  
+
   // Assign to ref so openFilesystemDirectory can access it
+  // NOTE: Don't add debouncedListDirectory to deps - causes infinite loop
   useEffect(() => {
     debouncedListDirectoryRef.current = debouncedListDirectory;
-  }, [debouncedListDirectory]);
+  }, []); // Empty deps - ref assignment doesn't need to re-run
 
   // Clear preview state on navigation (filesystemScopePath change)
   // This ensures fresh state when user navigates to a different session/directory
@@ -1660,6 +1665,13 @@ export default function CodePreviewPanel({
   useEffect(() => {
     const refresh = async (detail?: any) => {
       log(`[filesystem-updated event] received`, detail);
+
+      // Skip expensive network fetches when panel is closed — defer until re-open
+      if (!isOpen) {
+        pendingRefreshRef.current = true;
+        log(`[filesystem-updated] panel closed, deferring refresh`);
+        return;
+      }
 
       try {
         const eventWorkspaceVersion = typeof detail?.workspaceVersion === 'number' ? detail.workspaceVersion : null;
@@ -1762,6 +1774,16 @@ export default function CodePreviewPanel({
     };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [isOpen]); // Only depend on isOpen - listener stays stable
+
+  // Flush deferred refresh when panel re-opens
+  useEffect(() => {
+    if (isOpen && pendingRefreshRef.current) {
+      pendingRefreshRef.current = false;
+      log('[CodePreviewPanel] panel opened with pending refresh, triggering now');
+      const currentPath = filesystemCurrentPathRef.current || filesystemScopePathRef.current || 'project';
+      void debouncedListDirectory(normalizeProjectPath(currentPath));
+    }
+  }, [isOpen]);
 
   // Generate project structure for complex projects
   // Also merge virtual filesystem files for live preview
@@ -3155,8 +3177,9 @@ root.render(<App />);` };
 
         const template = getSandpackTemplate(effectiveFramework) as any;
 
-        // Manual preview - Sandpack mode (primary framework preview)
-        if (isManualPreviewActive && previewMode === 'sandpack') {
+        // Sandpack preview mode - for BOTH manual and auto-detected projects
+        // This is the primary preview mode for framework-based projects
+        if (previewMode === 'sandpack') {
           const sandpackFiles: Record<string, { code: string }> = {};
 
           // Add all files to Sandpack - useStructure.files is already normalized
@@ -3170,9 +3193,20 @@ root.render(<App />);` };
           });
 
           // Get template from project detection (uses FRAMEWORK_TO_TEMPLATE mapping)
-          const template = projectDetection?.framework
+          const activeTemplate = isManualPreviewActive && projectDetection?.framework
             ? getSandpackTemplate(projectDetection.framework)
-            : 'react'; // Default to react for unknown frameworks
+            : template;
+
+          // Debug: Log if no files detected
+          if (Object.keys(sandpackFiles).length === 0) {
+            log('[Sandpack] WARNING: No files to render - useStructure.files is empty or all files are empty strings');
+            log('[Sandpack] useStructure:', {
+              hasUseStructure: !!useStructure,
+              filesCount: Object.keys(useStructure?.files || {}).length,
+              framework: useStructure?.framework,
+              isManualPreviewActive
+            });
+          }
 
           return (
             <Suspense fallback={
@@ -3181,60 +3215,81 @@ root.render(<App />);` };
                   <RefreshCw className="w-8 h-8 mx-auto mb-2 animate-spin" />
                   <p>Loading {effectiveFramework} preview...</p>
                   <p className="text-xs text-gray-500 mt-1">
-                    Template: {template} • {Object.keys(sandpackFiles).length} files
+                    Template: {activeTemplate} • {Object.keys(sandpackFiles).length} files
                   </p>
                 </div>
               </div>
             }>
-              <div className="h-full bg-gray-900 rounded-lg overflow-hidden flex flex-col">
-                <div className="bg-purple-900 px-4 py-2 flex items-center justify-between">
-                  <div className="flex items-center gap-2">
-                    <span className="text-white text-sm font-medium">⚛️ {effectiveFramework.toUpperCase()} Preview</span>
-                    <span className="text-purple-300 text-xs">{Object.keys(sandpackFiles).length} files • {template}</span>
+              <PreviewErrorBoundary framework={effectiveFramework}>
+                <div className="h-full bg-gray-900 rounded-lg overflow-hidden flex flex-col">
+                  <div className="bg-purple-900 px-4 py-2 flex items-center justify-between">
+                    <div className="flex items-center gap-2">
+                      <span className="text-white text-sm font-medium">⚛️ {effectiveFramework.toUpperCase()} Preview</span>
+                      <span className="text-purple-300 text-xs">{Object.keys(sandpackFiles).length} files • {activeTemplate}</span>
+                    </div>
+                    <div className="flex gap-2">
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setPreviewMode('raw')}
+                        className="text-xs bg-purple-800 hover:bg-purple-700 text-white"
+                      >
+                        View Raw
+                      </Button>
+                      <Button
+                        size="sm"
+                        variant="outline"
+                        onClick={() => setPreviewMode('iframe')}
+                        className="text-xs bg-purple-800 hover:bg-purple-700 text-white"
+                      >
+                        Iframe
+                      </Button>
+                    </div>
                   </div>
-                  <div className="flex gap-2">
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setPreviewMode('raw')}
-                      className="text-xs bg-purple-800 hover:bg-purple-700 text-white"
-                    >
-                      View Raw
-                    </Button>
-                    <Button
-                      size="sm"
-                      variant="outline"
-                      onClick={() => setPreviewMode('iframe')}
-                      className="text-xs bg-purple-800 hover:bg-purple-700 text-white"
-                    >
-                      Iframe
-                    </Button>
+                  <div className="flex-1 overflow-hidden">
+                    {Object.keys(sandpackFiles).length > 0 ? (
+                      <Sandpack
+                        template={activeTemplate as any}
+                        theme="dark"
+                        options={{
+                          showTabs: true,
+                          showLineNumbers: false,
+                          showNavigator: true,
+                          showConsole: true,
+                          showRefreshButton: true,
+                          autorun: true,
+                          recompileMode: "delayed",
+                          recompileDelay: 500,
+                          // CORS fix: Use configurable CDN source for bundler resources
+                          // Sandpack loads bundler from CDN, which may be blocked by CORS/firewalls
+                          // Can be overridden via NEXT_PUBLIC_SANDBPACK_BUNDLER_URL env variable
+                          bundlerURL: process.env.NEXT_PUBLIC_SANDBPACK_BUNDLER_URL || 'https://sandpack-bundler.codeSandbox.io',
+                        }}
+                        files={sandpackFiles}
+                        customSetup={{
+                          dependencies: (projectDetection as any)?.dependencies?.reduce(
+                            (acc: Record<string, string>, dep: string) => { acc[dep] = "latest"; return acc; },
+                            {} as Record<string, string>
+                          ) || {},
+                        }}
+
+                      />
+                    ) : (
+                      <div className="h-full flex items-center justify-center text-gray-400">
+                        <div className="text-center">
+                          <p className="text-sm mb-2">No files to preview</p>
+                          <p className="text-xs text-gray-500">
+                            Framework: {effectiveFramework} • Template: {activeTemplate}
+                          </p>
+                          <p className="text-xs text-yellow-500 mt-2">
+                            {isManualPreviewActive ? 'Manual preview active but empty' : 'Auto-detect found no files'}
+                          </p>
+                        </div>
+                      </div>
+                    )}
                   </div>
                 </div>
-                <div className="flex-1 overflow-hidden">
-                  <Sandpack
-                    template={template as any}
-                    theme="dark"
-                    options={{
-                      showTabs: true,
-                      showLineNumbers: false,
-                      showNavigator: true,
-                      showConsole: true,
-                      showRefreshButton: true,
-                      autorun: true,
-                      recompileMode: "delayed",
-                      recompileDelay: 500,
-                    }}
-                    files={sandpackFiles}
-                    customSetup={{
-                      dependencies: (projectDetection as any)?.dependencies?.reduce(
-                        (acc: Record<string, string>, dep: string) => { acc[dep] = "latest"; return acc; },
-                        {} as Record<string, string>
-                      ) || {},
-                    }}
-                  />
-                </div>
-              </div>
+              </PreviewErrorBoundary>
             </Suspense>
           );
         }
@@ -5519,64 +5574,8 @@ root.render(<App />);` };
         }
       }
 
-      // Apply diffs from messages
-      const diffBlocks = messages
-        .filter((msg) => msg.role === "assistant")
-        .flatMap((msg) => {
-          const content = typeof msg.content === "string" ? msg.content : "";
-          const diffMatches = content.match(
-            /```diff\s+([^\n]+)\s*\n([\s\S]*?)```/g,
-          );
-          return (
-            diffMatches?.map((match) => {
-              const [, path, diff] =
-                match.match(/```diff\s+([^\n]+)\s*\n([\s\S]*?)```/) || [];
-              return { path, diff };
-            }) || []
-          );
-        })
-        .filter(Boolean);
-
-      if (diffBlocks.length > 0 && projectStructure) {
-        const newProjectStructure = { ...projectStructure, files: { ...projectStructure.files } };
-
-        for (const { path, diff } of diffBlocks) {
-          try {
-            // Parse unified diff and apply patch
-            const unifiedDiff = `--- ${path}\n+++ ${path}\n${diff}`;
-            const parsedDiff = parsePatch(unifiedDiff);
-
-            if (parsedDiff.length > 0) {
-              const currentContent = newProjectStructure.files[path] || "";
-              const patchedContent = applyPatch(currentContent, parsedDiff[0]);
-
-              if (patchedContent !== false) {
-                newProjectStructure.files[path] = patchedContent;
-              } else {
-                throw new Error(`Failed to apply patch to ${path}`);
-              }
-            }
-          } catch (error) {
-            console.error(`Error applying diff to ${path}:`, error);
-            setDiffErrors((prev) => [
-              ...prev,
-              `Failed to apply diff to ${path}: ${(error as Error).message}`,
-            ]);
-          }
-        }
-
-        setProjectStructure(newProjectStructure);
-      }
     }
   }, [messages, projectStructure, isOpen]);
-
-  // Clear diff errors when closing
-  useEffect(() => {
-    if (!isOpen) {
-      setDiffErrors([]);
-    }
-  }, [isOpen]);
-
   // NOTE: Keep component mounted even when closed to allow VFS sync for on-demand shell commands
   // The component will render nothing when isOpen is false, but effects will still run
   return (
@@ -6483,6 +6482,15 @@ root.render(<App />);` };
                   }}
                 >
                   <Edit className="w-4 h-4" /> Rename
+                </button>
+                <button
+                  className="w-full px-4 py-2 text-left text-sm text-cyan-400 hover:bg-cyan-500/10 flex items-center gap-2"
+                  onClick={() => {
+                    openMonacoEditor(contextMenu.path);
+                    setContextMenu(null);
+                  }}
+                >
+                  <CodeIcon className="w-4 h-4" /> Open in Editor
                 </button>
               </>
             )}

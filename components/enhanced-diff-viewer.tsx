@@ -65,6 +65,8 @@ export interface EnhancedDiffViewerProps {
   initialHeight?: number;
   /** Maximum height before requiring expand (default: much larger) */
   maxHeight?: number;
+  /** Start in expanded state by default (default: true) */
+  defaultExpanded?: boolean;
 }
 
 /**
@@ -248,9 +250,10 @@ export function EnhancedDiffViewer({
   language: explicitLanguage,
   enableDragScroll = true,
   maxHeight = 800, // Increased from 384px (max-h-96) to 800px
+  defaultExpanded = true, // Start expanded by default for better UX
 }: EnhancedDiffViewerProps) {
   const [activeTab, setActiveTab] = useState<'server-local' | 'server-git' | 'local-git'>('server-local');
-  const [isExpanded, setIsExpanded] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStartY, setDragStartY] = useState(0);
   const [scrollStart, setScrollStart] = useState(0);

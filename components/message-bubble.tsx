@@ -23,7 +23,10 @@ import { normalizeToolInvocations } from "@/lib/types/tool-invocation"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
 import { toast } from "sonner"
 import { buildApiHeaders } from "@/lib/utils"
-import { sanitizeFileEditTags } from "@/lib/chat/file-edit-parser"
+import {
+  extractReasoningContent,
+  sanitizeAssistantDisplayContent,
+} from "@/lib/chat/file-edit-parser"
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer"
 import { useMultiRotatingStatements } from "@/hooks/use-rotating-statements"
 
@@ -44,9 +47,8 @@ function LoadingIndicator() {
  */
 function sanitizeMessageContent(content: string): string {
   if (!content || typeof content !== 'string') return '';
-  
-  // Use centralized parser for all file edit formats
-  return sanitizeFileEditTags(content);
+
+  return sanitizeAssistantDisplayContent(content);
 }
 
 interface MessageBubbleProps {
@@ -135,38 +137,50 @@ export default function MessageBubble({
   const fileEditInfo = useMemo(() => {
     // First check for filesystem transaction (standard chat flow)
     const metadataFilesystem = (message.metadata as any)?.filesystem;
+    const metadataFileEdits = (message.metadata as any)?.fileEdits;
+    
     if (metadataFilesystem && typeof metadataFilesystem === "object") {
+      // FIX: Show diff viewer even when transactionId is null but files were applied
+      // This handles "auto_applied" status where no transaction is needed
       const txId = typeof metadataFilesystem.transactionId === "string" ? metadataFilesystem.transactionId : "";
-      if (txId) {
+      const applied = Array.isArray(metadataFilesystem.applied) ? metadataFilesystem.applied : [];
+
+      if (txId || applied.length > 0) {
+        // CRITICAL FIX: Use fileEdits if available (has content for diff viewer)
+        // Otherwise fall back to filesystem.applied (no content, just paths)
+        const usedApplied = (metadataFileEdits && Array.isArray(metadataFileEdits) && metadataFileEdits.length > 0)
+          ? metadataFileEdits
+          : applied;
+
         return {
-          transactionId: txId,
-          applied: Array.isArray(metadataFilesystem.applied) ? metadataFilesystem.applied : [],
+          transactionId: txId || undefined,
+          applied: usedApplied,
           errors: Array.isArray(metadataFilesystem.errors) ? metadataFilesystem.errors : [],
           status: typeof metadataFilesystem.status === "string" ? metadataFilesystem.status : "auto_applied",
           isSpecEnhancement: false,
         };
       }
     }
-    
+
     // Check for spec enhancement file edits (stored directly in metadata.fileEdits)
-    const metadataFileEdits = (message.metadata as any)?.fileEdits;
     if (metadataFileEdits && Array.isArray(metadataFileEdits) && metadataFileEdits.length > 0) {
       // Spec enhancement edits are already applied server-side, just for display
       return {
         transactionId: undefined, // No transaction for spec enhancement
         applied: metadataFileEdits.map((edit: any, index: number) => ({
           path: edit.path,
-          operation: 'write',
+          operation: edit.operation || 'write',
           version: typeof edit.version === 'number' ? edit.version : index + 1,
           existedBefore: false,
           content: edit.content, // Store full content for diff viewer
+          diff: edit.diff, // Include diff for PATCH operations
         })),
         errors: [],
         status: 'auto_applied', // Already applied server-side
         isSpecEnhancement: true, // Flag for UI handling
       };
     }
-    
+
     return null;
   }, [message.metadata]);
 
@@ -355,36 +369,6 @@ export default function MessageBubble({
   
   const { handleKeyDown } = useKeyboardHandler()
 
-  const parseReasoningContent = (content: string) => {
-    const thinkingRegex = /<think>([\s\S]*?)<\/think>/g
-    const reasoningRegex = /\*\*Reasoning:\*\*([\s\S]*?)(?=\*\*|$)/g
-    const thoughtRegex = /\*\*Thought:\*\*([\s\S]*?)(?=\*\*|$)/g
-
-    let reasoning = ""
-    let mainContent = content
-
-    let match
-    while ((match = thinkingRegex.exec(content)) !== null) {
-      reasoning += match[1].trim() + "\n\n"
-      mainContent = mainContent.replace(match[0], "")
-    }
-
-    while ((match = reasoningRegex.exec(content)) !== null) {
-      reasoning += "**Reasoning:**" + match[1].trim() + "\n\n"
-      mainContent = mainContent.replace(match[0], "")
-    }
-
-    while ((match = thoughtRegex.exec(content)) !== null) {
-      reasoning += "**Thought:**" + match[1].trim() + "\n\n"
-      mainContent = mainContent.replace(match[0], "")
-    }
-
-    return {
-      reasoning: reasoning.trim(),
-      mainContent: mainContent.trim()
-    }
-  }
-
   // Check for integration OAuth auth_required in message metadata
   // Only show IntegrationAuthPrompt for real 3rd-party integrations (Arcade/Composio/Nango),
   // NOT for generic site login auth (which has requiresAuth=false, loginRequired=true)
@@ -414,17 +398,18 @@ export default function MessageBubble({
     return sanitizeMessageContent(rawContent);
   }, [message.content, streamingDisplay.displayContent, isUser]);
 
-  const getContentToDisplay = () => {
-    if (isUser) return message.content
-    // Use displayContent if auth was dismissed (strips AUTH_REQUIRED sentinel)
-    // Also apply sanitization to handle edge cases
+  const contentToDisplay = useMemo(() => {
+    if (isUser) return message.content;
     if (authInfo && authDismissed) {
       return sanitizeMessageContent(displayContent);
     }
     return sanitizedContent;
-  }
+  }, [authDismissed, authInfo, displayContent, isUser, message.content, sanitizedContent]);
 
-  const { reasoning, mainContent } = parseReasoningContent(getContentToDisplay())
+  const { reasoning, mainContent } = useMemo(
+    () => extractReasoningContent(contentToDisplay),
+    [contentToDisplay],
+  )
   const metadataReasoning = typeof (message as any).metadata?.reasoning === 'string'
     ? (message as any).metadata.reasoning
     : ''
@@ -1087,17 +1072,28 @@ export default function MessageBubble({
                   )}
                 </div>
                 <div className="space-y-2 max-h-[600px] overflow-y-auto scrollbar-thin scrollbar-thumb-white/5 scrollbar-track-transparent hover:scrollbar-thumb-white/20">
-                  {(showAllFiles ? fileEditInfo.applied : fileEditInfo.applied.slice(0, 3)).map((edit: any) => (
-                    <EnhancedDiffViewer
-                      key={`${edit.path}-${edit.version}`}
-                      path={edit.path}
-                      serverContent={edit.content || edit.diff || ''}
-                      compareWithLocal={false}
-                      compareWithGit={false}
-                      showUnsynced={false}
-                      isFullContent={!edit.diff} // If no diff, treat as full content
-                    />
-                  ))}
+                  {(showAllFiles ? fileEditInfo.applied : fileEditInfo.applied.slice(0, 3)).map((edit: any) => {
+                    // CRITICAL FIX: ROBUST detection of unified diff vs full content
+                    // Don't rely on operation field or diff field alone
+                    // LLM may return: diffs in <file_edit>, full content for existing files, etc.
+                    // EnhancedDiffViewer has isDiffFormat() to auto-detect
+                    const hasUnifiedDiff = edit.diff && 
+                                           edit.diff.trim().length > 0 && 
+                                           edit.diff.startsWith('---') &&
+                                           edit.diff.includes('+++');
+                    
+                    return (
+                      <EnhancedDiffViewer
+                        key={`${edit.path}-${edit.version}`}
+                        path={edit.path}
+                        serverContent={hasUnifiedDiff ? edit.diff : (edit.content || '')}
+                        compareWithLocal={false}
+                        compareWithGit={false}
+                        showUnsynced={false}
+                        isFullContent={!hasUnifiedDiff} // Let EnhancedDiffViewer auto-detect if unsure
+                      />
+                    );
+                  })}
                 </div>
               </div>
             )}

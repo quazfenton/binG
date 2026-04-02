@@ -476,8 +476,22 @@ export async function GET(request: NextRequest) {
  * - { url, maxFiles } - Import from URL (legacy support, uses token for private or scraping for public)
  */
 export async function POST(request: NextRequest) {
+  // Handle malformed JSON separately
+  let body: any;
   try {
-    const body = await request.json();
+    body = await request.json();
+  } catch (error: any) {
+    console.warn('[GitHub Integration] Malformed JSON:', error.message);
+    return NextResponse.json(
+      { 
+        error: 'Invalid JSON in request body',
+        details: error.message 
+      }, 
+      { status: 400 }
+    );
+  }
+
+  try {
     const { action } = body;
 
     // POST /api/integrations/github { action: 'clone', repoUrl, destinationPath }

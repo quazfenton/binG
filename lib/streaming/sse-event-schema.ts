@@ -46,6 +46,8 @@ export const SSE_EVENT_TYPES = {
   SPEC_REFINEMENT: 'spec_refinement',
   /** DAG task execution status */
   DAG_TASK_STATUS: 'dag_task_status',
+  /** Initialization event */
+  INIT: 'init',
 } as const;
 
 export type SSEEventTypeName = typeof SSE_EVENT_TYPES[keyof typeof SSE_EVENT_TYPES];
@@ -129,6 +131,10 @@ export interface SSEFileEditPayload {
   error?: string;
   /** Timestamp */
   timestamp: number;
+  /** New content for write/patch operations (for diff viewer) */
+  content?: string;
+  /** Unified diff string (alternative to content) */
+  diff?: string;
 }
 
 export interface SSESpecAmplificationPayload {
@@ -224,6 +230,13 @@ export interface SSEErrorPayload {
   details?: string;
 }
 
+export interface SSEInitPayload {
+  /** Session/request ID */
+  requestId?: string;
+  /** Timestamp */
+  timestamp: number;
+}
+
 // ---------------------------------------------------------------------------
 // Discriminated union (useful on the consumer side)
 // ---------------------------------------------------------------------------
@@ -241,6 +254,7 @@ export type SSEEvent =
   | { type: typeof SSE_EVENT_TYPES.SPEC_AMPLIFICATION; data: SSESpecAmplificationPayload }
   | { type: typeof SSE_EVENT_TYPES.SPEC_REFINEMENT; data: SSESpecRefinementPayload }
   | { type: typeof SSE_EVENT_TYPES.DAG_TASK_STATUS; data: SSEDAGTaskStatusPayload }
+  | { type: typeof SSE_EVENT_TYPES.INIT; data: SSEInitPayload }
   | { type: typeof SSE_EVENT_TYPES.DONE; data: SSEDonePayload }
   | { type: typeof SSE_EVENT_TYPES.ERROR; data: SSEErrorPayload }
   | { type: typeof SSE_EVENT_TYPES.HEARTBEAT; data: Record<string, unknown> };

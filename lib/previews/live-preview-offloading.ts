@@ -1476,6 +1476,10 @@ export class LivePreviewOffloading {
 
   /**
    * Get Sandpack configuration for the project
+   * 
+   * CRITICAL: Filters files and dependencies for browser compatibility
+   * - Removes Node.js-only packages (@vue/server-renderer, crypto, etc.)
+   * - Transforms Vue code to remove SSR imports
    */
   getSandpackConfig(detection: ProjectDetection): SandpackConfig {
     const template = FRAMEWORK_TO_TEMPLATE[detection.framework] || 'vanilla';
@@ -1495,7 +1499,10 @@ export class LivePreviewOffloading {
       // Remove leading slash - Sandpack expects relative paths
       const sandpackPath = path.replace(/^\/+/, '');
       if (typeof content === 'string' && content.trim()) {
-        filteredFiles[sandpackPath] = { code: content };
+        // CRITICAL FIX: Transform files to remove server-side code for browser preview
+        // Handles Vue, React, Next.js, Svelte, SolidJS SSR and Node.js built-ins
+        const transformedContent = this.transformForBrowser(content, detection.framework, content);
+        filteredFiles[sandpackPath] = { code: transformedContent };
       }
     }
 
@@ -1511,11 +1518,15 @@ export class LivePreviewOffloading {
       this.addEntryPointStub(filteredFiles, detection.framework);
     }
 
+    // CRITICAL FIX: Filter dependencies for browser compatibility
+    const rawDeps = this.getDependencies(detection);
+    const browserDeps = this.filterDependenciesForBrowser(rawDeps, detection.framework);
+
     return {
       template,
       files: filteredFiles,
       customSetup: {
-        dependencies: this.getDependencies(detection),
+        dependencies: browserDeps,
       },
     };
   }
@@ -1609,10 +1620,14 @@ root.render(<App />);`,
 
   /**
    * Extract dependencies from package.json
+   * 
+   * CRITICAL: Filters out Node.js-only packages that don't work in browser (Sandpack)
+   * - @vue/server-renderer: SSR only, use vue (client) instead
+   * - crypto, node:stream, etc.: Node.js built-ins not available in browser
    */
   private getDependencies(detection: ProjectDetection): Record<string, string> {
     const deps: Record<string, string> = {};
-    
+
     // This would be populated from the actual package.json parsing
     // For now, return common defaults based on framework
     switch (detection.framework) {
@@ -1624,6 +1639,8 @@ root.render(<App />);`,
         break;
       case 'vue':
       case 'nuxt':
+        // CRITICAL FIX: Only include browser-compatible Vue packages
+        // DO NOT include @vue/server-renderer - it requires Node.js built-ins (node:stream, crypto)
         deps['vue'] = 'latest';
         break;
       case 'svelte':
@@ -1635,6 +1652,269 @@ root.render(<App />);`,
     }
 
     return deps;
+  }
+
+  /**
+   * Filter dependencies for browser compatibility (Sandpack)
+   * Removes Node.js-only packages that don't work in browser environment
+   * 
+   * @param deps - Original dependencies from package.json
+   * @param framework - Detected framework for context-aware filtering
+   * @returns Filtered dependencies safe for browser execution
+   */
+  filterDependenciesForBrowser(deps: Record<string, string>, framework?: AppFramework): Record<string, string> {
+    const filtered: Record<string, string> = {};
+
+    // Packages that require Node.js runtime (not available in Sandpack)
+    const nodeOnlyPackages = [
+      // Vue SSR packages
+      '@vue/server-renderer',
+      'vue/server-renderer',
+      // Node.js built-ins (explicit names)
+      'crypto',
+      'fs',
+      'path',
+      'stream',
+      'util',
+      'http',
+      'https',
+      'buffer',
+      'events',
+      'process',
+      'child_process',
+      'cluster',
+      'dgram',
+      'dns',
+      'domain',
+      'net',
+      'os',
+      'readline',
+      'repl',
+      'tls',
+      'tty',
+      'v8',
+      'vm',
+      'zlib',
+    ];
+
+    for (const [name, version] of Object.entries(deps)) {
+      // Skip Node.js built-ins and server-only packages
+      if (nodeOnlyPackages.includes(name) || name.startsWith('node:')) {
+        logger.debug(`[filterDependencies] Removed Node.js-only package: ${name}`);
+        continue;
+      }
+
+      // For Vue projects, explicitly exclude server-renderer variants
+      if ((framework === 'vue' || framework === 'nuxt') && name.includes('server-renderer')) {
+        logger.debug(`[filterDependencies] Removed server-renderer for Vue browser preview: ${name}`);
+        continue;
+      }
+
+      // Keep the dependency
+      filtered[name] = version;
+    }
+
+    return filtered;
+  }
+
+  /**
+   * Transform code to remove server-side imports for browser compatibility
+   * Handles Vue, React, Svelte, Next.js, and other frameworks with SSR code
+   * 
+   * @param code - Source code with potential SSR imports
+   * @param framework - Detected framework
+   * @param content - Full file content for additional context
+   * @returns Transformed code safe for browser execution
+   */
+  transformForBrowser(code: string, framework?: AppFramework, content?: string): string {
+    if (!code) return code;
+
+    let transformed = code;
+
+    // ============================================================================
+    // Vue/Nuxt SSR Removal
+    // ============================================================================
+    if (framework === 'vue' || framework === 'nuxt') {
+      // Remove @vue/server-renderer imports (ES modules)
+      transformed = transformed.replace(
+        /import\s*\{\s*[^}]+\s*\}\s*from\s*['"]@vue\/server-renderer['"];?\s*/g,
+        '// Server renderer removed for browser preview\n'
+      );
+      transformed = transformed.replace(
+        /import\s+\w+\s+from\s+['"]@vue\/server-renderer['"];?\s*/g,
+        '// Server renderer removed for browser preview\n'
+      );
+
+      // Remove @vue/server-renderer imports (CommonJS)
+      transformed = transformed.replace(
+        /const\s*\{\s*[^}]+\s*\}\s*=\s*require\(['"]@vue\/server-renderer['"]\);?\s*/g,
+        '// Server renderer removed for browser preview\n'
+      );
+
+      // Remove SSR function calls
+      transformed = transformed.replace(
+        /\brenderToString\s*\([^)]*\)/g,
+        '/* SSR not available in browser */ null'
+      );
+      transformed = transformed.replace(
+        /\brenderToNodeStream\s*\([^)]*\)/g,
+        '/* SSR not available in browser */ null'
+      );
+      transformed = transformed.replace(
+        /\brenderToWebStream\s*\([^)]*\)/g,
+        '/* SSR not available in browser */ null'
+      );
+    }
+
+    // ============================================================================
+    // React/Next.js SSR Removal
+    // ============================================================================
+    if (framework === 'react' || framework === 'next' || framework === 'vite-react') {
+      // Remove react-dom/server imports
+      transformed = transformed.replace(
+        /import\s*\{\s*[^}]+\s*\}\s*from\s*['"]react-dom\/server['"];?\s*/g,
+        '// react-dom/server removed for browser preview\n'
+      );
+      transformed = transformed.replace(
+        /import\s+\w+\s+from\s+['"]react-dom\/server['"];?\s*/g,
+        '// react-dom/server removed for browser preview\n'
+      );
+
+      // Remove next/server imports (Next.js middleware/edge)
+      transformed = transformed.replace(
+        /import\s*\{\s*[^}]+\s*\}\s*from\s*['"]next\/server['"];?\s*/g,
+        '// next/server removed for browser preview\n'
+      );
+      transformed = transformed.replace(
+        /import\s+.*\s+from\s+['"]next\/headers['"];?\s*/g,
+        '// next/headers removed for browser preview\n'
+      );
+      transformed = transformed.replace(
+        /import\s+.*\s+from\s+['"]next\/navigation['"];?\s*/g,
+        '// next/navigation removed for browser preview\n'
+      );
+
+      // Remove SSR function calls
+      transformed = transformed.replace(
+        /\brenderToString\s*\([^)]*\)/g,
+        '/* SSR not available in browser */ null'
+      );
+      transformed = transformed.replace(
+        /\brenderToStaticMarkup\s*\([^)]*\)/g,
+        '/* SSR not available in browser */ null'
+      );
+      transformed = transformed.replace(
+        /\brenderToNodeStream\s*\([^)]*\)/g,
+        '/* SSR not available in browser */ null'
+      );
+      transformed = transformed.replace(
+        /\brenderToStaticNodeStream\s*\([^)]*\)/g,
+        '/* SSR not available in browser */ null'
+      );
+
+      // Remove Next.js server components
+      transformed = transformed.replace(
+        /['"]use server['"];\s*/g,
+        '// Server action removed for browser preview\n'
+      );
+    }
+
+    // ============================================================================
+    // Svelte SSR Removal
+    // ============================================================================
+    if (framework === 'svelte') {
+      // Remove svelte/server imports
+      transformed = transformed.replace(
+        /import\s*\{\s*[^}]+\s*\}\s*from\s*['"]svelte\/server['"];?\s*/g,
+        '// svelte/server removed for browser preview\n'
+      );
+
+      // Remove SSR function calls
+      transformed = transformed.replace(
+        /\brender\s*\([^)]*\)/g,
+        '/* SSR not available in browser */ null'
+      );
+    }
+
+    // ============================================================================
+    // SolidJS SSR Removal
+    // ============================================================================
+    if (framework === 'solid') {
+      // Remove solid-js/web imports (server-side)
+      transformed = transformed.replace(
+        /import\s*\{\s*[^}]+\s*\}\s*from\s*['"]solid-js\/web['"];?\s*/g,
+        '// solid-js/web removed for browser preview\n'
+      );
+
+      // Remove SSR function calls
+      transformed = transformed.replace(
+        /\brenderToStream\s*\([^)]*\)/g,
+        '/* SSR not available in browser */ null'
+      );
+      transformed = transformed.replace(
+        /\brenderToString\s*\([^)]*\)/g,
+        '/* SSR not available in browser */ null'
+      );
+      transformed = transformed.replace(
+        /\brenderToStringAsync\s*\([^)]*\)/g,
+        '/* SSR not available in browser */ null'
+      );
+    }
+
+    // ============================================================================
+    // Node.js Built-in Removal (All Frameworks)
+    // ============================================================================
+    
+    // Remove node: built-in imports (ES modules)
+    transformed = transformed.replace(
+      /import\s*\{\s*[^}]+\s*\}\s*from\s*['"]node:(stream|crypto|fs|path|util|http|https|buffer|events|child_process|cluster|dgram|dns|net|os|readline|tls|tty|v8|vm|zlib)['"];?\s*/g,
+      '// Node.js built-in removed for browser preview\n'
+    );
+    transformed = transformed.replace(
+      /import\s+\*\s+as\s+\w+\s+from\s+['"]node:(stream|crypto|fs|path|util)['"];?\s*/g,
+      '// Node.js built-in removed for browser preview\n'
+    );
+
+    // Remove node: built-in imports (CommonJS)
+    transformed = transformed.replace(
+      /const\s*\{\s*[^}]+\s*\}\s*=\s*require\(['"]node:(stream|crypto|fs|path|util)['"]\);?\s*/g,
+      '// Node.js built-in removed for browser preview\n'
+    );
+
+    // Remove regular built-in imports (without node: prefix)
+    transformed = transformed.replace(
+      /import\s*\{\s*[^}]+\s*\}\s*from\s*['"](crypto|fs|path|stream|util|http|https|buffer|events)['"];?\s*/g,
+      '// Node.js built-in removed for browser preview\n'
+    );
+    transformed = transformed.replace(
+      /const\s+crypto\s*=\s*require\(['"]crypto['"]\);?\s*/g,
+      '// Crypto removed for browser preview\n'
+    );
+
+    // ============================================================================
+    // Database/ORM Removal (Prisma, Drizzle, etc.)
+    // ============================================================================
+    
+    // Remove Prisma imports
+    transformed = transformed.replace(
+      /import\s*\{\s*PrismaClient\s*\}\s*from\s*['"]@prisma\/client['"];?\s*/g,
+      '// Prisma client removed for browser preview\nconst PrismaClient = class { /* Mock for browser */ };\n'
+    );
+
+    // Remove database connection code
+    transformed = transformed.replace(
+      /new\s+PrismaClient\s*\([^)]*\)/g,
+      'new PrismaClient() /* Mock for browser */'
+    );
+
+    return transformed;
+  }
+
+  /**
+   * @deprecated Use transformForBrowser instead - this is kept for backward compatibility
+   */
+  transformVueForBrowser(code: string, framework?: AppFramework): string {
+    return this.transformForBrowser(code, framework);
   }
 
   /**

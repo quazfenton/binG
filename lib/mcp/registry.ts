@@ -5,7 +5,16 @@
  * with the AI chat system for tool calling
  */
 
-import { MCPClient } from './client'
+// Dynamic import for server-only MCPClient (uses node:child_process)
+let MCPClient: any = null;
+async function getMcpClient() {
+  if (!MCPClient) {
+    const module = await import('./client');
+    MCPClient = module.MCPClient;
+  }
+  return MCPClient;
+}
+
 import type {
   MCPTool,
   MCPToolResult,
@@ -42,7 +51,7 @@ export interface MCPToolCallResult {
  * Manages tools from multiple MCP servers
  */
 export class MCPToolRegistry {
-  private clients: Map<string, MCPClient> = new Map()
+  private clients: Map<string, any> = new Map()
   private serverConfigs: Map<string, MCPServerConfig> = new Map()
   private tools: Map<string, MCPToolWrapper> = new Map()
   private eventListeners: Set<(event: MCPRegistryEvent) => void> = new Set()
@@ -50,14 +59,15 @@ export class MCPToolRegistry {
   /**
    * Register a server configuration
    */
-  registerServer(config: MCPServerConfig): void {
+  async registerServer(config: MCPServerConfig): Promise<void> {
     if (config.enabled === false) {
       return
     }
 
     this.serverConfigs.set(config.id, config)
     
-    const client = new MCPClient(config.transport)
+    const ClientClass = await getMcpClient();
+    const client = new ClientClass(config.transport)
     this.clients.set(config.id, client)
 
     // Set up event listeners

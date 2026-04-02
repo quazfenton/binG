@@ -402,25 +402,15 @@ export class OpenCodeEngineService {
 - Use file operations for code changes
 
 FILE WRITING SYNTAX:
-Use bash heredoc syntax for writing files (NOT XML tags):
+Use structured file operations for writing files (preferred):
+  - Create: { file_operation: { action: "create", path: "src/file.ts", content: "..." } }
+  - Modify: { file_operation: { action: "modify", path: "src/file.ts", content: "..." } }
+  - Delete: { file_operation: { action: "delete", path: "src/old.ts" } }
 
-  cat > path/to/file.ts << 'EOF'
-  // Your code here
-  export default function App() {
-    return <div>Hello</div>;
-  }
-  EOF
-
-For append mode:
-  cat >> path/to/file.ts << 'EOF'
-  // Additional code
-  EOF
-
-For directories:
+For bash operations (directories, git, etc.):
   mkdir -p path/to/directory
-
-For deletion:
   rm path/to/old-file.ts
+  git add . && git commit -m "message"
 
 DO NOT use: <file_write>, <file_edit>, WRITE <<<, or XML-like tags`);
 

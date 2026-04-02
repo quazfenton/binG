@@ -28,11 +28,12 @@ export interface StreamingEventOptions {
   includeFilesystem?: boolean
   includeDiffs?: boolean
   chunkSize?: number
+  emitPrimaryContentImmediately?: boolean  // NEW: Emit first chunk immediately without waiting
 }
 
 /**
  * Create streaming events from unified response
- * 
+ *
  * Converts response data into SSE events for real-time UI updates
  */
 export function createStreamingEvents(
@@ -45,13 +46,14 @@ export function createStreamingEvents(
     includeToolState = true,
     includeFilesystem = true,
     includeDiffs = true,
-    chunkSize = 12, // Reduced from 30 for smoother, more gradual streaming
+    chunkSize = 8, // Reduced from 12 for faster initial text appearance
+    emitPrimaryContentImmediately = true, // NEW: Show first content immediately
   } = options
 
   const events: string[] = []
 
-  // Init event
-  events.push(sseEncode('token', {
+  // Init event - use 'init' type to distinguish from content tokens
+  events.push(sseEncode('init', {
     requestId,
     startTime: Date.now(),
     provider: response.data?.provider,
@@ -117,7 +119,7 @@ export function createStreamingEvents(
     })
   }
 
-  // Filesystem changes
+  // Filesystem changes - emit filesystem event
   if (includeFilesystem && response.data?.files?.length) {
     events.push(sseEncode('filesystem', {
       requestId,
@@ -143,15 +145,46 @@ export function createStreamingEvents(
   const content = response.content;
   if (typeof content === 'string' && content.length > 0) {
     const chunks = chunkText(content, chunkSize);
-    chunks.forEach((chunk, index) => {
+    
+    // NEW: Emit first chunk immediately with larger size for faster initial display
+    // This gives users something to read while the rest streams progressively
+    if (emitPrimaryContentImmediately && chunks.length > 0) {
+      // First chunk: emit immediately with slightly larger size (16 chars) for faster perceived response
+      const firstChunkSize = Math.min(16, chunks[0].length);
+      const firstChunk = chunks[0].slice(0, firstChunkSize);
+      
       events.push(sseEncode('token', {
         type: 'token',
-        content: chunk,
+        content: firstChunk,
         requestId,
         timestamp: Date.now(),
-        offset: index * chunkSize,
+        offset: 0,
+        immediate: true, // Flag for UI to prioritize rendering
       }));
-    });
+      
+      // Remaining chunks: stream with smaller chunkSize for smooth progressive display
+      for (let i = 1; i < chunks.length; i++) {
+        const chunk = chunks[i];
+        events.push(sseEncode('token', {
+          type: 'token',
+          content: chunk,
+          requestId,
+          timestamp: Date.now(),
+          offset: i * chunkSize,
+        }));
+      }
+    } else {
+      // Standard chunked streaming
+      chunks.forEach((chunk, index) => {
+        events.push(sseEncode('token', {
+          type: 'token',
+          content: chunk,
+          requestId,
+          timestamp: Date.now(),
+          offset: index * chunkSize,
+        }));
+      });
+    }
   }
 
   // Done event
@@ -165,6 +198,9 @@ export function createStreamingEvents(
     source: response.source,
     metadata: response.metadata,
     messageMetadata: response.data?.messageMetadata || response.metadata?.messageMetadata,
+    // Include filesystem metadata for enhanced-diff-viewer
+    filesystem: response.metadata?.filesystem,
+    fileEdits: response.metadata?.fileEdits,
     // Include usage breakdown if available
     usage: response.data?.usage ? {
       promptTokens: response.data.usage.promptTokens || response.data.usage.prompt_tokens || 0,

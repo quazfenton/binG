@@ -374,28 +374,29 @@ function fixMissingDependency(failure: BashFailure): string | null {
   if (!match) return null;
   
   const missingModule = match[1];
-  
+
   // Suggest installation based on command type
   if (failure.command.includes('python') || failure.command.includes('pip')) {
     return `pip install ${missingModule} && ${failure.command}`;
   }
-  
-  if (failure.command.includes('node') || failure.command.includes('npm')) {
-    return `npm install ${missingModule} && ${failure.command}`;
+
+  if (failure.command.includes('node') || failure.command.includes('npm') || failure.command.includes('pnpm')) {
+    // Use pnpm (repo standard) but fall back to npm only if pnpm is not available
+    return `if command -v pnpm >/dev/null 2>&1; then pnpm add ${missingModule}; else npm install ${missingModule}; fi && ${failure.command}`;
   }
-  
+
   if (failure.command.includes('apt') || failure.command.includes('apt-get')) {
     return `apt-get install -y ${missingModule} && ${failure.command}`;
   }
-  
+
   if (failure.command.includes('yum')) {
     return `yum install -y ${missingModule} && ${failure.command}`;
   }
-  
+
   if (failure.command.includes('brew')) {
     return `brew install ${missingModule} && ${failure.command}`;
   }
-  
+
   // Generic: try apt-get (most common in containers)
   return `apt-get install -y ${missingModule} && ${failure.command}`;
 }
@@ -803,17 +804,3 @@ export async function executeWithHealing(
     fixesApplied,
   };
 }
-
-// ============================================================================
-// Exports
-// ============================================================================
-
-export default {
-  classifyError,
-  generateFix,
-  repairWithLLM,
-  isSafe,
-  isMinimalChange,
-  executeWithHealing,
-  DANGEROUS_PATTERNS,
-};

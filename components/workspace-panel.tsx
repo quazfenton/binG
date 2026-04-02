@@ -5,7 +5,6 @@ import { motion, AnimatePresence } from "framer-motion";
 import { usePanel, type PanelTab } from "@/contexts/panel-context";
 import { Button } from "@/components/ui/button";
 import { Tabs, TabsContent, TabsList, TabsTrigger } from "@/components/ui/tabs";
-import { ScrollArea } from "@/components/ui/scroll-area";
 import { Input } from "@/components/ui/input";
 import { Textarea } from "@/components/ui/textarea";
 import { Badge } from "@/components/ui/badge";
@@ -28,12 +27,16 @@ import {
   ExternalLink,
   LucideHistory,
   RotateCcw,
+  Mail,
+  Share2,
   RefreshCw,
   Code,
   FileCode,
   Folder,
   ChevronRight,
   ChevronDown,
+  ChevronLeft,
+  ChevronUp,
   X,
   CheckCircle,
   Loader2,
@@ -42,53 +45,46 @@ import {
   Eye,
   Edit,
   Copy,
-  Download,
   Bot,
   Workflow,
   Database,
-  Mail,
   Video,
-  BookOpen,
   GraduationCap,
   MessageCircle,
-  FileSpreadsheet,
-  Cloud,
   Music2,
   Mic,
-  Share2,
-  LineChart,
   Search,
-  FileText as FileDoc,
   Clock,
   Youtube,
   Paperclip,
-  Maximize2,
-  Minimize2,
   Users,
   Heart,
-  MessageCircle as MessageComment,
   Send,
   User,
-  LogIn,
   Cpu,
-  Terminal,
   GitCommit,
+  Terminal,
   FileDiff,
   Activity,
   Clock3,
   CheckCircle2,
   AlertCircle,
-  ChevronUp,
-  ChevronDown as ChevronDownIcon,
   Square,
-  Github,
   Monitor,
+  Newspaper,
+  Command,
+  StopCircle,
+  Settings,
 } from "lucide-react";
 import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";
 import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
+import { onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { useMultiRotatingStatements } from "@/hooks/use-rotating-statements";
+import { useReasoningUI } from "@/lib/chat/use-chat-hooks";
+import { useOrchestrationMode, getOrchestrationModeHeaders } from "@/contexts/orchestration-mode-context";
+import AgentTab from "@/components/agent-tab";
 
 function ChatLoadingIndicator({ provider, model }: { provider: string; model: string }) {
   const statement = useMultiRotatingStatements(['interesting', 'funny', 'task'], 2500);
@@ -99,6 +95,217 @@ function ChatLoadingIndicator({ provider, model }: { provider: string; model: st
         <div>
           <p className="text-sm text-white/80">{statement}</p>
           <p className="text-[10px] text-white/50">Using {provider}/{model}</p>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// ============================================================================
+// Enhanced Message Bubble Component (from enhanced-workspace-panel)
+// ============================================================================
+
+function MessageBubble({ message, isStreaming }: { message: Message; isStreaming?: boolean }) {
+  const [isCopied, setIsCopied] = useState(false);
+  const [isExpanded, setIsExpanded] = useState(false);
+
+  const handleCopy = useCallback(async () => {
+    try {
+      await navigator.clipboard.writeText(message.content);
+      setIsCopied(true);
+      toast.success("Message copied");
+      setTimeout(() => setIsCopied(false), 2000);
+    } catch (err) {
+      toast.error("Failed to copy");
+    }
+  }, [message.content]);
+
+  const isAssistant = message.role === "assistant";
+
+  return (
+    <motion.div
+      initial={{ opacity: 0, y: 10 }}
+      animate={{ opacity: 1, y: 0 }}
+      className={`group relative p-3 rounded-lg mb-3 ${
+        isAssistant
+          ? "bg-white/5 border border-white/10"
+          : "bg-blue-500/10 border border-blue-400/30 ml-8"
+      }`}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between mb-2">
+        <div className="flex items-center gap-2">
+          {isAssistant ? (
+            <Brain className="w-4 h-4 text-purple-400" />
+          ) : (
+            <MessageSquare className="w-4 h-4 text-blue-400" />
+          )}
+          <span className="text-xs font-medium text-white/70">
+            {isAssistant ? "Assistant" : "You"}
+          </span>
+          {isStreaming && (
+            <span className="text-[10px] text-purple-400 animate-pulse">
+              Generating...
+            </span>
+          )}
+        </div>
+        <div className="flex items-center gap-1 opacity-0 group-hover:opacity-100 transition-opacity">
+          <button
+            onClick={handleCopy}
+            className="p-1 rounded hover:bg-white/10 text-white/60 hover:text-white"
+            title="Copy message"
+          >
+            {isCopied ? (
+              <CheckCircle className="w-3 h-3 text-green-400" />
+            ) : (
+              <Copy className="w-3 h-3" />
+            )}
+          </button>
+        </div>
+      </div>
+
+      {/* Content */}
+      <div className={`text-sm text-white/90 whitespace-pre-wrap break-words ${
+        !isExpanded && message.content.length > 500 ? "line-clamp-10" : ""
+      }`}>
+        {message.content}
+      </div>
+
+      {/* Expand for long messages */}
+      {!isExpanded && message.content.length > 500 && (
+        <button
+          onClick={() => setIsExpanded(true)}
+          className="mt-2 text-xs text-white/50 hover:text-white/80"
+        >
+          Show more...
+        </button>
+      )}
+
+      {/* Timestamp */}
+      <div className="mt-2 text-[10px] text-white/40">
+        {new Date(message.timestamp || Date.now()).toLocaleString()}
+      </div>
+    </motion.div>
+  );
+}
+
+// ============================================================================
+// Thread List Sidebar Component (from enhanced-workspace-panel)
+// ============================================================================
+
+function ThreadListSidebar({
+  threads,
+  activeThreadId,
+  onSelectThread,
+  onNewThread,
+  onDeleteThread,
+  isOpen,
+  onClose,
+}: {
+  threads: ChatThread[];
+  activeThreadId: string | null;
+  onSelectThread: (id: string) => void;
+  onNewThread: () => void;
+  onDeleteThread: (id: string) => void;
+  isOpen: boolean;
+  onClose: () => void;
+}) {
+  const [searchQuery, setSearchQuery] = useState("");
+
+  const filteredThreads = useMemo(() => {
+    if (!searchQuery) return threads;
+    const query = searchQuery.toLowerCase();
+    return threads.filter(
+      t => t.name.toLowerCase().includes(query) ||
+        t.messages.some(m => m.content.toLowerCase().includes(query))
+    );
+  }, [threads, searchQuery]);
+
+  if (!isOpen) return null;
+
+  return (
+    <div className="absolute left-0 top-0 bottom-0 w-64 z-20 bg-black/95 border-r border-white/10 flex flex-col">
+      {/* Header */}
+      <div className="p-3 border-b border-white/10 flex items-center justify-between">
+        <h3 className="text-sm font-semibold text-white">Chat Threads</h3>
+        <div className="flex items-center gap-1">
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onNewThread}
+            className="h-7 w-7 text-white/70 hover:text-white hover:bg-white/10"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </Button>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={onClose}
+            className="h-7 w-7 text-white/70 hover:text-white hover:bg-white/10"
+          >
+            <X className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      </div>
+
+      {/* Search */}
+      <div className="p-3 border-b border-white/10">
+        <div className="relative">
+          <Search className="absolute left-2 top-1/2 -translate-y-1/2 w-3.5 h-3.5 text-white/40" />
+          <Input
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            placeholder="Search conversations..."
+            className="pl-8 h-8 bg-white/5 border-white/20 text-xs"
+          />
+        </div>
+      </div>
+
+      {/* Thread List */}
+      <div className="flex-1 overflow-auto p-2">
+        <div className="space-y-1">
+          {filteredThreads.map(thread => (
+            <div
+              key={thread.id}
+              className={`group relative p-3 rounded-lg cursor-pointer transition-all ${
+                activeThreadId === thread.id
+                  ? "bg-white/10 border border-white/20"
+                  : "bg-transparent hover:bg-white/5 border border-transparent"
+              }`}
+              onClick={() => onSelectThread(thread.id)}
+            >
+              <div className="flex items-start gap-2">
+                <MessageSquare className={`w-4 h-4 mt-0.5 shrink-0 ${
+                  activeThreadId === thread.id ? "text-white" : "text-white/50"
+                }`} />
+                <div className="flex-1 min-w-0">
+                  <div className="text-xs font-medium text-white truncate">
+                    {thread.name}
+                  </div>
+                  <div className="text-[10px] text-white/50 truncate">
+                    {thread.messages[0]?.content.slice(0, 50) || "No messages"}
+                  </div>
+                  <div className="text-[10px] text-white/40 mt-1">
+                    {new Date(thread.lastActiveAt || thread.createdAt).toLocaleDateString()}
+                  </div>
+                </div>
+                <button
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    onDeleteThread(thread.id);
+                  }}
+                  className="opacity-0 group-hover:opacity-100 p-1 rounded hover:bg-red-500/20 text-white/40 hover:text-red-400 transition-all"
+                >
+                  <Trash2 className="w-3 h-3" />
+                </button>
+              </div>
+            </div>
+          ))}
+          {filteredThreads.length === 0 && (
+            <div className="text-center py-8 text-white/40 text-xs">
+              {searchQuery ? "No matching conversations" : "No conversations yet"}
+            </div>
+          )}
         </div>
       </div>
     </div>
@@ -117,7 +324,274 @@ import IntegrationPanel from "@/components/integrations/IntegrationPanel";
 import GitSourceControl from "@/components/git-source-control-tabs";
 import { VoicePanel } from "@/components/voice-panel";
 import VNCConnectionTab from "@/components/vnc-connection-tab";
+import { NewsPanel } from "@/components/news-panel";
+import { CronJobsPanel } from "@/components/cron-jobs-panel";
+import FrontierFeedPlugin from "@/components/plugins/frontier-feed-plugin";
+import CommandDeckPlugin from "@/components/plugins/command-deck-plugin";
 import { PROVIDERS } from "@/lib/chat/providers";
+
+// ---------------------------------------------------------------------------
+// Tab definitions - single source of truth for the workspace tab bar
+// ---------------------------------------------------------------------------
+
+interface TabDef {
+  value: PanelTab;
+  label: string;
+  icon: React.ComponentType<{ className?: string }>;
+  shortcut?: string;
+}
+
+const TAB_DEFS: TabDef[] = [
+  { value: 'explorer', label: 'Files', icon: FolderOpen },
+  { value: 'agent', label: 'Agent', icon: Sparkles },
+  { value: 'chat', label: 'Chat', icon: Cpu },
+  { value: 'thinking', label: 'Think', icon: Brain },
+  { value: 'music', label: 'Music', icon: Music },
+  { value: 'automations', label: 'Automate', icon: Workflow },
+  { value: 'youtube', label: 'Videos', icon: Youtube },
+  { value: 'forum', label: 'Forum', icon: Users },
+  { value: 'compare', label: 'Compare', icon: Zap },
+  { value: 'integrations', label: 'Integrations', icon: Database },
+  { value: 'git', label: 'Git', icon: GitCommit },
+  { value: 'voice', label: 'Voice', icon: Mic },
+  { value: 'remote', label: 'Remote', icon: Monitor },
+  { value: 'news', label: 'News', icon: Newspaper },
+  { value: 'cronjobs', label: 'Cron', icon: Clock },
+  { value: 'frontier-feed', label: 'Frontier', icon: Sparkles },
+  { value: 'command-deck', label: 'Actions', icon: Command },
+];
+
+// ---------------------------------------------------------------------------
+// Scrollable tab bar with arrows and animated indicator
+// ---------------------------------------------------------------------------
+
+interface ScrollableTabBarProps {
+  tabs: TabDef[];
+  activeTab: PanelTab;
+  onTabChange: (tab: PanelTab) => void;
+}
+
+function ScrollableTabBar({ tabs, activeTab, onTabChange }: ScrollableTabBarProps) {
+  const scrollRef = useRef<HTMLDivElement>(null);
+  const [canScrollLeft, setCanScrollLeft] = useState(false);
+  const [canScrollRight, setCanScrollRight] = useState(false);
+
+  // Drag-to-scroll state
+  const dragState = useRef({
+    isDragging: false,
+    startX: 0,
+    scrollLeft: 0,
+    didDrag: false,
+  });
+
+  const checkScroll = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    setCanScrollLeft(el.scrollLeft > 2);
+    setCanScrollRight(el.scrollLeft < el.scrollWidth - el.clientWidth - 2);
+  }, []);
+
+  useEffect(() => {
+    checkScroll();
+    const el = scrollRef.current;
+    if (!el) return;
+    el.addEventListener('scroll', checkScroll, { passive: true });
+    const observer = new ResizeObserver(checkScroll);
+    observer.observe(el);
+    return () => {
+      el.removeEventListener('scroll', checkScroll);
+      observer.disconnect();
+    };
+  }, [checkScroll]);
+
+  // Auto-scroll active tab into view
+  useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const activeBtn = el.querySelector<HTMLElement>(`[data-tab-value="${activeTab}"]`);
+    activeBtn?.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+  }, [activeTab]);
+
+  // Drag-to-scroll handlers
+  const handleMouseDown = useCallback((e: React.MouseEvent) => {
+    const el = scrollRef.current;
+    if (!el) return;
+    dragState.current = {
+      isDragging: true,
+      startX: e.pageX - el.offsetLeft,
+      scrollLeft: el.scrollLeft,
+      didDrag: false,
+    };
+    el.style.cursor = 'grabbing';
+    el.style.userSelect = 'none';
+  }, []);
+
+  const handleMouseMove = useCallback((e: React.MouseEvent) => {
+    const el = scrollRef.current;
+    if (!el || !dragState.current.isDragging) return;
+    e.preventDefault();
+    const x = e.pageX - el.offsetLeft;
+    const walk = x - dragState.current.startX;
+    if (Math.abs(walk) > 5) {
+      dragState.current.didDrag = true;
+    }
+    el.scrollLeft = dragState.current.scrollLeft - walk;
+  }, []);
+
+  const handleMouseUpOrLeave = useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    dragState.current.isDragging = false;
+    el.style.cursor = '';
+    el.style.userSelect = '';
+  }, []);
+
+  const handleTabClick = useCallback((tabValue: PanelTab, e: React.MouseEvent) => {
+    if (dragState.current.didDrag) {
+      e.preventDefault();
+      e.stopPropagation();
+      dragState.current.didDrag = false;
+      return;
+    }
+    onTabChange(tabValue);
+  }, [onTabChange]);
+
+  const scrollBy = (direction: 'left' | 'right') => {
+    const el = scrollRef.current;
+    if (!el) return;
+    el.scrollBy({ left: direction === 'left' ? -200 : 200, behavior: 'smooth' });
+  };
+
+  return (
+    <div className="relative flex items-center flex-1 min-w-0">
+      {/* Left fade + arrow */}
+      {canScrollLeft && (
+        <div className="absolute left-0 z-10 flex items-center h-full pointer-events-none">
+          <div className="h-full w-6 bg-gradient-to-r from-black/80 to-transparent pointer-events-none" />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute left-0 h-6 w-6 text-white/70 hover:text-white hover:bg-white/10 pointer-events-auto"
+            onClick={() => scrollBy('left')}
+            tabIndex={-1}
+          >
+            <ChevronLeft className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      )}
+
+      {/* Scrollable tabs container */}
+      <div
+        ref={scrollRef}
+        className="flex gap-1 overflow-x-auto no-scrollbar flex-1 cursor-grab select-none"
+        style={{ scrollbarWidth: 'none', msOverflowStyle: 'none' }}
+        onMouseDown={handleMouseDown}
+        onMouseMove={handleMouseMove}
+        onMouseUp={handleMouseUpOrLeave}
+        onMouseLeave={handleMouseUpOrLeave}
+      >
+        {tabs.map((tab) => {
+          const Icon = tab.icon;
+          const isActive = activeTab === tab.value;
+          return (
+            <button
+              key={tab.value}
+              data-tab-value={tab.value}
+              onClick={(e) => handleTabClick(tab.value, e)}
+              className={`
+                relative flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full
+                transition-all duration-200 whitespace-nowrap cursor-pointer border
+                ${
+                  isActive
+                    ? 'bg-white/10 border-white/20 text-white shadow-sm'
+                    : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
+                }
+              `}
+            >
+              <Icon className="h-3 w-3 shrink-0" />
+              <span>{tab.label}</span>
+              {isActive && (
+                <motion.div
+                  layoutId="workspace-active-tab-indicator"
+                  className="absolute bottom-0 left-2 right-2 h-0.5 rounded-full bg-white/50"
+                  transition={{ type: 'spring', stiffness: 400, damping: 30 }}
+                />
+              )}
+            </button>
+          );
+        })}
+      </div>
+
+      {/* Right fade + arrow */}
+      {canScrollRight && (
+        <div className="absolute right-0 z-10 flex items-center h-full pointer-events-none">
+          <div className="h-full w-6 bg-gradient-to-l from-black/80 to-transparent pointer-events-none" />
+          <Button
+            variant="ghost"
+            size="icon"
+            className="absolute right-0 h-6 w-6 text-white/70 hover:text-white hover:bg-white/10 pointer-events-auto"
+            onClick={() => scrollBy('right')}
+            tabIndex={-1}
+          >
+            <ChevronRight className="w-3.5 h-3.5" />
+          </Button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ---------------------------------------------------------------------------
+// Error boundary for tab content
+// ---------------------------------------------------------------------------
+
+interface TabErrorBoundaryState {
+  hasError: boolean;
+  error: Error | null;
+}
+
+class TabErrorBoundary extends React.Component<
+  { children: React.ReactNode; tabName: string },
+  TabErrorBoundaryState
+> {
+  constructor(props: { children: React.ReactNode; tabName: string }) {
+    super(props);
+    this.state = { hasError: false, error: null };
+  }
+
+  static getDerivedStateFromError(error: Error): TabErrorBoundaryState {
+    return { hasError: true, error };
+  }
+
+  componentDidCatch(error: Error) {
+    console.error(`[Workspace] Error in tab "${this.props.tabName}":`, error);
+  }
+
+  render() {
+    if (this.state.hasError) {
+      return (
+        <div className="h-full flex items-center justify-center p-8">
+          <div className="text-center space-y-3 max-w-sm">
+            <div className="text-4xl">⚠️</div>
+            <h3 className="text-lg font-semibold text-white">Tab Error</h3>
+            <p className="text-sm text-white/60">
+              The {this.props.tabName} tab encountered an error.
+            </p>
+            <Button
+              variant="outline"
+              size="sm"
+              onClick={() => this.setState({ hasError: false, error: null })}
+              className="border-white/20 text-white/80 hover:bg-white/10"
+            >
+              Try Again
+            </Button>
+          </div>
+        </div>
+      );
+    }
+    return this.props.children;
+  }
+}
 
 // Helper to normalize paths to relative format (project/...) for API compatibility
 // Moved outside component to avoid recreation on every render
@@ -174,7 +648,7 @@ const automationData: AutomationItem[] = [
   { id: 'life-manager', name: 'Personal Life Manager', description: 'Telegram, Google & voice AI', icon: Bot, category: 'productivity', available: false, tags: ['Telegram', 'Google', 'Voice AI'] },
   { id: 'video-gen', name: 'AI Viral Video Generator', description: 'VEO 3 → TikTok automation', icon: Video, category: 'media', available: false, tags: ['VEO 3', 'TikTok', 'Automation'] },
   { id: 'db-chat', name: 'Database Chat', description: 'Natural language database queries', icon: Database, category: 'ai', available: false, tags: ['Database', 'AI', 'NLP'] },
-  { id: 'rag-chatbot', name: 'RAG Company Chatbot', description: 'Google Drive + Gemini', icon: BookOpen, category: 'ai', available: false, tags: ['RAG', 'Drive', 'Gemini'] },
+  { id: 'rag-chatbot', name: 'RAG Company Chatbot', description: 'Google Drive + Gemini', icon: FolderOpen, category: 'ai', available: false, tags: ['RAG', 'Drive', 'Gemini'] },
   { id: 'gmail-label', name: 'Gmail Auto-Label', description: 'OpenAI + Gmail API', icon: Mail, category: 'productivity', available: false, tags: ['Gmail', 'OpenAI'] },
   { id: 'music-gen', name: 'AI Music Generator', description: 'ElevenLabs + Sheets + Drive', icon: Music2, category: 'media', available: false, tags: ['ElevenLabs', 'Sheets'] },
   { id: 'voice-clone', name: 'AI Voice Cloning', description: 'YouTube → ElevenLabs', icon: Mic, category: 'media', available: false, tags: ['YouTube', 'ElevenLabs'] },
@@ -183,7 +657,7 @@ const automationData: AutomationItem[] = [
 ];
 
 export function ExperimentalWorkspacePanel() {
-  const { isOpen, activeTab, closePanel, setTab } = usePanel();
+  const { isOpen, activeTab, closePanel, setTab, openMonacoEditor } = usePanel();
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   
@@ -200,11 +674,17 @@ export function ExperimentalWorkspacePanel() {
   const [chatModel, setChatModel] = useState('nvidia/nemotron-3-30b-a3b:free');
   
   // Abort controller for stopping chat
+  // Agent mode context from orchestration mode selector
+  const { config: orchestrationConfig } = useOrchestrationMode();
+  
   const chatAbortControllerRef = useRef<AbortController | null>(null);
   
   // Code preview panel
   const [showCodePreview, setShowCodePreview] = useState(false);
-  
+
+  // Thread sidebar (from enhanced-workspace-panel)
+  const [showThreadSidebar, setShowThreadSidebar] = useState(false);
+
   // Voice input
   const { isListening, startListening, stopListening, transcript } = useVoiceInput();
   
@@ -232,20 +712,59 @@ export function ExperimentalWorkspacePanel() {
   const [isLoadingRepos, setIsLoadingRepos] = useState(false);
   const [selectedRepo, setSelectedRepo] = useState<{ owner: string; repo: string; branch: string } | null>(null);
   const [showUrlInput, setShowUrlInput] = useState(false);
-  
-  // Resizable panel width
-  const [panelWidth, setPanelWidth] = useState(400);
+
+  // Resizable panel width with localStorage persistence and snap points
+  const SNAP_POINTS = [350, 450, 550, 650, 750];
+  const [panelWidth, setPanelWidth] = useState(() => {
+    if (typeof window !== 'undefined') {
+      const stored = localStorage.getItem('workspace-panel-width');
+      if (stored) {
+        const parsed = parseInt(stored);
+        if (parsed >= 300 && parsed <= 800) return parsed;
+      }
+    }
+    return 400;
+  });
+
+  // Save panel width to localStorage
+  useEffect(() => {
+    localStorage.setItem('workspace-panel-width', String(panelWidth));
+  }, [panelWidth]);
+
+  // Close panel on Escape
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleEsc = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        e.preventDefault();
+        closePanel();
+      }
+    };
+    document.addEventListener('keydown', handleEsc);
+    return () => document.removeEventListener('keydown', handleEsc);
+  }, [isOpen, closePanel]);
   const [isResizing, setIsResizing] = useState(false);
   const resizeStartX = useRef(0);
   const resizeStartWidth = useRef(400);
-  
+
+  // Snap to nearest snap point
+  const snapToPoints = useCallback((width: number) => {
+    const snapThreshold = 30; // pixels
+    for (const snapPoint of SNAP_POINTS) {
+      if (Math.abs(width - snapPoint) < snapThreshold) {
+        return snapPoint;
+      }
+    }
+    return width;
+  }, []);
+
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
     setIsResizing(true);
     resizeStartX.current = e.clientX;
     resizeStartWidth.current = panelWidth;
   }, [panelWidth]);
-  
+
   useEffect(() => {
     const handleMouseMove = (e: MouseEvent) => {
       if (!isResizing) return;
@@ -253,21 +772,25 @@ export function ExperimentalWorkspacePanel() {
       const newWidth = Math.max(300, Math.min(800, resizeStartWidth.current + delta));
       setPanelWidth(newWidth);
     };
-    
+
     const handleMouseUp = () => {
-      setIsResizing(false);
+      if (isResizing) {
+        // Snap to nearest point on release
+        setPanelWidth(prev => snapToPoints(prev));
+        setIsResizing(false);
+      }
     };
-    
+
     if (isResizing) {
       document.addEventListener('mousemove', handleMouseMove);
       document.addEventListener('mouseup', handleMouseUp);
     }
-    
+
     return () => {
       document.removeEventListener('mousemove', handleMouseMove);
       document.removeEventListener('mouseup', handleMouseUp);
     };
-  }, [isResizing]);
+  }, [isResizing, snapToPoints]);
 
   // Load chat threads from localStorage on mount
   useEffect(() => {
@@ -673,6 +1196,18 @@ export function ExperimentalWorkspacePanel() {
     fetchSnapshot();
   }, [vfs.getSnapshot]);
 
+  // Listen for filesystem updates from Monaco editor saves
+  useEffect(() => {
+    const unsubscribe = onFilesystemUpdated(async (event) => {
+      // Refresh VFS snapshot when Monaco editor saves a file
+      const snapshot = await vfs.getSnapshot();
+      if (snapshot?.files) {
+        setVfsSnapshot(snapshot);
+      }
+    });
+    return () => unsubscribe();
+  }, [vfs]);
+
   // Build file tree from filesystem
   const fileTree = React.useMemo(() => {
     const files = vfsSnapshot?.files || [];
@@ -826,6 +1361,7 @@ export function ExperimentalWorkspacePanel() {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
+          ...getOrchestrationModeHeaders(orchestrationConfig),  // Add orchestration mode headers
         },
         body: JSON.stringify({
           messages: messagesPayload,
@@ -879,8 +1415,9 @@ export function ExperimentalWorkspacePanel() {
         
         for (const line of lines) {
           // Parse SSE format: "event: type\ndata: {json}"
+          let eventType = '';
           if (line.startsWith('event: ')) {
-            const eventType = line.slice(7).trim();
+            eventType = line.slice(7).trim();
             continue;
           }
           
@@ -891,7 +1428,8 @@ export function ExperimentalWorkspacePanel() {
             try {
               const data = JSON.parse(dataStr);
               
-              switch (data.type) {
+              // Use eventType from the event line, not data.type (which doesn't exist in the payload)
+              switch (eventType || data.type) {
                 case SSE_EVENT_TYPES.TOKEN:
                   // Streaming token - update message in real-time
                   if (data.data?.content) {
@@ -960,15 +1498,30 @@ export function ExperimentalWorkspacePanel() {
                   break;
 
                 case SSE_EVENT_TYPES.REASONING:
-                  // Handle reasoning/thinking
+                  // Handle reasoning/thinking from Vercel AI SDK extractReasoningMiddleware
+                  // Supports Anthropic (<thinking>), Google (<thought>), and DeepSeek reasoning
                   if (data.data?.content) {
                     setAgentActivity((prev) => ({
                       ...prev,
                       status: 'thinking',
                       reasoningChunks: [...prev.reasoningChunks, {
-                        id: `reason-${Date.now()}`,
-                        type: 'thought',
+                        id: `reason-${Date.now()}-${prev.reasoningChunks.length}`,
+                        type: data.data.type || 'thought',
                         content: data.data.content,
+                        timestamp: Date.now(),
+                      }],
+                    }));
+                  }
+                  // Also handle message.metadata.reasoning if present
+                  if (data.data?.metadata?.reasoning) {
+                    const reasoningText = data.data.metadata.reasoning;
+                    setAgentActivity((prev) => ({
+                      ...prev,
+                      status: 'thinking',
+                      reasoningChunks: [...prev.reasoningChunks, {
+                        id: `reason-${Date.now()}-${prev.reasoningChunks.length}`,
+                        type: 'reasoning',
+                        content: reasoningText,
                         timestamp: Date.now(),
                       }],
                     }));
@@ -1560,6 +2113,31 @@ export function ExperimentalWorkspacePanel() {
     setRenameValue("");
   }, []);
 
+  // Keyboard shortcuts for file operations
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      // Only handle if a file is selected and we're in the file tree area
+      if (!selectedFile) return;
+      
+      const isInFileTree = document.activeElement?.closest('.file-tree') || 
+        document.activeElement?.closest('[data-file-tree]');
+      
+      // F2 to rename selected file
+      if (e.key === 'F2' && selectedFile) {
+        e.preventDefault();
+        handleRenameFile(selectedFile.path, selectedFile.name);
+      }
+      // Enter to open in Monaco editor
+      if (e.key === 'Enter' && selectedFile && isInFileTree) {
+        e.preventDefault();
+        openMonacoEditor(selectedFile.path);
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [selectedFile, handleRenameFile, openMonacoEditor]);
+
   // Drag and drop handlers
   const handleDragStart = useCallback((path: string) => {
     setDraggedFile(path);
@@ -1688,26 +2266,20 @@ export function ExperimentalWorkspacePanel() {
       const isDragTarget = dragOverFolder === node.path;
 
       return (
-        <div 
-          key={node.path} 
-          className="group"
-          onDragOver={(e) => handleDragOver(e, node.path)}
-          onDragLeave={handleDragLeave}
-          onDrop={(e) => handleDrop(e, node.path)}
-        >
+        <div key={node.path} className="group file-tree" onDragOver={(e) => handleDragOver(e, node.path)} onDragLeave={handleDragLeave} onDrop={(e) => handleDrop(e, node.path)}>
           <div className={`flex items-center rounded ${isDragTarget ? 'bg-cyan-500/30 border border-cyan-500/50' : ''}`}>
             <button
               onClick={() => toggleFolder(node.path)}
               onDoubleClick={() => handleRenameFile(node.path, node.name)}
-              className="flex items-center gap-1 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors"
+              className="flex items-center gap-1 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors overflow-hidden"
               style={{ paddingLeft: indent + 8 }}
             >
               {isExpanded ? (
-                <ChevronDown className="h-3 w-3 text-white/60" />
+                <ChevronDown className="h-3 w-3 text-white/60 flex-shrink-0" />
               ) : (
-                <ChevronRight className="h-3 w-3 text-white/60" />
+                <ChevronRight className="h-3 w-3 text-white/60 flex-shrink-0" />
               )}
-              <Folder className="h-3 w-3 text-blue-400" />
+              <Folder className="h-3 w-3 text-blue-400 flex-shrink-0" />
               {renamingFile === node.path ? (
                 <Input
                   value={renameValue}
@@ -1717,12 +2289,12 @@ export function ExperimentalWorkspacePanel() {
                     if (e.key === 'Escape') cancelRename();
                   }}
                   onBlur={confirmRename}
-                  className="h-5 text-xs bg-black/50 border-white/30"
+                  className="h-5 text-xs bg-black/50 border-white/30 min-w-0 flex-1"
                   autoFocus
                   onClick={(e) => e.stopPropagation()}
                 />
               ) : (
-                <span className="text-white/80">{node.name}</span>
+                <span className="text-white/80 truncate flex-1 min-w-0">{node.name}</span>
               )}
             </button>
             {/* Paste button when clipboard has content */}
@@ -1773,7 +2345,7 @@ export function ExperimentalWorkspacePanel() {
         draggable
         onDragStart={() => handleDragStart(node.path)}
         onClick={() => handleFileSelect(node)}
-        onDoubleClick={() => handleRenameFile(node.path, node.name)}
+        onDoubleClick={() => openMonacoEditor(node.path)}
         onContextMenu={(e) => {
           e.preventDefault();
           setContextMenu({ x: e.clientX, y: e.clientY, path: node.path, isDirectory: false });
@@ -2110,154 +2682,24 @@ export function ExperimentalWorkspacePanel() {
                 )}
               </AnimatePresence>
 
-              {/* Tabs - sleek horizontal pill design with grab scroll */}
+              {/* Tabs - scrollable pill design with arrows */}
               <Tabs value={activeTab} onValueChange={(v) => setTab(v as PanelTab)} className="flex-1 flex flex-col">
-                <div 
-                  className="flex gap-1 mx-4 mt-4 overflow-x-auto no-scrollbar cursor-grab active:cursor-grabbing select-none"
-                  style={{ scrollBehavior: 'smooth' }}
-                >
-                  <button
-                    onClick={() => setTab('explorer')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'explorer' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <FolderOpen className="h-3 w-3" />
-                    Files
-                  </button>
-                  <button
-                    onClick={() => setTab('chat')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'chat' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Cpu className="h-3 w-3" />
-                    Agent
-                  </button>
-                  <button
-                    onClick={() => setTab('thinking')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'thinking' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Brain className="h-3 w-3" />
-                    Think
-                  </button>
-                  <button
-                    onClick={() => setTab('music')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'music' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Music className="h-3 w-3" />
-                    Music
-                  </button>
-                  <button
-                    onClick={() => setTab('automations')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'automations' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Workflow className="h-3 w-3" />
-                    Automate
-                  </button>
-                  <button
-                    onClick={() => setTab('youtube')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'youtube' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Youtube className="h-3 w-3" />
-                    Videos
-                  </button>
-                  <button
-                    onClick={() => setTab('forum')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'forum' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Users className="h-3 w-3" />
-                    Forum
-                  </button>
-                  <button
-                    onClick={() => setTab('compare')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'compare' 
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm' 
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Zap className="h-3 w-3" />
-                    Compare
-                  </button>
-                  <button
-                    onClick={() => setTab('integrations')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'integrations'
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Database className="h-3 w-3" />
-                    Integrations
-                  </button>
-                  <button
-                    onClick={() => setTab('git')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'git'
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <GitCommit className="h-3 w-3" />
-                    Git
-                  </button>
-                  <button
-                    onClick={() => setTab('voice')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'voice'
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Mic className="h-3 w-3" />
-                    Voice
-                  </button>
-                  <button
-                    onClick={() => setTab('remote')}
-                    className={`flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full transition-all duration-200 border ${
-                      activeTab === 'remote'
-                        ? 'bg-white/10 border-white/20 text-white shadow-sm'
-                        : 'border-transparent text-white/50 hover:text-white/80 hover:bg-white/5'
-                    }`}
-                  >
-                    <Monitor className="h-3 w-3" />
-                    Remote
-                  </button>
+                <div className="px-4 mt-3">
+                  <ScrollableTabBar
+                    tabs={TAB_DEFS}
+                    activeTab={activeTab}
+                    onTabChange={setTab}
+                  />
                 </div>
 
-                {/* Explorer Tab */}
-                <TabsContent value="explorer" className="flex-1 mt-0 overflow-hidden">
-                  <ScrollArea className="h-full">
-                    <div className="p-4 space-y-2">
-                      <div className="flex items-center justify-between mb-4">
-                        <span className="text-xs text-white/60">File Explorer</span>
-                        <div className="flex gap-1">
-                          <Badge variant="secondary" className="text-[10px] bg-white/10">
+                 {/* Explorer Tab */}
+                  <TabsContent value="explorer" className="flex-1 mt-0 h-full" data-file-tree>
+                    <div className="h-full overflow-y-auto custom-scrollbar" style={{ overflowAnchor: 'auto' }}>
+                      <div className="p-4 space-y-2 max-w-full">
+                       <div className="flex items-center justify-between mb-4">
+                         <span className="text-xs text-white/60">File Explorer</span>
+                         <div className="flex gap-1">
+                           <Badge variant="secondary" className="text-[10px] bg-white/10">
                             {filesystem?.files?.length || 0} files
                           </Badge>
                           {/* Paste button when clipboard has content */}
@@ -2414,34 +2856,58 @@ export function ExperimentalWorkspacePanel() {
                         />
                       </div>
                     </div>
-                  </ScrollArea>
+                  </div>
                 </TabsContent>
 
                 {/* Parallel Chat Tab */}
-                <TabsContent value="chat" className="flex-1 mt-0 flex flex-col overflow-hidden">
+                <TabsContent value="chat" className="flex-1 mt-0 flex flex-col overflow-hidden relative">
+                  {/* Thread Sidebar */}
+                  <ThreadListSidebar
+                    threads={chatThreads}
+                    activeThreadId={activeThreadId}
+                    onSelectThread={switchThread}
+                    onNewThread={createNewThread}
+                    onDeleteThread={deleteThread}
+                    isOpen={showThreadSidebar}
+                    onClose={() => setShowThreadSidebar(false)}
+                  />
+
                   {/* Chat Header */}
-                  <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/20">
+                  <div className="flex items-center justify-between px-4 py-2 border-b border-white/10 bg-black/20 shrink-0">
                     <div className="flex items-center gap-2 flex-1">
-                      <MessageSquare className="h-4 w-4 text-blue-400" />
+                      {/* Thread Sidebar Toggle */}
+                      <Button
+                        variant="ghost"
+                        size="icon"
+                        onClick={() => setShowThreadSidebar(!showThreadSidebar)}
+                        className={`h-7 w-7 ${showThreadSidebar ? 'bg-white/10 text-white' : 'text-white/70 hover:text-white hover:bg-white/10'}`}
+                        title="Toggle thread list"
+                      >
+                        {showThreadSidebar ? (
+                          <ChevronLeft className="w-4 h-4" />
+                        ) : (
+                          <MessageSquare className="w-4 h-4" />
+                        )}
+                      </Button>
+
                       <span className="text-sm font-medium text-white/90">Parallel Chat</span>
                       <Badge variant="secondary" className="text-[10px] bg-blue-500/20 text-blue-300">
                         {chatMessages.length} messages
                       </Badge>
-                      
-                      {/* Provider/Model Selector */}
+
+                      {/* Provider/Model Selector - Improved */}
                       {availableProviders.filter((p: any) => (p as any).isAvailable !== false).length > 0 && (
                       <div className="flex items-center gap-1 ml-2">
                         <select
                           value={chatProvider}
                           onChange={(e) => {
                             setChatProvider(e.target.value);
-                            // Reset to first model of new provider
                             const provider = availableProviders.find(p => p.id === e.target.value);
                             if (provider?.models?.[0]) {
                               setChatModel(provider.models[0]);
                             }
                           }}
-                          className="text-xs bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50"
+                          className="text-xs bg-white/5 border border-white/10 rounded px-1.5 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50 cursor-pointer"
                           title="Select provider"
                         >
                           {availableProviders.filter((p: any) => (p as any).isAvailable !== false).map(provider => (
@@ -2453,24 +2919,24 @@ export function ExperimentalWorkspacePanel() {
                         <select
                           value={chatModel}
                           onChange={(e) => setChatModel(e.target.value)}
-                          className="text-xs bg-white/5 border border-white/10 rounded px-1 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50 max-w-[140px]"
+                          className="text-xs bg-white/5 border border-white/10 rounded px-1.5 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50 max-w-[120px] cursor-pointer"
                           title="Select model"
                         >
                           {(availableProviders.find(p => p.id === chatProvider)?.models || []).slice(0, 8).map(model => (
                             <option key={model} value={model} className="bg-gray-900">
-                              {model.split(':')[0]}
+                              {model.length > 25 ? model.slice(0, 25) + '...' : model}
                             </option>
                           ))}
                         </select>
                       </div>
                       )}
-                      
-                      {/* Thread Selector */}
+
+                      {/* Thread Selector Dropdown */}
                       <div className="flex items-center gap-1 ml-4">
                         <select
                           value={activeThreadId || ''}
                           onChange={(e) => switchThread(e.target.value)}
-                          className="text-xs bg-white/5 border border-white/10 rounded px-2 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50"
+                          className="text-xs bg-white/5 border border-white/10 rounded px-2 py-0.5 text-white/80 focus:outline-none focus:border-blue-500/50 cursor-pointer"
                           title="Select chat thread"
                         >
                           {chatThreads.map(thread => (
@@ -2590,6 +3056,54 @@ export function ExperimentalWorkspacePanel() {
                       </div>
                     )}
 
+                    {/* Reasoning Display - Shows agent's thinking process from Vercel AI SDK */}
+                    {agentActivity.reasoningChunks.length > 0 && showReasoning && (
+                      <Card className="bg-purple-500/10 border-purple-500/30">
+                        <CardHeader className="pb-2">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <Brain className="h-4 w-4 text-purple-400" />
+                              <span className="text-sm font-medium text-white/90">Agent Reasoning</span>
+                              <Badge variant="secondary" className="text-[10px] bg-purple-500/20">
+                                {agentActivity.reasoningChunks.length} thoughts
+                              </Badge>
+                            </div>
+                            <Button
+                              variant="ghost"
+                              size="sm"
+                              onClick={() => setShowReasoning(false)}
+                              className="h-6 w-6 p-0 hover:bg-purple-500/20"
+                            >
+                              <X className="h-3 w-3" />
+                            </Button>
+                          </div>
+                        </CardHeader>
+                        <CardContent className="space-y-2">
+                          {agentActivity.reasoningChunks.slice(-5).map((chunk, i) => (
+                            <div
+                              key={chunk.id}
+                              className="p-2 rounded bg-black/30 border border-purple-500/20 text-xs text-white/80"
+                            >
+                              <div className="flex items-center gap-2 mb-1">
+                                <Badge variant="outline" className="text-[8px] bg-purple-500/20 border-purple-500/30">
+                                  {chunk.type}
+                                </Badge>
+                                <span className="text-[9px] text-white/40">
+                                  {new Date(chunk.timestamp).toLocaleTimeString()}
+                                </span>
+                              </div>
+                              <div className="whitespace-pre-wrap">{chunk.content}</div>
+                            </div>
+                          ))}
+                          {agentActivity.reasoningChunks.length > 5 && (
+                            <p className="text-xs text-white/50 text-center">
+                              +{agentActivity.reasoningChunks.length - 5} more thoughts
+                            </p>
+                          )}
+                        </CardContent>
+                      </Card>
+                    )}
+
                     {/* Processing Steps */}
                     {agentActivity.processingSteps.length > 0 && (
                       <Card className="bg-white/5 border-white/10">
@@ -2697,30 +3211,18 @@ export function ExperimentalWorkspacePanel() {
                         <p className="text-xs mt-1">Start a new conversation</p>
                       </div>
                     ) : (
-                      chatMessages.map((msg) => (
-                        <div
+                      chatMessages.map((msg, index) => (
+                        <MessageBubble
                           key={msg.id}
-                          className={`flex ${msg.role === "user" ? "justify-end" : "justify-start"}`}
-                        >
-                          <div
-                            className={`max-w-[80%] p-3 rounded-lg text-sm ${
-                              msg.role === "user"
-                                ? "bg-blue-500/20 border border-blue-500/30 text-white/90"
-                                : "bg-white/10 border border-white/20 text-white/80"
-                            }`}
-                          >
-                            <p>{msg.content}</p>
-                            <p className="text-[10px] text-white/40 mt-1">
-                              {new Date(msg.timestamp || Date.now()).toLocaleTimeString()}
-                            </p>
-                          </div>
-                        </div>
+                          message={msg}
+                          isStreaming={isChatLoading && index === chatMessages.length - 1 && msg.role === "assistant"}
+                        />
                       ))
                     )}
                     {isChatLoading && (
-                      <ChatLoadingIndicator 
-                        provider={chatProvider} 
-                        model={chatModel.split(':')[0]} 
+                      <ChatLoadingIndicator
+                        provider={chatProvider}
+                        model={chatModel.split(':')[0]}
                       />
                     )}
                     <div ref={chatEndRef} />
@@ -2846,9 +3348,14 @@ export function ExperimentalWorkspacePanel() {
                   </div>
                 </TabsContent>
 
+                {/* Agent Tab - Orchestration Mode Selector */}
+                <TabsContent value="agent" className="flex-1 mt-0 overflow-hidden">
+                  <AgentTab onClose={() => setTab('explorer')} />
+                </TabsContent>
+
                 {/* Thinking Area Tab */}
                 <TabsContent value="thinking" className="flex-1 mt-0 overflow-hidden">
-                  <ScrollArea className="h-full">
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                     <div className="p-4 space-y-4">
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
@@ -3031,12 +3538,12 @@ export function ExperimentalWorkspacePanel() {
                         )}
                       </div>
                     </div>
-                  </ScrollArea>
+                  </div>
                 </TabsContent>
 
                 {/* Music Playlist Tab */}
                 <TabsContent value="music" className="flex-1 mt-0 overflow-hidden">
-                  <ScrollArea className="h-full">
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                     <div className="p-4 space-y-4">
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
@@ -3198,12 +3705,12 @@ export function ExperimentalWorkspacePanel() {
                         )}
                       </div>
                     </div>
-                  </ScrollArea>
+                  </div>
                 </TabsContent>
 
                 {/* Automations Tab - Redesigned */}
                 <TabsContent value="automations" className="flex-1 mt-0 overflow-hidden">
-                  <ScrollArea className="h-full">
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                     <div className="p-4 space-y-4">
                       {/* Header with Stats */}
                       <div className="flex items-center justify-between mb-4">
@@ -3373,7 +3880,7 @@ export function ExperimentalWorkspacePanel() {
                         </p>
                       </div>
                     </div>
-                  </ScrollArea>
+                  </div>
                 </TabsContent>
 
                 {/* YouTube Playlist Tab - Auto fullscreen with faded background */}
@@ -3465,7 +3972,7 @@ export function ExperimentalWorkspacePanel() {
 
                 {/* Forum Tab */}
                 <TabsContent value="forum" className="flex-1 mt-0 overflow-hidden">
-                  <ScrollArea className="h-full">
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                     <div className="p-4 space-y-4">
                       {/* Header */}
                       <div className="flex items-center justify-between mb-4">
@@ -3566,7 +4073,7 @@ export function ExperimentalWorkspacePanel() {
                                     onClick={() => handleToggleComments(post.id)}
                                     className="h-6 text-xs hover:bg-blue-500/20 hover:text-blue-400"
                                   >
-                                    <MessageComment className="h-3 w-3 mr-1" />
+                                    <MessageCircle className="h-3 w-3 mr-1" />
                                     {post.comments.length}
                                   </Button>
                                 </div>
@@ -3628,12 +4135,12 @@ export function ExperimentalWorkspacePanel() {
                         )}
                       </div>
                     </div>
-                  </ScrollArea>
+                  </div>
                 </TabsContent>
 
                 {/* Compare Tab - Multi-Model Comparison */}
                 <TabsContent value="compare" className="flex-1 mt-0 overflow-hidden">
-                  <ScrollArea className="h-full">
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                     <div className="p-4">
                       <div className="mb-4">
                         <h3 className="text-sm font-medium text-white/80 mb-2 flex items-center gap-2">
@@ -3650,19 +4157,19 @@ export function ExperimentalWorkspacePanel() {
                         availableProviders={availableProviders}
                       />
                     </div>
-                  </ScrollArea>
+                  </div>
                 </TabsContent>
 
                 {/* Integrations Tab - OAuth Connections */}
                 <TabsContent value="integrations" className="flex-1 mt-0 overflow-hidden">
-                  <ScrollArea className="h-full">
+                  <div className="h-full overflow-y-auto custom-scrollbar">
                     <div className="p-4">
                       <IntegrationPanel
                         userId={getOrCreateAnonymousSessionId()}
                         onClose={() => setTab("explorer")}
                       />
                     </div>
-                  </ScrollArea>
+                  </div>
                 </TabsContent>
 
                 {/* Git Tab - Source Control */}
@@ -3680,6 +4187,26 @@ export function ExperimentalWorkspacePanel() {
                   <div className="flex-1 overflow-hidden">
                     <VNCConnectionTab />
                   </div>
+                </TabsContent>
+
+                {/* News Tab - News feed from multiple sources */}
+                <TabsContent value="news" className="flex-1 mt-0 overflow-hidden">
+                  <NewsPanel />
+                </TabsContent>
+
+                {/* Cron Jobs Tab - Authenticated users only, max 1 job per user */}
+                <TabsContent value="cronjobs" className="flex-1 mt-0 overflow-hidden">
+                  <CronJobsPanel />
+                </TabsContent>
+
+                {/* Frontier Feed Tab */}
+                <TabsContent value="frontier-feed" className="flex-1 mt-0 overflow-hidden">
+                  <FrontierFeedPlugin />
+                </TabsContent>
+
+                {/* Command Deck Tab */}
+                <TabsContent value="command-deck" className="flex-1 mt-0 overflow-hidden">
+                  <CommandDeckPlugin />
                 </TabsContent>
               </Tabs>
             </div>
@@ -3747,6 +4274,17 @@ export function ExperimentalWorkspacePanel() {
             >
               <FileText className="h-3 w-3 text-purple-400" /> Rename
             </button>
+            {!contextMenu.isDirectory && (
+              <button
+                onClick={() => {
+                  openMonacoEditor(contextMenu.path);
+                  setContextMenu(null);
+                }}
+                className="w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-white/10 flex items-center gap-2"
+              >
+                <Code className="h-3 w-3 text-cyan-400" /> Open in Editor
+              </button>
+            )}
           </div>
         </>
       )}
@@ -3898,7 +4436,7 @@ export function ExperimentalWorkspacePanel() {
                     <Loader2 className="h-6 w-6 animate-spin text-white/60" />
                   </div>
                 ) : (
-                  <ScrollArea className="flex-1 max-h-64 mb-4">
+                  <div className="flex-1 max-h-64 mb-4 overflow-y-auto custom-scrollbar">
                     <div className="space-y-2 pr-4">
                       {githubRepos.map((repo) => (
                         <div
@@ -3935,7 +4473,7 @@ export function ExperimentalWorkspacePanel() {
                         </div>
                       ))}
                     </div>
-                  </ScrollArea>
+                  </div>
                 )}
 
                 {importError && (

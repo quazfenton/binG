@@ -66,13 +66,27 @@ export async function GET(
     const encoder = new TextEncoder();
     let eventIterator: AsyncIterableIterator<any> | null = null;
     let abortController: AbortController | null = null;
+    let unsubscribe: (() => void) | null = null;
 
     const stream = new ReadableStream({
       async start(controller) {
         abortController = new AbortController();
 
         try {
-          eventIterator = await manager.subscribe(id);
+          // Subscribe to agent events - get both iterator and unsubscribe function
+          const subscription = await manager.subscribe(id);
+          
+          // Handle both subscription object { iterator, unsubscribe } and plain iterator
+          if (subscription && typeof subscription === 'object') {
+            if ('iterator' in subscription && 'unsubscribe' in subscription) {
+              eventIterator = (subscription as any).iterator as AsyncIterableIterator<any>;
+              unsubscribe = (subscription as any).unsubscribe as () => void;
+            } else if (Symbol.asyncIterator in subscription) {
+              eventIterator = subscription as AsyncIterableIterator<any>;
+            }
+          } else if (subscription && Symbol.asyncIterator in subscription) {
+            eventIterator = subscription as AsyncIterableIterator<any>;
+          }
 
           for await (const event of eventIterator) {
             if (abortController.signal.aborted) {
@@ -85,6 +99,7 @@ export async function GET(
           controller.close();
         } catch (error: any) {
           if (!abortController.signal.aborted) {
+            logger.error('SSE stream error', { agentId: id, error: error.message });
             controller.error(error);
           }
         } finally {
@@ -92,15 +107,24 @@ export async function GET(
           if (eventIterator && (eventIterator as any).return) {
             (eventIterator as any).return();
           }
+          // Call explicit unsubscribe if provided
+          if (unsubscribe) {
+            unsubscribe();
+          }
         }
       },
       cancel() {
         // Client disconnected - abort the subscription to release resources
+        logger.debug('SSE client disconnected', { agentId: id });
         if (abortController) {
           abortController.abort();
         }
         if (eventIterator && (eventIterator as any).return) {
           (eventIterator as any).return();
+        }
+        // Call explicit unsubscribe if provided
+        if (unsubscribe) {
+          unsubscribe();
         }
       },
     });
@@ -114,9 +138,21 @@ export async function GET(
       },
     });
   } catch (error: any) {
-    logger.error('Failed to subscribe to events', { error: error.message });
+    logger.error('Failed to subscribe to events', { 
+      agentId: (await params).id,
+      error: error.message,
+      stack: error.stack 
+    });
+    
+    // Return sanitized error to client
     return NextResponse.json(
-      { error: error.message },
+      { 
+        error: 'Failed to subscribe to events',
+        // Only include details in development
+        ...(process.env.NODE_ENV === 'development' && {
+          details: error.message,
+        }),
+      },
       { status: 500 }
     );
   }

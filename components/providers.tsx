@@ -3,6 +3,7 @@
 import { AuthProvider } from '@/contexts/auth-context';
 import { TamboContextProvider } from '@/contexts/tambo-context';
 import { PanelProvider } from '@/contexts/panel-context';
+import { OrchestrationModeProvider } from '@/contexts/orchestration-mode-context';
 import { ThemeProvider } from './theme-provider';
 
 export function Providers({ children }: { children: React.ReactNode }) {
@@ -17,7 +18,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
       <AuthProvider>
         <TamboContextProvider>
           <PanelProvider>
-            {children}
+            <OrchestrationModeProvider>
+              {children}
+            </OrchestrationModeProvider>
           </PanelProvider>
         </TamboContextProvider>
       </AuthProvider>

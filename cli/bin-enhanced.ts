@@ -5,12 +5,15 @@
  * 
  * Enhanced version with:
  * - WebSocket terminal support
- * - Mastra workflow execution
- * - Git operations
- * - Cloud storage management
- * - Quota monitoring
- * - OAuth integrations
- * - Enhanced error handling
+ * - Mastra/n8n workflow execution
+ * - Git operations (status, commit, push)
+ * - Cloud storage management (upload, list, usage)
+ * - Quota monitoring and cost tracking
+ * - OAuth integrations (GitHub, Google, Notion, etc.)
+ * - Multi-provider fallback (automatic failover)
+ * - Circuit breaker protection
+ * - 20+ LLM providers (OpenAI, Anthropic, Google, Mistral, GitHub, NVIDIA NIM, etc.)
+ * - 25+ Sandbox providers (Daytona, E2B, Blaxel, Sprites, CodeSandbox, etc.)
  * 
  * @see https://github.com/quazfenton/binG
  */
@@ -20,7 +23,6 @@ import { createInterface } from 'readline';
 import { stdin as input, stdout as output } from 'process';
 import chalk from 'chalk';
 import ora from 'ora';
-import gradient from 'gradient-string';
 import fs from 'fs-extra';
 import axios from 'axios';
 import * as dotenv from 'dotenv';
@@ -32,7 +34,7 @@ import FormData from 'form-data';
 dotenv.config();
 
 // CLI Configuration
-const CLI_VERSION = '1.1.0';
+const CLI_VERSION = '1.2.0';
 const DEFAULT_API_BASE = process.env.BING_API_URL || 'http://localhost:3000/api';
 const CONFIG_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', '.bing-cli');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -48,7 +50,6 @@ const COLORS = {
   warning: chalk.yellow,
   error: chalk.red,
   info: chalk.blue,
-  gradient: gradient(['#00c6ff', '#0072ff']),
 };
 
 /**
@@ -146,7 +147,8 @@ async function apiRequest(endpoint: string, options: any = {}): Promise<any> {
     if (error.code === 'ECONNREFUSED') {
       throw new Error(`Cannot connect to binG API at ${url}. Is the server running?`);
     }
-    if (error.code === 'ETIMEDOUT') {
+    // Axios uses 'ECONNABORTED' for timeouts, but also handle 'ETIMEDOUT' for compatibility
+    if (error.code === 'ETIMEDOUT' || error.code === 'ECONNABORTED') {
       throw new Error(`Request timed out after ${options.timeout || 120000}ms`);
     }
     throw error;
@@ -207,7 +209,7 @@ async function chatLoop(options: {
   const provider = options.provider || config.provider;
   const model = options.model || config.model;
 
-  console.log(COLORS.gradient(`
+  console.log(chalk.cyanBright(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                    binG Chat Interface                     ║
 ║                                                           ║
@@ -339,7 +341,7 @@ async function websocketTerminal(sandboxId: string): Promise<void> {
     process.exit(1);
   }
 
-  console.log(COLORS.gradient('\n=== binG WebSocket Terminal ===\n'));
+  console.log(chalk.cyanBright('\n=== binG WebSocket Terminal ===\n'));
   console.log(COLORS.info(`Connecting to sandbox: ${sandboxId}`));
 
   try {
@@ -446,16 +448,22 @@ async function websocketTerminal(sandboxId: string): Promise<void> {
         process.exit(0);
       });
 
-      // Handle unexpected exits
+      // Handle unexpected exits - log errors before exiting
       process.on('exit', cleanupTerminal);
-      process.on('uncaughtException', () => {
+      process.on('uncaughtException', (error) => {
+        console.error(COLORS.error('\nUncaught Exception:'), error.message);
+        console.error(COLORS.error('Stack:'), error.stack);
         cleanupTerminal();
+        process.exit(1); // Ensure process exits
       });
-      process.on('unhandledRejection', () => {
+      process.on('unhandledRejection', (reason, promise) => {
+        console.error(COLORS.error('\nUnhandled Rejection at:'), promise);
+        console.error(COLORS.error('Reason:'), reason);
         cleanupTerminal();
+        process.exit(1); // Ensure process exits
       });
     });
-    
+
   } catch (error: any) {
     // Restore terminal state if we enabled raw mode before the error
     if (process.stdin.isTTY && process.stdin.isRaw) {
@@ -901,11 +909,11 @@ program
     
     try {
       const result = await apiRequest('/quota', { method: 'GET' });
-      
+
       spinner.stop();
-      
+
       if (result.success && result.quotas) {
-        console.log(COLORS.gradient('\n=== Provider Quotas ===\n'));
+        console.log(chalk.cyanBright('\n=== Provider Quotas ===\n'));
         
         result.quotas.forEach((q: any) => {
           const percentage = q.percentageUsed.toFixed(1);

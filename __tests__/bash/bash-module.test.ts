@@ -17,10 +17,10 @@ vi.mock('@/lib/virtual-filesystem', () => ({
 
 describe('Bash Event Schema', () => {
   it('should create valid bash execution event', async () => {
-    const { createBashExecutionEvent } = await import('../bash/bash-event-schema');
-    
+    const { createBashExecutionEvent } = await import('@/lib/bash/bash-event-schema');
+
     const event = createBashExecutionEvent('ls -la', 'agent-123');
-    
+
     expect(event.type).toBe('BASH_EXECUTION');
     expect(event.command).toBe('ls -la');
     expect(event.agentId).toBe('agent-123');
@@ -29,7 +29,7 @@ describe('Bash Event Schema', () => {
   });
 
   it('should create bash failure context', async () => {
-    const { createBashFailureContext } = await import('../bash/bash-event-schema');
+    const { createBashFailureContext } = await import('@/lib/bash/bash-event-schema');
     
     const result = {
       command: 'invalid-cmd',
@@ -51,34 +51,34 @@ describe('Bash Event Schema', () => {
 
 describe('Bash Tool', () => {
   it('should execute simple command', async () => {
-    const { executeBashCommand } = await import('../bash/bash-tool');
-    
+    const { executeBashCommand } = await import('@/lib/bash/bash-tool');
+
     const result = await executeBashCommand('echo "hello"');
-    
+
     expect(result.success).toBe(true);
     expect(result.stdout).toContain('hello');
     expect(result.exitCode).toBe(0);
   });
 
   it('should handle command failure', async () => {
-    const { executeBashCommand } = await import('../bash/bash-tool');
-    
+    const { executeBashCommand } = await import('@/lib/bash/bash-tool');
+
     const result = await executeBashCommand('nonexistent-command-xyz');
-    
+
     expect(result.success).toBe(false);
     expect(result.exitCode).not.toBe(0);
   });
 
   it('should check command safety', async () => {
-    const { isCommandSafe } = await import('../bash/bash-tool');
-    
+    const { isCommandSafe } = await import('@/lib/bash/bash-tool');
+
     expect(isCommandSafe('ls -la')).toBe(true);
     expect(isCommandSafe('rm -rf /')).toBe(false);
     expect(isCommandSafe('echo "hello"')).toBe(true);
   });
 
   it('should extract output files', async () => {
-    const { extractOutputFiles } = await import('../bash/bash-tool');
+    const { extractOutputFiles } = await import('@/lib/bash/bash-tool');
     
     const files = extractOutputFiles('cat file.txt > output.txt');
     
@@ -88,10 +88,10 @@ describe('Bash Tool', () => {
 
 describe('DAG Compiler', () => {
   it('should parse simple pipeline', async () => {
-    const { parsePipeline } = await import('../bash/dag-compiler');
-    
+    const { parsePipeline } = await import('@/lib/bash/dag-compiler');
+
     const parts = parsePipeline('cat file.txt | grep pattern | wc -l');
-    
+
     expect(parts).toHaveLength(3);
     expect(parts[0]).toBe('cat file.txt');
     expect(parts[1]).toBe('grep pattern');
@@ -99,36 +99,36 @@ describe('DAG Compiler', () => {
   });
 
   it('should handle quoted pipes', async () => {
-    const { parsePipeline } = await import('../bash/dag-compiler');
-    
+    const { parsePipeline } = await import('@/lib/bash/dag-compiler');
+
     const parts = parsePipeline('echo "a | b" | grep "pattern"');
-    
+
     expect(parts).toHaveLength(2);
     expect(parts[0]).toBe('echo "a | b"');
   });
 
   it('should extract redirect', async () => {
-    const { extractRedirect } = await import('../bash/dag-compiler');
-    
+    const { extractRedirect } = await import('@/lib/bash/dag-compiler');
+
     const { command, outputFile } = extractRedirect('cat file.txt > output.txt');
-    
+
     expect(command).toBe('cat file.txt');
     expect(outputFile).toBe('output.txt');
   });
 
   it('should classify command types', async () => {
-    const { classifyCommand } = await import('../bash/dag-compiler');
-    
+    const { classifyCommand } = await import('@/lib/bash/dag-compiler');
+
     expect(classifyCommand('ls -la')).toBe('bash');
     expect(classifyCommand('curl https://api.com')).toBe('tool');
     expect(classifyCommand('node script.js')).toBe('container');
   });
 
   it('should compile bash to DAG', async () => {
-    const { compileBashToDAG } = await import('../bash/dag-compiler');
-    
+    const { compileBashToDAG } = await import('@/lib/bash/dag-compiler');
+
     const dag = compileBashToDAG('curl api | jq ".items"', 'agent-1');
-    
+
     expect(dag.nodes).toHaveLength(2);
     expect(dag.nodes[0].type).toBe('tool');
     expect(dag.nodes[1].type).toBe('bash');
@@ -136,7 +136,7 @@ describe('DAG Compiler', () => {
   });
 
   it('should validate DAG', async () => {
-    const { validateDAG } = await import('../bash/dag-compiler');
+    const { validateDAG } = await import('@/lib/bash/dag-compiler');
     
     const validDag = {
       nodes: [
@@ -154,8 +154,8 @@ describe('DAG Compiler', () => {
 
 describe('Self-Healing', () => {
   it('should classify errors', async () => {
-    const { classifyError } = await import('../bash/self-healing');
-    
+    const { classifyError } = await import('@/lib/bash/self-healing');
+
     expect(classifyError('command not found: jqq')).toBe('missing_binary');
     expect(classifyError('No such file: file.txt')).toBe('missing_file');
     expect(classifyError('permission denied')).toBe('permissions');
@@ -163,29 +163,29 @@ describe('Self-Healing', () => {
   });
 
   it('should normalize commands', async () => {
-    const { normalizeCommand } = await import('../bash/self-healing');
-    
+    const { normalizeCommand } = await import('@/lib/bash/self-healing');
+
     expect(normalizeCommand('curl https://api.com/data')).toBe('curl URL');
     expect(normalizeCommand('cat file123.txt')).toBe('cat fileN.txt');
   });
 
   it('should apply targeted fixes', async () => {
-    const { applyTargetedFix } = await import('../bash/self-healing');
-    
+    const { applyTargetedFix } = await import('@/lib/bash/self-healing');
+
     const fix = applyTargetedFix('jqq .items file.json', 'missing_binary', 'command not found: jqq');
-    
+
     expect(fix).toBe('jq .items file.json');
   });
 
   it('should validate repairs', async () => {
-    const { validateRepair } = await import('../bash/self-healing');
-    
+    const { validateRepair } = await import('@/lib/bash/self-healing');
+
     expect(validateRepair('ls -la', 'ls -la')).toBe(true);
     expect(validateRepair('ls -la', 'rm -rf /')).toBe(false);
   });
 
   it('should check minimal changes', async () => {
-    const { isMinimalChange } = await import('../bash/self-healing');
+    const { isMinimalChange } = await import('@/lib/bash/self-healing');
     
     expect(isMinimalChange('curl api', 'curl https://api.com')).toBe(true);
     expect(isMinimalChange('ls', 'rm -rf / && ls -la && cat /etc/passwd')).toBe(false);
@@ -194,29 +194,29 @@ describe('Self-Healing', () => {
 
 describe('DAG Executor', () => {
   it('should execute single node', async () => {
-    const { executeNode } = await import('../bash/dag-executor');
-    
+    const { executeNode } = await import('@/lib/bash/dag-executor');
+
     const node = {
       id: 'step-0',
       type: 'bash' as const,
       command: 'echo "test"',
       dependsOn: [],
     };
-    
+
     const ctx = {
       agentId: 'test-agent',
       workingDir: '/workspace',
       results: {},
     };
-    
+
     const result = await executeNode(node, ctx);
-    
+
     expect(result.success).toBe(true);
     expect(result.stdout).toContain('test');
   });
 
   it('should execute DAG sequentially', async () => {
-    const { executeDAG } = await import('../bash/dag-executor');
+    const { executeDAG } = await import('@/lib/bash/dag-executor');
     
     const dag = {
       nodes: [

@@ -1,6 +1,6 @@
 /**
  * OAuth Permissions Management API
- * 
+ *
  * GET /api/oauth/permissions - Get all permissions for current user
  * POST /api/oauth/permissions/grant - Grant a permission
  * POST /api/oauth/permissions/revoke - Revoke a permission
@@ -19,33 +19,41 @@ import {
   type ServiceType,
 } from '@/lib/oauth/permission-tracker';
 
+// Use Auth0 user ID as the user identifier
+function getUserId(session: any): string {
+  return session.user.sub;
+}
+
 export async function GET(request: NextRequest) {
   try {
     // Check if user is authenticated
     const session = await auth0.getSession(request);
-    
+
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = getUserId(session);
     const url = new URL(request.url);
     const action = url.searchParams.get('action');
 
     // Get automation tool permissions
     if (action === 'automation') {
-      // We need user ID from database - for now return Auth0 session
-      // In production, map Auth0 user to local user ID
+      const permissions = await getAutomationToolPermissions(userId as any);
       return NextResponse.json({
-        error: 'User ID mapping required',
-        auth0User: session.user,
-      }, { status: 501 });
+        success: true,
+        permissions,
+        userId,
+      });
     }
 
-    // Get all permissions (requires local user ID)
+    // Get all permissions
+    const permissions = await getUserConnectionPermissions(userId as any);
     return NextResponse.json({
-      error: 'User ID mapping required',
-      auth0User: session.user,
-    }, { status: 501 });
+      success: true,
+      permissions,
+      userId,
+    });
   } catch (error: any) {
     console.error('[OAuth Permissions] Error:', error);
     return NextResponse.json({ error: error.message || 'Internal error' }, { status: 500 });
@@ -55,11 +63,12 @@ export async function GET(request: NextRequest) {
 export async function POST(request: NextRequest) {
   try {
     const session = await auth0.getSession(request);
-    
+
     if (!session?.user) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
+    const userId = getUserId(session);
     const body = await request.json();
     const { action, connectionId, serviceName, permissionLevel } = body;
 
@@ -70,47 +79,64 @@ export async function POST(request: NextRequest) {
     // Grant permission
     if (action === 'grant') {
       if (!connectionId || !serviceName) {
-        return NextResponse.json({ 
-          error: 'connectionId and serviceName required' 
+        return NextResponse.json({
+          error: 'connectionId and serviceName required'
         }, { status: 400 });
       }
 
       // Validate service name
       const validServices = ['gmail', 'drive', 'calendar', 'contacts', 'docs', 'sheets', 'slides', 'tasks', 'keep', 'photos', 'youtube', 'maps', 'custom'];
       if (!validServices.includes(serviceName)) {
-        return NextResponse.json({ 
-          error: `Invalid service. Must be one of: ${validServices.join(', ')}` 
+        return NextResponse.json({
+          error: `Invalid service. Must be one of: ${validServices.join(', ')}`
         }, { status: 400 });
       }
 
       // Validate permission level
       const validLevels = ['read', 'write', 'full'];
       if (permissionLevel && !validLevels.includes(permissionLevel)) {
-        return NextResponse.json({ 
-          error: `Invalid permission level. Must be one of: ${validLevels.join(', ')}` 
+        return NextResponse.json({
+          error: `Invalid permission level. Must be one of: ${validLevels.join(', ')}`
         }, { status: 400 });
       }
 
-      // Note: Need to map Auth0 user to local user ID
+      await grantServicePermission(
+        userId as any,
+        connectionId,
+        serviceName as ServiceType,
+        permissionLevel as PermissionLevel
+      );
+
       return NextResponse.json({
-        error: 'User ID mapping required',
-        request: body,
-      }, { status: 501 });
+        success: true,
+        message: 'Permission granted',
+        userId,
+        connectionId,
+        serviceName,
+      });
     }
 
     // Revoke permission
     if (action === 'revoke') {
       if (!connectionId || !serviceName) {
-        return NextResponse.json({ 
-          error: 'connectionId and serviceName required' 
+        return NextResponse.json({
+          error: 'connectionId and serviceName required'
         }, { status: 400 });
       }
 
-      // Note: Need to map Auth0 user to local user ID
+      await revokeServicePermission(
+        userId as any,
+        connectionId,
+        serviceName as ServiceType
+      );
+
       return NextResponse.json({
-        error: 'User ID mapping required',
-        request: body,
-      }, { status: 501 });
+        success: true,
+        message: 'Permission revoked',
+        userId,
+        connectionId,
+        serviceName,
+      });
     }
 
     return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
