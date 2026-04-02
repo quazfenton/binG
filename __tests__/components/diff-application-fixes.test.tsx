@@ -209,17 +209,14 @@ describe('Diff Application Fixes', () => {
       const currentContent = 'same content';
       const nextContent = 'same content';
       
-      if (nextContent === currentContent) {
-        // No change - skip
-        console.debug('Diff produced no change');
-      }
-      
       const debugSpy = vi.spyOn(console, 'debug').mockImplementation(() => {});
       
+      // Simulate the no-op condition
       if (nextContent === currentContent) {
         debugSpy('Diff produced no change');
       }
       
+      // Verify the debug message was logged for no-op detection
       expect(debugSpy).toHaveBeenCalledWith('Diff produced no change');
       debugSpy.mockRestore();
     });
@@ -386,8 +383,8 @@ line3`;
 @@ -1 +1 @@\r
 -old\r
 +new\r`;
-      
-      expect(diff).toContain('\r\n') || expect(diff).toContain('\r');
+
+      expect(diff).toMatch(/\r\n|\r/);
     });
 
     it('should handle diff with trailing whitespace', () => {
@@ -434,7 +431,7 @@ line3`;
       // No + or - lines at start of line, only context (space prefix)
       // Note: --- and +++ in headers will match, so we check for content lines only
       const additionLines = (noChangeDiff.match(/^\+[^\+]/gm) || []).length;
-      const deletionLines = (noChangeDiff.match(/^[^\-]-/gm) || []).length;
+      const deletionLines = (noChangeDiff.match(/^\-[^-]/gm) || []).length;
       expect(additionLines).toBe(0);
       expect(deletionLines).toBe(0);
     });

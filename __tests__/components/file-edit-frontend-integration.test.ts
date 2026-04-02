@@ -1,6 +1,10 @@
 /**
- * FILE_EDIT Frontend Integration Tests
+ * @deprecated This file tests re-implemented logic, not actual component/hook behavior.
+ * Replace with actual integration tests that use the real useEnhancedChat hook and
+ * MessageBubble component.
  * 
+ * FILE_EDIT Frontend Integration Tests
+ *
  * Tests the frontend FILE_EDIT event handling in hooks/use-enhanced-chat.ts
  * and components/message-bubble.tsx rendering logic.
  */
@@ -534,13 +538,16 @@ describe('Frontend Path Validation', () => {
     
     for (const path of invalidPaths) {
       const isValid = /^[a-zA-Z0-9_./\-\\]+$/.test(path);
-      const hasSpecialChars = path.startsWith('$') || 
-                             path.includes('{') || 
+      const hasSpecialChars = path.startsWith('$') ||
+                             path.includes('{') ||
                              path.includes('[') ||
                              path.endsWith('/') ||
                              path.endsWith(':');
-      
-      expect(isValid && !hasSpecialChars).toBe(false);
+
+      // Invalid paths should fail validation
+      expect(isValid).toBe(false);
+      // Additional check: ensure special chars are detected
+      expect(hasSpecialChars).toBe(true);
     }
   });
 });

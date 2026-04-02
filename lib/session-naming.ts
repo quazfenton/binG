@@ -5,9 +5,10 @@
  * Uses Set for O(1) has/add/delete operations.
  *
  * Naming scheme:
- * - First 999 sessions: 001, 002, 003, ... 999 (zero-padded sequential)
+ * - First 999 sessions: 000, 001, 002, ... 998 (zero-padded sequential, starting at 000)
  * - After 999: Stock words (alpha, beta, gamma, ...)
  * - LLM suggestions: Sanitized and conflict-checked
+ * - Copy suffixes: 000a, 000b, 000c... (letter suffixes for variants)
  *
  * @see https://developer.mozilla.org/en-US/docs/Web/JavaScript/Reference/Global_Objects/Set
  */
@@ -96,7 +97,7 @@ async function initializeSessionNaming(): Promise<void> {
     let maxNumber = 0;
     for (const node of nodes) {
       const name = node.name || '';
-      // Match 3-digit sequential names (001, 002, etc.)
+      // Match 3-digit sequential names (000, 001, etc.)
       const match = /^(\d{3})$/.exec(name);
       if (match) {
         const num = parseInt(match[1], 10);
@@ -104,16 +105,17 @@ async function initializeSessionNaming(): Promise<void> {
         // Register as used
         usedNames.add(name.toLowerCase());
       } else if (name.length > 0) {
-        // Register non-sequential names too (including suffixed versions like 001-1, 001a, alpha-2, etc.)
+        // Register non-sequential names too (including suffixed versions like 000a, 001a, alpha-2, my-project, etc.)
         usedNames.add(name.toLowerCase());
       }
     }
 
-    // FIX: Start AFTER the highest used number
-    // If maxNumber is 0 (no sessions), currentIndex stays 0, next will be 001
-    // If maxNumber is 1 (001 exists), currentIndex becomes 1, next will be 002
+    // Start from the highest sequential number found
+    // The usedNames Set ensures we skip any names that are already taken
+    // If maxNumber is 0 (no sessions or only 000), currentIndex = 0, next will be 000 (or 000a if 000 taken)
+    // If maxNumber is 1 (001 exists), currentIndex = 1, next will be 001 (or 001a if 001 taken)
     currentIndex = maxNumber;
-    logger.info(`Initialized session naming: ${maxNumber} existing sessions found (from ${nodes.length} nodes), next index: ${currentIndex + 1}`);
+    logger.info(`Initialized session naming: ${maxNumber} existing sessions found (from ${nodes.length} nodes), next index: ${currentIndex}`);
   } catch (error) {
     logger.warn(`Failed to initialize session naming from filesystem: ${error}`);
   }
@@ -156,12 +158,12 @@ export function resetSessionNaming(): void {
 }
 
 /**
- * Generate a zero-padded 3-digit number (001, 002, 003, etc.)
+ * Generate a zero-padded 3-digit number (000, 001, 002, etc.)
  * Time complexity: O(1)
  */
 function generateSequentialNumber(index: number): string {
-  // Use 1-based indexing for human-friendly numbering (001 instead of 000)
-  return String(index + 1).padStart(3, '0');
+  // Use 0-based indexing for technical consistency (000, 001, 002...)
+  return String(index).padStart(3, '0');
 }
 
 /**
@@ -169,7 +171,7 @@ function generateSequentialNumber(index: number): string {
  * Time complexity: O(1) for in-memory, O(API) if filesystem check needed
  */
 async function getNextStockName(): Promise<string> {
-  // Use sequential numbering: 001, 002, 003, ... 999
+  // Use sequential numbering: 000, 001, 002, ... 998
   if (currentIndex < 999) {
     // First check in-memory cache (fast, handles same-session conflicts)
     let candidateName = generateSequentialNumber(currentIndex);
@@ -245,12 +247,12 @@ async function checkNameExistsInFilesystem(name: string): Promise<boolean> {
  *
  * OPTIMIZATION: Uses Set for O(1) lookup instead of Array.includes() which is O(n)
  * Suffix strategy:
- * - Sequential names (001): 001-1, 001-2, ..., 001-9, 001-10, ... (numeric suffixes only)
- * - Stock words (alpha): alpha-1, alpha-2, alpha-3, ...
+ * - Sequential names (000): 000a, 000b, 000c, ... (letter suffixes)
+ * - Stock words (alpha): alpha-a, alpha-b, alpha-c, ...
  *
- * Note: We use numeric suffixes with dash separator (-) instead of letters (a, b, c)
- * to avoid confusion and ensure names are clearly identifiable as suffixed versions.
- * This also prevents issues with empty/invalid folders from ambiguous naming.
+ * Note: We use letter suffixes (a, b, c) for clarity and to distinguish
+ * from numeric suffixes used for stock word repeats (alpha-1, alpha-2).
+ * This makes names like '000a' clearly identifiable as copies/variants.
  *
  * Time complexity: O(1) average case, O(k) worst case where k = number of conflicts
  *
@@ -270,12 +272,21 @@ function generateUniqueName(baseName: string): string {
   let attempt = 0;
   let candidate = '';
 
+  // Letter suffixes for copies: a, b, c, d, e, f, g, h, i, j, k...
+  const letterSuffixes = 'abcdefghijklmnopqrstuvwxyz';
+
   while (true) {
     attempt++;
 
-    // Use consistent numeric suffix with dash separator for all name types
-    // This avoids ambiguous names like '001a' which can be confused with stock words
-    candidate = `${normalizedName}-${attempt}`;
+    // Use letter suffix (a, b, c...) for first 26 attempts
+    // Then fall back to numeric suffix with dash (name-1, name-2...)
+    if (attempt <= 26) {
+      const letter = letterSuffixes[attempt - 1];
+      candidate = `${normalizedName}${letter}`;
+    } else {
+      // After 26 letter suffixes, use numeric with dash
+      candidate = `${normalizedName}-${attempt - 26}`;
+    }
 
     // O(1) conflict check
     if (!usedNames.has(candidate)) {
@@ -355,9 +366,10 @@ export function detectSingleFolderFromResponse(content: string): string | null {
  * @param hasOnlyOneFolder - Whether the response has only 1 pre-named folder
  *
  * Naming scheme:
- * - First 999 sessions: 001, 002, 003, ... 999 (zero-padded sequential)
+ * - First 999 sessions: 000, 001, 002, ... 998 (zero-padded sequential, starting at 000)
  * - After 999: Stock words (alpha, beta, gamma, ...)
  * - If LLM suggests a name for single-folder projects, use that (with conflict check)
+ * - Copy suffixes: 000a, 000b, 000c... (letter suffixes for variants)
  *
  * Conflict handling:
  * - Editing existing files in existing session = OK (auto-apply)
@@ -388,8 +400,7 @@ export async function generateSessionName(
     // use the LLM-suggested folder name as the session ID (with conflict handling)
     if (isNewProject && hasOnlyOneFolder && suggestedFolderName) {
       const cleanName = suggestedFolderName
-        .replace(/[^a-zA-Z0-9_-]/g, '')  // Remove special chars
-        .replace(/^\d+/, '')              // Remove leading numbers
+        .replace(/[^a-zA-Z0-9_-]/g, '')  // Remove special chars (keep numbers!)
         .substring(0, 50);                // Limit length
 
       if (cleanName.length > 0) {

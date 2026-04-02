@@ -224,24 +224,32 @@ export class AuthService {
   private async ensureDatabase(): Promise<void> {
     if (!this.db) {
       // Wait for database to initialize (poll every 50ms, max 5 seconds)
-      await new Promise<void>((resolve) => {
+      let pollTimer: ReturnType<typeof setTimeout> | null = null;
+      
+      await new Promise<void>((resolve, reject) => {
         if (this.db) {
           resolve();
           return;
         }
-        
+
         const check = () => {
           this.db = getDatabase();
           if (this.db) {
+            if (pollTimer) clearTimeout(pollTimer);
             resolve();
           } else {
-            setTimeout(check, 50);
+            pollTimer = setTimeout(check, 50);
           }
         };
         check();
-        
-        // Timeout after 5 seconds
-        setTimeout(() => resolve(), 5000);
+
+        // Timeout after 5 seconds - clear poll timer and REJECT to prevent proceeding with null db
+        pollTimer = setTimeout(() => {
+          if (pollTimer) clearTimeout(pollTimer);
+          const error = new Error('Database initialization timeout after 5 seconds');
+          console.error('[AuthService] Database initialization failed:', error);
+          reject(error);  // REJECT so callers don't proceed with null database
+        }, 5000);
       });
     }
   }

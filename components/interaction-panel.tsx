@@ -420,9 +420,9 @@ export default function InteractionPanel({
   // Panel state
   const [panelHeight, setPanelHeight] = useState(() => {
     if (typeof window !== "undefined" && window.innerWidth <= 768) {
-      return Math.min(420, window.innerHeight * 0.58);
+      return Math.min(380, window.innerHeight * 0.50);
     }
-    return 320; // Increased from 280 to ensure input is always visible
+    return 280; // Slightly lower default height for better screen real estate
   });
   const [isDragging, setIsDragging] = useState(false);
   const [isMinimized, setIsMinimized] = useState(false);
@@ -1863,17 +1863,6 @@ export default function InteractionPanel({
                   >
                     <History className="h-3 w-3 sm:h-4 sm:w-4" />
                   </Button>
-                  {onPollDiffsNow && (
-                    <Button
-                      variant="outline"
-                      size="sm"
-                      onClick={onPollDiffsNow}
-                      title={`Refresh file changes (${pollCount || 0} polls)`}
-                      className="h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10"
-                    >
-                      <RefreshCw className="h-3 w-3 sm:h-4 sm:w-4" />
-                    </Button>
-                  )}
                   <Button
                     variant="outline"
                     size="sm"

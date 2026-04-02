@@ -765,19 +765,20 @@ export async function POST(request: NextRequest) {
                   // Check if detected folder name is available
                   const { sessionNameExists } = await import('@/lib/session-naming');
                   const folderExists = await sessionNameExists(detectedFolder);
-                  
+
                   if (!folderExists) {
                     // Rename session folder by moving contents
                     const oldPath = `project/sessions/${resolvedConversationId}`;
                     const newPath = `project/sessions/${detectedFolder}`;
-                    
+
                     try {
                       const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service');
                       // List files in old session
                       const listing = await virtualFilesystem.listDirectory(filesystemOwnerId, oldPath);
-                      
+
+                      // ALWAYS rename session when LLM suggests a single folder name
+                      // File migration is optional (currently not implemented in VFS)
                       if (listing.nodes.length > 0) {
-                        // Move each file to new folder
                         // Note: VFS doesn't support rename, so we'd need to copy+delete
                         // For now, skip file moving - session rename is cosmetic only
                         chatLogger.info('Session folder name updated (files would need manual migration)', {
@@ -786,47 +787,24 @@ export async function POST(request: NextRequest) {
                           filesToMove: listing.nodes.length,
                         });
                         // TODO: Implement file migration when VFS supports rename/move operations
-                        /*
-                        for (const node of listing.nodes) {
-                          const oldFilePath = node.path;
-                          const newFilePath = newPath + node.path.substring(oldPath.length);
-                          try {
-                            const readResult = await virtualFilesystem.readFile(filesystemOwnerId, oldFilePath);
-                            const fileContent = typeof readResult === 'string' ? readResult : (readResult as any).content || '';
-                            await virtualFilesystem.writeFile(
-                              filesystemOwnerId,
-                              newFilePath,
-                              fileContent,
-                              (node as any).language
-                            );
-                            // VFS doesn't have deleteFile, would need to use low-level OPFS
-                          } catch (moveError: any) {
-                            chatLogger.warn('Failed to move file during session rename', {
-                              oldPath: oldFilePath,
-                              newPath: newFilePath,
-                              error: moveError.message,
-                            });
-                          }
-                        }
-                        */
-                        
-                        // Update resolvedConversationId for future operations
-                        const previousId = resolvedConversationId;
-                        resolvedConversationId = detectedFolder;
-                        
-                        chatLogger.info('Session folder renamed based on detected project structure', {
-                          previousId,
-                          newId: detectedFolder,
-                          filesMoved: listing.nodes.length,
-                        });
-                        
-                        // Emit filesystem updated event for UI
-                        emit(SSE_EVENT_TYPES.FILESYSTEM, {
-                          previousId,
-                          newId: detectedFolder,
-                          reason: 'single-folder-project',
-                        });
                       }
+
+                      // Update resolvedConversationId for future operations
+                      const previousId = resolvedConversationId;
+                      resolvedConversationId = detectedFolder;
+
+                      chatLogger.info('Session folder renamed based on detected project structure', {
+                        previousId,
+                        newId: detectedFolder,
+                        filesMoved: listing.nodes.length,
+                      });
+
+                      // Emit filesystem updated event for UI
+                      emit(SSE_EVENT_TYPES.FILESYSTEM, {
+                        previousId,
+                        newId: detectedFolder,
+                        reason: 'single-folder-project',
+                      });
                     } catch (renameError: any) {
                       chatLogger.warn('Failed to rename session folder', {
                         error: renameError.message,
@@ -1401,18 +1379,23 @@ export async function POST(request: NextRequest) {
       // SPEC AMPLIFICATION: Trigger after ToolLoopAgent completes (non-streaming path)
       // Runs AFTER filesystem edits are applied (line ~1242)
       // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
-      if (agentToolResults && !clientResponse.metadata?.specAmplificationRun) {
+      if (agentToolResults && !clientResponse?.metadata?.specAmplificationRun) {
         const hasFileEdits = filesystemEdits && filesystemEdits.applied.length > 0;
+        const hasCodeContent = rawResponseContent && (
+          rawResponseContent.length > 100 ||
+          ['```', '<file_edit', 'WRITE ', 'import ', 'export ', 'function ', 'const ', 'interface '].some(m => rawResponseContent.includes(m))
+        );
         // Spec amplification runs in 'enhanced' or 'max' mode
         const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
-        const shouldRunSpecAmplification = hasFileEdits && isSpecAmplificationMode;
+        const shouldRunSpecAmplification = (hasFileEdits || hasCodeContent) && isSpecAmplificationMode;
 
         chatLogger.info('Spec amplification check (non-streaming)', {
           requestId,
           hasFileEdits,
+          hasCodeContent,
           mode: routerRequest.mode,
           isSpecAmplificationMode,
-          specAmplificationRun: clientResponse.metadata?.specAmplificationRun,
+          specAmplificationRun: clientResponse?.metadata?.specAmplificationRun,
           shouldRunSpecAmplification,
         });
 
@@ -1440,7 +1423,7 @@ export async function POST(request: NextRequest) {
             requestId,
             reason: !hasFileEdits ? 'no filesystem edits' :
                     !isSpecAmplificationMode ? `mode is ${routerRequest.mode}` :
-                    clientResponse.metadata?.specAmplificationRun ? 'already run' : 'unknown',
+                    clientResponse?.metadata?.specAmplificationRun ? 'already run' : 'unknown',
           });
         }
       }
@@ -1924,10 +1907,16 @@ export async function POST(request: NextRequest) {
                 // SPEC AMPLIFICATION: Trigger after regular LLM streaming completes
                 // Runs AFTER final parse (line ~1684) and FILE_EDIT events (line ~1715)
                 // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
-                const hasFileEdits = (filesystemEdits?.applied?.length || 0) > 0 ||
-                                     (streamedEdits?.applied?.length || 0) > 0;
+                // Note: allEdits is assigned inside streamChunk.isComplete block (line ~1833)
+                // If loop completed normally, allEdits should be set. Otherwise fall back to streamedEdits/filesystemEdits.
+                const effectiveEdits = allEdits || streamedEdits || filesystemEdits;
+                const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
+                const hasCodeContent = streamingContentBuffer && (
+                  streamingContentBuffer.length > 100 ||
+                  ['```', '<file_edit', 'WRITE ', 'import ', 'export ', 'function ', 'const ', 'interface '].some(m => streamingContentBuffer.includes(m))
+                );
                 const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
-                const shouldRunSpecAmplification = hasFileEdits &&
+                const shouldRunSpecAmplification = (hasFileEdits || hasCodeContent) &&
                   isSpecAmplificationMode &&
                   !clientResponse.metadata?.specAmplificationRun;
 
@@ -2293,10 +2282,15 @@ export async function POST(request: NextRequest) {
                 // SPEC AMPLIFICATION: Trigger after ToolLoopAgent streaming completes
                 // Runs AFTER final parse (inside stream callback) and FILE_EDIT events
                 // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
-                // Note: allEdits is set by final parse inside stream callback (line ~2155)
-                const hasFileEdits = (allEdits?.applied?.length || 0) > 0;
+                // Note: allEdits is set by final parse inside stream callback (line ~2165)
+                const effectiveEdits = allEdits || filesystemEdits;
+                const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
+                const hasCodeContent = finalContent && (
+                  finalContent.length > 100 ||
+                  ['```', '<file_edit', 'WRITE ', 'import ', 'export ', 'function ', 'const ', 'interface '].some(m => finalContent.includes(m))
+                );
                 const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
-                const shouldRunSpecAmplification = hasFileEdits &&
+                const shouldRunSpecAmplification = (hasFileEdits || hasCodeContent) &&
                   isSpecAmplificationMode &&
                   !clientResponse.metadata?.specAmplificationRun;
 

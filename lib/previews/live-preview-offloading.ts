@@ -1823,30 +1823,25 @@ root.render(<App />);`,
     // Svelte SSR Removal
     // ============================================================================
     if (framework === 'svelte') {
-      // Remove svelte/server imports
+      // Remove svelte/server imports (SSR package)
       transformed = transformed.replace(
         /import\s*\{\s*[^}]+\s*\}\s*from\s*['"]svelte\/server['"];?\s*/g,
         '// svelte/server removed for browser preview\n'
       );
 
-      // Remove SSR function calls
-      transformed = transformed.replace(
-        /\brender\s*\([^)]*\)/g,
-        '/* SSR not available in browser */ null'
-      );
+      // Note: We don't remove render() calls generically as that would break
+      // client-side code. The svelte/server import removal is sufficient since
+      // the SSR render function comes from that package.
     }
 
     // ============================================================================
     // SolidJS SSR Removal
     // ============================================================================
     if (framework === 'solid') {
-      // Remove solid-js/web imports (server-side)
-      transformed = transformed.replace(
-        /import\s*\{\s*[^}]+\s*\}\s*from\s*['"]solid-js\/web['"];?\s*/g,
-        '// solid-js/web removed for browser preview\n'
-      );
-
-      // Remove SSR function calls
+      // Note: solid-js/web is the CLIENT-SIDE DOM package (render, Dynamic, Portal)
+      // DO NOT remove the import - only remove SSR-specific function calls
+      
+      // Remove SSR function calls (renderToStream, renderToString, renderToStringAsync)
       transformed = transformed.replace(
         /\brenderToStream\s*\([^)]*\)/g,
         '/* SSR not available in browser */ null'
