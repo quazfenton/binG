@@ -1823,29 +1823,35 @@ root.render(<App />);`,
     // Svelte SSR Removal
     // ============================================================================
     if (framework === 'svelte') {
-      // Remove svelte/server imports (SSR package) and stub out the bindings
-      const svelteServerImport = transformed.match(
-        /import\s*\{\s*([^}]+)\s*\}\s*from\s*['"]svelte\/server['"];?\s*/
-      );
-
-      if (svelteServerImport) {
-        const serverBindings = svelteServerImport[1]
+      // Remove ALL svelte/server imports (SSR package) and stub out the bindings
+      // Handle both single-line and multiline imports, process all occurrences
+      const svelteServerImportRegex = /import\s*\{\s*([\s\S]*?)\s*\}\s*from\s*['"]svelte\/server['"];?\s*/g;
+      let match;
+      
+      while ((match = svelteServerImportRegex.exec(transformed)) !== null) {
+        const serverBindings = match[1]
           .split(',')
           .map(specifier => specifier.trim().split(/\s+as\s+/).pop()?.trim())
           .filter((binding): binding is string => Boolean(binding));
 
+        // Remove this import statement
         transformed = transformed.replace(
-          svelteServerImport[0],
+          match[0],
           '// svelte/server removed for browser preview\n'
         );
 
         // Stub out server-only function calls to prevent runtime errors
+        // Escape special regex characters in binding names (e.g., $render, render$)
         for (const binding of serverBindings) {
+          const escapedBinding = binding.replace(/[.*+?^${}()|[\\]\\]/g, '\\$&');
           transformed = transformed.replace(
-            new RegExp(`\\b${binding}\\s*\\([^)]*\\)`, 'g'),
+            new RegExp(`\\b${escapedBinding}\\s*\\([^)]*\\)`, 'g'),
             "/* SSR not available in browser */ ({ body: '', head: '' })"
           );
         }
+        
+        // Reset regex lastIndex to prevent infinite loop after replace
+        svelteServerImportRegex.lastIndex = 0;
       }
     }
 

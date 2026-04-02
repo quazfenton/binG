@@ -553,13 +553,27 @@ export async function getSandboxProvider(type?: SandboxProviderType): Promise<Sa
   // Check health checker status (if running)
   const { providerHealthChecker } = await import('../../management/health-checker');
   const healthStatus = providerHealthChecker.getProviderHealth(providerType);
-  if (healthStatus && !healthStatus.healthy && healthStatus.consecutiveFailures >= 3) {
+  
+  // Allow recovery after cooldown period (5 minutes)
+  const COOLDOWN_MS = 5 * 60 * 1000; // 5 minutes
+  const isRecoveryTime = healthStatus && 
+    healthStatus.lastFailureTime && 
+    (Date.now() - healthStatus.lastFailureTime) >= COOLDOWN_MS;
+  
+  if (healthStatus && !healthStatus.healthy && healthStatus.consecutiveFailures >= 3 && !isRecoveryTime) {
     log.warn(`Provider ${providerType} is unhealthy: ${healthStatus.lastError}`)
     sandboxMetrics.providerInitTotal.inc({ provider: providerType, status: 'unhealthy' });
     throw new Error(
       `Provider ${providerType} is unhealthy (${healthStatus.consecutiveFailures} consecutive failures). ` +
-      `Last error: ${healthStatus.lastError || 'unknown'}`
+      `Last error: ${healthStatus.lastError || 'unknown'}. ` +
+      `Retry after ${Math.ceil((COOLDOWN_MS - (Date.now() - healthStatus.lastFailureTime!)) / 60000)} minutes`
     );
+  }
+  
+  // Reset failure count if provider has recovered
+  if (isRecoveryTime && healthStatus) {
+    log.info(`Provider ${providerType} recovery period elapsed, allowing initialization attempt`);
+    entry.failureCount = 0;
   }
 
   // Already initialized and healthy — return immediately

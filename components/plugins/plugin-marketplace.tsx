@@ -1,6 +1,6 @@
 "use client"
 
-import React, { useState, useEffect } from 'react'
+import React, { useState, useEffect, useMemo } from 'react'
 import { Card, CardContent } from '../ui/card'
 import { Badge } from '../ui/badge'
 import { Button } from '../ui/button'
@@ -322,10 +322,10 @@ export default function PluginMarketplace({ onClose, onInstall }: PluginMarketpl
     }
   }
 
-  const getCategories = () => {
-    const categories = [...new Set(plugins.map(p => p.category))]
-    return categories.sort()
-  }
+  // Memoize categories to prevent recomputation on every render
+  const categories = useMemo(() => {
+    return [...new Set(plugins.map(p => p.category))].sort()
+  }, [plugins])
 
   const getCategoryIcon = (category: string) => {
     switch (category) {
@@ -385,7 +385,7 @@ export default function PluginMarketplace({ onClose, onInstall }: PluginMarketpl
               className="bg-black/40 border border-white/20 rounded px-3 py-2 text-white"
             >
               <option value="all">All Categories</option>
-              {getCategories().map(category => (
+              {categories.map(category => (
                 <option key={category} value={category}>
                   {category.charAt(0).toUpperCase() + category.slice(1)}
                 </option>
@@ -619,7 +619,11 @@ function PluginCard({
               <Button
                 size="sm"
                 variant="outline"
-                onClick={() => onUninstall(plugin)}
+                onClick={() => {
+                  if (window.confirm(`Are you sure you want to uninstall "${plugin.name}"?`)) {
+                    onUninstall(plugin);
+                  }
+                }}
                 className="flex-1 bg-red-500/10 border-red-500/30 text-red-400 hover:bg-red-500/20 hover:border-red-500/50 transition-all duration-300"
               >
                 <X className="w-3.5 h-3.5 mr-1.5" />
