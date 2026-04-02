@@ -70,7 +70,6 @@ export default function PluginMarketplace({ onClose, onInstall }: PluginMarketpl
   const [showOnlyFree, setShowOnlyFree] = useState(false)
   const [showOnlyCompatible, setShowOnlyCompatible] = useState(true)
   const [sortBy, setSortBy] = useState<'rating' | 'downloads' | 'name' | 'updated'>('rating')
-  const [selectedPlugin, setSelectedPlugin] = useState<Plugin | null>(null)
 
   // Load plugins from API or use mock data
   useEffect(() => {
@@ -447,7 +446,7 @@ export default function PluginMarketplace({ onClose, onInstall }: PluginMarketpl
                   index={index}
                   onInstall={handleInstall}
                   onUninstall={handleUninstall}
-                  onViewDetails={() => setSelectedPlugin(plugin)}
+                  onViewDetails={() => toast.info(`${plugin.name} details are coming soon`)}
                 />
               ))}
             </AnimatePresence>

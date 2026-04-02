@@ -27,6 +27,8 @@ export interface RenameOptions {
   overwrite?: boolean;
   /** Session ID for event emission */
   sessionId?: string;
+  /** Filesystem scope root for UI refresh filtering */
+  scopePath?: string;
 }
 
 export interface RenameResult {
@@ -126,6 +128,7 @@ export async function safeRename(options: RenameOptions): Promise<RenameResult> 
     destinationPath,
     overwrite = false,
     sessionId,
+    scopePath,
   } = options;
 
   logger.info(`Starting rename: ${sourcePath} -> ${destinationPath}`, {
@@ -207,20 +210,31 @@ export async function safeRename(options: RenameOptions): Promise<RenameResult> 
     // Get new workspace version for event
     const workspaceVersion = await virtualFilesystem.getWorkspaceVersion(ownerId);
 
-    // Emit filesystem updated event
-    emitFilesystemUpdated({
-      type: overwrite ? 'update' : 'create',
-      path: destinationPath,
-      scopePath: destinationPath.split('/').slice(0, -1).join('/') || 'project',
-      sessionId,
-      workspaceVersion,
-      applied: [{
+    // Emit filesystem updated event with error handling
+    try {
+      emitFilesystemUpdated({
+        type: overwrite ? 'update' : 'create',
         path: destinationPath,
-        operation: overwrite ? 'patch' : 'write',
-        timestamp: Date.now(),
-      }],
-      source: 'rename',
-    });
+        scopePath,  // Use passed scopePath, not derived from destinationPath
+        sessionId,
+        workspaceVersion,
+        applied: [{
+          path: destinationPath,
+          operation: 'rename',  // Use 'rename' to accurately reflect the operation type
+          timestamp: Date.now(),
+          sourcePath,  // Include source path for rename operations
+          destinationPath,  // Include destination path for clarity
+          overwritten: overwrite,  // Include overwrite flag for additional context
+        }],
+        source: 'rename',
+      });
+    } catch (emitError: any) {
+      // Log event emission failure but don't fail the rename operation
+      // The rename was successful, only the notification failed
+      logger.warn(`Failed to emit filesystem event after rename: ${emitError.message}`);
+      // Note: We don't rollback the rename since the filesystem change was successful
+      // The event emission is a notification, not a critical part of the operation
+    }
 
     logger.info(`Rename successful: ${sourcePath} -> ${destinationPath}`);
 

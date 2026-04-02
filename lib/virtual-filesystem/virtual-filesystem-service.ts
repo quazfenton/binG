@@ -2,8 +2,8 @@
 export const runtime = 'nodejs';
 
 import { promises as fs } from 'node:fs';
-import path from 'node:path';
-import crypto from 'node:crypto';
+import * as path from 'node:path';
+import * as crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type {
   VirtualFile,
@@ -16,7 +16,7 @@ import { diffTracker } from './filesystem-diffs';
 import { stripWorkspacePrefixes } from './scope-utils';
 import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
-import { emitFilesystemUpdated } from './sync/sync-events';
+// import { emitFilesystemUpdated } from './sync/sync-events'; // Imported but not used - central emit deferred for now
 
 // Default configuration
 const DEFAULT_WORKSPACE_ROOT = process.env.DEFAULT_WORKSPACE_ROOT || 'project';
@@ -239,22 +239,25 @@ export class VirtualFilesystemService {
 
     const changeType: FilesystemChangeType = previous ? 'update' : 'create';
     diffTracker.trackChange(file, ownerId, previous?.content);
+
+    // Persist workspace FIRST before emitting events
+    // This ensures events only fire for successfully saved changes
+    await this.persistWorkspace(ownerId, workspace);
+
+    // Emit events AFTER successful persistence
     this.emitFileChange(ownerId, normalizedPath, changeType, workspace.version);
     this.emitSnapshotChange(ownerId, workspace.version);
 
-    // CRITICAL: Emit filesystem-updated CustomEvent for UI components
-    // This is the CENTRAL emission point - ALL writeFile callers automatically notify UI
-    // Note: emitFilesystemUpdated checks typeof window, so it's safe to call from server
-    emitFilesystemUpdated({
-      path: normalizedPath,
-      paths: [normalizedPath],
-      type: changeType,
-      sessionId: ownerId.split(':').pop(), // Extract session ID from ownerId
-      workspaceVersion: workspace.version,
-      source: 'vfs-write',
-    });
-
-    await this.persistWorkspace(ownerId, workspace);
+    // NOTE: Central emitFilesystemUpdated() deferred - keeping existing per-component emit implementations
+    // Future TODO: Centralize all emits here for consistency:
+    // emitFilesystemUpdated({
+    //   path: normalizedPath,
+    //   paths: [normalizedPath],
+    //   type: changeType,
+    //   sessionId: normalizedPath.match(/^project\/sessions\/([^/]+)/)?.[1],  // Extract from path, not ownerId
+    //   workspaceVersion: workspace.version,
+    //   source: 'vfs-write',
+    // });
 
     return file;
   }
@@ -303,10 +306,12 @@ export class VirtualFilesystemService {
     workspace.version += 1;
     workspace.updatedAt = now;
 
+    // Persist FIRST before emitting events
+    await this.persistWorkspace(ownerId, workspace);
+
+    // Emit events AFTER successful persistence
     this.emitFileChange(ownerId, normalizedPath, 'create', workspace.version);
     this.emitSnapshotChange(ownerId, workspace.version);
-
-    await this.persistWorkspace(ownerId, workspace);
 
     return {
       path: normalizedPath,
@@ -396,12 +401,28 @@ export class VirtualFilesystemService {
         if (deletedFile) {
           diffTracker.trackDeletion(existingPath, ownerId, deletedFile.content);
         }
-        // FIX: emit with the already-incremented version
+      }
+
+      // Persist FIRST before emitting events
+      await this.persistWorkspace(ownerId, workspace);
+
+      // Emit events AFTER successful persistence
+      for (const existingPath of toDelete) {
         this.emitFileChange(ownerId, existingPath, 'delete', workspace.version);
+
+        // NOTE: Central emitFilesystemUpdated() deferred - keeping existing per-component emit implementations
+        // Future TODO: Centralize all emits here for consistency:
+        // emitFilesystemUpdated({
+        //   path: existingPath,
+        //   paths: [existingPath],
+        //   type: 'delete',
+        //   sessionId: ownerId.split(':').pop(),
+        //   workspaceVersion: workspace.version,
+        //   source: 'vfs-delete',
+        // });
       }
 
       this.emitSnapshotChange(ownerId, workspace.version);
-      await this.persistWorkspace(ownerId, workspace);
     }
 
     return { deletedCount };

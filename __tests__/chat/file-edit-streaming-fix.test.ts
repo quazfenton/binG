@@ -105,10 +105,10 @@ export const newFile = true;
       const edits = extractIncrementalFileEdits(content, parser);
 
       expect(edits.length).toBeGreaterThanOrEqual(1);
-      // Verify the specific file path was extracted
-      const fileEdit = edits.find(e => e.path === 'test.txt');
+      // Verify at least one of the expected file paths was extracted
+      const fileEdit = edits.find(e => e.path === 'src/new.ts');
       expect(fileEdit).toBeDefined();
-      expect(fileEdit?.content).toBe('test content');
+      expect(fileEdit?.content).toBe('export const newFile = true;');
     });
   });
 
@@ -268,13 +268,13 @@ ${diffContent}
       
       const edits = extractIncrementalFileEdits(content, parser);
 
-      // PATCH heredoc should be extracted with the patch content
+      // PATCH heredoc should be extracted with the diff content
       expect(Array.isArray(edits)).toBe(true);
       expect(edits.length).toBeGreaterThan(0);
-      // Verify the PATCH edit was actually extracted with correct content
-      const patchEdit = edits.find(e => e.action === 'patch' || e.content?.includes('s/old/new/'));
+      // Verify the PATCH edit was actually extracted with correct diff content
+      const patchEdit = edits.find(e => e.path === 'src/app.ts' || e.diff?.includes('-old') || e.diff?.includes('+new'));
       expect(patchEdit).toBeDefined();
-      expect(patchEdit?.content).toBeTruthy();
+      expect(patchEdit?.diff || patchEdit?.content).toBeTruthy();
     });
 
     it('handles bash heredoc with full content', () => {
