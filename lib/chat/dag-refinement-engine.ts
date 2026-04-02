@@ -187,12 +187,19 @@ export class DAGExecutor {
     task.status = 'running'
     task.startedAt = Date.now()
 
-    logger.debug('Executing task', { taskId: task.id, title: task.title })
+    logger.debug('Spec: Executing task', { taskId: task.id, title: task.title, dependencies: task.dependencies })
 
     try {
       const baseContent = task.dependencies.reduce((acc, depId) => {
         return this.tasks.get(depId)?.result ?? acc
       }, '')
+
+      logger.debug('Spec: Task preparing LLM call', { 
+        taskId: task.id, 
+        baseContentLength: baseContent.length,
+        model: this.config.model,
+        provider: this.config.provider,
+      })
 
       const { enhancedLLMService } = await import('@/lib/chat/enhanced-llm-service')
       const provider = await this.resolveProvider()
@@ -210,12 +217,17 @@ export class DAGExecutor {
       })
 
       const refinedContent = refined.content ?? ''
+      logger.debug('Spec: Task LLM returned', { 
+        taskId: task.id, 
+        contentLength: refinedContent.length,
+        tokensUsed: refined.tokensUsed,
+      })
 
       task.status = 'complete'
       task.completedAt = Date.now()
       task.result = refinedContent
 
-      logger.debug('Task complete', {
+      logger.debug('Spec: Task complete', {
         taskId: task.id,
         durationMs: task.completedAt - task.startedAt!,
       })
@@ -234,7 +246,11 @@ export class DAGExecutor {
       task.completedAt = Date.now()
       task.error = error instanceof Error ? error.message : 'Unknown error'
 
-      logger.error('Task failed', { taskId: task.id, error: task.error })
+      logger.error('Spec: Task failed', { 
+        taskId: task.id, 
+        error: task.error,
+        errorStack: error instanceof Error ? error.stack : undefined,
+      })
       throw error
     }
   }
@@ -252,12 +268,16 @@ ${tasksList}
 RULES:
 - Improve depth and correctness for YOUR FOCUS AREA only
 - Add missing implementation details for YOUR assigned tasks
-- Output ONLY new or changed files relevant to your focus area
-- Do NOT re-output files that are unchanged or belong to other focus areas
+- Include actual file improvements using fs-actions format:
+  \`\`\`fs-actions
+  WRITE path/to/file.js <<<content>>>
+  \`\`\`
+- Do NOT duplicate content from other focus areas
 - Focus on QUALITY over speed
 - Make it PRODUCTION-READY
+- Output the improved response including any improved/added file content
 
-Return ONLY the improved output, no explanations.`
+Return the improved output with file edits embedded.`
   }
 
   // -------------------------------------------------------------------------
@@ -265,17 +285,16 @@ Return ONLY the improved output, no explanations.`
   // -------------------------------------------------------------------------
 
   async execute(emit: SSEEmitter): Promise<string> {
-    logger.info('Starting DAG execution', {
+    logger.info('Spec: DAG execution started', {
       totalTasks: this.tasks.size,
       maxConcurrency: this.maxConcurrency,
       timeBudgetMs: this.timeBudgetMs,
     })
 
-    emit(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
-      stage: 'refining',
-      currentIteration: 0,
-      totalIterations: this.tasks.size - 1, // exclude base
-      timestamp: Date.now(),
+    // Skip emit test - emit may be undefined (no-op) when stream is closed
+    logger.debug('Spec: DAG task graph built', {
+      totalTasks: this.tasks.size,
+      taskIds: Array.from(this.tasks.keys()),
     })
 
     // activeTasks maps taskId → a Promise<TaskOutcome> that never rejects
@@ -394,11 +413,26 @@ Return ONLY the improved output, no explanations.`
       .filter(t => t.status === 'complete' && t.id !== 'base')
       .sort((a, b) => (a.completedAt ?? 0) - (b.completedAt ?? 0))
 
+    logger.debug('Spec: Merging results', { 
+      completedTaskCount: completedTasks.length,
+      baseLength: baseTask?.result?.length || 0,
+    })
+
     for (const task of completedTasks) {
       if (task.result) {
+        logger.debug('Spec: Task result merged', { 
+          taskId: task.id, 
+          resultLength: task.result.length,
+          hasFsActions: task.result.includes('WRITE'),
+        })
         output += '\n\n---\n\n' + task.result
       }
     }
+
+    logger.debug('Spec: Final merged output', { 
+      totalLength: output.length,
+      hasFsActions: output.includes('WRITE'),
+    })
 
     return output
   }
@@ -432,11 +466,14 @@ export async function executeRefinementWithDAG(
   try {
     return await executor.execute(emitter)
   } catch (error) {
-    emitter(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
-      stage: 'error',
-      error: error instanceof Error ? error.message : 'DAG execution failed',
-      timestamp: Date.now(),
-    })
+    // Only emit if emitter is not the no-op (i.e., stream is still open)
+    if (emitter !== (() => {})) {
+      emitter(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
+        stage: 'error',
+        error: error instanceof Error ? error.message : 'DAG execution failed',
+        timestamp: Date.now(),
+      })
+    }
 
     // Safe fallback: return base response via private map access
     const baseTask = (executor as unknown as { tasks: Map<string, DAGTask> }).tasks.get('base')

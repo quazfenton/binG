@@ -976,18 +976,19 @@ async function attemptFallback(
         }
       }
 
-      const result = await processUnifiedAgentRequest({
-        ...config,
-        mode: fallbackMode,
-      });
+      // FIX: Pass visitedModes to recursive fallback calls to properly track tried modes
+      const result = await attemptFallback(config, fallbackMode, fallbackError, visitedModes);
 
-      if (result.success) {
+      if (result) {
+        // Update metadata to show the full chain of modes that were tried
+        const fallbackTriedModes = result.metadata?.triedModes || [fallbackMode];
         return {
           ...result,
           metadata: {
             ...result.metadata,
             fallbackFrom: failedMode,
-            triedModes: Array.from(visitedModes),
+            // Combine current visitedModes with the fallback's triedModes
+            triedModes: [...Array.from(visitedModes), ...fallbackTriedModes],
           },
         };
       }

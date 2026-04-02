@@ -367,7 +367,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
     // Set up a timeout to ensure we don't get stuck
     const timeoutId = setTimeout(() => {
-      console.warn('[Chat] Streaming timeout after 30s, finalizing with accumulated content', {
+      console.warn('[Chat] Streaming timeout after 3min, finalizing with accumulated content', {
         accumulatedContentLength: accumulatedContent?.length,
         tokenCount,
       });
@@ -386,7 +386,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           });
         }
       }
-    }, 30000); // 30 second timeout
+    }, 180000); // 3 minute timeout
 
     // Buffer for accumulating partial SSE chunks across boundaries
     let sseBuffer = '';
@@ -433,11 +433,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           // Skip events without data
           if (!dataString) continue;
 
-          // Debug: Log raw data in dev mode
-          if (process.env.NODE_ENV === 'development') {
-            console.log('[SSE] Raw data:', dataString.substring(0, 80), 'event:', eventType);
-          }
-
           // Parse JSON data
           let parsedObjects: any[];
           try {
@@ -455,11 +450,6 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
           // Process each parsed object
           for (const eventData of parsedObjects) {
-            // Debug: Log parsed content
-            if (process.env.NODE_ENV === 'development' && eventData.content) {
-              console.log('[SSE] Content received:', eventData.content.substring(0, 50));
-            }
-
             // Determine event type from event header or data payload
             const determinedType = eventType || eventData.type || 'token';
 
@@ -1465,7 +1455,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           });
         }
       }
-    }, 30000);
+    }, 180000);
     
     const parser = createNDJSONParser();
 

@@ -59,6 +59,8 @@ export function transformToEmbed(urlStr: string, domain: string = 'localhost'): 
   }
 
   // Quick check for valid URL scheme before constructing URL object
+  // Security restriction: only allow http, https, mailto, tel for iframe embedding
+  // This prevents potential XSS from dangerous protocols like javascript:, data:, etc.
   if (!/^https?:\/\//i.test(trimmed) && !/^mailto:/i.test(trimmed) && !/^tel:/i.test(trimmed)) {
     return {
       provider: 'unknown',

@@ -167,6 +167,7 @@ export function applyDiffMatchPatch(currentContent: string, diffBody: string): s
         totalPatches: diffs.length,
         successfulPatches: successes.filter(s => s).length,
         failedPatches: successes.filter(s => !s).length,
+        diffPreview: diffBody.substring(0, 200),
       });
       
       // If more than half failed, reject the diff
@@ -187,6 +188,7 @@ export function applyDiffMatchPatch(currentContent: string, diffBody: string): s
       error: error.message,
       diffLength: diffBody.length,
       contentLength: currentContent.length,
+      diffPreview: diffBody.substring(0, 200),
     });
     return null;
   }
@@ -229,7 +231,10 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
   // This prevents accidental overwrites from malformed content
   if (!hasRealDiffMarkers && !hasUnifiedDiffHeader && diffBody.length > 100 && !looksLikeCompleteFile(diffBody)) {
     // Long content with no diff markers and no file structure - likely malformed
-    console.warn('[applyDiffToContent] Content appears malformed (no diff markers, not recognizable file), rejecting for safety');
+    console.warn('[applyDiffToContent] Content appears malformed (no diff markers, not recognizable file), rejecting for safety', {
+      path,
+      diffPreview: diffBody.substring(0, 200),
+    });
     return null;
   }
 
@@ -238,7 +243,10 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
   if (unifiedResult !== null) {
     // SAFETY CHECK 2: Verify result is not empty unless original was empty
     if (unifiedResult.trim().length === 0 && currentContent.trim().length > 0) {
-      console.warn('[applyDiffToContent] Unified diff would empty non-empty file, rejecting');
+      console.warn('[applyDiffToContent] Unified diff would empty non-empty file, rejecting', {
+        path,
+        diffPreview: diffBody.substring(0, 200),
+      });
       return null;
     }
     return unifiedResult;
@@ -249,7 +257,10 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
   if (dmpResult !== null) {
     // SAFETY CHECK 3: Verify result is not empty unless original was empty
     if (dmpResult.trim().length === 0 && currentContent.trim().length > 0) {
-      console.warn('[applyDiffToContent] diff-match-patch would empty non-empty file, rejecting');
+      console.warn('[applyDiffToContent] diff-match-patch would empty non-empty file, rejecting', {
+        path,
+        diffPreview: diffBody.substring(0, 200),
+      });
       return null;
     }
     return dmpResult;
@@ -260,7 +271,10 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
   if (lineDiffResult !== null) {
     // SAFETY CHECK 4: Verify result is not empty unless original was empty
     if (lineDiffResult.trim().length === 0 && currentContent.trim().length > 0) {
-      console.warn('[applyDiffToContent] Line diff would empty non-empty file, rejecting');
+      console.warn('[applyDiffToContent] Line diff would empty non-empty file, rejecting', {
+        path,
+        diffPreview: diffBody.substring(0, 200),
+      });
       return null;
     }
     return lineDiffResult;
@@ -273,6 +287,7 @@ export function applyDiffToContent(currentContent: string, path: string, diffBod
     diffLength: diffBody.length,
     contentLength: currentContent.length,
     hasRealDiffMarkers,
+    diffPreview: diffBody.substring(0, 200),
   });
 
   return null;

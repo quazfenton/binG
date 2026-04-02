@@ -87,6 +87,26 @@ export class ToolExecutor {
     this.healthCheckCache.delete(sandboxId);
   }
 
+  /**
+   * Redact sensitive params from tool execution logging
+   */
+  private redactParams(toolName: string, params: Record<string, any>): Record<string, any> {
+    const sensitiveKeys = new Set(['content', 'diff', 'replace', 'password', 'token', 'secret', 'apiKey', 'credential']);
+    const redacted: Record<string, any> = {};
+    
+    for (const [key, value] of Object.entries(params)) {
+      if (sensitiveKeys.has(key.toLowerCase()) || key.toLowerCase().includes('secret') || key.toLowerCase().includes('password')) {
+        redacted[key] = '[REDACTED]';
+      } else if (typeof value === 'string' && value.length > 500) {
+        redacted[key] = value.substring(0, 100) + '...[truncated]';
+      } else {
+        redacted[key] = value;
+      }
+    }
+    
+    return redacted;
+  }
+
   updateContext(updates: Partial<ToolContext>): void {
     this.context = { ...this.context, ...updates };
   }
@@ -117,9 +137,18 @@ export class ToolExecutor {
     const timestamp = new Date();
 
     try {
-      // SANDBOX HEALTH CHECK: Check before executing (skip for lightweight ops)
-      const lightweightOps = ['readFile', 'listFiles', 'history'];
-      if (!lightweightOps.includes(toolName) && this.context.sandboxHandle) {
+      // SANDBOX HEALTH CHECK: Check before executing (only for sandbox-backed ops)
+      // FIX: Only gate tools that actually depend on the sandbox
+      const sandboxBackedOps = new Set([
+        'readFile',
+        'listFiles',
+        'createFile',
+        'applyDiff',
+        'astDiff',
+        'execShell',
+        'syntaxCheck',
+      ]);
+      if (sandboxBackedOps.has(toolName) && this.context.sandboxHandle) {
         const health = await this.checkSandboxHealth();
         if (!health.healthy) {
           return {
@@ -130,8 +159,11 @@ export class ToolExecutor {
         }
       }
 
+      // FIX: Don't log raw params - they may contain secrets
       if (this.config.enableLogging) {
-        console.log(`[ToolExecutor] Executing ${toolName}`, params);
+        // Log a redacted summary instead
+        const redactedParams = this.redactParams(toolName, params);
+        console.log(`[ToolExecutor] Executing ${toolName}`, redactedParams);
       }
 
       // TIMEOUT ENFORCEMENT: Wrap execution with timeout
@@ -490,14 +522,18 @@ export class ToolExecutor {
       });
 
       if (result.success) {
-        // Update VFS
-        if (this.context.vfs) {
-          this.context.vfs[path] = result.updatedContent;
+        // FIX: Check sandbox write result before recording the file update
+        // Update sandbox FIRST - if this fails, don't update VFS
+        if (this.context.sandboxHandle) {
+          const writeResult = await this.context.sandboxHandle.writeFile(path, result.updatedContent);
+          if (!writeResult.success) {
+            return writeResult;
+          }
         }
 
-        // Update sandbox if available
-        if (this.context.sandboxHandle) {
-          await this.context.sandboxHandle.writeFile(path, result.updatedContent);
+        // Only update VFS after sandbox write succeeds
+        if (this.context.vfs) {
+          this.context.vfs[path] = result.updatedContent;
         }
 
         // Log transaction

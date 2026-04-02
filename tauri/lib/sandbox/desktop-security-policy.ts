@@ -157,10 +157,14 @@ class DesktopSecurityPolicy {
     const trimmed = command.trim();
     const riskLevel = this.assessRisk(trimmed);
 
-    // Check blocked commands (exact match)
+    // FIX: Use boundary-aware matching for blockedCommands (not just substring)
+    // Check blocked commands (word boundary match)
+    const commandWords = trimmed.toLowerCase().split(/\s+/);
     for (const blocked of this.config.blockedCommands) {
-      if (trimmed.toLowerCase().includes(blocked.toLowerCase())) {
-        log.warn('Blocked command detected (exact match)', { command: trimmed, blocked });
+      const blockedLower = blocked.toLowerCase();
+      // Check if blocked command appears as a standalone word or at command start
+      if (commandWords.includes(blockedLower) || trimmed.toLowerCase().startsWith(blockedLower)) {
+        log.warn('Blocked command detected (boundary match)', { command: trimmed, blocked });
         this.logAudit({
           command: trimmed,
           riskLevel,
@@ -201,6 +205,42 @@ class DesktopSecurityPolicy {
         }
       } catch (e) {
         log.warn('Invalid regex pattern in blocked patterns', { pattern });
+      }
+    }
+
+    // FIX: Implement blockNetworkCommands - block network-affecting commands if configured
+    if (this.config.blockNetworkCommands) {
+      const networkPatterns = [
+        'curl',
+        'wget',
+        'ssh',
+        'scp',
+        'sftp',
+        'nc ', // netcat
+        'netcat',
+        'telnet',
+        'ftp',
+        'nmap',
+      ];
+      
+      for (const pattern of networkPatterns) {
+        if (trimmed.toLowerCase().includes(pattern)) {
+          log.warn('Blocked network command (blockNetworkCommands enabled)', { command: trimmed, pattern });
+          this.logAudit({
+            command: trimmed,
+            riskLevel,
+            allowed: false,
+            requiresApproval: false,
+            workingDirectory: workingDirectory || '',
+          });
+          return {
+            allowed: false,
+            riskLevel: 'high',
+            reason: `Network command '${pattern}' is blocked (blockNetworkCommands enabled)`,
+            requiresApproval: false,
+            matchedRule: `blockNetworkCommand:${pattern}`,
+          };
+        }
       }
     }
 

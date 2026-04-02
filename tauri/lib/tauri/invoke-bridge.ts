@@ -35,14 +35,15 @@ export interface DirectoryEntry {
 }
 
 export interface SystemInfo {
-  platform: string;
+  // Note: Rust only returns os, arch, hostname - other fields will be undefined
+  platform: string;  // Maps from Rust 'os'
   arch: string;
-  version: string;
+  version?: string;  // Not available from Rust
   hostname: string;
-  cpuCount: number;
-  totalMemory: number;
-  homeDir: string;
-  tempDir: string;
+  cpuCount?: number;  // Not available from Rust
+  totalMemory?: number;  // Not available from Rust
+  homeDir?: string;  // Not available from Rust
+  tempDir?: string;  // Not available from Rust
 }
 
 export interface CheckpointInfo {
@@ -117,55 +118,26 @@ export async function openDirectoryDialog(options: {
   }
 }
 
-/**
- * Get resource usage (CPU, memory, disk)
- */
-export async function getResourceUsage(): Promise<ResourceUsage> {
-  if (!isTauriAvailable()) {
-    return {
-      cpu_percent: 0,
-      memory_used_mb: 0,
-      memory_total_mb: 0,
-      disk_used_gb: 0,
-      disk_total_gb: 0,
-      active_processes: 0,
-    };
-  }
 
-  try {
-    return await invoke<ResourceUsage>('get_resource_usage');
-  } catch (error) {
-    // Return mock data if not available
-    return {
-      cpu_percent: 0,
-      memory_used_mb: 0,
-      memory_total_mb: 0,
-      disk_used_gb: 0,
-      disk_total_gb: 0,
-      active_processes: 0,
-    };
-  }
-}
 
 /**
  * Execute a shell command in the sandbox
  */
 export async function executeCommand(
-  sandboxId: string,
+  _sandboxId: string,  // Note: Not used - sandbox not implemented in Rust
   command: string,
   cwd?: string,
-  timeout?: number
+  _timeout?: number  // Note: Not used - timeout not implemented in Rust
 ): Promise<ExecuteCommandResult> {
   if (!isTauriAvailable()) {
     throw new Error('Tauri runtime not available');
   }
 
   try {
+    // Note: Rust handler only accepts 'command' and 'cwd' - sandboxId and timeout are ignored
     return await invoke<ExecuteCommandResult>('execute_command', {
-      sandboxId,
       command,
       cwd,
-      timeout,
     });
   } catch (error: any) {
     log.error('execute_command failed', error);
@@ -284,93 +256,67 @@ export async function getSystemInfo(): Promise<SystemInfo | null> {
   }
 }
 
+// Note: Checkpoint commands (create_checkpoint, restore_checkpoint, list_checkpoints, delete_checkpoint)
+// are NOT implemented in the Rust backend. These functions will always fail with "unknown command" errors.
+// They're kept here for potential future implementation.
+
 /**
- * Create a checkpoint
+ * Create a checkpoint (NOT IMPLEMENTED IN RUST)
+ * @deprecated This command is not yet implemented in the Rust backend
  */
 export async function createCheckpoint(
-  sandboxId: string,
-  name?: string
+  _sandboxId: string,
+  _name?: string
 ): Promise<CheckpointInfo | null> {
   if (!isTauriAvailable()) {
     return null;
   }
-
-  try {
-    return await invoke<CheckpointInfo>('create_checkpoint', {
-      sandboxId,
-      name,
-    });
-  } catch (error: any) {
-    log.error('create_checkpoint failed', error);
-    return null;
-  }
+  log.warn('create_checkpoint is not implemented in the Rust backend');
+  return null;
 }
 
 /**
- * Restore a checkpoint
+ * Restore a checkpoint (NOT IMPLEMENTED IN RUST)
+ * @deprecated This command is not yet implemented in the Rust backend
  */
 export async function restoreCheckpoint(
-  sandboxId: string,
-  checkpointId: string
+  _sandboxId: string,
+  _checkpointId: string
 ): Promise<boolean> {
   if (!isTauriAvailable()) {
     return false;
   }
-
-  try {
-    await invoke('restore_checkpoint', {
-      sandboxId,
-      checkpointId,
-    });
-    return true;
-  } catch (error: any) {
-    log.error('restore_checkpoint failed', error);
-    return false;
-  }
+  log.warn('restore_checkpoint is not implemented in the Rust backend');
+  return false;
 }
 
 /**
- * List checkpoints - returns error result instead of empty array on failure
+ * List checkpoints (NOT IMPLEMENTED IN RUST)
+ * @deprecated This command is not yet implemented in the Rust backend
  */
 export async function listCheckpoints(
-  sandboxId: string
+  _sandboxId: string
 ): Promise<{ success: boolean; checkpoints?: CheckpointInfo[]; error?: string }> {
   if (!isTauriAvailable()) {
     return { success: false, error: 'Tauri not available' };
   }
-
-  try {
-    const checkpoints = await invoke<CheckpointInfo[]>('list_checkpoints', {
-      sandboxId,
-    });
-    return { success: true, checkpoints };
-  } catch (error: any) {
-    log.error('list_checkpoints failed', error);
-    return { success: false, error: error.message || 'Failed to list checkpoints' };
-  }
+  log.warn('list_checkpoints is not implemented in the Rust backend');
+  return { success: false, error: 'list_checkpoints is not implemented in the Rust backend' };
 }
 
 /**
- * Delete a checkpoint
+ * Delete a checkpoint (NOT IMPLEMENTED IN RUST)
+ * @deprecated This command is not yet implemented in the Rust backend
  */
 export async function deleteCheckpoint(
-  sandboxId: string,
-  checkpointId: string
+  _sandboxId: string,
+  _checkpointId: string
 ): Promise<boolean> {
   if (!isTauriAvailable()) {
     return false;
   }
-
-  try {
-    await invoke('delete_checkpoint', {
-      sandboxId,
-      checkpointId,
-    });
-    return true;
-  } catch (error: any) {
-    log.error('delete_checkpoint failed', error);
-    return false;
-  }
+  log.warn('delete_checkpoint is not implemented in the Rust backend');
+  return false;
 }
 
 /**

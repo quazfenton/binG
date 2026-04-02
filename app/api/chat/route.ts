@@ -1934,7 +1934,24 @@ export async function POST(request: NextRequest) {
                   chatLogger.info('Code/file edits detected, triggering spec amplification (regular LLM path)', {
                     requestId: streamRequestId,
                     contentLength: streamingContentBuffer.length,
+                    appliedEditsCount: effectiveEdits?.applied?.length || 0,
                   });
+
+                  // Build enhanced content including actual file edits
+                  let enhancedContent = streamingContentBuffer;
+                  if (effectiveEdits?.applied?.length > 0) {
+                    const fileEditsContent = effectiveEdits.applied
+                      .filter(e => e.content || e.diff)
+                      .map(e => `\n\`\`\`fs-actions\nWRITE ${e.path} <<<\n${e.content || e.diff || ''}\n>>>\n\`\`\``)
+                      .join('\n\n');
+                    if (fileEditsContent) {
+                      enhancedContent = streamingContentBuffer + '\n\n' + fileEditsContent;
+                      chatLogger.debug('Including file edits in spec amplification', {
+                        fileCount: effectiveEdits.applied.length,
+                        additionalContentLength: fileEditsContent.length,
+                      });
+                    }
+                  }
 
                   // Trigger spec amplification in background - events stream via emitRef.current
                   const { responseRouter } = await import('@/lib/api/response-router');
@@ -1942,7 +1959,7 @@ export async function POST(request: NextRequest) {
                     ...routerRequest,
                     messages: [
                       ...messages,
-                      { role: 'assistant' as const, content: streamingContentBuffer },
+                      { role: 'assistant' as const, content: enhancedContent },
                     ],
                     mode: 'enhanced' as const,
                     emit: emitRef.current,  // CRITICAL: Pass emit function so spec amp events reach client
