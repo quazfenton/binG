@@ -29,6 +29,7 @@ import {
   ChevronRight,
   Newspaper,
   Puzzle,
+  Store,
   Workflow,
   Cpu,
   Image,
@@ -52,6 +53,9 @@ import {
   AlertCircle,
   Play,
   Terminal,
+  ArrowRight,
+  Plus,
+  Check,
 } from "lucide-react";
 import WorkflowsTab from "./plugins/n8n-workflows-tab";
 import OrchestrationTab from "./plugins/orchestration-tab";
@@ -68,6 +72,7 @@ import BroadwayDealHunterTab from "./top-panel/plugins/broadway-deal-hunter-tab"
 import ModelComparisonTab from "./top-panel/plugins/model-comparison-tab";
 import ZineDisplayTab from "./top-panel/plugins/zine-display-tab";
 import CodePlaygroundTab from "./plugins/code-playground-tab";
+import PluginMarketplace from "./plugins/plugin-marketplace";
 import { MonacoVFSEditor } from "./monaco-vfs-editor";
 import { BookmarksCurationPlugin } from "@/components/bookmarks/bookmarks-curation-plugin";
 import { MCPStore } from "@/components/mcp/mcp-store";
@@ -251,7 +256,7 @@ function NewsTab() {
 }
 
 // ---------------------------------------------------------------------------
-// Plugins Tab Component
+// Plugins Tab Component - Redesigned
 // ---------------------------------------------------------------------------
 
 interface PluginInfo {
@@ -263,17 +268,26 @@ interface PluginInfo {
   tags: string[];
 }
 
-function PluginsTab() {
+interface PluginsTabProps {
+  visibleTabs?: TopPanelTab[];
+  toggleTabVisibility?: (tab: TopPanelTab) => void;
+  isTabVisible?: (tab: TopPanelTab) => boolean;
+  setVisibleTabs?: (tabs: TopPanelTab[]) => void;
+}
+
+function PluginsTab({ visibleTabs, toggleTabVisibility, isTabVisible, setVisibleTabs }: PluginsTabProps = {}) {
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null);
+  const [hoveredPlugin, setHoveredPlugin] = useState<string | null>(null);
+  const { closeTopPanel, setTopPanelHovering } = usePanel();
 
   const fetchPlugins = useCallback(async () => {
     try {
       setLoading(true);
       const response = await fetch('/api/plugins');
       const data = await response.json();
-      
+
       if (data.success) {
         setPlugins(data.plugins);
       }
@@ -288,6 +302,12 @@ function PluginsTab() {
     fetchPlugins();
   }, [fetchPlugins]);
 
+  const handleClose = () => {
+    setSelectedPlugin(null);
+    setTopPanelHovering(false);  // Override hover state to ensure panel closes
+    closeTopPanel();
+  };
+
   if (loading) {
     return (
       <div className="h-full flex items-center justify-center">
@@ -297,45 +317,49 @@ function PluginsTab() {
   }
 
   if (selectedPlugin) {
+    const plugin = plugins.find(p => p.id === selectedPlugin);
+    if (!plugin) return null;
+
     return (
       <div className="h-full flex flex-col">
-        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-black/20">
+        <div className="flex items-center justify-between p-4 border-b border-white/10 bg-gradient-to-r from-purple-500/10 to-pink-500/10">
           <div className="flex items-center gap-3">
-            <span className="text-2xl">{plugins.find(p => p.id === selectedPlugin)?.icon || '🔌'}</span>
+            <div className="w-10 h-10 rounded-lg bg-white/10 border border-white/20 flex items-center justify-center text-xl">
+              {plugin.icon || '🔌'}
+            </div>
             <div>
-              <h3 className="text-lg font-semibold text-white">
-                {plugins.find(p => p.id === selectedPlugin)?.name}
-              </h3>
-              <p className="text-xs text-white/60">Plugin details</p>
+              <h3 className="text-lg font-semibold text-white">{plugin.name}</h3>
+              <p className="text-xs text-white/60">{plugin.category}</p>
             </div>
           </div>
-          <div className="flex items-center gap-2">
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={() => setSelectedPlugin(null)}
-              className="text-white/60 hover:text-white"
-            >
-              <Minimize2 className="w-4 h-4" />
-            </Button>
-            <Button
-              variant="ghost"
-              size="icon"
-              onClick={(e) => {
-                e.stopPropagation();
-                setSelectedPlugin(null);
-              }}
-              className="text-white/60 hover:text-white"
-            >
-              <X className="w-4 h-4" />
-            </Button>
-          </div>
+          <Button
+            variant="ghost"
+            size="icon"
+            onClick={handleClose}
+            className="text-white/60 hover:text-white hover:bg-white/10"
+          >
+            <X className="w-4 h-4" />
+          </Button>
         </div>
-        <div className="flex-1 flex items-center justify-center text-white/60">
-          <div className="text-center">
-            <p className="text-lg mb-2">{selectedPlugin}</p>
-            <p className="text-sm">Plugin would load here</p>
-            <p className="text-xs mt-2">Integration with actual plugin component coming soon</p>
+        <div className="flex-1 flex items-center justify-center text-white/60 p-8">
+          <div className="text-center max-w-md space-y-4">
+            <div className="w-16 h-16 mx-auto rounded-xl bg-white/5 border border-white/10 flex items-center justify-center text-3xl">
+              {plugin.icon || '🔌'}
+            </div>
+            <div>
+              <p className="text-lg font-semibold text-white mb-2">{plugin.name}</p>
+              <p className="text-sm text-white/70">{plugin.description}</p>
+            </div>
+            <div className="flex flex-wrap justify-center gap-2">
+              {plugin.tags.map(tag => (
+                <Badge
+                  key={tag}
+                  className="bg-purple-500/20 border-purple-500/30 text-purple-300 text-xs"
+                >
+                  {tag}
+                </Badge>
+              ))}
+            </div>
           </div>
         </div>
       </div>
@@ -351,57 +375,175 @@ function PluginsTab() {
     return acc;
   }, {} as Record<string, PluginInfo[]>);
 
+  // All tabs can be shown/hidden except plugins and marketplace (needed for management)
+  const optionalTabs = TAB_DEFS.filter(tab =>
+    !['plugins', 'marketplace'].includes(tab.value)
+  );
+
   return (
     <ScrollArea className="h-full">
-      <div className="p-6 space-y-6">
-        {Object.entries(grouped).map(([category, categoryPlugins]) => (
-          <div key={category}>
-            <h3 className="text-sm font-semibold text-white/80 mb-3 capitalize">
-              {category}
-            </h3>
-            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-4">
-              {categoryPlugins.map((plugin) => (
+      <div className="p-6 space-y-8">
+        {/* Tab Management Section */}
+        {toggleTabVisibility && isTabVisible && (
+          <motion.div
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            className="space-y-4"
+          >
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-px flex-1 bg-gradient-to-r from-transparent via-purple-500/30 to-purple-500/30" />
+              <h3 className="text-sm font-semibold text-white">Manage Tabs</h3>
+              <div className="h-px flex-1 bg-gradient-to-l from-purple-500/30 to-purple-500/30 via-transparent" />
+            </div>
+            <p className="text-xs text-white/50 text-center mb-4">
+              Click tabs to show/hide them from the top panel
+            </p>
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-2">
+              {optionalTabs.map((tab) => {
+                const Icon = tab.icon;
+                const isVisible = isTabVisible(tab.value);
+                return (
+                  <motion.button
+                    key={tab.value}
+                    whileHover={{ scale: 1.02 }}
+                    whileTap={{ scale: 0.98 }}
+                    onClick={() => toggleTabVisibility(tab.value)}
+                    className={`
+                      p-3 rounded-lg border transition-all duration-200 flex items-center gap-2
+                      ${isVisible 
+                        ? 'bg-purple-500/20 border-purple-500/40 text-white' 
+                        : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10 hover:border-white/20'
+                      }
+                    `}
+                  >
+                    <Icon className="w-4 h-4 shrink-0" />
+                    <span className="text-xs font-medium truncate">{tab.label}</span>
+                    {isVisible && (
+                      <Check className="w-3 h-3 ml-auto shrink-0 text-purple-400" />
+                    )}
+                  </motion.button>
+                );
+              })}
+            </div>
+            <div className="flex items-center gap-2 mt-4 pt-4 border-t border-white/10">
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setVisibleTabs(['news', 'music-hub', 'plugins', 'immersive'])}
+                className="text-xs border-white/20 text-white/70 hover:bg-white/10"
+              >
+                Reset to Defaults
+              </Button>
+              <Button
+                variant="outline"
+                size="sm"
+                onClick={() => setVisibleTabs(TAB_DEFS.map(t => t.value))}
+                className="text-xs border-white/20 text-white/70 hover:bg-white/10"
+              >
+                Show All Tabs
+              </Button>
+            </div>
+          </motion.div>
+        )}
+
+        {/* Plugins Section */}
+        <div className="flex items-center gap-3 mb-4">
+          <div className="h-px flex-1 bg-gradient-to-r from-transparent via-white/10 to-white/20" />
+          <h3 className="text-sm font-semibold text-white/80">Plugins</h3>
+          <div className="h-px flex-1 bg-gradient-to-l from-transparent via-white/10 to-white/20" />
+        </div>
+        {Object.entries(grouped).map(([category, categoryPlugins], categoryIndex) => (
+          <motion.div
+            key={category}
+            initial={{ opacity: 0, y: 20 }}
+            animate={{ opacity: 1, y: 0 }}
+            transition={{ delay: categoryIndex * 0.05 }}
+          >
+            {/* Category Header */}
+            <div className="flex items-center gap-3 mb-4">
+              <div className="h-px flex-1 bg-gradient-to-r from-transparent via-white/10 to-white/20" />
+              <span className="text-xs font-medium text-white/50 uppercase tracking-wider">
+                {category}
+              </span>
+              <div className="h-px flex-1 bg-gradient-to-l from-transparent via-white/10 to-white/20" />
+            </div>
+            
+            {/* Plugin Cards Grid */}
+            <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 gap-3">
+              {categoryPlugins.map((plugin, pluginIndex) => (
                 <motion.div
                   key={plugin.id}
-                  whileHover={{ scale: 1.05 }}
-                  whileTap={{ scale: 0.95 }}
+                  initial={{ opacity: 0, y: 10 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ delay: categoryIndex * 0.05 + pluginIndex * 0.02 }}
+                  whileHover={{ y: -2 }}
+                  onMouseEnter={() => setHoveredPlugin(plugin.id)}
+                  onMouseLeave={() => setHoveredPlugin(null)}
                   onClick={() => setSelectedPlugin(plugin.id)}
-                  className="p-4 rounded-lg bg-white/5 border border-white/10 hover:bg-white/10 hover:border-white/20 transition-all cursor-pointer group text-center"
+                  className="group relative p-3 rounded-lg bg-white/[0.02] border border-white/5 hover:bg-white/[0.06] hover:border-white/15 transition-all duration-300 cursor-pointer overflow-hidden"
                 >
-                  <div className="text-3xl mb-2">
-                    {plugin.icon || '🔌'}
+                  {/* Subtle gradient overlay on hover */}
+                  <div className="absolute inset-0 bg-gradient-to-br from-purple-500/0 to-pink-500/0 group-hover:from-purple-500/[0.03] group-hover:to-pink-500/[0.03] transition-all duration-500" />
+                  
+                  <div className="relative z-10 space-y-2">
+                    {/* Name - prominent */}
+                    <h4 className="text-sm font-medium text-white/90 group-hover:text-white transition-colors">
+                      {plugin.name}
+                    </h4>
+
+                    {/* Description - appears/expands on hover */}
+                    <div className="overflow-hidden">
+                      <motion.p
+                        initial={{ opacity: 0.5 }}
+                        animate={{ 
+                          opacity: hoveredPlugin === plugin.id ? 1 : 0.5,
+                          height: hoveredPlugin === plugin.id ? 'auto' : '2.5rem'
+                        }}
+                        className="text-xs text-white/60 group-hover:text-white/80 transition-colors line-clamp-2"
+                      >
+                        {plugin.description}
+                      </motion.p>
+                    </div>
+
+                    {/* Tags - compact pill style */}
+                    <div className="flex flex-wrap gap-1 pt-1">
+                      {plugin.tags.slice(0, 2).map((tag, i) => (
+                        <span
+                          key={tag}
+                          className="text-[10px] px-1.5 py-0.5 rounded bg-white/[0.04] border border-white/5 text-white/50 group-hover:border-white/10 group-hover:text-white/70 transition-colors"
+                        >
+                          {tag}
+                        </span>
+                      ))}
+                      {plugin.tags.length > 2 && (
+                        <span className="text-[10px] px-1.5 py-0.5 text-white/40">
+                          +{plugin.tags.length - 2}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  <h4 className="text-sm font-semibold text-white mb-1">
-                    {plugin.name}
-                  </h4>
-                  <p className="text-xs text-white/60 mb-2 line-clamp-2">
-                    {plugin.description}
-                  </p>
-                  <div className="flex flex-wrap justify-center gap-1">
-                    {plugin.tags.slice(0, 3).map(tag => (
-                      <Badge key={tag} variant="outline" className="text-[10px]">
-                        {tag}
-                      </Badge>
-                    ))}
-                  </div>
-                  <Button
-                    variant="ghost"
-                    size="sm"
-                    className="mt-3 opacity-0 group-hover:opacity-100 transition-opacity"
+
+                  {/* Open indicator - slides in on hover */}
+                  <motion.div
+                    initial={{ opacity: 0, x: 10 }}
+                    animate={{ 
+                      opacity: hoveredPlugin === plugin.id ? 1 : 0,
+                      x: hoveredPlugin === plugin.id ? 0 : 10 
+                    }}
+                    className="absolute bottom-3 right-3 text-white/60"
                   >
-                    <Maximize2 className="w-3 h-3 mr-2" />
-                    Open
-                  </Button>
+                    <ArrowRight className="w-3 h-3" />
+                  </motion.div>
                 </motion.div>
               ))}
             </div>
-          </div>
+          </motion.div>
         ))}
-        
+
         {plugins.length === 0 && (
           <div className="text-center py-12 text-white/60">
-            <Puzzle className="w-12 h-12 mx-auto mb-3 opacity-50" />
-            <p>No plugins available</p>
+            <Puzzle className="w-12 h-12 mx-auto mb-3 opacity-30" />
+            <p className="text-sm">No plugins available</p>
           </div>
         )}
       </div>
@@ -542,12 +684,16 @@ interface ScrollableTabBarProps {
   tabs: TabDef[];
   activeTab: TopPanelTab;
   onTabChange: (tab: TopPanelTab) => void;
+  isTabVisible: (tab: TopPanelTab) => boolean;
+  setTopPanelTab: (tab: TopPanelTab) => void;
 }
 
 function ScrollableTabBar({
   tabs,
   activeTab,
   onTabChange,
+  isTabVisible,
+  setTopPanelTab,
 }: ScrollableTabBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
@@ -625,7 +771,7 @@ function ScrollableTabBar({
         style={{ scrollbarWidth: "none", msOverflowStyle: "none" }}
       >
         <TabsList className="bg-transparent border-none h-auto p-0 gap-1 whitespace-nowrap">
-          {tabs.map((tab) => {
+          {tabs.filter(tab => isTabVisible(tab.value)).map((tab) => {
             const Icon = tab.icon;
             const isActive = activeTab === tab.value;
             return (
@@ -656,6 +802,15 @@ function ScrollableTabBar({
               </TabsTrigger>
             );
           })}
+          {/* Add/Manage Tabs Button */}
+          <TabsTrigger
+            value="manage-tabs"
+            onClick={() => setTopPanelTab('plugins')}
+            className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium text-white/50 hover:text-white hover:bg-white/10 transition-all"
+            title="Manage tabs"
+          >
+            <Plus className="w-3.5 h-3.5" />
+          </TabsTrigger>
         </TabsList>
       </div>
 
@@ -711,6 +866,50 @@ export default function TopPanel() {
   const resizeStartX = useRef(0);
   const resizeStartWidth = useRef(100);
   const resizeHandle = useRef<'left' | 'right' | 'bottom' | null>(null);
+
+  // Tab visibility state - stored in localStorage
+  const [visibleTabs, setVisibleTabs] = useState<TopPanelTab[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('topPanelVisibleTabs');
+      if (saved) {
+        try {
+          return JSON.parse(saved) as TopPanelTab[];
+        } catch {
+          // Fallback to defaults if parsing fails
+        }
+      }
+    }
+    // Default visible tabs: News, Music Hub, Plugins, Immersive
+    return ['news', 'music-hub', 'plugins', 'immersive'];
+  });
+
+  // Save visible tabs to localStorage whenever they change
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('topPanelVisibleTabs', JSON.stringify(visibleTabs));
+    }
+  }, [visibleTabs]);
+
+  // Function to toggle tab visibility
+  const toggleTabVisibility = useCallback((tab: TopPanelTab) => {
+    setVisibleTabs(prev => {
+      if (prev.includes(tab)) {
+        // Don't allow hiding if only one tab would remain visible
+        if (prev.length <= 1) {
+          toast.error('At least one tab must be visible');
+          return prev;
+        }
+        return prev.filter(t => t !== tab);
+      } else {
+        return [...prev, tab];
+      }
+    });
+  }, []);
+
+  // Function to check if a tab is visible
+  const isTabVisible = useCallback((tab: TopPanelTab) => {
+    return visibleTabs.includes(tab);
+  }, [visibleTabs]);
 
   // Keyboard shortcut (Ctrl/Cmd + Shift + T)
   useEffect(() => {
@@ -838,87 +1037,144 @@ export default function TopPanel() {
       {/* Top Panel */}
       <AnimatePresence>
         {panelVisible && (
-          <motion.div
-            className="fixed z-[150]"
-            style={{
-              left: `calc(20px + ((100 - ${panelWidth}) * 0.5%))`,
-              right: `calc(420px + ((100 - ${panelWidth}) * 0.5%))`,
-              top: "20px",
-            }}
-            initial={{ height: 0, opacity: 0, y: -20 }}
-            animate={{
-              height: "auto",
-              opacity: 1,
-              y: 0,
-              maxHeight: isMaximized
-                ? "calc(100vh - 120px)"
-                : `calc(100vh - ${panelHeightOffset}px)`,
-            }}
-            exit={{ height: 0, opacity: 0, y: -20 }}
-            transition={{
-              duration: 0.35,
-              ease: [0.4, 0, 0.2, 1],
-            }}
-            onHoverStart={() => !isResizing && setTopPanelHovering(true)}
-            onHoverEnd={() => !isResizing && setTopPanelHovering(false)}
-          >
-            {/* Glassmorphic Background */}
-            <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/50 to-transparent backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl pointer-events-none" />
-
-            {/* Resize handles need to be above the background */}
-            {/* Left Resize Handle */}
-            <div
-              className={`absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize z-[170] group pointer-events-auto ${
-                isResizing ? 'bg-purple-500/50' : 'bg-transparent hover:bg-purple-500/30'
-              }`}
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                startResize(e, 'left');
+          <>
+            {/* Mobile: Separate panel with full width */}
+            <motion.div
+              className="fixed inset-x-2 top-2 z-[250] md:hidden"
+              initial={{ height: 0, opacity: 0, y: -20 }}
+              animate={{
+                height: "auto",
+                opacity: 1,
+                y: 0,
+                maxHeight: isMaximized
+                  ? "calc(100vh - 120px)"
+                  : `calc(100vh - ${panelHeightOffset}px)`,
               }}
-              onMouseEnter={(e) => e.stopPropagation()}
-              onMouseLeave={(e) => e.stopPropagation()}
-              title="Drag to resize panel width"
-            >
-              <div className="absolute left-1/2 top-1/2 -translate-y-1/2 w-0.5 h-16 bg-purple-400/0 group-hover:bg-purple-400/60 rounded transition-colors" />
-            </div>
-
-            {/* Right Resize Handle */}
-            <div
-              className={`absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize z-[170] group pointer-events-auto ${
-                isResizing ? 'bg-purple-500/50' : 'bg-transparent hover:bg-purple-500/30'
-              }`}
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                startResize(e, 'right');
+              exit={{ height: 0, opacity: 0, y: -20 }}
+              transition={{
+                duration: 0.35,
+                ease: [0.4, 0, 0.2, 1],
               }}
-              onMouseEnter={(e) => e.stopPropagation()}
-              onMouseLeave={(e) => e.stopPropagation()}
-              title="Drag to resize panel width"
             >
-              <div className="absolute right-1/2 top-1/2 -translate-y-1/2 w-0.5 h-16 bg-purple-400/0 group-hover:bg-purple-400/60 rounded transition-colors" />
-            </div>
+              <div className="absolute inset-0 bg-gradient-to-b from-black/90 via-black/80 to-transparent backdrop-blur-xl rounded-xl border border-white/10 shadow-2xl pointer-events-none" />
+              <div className="relative h-full">
+                {/* Mobile Tab Bar */}
+                <div className="p-2 border-b border-white/10">
+                  <Tabs value={topPanelActiveTab} onValueChange={(v) => setTopPanelTab(v as TopPanelTab)}>
+                    <ScrollableTabBar
+                      tabs={TAB_DEFS}
+                      activeTab={topPanelActiveTab}
+                      onTabChange={setTopPanelTab}
+                      isTabVisible={isTabVisible}
+                      setTopPanelTab={setTopPanelTab}
+                    />
+                    {/* Mobile Tab Content */}
+                    <div className="p-2 h-[calc(100vh-180px)] overflow-y-auto">
+                      <TabsContent value="news" className="h-full mt-0">
+                        <TabErrorBoundary tabName="News">
+                          <NewsTab />
+                        </TabErrorBoundary>
+                      </TabsContent>
+                      <TabsContent value="plugins" className="h-full mt-0">
+                        <TabErrorBoundary tabName="Plugins">
+                          <PluginsTab 
+                            visibleTabs={visibleTabs}
+                            toggleTabVisibility={toggleTabVisibility}
+                            isTabVisible={isTabVisible}
+                            setVisibleTabs={setVisibleTabs}
+                          />
+                        </TabErrorBoundary>
+                      </TabsContent>
+                      <TabsContent value="marketplace" className="h-full mt-0">
+                        <TabErrorBoundary tabName="Marketplace">
+                          <PluginMarketplace />
+                        </TabErrorBoundary>
+                      </TabsContent>
+                    </div>
+                  </Tabs>
+                </div>
+              </div>
+            </motion.div>
 
-            {/* Bottom Resize Handle */}
-            <div
-              className={`absolute left-0 right-0 bottom-0 h-3 cursor-ns-resize z-[170] group pointer-events-auto ${
-                isResizing ? 'bg-purple-500/50' : 'bg-transparent hover:bg-purple-500/30'
-              }`}
-              onMouseDown={(e) => {
-                e.stopPropagation();
-                startResize(e, 'bottom');
+            {/* Desktop: Original centered panel */}
+            <motion.div
+              className="hidden md:block fixed z-[150]"
+              style={{
+                left: `calc(20px + ((100 - ${panelWidth}) * 0.5%))`,
+                right: `calc(420px + ((100 - ${panelWidth}) * 0.5%))`,
+                top: "20px",
               }}
-              onMouseEnter={(e) => e.stopPropagation()}
-              onMouseLeave={(e) => e.stopPropagation()}
-              title="Drag to resize panel height"
+              initial={{ height: 0, opacity: 0, y: -20 }}
+              animate={{
+                height: "auto",
+                opacity: 1,
+                y: 0,
+                maxHeight: isMaximized
+                  ? "calc(100vh - 120px)"
+                  : `calc(100vh - ${panelHeightOffset}px)`,
+              }}
+              exit={{ height: 0, opacity: 0, y: -20 }}
+              transition={{
+                duration: 0.35,
+                ease: [0.4, 0, 0.2, 1],
+              }}
+              onHoverStart={() => !isResizing && setTopPanelHovering(true)}
+              onHoverEnd={() => !isResizing && setTopPanelHovering(false)}
             >
-              <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-0.5 bg-purple-400/0 group-hover:bg-purple-400/60 rounded transition-colors" />
-            </div>
+              {/* Desktop Glassmorphic Background */}
+              <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/50 to-transparent backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl pointer-events-none" />
 
-            {/* Glassmorphic Background */}
-            <div className="absolute inset-0 bg-gradient-to-b from-black/70 via-black/50 to-transparent backdrop-blur-xl rounded-2xl border border-white/10 shadow-2xl pointer-events-none" />
+              {/* Resize handles need to be above the background */}
+              {/* Left Resize Handle */}
+              <div
+                className={`absolute left-0 top-0 bottom-0 w-3 cursor-ew-resize z-[170] group pointer-events-auto ${
+                  isResizing ? 'bg-purple-500/50' : 'bg-transparent hover:bg-purple-500/30'
+                }`}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  startResize(e, 'left');
+                }}
+                onMouseEnter={(e) => e.stopPropagation()}
+                onMouseLeave={(e) => e.stopPropagation()}
+                title="Drag to resize panel width"
+              >
+                <div className="absolute left-1/2 top-1/2 -translate-y-1/2 w-0.5 h-16 bg-purple-400/0 group-hover:bg-purple-400/60 rounded transition-colors" />
+              </div>
 
-            {/* Content */}
-            <div className="relative z-[10] h-full flex flex-col overflow-hidden rounded-2xl" style={{ maxHeight: isMaximized ? "calc(100vh - 120px)" : `calc(100vh - ${panelHeightOffset}px)` }}>
+              {/* Right Resize Handle */}
+              <div
+                className={`absolute right-0 top-0 bottom-0 w-3 cursor-ew-resize z-[170] group pointer-events-auto ${
+                  isResizing ? 'bg-purple-500/50' : 'bg-transparent hover:bg-purple-500/30'
+                }`}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  startResize(e, 'right');
+                }}
+                onMouseEnter={(e) => e.stopPropagation()}
+                onMouseLeave={(e) => e.stopPropagation()}
+                title="Drag to resize panel width"
+              >
+                <div className="absolute right-1/2 top-1/2 -translate-y-1/2 w-0.5 h-16 bg-purple-400/0 group-hover:bg-purple-400/60 rounded transition-colors" />
+              </div>
+
+              {/* Bottom Resize Handle */}
+              <div
+                className={`absolute left-0 right-0 bottom-0 h-3 cursor-ns-resize z-[170] group pointer-events-auto ${
+                  isResizing ? 'bg-purple-500/50' : 'bg-transparent hover:bg-purple-500/30'
+                }`}
+                onMouseDown={(e) => {
+                  e.stopPropagation();
+                  startResize(e, 'bottom');
+                }}
+                onMouseEnter={(e) => e.stopPropagation()}
+                onMouseLeave={(e) => e.stopPropagation()}
+                title="Drag to resize panel height"
+              >
+                <div className="absolute left-1/2 top-1/2 -translate-x-1/2 -translate-y-1/2 w-16 h-0.5 bg-purple-400/0 group-hover:bg-purple-400/60 rounded transition-colors" />
+              </div>
+
+              {/* Content */}
+              <div className="relative z-[10] h-full flex flex-col overflow-hidden rounded-2xl" style={{ maxHeight: isMaximized ? "calc(100vh - 120px)" : `calc(100vh - ${panelHeightOffset}px)` }}>
               {/* Header with tabs */}
               <div className="flex items-center justify-between gap-3 p-3 border-b border-white/10 bg-white/5 shrink-0">
                 <Tabs
@@ -930,6 +1186,8 @@ export default function TopPanel() {
                     tabs={TAB_DEFS}
                     activeTab={topPanelActiveTab}
                     onTabChange={setTopPanelTab}
+                    isTabVisible={isTabVisible}
+                    setTopPanelTab={setTopPanelTab}
                   />
                 </Tabs>
 
@@ -986,7 +1244,19 @@ export default function TopPanel() {
                   {/* Plugins */}
                   <TabsContent value="plugins" className="h-full mt-0">
                     <TabErrorBoundary tabName="Plugins">
-                      <PluginsTab />
+                      <PluginsTab 
+                        visibleTabs={visibleTabs}
+                        toggleTabVisibility={toggleTabVisibility}
+                        isTabVisible={isTabVisible}
+                        setVisibleTabs={setVisibleTabs}
+                      />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  {/* Marketplace */}
+                  <TabsContent value="marketplace" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Marketplace">
+                      <PluginMarketplace />
                     </TabErrorBoundary>
                   </TabsContent>
 
@@ -1126,7 +1396,8 @@ export default function TopPanel() {
               </div>
             </div>
           </motion.div>
-        )}
+        </>
+      )}
       </AnimatePresence>
     </>
   );

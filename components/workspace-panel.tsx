@@ -79,7 +79,7 @@ import {
 import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";
 import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
-import { onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
+import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 import { useVoiceInput } from "@/hooks/use-voice-input";
 import { useMultiRotatingStatements } from "@/hooks/use-rotating-statements";
 import { useReasoningUI } from "@/lib/chat/use-chat-hooks";
@@ -500,7 +500,7 @@ function ScrollableTabBar({ tabs, activeTab, onTabChange }: ScrollableTabBarProp
               onClick={(e) => handleTabClick(tab.value, e)}
               className={`
                 relative flex items-center gap-1.5 px-3 py-1.5 text-xs rounded-full
-                transition-all duration-200 whitespace-nowrap cursor-pointer border
+                transition-all duration-200 whitespace-nowrap cursor-pointer border flex-shrink-0
                 ${
                   isActive
                     ? 'bg-white/10 border-white/20 text-white shadow-sm'
@@ -509,7 +509,7 @@ function ScrollableTabBar({ tabs, activeTab, onTabChange }: ScrollableTabBarProp
               `}
             >
               <Icon className="h-3 w-3 shrink-0" />
-              <span>{tab.label}</span>
+              <span className="shrink-0">{tab.label}</span>
               {isActive && (
                 <motion.div
                   layoutId="workspace-active-tab-indicator"
@@ -1949,7 +1949,7 @@ export function ExperimentalWorkspacePanel() {
     await performPaste(targetPath, activeClipboard);
   }, [clipboard, vfsSnapshot?.files]);
 
-  const performPaste = async (targetPath: string, currentClipboard?: typeof clipboard) => {
+  const performPaste = useCallback(async (targetPath: string, currentClipboard?: typeof clipboard) => {
     const activeClipboard = currentClipboard || clipboard;
     if (!activeClipboard) return;
 
@@ -1985,11 +1985,21 @@ export function ExperimentalWorkspacePanel() {
 
       await listDirectory(vfs?.currentPath || '/');
       toast.success(`File ${activeClipboard.operation === 'cut' ? 'moved' : 'copied'} successfully`);
+
+      // Emit filesystem SSE event for paste operation
+      emitFilesystemUpdated({
+        path: targetPath,
+        scopePath: vfs?.currentPath || 'project',
+        type: 'update',
+        source: 'workspace-panel-paste',
+        sessionId: filesystem?.sessionId,
+      });
+
       setClipboard(null);
     } catch (err: any) {
       toast.error(`Operation failed: ${err.message}`);
     }
-  };
+  }, [emitFilesystemUpdated, filesystem?.sessionId, vfs?.currentPath, listDirectory, writeFile, buildApiHeaders, resolveScopedPath]);
 
   const handleRenameFile = useCallback((path: string, currentName: string) => {
     setRenamingFile(path);
@@ -2045,6 +2055,14 @@ export function ExperimentalWorkspacePanel() {
             if (retryResponse.ok) {
               await listDirectory(vfs?.currentPath || '/');
               toast.success('File renamed successfully');
+              
+              // Emit filesystem SSE event for rename operation
+              emitFilesystemUpdated({
+                path: newPath,
+                type: 'update',
+                source: 'workspace-panel-rename',
+                sessionId: filesystem?.sessionId,
+              });
             } else {
               const errorData = await retryResponse.json().catch(() => null);
               toast.error(`Rename failed: ${errorData?.error || 'Unknown error'}`);
@@ -2065,13 +2083,23 @@ export function ExperimentalWorkspacePanel() {
 
       await listDirectory(vfs?.currentPath || '/');
       toast.success('File renamed successfully');
+
+      // Emit filesystem SSE event for rename operation
+      emitFilesystemUpdated({
+        path: newPath,
+        scopePath: vfs?.currentPath || 'project',
+        type: 'update',
+        source: 'workspace-panel-rename',
+        sessionId: filesystem?.sessionId,
+      });
+
       setRenamingFile(null);
       setRenameValue("");
     } catch (err: any) {
       toast.error(`Rename failed: ${err.message}`);
       setRenamingFile(null);
     }
-  }, [renamingFile, renameValue, vfs?.currentPath, listDirectory]);
+  }, [renamingFile, renameValue, vfs?.currentPath, listDirectory, emitFilesystemUpdated, filesystem?.sessionId]);
 
   const performRename = async (newPath: string, oldPath: string) => {
     if (!oldPath) return;
@@ -2188,7 +2216,7 @@ export function ExperimentalWorkspacePanel() {
     setDraggedFile(null);
   }, [draggedFile, vfsSnapshot?.files]);
 
-  const performMove = async (targetPath: string, sourcePath: string) => {
+  const performMove = useCallback(async (targetPath: string, sourcePath: string) => {
     if (!sourcePath) return;
 
     // Bail out when the target path equals the source path
@@ -2230,6 +2258,15 @@ export function ExperimentalWorkspacePanel() {
             if (retryResponse.ok) {
               await listDirectory(vfs?.currentPath || '/');
               toast.success('File moved successfully');
+
+              // Emit filesystem SSE event for move operation
+              emitFilesystemUpdated({
+                path: targetPath,
+                scopePath: vfs?.currentPath || 'project',
+                type: 'update',
+                source: 'workspace-panel-move',
+                sessionId: filesystem?.sessionId,
+              });
             } else {
               const errorData = await retryResponse.json().catch(() => null);
               toast.error(`Move failed: ${errorData?.error || 'Unknown error'}`);
@@ -2249,10 +2286,19 @@ export function ExperimentalWorkspacePanel() {
 
       await listDirectory(vfs?.currentPath || '/');
       toast.success('File moved successfully');
+
+      // Emit filesystem SSE event for move operation
+      emitFilesystemUpdated({
+        path: targetPath,
+        scopePath: vfs?.currentPath || 'project',
+        type: 'update',
+        source: 'workspace-panel-move',
+        sessionId: filesystem?.sessionId,
+      });
     } catch (err: any) {
       toast.error(`Move failed: ${err.message}`);
     }
-  };
+  }, [emitFilesystemUpdated, filesystem?.sessionId, vfs?.currentPath, listDirectory, buildApiHeaders, resolveScopedPath]);
 
   // Context menu state
   const [contextMenu, setContextMenu] = useState<{ x: number; y: number; path: string; isDirectory: boolean } | null>(null);
@@ -2345,10 +2391,16 @@ export function ExperimentalWorkspacePanel() {
         draggable
         onDragStart={() => handleDragStart(node.path)}
         onClick={() => handleFileSelect(node)}
-        onDoubleClick={() => openMonacoEditor(node.path)}
+        onDoubleClick={() => {
+          // Double-click triggers rename mode
+          handleRenameFile(node.path, node.name);
+        }}
         onContextMenu={(e) => {
           e.preventDefault();
+          e.stopPropagation();
+          console.log('[File Context Menu] Right-click detected:', { path: node.path, x: e.clientX, y: e.clientY });
           setContextMenu({ x: e.clientX, y: e.clientY, path: node.path, isDirectory: false });
+          return false;
         }}
         className={`flex items-center gap-2 w-full px-2 py-1 hover:bg-white/10 rounded text-left text-sm transition-colors cursor-pointer ${
           selectedFile?.path === node.path ? "bg-white/20" : ""
@@ -2377,12 +2429,24 @@ export function ExperimentalWorkspacePanel() {
           <button
             onClick={(e) => {
               e.stopPropagation();
+              openMonacoEditor(node.path);
+            }}
+            className="p-0.5 hover:bg-white/10 rounded"
+            title="Edit in Monaco Editor"
+          >
+            <svg className="h-3 w-3 text-yellow-400" viewBox="0 0 24 24" fill="currentColor">
+              <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+            </svg>
+          </button>
+          <button
+            onClick={(e) => {
+              e.stopPropagation();
               handleCutFile(node.path);
             }}
             className="p-0.5 hover:bg-white/10 rounded"
             title="Cut"
           >
-            <Edit className="h-3 w-3 text-yellow-400" />
+            <Edit className="h-3 w-3 text-blue-400" />
           </button>
           <button
             onClick={(e) => {
@@ -2397,7 +2461,7 @@ export function ExperimentalWorkspacePanel() {
         </div>
       </div>
     );
-  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile, handleRenameFile, renamingFile, renameValue, confirmRename, cancelRename, clipboard, handlePasteToFolder, dragOverFolder, handleDragOver, handleDragLeave, handleDrop, handleDragStart, handleCutFile, handleCopyFile]);
+  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile, handleRenameFile, renamingFile, renameValue, confirmRename, cancelRename, clipboard, handlePasteToFolder, dragOverFolder, handleDragOver, handleDragLeave, handleDrop, handleDragStart, handleCutFile, handleCopyFile, openMonacoEditor]);
 
   // Check GitHub auth status and fetch repos when modal opens
   useEffect(() => {
@@ -2693,8 +2757,70 @@ export function ExperimentalWorkspacePanel() {
                 </div>
 
                  {/* Explorer Tab */}
-                  <TabsContent value="explorer" className="flex-1 mt-0 h-full" data-file-tree>
-                    <div className="h-full overflow-y-auto custom-scrollbar" style={{ overflowAnchor: 'auto' }}>
+                  <TabsContent 
+                    value="explorer" 
+                    className="flex-1 mt-0 h-full overflow-visible" 
+                    data-file-tree
+                    onWheel={(e) => {
+                      console.log('[Explorer TabsContent] Wheel event:', { deltaY: e.deltaY, target: (e.target as HTMLElement)?.tagName });
+                    }}
+                    onPointerDown={(e) => {
+                      console.log('[Explorer TabsContent] Pointer down:', { target: (e.target as HTMLElement)?.tagName, pointerType: e.pointerType });
+                    }}
+                  >
+                    <div 
+                      className="h-full overflow-y-auto custom-scrollbar" 
+                      style={{ overflowAnchor: 'auto', pointerEvents: 'auto', touchAction: 'pan-y' }}
+                      onWheel={(e) => {
+                        console.log('[Files Tab] Wheel event detected:', { deltaY: e.deltaY, target: (e.target as HTMLElement)?.tagName, currentTarget: (e.currentTarget as HTMLElement)?.tagName });
+                      }}
+                      onScroll={(e) => {
+                        console.log('[Files Tab] Scroll event detected:', { scrollTop: e.currentTarget.scrollTop, scrollHeight: e.currentTarget.scrollHeight, clientHeight: e.currentTarget.clientHeight });
+                      }}
+                      onPointerDown={(e) => {
+                        console.log('[Files Tab] Pointer down:', { target: (e.target as HTMLElement)?.tagName, pointerType: e.pointerType });
+                      }}
+                      onKeyDown={(e) => {
+                        // Arrow key navigation for accessibility
+                        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                          e.preventDefault();
+                          const scrollAmount = 40;
+                          const container = e.currentTarget;
+                          if (e.key === 'ArrowDown') {
+                            container.scrollTop += scrollAmount;
+                          } else {
+                            container.scrollTop -= scrollAmount;
+                          }
+                          console.log('[Files Tab] Arrow key scroll:', { key: e.key, newScrollTop: container.scrollTop });
+                        }
+                      }}
+                      // Drag-to-scroll for mobile
+                      onTouchStart={(e) => {
+                        const container = e.currentTarget;
+                        (container as any)._dragStartY = e.touches[0].clientY;
+                        (container as any)._dragStartScrollTop = container.scrollTop;
+                        console.log('[Files Tab] Touch start:', { startY: (container as any)._dragStartY });
+                      }}
+                      onTouchMove={(e) => {
+                        const container = e.currentTarget;
+                        if ((container as any)._dragStartY !== undefined) {
+                          const deltaY = (container as any)._dragStartY - e.touches[0].clientY;
+                          container.scrollTop = (container as any)._dragStartScrollTop + deltaY;
+                          console.log('[Files Tab] Touch drag:', { deltaY, scrollTop: container.scrollTop });
+                        }
+                      }}
+                      onTouchEnd={() => {
+                        const container = document.querySelector('[data-file-tree] .overflow-y-auto') as HTMLElement;
+                        if (container) {
+                          (container as any)._dragStartY = undefined;
+                          (container as any)._dragStartScrollTop = undefined;
+                          console.log('[Files Tab] Touch end');
+                        }
+                      }}
+                      tabIndex={0}  // Make focusable for keyboard navigation
+                      role="region"
+                      aria-label="File Explorer"
+                    >
                       <div className="p-4 space-y-2 max-w-full">
                        <div className="flex items-center justify-between mb-4">
                          <span className="text-xs text-white/60">File Explorer</span>
@@ -2807,8 +2933,16 @@ export function ExperimentalWorkspacePanel() {
                                 {selectedFile.name}
                               </span>
                               <div className="flex gap-1">
-                                <Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-white/10">
-                                  <Eye className="h-3 w-3" />
+                                <Button
+                                  variant="ghost"
+                                  size="icon"
+                                  className="h-6 w-6 hover:bg-white/10"
+                                  onClick={() => openMonacoEditor(selectedFile.path)}
+                                  title="Edit in Monaco Editor"
+                                >
+                                  <svg className="h-3 w-3 text-yellow-400" viewBox="0 0 24 24" fill="currentColor">
+                                    <path d="M3 17.25V21h3.75L17.81 9.94l-3.75-3.75L3 17.25zM20.71 7.04c.39-.39.39-1.02 0-1.41l-2.34-2.34c-.39-.39-1.02-.39-1.41 0l-1.83 1.83 3.75 3.75 1.83-1.83z"/>
+                                  </svg>
                                 </Button>
                                 <Button variant="ghost" size="icon" className="h-6 w-6 hover:bg-white/10">
                                   <Copy className="h-3 w-3" />
@@ -3543,7 +3677,20 @@ export function ExperimentalWorkspacePanel() {
 
                 {/* Music Playlist Tab */}
                 <TabsContent value="music" className="flex-1 mt-0 overflow-hidden">
-                  <div className="h-full overflow-y-auto custom-scrollbar">
+                  <div 
+                    className="h-full overflow-y-auto custom-scrollbar"
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Music Playlist"
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const scrollAmount = 40;
+                        const container = e.currentTarget;
+                        container.scrollTop += e.key === 'ArrowDown' ? scrollAmount : -scrollAmount;
+                      }
+                    }}
+                  >
                     <div className="p-4 space-y-4">
                       <div className="flex items-center justify-between mb-4">
                         <div className="flex items-center gap-2">
@@ -4191,22 +4338,82 @@ export function ExperimentalWorkspacePanel() {
 
                 {/* News Tab - News feed from multiple sources */}
                 <TabsContent value="news" className="flex-1 mt-0 overflow-hidden">
-                  <NewsPanel />
+                  <div 
+                    className="h-full overflow-y-auto custom-scrollbar"
+                    tabIndex={0}
+                    role="region"
+                    aria-label="News Feed"
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const scrollAmount = 40;
+                        const container = e.currentTarget;
+                        container.scrollTop += e.key === 'ArrowDown' ? scrollAmount : -scrollAmount;
+                      }
+                    }}
+                  >
+                    <NewsPanel />
+                  </div>
                 </TabsContent>
 
                 {/* Cron Jobs Tab - Authenticated users only, max 1 job per user */}
                 <TabsContent value="cronjobs" className="flex-1 mt-0 overflow-hidden">
-                  <CronJobsPanel />
+                  <div 
+                    className="h-full overflow-y-auto custom-scrollbar"
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Cron Jobs"
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const scrollAmount = 40;
+                        const container = e.currentTarget;
+                        container.scrollTop += e.key === 'ArrowDown' ? scrollAmount : -scrollAmount;
+                      }
+                    }}
+                  >
+                    <CronJobsPanel />
+                  </div>
                 </TabsContent>
 
                 {/* Frontier Feed Tab */}
                 <TabsContent value="frontier-feed" className="flex-1 mt-0 overflow-hidden">
-                  <FrontierFeedPlugin />
+                  <div 
+                    className="h-full overflow-y-auto custom-scrollbar"
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Frontier Feed"
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const scrollAmount = 40;
+                        const container = e.currentTarget;
+                        container.scrollTop += e.key === 'ArrowDown' ? scrollAmount : -scrollAmount;
+                      }
+                    }}
+                  >
+                    <FrontierFeedPlugin />
+                  </div>
                 </TabsContent>
 
                 {/* Command Deck Tab */}
                 <TabsContent value="command-deck" className="flex-1 mt-0 overflow-hidden">
-                  <CommandDeckPlugin />
+                  <div 
+                    className="h-full overflow-y-auto custom-scrollbar"
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Command Deck"
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const scrollAmount = 40;
+                        const container = e.currentTarget;
+                        container.scrollTop += e.key === 'ArrowDown' ? scrollAmount : -scrollAmount;
+                      }
+                    }}
+                  >
+                    <CommandDeckPlugin />
+                  </div>
                 </TabsContent>
               </Tabs>
             </div>
@@ -4235,12 +4442,24 @@ export function ExperimentalWorkspacePanel() {
       {contextMenu && (
         <>
           <div
-            className="fixed inset-0 z-40"
-            onClick={() => setContextMenu(null)}
+            className="fixed inset-0 z-[100]"
+            onClick={() => {
+              console.log('[Context Menu] Dismissed by clicking outside');
+              setContextMenu(null);
+            }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setContextMenu(null);
+            }}
           />
           <div
-            className="fixed z-50 bg-black/90 border border-white/20 rounded-lg shadow-xl py-1 min-w-[140px]"
+            className="fixed z-[101] bg-black/95 border border-white/30 rounded-lg shadow-2xl py-1 min-w-[160px]"
             style={{ left: contextMenu.x, top: contextMenu.y }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+              console.log('[Context Menu] Prevented context menu on menu itself');
+            }}
           >
             {!contextMenu.isDirectory && (
               <>
@@ -4275,15 +4494,52 @@ export function ExperimentalWorkspacePanel() {
               <FileText className="h-3 w-3 text-purple-400" /> Rename
             </button>
             {!contextMenu.isDirectory && (
-              <button
-                onClick={() => {
-                  openMonacoEditor(contextMenu.path);
-                  setContextMenu(null);
-                }}
-                className="w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-white/10 flex items-center gap-2"
-              >
-                <Code className="h-3 w-3 text-cyan-400" /> Open in Editor
-              </button>
+              <>
+                <button
+                  onClick={() => {
+                    openMonacoEditor(contextMenu.path);
+                    setContextMenu(null);
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-xs text-white/80 hover:bg-white/10 flex items-center gap-2"
+                >
+                  <Code className="h-3 w-3 text-cyan-400" /> Open in Editor
+                </button>
+                <button
+                  onClick={() => {
+                    if (confirm(`Delete ${contextMenu.path.split('/').pop()}?`)) {
+                      fetch('/api/filesystem/delete', {
+                        method: 'POST',
+                        headers: buildApiHeaders(),
+                        body: JSON.stringify({ path: resolveScopedPath(contextMenu.path, vfs?.currentPath || '/') }),
+                      }).then(async (response) => {
+                        if (response.ok) {
+                          await listDirectory(vfs?.currentPath || '/');
+                          toast.success('Deleted ' + contextMenu.path.split('/').pop());
+
+                          // Emit filesystem SSE event for delete operation
+                          emitFilesystemUpdated({
+                            path: contextMenu.path,
+                            scopePath: vfs?.currentPath || 'project',
+                            type: 'delete',
+                            source: 'workspace-panel-delete',
+                            sessionId: filesystem?.sessionId,
+                          });
+                        } else {
+                          const errorData = await response.json().catch(() => null);
+                          toast.error(`Delete failed: ${errorData?.error || 'Unknown error'}`);
+                        }
+                        setContextMenu(null);
+                      }).catch((err: any) => {
+                        toast.error(`Delete failed: ${err.message}`);
+                        setContextMenu(null);
+                      });
+                    }
+                  }}
+                  className="w-full px-3 py-1.5 text-left text-xs text-red-400/80 hover:bg-red-500/10 hover:text-red-400 flex items-center gap-2"
+                >
+                  <Trash2 className="h-3 w-3" /> Delete
+                </button>
+              </>
             )}
           </div>
         </>

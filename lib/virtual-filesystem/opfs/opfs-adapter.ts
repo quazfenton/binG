@@ -528,8 +528,8 @@ export class OPFSAdapter {
 
     try {
       // FIX: Check if using IndexedDB fallback or if OPFS is not initialized
-      if (this.usingFallback || !this.core.isInitialized()) {
-        console.log('[OPFS] Skipping sync - using IndexedDB fallback or OPFS not initialized');
+      if (this.usingFallback) {
+        console.log('[OPFS] Skipping sync - using IndexedDB fallback');
         return {
           success: true,
           filesSynced: 0,
@@ -538,6 +538,36 @@ export class OPFSAdapter {
           errors: [],
           duration: Date.now() - startTime,
         };
+      }
+
+      // CRITICAL FIX: Initialize OPFS core if not already initialized (prevents "OPFS not initialized" errors)
+      if (!this.core.isInitialized()) {
+        console.log('[OPFS] OPFS core not initialized, initializing before sync...');
+        try {
+          // Use the ownerId as workspaceId for initialization
+          await this.core.initialize(ownerId);
+          console.log('[OPFS] Core initialization successful');
+        } catch (initError: any) {
+          console.warn('[OPFS] Core initialization failed, enabling IndexedDB fallback:', initError.message);
+          // TRULY enable fallback by calling enableFallback to initialize IndexedDB backend
+          try {
+            await this.enableFallback(ownerId, ownerId);
+            console.log('[OPFS] IndexedDB fallback enabled successfully');
+          } catch (fallbackError: any) {
+            console.error('[OPFS] Failed to enable IndexedDB fallback:', fallbackError.message);
+            return {
+              success: false,
+              filesSynced: 0,
+              bytesTransferred: 0,
+              conflicts: [],
+              errors: [
+                `OPFS initialization failed: ${initError.message}`,
+                `Fallback initialization failed: ${fallbackError.message}`,
+              ],
+              duration: Date.now() - startTime,
+            };
+          }
+        }
       }
 
       // Get server snapshot via API

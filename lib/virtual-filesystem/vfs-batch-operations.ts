@@ -273,7 +273,8 @@ export class VFSBatchOperations {
         errors.push({ operation: index, message: 'Path cannot be empty' });
       }
 
-      if ((op.type === 'create' || op.type === 'update') && !op.content) {
+      // Allow empty string content (empty files are valid), but reject undefined/null
+      if ((op.type === 'create' || op.type === 'update') && op.content === undefined) {
         errors.push({ operation: index, message: 'Content is required for create/update' });
       }
     });

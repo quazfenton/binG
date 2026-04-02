@@ -103,12 +103,12 @@ export const newFile = true;
 `;
       
       const edits = extractIncrementalFileEdits(content, parser);
-      
+
       expect(edits.length).toBeGreaterThanOrEqual(1);
-      // At least one edit should be detected
-      const firstEdit = edits[0];
-      expect(firstEdit.path).toBeTruthy();
-      expect(firstEdit.content).toBeTruthy();
+      // Verify the specific file path was extracted
+      const fileEdit = edits.find(e => e.path === 'test.txt');
+      expect(fileEdit).toBeDefined();
+      expect(fileEdit?.content).toBe('test content');
     });
   });
 
@@ -267,15 +267,14 @@ ${diffContent}
 >>>`;
       
       const edits = extractIncrementalFileEdits(content, parser);
-      
-      // PATCH heredoc may be extracted differently depending on parser implementation
-      // The important thing is that the content is captured somehow
-      // This test verifies the parser handles PATCH format without errors
+
+      // PATCH heredoc should be extracted with the patch content
       expect(Array.isArray(edits)).toBe(true);
-      // If edits are found, verify they contain the diff content
-      if (edits.length > 0) {
-        expect(edits[0].content).toBeTruthy();
-      }
+      expect(edits.length).toBeGreaterThan(0);
+      // Verify the PATCH edit was actually extracted with correct content
+      const patchEdit = edits.find(e => e.action === 'patch' || e.content?.includes('s/old/new/'));
+      expect(patchEdit).toBeDefined();
+      expect(patchEdit?.content).toBeTruthy();
     });
 
     it('handles bash heredoc with full content', () => {
@@ -390,9 +389,14 @@ mkdir -p src/utils
 `;
       
       const parsed = parseFilesystemResponse(response);
-      
-      // Should detect fenced diffs
-      expect(parsed.diffs.length).toBeGreaterThanOrEqual(0);
+
+      // Should detect fenced diffs (at least 1 valid diff)
+      expect(parsed.diffs.length).toBeGreaterThan(0);
+      // Verify the diff has proper structure
+      if (parsed.diffs.length > 0) {
+        expect(parsed.diffs[0].path).toBeTruthy();
+        expect(parsed.diffs[0].diff).toBeTruthy();
+      }
     });
   });
 });
