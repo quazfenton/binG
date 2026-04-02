@@ -73,9 +73,21 @@ export async function openFileDialog(
       };
     }
 
+    // Filter out falsy values (empty strings, undefined)
+    const paths = Array.isArray(result) 
+      ? result.filter(Boolean) 
+      : [result].filter(Boolean);
+    
+    if (paths.length === 0) {
+      return {
+        success: false,
+        error: 'No valid path selected',
+      };
+    }
+
     return {
       success: true,
-      data: Array.isArray(result) ? result : [result],
+      data: paths,
     };
   } catch (error: any) {
     log.error('Failed to open file dialog', error);
@@ -114,9 +126,21 @@ export async function openFolderDialog(
       };
     }
 
+    // Filter out falsy values (empty strings, undefined)
+    const paths = Array.isArray(result) 
+      ? result.filter(Boolean) 
+      : [result].filter(Boolean);
+    
+    if (paths.length === 0) {
+      return {
+        success: false,
+        error: 'No valid path selected',
+      };
+    }
+
     return {
       success: true,
-      data: Array.isArray(result) ? result : [result],
+      data: paths,
     };
   } catch (error: any) {
     log.error('Failed to open folder dialog', error);

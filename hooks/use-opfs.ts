@@ -92,6 +92,7 @@ export function useOPFS(
 
   const initializedRef = useRef(false);
   const workspaceIdRef = useRef(workspaceId || ownerId);
+  const enablingRef = useRef(false);  // Prevent concurrent enable calls
 
   // Update online status
   useEffect(() => {
@@ -152,7 +153,7 @@ export function useOPFS(
     };
 
     enableOPFS();
-  }, [autoEnable, ownerId, supportInfo.supported, onError, isEnabled, updateSyncStatus]);
+  }, [autoEnable, ownerId, supportInfo.supported, onError, updateSyncStatus]);
 
   // Periodic sync status update
   useEffect(() => {
@@ -187,12 +188,13 @@ export function useOPFS(
       throw new Error('OPFS not supported in this browser');
     }
 
-    // Only enable if not already enabled
-    if (isEnabled) {
-      console.log('[useOPFS] Already enabled, skipping enable call');
+    // Prevent concurrent enable operations
+    if (enablingRef.current || isEnabled) {
+      console.log('[useOPFS] Enable already in progress or already enabled, skipping');
       return;
     }
 
+    enablingRef.current = true;
     try {
       const wsId = customWorkspaceId || ownerId;
       await opfsAdapter.enable(ownerId, wsId);
@@ -202,6 +204,8 @@ export function useOPFS(
     } catch (error) {
       onError?.(error as Error);
       throw error;
+    } finally {
+      enablingRef.current = false;
     }
   }, [ownerId, supportInfo.supported, onError, isEnabled]);
 

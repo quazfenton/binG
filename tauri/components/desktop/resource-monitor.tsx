@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useCallback } from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
@@ -29,20 +29,8 @@ export function ResourceMonitor({
   const [isDesktop, setIsDesktop] = useState(false);
   const [lastUpdate, setLastUpdate] = useState<Date | null>(null);
 
-  useEffect(() => {
-    const desktop = isDesktopMode();
-    setIsDesktop(desktop);
-
-    if (desktop) {
-      loadResources();
-      const interval = setInterval(loadResources, refreshInterval);
-      return () => clearInterval(interval);
-    } else {
-      setLoading(false);
-    }
-  }, [refreshInterval]);
-
-  const loadResources = async () => {
+  // Memoize loadResources to prevent stale closures in interval
+  const loadResources = useCallback(async () => {
     try {
       const data = await tauriInvoke.getResourceUsage();
       setResources(data);
@@ -54,7 +42,20 @@ export function ResourceMonitor({
     } finally {
       setLoading(false);
     }
-  };
+  }, []);
+
+  useEffect(() => {
+    const desktop = isDesktopMode();
+    setIsDesktop(desktop);
+
+    if (desktop) {
+      loadResources();
+      const interval = setInterval(loadResources, refreshInterval);
+      return () => clearInterval(interval);
+    } else {
+      setLoading(false);
+    }
+  }, [refreshInterval, loadResources]);
 
   const getCpuColor = (percent: number): string => {
     if (percent > 90) return 'text-red-500';
@@ -107,8 +108,13 @@ export function ResourceMonitor({
     );
   }
 
-  const memoryPercent = (resources.memory_used_mb / resources.memory_total_mb) * 100;
-  const diskPercent = (resources.disk_used_gb / resources.disk_total_gb) * 100;
+  // Guard against division by zero
+  const memoryPercent = resources.memory_total_mb > 0 
+    ? (resources.memory_used_mb / resources.memory_total_mb) * 100 
+    : 0;
+  const diskPercent = resources.disk_total_gb > 0 
+    ? (resources.disk_used_gb / resources.disk_total_gb) * 100 
+    : 0;
 
   return (
     <Card className={className}>

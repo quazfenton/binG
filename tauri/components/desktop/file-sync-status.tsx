@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { Badge } from '@/components/ui/badge';
 import { Tooltip, TooltipContent, TooltipTrigger } from '@/components/ui/tooltip';
 import { RefreshCw, CheckCircle, AlertCircle, Pause, Loader2 } from 'lucide-react';
@@ -27,6 +27,9 @@ export function FileSyncStatus({
   const [lastSyncTime, setLastSyncTime] = useState<Date | null>(null);
   const [isDesktop, setIsDesktop] = useState(false);
   const [isSyncing, setIsSyncing] = useState(false);
+  
+  // FIX: Use useRef to persist previous status across polling intervals
+  const previousStatusRef = useRef<SyncStatus>(status);
 
   useEffect(() => {
     setIsDesktop(isDesktopMode());
@@ -37,18 +40,14 @@ export function FileSyncStatus({
   useEffect(() => {
     if (!isDesktop) return;
 
-    // FIX: Track previous status to avoid clearing error state silently
-    let previousStatus: SyncStatus = status;
-
-    // Poll for sync status every 5 seconds
     const interval = setInterval(() => {
       // In real implementation, this would check actual sync state
       // For now, we'll simulate the status - but preserve error state
-      if (previousStatus === 'error') {
+      if (previousStatusRef.current === 'error') {
         // Don't clear error state automatically - only manual retry should clear it
         return;
       }
-      
+
       if (isSyncing) {
         setStatus('syncing');
       } else if (pendingCount > 0) {
@@ -56,7 +55,7 @@ export function FileSyncStatus({
       } else {
         setStatus('synced');
       }
-      previousStatus = status;
+      previousStatusRef.current = status;
     }, 5000);
 
     return () => clearInterval(interval);

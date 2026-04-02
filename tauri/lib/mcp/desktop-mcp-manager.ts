@@ -159,27 +159,60 @@ export class DesktopMCPManager extends EventEmitter {
       return;
     }
 
+    const process = server.process;
+
     return new Promise((resolve, reject) => {
-      server.process!.on('exit', () => {
+      let resolved = false;
+
+      // Remove any existing listeners to prevent memory leaks and duplicate calls
+      process.removeAllListeners('exit');
+      process.removeAllListeners('error');
+
+      // Use once: true to ensure listeners are only triggered once
+      const exitHandler = () => {
+        if (resolved) return;
+        resolved = true;
         server.status = 'stopped';
         server.process = undefined;
         this.emit('serverStopped', serverId);
         resolve();
-      });
+      };
 
-      server.process!.on('error', (error) => {
+      const errorHandler = (error: Error) => {
+        if (resolved) return;
+        resolved = true;
         server.status = 'error';
         server.error = error.message;
+        this.emit('serverError', serverId, error);
         reject(error);
-      });
+      };
+
+      process.once('exit', exitHandler);
+      process.once('error', errorHandler);
 
       // Try graceful shutdown first
-      server.process!.kill('SIGTERM');
+      const gracefulKilled = process.kill('SIGTERM');
 
-      // Force kill after 5 seconds
+      if (!gracefulKilled) {
+        // Process already dead, resolve immediately
+        exitHandler();
+        return;
+      }
+
+      // Force kill after 5 seconds with guaranteed cleanup
       setTimeout(() => {
-        if (server.process) {
-          server.process.kill('SIGKILL');
+        if (server.process && server.status !== 'stopped') {
+          const forceKilled = server.process.kill('SIGKILL');
+          if (!forceKilled) {
+            // Force kill failed, clean up anyway
+            server.status = 'stopped';
+            server.process = undefined;
+            this.emit('serverStopped', serverId);
+            if (!resolved) {
+              resolved = true;
+              resolve();
+            }
+          }
         }
       }, 5000);
     });

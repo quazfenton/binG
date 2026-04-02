@@ -12,7 +12,7 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-import { FolderOpen, Terminal, Shield, Database, Save, RefreshCw, CheckCircle, AlertTriangle } from 'lucide-react';
+import { FolderOpen, Terminal, Shield, Database, Save, RefreshCw, CheckCircle, AlertTriangle, AlertCircle } from 'lucide-react';
 import { isDesktopMode, getDesktopConfig, getDesktopWorkspaceDir } from '@/lib/utils/desktop-env';
 import { tauriInvoke } from '@/lib/tauri/invoke-bridge';
 import { createLogger } from '@/lib/utils/logger';
@@ -44,6 +44,7 @@ export default function DesktopSettingsPage() {
   const [saving, setSaving] = useState(false);
   const [saved, setSaved] = useState(false);
   const [error, setError] = useState<string | null>(null);
+  const [warning, setWarning] = useState<string | null>(null);
   const [systemInfo, setSystemInfo] = useState<any>(null);
 
   useEffect(() => {
@@ -63,8 +64,18 @@ export default function DesktopSettingsPage() {
       // Load from localStorage or Tauri store
       const savedSettings = localStorage.getItem('desktop_settings');
       if (savedSettings) {
-        const parsed = JSON.parse(savedSettings);
-        setSettings({ ...DEFAULT_SETTINGS, ...parsed });
+        try {
+          const parsed = JSON.parse(savedSettings);
+          // Validate parsed object structure
+          if (typeof parsed !== 'object' || parsed === null) {
+            throw new Error('Invalid settings format');
+          }
+          setSettings({ ...DEFAULT_SETTINGS, ...parsed });
+        } catch (parseErr: any) {
+          log.error('Malformed settings in localStorage', parseErr);
+          setError('Failed to load settings: invalid format');
+          setSettings(DEFAULT_SETTINGS);
+        }
       } else {
         // Use default workspace
         const workspace = getDesktopWorkspaceDir();
@@ -99,8 +110,10 @@ export default function DesktopSettingsPage() {
       // Also save to Tauri store if available
       try {
         await tauriInvoke.saveSettings(settings);
-      } catch {
-        // Tauri store not available, localStorage is sufficient
+      } catch (tauriErr: any) {
+        // Tauri store failed, warn user about partial save
+        log.warn('Tauri store save failed', tauriErr);
+        setWarning('Settings saved locally, but failed to sync with desktop store.');
       }
 
       setSaved(true);
@@ -175,6 +188,14 @@ export default function DesktopSettingsPage() {
           <AlertTriangle className="h-4 w-4" />
           <AlertTitle>Error</AlertTitle>
           <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {warning && (
+        <Alert className="mb-6 bg-yellow-50 border-yellow-200 text-yellow-800">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Warning</AlertTitle>
+          <AlertDescription>{warning}</AlertDescription>
         </Alert>
       )}
 

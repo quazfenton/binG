@@ -1964,6 +1964,7 @@ export class ResponseRouter {
   ): Promise<UnifiedResponse> {
     const startTime = Date.now()
     const span = startSpan('response-router.spec-amplification')
+    let fastModel: any = null
     
     try {
       // V2 AGENT MODE: Skip spec amplification entirely
@@ -1981,7 +1982,7 @@ export class ResponseRouter {
       // Get fastest model from telemetry
       const { getModelStatsFromTelemetry, getSpecGenerationModel } = await import('@/lib/models/model-ranker')
       const modelStats = await getModelStatsFromTelemetry()
-      let fastModel = await getSpecGenerationModel()
+      fastModel = await getSpecGenerationModel()
 
       // Fallback: If no telemetry data available, use Mistral Small (fast & cheap)
       if (!fastModel) {
@@ -2003,16 +2004,31 @@ export class ResponseRouter {
         fastModel: fastModel.model,
         mode: request.mode,
         provider: fastModel.provider,
-        fromTelemetry: !!getSpecGenerationModel()  // true if telemetry returned model, false if fallback
+        fromTelemetry: !!getSpecGenerationModel()
       })
 
-      // PARALLEL EXECUTION
-      const primaryPromise = this.routeAndFormat(request)
+      // PRIMARY ALREADY DONE BY CALLER - extract from messages
+      // The caller (route.ts) passes the assistant response in messages
+      const lastAssistantMsg = [...request.messages].reverse().find(m => m.role === 'assistant')
+      const primaryContent = typeof lastAssistantMsg?.content === 'string' 
+        ? lastAssistantMsg.content 
+        : ''
 
+      const primaryData: UnifiedResponse = {
+        success: true,
+        content: primaryContent,
+        source: 'spec-amplification',
+        priority: 0,
+        data: {
+          content: primaryContent,
+        }
+      }
+
+      // Generate spec only (primary already done by caller)
       const { buildSpecPrompt } = await import('@/lib/prompts/spec-generator')
       const { enhancedLLMService } = await import('@/lib/chat/enhanced-llm-service')
       
-      // Generate unique request ID for spec generation to avoid duplicate key error
+      // Generate unique request ID for spec generation
       const specRequestId = `spec-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
       const specPromise = enhancedLLMService.generateResponse({
@@ -2031,30 +2047,53 @@ export class ResponseRouter {
         requestId: specRequestId
       })
 
-      // Wait for primary response (needed for content)
-      const primaryResult = await primaryPromise.catch(err => ({ success: false, error: err }))
+      // Wrap spec promise to match expected type for runBackgroundRefinement
+      const wrappedSpecPromise = specPromise.then(response => ({
+        success: true,
+        data: response,
+        error: null,
+      })).catch(err => ({
+        success: false,
+        data: null,
+        error: err,
+      }))
 
-      // Always return primary response immediately
-      if (!(primaryResult as any).success) {
-        const err = (primaryResult as any).error
-        logger.error('Primary routing failed', { error: err })
-        throw err
+      // Trigger background refinement (fire-and-forget)
+      this.runBackgroundRefinement({
+        primaryData,
+        specGenerationPromise: wrappedSpecPromise,
+        request,
+        fastModel,
+        startTime,
+      }).catch(err => {
+        logger.error('Background refinement failed', {
+          error: err?.message,
+          stack: err?.stack,
+          requestId: request.requestId,
+          hasPrimaryContent: !!primaryContent,
+        })
+      })
+
+      // Return minimal response - primary already returned by caller
+      return {
+        success: true,
+        content: '',
+        source: 'spec-amplification',
+        priority: 0,
+        data: {
+          content: '',
+        }
       }
-
-      const primaryData = (primaryResult as any).data
-
-      // Emit primary response immediately if emit is provided
-      if (request.emit) {
-        request.emit('primary_response', { content: primaryData.content, timestamp: Date.now() })
-      }
-
-      // Return primary response immediately
-      // Note: For ToolLoopAgent execution, code is generated during streaming
-      // Spec amplification should be triggered post-stream in the unified pipeline
-      return primaryData as UnifiedResponse
 
     } catch (error) {
-      logger.error('Spec amplification failed', error)
+      const hasFastModelInCatch = typeof fastModel !== 'undefined'
+      logger.error('Spec amplification failed', {
+        error: error?.message,
+        stack: error?.stack,
+        requestId: request?.requestId,
+        hasFastModel: hasFastModelInCatch,
+        mode: request?.mode,
+      })
       recordEndpointUsage('spec-generation', Date.now() - startTime, false)
 
       // Fallback to normal routing
