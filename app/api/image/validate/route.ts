@@ -13,6 +13,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { validateImageUrl } from '@/lib/utils/image-loader';
+import { sanitizeUrlInput } from '@/lib/utils/sanitize';
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -25,7 +26,19 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const validation = validateImageUrl(url);
+  // Sanitize URL input to handle edge cases like null bytes and unusual encoding
+  let sanitizedUrl: string;
+  try {
+    sanitizedUrl = sanitizeUrlInput(url);
+  } catch (sanitizeError: any) {
+    console.error('[Image-Validate] URL sanitization failed:', sanitizeError.message);
+    return NextResponse.json(
+      { valid: false, error: sanitizeError.message || 'URL sanitization failed' },
+      { status: 400 }
+    );
+  }
+
+  const validation = validateImageUrl(sanitizedUrl);
 
   if (!validation.valid) {
     return NextResponse.json(
@@ -36,6 +49,6 @@ export async function GET(request: NextRequest) {
 
   return NextResponse.json({
     valid: true,
-    url,
+    url: sanitizedUrl,
   });
 }

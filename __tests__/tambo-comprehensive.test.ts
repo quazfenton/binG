@@ -14,9 +14,11 @@
 
 import { describe, it, expect, beforeAll, afterAll, vi } from 'vitest';
 
-// Mock React for hooks tests
-vi.mock('react', () => {
+// Mock React for hooks tests - preserve all exports including forwardRef
+vi.mock('react', async (importOriginal) => {
+  const actualReact = await importOriginal();
   return {
+    ...actualReact,
     useState: vi.fn((initial) => [initial, vi.fn()]),
     useCallback: vi.fn((fn) => fn),
     useMemo: vi.fn((fn) => fn()),

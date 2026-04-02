@@ -1,0 +1,95 @@
+{
+  "name": "@bing/mcp-server",
+  "version": "1.0.0",
+  "description": "binG MCP Server - Agentic compute workspace with multi-provider sandbox execution",
+  "type": "module",
+  "bin": {
+    "bing-mcp": "./dist/mcp/stdio-server.js"
+  },
+  "main": "./dist/mcp/index.js",
+  "exports": {
+    ".": {
+      "import": "./dist/mcp/index.js",
+      "types": "./dist/mcp/index.d.ts"
+    },
+    "./transports": {
+      "import": "./dist/mcp/transports.js",
+      "types": "./dist/mcp/transports.d.ts"
+    }
+  },
+  "mcp": {
+    "name": "binG",
+    "description": "Agentic compute workspace with sandbox execution, voice control, and multi-agent orchestration",
+    "tools": [
+      {
+        "name": "execute_command",
+        "description": "Execute shell commands in isolated sandbox"
+      },
+      {
+        "name": "write_file",
+        "description": "Write files to sandbox workspace"
+      },
+      {
+        "name": "read_file",
+        "description": "Read files from sandbox workspace"
+      },
+      {
+        "name": "list_directory",
+        "description": "List directory contents"
+      },
+      {
+        "name": "create_agent",
+        "description": "Create and spawn AI agent for task execution"
+      },
+      {
+        "name": "get_agent_status",
+        "description": "Get status of running agent"
+      },
+      {
+        "name": "stop_agent",
+        "description": "Stop running agent"
+      }
+    ],
+    "transport": ["stdio", "http"],
+    "capabilities": {
+      "sandbox": ["daytona", "blaxel", "runloop", "sprites"],
+      "voice": ["elevenlabs", "cartesia", "livekit"],
+      "llm": ["openrouter", "anthropic", "google", "mistral"],
+      "integrations": ["nango", "composio", "arcade", "smithery"]
+    }
+  },
+  "scripts": {
+    "build": "tsc -p tsconfig.mcp.json",
+    "start": "node dist/mcp/stdio-server.js",
+    "dev": "tsx src/mcp/stdio-server.ts"
+  },
+  "keywords": [
+    "mcp",
+    "agent",
+    "sandbox",
+    "ai",
+    "llm",
+    "code-execution",
+    "voice-control"
+  ],
+  "author": "binG Team",
+  "license": "MIT",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/quazfenton/binG.git"
+  },
+  "bugs": {
+    "url": "https://github.com/quazfenton/binG/issues"
+  },
+  "homepage": "https://github.com/quazfenton/binG#readme",
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0"
+  }
+}

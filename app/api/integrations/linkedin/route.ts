@@ -180,19 +180,33 @@ async function handleGetConnections(token: string, count: string) {
 
 /**
  * POST /api/integrations/linkedin
- * 
+ *
  * Body:
  * - action: 'post'
  * - text: string (post content)
  */
 export async function POST(request: NextRequest) {
+  // Handle malformed JSON separately
+  let body: any;
   try {
-    const body = await request.json();
+    body = await request.json();
+  } catch (error: any) {
+    console.warn('[LinkedIn Integration] Malformed JSON:', error.message);
+    return NextResponse.json(
+      { 
+        error: 'Invalid JSON in request body',
+        details: error.message 
+      }, 
+      { status: 400 }
+    );
+  }
+
+  try {
     const { action, text } = body;
 
     // Try to get Auth0 LinkedIn token
     const auth0Token = await getAccessTokenForConnection(AUTH0_CONNECTIONS.LINKEDIN);
-    
+
     if (!auth0Token) {
       return NextResponse.json({
         error: 'LinkedIn not connected',

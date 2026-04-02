@@ -46,22 +46,34 @@ export async function GET(req: NextRequest) {
   const wsHost = process.env.WEBSOCKET_HOST || 'localhost:3001';
 
   // Build WebSocket URL with properly encoded parameters
-  // Note: Token in URL is a security concern - consider using cookies for authentication
-  // when possible, as URL parameters can be logged in server/access logs
+  // SECURITY NOTE: Token in URL can be logged in server/access logs
+  // RECOMMENDED: Use cookies or Authorization header for authentication
+  // For now, we use short-lived tokens and ensure they're blacklisted after use
   const wsParams = new URLSearchParams();
+
+  // SECURITY: Prefer cookie-based auth when available
+  // Token is only added to URL if explicitly provided (not from cookies)
+  // This maintains backward compatibility while encouraging safer patterns
   if (token) {
+    // Note: Token will be validated and blacklisted after use by WebSocket server
+    // Consider using HttpOnly cookies for token transmission in production
     wsParams.set('token', token);
   }
   wsParams.set('sessionId', sessionId);
   wsParams.set('sandboxId', sandboxId);
-  
+
   const wsUrl = `${wsProtocol}://${wsHost}/ws?${wsParams.toString()}`;
 
   // Build SSE fallback URL with properly encoded parameters
+  // SECURITY: Same token-in-URL concern as WebSocket URL
   const sseParams = new URLSearchParams();
   sseParams.set('sessionId', sessionId);
   sseParams.set('sandboxId', sandboxId);
-  if (token) {
+  // SECURITY: Don't include token in SSE URL - use cookie-based auth
+  // Token is validated from HttpOnly cookie in SSE route handler
+  if (token && process.env.NODE_ENV === 'development') {
+    // Only allow token in URL for development
+    // Production should use HttpOnly cookies
     sseParams.set('token', token);
   }
   const sseUrl = `/api/sandbox/terminal/stream?${sseParams.toString()}`;
@@ -69,6 +81,7 @@ export async function GET(req: NextRequest) {
   return new Response(JSON.stringify({
     message: 'WebSocket endpoint - requires custom server for WebSocket upgrade',
     wsUrl,
+    securityNote: 'Token in URL can be logged. Use HttpOnly cookies in production.',
     instructions: 'Connect to wsUrl using WebSocket client. See docs for custom server setup.',
     fallback: {
       type: 'sse',
@@ -76,6 +89,11 @@ export async function GET(req: NextRequest) {
     }
   }), {
     status: 200,
-    headers: { 'Content-Type': 'application/json' },
+    headers: {
+      'Content-Type': 'application/json',
+      // SECURITY: Prevent caching of WebSocket credentials
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Pragma': 'no-cache',
+    },
   });
 }

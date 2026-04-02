@@ -7,9 +7,9 @@
  */
 
 import { BashFailureContext, CommandRepair, FixMemory } from './bash-event-schema';
-import { executeBashCommand, isCommandSafe } from './bash-tool';
+import { executeBashCommand } from './bash-tool';
 import { createLogger } from '@/lib/utils/logger';
-import { virtualFilesystem } from '@/lib/virtual-filesystem';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 
 const logger = createLogger('Bash:SelfHealing');
 
@@ -163,12 +163,49 @@ export function isMinimalChange(original: string, updated: string): boolean {
 // ============================================================================
 
 /**
+ * Configuration for self-healing behavior
+ */
+export interface SelfHealingConfig {
+  /** Allow automatic sudo escalation for permission errors (default: false) */
+  allowSudoEscalation?: boolean;
+  /** Whitelist of commands safe to run with sudo (used when allowSudoEscalation is true) */
+  safeSudoCommands?: string[];
+}
+
+// Safe commands that can be auto-escalated with sudo
+const DEFAULT_SAFE_SUDO_COMMANDS = [
+  'chmod',
+  'chown',
+  'mkdir',
+  'touch',
+  'apt-get',
+  'apt',
+  'yum',
+  'dnf',
+  'brew',
+  'pip',
+  'pip3',
+  'npm',
+  'pnpm',
+  'yarn',
+];
+
+/**
+ * Check if a command is safe to run with sudo
+ */
+function isSafeSudoCommand(command: string, safeCommands: string[] = DEFAULT_SAFE_SUDO_COMMANDS): boolean {
+  const baseCommand = command.split(/\s+/)[0].toLowerCase();
+  return safeCommands.some(safe => baseCommand === safe || baseCommand.endsWith(`/${safe}`));
+}
+
+/**
  * Apply targeted fix based on error type
  */
 export function applyTargetedFix(
   command: string,
   errorType: BashFailureContext['errorType'],
-  stderr: string
+  stderr: string,
+  config?: SelfHealingConfig
 ): string | null {
   switch (errorType) {
     case 'missing_binary': {
@@ -176,7 +213,7 @@ export function applyTargetedFix(
       const match = stderr.match(/command not found:\s*(\S+)/);
       if (match) {
         const binary = match[1];
-        
+
         // Suggest common alternatives
         const alternatives: Record<string, string> = {
           'jqq': 'jq',
@@ -208,9 +245,25 @@ export function applyTargetedFix(
     }
 
     case 'permissions': {
-      // Suggest adding sudo or fixing permissions
+      // SECURITY: Only auto-escalate with sudo if explicitly allowed and command is safe
+      const allowSudo = config?.allowSudoEscalation ?? false;
+      const safeCommands = config?.safeSudoCommands || DEFAULT_SAFE_SUDO_COMMANDS;
+      
       if (!command.startsWith('sudo ')) {
-        return `sudo ${command}`;
+        if (allowSudo && isSafeSudoCommand(command, safeCommands)) {
+          // Safe to auto-escalate
+          return `sudo ${command}`;
+        } else {
+          // Don't auto-escalate - provide user guidance instead
+          // Return null to indicate no automatic fix available
+          // The error will be reported to the user with suggestions
+          logger.warn('Permission error requires manual intervention', {
+            command,
+            suggestion: 'Try running with sudo or fix file permissions',
+            safeSudoCommands: safeCommands,
+          });
+          return null;
+        }
       }
       break;
     }
@@ -367,21 +420,25 @@ export async function executeWithHealing(
     maxRetries?: number;
     env?: Record<string, string>;
     timeout?: number;
+    /** Self-healing configuration for security controls */
+    healingConfig?: SelfHealingConfig;
   } = {}
 ): Promise<any> {
   const maxRetries = options.maxRetries || 3;
   let attempt = 0;
   let currentCommand = command;
+  let lastError: string | null = null; // Track the last error for fix memory
 
   logger.info('Starting self-healing execution', {
     command,
     maxRetries,
+    allowSudoEscalation: options.healingConfig?.allowSudoEscalation ?? false,
   });
 
   while (attempt < maxRetries) {
     try {
-      logger.info('Executing command', { 
-        command: currentCommand, 
+      logger.info('Executing command', {
+        command: currentCommand,
         attempt: attempt + 1,
       });
 
@@ -397,9 +454,9 @@ export async function executeWithHealing(
           duration: result.duration,
         });
 
-        // Store success in memory
-        if (attempt > 0) {
-          await storeFix(command, currentCommand, '', true);
+        // Store success in memory - use the error that was fixed
+        if (attempt > 0 && lastError) {
+          await storeFix(command, currentCommand, lastError, true);
         }
 
         return result;
@@ -409,29 +466,31 @@ export async function executeWithHealing(
       throw new Error(result.stderr);
     } catch (error: any) {
       attempt++;
+      lastError = error.stderr || error.message; // Track error for potential future fix
 
       if (attempt >= maxRetries) {
-        logger.error('Max retries exceeded', { 
+        logger.error('Max retries exceeded', {
           command: currentCommand,
           attempts: attempt,
         });
-        
+
         // Store failure in memory
-        await storeFix(command, currentCommand, error.message, false);
-        
+        await storeFix(command, currentCommand, lastError, false);
+
         throw error;
       }
 
       // Build failure context
+      const stderrMsg = error.stderr || error.message;
       const failure: BashFailureContext = {
         command: currentCommand,
-        stderr: error.stderr || error.message,
+        stderr: stderrMsg,
         stdout: error.stdout || '',
         exitCode: error.exitCode || -1,
         workingDir: options.workingDir || '/workspace',
         files: [], // TODO: Get VFS snapshot
         attempt,
-        errorType: classifyError(failure.stderr),
+        errorType: classifyError(stderrMsg),
       };
 
       logger.info('Command failed', { 
@@ -457,7 +516,8 @@ export async function executeWithHealing(
       const targetedFix = applyTargetedFix(
         currentCommand,
         failure.errorType,
-        failure.stderr
+        failure.stderr,
+        options.healingConfig
       );
 
       if (targetedFix && isCommandSafe(targetedFix)) {
@@ -498,20 +558,3 @@ export async function executeWithHealing(
 
   throw new Error('Unexpected: loop exited without result or error');
 }
-
-// ============================================================================
-// Exports
-// ============================================================================
-
-export {
-  classifyError,
-  isCommandSafe,
-  validateRepair,
-  generateDiffRepair,
-  applyDiff,
-  isMinimalChange,
-  applyTargetedFix,
-  normalizeCommand,
-  findKnownFix,
-  storeFix,
-};

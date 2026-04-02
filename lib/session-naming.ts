@@ -14,6 +14,20 @@
 
 import { secureRandomString } from './utils';
 
+// Get the base URL for server-side fetch calls
+function getBaseUrl(): string {
+  if (typeof window !== 'undefined') {
+    return ''; // Client-side: relative URL works
+  }
+  if (process.env.NEXT_PUBLIC_APP_URL) {
+    return process.env.NEXT_PUBLIC_APP_URL;
+  }
+  // Default for local development
+  return process.env.NODE_ENV === 'production' 
+    ? 'https://binGPT.ai' 
+    : 'http://localhost:3000';
+}
+
 // Simple logger for session naming (defined early to avoid hoisting issues)
 const logger = {
   debug: (msg: string) => console.debug(`[SessionNaming] ${msg}`),
@@ -41,6 +55,8 @@ const STOCK_WORDS = [
 const usedNames = new Set<string>();
 let currentIndex = 0;
 let initialized = false;
+// Mutex to prevent race conditions in session name generation
+let nameGenerationLock = Promise.resolve();
 
 // Cache for filesystem checks to avoid redundant API calls
 const filesystemCheckCache = new Map<string, { exists: boolean; checkedAt: number }>();
@@ -57,20 +73,20 @@ async function initializeSessionNaming(): Promise<void> {
     // Retry logic: VFS might not be ready immediately on page load
     let attempts = 0;
     let nodes: any[] = [];
-    
+
     while (attempts < 3) {
-      const response = await fetch(`/api/filesystem/list?path=${encodeURIComponent('project/sessions')}`);
+      const response = await fetch(`${getBaseUrl()}/api/filesystem/list?path=${encodeURIComponent('project/sessions')}`);
 
       if (response.ok) {
         const payload = await response.json().catch(() => null);
         nodes = payload?.data?.nodes || [];
-        
+
         // If we got results, break out of retry loop
         if (nodes.length > 0 || payload?.success !== false) {
           break;
         }
       }
-      
+
       // Wait before retrying
       await new Promise(resolve => setTimeout(resolve, 100 * (attempts + 1)));
       attempts++;
@@ -93,9 +109,11 @@ async function initializeSessionNaming(): Promise<void> {
       }
     }
 
-    // Start after the highest used number
+    // FIX: Start AFTER the highest used number
+    // If maxNumber is 0 (no sessions), currentIndex stays 0, next will be 001
+    // If maxNumber is 1 (001 exists), currentIndex becomes 1, next will be 002
     currentIndex = maxNumber;
-    logger.info(`Initialized session naming: ${maxNumber} existing sessions found (from ${nodes.length} nodes)`);
+    logger.info(`Initialized session naming: ${maxNumber} existing sessions found (from ${nodes.length} nodes), next index: ${currentIndex + 1}`);
   } catch (error) {
     logger.warn(`Failed to initialize session naming from filesystem: ${error}`);
   }
@@ -203,11 +221,18 @@ async function getNextStockName(): Promise<string> {
  */
 async function checkNameExistsInFilesystem(name: string): Promise<boolean> {
   try {
-    const response = await fetch(`/api/filesystem/list?path=${encodeURIComponent(`project/sessions/${name}`)}`);
+    // Check if the directory itself exists by listing parent and finding the name
+    const response = await fetch(`${getBaseUrl()}/api/filesystem/list?path=${encodeURIComponent('project/sessions')}`);
 
     if (response.ok) {
       const payload = await response.json().catch(() => null);
-      return !!(payload?.success && payload?.data?.nodes?.length > 0);
+      if (payload?.success && Array.isArray(payload?.data?.nodes)) {
+        // Check if any node matches our name (case-insensitive)
+        const nameLower = name.toLowerCase();
+        return payload.data.nodes.some((node: any) => 
+          node.name && node.name.toLowerCase() === nameLower
+        );
+      }
     }
   } catch (error) {
     logger.warn(`Failed to check name in filesystem: ${error}`);
@@ -270,6 +295,60 @@ function generateUniqueName(baseName: string): string {
 }
 
 /**
+ * Detect folder structure from response content
+ * Returns the single folder name if all files are in one folder
+ */
+export function detectSingleFolderFromResponse(content: string): string | null {
+  if (!content || content.trim().length === 0) return null;
+  
+  const folderSet = new Set<string>();
+  
+  // Extract paths from WRITE commands: WRITE path <<<content>>>
+  const writeRegex = /WRITE\s+<?([^\s<>]+)>?\s*<<<[\s\S]*?>>>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = writeRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (path && path.includes('/')) {
+      const folder = path.split('/')[0];
+      if (folder && !folder.startsWith('<') && !folder.endsWith('>')) {
+        folderSet.add(folder);
+      }
+    }
+  }
+  
+  // Extract paths from <file_edit path="..."> tags
+  const fileEditRegex = /<file_edit\s*path=["']([^"']+)["']/gi;
+  while ((match = fileEditRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (path && path.includes('/')) {
+      const folder = path.split('/')[0];
+      folderSet.add(folder);
+    }
+  }
+  
+  // Extract paths from fenced code blocks with filename hints
+  const codeBlockRegex = /```[a-zA-Z]*\s*(?:file|path|filename)\s*[:=]\s*([^\n]+)/gi;
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (path && path.includes('/')) {
+      const folder = path.split('/')[0];
+      folderSet.add(folder);
+    }
+  }
+  
+  // If exactly one folder found, return it
+  if (folderSet.size === 1) {
+    const folderName = Array.from(folderSet)[0];
+    // Validate folder name (alphanumeric, no special chars)
+    if (/^[a-zA-Z0-9_-]+$/.test(folderName)) {
+      return folderName;
+    }
+  }
+  
+  return null;
+}
+
+/**
  * Main function to generate a session name
  * @param suggestedFolderName - Optional folder name from LLM response
  * @param isNewProject - Whether this is a new project (first generation)
@@ -290,31 +369,46 @@ export async function generateSessionName(
   isNewProject: boolean = true,
   hasOnlyOneFolder: boolean = false
 ): Promise<string> {
-  // Ensure we've scanned existing sessions to avoid collisions
-  await initializeSessionNaming();
+  // Use mutex to prevent race conditions between concurrent requests
+  let releaseLock: () => void;
+  const lockPromise = new Promise<void>(resolve => {
+    releaseLock = resolve;
+  });
 
-  // Rule 1: If it's a new project, has only 1 folder, and LLM suggested a name,
-  // use the LLM-suggested folder name as the session ID (with conflict handling)
-  if (isNewProject && hasOnlyOneFolder && suggestedFolderName) {
-    const cleanName = suggestedFolderName
-      .replace(/[^a-zA-Z0-9_-]/g, '')  // Remove special chars
-      .replace(/^\d+/, '')              // Remove leading numbers
-      .substring(0, 50);                // Limit length
+  const currentLock = nameGenerationLock;
+  nameGenerationLock = lockPromise;
 
-    if (cleanName.length > 0) {
-      // generateUniqueName will handle conflicts by appending suffix
-      const name = generateUniqueName(cleanName);
-      // Register immediately to prevent duplicate generation in same session
-      registerSessionName(name);
-      return name;
+  await currentLock;
+
+  try {
+    // Ensure we've scanned existing sessions to avoid collisions
+    await initializeSessionNaming();
+
+    // Rule 1: If it's a new project, has only 1 folder, and LLM suggested a name,
+    // use the LLM-suggested folder name as the session ID (with conflict handling)
+    if (isNewProject && hasOnlyOneFolder && suggestedFolderName) {
+      const cleanName = suggestedFolderName
+        .replace(/[^a-zA-Z0-9_-]/g, '')  // Remove special chars
+        .replace(/^\d+/, '')              // Remove leading numbers
+        .substring(0, 50);                // Limit length
+
+      if (cleanName.length > 0) {
+        // generateUniqueName will handle conflicts by appending suffix
+        const name = generateUniqueName(cleanName);
+        // Register immediately to prevent duplicate generation in same session
+        registerSessionName(name);
+        return name;
+      }
     }
-  }
 
-  // Rule 2: Use sequential numbering (001, 002, 003, ...)
-  const name = generateUniqueName(await getNextStockName());
-  // Register immediately to prevent duplicate generation in same session
-  registerSessionName(name);
-  return name;
+    // Rule 2: Use sequential numbering (001, 002, 003, ...)
+    const name = generateUniqueName(await getNextStockName());
+    // Register immediately to prevent duplicate generation in same session
+    registerSessionName(name);
+    return name;
+  } finally {
+    releaseLock!();
+  }
 }
 
 /**
@@ -330,6 +424,11 @@ export async function generateSessionName(
  * @returns true if name exists (in memory or filesystem)
  */
 export async function sessionNameExists(name: string): Promise<boolean> {
+  // Guard against undefined/null names to prevent URL parsing failures
+  if (!name || typeof name !== 'string') {
+    return false;
+  }
+  
   const normalizedName = name.toLowerCase();
   
   // Level 1: Check in-memory Set (O(1))
@@ -350,7 +449,7 @@ export async function sessionNameExists(name: string): Promise<boolean> {
   
   // Level 3: Query filesystem (expensive, but cached for 5 seconds)
   try {
-    const response = await fetch(`/api/filesystem/list?path=${encodeURIComponent(`project/sessions/${name}`)}`);
+    const response = await fetch(`${getBaseUrl()}/api/filesystem/list?path=${encodeURIComponent(`project/sessions/${name}`)}`);
 
     if (response.ok) {
       const payload = await response.json().catch(() => null);

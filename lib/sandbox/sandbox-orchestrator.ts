@@ -18,6 +18,7 @@ import {
   getExecutionPolicyConfig,
   getPreferredProviders,
 } from './types';
+import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import type { SandboxHandle } from './providers/sandbox-provider';
 import { getSandboxProvider, type SandboxProviderType } from './providers';
 
@@ -31,7 +32,7 @@ export interface OrchestratorSession {
   handle: SandboxHandle;
   provider: SandboxProviderType;
   policy: ExecutionPolicy;
-  taskType: 'coding' | 'browsing' | 'automation' | 'general' | 'messaging' | 'api' | 'unknown'; // Persisted task type for migration
+  taskType: 'coding' | 'browsing' | 'automation' | 'general' | 'messaging' | 'api' | 'unknown' | 'advanced' | 'code-interpreter' | 'agent' | 'fullstack-app' | 'frontend-app' | 'batch-job' | 'computer-use' | 'lsp-intelligence' | 'persistent-service' | 'ci-cd' | 'ml-training'; // Persisted task type for migration
   riskAssessment?: RiskAssessment;
   createdAt: number;
   lastActivityAt: number;
@@ -417,7 +418,7 @@ export class SandboxOrchestrator {
   }
 
   private buildTaskContext(
-    taskType: 'coding' | 'browsing' | 'automation' | 'general' | 'messaging' | 'api' | 'unknown',
+    taskType: 'coding' | 'browsing' | 'automation' | 'general' | 'messaging' | 'api' | 'unknown' | 'advanced' | 'code-interpreter' | 'agent' | 'fullstack-app' | 'frontend-app' | 'batch-job' | 'computer-use' | 'lsp-intelligence' | 'persistent-service' | 'ci-cd' | 'ml-training',
     policy: ExecutionPolicy,
   ): TaskContext {
     switch (policy) {
@@ -449,7 +450,9 @@ export class SandboxOrchestrator {
     const preferredProviders = getPreferredProviders(policy);
 
     const safeUserId = userId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
-    const safeConvId = conversationId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
+    // CRITICAL FIX: Normalize conversationId before sanitizing for workspace path
+    const simpleSessionId = normalizeSessionId(conversationId) || conversationId; // Use original if normalize returns empty
+    const safeConvId = simpleSessionId.replace(/[^a-zA-Z0-9_-]/g, '_').slice(0, 64);
     const workspaceDir = `/workspace/users/${safeUserId}/sessions/${safeConvId}`;
     const handle = await provider.createSandbox({
       language: 'typescript',

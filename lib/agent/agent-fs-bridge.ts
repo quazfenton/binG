@@ -1,13 +1,15 @@
 /**
  * VFS ↔ Sandbox Bridge
- * 
+ *
  * Bidirectional synchronization between Virtual Filesystem and OpenSandbox workspace.
  * Ensures user's VFS files are available in sandbox and changes are synced back.
  */
 
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
 import { agentSessionManager } from '../session/agent/agent-session-manager';
+import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { createLogger } from '../utils/logger';
+import { emitFilesystemUpdated } from '../virtual-filesystem/sync/sync-events';
 
 const logger = createLogger('Agent:FSBridge');
 
@@ -39,7 +41,9 @@ class AgentFSBridge {
 
     try {
       const session = await agentSessionManager.getOrCreateSession(userId, conversationId);
-      const vfsPath = `project/sessions/${conversationId}`;
+      // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
+      const simpleSessionId = normalizeSessionId(conversationId) || conversationId; // Use original if normalize returns empty
+      const vfsPath = `project/sessions/${simpleSessionId}`;
       const sandboxPath = session.workspacePath;
 
       logger.debug(`Syncing VFS → Sandbox: ${vfsPath} → ${sandboxPath}`);
@@ -105,7 +109,9 @@ class AgentFSBridge {
 
     try {
       const session = await agentSessionManager.getOrCreateSession(userId, conversationId);
-      const vfsPath = `project/sessions/${conversationId}`;
+      // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
+      const simpleSessionId = normalizeSessionId(conversationId) || conversationId; // Use original if normalize returns empty
+      const vfsPath = `project/sessions/${simpleSessionId}`;
       const sandboxPath = session.workspacePath;
 
       logger.debug(`Syncing Sandbox → VFS: ${sandboxPath} → ${vfsPath}`);
@@ -152,6 +158,18 @@ class AgentFSBridge {
 
       const duration = Date.now() - startTime;
       logger.info(`Sandbox → VFS sync complete: ${syncedFiles.length} files in ${duration}ms`);
+
+      // CRITICAL FIX Bug #3: Emit filesystem-updated event after V2 sandbox sync
+      // This ensures components update after V2 agent writes files
+      if (syncedFiles.length > 0) {
+        emitFilesystemUpdated({
+          scopePath: vfsPath,
+          sessionId: simpleSessionId,
+          paths: syncedFiles,
+          type: 'update',
+          source: 'v2-agent',
+        });
+      }
 
       return {
         success: errors.length === 0,

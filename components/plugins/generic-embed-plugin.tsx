@@ -33,7 +33,7 @@ import {
   Archive,
 } from 'lucide-react';
 import { toast } from 'sonner';
-import { transformToEmbed, isEmbeddableUrl, detectEmbeddableLinks, EmbedInfo, formatUrlForDisplay } from '@/lib/utils/iframe-helper';
+import { transformToEmbed, isEmbeddableUrl, detectEmbeddableLinks, EmbedInfo, formatUrlForDisplay, getSecondaryFallbackUrl } from '@/lib/utils/iframe-helper';
 import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
 import useIframeLoader from '@/hooks/use-iframe-loader';
 
@@ -124,7 +124,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
   const [copied, setCopied] = useState(false);
   const [detectedLinks, setDetectedLinks] = useState<Array<{ url: string; provider: string; embedUrl: string }>>([]);
 
-  // Use iframe loader hook
+  // Use iframe loader hook with automatic cascading fallback
   const {
     isLoading,
     isLoaded,
@@ -134,6 +134,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
     retryCount,
     canRetry,
     isUsingFallback,
+    fallbackLevel,
     fallbackUrl,
     handleLoad,
     handleRetry,
@@ -256,6 +257,19 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
 
   const toggleFullscreen = () => {
     setIsFullscreen(!isFullscreen);
+  };
+
+  const handleManualFallback = () => {
+    // Use external webfuse service as fallback
+    if (inputUrl) {
+      const info = transformToEmbed(inputUrl, window.location.hostname);
+      const fallback = getSecondaryFallbackUrl(info.embedUrl);
+      setCurrentUrl(fallback);
+      setIsReloading(true);
+      setIframeKey(prev => prev + 1);
+      setTimeout(() => setIsReloading(false), 1000);
+      toast.info('Using fallback service', { duration: 3000 });
+    }
   };
 
   const handleCopyUrl = () => {
@@ -438,10 +452,6 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                         setIframeError(null);
                         handleRetry();
                       }}
-                      onTryFallback={() => {
-                        setIframeError(null);
-                        handleFallback();
-                      }}
                       onOpenExternal={handleOpenExternal}
                       onClose={onClose}
                       autoRetryCount={retryCount}
@@ -460,7 +470,11 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                       // Do not restart loader on successful iframe load.
                     }}
                     onError={() => {
-                      setIframeError('Failed to load content. This site may block embedding. Try opening externally.');
+                      setIframeError('Failed to load content. This site may block embedding.');
+                      // Auto-trigger cascading fallback on error (proxy → webfuse)
+                      setTimeout(() => {
+                        handleFallback();
+                      }, 500);
                     }}
                     sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-autoplay allow-top-navigation allow-top-navigation-by-user-activation"
                     allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
@@ -473,7 +487,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
               <div className="p-2 border-t border-slate-700 bg-slate-950/50 flex items-center justify-between text-xs">
                 <div className="flex items-center gap-3 text-slate-400">
                   <Shield className="w-3 h-3" />
-                  <span>Sandboxed iframe</span>
+                  <span>{fallbackLevel === 'none' ? 'Sandboxed iframe' : fallbackLevel === 'proxy' ? 'Using /api/proxy' : 'Using webfuse fallback'}</span>
                 </div>
                 <div className="flex items-center gap-2 text-slate-400">
                   <LinkIcon className="w-3 h-3" />

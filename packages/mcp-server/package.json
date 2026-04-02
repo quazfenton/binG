@@ -1,0 +1,211 @@
+{
+  "name": "@bing/mcp-server",
+  "version": "1.0.0",
+  "description": "binG MCP Server - Agentic compute workspace with multi-provider sandbox execution, voice control, and AI agent orchestration",
+  "type": "module",
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "bin": {
+    "bing-mcp": "./dist/stdio-server.js"
+  },
+  "files": [
+    "dist",
+    "README.md",
+    "LICENSE"
+  ],
+  "scripts": {
+    "build": "tsc -p tsconfig.mcp.json",
+    "prepublishOnly": "npm run build",
+    "start": "node dist/stdio-server.js",
+    "dev": "tsx src/stdio-server.ts"
+  },
+  "mcp": {
+    "name": "binG",
+    "displayName": "binG - Agentic Compute Workspace",
+    "description": "Full-stack AI agent workspace with sandboxed code execution, voice interaction, and multi-agent orchestration. Supports 8+ sandbox providers, 100+ AI models, and real-time collaboration.",
+    "version": "1.0.0",
+    "homepage": "https://github.com/quazfenton/binG",
+    "repository": "github:quazfenton/binG",
+    "license": "MIT",
+    "author": "binG Team",
+    "keywords": [
+      "mcp",
+      "ai-agent",
+      "sandbox",
+      "code-execution",
+      "voice-control",
+      "multi-agent",
+      "llm",
+      "automation"
+    ],
+    "tools": [
+      {
+        "name": "execute_command",
+        "displayName": "Execute Command",
+        "description": "Execute shell commands in isolated sandbox with self-healing and VFS persistence",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "command": { "type": "string", "description": "Bash command to execute" },
+            "workingDir": { "type": "string", "description": "Working directory" },
+            "timeout": { "type": "number", "description": "Timeout in ms" }
+          },
+          "required": ["command"]
+        }
+      },
+      {
+        "name": "write_file",
+        "displayName": "Write File",
+        "description": "Write files to sandbox workspace with VFS integration",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string", "description": "File path" },
+            "content": { "type": "string", "description": "File content" }
+          },
+          "required": ["path", "content"]
+        }
+      },
+      {
+        "name": "read_file",
+        "displayName": "Read File",
+        "description": "Read files from sandbox workspace",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string", "description": "File path" }
+          },
+          "required": ["path"]
+        }
+      },
+      {
+        "name": "list_directory",
+        "displayName": "List Directory",
+        "description": "List directory contents",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "path": { "type": "string", "description": "Directory path" }
+          },
+          "required": ["path"]
+        }
+      },
+      {
+        "name": "create_agent",
+        "displayName": "Create Agent",
+        "description": "Create and spawn AI agent for task execution with execution policy control",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "task": { "type": "string", "description": "Task description" },
+            "model": { "type": "string", "description": "LLM model" },
+            "executionPolicy": { "type": "string", "description": "Execution policy" }
+          },
+          "required": ["task"]
+        }
+      },
+      {
+        "name": "get_agent_status",
+        "displayName": "Get Agent Status",
+        "description": "Get status of running agent",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "agentId": { "type": "string", "description": "Agent ID" }
+          },
+          "required": ["agentId"]
+        }
+      },
+      {
+        "name": "stop_agent",
+        "displayName": "Stop Agent",
+        "description": "Stop running agent",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "agentId": { "type": "string", "description": "Agent ID" }
+          },
+          "required": ["agentId"]
+        }
+      },
+      {
+        "name": "spawn_agent_session",
+        "displayName": "Spawn Agent Session",
+        "description": "Spawn persistent agent session for complex workflows",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "goal": { "type": "string", "description": "Session goal" },
+            "mode": { "type": "string", "description": "Agent mode" }
+          },
+          "required": ["goal"]
+        }
+      },
+      {
+        "name": "voice_speech",
+        "displayName": "Voice Speech",
+        "description": "Generate speech from text using neural TTS",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "text": { "type": "string", "description": "Text to synthesize" },
+            "voice": { "type": "string", "description": "Voice ID" },
+            "model": { "type": "string", "description": "TTS model" }
+          },
+          "required": ["text"]
+        }
+      },
+      {
+        "name": "generate_image",
+        "displayName": "Generate Image",
+        "description": "Generate images using FLUX, SDXL, or other providers",
+        "inputSchema": {
+          "type": "object",
+          "properties": {
+            "prompt": { "type": "string", "description": "Image prompt" },
+            "model": { "type": "string", "description": "Image model" },
+            "size": { "type": "string", "description": "Image size" }
+          },
+          "required": ["prompt"]
+        }
+      }
+    ],
+    "capabilities": {
+      "sandbox": {
+        "providers": ["daytona", "blaxel", "runloop", "sprites", "e2b", "codesandbox", "vercel"],
+        "features": ["warm-pool", "snapshots", "health-tracking", "migration"]
+      },
+      "voice": {
+        "providers": ["elevenlabs", "cartesia", "livekit"],
+        "features": ["tts", "stt", "voice-commands"]
+      },
+      "llm": {
+        "providers": ["openrouter", "anthropic", "google", "mistral", "openai"],
+        "features": ["streaming", "tool-calling", "multi-model"]
+      },
+      "integrations": {
+        "providers": ["nango", "composio", "arcade", "smithery"],
+        "features": ["oauth", "webhooks", "automation"]
+      }
+    },
+    "transport": ["stdio", "http", "sse"],
+    "auth": {
+      "type": "bearer",
+      "description": "Authentication via Auth0 bearer token or API key"
+    }
+  },
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "typescript": "^5.0.0",
+    "tsx": "^4.0.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

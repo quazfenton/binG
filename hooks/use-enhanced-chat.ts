@@ -7,6 +7,7 @@ import type { Message } from '@/types';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { buildApiHeaders } from '@/lib/utils';
 import type { AgentType, AgentStatus } from '@/components/agent-status-display';
+import { isValidExtractedPath } from '@/lib/chat/file-edit-parser';  // NEW: Server-side validation
 
 export interface UseChatOptions {
   api: string;
@@ -47,6 +48,39 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | undefined>();
+  
+  // Rate limiting for invalid path warnings (prevents log spam from malformed LLM output)
+  const invalidPathWarningCount = useRef(0);
+  const lastInvalidPathWarning = useRef(0);
+  const INVALID_PATH_WARNING_LIMIT = 10;  // Max warnings per 30 seconds
+  const INVALID_PATH_WARNING_WINDOW = 30000;  // 30 seconds
+  
+  const shouldShowInvalidPathWarning = useCallback((path: string) => {
+    const now = Date.now();
+    // Reset counter if window has passed
+    if (now - lastInvalidPathWarning.current > INVALID_PATH_WARNING_WINDOW) {
+      invalidPathWarningCount.current = 0;
+    }
+    lastInvalidPathWarning.current = now;
+    
+    // Show warning if under limit
+    if (invalidPathWarningCount.current < INVALID_PATH_WARNING_LIMIT) {
+      invalidPathWarningCount.current++;
+      return true;
+    }
+    
+    // Log summary instead of individual warnings when limit exceeded
+    if (invalidPathWarningCount.current === INVALID_PATH_WARNING_LIMIT) {
+      console.warn('[Chat] Rate limit reached for invalid path warnings. Further invalid paths will be silently skipped.', {
+        path,
+        limit: INVALID_PATH_WARNING_LIMIT,
+        windowMs: INVALID_PATH_WARNING_WINDOW,
+      });
+      invalidPathWarningCount.current++;
+    }
+    
+    return false;
+  }, []);
   
   // Agent status state
   const [agentType, setAgentType] = useState<AgentType>('single');
@@ -209,7 +243,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
       // Some auth-required responses are returned as JSON, not SSE.
       const contentType = response.headers.get('content-type') || '';
-      if (contentType.includes('application/json')) {
+      
+      // Check for JSON responses (errors, auth required, etc.)
+      // Skip this for SSE streams which may include 'application/json' in content-type
+      if (contentType.includes('application/json') && !contentType.includes('text/event-stream')) {
         const payload = await response.json().catch(() => ({} as any));
         const authRequired =
           payload?.status === 'auth_required' ||
@@ -326,13 +363,18 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     const decoder = new TextDecoder();
     let accumulatedContent = '';
     let currentEventType = '';
+    let tokenCount = 0;  // Track token events for debugging
 
     // Set up a timeout to ensure we don't get stuck
     const timeoutId = setTimeout(() => {
+      console.warn('[Chat] Streaming timeout after 30s, finalizing with accumulated content', {
+        accumulatedContentLength: accumulatedContent?.length,
+        tokenCount,
+      });
       if (accumulatedContent.trim()) {
         // If we have some content, finalize it
-        setMessages(prev => prev.map(msg => 
-          msg.id === assistantMessage.id 
+        setMessages(prev => prev.map(msg =>
+          msg.id === assistantMessage.id
             ? { ...msg, content: accumulatedContent }
             : msg
         ));
@@ -346,9 +388,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       }
     }, 30000); // 30 second timeout
 
+    // Buffer for accumulating partial SSE chunks across boundaries
+    let sseBuffer = '';
+
     try {
       const parser = createNDJSONParser();
-      
+
       while (true) {
         const { done, value } = await reader.read();
 
@@ -360,54 +405,65 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           break;
         }
 
-        // Decode chunk and parse complete NDJSON lines
+        // Decode chunk and append to buffer for proper SSE parsing across chunk boundaries
         const chunk = decoder.decode(value, { stream: true });
-        
-        // Handle SSE format (event: / data: / \n\n)
-        const lines = chunk.split('\n');
-        
-        for (const line of lines) {
-          if (line.trim() === '') {
-            // Empty line indicates end of event
-            currentEventType = '';
-            continue;
+        sseBuffer += chunk;
+
+        // Process complete SSE events (delimited by \n\n)
+        let eventEndIndex: number;
+        while ((eventEndIndex = sseBuffer.indexOf('\n\n')) >= 0) {
+          // Extract complete event
+          const eventText = sseBuffer.slice(0, eventEndIndex);
+          sseBuffer = sseBuffer.slice(eventEndIndex + 2);
+
+          // Parse event lines
+          const lines = eventText.split('\n');
+          let eventType = '';
+          let dataString = '';
+
+          for (const line of lines) {
+            if (line.startsWith('event: ')) {
+              eventType = line.slice(7).trim();
+            } else if (line.startsWith('data: ')) {
+              // Accumulate data from multiple data: lines
+              dataString += line.slice(6).trim();
+            }
           }
 
-          // Handle event type declarations
-          if (line.startsWith('event: ')) {
-            currentEventType = line.slice(7).trim();
-            continue;
+          // Skip events without data
+          if (!dataString) continue;
+
+          // Debug: Log raw data in dev mode
+          if (process.env.NODE_ENV === 'development') {
+            console.log('[SSE] Raw data:', dataString.substring(0, 80), 'event:', eventType);
           }
 
-          // Handle data lines
-          if (line.startsWith('data: ')) {
-            const dataString = line.slice(6).trim();
-            if (!dataString) continue;
-
-            // Use robust NDJSON parser to handle partial chunks
-            // Add newline to ensure complete parsing of SSE payloads
-            let parsedObjects: any[];
+          // Parse JSON data
+          let parsedObjects: any[];
+          try {
+            const parsed = JSON.parse(dataString);
+            parsedObjects = [parsed];
+          } catch {
+            // Fallback to NDJSON parser for edge cases
             try {
               parsedObjects = parser.parse(dataString + '\n');
             } catch (parseError) {
-              // Handle parsing errors gracefully - use streaming error handler
-              const streamingError = streamingErrorHandler.processError(
-                parseError instanceof Error ? parseError : new Error(String(parseError))
-              );
-
-              // Only show error to user if it should be shown
-              if (streamingErrorHandler.shouldShowToUser(streamingError)) {
-                console.error('SSE parsing error:', parseError);
-              } else {
-                console.warn('SSE parsing error (handled silently):', parseError);
-              }
+              console.warn('[SSE] Parse error:', parseError);
               continue;
             }
+          }
 
-            for (const eventData of parsedObjects) {              // Determine event type from current context or data
-              const eventType = currentEventType || eventData.type || 'token';
+          // Process each parsed object
+          for (const eventData of parsedObjects) {
+            // Debug: Log parsed content
+            if (process.env.NODE_ENV === 'development' && eventData.content) {
+              console.log('[SSE] Content received:', eventData.content.substring(0, 50));
+            }
 
-              switch (eventType) {
+            // Determine event type from event header or data payload
+            const determinedType = eventType || eventData.type || 'token';
+
+              switch (determinedType) {
                 case 'init':
                   // Initialization event - update agent status
                   console.log('Chat stream initialized:', eventData);
@@ -486,14 +542,50 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 case 'done':
-                  if (eventData.messageMetadata) {
-                    const metadata = eventData.messageMetadata;
-                    setMessages(prev => prev.map(msg =>
-                      msg.id === assistantMessage.id
-                        ? { ...msg, metadata: { ...(msg.metadata || {}), ...metadata } }
-                        : msg
-                    ));
+                  // Update message with metadata and content from done event
+                  // CRITICAL FIX: Use done event content as PRIMARY (it has the complete content)
+                  // accumulatedContent may be incomplete if stream parsing got stuck
+                  const doneContent = eventData.content || accumulatedContent || '';
+
+                  // Debug: Log if done event content differs from accumulated (indicates streaming issue)
+                  const contentSource = eventData.content ? 'done-event' : 'accumulated';
+                  const hasContentMismatch = eventData.content && accumulatedContent &&
+                    eventData.content.length !== accumulatedContent.length;
+                  if (process.env.NODE_ENV === 'development') {
+                    console.log('[Chat] Done event received:', {
+                      contentSource,
+                      hasEventDataContent: !!eventData.content,
+                      hasAccumulatedContent: !!accumulatedContent,
+                      doneContentLength: doneContent?.length,
+                      eventDataContentLength: eventData.content?.length,
+                      accumulatedContentLength: accumulatedContent?.length,
+                      contentMismatch: hasContentMismatch,
+                      messageMetadata: eventData.messageMetadata,
+                      hasFilesystem: !!eventData.filesystem,
+                      filesystemApplied: eventData.filesystem?.applied?.length || 0,
+                    });
                   }
+                  // Build metadata from done event
+                  const doneMetadata: any = eventData.messageMetadata || {};
+                  // Also include filesystem info if present
+                  if (eventData.filesystem) {
+                    doneMetadata.filesystem = eventData.filesystem;
+                  }
+                  // Also include fileEdits if present (for enhanced-diff-viewer)
+                  if (eventData.fileEdits && Array.isArray(eventData.fileEdits)) {
+                    doneMetadata.fileEdits = eventData.fileEdits;
+                  }
+                  // ALWAYS update message with done content and metadata
+                  // This ensures complete content even if streaming accumulation got stuck
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === assistantMessage.id
+                      ? {
+                          ...msg,
+                          metadata: { ...(msg.metadata || {}), ...doneMetadata },
+                          content: doneContent // CRITICAL: Always use complete done content
+                        }
+                      : msg
+                  ));
                   // Update version if provided
                   if (eventData.version) {
                     setCurrentVersion(eventData.version);
@@ -505,8 +597,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   if (options.onFinish && currentMessageRef.current) {
                     options.onFinish({
                       ...currentMessageRef.current,
-                      content: accumulatedContent,
-                      metadata: eventData.messageMetadata
+                      content: doneContent,
+                      metadata: doneMetadata
                     });
                   }
                   return;
@@ -634,24 +726,106 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                 case 'file_edit':
                   // Progressive file edit detected during streaming
-                  // eventData contains: { path, status, operation, timestamp }
-                  if (eventData.path) {
-                    // Update agent activity with progressive file edit
-                    setAgentActivity(prev => ({
-                      ...prev,
-                      status: 'executing',
-                      currentAction: `Editing ${eventData.path}...`,
-                      fileEdits: [...(prev.fileEdits || []), {
-                        path: eventData.path,
-                        status: eventData.status || 'detected',
-                        operation: eventData.operation,
-                        timestamp: eventData.timestamp || Date.now(),
-                      }],
-                    }));
+                  // eventData contains: { path, status, operation, content, diff, timestamp }
+                  // CRITICAL FIX: Handle corrected data format from backend
+                  // - WRITE operations: eventData.content = full file content, eventData.diff = undefined
+                  // - PATCH operations: eventData.diff = unified diff, eventData.content = full content (optional)
 
-                    if (process.env.NODE_ENV === 'development') {
-                      console.log('[Chat] Progressive file edit detected:', eventData.path);
+                  // CRITICAL FIX #1: Validate path exists
+                  if (!eventData.path) {
+                    console.warn('[Chat] Skipping file_edit event: missing path');
+                    break;
+                  }
+
+                  // CRITICAL FIX #2: Reject empty content/diff to prevent infinite loops
+                  const editContent = eventData.content || eventData.diff || '';
+                  if (!editContent || editContent.trim().length === 0) {
+                    console.warn('[Chat] Skipping file_edit event: empty diff/content (prevents infinite loop)', {
+                      path: eventData.path,
+                    });
+                    break;
+                  }
+
+                  // CRITICAL FIX #3: Reject obviously invalid paths using server-side validation
+                  // This ensures consistency between client and server path validation
+                  if (!isValidExtractedPath(eventData.path)) {
+                    // Rate limit warnings to prevent log spam (malformed LLM output can trigger many)
+                    if (shouldShowInvalidPathWarning(eventData.path)) {
+                      console.warn('[Chat] Skipping file_edit event: invalid path (failed server-side validation)', {
+                        path: eventData.path,
+                      });
                     }
+                    break;
+                  }
+
+                  // CRITICAL FIX #4: Determine operation type and prepare data for diff viewer
+                  // For WRITE operations without diff, we'll send full content and let EnhancedDiffViewer handle it
+                  const isPatch = eventData.operation === 'patch' || !!eventData.diff;
+                  const fileEditData = {
+                    path: eventData.path,
+                    status: eventData.status || 'detected',
+                    operation: eventData.operation || (isPatch ? 'patch' : 'write'),
+                    content: eventData.content || '',  // Full file content for WRITE operations
+                    diff: eventData.diff || '',  // Unified diff for PATCH operations (empty for WRITE)
+                    timestamp: eventData.timestamp || Date.now(),
+                    isFinal: eventData.isFinal || false,  // Mark edits from final parse
+                  };
+
+                  // Update agent activity with progressive file edit
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: 'executing',
+                    currentAction: `Editing ${eventData.path}...`,
+                    fileEdits: [...(prev.fileEdits || []), fileEditData],
+                  }));
+
+                  // ALSO store in message metadata for enhanced-diff-viewer display
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id === assistantMessage.id) {
+                      const existingFileEdits = (msg.metadata as any)?.fileEdits || [];
+                      return {
+                        ...msg,
+                        metadata: {
+                          ...(msg.metadata || {}),
+                          fileEdits: [...existingFileEdits, fileEditData],
+                        },
+                      };
+                    }
+                    return msg;
+                  }));
+
+                  // CRITICAL FIX #5: Handle isFinal edits - ensure stream completion logic waits
+                  // When isFinal=true, this is from the post-stream parse, so we should NOT
+                  // wait for more streaming content before showing the diff viewer
+                  if (eventData.isFinal) {
+                    if (process.env.NODE_ENV === 'development') {
+                      console.log('[Chat] Final file edit received - stream should complete soon', {
+                        path: eventData.path,
+                      });
+                    }
+                    // Mark the assistant message as having received final edits
+                    // This helps the UI know to show the diff viewer even if stream hasn't formally closed
+                    setMessages(prev => prev.map(msg => {
+                      if (msg.id === assistantMessage.id) {
+                        return {
+                          ...msg,
+                          metadata: {
+                            ...(msg.metadata || {}),
+                            hasReceivedFinalEdits: true,
+                          },
+                        };
+                      }
+                      return msg;
+                    }));
+                  }
+
+                  if (process.env.NODE_ENV === 'development') {
+                    console.log('[Chat] Progressive file edit detected:', {
+                      path: eventData.path,
+                      operation: fileEditData.operation,
+                      hasDiff: !!fileEditData.diff,
+                      contentLength: fileEditData.content?.length,
+                    });
                   }
                   break;
 
@@ -716,13 +890,52 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // When a refinement task completes, create/update a message with the content
                   // Each task gets its own message to show progressive improvements
                   if (eventData.stage === 'task_complete' && eventData.content) {
-                    // Extract file edits from the content for enhanced-diff-viewer display
-                    // Note: Server already applied these edits via applyFilesystemEditsFromResponse
-                    // We just extract for UI display, not for re-applying
-                    const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
-                    const compactEdits = extractCompactFileEdits(eventData.content);
-                    const writeEdits = extractFileWriteEdits(eventData.content);
-                    const allEdits = [...compactEdits, ...writeEdits];
+                    // CRITICAL FIX: Use fileEdits from server if available, otherwise extract from content
+                    let allEdits: any[] = [];
+
+                    if (eventData.fileEdits && Array.isArray(eventData.fileEdits) && eventData.fileEdits.length > 0) {
+                      // CRITICAL FIX: Validate server-provided file edits (don't trust blindly)
+                      allEdits = eventData.fileEdits.filter((edit: any) => {
+                        // Check path exists
+                        if (!edit.path) {
+                          console.warn('[Chat] Filtering out fileEdit with missing path');
+                          return false;
+                        }
+                        // Check content/diff is not empty
+                        const content = edit.content || edit.diff || '';
+                        if (!content || content.trim().length === 0) {
+                          console.warn('[Chat] Filtering out fileEdit with empty content (prevents infinite loop)', {
+                            path: edit.path,
+                          });
+                          return false;
+                        }
+                        // Validate path format using server-side validation
+                        if (!isValidExtractedPath(edit.path)) {
+                          // Rate limit warnings
+                          if (shouldShowInvalidPathWarning(edit.path)) {
+                            console.warn('[Chat] Filtering out fileEdit with invalid path (failed server-side validation)', {
+                              path: edit.path,
+                            });
+                          }
+                          return false;
+                        }
+                        return true;
+                      });
+                      console.log('[Chat] Using server-provided fileEdits for task:', allEdits.length, 'files');
+                    } else if (eventData.content) {
+                      // Fallback: extract from content (may fail with strict validation)
+                      const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
+                      const compactEdits = extractCompactFileEdits(eventData.content);
+                      const writeEdits = extractFileWriteEdits(eventData.content);
+                      allEdits = [...compactEdits, ...writeEdits];
+                      if (allEdits.length > 0) {
+                        console.log('[Chat] Extracted fileEdits from task content:', allEdits.length, 'files');
+                      } else {
+                        console.log('[Chat] No fileEdits extracted, content length:', eventData.content.length);
+                      }
+                    }
+
+                    console.log('[Chat] Creating refinement message, edits:', allEdits.length, 'content length:', eventData.content?.length);
 
                     setMessages(prev => {
                       // Remove pending message if it exists
@@ -738,7 +951,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       const refinementMessage: Message = {
                         id: `refinement-${eventData.taskId || Date.now()}-${Math.random().toString(36).slice(2, 8)}`,
                         role: 'assistant',
-                        content: eventData.content,
+                        content: eventData.content || '',
                         metadata: {
                           isRefinement: true,
                           taskId: eventData.taskId,
@@ -755,10 +968,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         // Update existing task message
                         const updated = [...withoutPending];
                         updated[existingTaskIndex] = refinementMessage;
+                        console.log('[Chat] Updated existing refinement message at index:', existingTaskIndex);
                         return updated;
                       }
 
                       // Add new task message
+                      console.log('[Chat] Adding new refinement message');
                       return withoutPending.concat(refinementMessage);
                     });
                   }
@@ -766,13 +981,51 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // When refinement completes, create/update summary message
                   // This happens regardless of filesystem edits
                   if (eventData.stage === 'complete') {
-                    // Extract file edits from the refined content for enhanced-diff-viewer display
-                    // Note: Server already applied these edits via applyFilesystemEditsFromResponse
-                    // We just extract for UI display, not for re-applying
-                    const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
-                    const compactEdits = extractCompactFileEdits(eventData.refinedContent || '');
-                    const writeEdits = extractFileWriteEdits(eventData.refinedContent || '');
-                    const allEdits = [...compactEdits, ...writeEdits];
+                    // CRITICAL FIX: Use fileEdits from server if available, otherwise extract from content
+                    // Server now emits fileEdits directly which is more reliable than client-side extraction
+                    let allEdits: any[] = [];
+
+                    if (eventData.fileEdits && Array.isArray(eventData.fileEdits) && eventData.fileEdits.length > 0) {
+                      // CRITICAL FIX: Validate server-provided file edits (don't trust blindly)
+                      allEdits = eventData.fileEdits.filter((edit: any) => {
+                        // Check path exists
+                        if (!edit.path) {
+                          console.warn('[Chat] Filtering out fileEdit with missing path');
+                          return false;
+                        }
+                        // Check content/diff is not empty
+                        const content = edit.content || edit.diff || '';
+                        if (!content || content.trim().length === 0) {
+                          console.warn('[Chat] Filtering out fileEdit with empty content (prevents infinite loop)', {
+                            path: edit.path,
+                          });
+                          return false;
+                        }
+                        // Validate path format using server-side validation
+                        if (!isValidExtractedPath(edit.path)) {
+                          // Rate limit warnings
+                          if (shouldShowInvalidPathWarning(edit.path)) {
+                            console.warn('[Chat] Filtering out fileEdit with invalid path (failed server-side validation)', {
+                              path: edit.path,
+                            });
+                          }
+                          return false;
+                        }
+                        return true;
+                      });
+                      console.log('[Chat] Using server-provided fileEdits:', allEdits.length, 'files');
+                    } else if (eventData.refinedContent) {
+                      // Fallback: extract from content (may fail with strict validation)
+                      const { extractCompactFileEdits, extractFileWriteEdits } = await import('@/lib/chat/file-edit-parser');
+                      const compactEdits = extractCompactFileEdits(eventData.refinedContent);
+                      const writeEdits = extractFileWriteEdits(eventData.refinedContent);
+                      allEdits = [...compactEdits, ...writeEdits];
+                      if (allEdits.length > 0) {
+                        console.log('[Chat] Extracted fileEdits from content:', allEdits.length, 'files');
+                      }
+                    }
+
+                    console.log('[Chat] Creating refinement summary message, edits:', allEdits.length, 'content length:', eventData.refinedContent?.length);
 
                     setMessages(prev => {
                       // Remove pending message if it exists
@@ -804,10 +1057,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         // Update existing summary
                         const updated = [...withoutPending];
                         updated[existingSummaryIndex] = refinementMessage;
+                        console.log('[Chat] Updated existing refinement summary at index:', existingSummaryIndex);
                         return updated;
                       }
 
                       // Add new summary message
+                      console.log('[Chat] Adding new refinement summary message');
                       return withoutPending.concat(refinementMessage);
                     });
                   }
@@ -969,14 +1224,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // Update agent activity
                   setAgentActivity(prev => ({
                     ...prev,
-                    status: eventData.status === 'started' ? 'executing' : 
+                    status: eventData.status === 'started' ? 'executing' :
                             eventData.status === 'completed' ? 'completed' : prev.status,
                     currentAction: eventData.status === 'started' ? eventData.step : prev.currentAction,
                     processingSteps: [...prev.processingSteps, {
                       id: Date.now().toString(),
                       step: eventData.step,
                       status: eventData.status,
-                      stepIndex: eventData.stepIndex || prev.processingSteps.length,
+                      // Use nullish coalescing to preserve valid index 0
+                      stepIndex: eventData.stepIndex ?? prev.processingSteps.length,
                       timestamp: Date.now(),
                     }],
                   }));
@@ -1064,27 +1320,20 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }
                   break;
               }
-            } // End for loop
+            } // End for (const eventData of parsedObjects)
+          } // End while (eventEndIndex >= 0)
+        } // End while (true) - reader loop
 
-            // Handle other SSE fields (id, retry) - ignore them
-            if (line.startsWith('id: ') || line.startsWith('retry: ')) {
-              continue;
-            }
-          } // End if (line.startsWith('data: '))
-        } // End for (const line of lines)
-      } // End while (true)
+        // If we reach here without a 'done' event, consider it complete
+        clearTimeout(timeoutId);
+        setIsLoading(false);
 
-      // If we reach here without a 'done' event, consider it complete
-      clearTimeout(timeoutId);
-      setIsLoading(false);
-      
-      if (options.onFinish && currentMessageRef.current) {
-        options.onFinish({
-          ...currentMessageRef.current,
-          content: accumulatedContent
-        });
-      }
-
+        if (options.onFinish && currentMessageRef.current) {
+          options.onFinish({
+            ...currentMessageRef.current,
+            content: accumulatedContent
+          });
+        }
     } catch (streamError) {
       clearTimeout(timeoutId);
       if (streamError instanceof Error && streamError.name !== 'AbortError') {
@@ -1094,7 +1343,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       reader.releaseLock();
       abortControllerRef.current = null;
     }
-  };
+    };
 
   // Helper function to retry with v1 mode, reusing handleStreamingResponse
   const handleV1Fallback = async (

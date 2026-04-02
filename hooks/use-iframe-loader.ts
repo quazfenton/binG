@@ -20,7 +20,7 @@ export interface UseIframeLoaderOptions {
   onFailed?: (reason: IframeFailureReason, error?: string) => void;
 }
 
-export type IframeFailureReason = 
+export type IframeFailureReason =
   | 'blocked'
   | 'failed'
   | 'header-detected'
@@ -29,6 +29,8 @@ export type IframeFailureReason =
   | 'csp-blocked'
   | 'network-error'
   | 'ssl-error';
+
+export type FallbackLevel = 'none' | 'proxy' | 'webfuse';
 
 export interface UseIframeLoaderReturn {
   isLoading: boolean;
@@ -39,6 +41,7 @@ export interface UseIframeLoaderReturn {
   retryCount: number;
   canRetry: boolean;
   isUsingFallback: boolean;
+  fallbackLevel: FallbackLevel;
   fallbackUrl: string | null;
   handleLoad: (url: string) => void;
   handleRetry: () => void;
@@ -52,7 +55,7 @@ export function useIframeLoader({
   maxRetries = 3,
   retryDelay = 5000,
   enableAutoRetry = true,
-  enableFallback = false,
+  enableFallback = true,
   onLoaded,
   onFailed,
 }: UseIframeLoaderOptions): UseIframeLoaderReturn {
@@ -62,12 +65,15 @@ export function useIframeLoader({
   const [failureReason, setFailureReason] = useState<IframeFailureReason | null>(null);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [retryCount, setRetryCount] = useState(0);
+  const [fallbackAttempt, setFallbackAttempt] = useState(0);
+  const [fallbackLevel, setFallbackLevel] = useState<FallbackLevel>('none');
   const [isUsingFallback, setIsUsingFallback] = useState(false);
   const [fallbackUrl, setFallbackUrl] = useState<string | null>(null);
 
   const timeoutRef = useRef<NodeJS.Timeout | null>(null);
   const currentUrlRef = useRef<string>('');
   const originalUrlRef = useRef<string>('');
+  const fallbackAttemptRef = useRef<number>(0);
 
   const detectFailureReason = useCallback((error?: string): IframeFailureReason => {
     if (!error) return 'failed';
@@ -100,9 +106,9 @@ export function useIframeLoader({
   const handleLoad = useCallback((newUrl: string) => {
     if (!newUrl) return;
 
-    // Only reset retry count if this is a completely new URL (not a retry)
+    // Only reset state if this is a completely new URL (not a retry/fallback)
     const isNewUrl = newUrl !== currentUrlRef.current;
-    
+
     // Reset state
     setIsLoading(true);
     setIsLoaded(false);
@@ -110,10 +116,13 @@ export function useIframeLoader({
     setFailureReason(null);
     setErrorMessage(null);
     if (isNewUrl) {
-      setRetryCount(0);  // Only reset on new URL, not retries
+      setRetryCount(0);
+      fallbackAttemptRef.current = 0;
+      setFallbackAttempt(0);
+      setFallbackLevel('none');
+      setIsUsingFallback(false);
+      setFallbackUrl(null);
     }
-    setIsUsingFallback(false);
-    setFallbackUrl(null);
     currentUrlRef.current = newUrl;
     originalUrlRef.current = newUrl;
 
@@ -171,11 +180,28 @@ export function useIframeLoader({
   const handleFallback = useCallback(() => {
     if (!originalUrlRef.current) return;
 
-    const encodedUrl = encodeURIComponent(originalUrlRef.current);
-    const fallback = `https://demo.webfuse.com/+iframetest/?url=${encodedUrl}`;
+    // Use ref to track attempt count for proper closure behavior
+    const attempt = fallbackAttemptRef.current + 1;
+    fallbackAttemptRef.current = attempt;
+    setFallbackAttempt(attempt);
 
+    let nextFallback: FallbackLevel;
+    let nextFallbackUrl: string;
+
+    if (attempt === 1) {
+      // First fallback: use local /api/proxy
+      nextFallback = 'proxy';
+      nextFallbackUrl = `/api/proxy?url=${encodeURIComponent(originalUrlRef.current)}`;
+    } else {
+      // Second fallback: use external webfuse service
+      nextFallback = 'webfuse';
+      const encodedUrl = encodeURIComponent(originalUrlRef.current);
+      nextFallbackUrl = `https://demo.webfuse.com/+iframetest/?url=${encodedUrl}`;
+    }
+
+    setFallbackLevel(nextFallback);
     setIsUsingFallback(true);
-    setFallbackUrl(fallback);
+    setFallbackUrl(nextFallbackUrl);
     setIsFailed(false);
     setFailureReason(null);
     setErrorMessage(null);
@@ -188,15 +214,21 @@ export function useIframeLoader({
 
     // Set timeout for fallback iframe
     timeoutRef.current = setTimeout(() => {
-      const reason: IframeFailureReason = 'timeout';
-      const errorMsg = 'Fallback connection timed out';
+      // If proxy fails (attempt 1), auto-escalate to webfuse (attempt 2)
+      if (fallbackAttemptRef.current === 1) {
+        handleFallback(); // Cascade to next level
+      } else {
+        // webfuse also failed (attempt 2+) - give up
+        const reason: IframeFailureReason = 'timeout';
+        const errorMsg = 'All fallback options exhausted';
 
-      setIsLoading(false);
-      setIsFailed(true);
-      setFailureReason(reason);
-      setErrorMessage(errorMsg);
+        setIsLoading(false);
+        setIsFailed(true);
+        setFailureReason(reason);
+        setErrorMessage(errorMsg);
 
-      onFailed?.(reason, errorMsg);
+        onFailed?.(reason, errorMsg);
+      }
     }, timeout);
   }, [timeout, onFailed]);
 
@@ -228,6 +260,9 @@ export function useIframeLoader({
     setFailureReason(null);
     setErrorMessage(null);
     setRetryCount(0);
+    fallbackAttemptRef.current = 0;
+    setFallbackAttempt(0);
+    setFallbackLevel('none');
     setIsUsingFallback(false);
     setFallbackUrl(null);
     currentUrlRef.current = '';
@@ -259,6 +294,7 @@ export function useIframeLoader({
     retryCount,
     canRetry: retryCount < maxRetries,
     isUsingFallback,
+    fallbackLevel,
     fallbackUrl,
     handleLoad,
     handleRetry,

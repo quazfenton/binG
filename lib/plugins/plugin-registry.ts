@@ -2,15 +2,16 @@
  * Plugin Registry with Enhanced Configuration
  */
 
-import { 
-  Calculator, 
-  Code, 
-  FileText, 
-  Image, 
-  Globe, 
+import {
+  Calculator,
+  Code,
+  FileText,
+  Image,
+  Globe,
   Database,
   Sparkles,
-  Zap
+  Zap,
+  Palette
 } from 'lucide-react';
 
 import { CalculatorPlugin } from '../../components/plugins/calculator-plugin';
@@ -18,6 +19,7 @@ import { CodeFormatterPlugin } from '../../components/plugins/code-formatter-plu
 import { NoteTakerPlugin } from '../../components/plugins/note-taker-plugin';
 import { JsonValidatorPlugin } from '../../components/plugins/json-validator-plugin';
 import { UrlUtilitiesPlugin } from '../../components/plugins/url-utilities-plugin';
+import FigmaEmbedPlugin from '../../components/plugins/figma-embed-plugin';
 import type { Plugin } from '../../components/plugins/plugin-manager';
 
 export const pluginRegistry: Plugin[] = [
@@ -155,6 +157,26 @@ export const pluginRegistry: Plugin[] = [
       maxNetworkRequests: 10,
       maxStorageKB: 256,
       timeoutMs: 15000
+    }
+  },
+  // Figma Integration Plugin
+  {
+    id: 'figma',
+    name: 'Figma Integration',
+    description: 'Import and export designs from Figma. Connect to your Figma account to browse files, export frames, and import designs to the visual editor.',
+    icon: Palette,
+    component: FigmaEmbedPlugin,
+    category: 'design',
+    defaultSize: { width: 900, height: 700 },
+    minSize: { width: 700, height: 500 },
+    maxSize: { width: 1200, height: 900 },
+    enhanced: true,
+    resourceLimits: {
+      maxMemoryMB: 200,
+      maxCpuPercent: 30,
+      maxNetworkRequests: 50,
+      maxStorageKB: 5120,
+      timeoutMs: 60000
     }
   }
 ];

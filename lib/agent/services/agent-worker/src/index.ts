@@ -17,6 +17,7 @@ import { executeV2Task } from '../../../v2-executor';
 import { taskRouter } from '../../../task-router';
 import { providerRouter, latencyTracker } from '../../../../sandbox/provider-router';
 import { determineExecutionPolicy } from '../../../../sandbox/types';
+import { normalizeSessionId } from '../../../../virtual-filesystem/scope-utils';
 
 const logger = createLogger('Agent:Worker');
 
@@ -79,7 +80,9 @@ async function runOpenCode(job: AgentJob): Promise<void> {
   job.status = 'processing';
   await redis.set(`agent:job:${jobId}`, JSON.stringify(job), 'EX', 3600);
 
-  const workspaceDir = `/workspace/users/${userId}/sessions/${conversationId}`;
+  // CRITICAL FIX: Normalize conversationId to prevent composite IDs in workspace paths
+  const simpleSessionId = normalizeSessionId(conversationId) || conversationId; // Use original if normalize returns empty
+  const workspaceDir = `/workspace/users/${userId}/sessions/${simpleSessionId}`;
   await fs.mkdir(workspaceDir, { recursive: true }).catch(() => {});
 
   let selectedProvider: string | undefined;

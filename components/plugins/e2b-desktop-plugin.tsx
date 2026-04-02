@@ -509,9 +509,7 @@ export default function E2BDesktopPlugin({ onClose, isVisible = true }: DesktopP
                       url={streamUrl}
                       reason={failureReason || 'failed'}
                       errorMessage={errorMessage || undefined}
-                      onRetry={handleRetry}
-                      onTryFallback={handleFallback}
-                      onOpenExternal={() => window.open(streamUrl, '_blank', 'noopener,noreferrer')}
+                      onRetry={handleRetry}onOpenExternal={() => window.open(streamUrl, '_blank', 'noopener,noreferrer')}
                       onClose={onClose}
                       autoRetryCount={retryCount}
                       maxRetries={3}

@@ -129,6 +129,31 @@ export function extractCatHeredocEdits(content: string): BashFileEdit[] {
 }
 
 /**
+ * Strip heredoc bodies from content to prevent false positives
+ * in secondary scanners (mkdir, rm, sed).
+ *
+ * Handles:
+ * - <<'DELIM' ... DELIM (quoted - no variable expansion)
+ * - <<DELIM ... DELIM (unquoted)
+ * - <<-DELIM ... DELIM (indented)
+ */
+export function stripHeredocBodies(content: string): string {
+  let result = content;
+
+  // Match heredocs: <<['"]?DELIM['"]? ... DELIM
+  // Handles: <<'EOF', <<EOF, <<-'EOF', <<-EOF
+  const heredocRegex = /<<-?['"]?(\w+)['"]?([\s\S]*?)\n?\1(?:\s|$)/gi;
+
+  result = result.replace(heredocRegex, (match, delimiter, body) => {
+    // Replace heredoc body with placeholder to preserve line structure
+    const placeholder = `[HEREDOC:${delimiter}:${body.split('\n').length} lines]`;
+    return match.replace(body, placeholder);
+  });
+
+  return result;
+}
+
+/**
  * Extract mkdir commands: mkdir -p path
  * 
  * Handles:
@@ -143,22 +168,29 @@ export function extractMkdirEdits(content: string): BashDirectoryEdit[] {
     return edits;
   }
   
-  // Match: mkdir [-p] path
-  // Global flag to find all mkdir commands
-  const regex = /mkdir\s+(-p\s+)?([^\s&|;<>]+)/gi;
+  const stripped = stripHeredocBodies(content);
+
+  // Match: mkdir [-p] path1 [path2 ...]
+  // FIX: Don't capture across newlines to avoid parsing subsequent commands as paths
+  const regex = /mkdir\s+(-p\s+)?([^\n&|;<>]+)/gi;
   let match: RegExpExecArray | null;
   
-  while ((match = regex.exec(content)) !== null) {
+  while ((match = regex.exec(stripped)) !== null) {
     try {
-      const path = match[2]?.trim();
+      const recursive = !!match[1];
+      const pathsStr = match[2]?.trim();
       
-      // Skip if path looks like a flag or is empty
-      if (!path || path.startsWith('-')) {
+      if (!pathsStr) {
         continue;
       }
       
-      edits.push({ path, mode: 'create' });
-      logger.debug('Extracted mkdir', { path });
+      // Split on whitespace to handle multiple paths: mkdir -p path1 path2
+      const paths = pathsStr.split(/\s+/).filter(p => p && !p.startsWith('-'));
+      
+      for (const path of paths) {
+        edits.push({ path, mode: 'create' });
+        logger.debug('Extracted mkdir', { path, recursive });
+      }
     } catch (error: any) {
       logger.warn('Failed to parse mkdir', { 
         error: error.message,
@@ -185,11 +217,13 @@ export function extractRmEdits(content: string): BashDeleteEdit[] {
     return deletes;
   }
   
+  const stripped = stripHeredocBodies(content);
+  
   // Match: rm [-flags] path
   const regex = /rm\s+(-[rf]+\s+)?([^\s&|;<>]+)/gi;
   let match: RegExpExecArray | null;
   
-  while ((match = regex.exec(content)) !== null) {
+  while ((match = regex.exec(stripped)) !== null) {
     try {
       const path = match[2]?.trim();
       
@@ -226,12 +260,14 @@ export function extractSedEdits(content: string): BashPatchEdit[] {
     return patches;
   }
   
+  const stripped = stripHeredocBodies(content);
+  
   // Match: sed -i ['"]s/pattern/replacement/flags['"] file
   // Groups: 1=pattern, 2=replacement, 3=flags, 4=file
   const regex = /sed\s+-i\s+('')?\s*['"]s\/([^\/]+)\/([^\/]+)\/([gim]*)['"]\s+([^\s&|;<>]+)/gi;
   let match: RegExpExecArray | null;
   
-  while ((match = regex.exec(content)) !== null) {
+  while ((match = regex.exec(stripped)) !== null) {
     try {
       const pattern = match[2];
       const replacement = match[3];
@@ -300,25 +336,43 @@ export function toStandardFileEdits(bashEdits: {
   deletes: BashDeleteEdit[];
   patches: BashPatchEdit[];
 }): Array<{ path: string; content: string; action?: 'write' | 'append' | 'delete' | 'patch' }> {
-  const edits: Array<{ path: string; content: string; action?: string }> = [];
-  
+  const edits: Array<{ path: string; content: string; action?: 'write' | 'append' | 'delete' | 'patch' }> = [];
+
   // Convert writes
   for (const write of bashEdits.writes) {
-    edits.push({ 
-      path: write.path, 
+    edits.push({
+      path: write.path,
       content: write.content,
       action: write.mode,
     });
   }
-  
+
+  // Convert directories (mkdir - represented as write with empty content)
+  for (const dir of bashEdits.directories) {
+    edits.push({
+      path: dir.path,
+      content: '',
+      action: 'write',
+    });
+  }
+
   // Convert deletes (empty content)
   for (const del of bashEdits.deletes) {
-    edits.push({ 
-      path: del.path, 
+    edits.push({
+      path: del.path,
       content: '',
       action: 'delete',
     });
   }
-  
+
+  // Convert patches (sed commands)
+  for (const patch of bashEdits.patches) {
+    edits.push({
+      path: patch.path,
+      content: `s/${patch.pattern}/${patch.replacement}/${patch.flags || ''}`,
+      action: 'patch',
+    });
+  }
+
   return edits;
 }

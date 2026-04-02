@@ -134,9 +134,19 @@ export class ShadowCommitManager {
 
       // Extract owner_id from sessionId
       // sessionId format: 'ownerId:conversationId' or just 'conversationId'
-      const ownerId = options.sessionId.includes(':')
-        ? options.sessionId.split(':')[0]
-        : (options.author || 'anon:unknown');
+      // Priority: author > sessionId with ownerId prefix > fallback
+      let ownerId = options.author;
+      if (!ownerId && options.sessionId.includes(':')) {
+        const parts = options.sessionId.split(':');
+        // If sessionId starts with 'anon:' or similar ownerId pattern, use full first part
+        // Otherwise, check if author was passed
+        ownerId = parts[0].includes('anon') || parts[0].includes('@')
+          ? parts[0]
+          : parts.length > 1
+            ? `${parts[0]}:${parts[1]}`
+            : undefined;
+      }
+      ownerId = ownerId || 'anon:unknown';
 
       console.log('[ShadowCommit] Inserting with commitId:', commitId, 'ownerId:', ownerId);
 

@@ -19,9 +19,9 @@
  * ```
  */
 
-import { getSandboxProvider } from '@/lib/sandbox/providers';
+import { getSandboxProvider, type SandboxProviderType } from '@/lib/sandbox/providers';
 import { createLogger } from '@/lib/utils/logger';
-import { executeWithHealing } from '../../chat/bash-self-heal';
+import { executeWithHealing } from '@/lib/chat/bash-self-heal';
 import type { ToolExecutionContext, ToolExecutionResult } from '../tool-integration-system';
 
 const logger = createLogger('Tool:Bash');
@@ -71,6 +71,12 @@ export interface BashToolExecutionResult extends ToolExecutionResult {
   }>;
 }
 
+export interface BashExecutionContext extends ToolExecutionContext {
+  params: BashToolParams;
+  sandboxId?: string;
+  sandboxProvider?: SandboxProviderType;
+}
+
 // ============================================================================
 // Bash Tool Executor Class
 // ============================================================================
@@ -94,7 +100,7 @@ export class BashToolExecutor {
    * @returns Execution result with stdout, stderr, exitCode
    */
   async execute(
-    context: ToolExecutionContext<BashToolParams>
+    context: BashExecutionContext
   ): Promise<BashToolExecutionResult> {
     const { command, cwd, timeout, enableHealing } = context.params;
     const startTime = Date.now();
@@ -108,14 +114,17 @@ export class BashToolExecutor {
 
     try {
       // Get sandbox handle
-      const sandbox = await getSandboxProvider(context.sandboxProvider || 'daytona');
+      if (!context.sandboxId) {
+        throw new Error('bash.execute requires a sandboxId in context');
+      }
+      const sandbox = await getSandboxProvider(context.sandboxProvider);
       const handle = await sandbox.getSandbox(context.sandboxId);
 
       // Create execute function for healing wrapper
       const executeCommand = async (cmd: string) => {
         const result = await handle.executeCommand(
           cmd,
-          cwd || context.cwd,
+          cwd || context.params.cwd,
           timeout || this.config.defaultTimeout
         );
 
@@ -200,7 +209,7 @@ export class BashToolExecutor {
    * @returns Execution result
    */
   async executeSimple(
-    context: ToolExecutionContext<BashToolParams>
+    context: BashExecutionContext
   ): Promise<BashToolExecutionResult> {
     return this.execute({
       ...context,
@@ -218,7 +227,7 @@ export class BashToolExecutor {
    * @returns Execution result
    */
   async executeWithHealing(
-    context: ToolExecutionContext<BashToolParams>
+    context: BashExecutionContext
   ): Promise<BashToolExecutionResult> {
     return this.execute({
       ...context,
@@ -261,25 +270,24 @@ export const bashToolExecutor = new BashToolExecutor();
 export async function executeBash(
   command: string,
   options: {
-    ownerId: string;
+    userId: string;
     sandboxId: string;
-    sandboxProvider?: string;
+    sandboxProvider?: SandboxProviderType;
     cwd?: string;
     timeout?: number;
     enableHealing?: boolean;
   }
 ): Promise<BashToolExecutionResult> {
   return bashToolExecutor.execute({
+    userId: options.userId,
     params: {
       command,
       cwd: options.cwd,
       timeout: options.timeout,
       enableHealing: options.enableHealing,
     },
-    ownerId: options.ownerId,
     sandboxId: options.sandboxId,
     sandboxProvider: options.sandboxProvider,
-    cwd: options.cwd,
   });
 }
 
@@ -289,23 +297,22 @@ export async function executeBash(
 export async function executeBashWithHealing(
   command: string,
   options: {
-    ownerId: string;
+    userId: string;
     sandboxId: string;
-    sandboxProvider?: string;
+    sandboxProvider?: SandboxProviderType;
     cwd?: string;
     timeout?: number;
   }
 ): Promise<BashToolExecutionResult> {
   return bashToolExecutor.executeWithHealing({
+    userId: options.userId,
     params: {
       command,
       cwd: options.cwd,
       timeout: options.timeout,
     },
-    ownerId: options.ownerId,
     sandboxId: options.sandboxId,
     sandboxProvider: options.sandboxProvider,
-    cwd: options.cwd,
   });
 }
 
@@ -315,22 +322,21 @@ export async function executeBashWithHealing(
 export async function executeBashSimple(
   command: string,
   options: {
-    ownerId: string;
+    userId: string;
     sandboxId: string;
-    sandboxProvider?: string;
+    sandboxProvider?: SandboxProviderType;
     cwd?: string;
     timeout?: number;
   }
 ): Promise<BashToolExecutionResult> {
   return bashToolExecutor.executeSimple({
+    userId: options.userId,
     params: {
       command,
       cwd: options.cwd,
       timeout: options.timeout,
     },
-    ownerId: options.ownerId,
     sandboxId: options.sandboxId,
     sandboxProvider: options.sandboxProvider,
-    cwd: options.cwd,
   });
 }

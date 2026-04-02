@@ -1,34 +1,360 @@
 /**
  * File Edit Parser
- * 
+ *
  * PURPOSE: Parse LLM text responses to extract file edit commands.
  * This module is NOT for applying edits - only for extracting edit commands
  * from unstructured LLM output text.
- * 
+ *
  * ARCHITECTURE LAYER: Response Parsing (LLM output → structured commands)
- * 
+ *
  * USE CASES:
  * - Server-side (api/chat/route.ts): Extracts edits from LLM responses for
  *   server-side application and response sanitization
- * - Client-side (message-bubble.tsx): Sanitizes display by removing edit tags
- * - Mode-aware processing (mode-manager.ts): Detects file operations in responses
- * 
+ * - Client-side (message-bubble.tsx, conversation-interface.tsx): Sanitizes display
+ *   and detects file operations in responses
+ *
  * NOT THIS MODULE'S JOB:
  * - tool-executor.ts: Applies structured diffs to VFS/sandbox (different layer)
  * - safe-diff-operations.ts: Enterprise validation of structured DiffOperation[]
  *   (receives structured objects, not LLM text)
- * 
+ *
  * Supported formats:
  * - <file_edit path="...">content</file_edit> (compact)
  * - <file_edit>\n<path>...</path>\ncontent\n</file_edit> (multi-line)
  * - ```diff path\ncontent\n``` (fenced diff blocks)
+ * - cat > file << 'EOF' ... EOF (bash heredoc)
+ * - mkdir -p path, rm -rf path, sed -i 's/old/new/' path (bash commands)
  */
 
 export { isFullFileContent } from './file-diff-utils';
+export { stripHeredocBodies } from './bash-file-commands';
+
+// Import for local use
+import { stripHeredocBodies as maskHeredocs } from './bash-file-commands';
+
+/**
+ * Check if a path segment looks like a CSS value (e.g., "0.3s", "10px")
+ */
+function looksLikeCssValueSegment(segment: string): boolean {
+  return /^(?:\d*\.\d+|\d+[a-z%]+)$/i.test(segment);
+}
+
+/**
+ * Validate file path - must be a valid filesystem path
+ * CRITICAL: Prevents AI from generating malformed paths like 'project/sessions/003/{'
+ * Also rejects CSS values, SCSS variables, and code snippets
+ *
+ * NOTE: Trailing slashes ARE allowed for directory paths (e.g., "src/", "components/")
+ */
+export function isValidFilePath(path: string, isFolder: boolean = false): boolean {
+  if (!path || path.length === 0) return false;
+
+  // CRITICAL: Check the last segment of the path (the actual filename)
+  // This catches "project/sessions/002/0.3s" where "0.3s" is the invalid part
+  const pathSegments = path.split('/');
+  const lastSegment = pathSegments[pathSegments.length - 1] || path;
+
+  // Reject paths that are clearly CSS values or code snippets (check last segment)
+  if (looksLikeCssValueSegment(lastSegment)) return false;  // e.g., "0.3s", "10px"
+  if (/^[,;:!?()\[\]{}\/]+$/.test(lastSegment)) return false;  // e.g., ",", "/", "("
+  if (/^[+\-*/%&|^~<>]+$/.test(lastSegment)) return false;  // e.g., "=", "+", "-"
+
+  // Paths should NOT contain JSON/object syntax
+  if (path.includes('{') || path.includes('}') ||
+      path.includes('[') || path.includes(']')) {
+    return false;
+  }
+
+  // For files: should NOT end with special characters
+  // For folders: trailing slash is OK (e.g., "src/", "components/")
+  if (!isFolder) {
+    if (path.endsWith('/') || path.endsWith(':') ||
+        path.endsWith(',') || path.endsWith('{') ||
+        path.endsWith('<') || path.endsWith('>')) {
+      return false;
+    }
+  }
+
+  // Paths should NOT start with special characters (except . for relative paths)
+  // This rejects SCSS variables ($var), CSS selectors (.class, #id), decorators (@import), etc.
+  if (path.startsWith('<') || path.startsWith('>') ||
+      path.startsWith('{') || path.startsWith('}') ||
+      path.startsWith('[') || path.startsWith(']') ||
+      path.startsWith('$') ||  // SCSS/SASS variables like $transition-fast
+      path.startsWith('@') ||  // CSS imports, decorators like @import
+      path.startsWith('#')) {  // CSS IDs like #header
+    return false;
+  }
+
+  // Must have valid path format (alphanumeric, dots, dashes, underscores, slashes)
+  if (!/^[a-zA-Z0-9_./\-\\]+$/.test(path)) return false;
+
+  return true;
+}
+
+export function sanitizeExtractedPath(
+  rawPath: string,
+  options: { isFolder?: boolean } = {},
+): string | null {
+  let path = (rawPath || '').trim();
+  if (!path) return null;
+
+  path = path
+    .replace(/^path\s*[:=]\s*/i, '')
+    .replace(/^['"`]+/, '')
+    .replace(/['"`]+$/, '')
+    .replace(/,+$/, '')
+    .trim();
+
+  if (!path) return null;
+
+  if (options.isFolder) {
+    path = path.replace(/\/+$/, '');
+    return isValidFilePath(path, true) ? path : null;
+  }
+
+  return isValidExtractedPath(path) ? path : null;
+}
+
+export function parseStructuredPathList(
+  rawList: string,
+  options: { isFolder?: boolean } = {},
+): string[] {
+  const tokens: string[] = [];
+  let current = '';
+  let quote: '"' | "'" | '`' | null = null;
+
+  for (let i = 0; i < rawList.length; i += 1) {
+    const char = rawList[i];
+    const previous = i > 0 ? rawList[i - 1] : '';
+
+    if (quote) {
+      if (char === quote && previous !== '\\') {
+        quote = null;
+        continue;
+      }
+      current += char;
+      continue;
+    }
+
+    if (char === '"' || char === '\'' || char === '`') {
+      quote = char;
+      continue;
+    }
+
+    if (char === ',' || char === '\n') {
+      tokens.push(current);
+      current = '';
+      continue;
+    }
+
+    current += char;
+  }
+
+  if (current.trim()) {
+    tokens.push(current);
+  }
+
+  const seen = new Set<string>();
+  const paths: string[] = [];
+
+  for (const token of tokens) {
+    const path = sanitizeExtractedPath(token, options);
+    if (!path || seen.has(path)) continue;
+    seen.add(path);
+    paths.push(path);
+  }
+
+  return paths;
+}
+
+/**
+ * Bash heredoc file edit extraction (inline to avoid module init issues)
+ * Parses: cat > file << 'EOF' ... EOF
+ */
+interface BashFileEdit {
+  path: string;
+  content: string;
+  mode: 'write' | 'append';
+}
+
+interface BashDirectoryEdit {
+  path: string;
+}
+
+interface BashDeleteEdit {
+  path: string;
+}
+
+interface BashPatchEdit {
+  path: string;
+  pattern: string;
+  replacement: string;
+  flags?: string;
+}
+
+function extractCatHeredocEdits(content: string): BashFileEdit[] {
+  const edits: BashFileEdit[] = [];
+
+  // Fast-path: check for heredoc signature
+  if (!content.includes('<<') || !content.includes('cat')) {
+    return edits;
+  }
+
+  // Match: cat > path << 'EOF' ... EOF  OR  cat >> path << 'EOF' ... EOF
+  // Groups: 1=mode (> or >>), 2=path, 3=delimiter, 4=content
+  const regex = /cat\s*(>>?)\s*([^\s<>&|]+)\s*<<\s*['"]?(\w+)['"]?\s*\n([\s\S]*?)\n?\3(?:\s|$)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    try {
+      const mode = match[1] === '>>' ? 'append' : 'write';
+      const path = match[2]?.trim();
+      const fileContent = match[4] ?? '';
+
+      if (!path || path.startsWith('-')) {
+        continue;
+      }
+
+      edits.push({
+        path,
+        content: fileContent.trimEnd(),
+        mode
+      });
+    } catch {
+      // Skip invalid matches
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Extract mkdir commands: mkdir -p path
+ */
+function extractMkdirEdits(content: string): BashDirectoryEdit[] {
+  const edits: BashDirectoryEdit[] = [];
+
+  if (!content.includes('mkdir')) {
+    return edits;
+  }
+
+  // SECURITY: Strip heredoc bodies to avoid false positives from commands inside heredocs
+  const masked = maskHeredocs(content);
+
+  // Match: mkdir [-p] path
+  const regex = /mkdir\s+(-p\s+)?([^\s&|;<>]+)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(masked)) !== null) {
+    try {
+      const path = match[2]?.trim();
+
+      // Skip if path looks like a flag or is empty
+      if (!path || path.startsWith('-')) {
+        continue;
+      }
+
+      edits.push({ path });
+    } catch {
+      // Skip invalid matches
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Extract rm commands: rm -rf path
+ */
+function extractRmEdits(content: string): BashDeleteEdit[] {
+  const edits: BashDeleteEdit[] = [];
+
+  if (!content.includes('rm ')) {
+    return edits;
+  }
+
+  // SECURITY: Strip heredoc bodies to avoid false positives from commands inside heredocs
+  const masked = maskHeredocs(content);
+
+  // Match: rm [-rf] path
+  const regex = /rm\s+(-[rf]+\s+)?([^\s&|;<>]+)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(masked)) !== null) {
+    try {
+      const path = match[2]?.trim();
+
+      // Skip if path looks like a flag or is empty
+      if (!path || path.startsWith('-')) {
+        continue;
+      }
+
+      edits.push({ path });
+    } catch {
+      // Skip invalid matches
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Extract sed -i commands: sed -i 's/pattern/replacement/' path
+ */
+function extractSedEdits(content: string): BashPatchEdit[] {
+  const edits: BashPatchEdit[] = [];
+
+  if (!content.includes('sed')) {
+    return edits;
+  }
+
+  // SECURITY: Strip heredoc bodies to avoid false positives from commands inside heredocs
+  const masked = maskHeredocs(content);
+
+  // Match: sed -i 's/pattern/replacement/' path
+  const regex = /sed\s+-i\s+['"]s\/([^\/]+)\/([^\/]*)\/['"]\s+([^\s&|;<>]+)/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(masked)) !== null) {
+    try {
+      const pattern = match[1] ?? '';
+      const replacement = match[2] ?? '';
+      const path = match[3]?.trim();
+
+      if (!path || path.startsWith('-')) {
+        continue;
+      }
+
+      edits.push({ path, pattern, replacement });
+    } catch {
+      // Skip invalid matches
+    }
+  }
+
+  return edits;
+}
+
+function extractBashFileEdits(content: string): {
+  writes: BashFileEdit[];
+  directories: BashDirectoryEdit[];
+  deletes: BashDeleteEdit[];
+  patches: BashPatchEdit[];
+} {
+  return {
+    writes: extractCatHeredocEdits(content),
+    directories: extractMkdirEdits(content),
+    deletes: extractRmEdits(content),
+    patches: extractSedEdits(content),
+  };
+}
 
 export interface FileEdit {
   path: string;
   content: string;
+  action?: 'write' | 'delete' | 'patch' | 'mkdir'; // Optional action type for bash commands
+  flags?: string; // For sed patches with flags (g, i, m)
+  diff?: string; // Optional unified diff for patch operations
 }
 
 export interface DiffEdit {
@@ -45,6 +371,69 @@ export interface PatchEdit {
   diff: string;
 }
 
+export interface ApplyDiffOperation {
+  path: string;
+  search: string;
+  replace: string;
+  thought?: string;
+}
+
+export interface ReasoningParseResult {
+  reasoning: string;
+  mainContent: string;
+}
+
+export interface ParsedFilesystemResponse {
+  writes: FileEdit[];
+  diffs: PatchEdit[];
+  applyDiffs: ApplyDiffOperation[];
+  deletes: string[];
+  folders: string[];
+}
+
+function extractFencedBlocks(content: string, fenceName: string): string[] {
+  const blocks: string[] = [];
+  const opener = `\`\`\`${fenceName}`;
+  let searchFrom = 0;
+
+  while (searchFrom < content.length) {
+    const openIndex = content.indexOf(opener, searchFrom);
+    if (openIndex === -1) break;
+
+    const bodyStart = content.indexOf('\n', openIndex + opener.length);
+    if (bodyStart === -1) break;
+
+    const closeIndex = content.indexOf('```', bodyStart + 1);
+    if (closeIndex === -1) break;
+
+    blocks.push(content.slice(bodyStart + 1, closeIndex));
+    searchFrom = closeIndex + 3;
+  }
+
+  return blocks;
+}
+
+function extractXmlBlocks(content: string, tagName: string): string[] {
+  const blocks: string[] = [];
+  const openTag = `<${tagName}>`;
+  const closeTag = `</${tagName}>`;
+  let searchFrom = 0;
+
+  while (searchFrom < content.length) {
+    const openIndex = content.indexOf(openTag, searchFrom);
+    if (openIndex === -1) break;
+
+    const bodyStart = openIndex + openTag.length;
+    const closeIndex = content.indexOf(closeTag, bodyStart);
+    if (closeIndex === -1) break;
+
+    blocks.push(content.slice(bodyStart, closeIndex));
+    searchFrom = closeIndex + closeTag.length;
+  }
+
+  return blocks;
+}
+
 /**
  * Extract HTML comment format: <!-- path -->content
  * Example: <!-- src/components/Card.vue --> ...content...
@@ -57,7 +446,7 @@ export function extractHtmlCommentFileEdits(content: string): FileEdit[] {
   // Path must look like a file path: contains / OR . OR common file patterns
   // This avoids matching comments like <!-- TODO: fix this -->
   // FIX: Limit match scope to prevent catastrophic backtracking
-  const regex = /<!--\s*([^\s\-]+(?:[\/\.][^\s\-]+)*|[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)\s*-->\s*([\s\S]{0,5000}?)(?=<!--|$)/gi;
+  const regex = /<!--\s*([^\s\-]+(?:[\/\.][^\s\-]+)*|[a-zA-Z0-9_\-]+\.[a-zA-Z0-9]+)\s*-->\s*([\s\S]*?)(?=<!--|$)/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
@@ -73,18 +462,34 @@ export function extractHtmlCommentFileEdits(content: string): FileEdit[] {
 /**
  * Extract <file_edit path="...">content</file_edit> compact format
  * Handles both with and without space: <file_edit path="..."> and <file_editpath="...">
+ * 
+ * IMPORTANT: Validates extracted paths to reject invalid patterns like CSS values,
+ * Vue directives, and code snippets that may be mistakenly output as paths.
  */
 export function extractCompactFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
   // Use \s* to handle both spaced and non-spaced variants
   // FIX: Limit match scope to prevent catastrophic backtracking
-  const regex = /<file_edit\s*path=["']([^"']+)["']\s*>([\s\S]{0,10000}?)<\/file_edit>/gi;
+  const regex = /<file_edit\s*path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_edit>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
     const filePath = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!filePath) continue;
+
+    // CRITICAL: Validate path before adding
+    // Rejects CSS values (0.3s,), Vue directives (@submit...), operators (=), etc.
+    if (!isValidExtractedPath(filePath)) {
+      continue;
+    }
+
+    // CRITICAL FIX: Skip edits with empty content - likely incomplete streaming tags
+    // This prevents infinite loops from applying empty diffs
+    if (!fileContent || fileContent.trim().length === 0) {
+      continue;
+    }
+
     edits.push({ path: filePath, content: fileContent.trim() });
   }
 
@@ -95,6 +500,8 @@ export function extractCompactFileEdits(content: string): FileEdit[] {
  * Extract <file_write path="...">content</file_write> format
  * This is an alternative format used by some LLMs
  * Handles both with and without space: <file_write path="..."> and <file_writepath="...">
+ * 
+ * IMPORTANT: Validates extracted paths to reject invalid patterns.
  */
 export function extractFileWriteEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
@@ -108,6 +515,18 @@ export function extractFileWriteEdits(content: string): FileEdit[] {
     // Clean up leading/trailing whitespace
     fileContent = fileContent.replace(/^\n+/, '').replace(/\n+$/, '');
     if (!filePath) continue;
+
+    // CRITICAL: Validate path before adding
+    // Rejects CSS values, Vue directives, operators, and other non-path patterns
+    if (!isValidExtractedPath(filePath)) {
+      continue;
+    }
+
+    // CRITICAL FIX: Skip edits with empty content - likely incomplete streaming tags
+    if (!fileContent || fileContent.trim().length === 0) {
+      continue;
+    }
+
     edits.push({ path: filePath, content: fileContent });
   }
 
@@ -127,6 +546,21 @@ export function extractMultiLineFileEdits(content: string): FileEdit[] {
     const filePath = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!filePath) continue;
+
+    // CRITICAL FIX: Validate path before adding
+    // Skip paths with JSON/object syntax or ending with special chars
+    if (filePath.includes('{') || filePath.includes('}') ||
+        filePath.includes('[') || filePath.includes(']') ||
+        filePath.endsWith('/') || filePath.endsWith(':') ||
+        filePath.endsWith(',') || filePath.endsWith('{')) {
+      continue;
+    }
+
+    // CRITICAL FIX: Skip edits with empty content - likely incomplete streaming tags
+    if (!fileContent || fileContent.trim().length === 0) {
+      continue;
+    }
+
     edits.push({ path: filePath, content: fileContent.trim() });
   }
 
@@ -140,10 +574,16 @@ export function extractMultiLineFileEdits(content: string): FileEdit[] {
  * <file Edit> or <file_edit> (as closing marker)
  *
  * This handles cases where LLM doesn't properly wrap content in <file_edit> tags
+ * 
+ * CRITICAL: Skips <path> tags that appear to be SVG elements (inside <svg>...</svg>)
+ * to prevent extracting SVG path data as file paths.
  */
 export function extractMalformedFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
 
+  // Check if content contains SVG - if so, we need to be more careful
+  const hasSvgContent = content.includes('<svg') && content.includes('</svg>');
+  
   // Match: <path>path</path> followed by content, ending with <file Edit> or <file_edit> or next <path>
   // Handles variations: <file Edit>, <file_edit>, <FILE_EDIT>, <File_Edit>, etc. (case insensitive)
   const regex = /<path>\s*([^\s<]+?)\s*<\/path>\s*([\s\S]*?)(?=<path>|<file\s*edit>|$)/gi;
@@ -155,6 +595,50 @@ export function extractMalformedFileEdits(content: string): FileEdit[] {
 
     // Skip if path looks invalid or contains tags
     if (!filePath || filePath.includes('<') || filePath.includes('>')) continue;
+
+    // CRITICAL FIX: Skip <path> tags that are inside SVG content
+    // SVG <path> elements have d="..." attributes, not file paths
+    if (hasSvgContent) {
+      // Check if this <path> is likely inside an <svg> block
+      const matchIndex = match.index;
+      // Search from start of content for more accurate SVG detection
+      const precedingContent = content.slice(0, matchIndex);
+      const followingContent = content.slice(matchIndex);
+      
+      // If there's an <svg> tag before and </svg> after, skip this <path>
+      const lastSvgOpen = precedingContent.lastIndexOf('<svg');
+      const nextSvgClose = followingContent.indexOf('</svg>');
+      if (lastSvgOpen !== -1 && nextSvgClose !== -1) {
+        continue;
+      }
+      
+      // Also skip if path looks like SVG path data (starts with M, L, C, Q, etc.)
+      // SVG path commands: M(move), L(line), C(curve), Q(quad), S(smooth), H(horizontal), V(vertical), T(quad smooth), A(arc), Z(close)
+      if (/^[MLCQSZHVTAmlcqs][0-9.\s,\-]*$/.test(filePath)) {
+        continue;
+      }
+    }
+
+    // CRITICAL FIX: Detect if <path> tag contains JSON/object instead of actual path
+    // If content after </path> starts with { or [, the <path> tag was likely misused for JSON
+    const trimmedContent = fileContent.trim();
+    if (trimmedContent.startsWith('{') || trimmedContent.startsWith('[')) {
+      // This is JSON content, not a file path - skip entirely
+      continue;
+    }
+
+    // CRITICAL FIX: Skip paths that contain JSON/object syntax
+    // Valid file paths should NOT contain: { } [ ] : , (unless encoded)
+    if (filePath.includes('{') || filePath.includes('}') ||
+        filePath.includes('[') || filePath.includes(']')) {
+      continue;
+    }
+
+    // Skip paths that end with special characters (likely parsing errors)
+    if (filePath.endsWith('/') || filePath.endsWith(':') ||
+        filePath.endsWith(',') || filePath.endsWith('{')) {
+      continue;
+    }
 
     // Remove trailing file edit markers from content (case insensitive)
     fileContent = fileContent.replace(/\s*<file\s*edit\s*>?\s*$/gi, '').trim();
@@ -169,6 +653,55 @@ export function extractMalformedFileEdits(content: string): FileEdit[] {
 }
 
 /**
+ * Find the end of a balanced JSON object starting at `startIndex` (which should point to '{').
+ * Accounts for string escaping, nested braces, and brackets.
+ * Returns the exclusive end index, or -1 if no balanced object is found.
+ */
+function findBalancedJsonObject(content: string, startIndex: number): number {
+  // Defensive: ensure startIndex points to an opening brace
+  if (startIndex < 0 || startIndex >= content.length || content[startIndex] !== '{') {
+    return -1;
+  }
+
+  let braceCount = 0;
+  let bracketCount = 0;
+  let inString = false;
+  let escape = false;
+
+  for (let i = startIndex; i < content.length; i++) {
+    const char = content[i];
+
+    if (escape) {
+      escape = false;
+      continue;
+    }
+
+    if (char === '\\' && inString) {
+      escape = true;
+      continue;
+    }
+
+    if (char === '"') {
+      inString = !inString;
+      continue;
+    }
+
+    if (!inString) {
+      if (char === '{') braceCount++;
+      if (char === '}') braceCount--;
+      if (char === '[') bracketCount++;
+      if (char === ']') bracketCount--;
+
+      if (braceCount === 0 && bracketCount === 0) {
+        return i + 1;
+      }
+    }
+  }
+
+  return -1;
+}
+
+/**
  * Extract JSON format: { "ws_action": "CREATE", "path": "...", "content": "..." }
  * This is an alternative format used by some LLMs
  */
@@ -176,8 +709,6 @@ export function extractWsActionEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
 
   // Find JSON-like blocks by looking for ws_action pattern
-  // Use a more careful regex that accounts for nested braces in strings
-  // Match from ws_action backward to find the opening brace, then parse carefully
   const wsActionPattern = /"ws_action"\s*:\s*"CREATE"/gi;
   let match: RegExpExecArray | null;
 
@@ -186,44 +717,7 @@ export function extractWsActionEdits(content: string): FileEdit[] {
     const startIndex = content.lastIndexOf('{', match.index);
     if (startIndex === -1) continue;
 
-    // Find the matching closing brace by counting braces AND brackets (accounting for strings)
-    let braceCount = 0;
-    let bracketCount = 0;
-    let inString = false;
-    let escape = false;
-    let endIndex = -1;
-
-    for (let i = startIndex; i < content.length; i++) {
-      const char = content[i];
-
-      if (escape) {
-        escape = false;
-        continue;
-      }
-
-      if (char === '\\' && inString) {
-        escape = true;
-        continue;
-      }
-
-      if (char === '"') {
-        inString = !inString;
-        continue;
-      }
-
-      if (!inString) {
-        if (char === '{') braceCount++;
-        if (char === '}') braceCount--;
-        if (char === '[') bracketCount++;
-        if (char === ']') bracketCount--;
-
-        if (braceCount === 0 && bracketCount === 0) {
-          endIndex = i + 1;
-          break;
-        }
-      }
-    }
-
+    const endIndex = findBalancedJsonObject(content, startIndex);
     if (endIndex === -1) continue;
 
     const jsonStr = content.substring(startIndex, endIndex);
@@ -233,6 +727,9 @@ export function extractWsActionEdits(content: string): FileEdit[] {
 
       // Only process CREATE actions with valid path (must be string) and content
       if (obj.ws_action !== 'CREATE' || typeof obj.path !== 'string' || !obj.path.trim()) continue;
+
+      // CRITICAL FIX: Skip edits with empty content
+      if (!obj.content || obj.content.trim().length === 0) continue;
 
       edits.push({ path: obj.path.trim(), content: obj.content ?? '' });
     } catch {
@@ -260,44 +757,7 @@ export function extractSimpleJsonFileEdits(content: string): FileEdit[] {
     const startIndex = content.lastIndexOf('{', match.index);
     if (startIndex === -1) continue;
 
-    // Find the matching closing brace by counting braces AND brackets (accounting for strings)
-    let braceCount = 0;
-    let bracketCount = 0;
-    let inString = false;
-    let escape = false;
-    let endIndex = -1;
-
-    for (let i = startIndex; i < content.length; i++) {
-      const char = content[i];
-
-      if (escape) {
-        escape = false;
-        continue;
-      }
-
-      if (char === '\\' && inString) {
-        escape = true;
-        continue;
-      }
-
-      if (char === '"') {
-        inString = !inString;
-        continue;
-      }
-
-      if (!inString) {
-        if (char === '{') braceCount++;
-        if (char === '}') braceCount--;
-        if (char === '[') bracketCount++;
-        if (char === ']') bracketCount--;
-
-        if (braceCount === 0 && bracketCount === 0) {
-          endIndex = i + 1;
-          break;
-        }
-      }
-    }
-
+    const endIndex = findBalancedJsonObject(content, startIndex);
     if (endIndex === -1) continue;
 
     const jsonStr = content.substring(startIndex, endIndex);
@@ -307,6 +767,9 @@ export function extractSimpleJsonFileEdits(content: string): FileEdit[] {
 
       // Process if file_edit path exists and is a string
       if (typeof obj.file_edit !== 'string' || !obj.file_edit.trim()) continue;
+
+      // CRITICAL FIX: Skip edits with empty content
+      if (!obj.content || obj.content.trim().length === 0) continue;
 
       edits.push({ path: obj.file_edit.trim(), content: obj.content ?? '' });
     } catch {
@@ -400,12 +863,64 @@ export function extractMarkdownCodeBlockFiles(content: string): FileEdit[] {
  * usually restatements or examples.
  */
 export function extractFileEdits(content: string): FileEdit[] {
+  // Fast-path: bail out if no file edit markers are present at all
+  // Avoids running all individual extractors (and their sub-operations like maskHeredocs)
+  // on content that contains no file edits — common in streaming parse windows
+  if (
+    !content.includes('<file_edit') &&
+    !content.includes('<file_write') &&
+    !content.includes('ws_action') &&
+    !content.includes('"file_edit"') &&
+    !content.includes('<!--') &&
+    !content.includes('<path>') &&
+    !content.includes('<<') &&
+    !content.includes('cat') &&
+    !content.includes('mkdir') &&
+    !content.includes('rm ') &&
+    !content.includes('sed')
+  ) {
+    return [];
+  }
+
   const allEdits: FileEdit[] = [];
 
-  // NEW: Try bash heredoc syntax first (preferred, more natural for LLMs)
+  // Try bash heredoc syntax (writes, mkdir, deletes, patches)
   const bashEdits = extractBashFileEdits(content);
+
+  // Process writes (default action is 'write')
   for (const write of bashEdits.writes) {
-    allEdits.push({ path: write.path, content: write.content });
+    allEdits.push({ 
+      path: write.path, 
+      content: write.content,
+      action: 'write',
+    });
+  }
+
+  // Process deletes with explicit action
+  for (const del of bashEdits.deletes) {
+    allEdits.push({ 
+      path: del.path, 
+      content: '',
+      action: 'delete',
+    });
+  }
+
+  // Process patches with explicit action
+  for (const patch of bashEdits.patches) {
+    allEdits.push({
+      path: patch.path,
+      content: `s/${patch.pattern}/${patch.replacement}/${patch.flags || ''}`,
+      action: 'patch',
+    });
+  }
+
+  // Process directories (mkdir) as write actions
+  for (const dir of bashEdits.directories) {
+    allEdits.push({
+      path: dir.path,
+      content: '',
+      action: 'write',
+    });
   }
 
   // Existing parsers (keep for backward compatibility)
@@ -441,17 +956,12 @@ export function extractFileEdits(content: string): FileEdit[] {
     }
   }
 
-  logger.debug('File edits extracted', {
-    total: dedupedEdits.size,
-    bashEdits: bashEdits.writes.length,
-  });
-
   return Array.from(dedupedEdits.values());
 }
 
 /**
  * Extract fenced diff blocks: ```diff path\ncontent\n```
- * 
+ *
  * FIX: Now correctly distinguishes between:
  * - ```diff path\n<unified diff content>``` (diff patch for a file)
  * - ```diff\ndiff --git a/path b/path\n...``` (raw git diff output - should NOT be parsed as file edit)
@@ -469,20 +979,30 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
   while ((match = regex.exec(content)) !== null) {
     const targetPath = match[1]?.trim();
     const diff = match[2] ?? '';
-    
+
     if (!targetPath) continue;
-    
+
     // CRITICAL FIX: Detect if the path itself is a raw git diff header
     // The LLM may output: ```diff\ndiff --git a/path b/path\n...``` instead of ```diff\npath\n...```
     // In this case, BOTH group 1 (targetPath) AND group 2 (diff content) contain "diff --git"
     // We need to check BOTH to properly detect raw git diff output
     const isRawGitDiff = /^diff --git/m.test(targetPath) || /^diff --git/m.test(diff);
-    
+
     if (isRawGitDiff) {
       console.warn('[extractFencedDiffEdits] Skipping raw git diff output (should use diff parser):', targetPath);
       continue;
     }
-    
+
+    // CRITICAL FIX: Validate path to reject JSX/HTML fragments, CSS values, etc.
+    // This prevents paths like "project/sessions/002/Input'" from being extracted
+    if (!isValidExtractedPath(targetPath)) {
+      console.warn('[extractFencedDiffEdits] Skipping invalid path:', targetPath);
+      continue;
+    }
+
+    // CRITICAL FIX: Skip edits with empty diff content
+    if (!diff || diff.trim().length === 0) continue;
+
     edits.push({ path: targetPath, diff: diff.trim() });
   }
 
@@ -490,8 +1010,74 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
 }
 
 /**
+ * Validate path to reject invalid patterns
+ * Rejects: paths with command names (WRITE, PATCH, etc.), JSON syntax, malformed paths,
+ * CSS values, Vue directives, operators, and other non-path patterns.
+ * 
+ * EXPORTED for use in client-side validation (hooks/use-enhanced-chat.ts)
+ */
+export function isValidExtractedPath(path: string): boolean {
+  if (!path || path.length === 0 || path.length > 300) return false;
+
+  // CRITICAL: Reject control characters and null bytes (security)
+  if (/[\0-\x1F\u202A-\u202E]/.test(path)) return false;
+
+  // Reject single-character paths (except valid single-char filenames like 'a')
+  if (path.length === 1 && !/^[a-zA-Z0-9_]$/.test(path)) return false;
+
+  // Reject paths that are just operators or punctuation
+  // NOTE: Removed : and . to allow valid paths like "./src/file.ts" or Windows "C:/path"
+  if (/^[=+\-*/%<>!&|^~,;]+$/.test(path)) return false;
+
+  // Reject paths containing command names (WRITE, PATCH, APPLY_DIFF, DELETE)
+  if (/\b(?:WRITE|PATCH|APPLY_DIFF|DELETE)\b/i.test(path)) return false;
+
+  // Reject paths with JSON/object syntax
+  if (path.includes('{') || path.includes('}') ||
+      path.includes('[') || path.includes(']')) return false;
+
+  // Reject paths ending with special characters
+  if (path.endsWith('/') || path.endsWith(':') ||
+      path.endsWith(',') || path.endsWith('{') ||
+      path.endsWith('<') || path.endsWith('>') ||
+      path.endsWith('=') || path.endsWith(';')) return false;
+
+  // Reject paths starting with special characters (except . for relative paths)
+  // NOTE: Allow . for relative paths like "./src/file.ts"
+  if (path.startsWith('<') || path.startsWith('>') ||
+      path.startsWith('{') || path.startsWith('}') ||
+      path.startsWith('@') || path.startsWith('=') ||
+      path.startsWith('+') || path.startsWith('-') ||
+      path.startsWith('*') || path.startsWith('#')) return false;
+
+  // Reject paths with heredoc markers
+  if (path.includes('<<<') || path.includes('>>>') || path.includes('===')) return false;
+
+  // Reject paths that look like CSS classes or Vue directives
+  if (/^(?:hover:|@|:|v-|:bind|@click|@submit|@keyup|@change|@input|@focus|@blur)/i.test(path)) return false;
+
+  // Reject paths with colons (CSS classes like hover:scale-105)
+  // Allow Windows drive letters like C:/ and URL protocols like https://
+  if (path.includes(':') && !/^[a-zA-Z]:[\/\\]/.test(path) && !/^https?:\/\//.test(path)) return false;
+
+  // Reject paths that look like CSS values (0.3s, 10px, etc.)
+  if (looksLikeCssValueSegment(path)) return false;
+
+  // Reject paths that look like event handlers or expressions
+  if (/[=(].*[)]/.test(path)) return false;
+
+  // Must have valid path format - start with alphanumeric or dot (for relative paths)
+  if (!/^[a-zA-Z0-9._]/.test(path)) return false;
+
+  // Must contain at least one path separator or file extension for multi-segment paths
+  if (path.includes('/') && !/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) return false;
+
+  return true;
+}
+
+/**
  * Extract WRITE commands from fs-actions blocks and top-level
- * Format: WRITE path <<<content>>> or ```fs-actions WRITE path <<<content>>>
+ * Format: WRITE path <<<content>>> or WRITE <path> <<<content>>> or ```fs-actions WRITE path <<<content>>>
  *
  * Case-insensitive matching to handle LLM output variations (WRITE, write, Write, etc.)
  */
@@ -510,12 +1096,21 @@ export function extractFsActionWrites(content: string): FileEdit[] {
 
   while ((blockMatch = blockRegex.exec(content)) !== null) {
     const blockContent = blockMatch[1] || '';
-    const writeRegex = /WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
+    const writeRegex = /WRITE\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
       const fileContent = writeMatch[2] ?? '';
       if (!path) continue;
+      // Validate path before adding
+      if (!isValidExtractedPath(path)) {
+        continue;
+      }
+      // CRITICAL FIX: Skip edits with empty content
+      if (!fileContent || fileContent.trim().length === 0) {
+        continue;
+      }
       writes.push({ path, content: fileContent });
     }
   }
@@ -526,12 +1121,17 @@ export function extractFsActionWrites(content: string): FileEdit[] {
 
   while ((xmlBlockMatch = xmlBlockRegex.exec(content)) !== null) {
     const blockContent = xmlBlockMatch[1] || '';
-    const writeRegex = /WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+    // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
+    const writeRegex = /WRITE\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*>>>/gi;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
       const fileContent = writeMatch[2] ?? '';
       if (!path) continue;
+      // Validate path before adding
+      if (!isValidExtractedPath(path)) continue;
+      // CRITICAL FIX: Skip edits with empty content
+      if (!fileContent || fileContent.trim().length === 0) continue;
       writes.push({ path, content: fileContent });
     }
   }
@@ -542,12 +1142,17 @@ export function extractFsActionWrites(content: string): FileEdit[] {
 
   while ((regularBlockMatch = regularBlockRegex.exec(content)) !== null) {
     const blockContent = regularBlockMatch[1] || '';
-    const writeRegex = /^WRITE\s*([^\s<]+)\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
+    // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
+    const writeRegex = /^WRITE\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
     let writeMatch: RegExpExecArray | null;
     while ((writeMatch = writeRegex.exec(blockContent)) !== null) {
       const path = writeMatch[1]?.trim();
       const fileContent = writeMatch[2] ?? '';
       if (!path) continue;
+      // Validate path before adding
+      if (!isValidExtractedPath(path)) continue;
+      // CRITICAL FIX: Skip edits with empty content
+      if (!fileContent || fileContent.trim().length === 0) continue;
       writes.push({ path, content: fileContent });
     }
   }
@@ -557,30 +1162,48 @@ export function extractFsActionWrites(content: string): FileEdit[] {
 
 /**
  * Extract top-level WRITE commands outside code blocks
- * Format: WRITE path <<<content>>>
+ * Format: WRITE path <<<content>>> or WRITE <path> <<<content>>>
+ * 
+ * IMPORTANT: Only extracts when BOTH opening (<<<) AND closing (>>>) markers are present
+ * to avoid extracting incomplete content during streaming.
  */
 export function extractTopLevelWrites(content: string): FileEdit[] {
   const writes: FileEdit[] = [];
 
   if (!content.includes('WRITE')) return writes;
 
-  const topLevelWriteRegex = /^WRITE\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
+  // Quick check: must have both <<< and >>> to proceed
+  if (!content.includes('<<<') || !content.includes('>>>')) {
+    return writes;
+  }
+
+  // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
+  const topLevelWriteRegex = /^WRITE\s+<?([^\s<>]+)>?(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
   let match: RegExpExecArray | null;
   while ((match = topLevelWriteRegex.exec(content)) !== null) {
     const path = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!path) continue;
+    // Validate path before adding
+    if (!isValidExtractedPath(path)) continue;
+    // CRITICAL FIX: Skip edits with empty content
+    if (!fileContent || fileContent.trim().length === 0) continue;
     // Deduplicate - check if we already have this exact edit
     if (!writes.some(w => w.path === path && w.content === fileContent)) {
       writes.push({ path, content: fileContent });
     }
   }
 
-  const altWriteRegex = /^WRITE\s+([^\s<]+)\s*<<<\s*([\s\S]*?)>>>/gim;
+  // Alternative regex for inline format: WRITE path <<<content>>> or WRITE <path> <<<content>>>
+  const altWriteRegex = /^WRITE\s+<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)>>>/gim;
   while ((match = altWriteRegex.exec(content)) !== null) {
     const path = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!path) continue;
+    // Validate path before adding
+    if (!isValidExtractedPath(path)) continue;
+    // CRITICAL FIX: Skip edits with empty content
+    if (!fileContent || fileContent.trim().length === 0) continue;
     if (!writes.some(w => w.path === path && w.content === fileContent)) {
       writes.push({ path, content: fileContent });
     }
@@ -610,23 +1233,389 @@ export function extractDeleteEdits(content: string): DeleteEdit[] {
 
 /**
  * Extract PATCH commands from content
- * Format: PATCH path <<<diff>>>
+ * Format: PATCH path <<<diff>>> or PATCH <path> <<<diff>>>
  */
 export function extractPatchEdits(content: string): PatchEdit[] {
   const patches: PatchEdit[] = [];
-  
+
   if (!content.includes('PATCH')) return patches;
 
-  const patchRegex = /^PATCH\s+([^\s<]+)(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
+  // Updated regex to handle both: PATCH path <<<...>>> and PATCH <path> <<<...>>>
+  const patchRegex = /^PATCH\s+<?([^\s<>]+)>?(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
   let match: RegExpExecArray | null;
   while ((match = patchRegex.exec(content)) !== null) {
     const path = match[1]?.trim();
     const diff = match[2] ?? '';
     if (!path) continue;
+    // Validate path before adding
+    if (!isValidExtractedPath(path)) continue;
+    // CRITICAL FIX: Skip edits with empty diff content
+    if (!diff || diff.trim().length === 0) continue;
     patches.push({ path, diff });
   }
 
   return patches;
+}
+
+/**
+ * Extract DELETE commands from fs-actions blocks
+ */
+export function extractFsActionDeletes(content: string): string[] {
+  const deletes: string[] = [];
+
+  if (!content.includes('DELETE')) return deletes;
+
+  for (const blockContent of extractFencedBlocks(content, 'fs-actions')) {
+    const deleteRegex = /DELETE\s+([^\n]+)/gi;
+    let deleteMatch: RegExpExecArray | null;
+    while ((deleteMatch = deleteRegex.exec(blockContent)) !== null) {
+      const path = deleteMatch[1]?.trim();
+      if (path) deletes.push(path);
+    }
+  }
+
+  for (const blockContent of extractXmlBlocks(content, 'fs-actions')) {
+    const deleteRegex = /DELETE\s+([^\n]+)/gi;
+    let deleteMatch: RegExpExecArray | null;
+    while ((deleteMatch = deleteRegex.exec(blockContent)) !== null) {
+      const path = deleteMatch[1]?.trim();
+      if (path) deletes.push(path);
+    }
+  }
+
+  return deletes;
+}
+
+/**
+ * Extract PATCH commands from fs-actions blocks
+ */
+export function extractFsActionPatches(content: string): PatchEdit[] {
+  const patches: PatchEdit[] = [];
+
+  if (!content.includes('PATCH')) return patches;
+
+  // Updated regex to handle both: PATCH path <<<...>>> and PATCH <path> <<<...>>>
+  const patchRegex = /PATCH\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*>>>/gi;
+  
+  for (const blockContent of extractFencedBlocks(content, 'fs-actions')) {
+    let patchMatch: RegExpExecArray | null;
+    while ((patchMatch = patchRegex.exec(blockContent)) !== null) {
+      const path = patchMatch[1]?.trim();
+      const diff = patchMatch[2] ?? '';
+      if (!path) continue;
+      patches.push({ path, diff });
+    }
+  }
+
+  for (const blockContent of extractXmlBlocks(content, 'fs-actions')) {
+    let patchMatch: RegExpExecArray | null;
+    while ((patchMatch = patchRegex.exec(blockContent)) !== null) {
+      const path = patchMatch[1]?.trim();
+      const diff = patchMatch[2] ?? '';
+      if (!path) continue;
+      patches.push({ path, diff });
+    }
+  }
+
+  return patches;
+}
+
+/**
+ * Extract apply_diff operations across supported formats.
+ */
+export function extractApplyDiffOperations(content: string): ApplyDiffOperation[] {
+  const diffs: ApplyDiffOperation[] = [];
+
+  if (!content.includes('APPLY_DIFF') && !content.includes('<apply_diff')) {
+    return diffs;
+  }
+
+  // Updated regex to handle both: APPLY_DIFF path <<<...>>> and APPLY_DIFF <path> <<<...>>>
+  const diffRegex = /APPLY_DIFF\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*===\s*([\s\S]*?)\s*>>>/gi;
+  
+  for (const blockContent of extractFencedBlocks(content, 'fs-actions')) {
+    let diffMatch: RegExpExecArray | null;
+    while ((diffMatch = diffRegex.exec(blockContent)) !== null) {
+      const path = diffMatch[1]?.trim();
+      const search = diffMatch[2] ?? '';
+      const replace = diffMatch[3] ?? '';
+      if (!path || !search) continue;
+      diffs.push({ path, search, replace });
+    }
+  }
+
+  for (const blockContent of extractXmlBlocks(content, 'fs-actions')) {
+    let diffMatch: RegExpExecArray | null;
+    while ((diffMatch = diffRegex.exec(blockContent)) !== null) {
+      const path = diffMatch[1]?.trim();
+      const search = diffMatch[2] ?? '';
+      const replace = diffMatch[3] ?? '';
+      if (!path || !search) continue;
+      diffs.push({ path, search, replace });
+    }
+  }
+
+  const xmlDiffRegex = /<apply_diff\s+path=["']([^"']+)["']\s*>\s*<search>([\s\S]*?)<\/search>\s*<replace>([\s\S]*?)<\/replace>\s*(?:<thought>([\s\S]*?)<\/thought>\s*)?<\/apply_diff>/gi;
+  let xmlDiffMatch: RegExpExecArray | null;
+
+  while ((xmlDiffMatch = xmlDiffRegex.exec(content)) !== null) {
+    const path = xmlDiffMatch[1]?.trim();
+    const search = xmlDiffMatch[2] ?? '';
+    const replace = xmlDiffMatch[3] ?? '';
+    const thought = xmlDiffMatch[4]?.trim();
+    if (!path || !search) continue;
+    diffs.push({ path, search, replace, thought });
+  }
+
+  // Updated regex to handle both: APPLY_DIFF path <<<...>>> and APPLY_DIFF <path> <<<...>>>
+  const topLevelDiffRegex = /^\s*APPLY_DIFF\s*<?([^\s<>]+)>?\s*(?:\n\s*)?<<<\s*\n([\s\S]*?)\n===\s*\n([\s\S]*?)\n>>>/gim;
+  let topLevelMatch: RegExpExecArray | null;
+  while ((topLevelMatch = topLevelDiffRegex.exec(content)) !== null) {
+    const path = topLevelMatch[1]?.trim();
+    const search = topLevelMatch[2] ?? '';
+    const replace = topLevelMatch[3] ?? '';
+    if (!path || !search) continue;
+    if (!diffs.some(d => d.path === path && d.search === search && d.replace === replace)) {
+      diffs.push({ path, search, replace });
+    }
+  }
+
+  return diffs;
+}
+
+/**
+ * Extract bash heredoc file writes from fenced bash blocks.
+ */
+export function extractBashHereDocWrites(content: string): FileEdit[] {
+  const writes: FileEdit[] = [];
+
+  if (!content.includes('```bash') && !content.includes('cat')) return writes;
+
+  for (const block of extractFencedBlocks(content, 'bash')) {
+    const hereDocRegex = /cat\s*>\s*([^\s]+)\s*<<['"]?EOF['"]?\n([\s\S]*?)\nEOF/g;
+    let hereDocMatch: RegExpExecArray | null;
+    while ((hereDocMatch = hereDocRegex.exec(block)) !== null) {
+      const path = hereDocMatch[1]?.trim();
+      const fileContent = hereDocMatch[2] ?? '';
+      if (!path) continue;
+      // CRITICAL FIX: Skip edits with empty content
+      if (!fileContent || fileContent.trim().length === 0) continue;
+      writes.push({ path, content: fileContent });
+    }
+  }
+
+  return writes;
+}
+
+/**
+ * Extract code blocks with filename hints.
+ */
+export function extractFilenameHintCodeBlocks(content: string): FileEdit[] {
+  const writes: FileEdit[] = [];
+
+  if (!content.includes('```')) return writes;
+
+  const regex = /```[^\n`]*\b(?:file|path|filename)\s*[:=]\s*([^\n]+)\n([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    let fileContent = match[2] ?? '';
+    if (!path) continue;
+
+    // CRITICAL FIX: Validate path before adding
+    // Reject SCSS variables, CSS selectors, and other non-file paths
+    if (!isValidFilePath(path)) {
+      continue;
+    }
+
+    fileContent = stripHeredocMarkers(fileContent);
+    // CRITICAL FIX: Skip edits with empty content
+    if (!fileContent || fileContent.trim().length === 0) continue;
+    writes.push({ path, content: fileContent });
+  }
+
+  return writes;
+}
+
+function extractFolderCreateEdits(content: string): string[] {
+  const folders: string[] = [];
+
+  if (!content.includes('<folder_create')) return folders;
+
+  const folderCreateRegex = /<folder_create\s+path\s*=\s*["']([^"']+)["']\s*\/?>/gi;
+  let match: RegExpExecArray | null;
+  while ((match = folderCreateRegex.exec(content)) !== null) {
+    const path = match[1]?.trim();
+    if (path) folders.push(path);
+  }
+
+  return folders;
+}
+
+// ---------------------------------------------------------------------------
+// Folder Structure Detection (moved from mode-manager.ts for consolidation)
+// ---------------------------------------------------------------------------
+
+export interface DetectedFolderStructure {
+  isSingleFolder: boolean
+  folderName: string | null
+  totalFiles: number
+  filesInFolder: number
+  filesOutsideFolder: string[]
+  isNewProject: boolean
+}
+
+export interface FileOperation {
+  type: 'create' | 'modify' | 'delete'
+  path: string
+  content?: string
+  diff?: string
+}
+
+/** Minimum number of files in a folder for it to be treated as a new project. */
+const NEW_PROJECT_MIN_FILES = parseInt(process.env.NEW_PROJECT_MIN_FILES || '2', 10)
+
+/**
+ * Detect folder structure from file operations
+ * Moved from mode-manager.ts to consolidate all file parsing logic
+ */
+export function detectFolderStructure(fileOperations: FileOperation[]): DetectedFolderStructure {
+  if (fileOperations.length === 0) {
+    return {
+      isSingleFolder: false,
+      folderName: null,
+      totalFiles: 0,
+      filesInFolder: 0,
+      filesOutsideFolder: [],
+      isNewProject: false,
+    }
+  }
+
+  const paths = fileOperations.map(op => op.path)
+  const folderNames = new Set<string>()
+  const filesOutsideAnyFolder: string[] = []
+
+  for (const path of paths) {
+    const parts = path.split('/').filter(Boolean)
+    if (parts.length >= 2) {
+      folderNames.add(parts[0])
+    } else {
+      filesOutsideAnyFolder.push(path)
+    }
+  }
+
+  const folderNameArray = Array.from(folderNames)
+  const isSingleFolder = folderNameArray.length === 1
+  const singleFolderName = isSingleFolder ? folderNameArray[0] : null
+
+  const filesInFolder =
+    isSingleFolder && singleFolderName
+      ? paths.filter(p => p.startsWith(singleFolderName + '/')).length
+      : 0
+
+  const isNewProject =
+    isSingleFolder || (paths.length > 1 && filesOutsideAnyFolder.length === 0)
+
+  return {
+    isSingleFolder,
+    folderName: singleFolderName,
+    totalFiles: paths.length,
+    filesInFolder,
+    filesOutsideFolder: filesOutsideAnyFolder,
+    isNewProject,
+  }
+}
+
+/**
+ * Detect if response indicates a new project with single folder structure
+ * Moved from mode-manager.ts to consolidate all file parsing logic
+ * 
+ * @param content - LLM response content to analyze
+ * @returns Folder name if a single-folder project structure is detected, null otherwise
+ */
+export function detectNewProjectFolder(content: string): string | null {
+  const parsed = parseFilesystemResponse(content)
+  
+  // Build file operations from all detected edit types
+  const fileOperations: FileOperation[] = [
+    // <file_edit> tags and other XML-style edits (includes bash heredocs)
+    ...parsed.writes.map(w => ({
+      type: w.action === 'write' && w.content ? ('create' as const) : ('modify' as const),
+      path: w.path,
+      content: w.content
+    })),
+    // Diff-based edits
+    ...parsed.diffs.map(d => ({ type: 'modify' as const, path: d.path, diff: d.diff })),
+    // Folder creation (mkdir)
+    ...parsed.folders.map(f => ({ type: 'create' as const, path: f })),
+  ]
+
+  const structure = detectFolderStructure(fileOperations)
+
+  if (
+    structure.isSingleFolder &&
+    structure.folderName &&
+    structure.filesInFolder >= NEW_PROJECT_MIN_FILES &&
+    structure.filesOutsideFolder.length === 0
+  ) {
+    return structure.folderName
+  }
+
+  return null
+}
+
+// ---------------------------------------------------------------------------
+// Main Parser Function
+// ---------------------------------------------------------------------------
+
+export function parseFilesystemResponse(content: string, forceExtract: boolean = false): ParsedFilesystemResponse {
+  const writes = new Map<string, FileEdit>();
+  const diffs = new Map<string, PatchEdit>();
+  const applyDiffs = new Map<string, ApplyDiffOperation>();
+  const deletes = new Set<string>();
+  const folders = new Set<string>();
+
+  // When forceExtract is true, bypass deduplication to catch all edits
+  // This is used for final parse after stream completes to catch any remaining edits
+  const skipDeduplication = forceExtract;
+
+  const addWrite = (edit: FileEdit) => {
+    const key = `${edit.path}::${edit.content}`;
+    // When forceExtract is true, always add (skip deduplication)
+    if (skipDeduplication || !writes.has(key)) writes.set(key, edit);
+  };
+  const addDiff = (edit: PatchEdit) => {
+    const key = `${edit.path}::${edit.diff}`;
+    // When forceExtract is true, always add (skip deduplication)
+    if (skipDeduplication || !diffs.has(key)) diffs.set(key, edit);
+  };
+  const addApplyDiff = (edit: ApplyDiffOperation) => {
+    const key = `${edit.path}::${edit.search}::${edit.replace}`;
+    // When forceExtract is true, always add (skip deduplication)
+    if (skipDeduplication || !applyDiffs.has(key)) applyDiffs.set(key, edit);
+  };
+
+  for (const edit of extractFileEdits(content)) addWrite(edit);
+  for (const edit of extractFsActionWrites(content)) addWrite(edit);
+  for (const edit of extractTopLevelWrites(content)) addWrite(edit);
+  for (const edit of extractBashHereDocWrites(content)) addWrite(edit);
+  for (const edit of extractFilenameHintCodeBlocks(content)) addWrite(edit);
+  for (const edit of extractFencedDiffEdits(content)) addDiff(edit);
+  for (const edit of extractFsActionPatches(content)) addDiff(edit);
+  for (const edit of extractPatchEdits(content)) addDiff(edit);
+  for (const edit of extractApplyDiffOperations(content)) addApplyDiff(edit);
+  for (const edit of extractFsActionDeletes(content)) deletes.add(edit);
+  for (const edit of extractDeleteEdits(content)) deletes.add(edit.path);
+  for (const folder of extractFolderCreateEdits(content)) folders.add(folder);
+
+  return {
+    writes: Array.from(writes.values()),
+    diffs: Array.from(diffs.values()),
+    applyDiffs: Array.from(applyDiffs.values()),
+    deletes: Array.from(deletes.values()),
+    folders: Array.from(folders.values()),
+  };
 }
 
 /**
@@ -778,6 +1767,65 @@ export function sanitizeFileEditTags(content: string): string {
   return sanitized;
 }
 
+/**
+ * Sanitize assistant display content while preserving visible prose and reasoning.
+ */
+export function sanitizeAssistantDisplayContent(content: string): string {
+  if (!content) return '';
+
+  let next = sanitizeFileEditTags(content);
+
+  if (next.includes('<thought>') && next.includes('</thought>')) {
+    next = next.replace(/<thought>[\s\S]{0,5000}?<\/thought>/gi, '');
+  }
+
+  next = next.replace(/(?:^|\n)\s*<<<[\s\S]{0,5000}?>>>\s*(?=\n|$)/gim, '\n');
+  next = next.replace(/\n{3,}/g, '\n\n').trim();
+
+  return next;
+}
+
+/**
+ * Split reasoning sections from visible assistant content.
+ */
+export function extractReasoningContent(content: string): ReasoningParseResult {
+  if (!content) {
+    return { reasoning: '', mainContent: '' };
+  }
+
+  const patterns = [
+    { regex: /<think>([\s\S]*?)<\/think>/gi, label: '' },
+    { regex: /\*\*Reasoning:\*\*([\s\S]*?)(?=\n\s*\n(?!\*\*)|\*\*|$)/gi, label: '**Reasoning:**' },
+    { regex: /\*\*Thought:\*\*([\s\S]*?)(?=\n\s*\n(?!\*\*)|\*\*|$)/gi, label: '**Thought:**' },
+  ] as const;
+
+  let reasoning = '';
+  let mainContent = content;
+
+  for (const pattern of patterns) {
+    let match: RegExpExecArray | null;
+    while ((match = pattern.regex.exec(content)) !== null) {
+      const body = match[1]?.trim();
+      if (!body) continue;
+      reasoning += `${pattern.label}${body}\n\n`;
+      mainContent = mainContent.replace(match[0], '');
+    }
+  }
+
+  return {
+    reasoning: reasoning.trim(),
+    mainContent: mainContent.trim(),
+  };
+}
+
+export function stripHeredocMarkers(content: string): string {
+  let cleaned = content;
+  cleaned = cleaned.replace(/^\s*(?:WRITE|PATCH)\s+\S+\s*\n/, '');
+  cleaned = cleaned.replace(/^\s*<<<\s*\n?/, '');
+  cleaned = cleaned.replace(/\n?\s*>>>\s*$/, '');
+  return cleaned;
+}
+
 // ---------------------------------------------------------------------------
 // Incremental Parser - for progressive streaming
 // ---------------------------------------------------------------------------
@@ -787,7 +1835,24 @@ interface IncrementalParseState {
   emittedEdits: Set<string>;
   /** Last processed position in buffer (for future optimization) */
   lastPosition: number;
+  /**
+   * Positions of unclosed opening tags detected in previous parses.
+   * On the next parse, the window extends back to the earliest of these
+   * so large edits (>12K chars) are found even when the closing tag
+   * lands far from the opening tag.
+   */
+  unclosedPositions: Set<number>;
 }
+
+// Default overlap for cross-chunk boundary matching.
+// Unclosed-tag tracking extends this dynamically when needed.
+const INCREMENTAL_PARSE_OVERLAP_CHARS = 2000;
+
+/**
+ * How many chars from the tail of the parse window to scan for unclosed tags.
+ * All supported opening markers are well under this length.
+ */
+const UNCLOSED_SCAN_TAIL_CHARS = 5000;
 
 /**
  * Create a new incremental parser state
@@ -796,7 +1861,141 @@ export function createIncrementalParser(): IncrementalParseState {
   return {
     emittedEdits: new Set<string>(),
     lastPosition: 0,
+    unclosedPositions: new Set<number>(),
   };
+}
+
+/**
+ * Scan the tail of a parse window for opening markers that lack their
+ * closing counterpart.  Returns buffer-relative start positions of
+ * unclosed blocks.
+ *
+ * Cost: O(tailChars) — bounded constant, not proportional to buffer size.
+ */
+function detectUnclosedTags(
+  windowText: string,
+  windowStart: number,
+  tailChars: number
+): number[] {
+  const scanStart = Math.max(0, windowText.length - tailChars);
+  const tail = windowText.slice(scanStart);
+  const positions: number[] = [];
+
+  // <file_edit path="...">  or  <file_write path="...">  or  <apply_diff path="...">
+  const tagNames = ['file_edit', 'file_write', 'apply_diff'];
+  for (const tag of tagNames) {
+    const openRe = new RegExp(`<${tag}\\b`, 'gi');
+    let m: RegExpExecArray | null;
+    while ((m = openRe.exec(tail)) !== null) {
+      const closeRe = new RegExp(`</${tag}>`, 'gi');
+      closeRe.lastIndex = m.index + m[0].length;
+      if (!closeRe.test(tail)) {
+        positions.push(windowStart + scanStart + m.index);
+      }
+    }
+  }
+
+  // Incomplete opening tag at the very end of the buffer
+  // e.g., "<file_edit path="src/"  or  "<file_write"  (no closing '>')
+  if (/<(?:file_edit|file_write|apply_diff)\b[^>]*$/.test(tail)) {
+    const m = tail.match(/(<(?:file_edit|file_write|apply_diff)\b[^>]*)$/);
+    if (m) {
+      const idx = tail.lastIndexOf(m[1]);
+      if (idx !== -1) positions.push(windowStart + scanStart + idx);
+    }
+  }
+
+  // <file_edit> (multi-line format, no path attr)
+  if (/<file_edit>\s*$/.test(tail) || /<file_edit>\s*<path>\s*[^\s<]*$/.test(tail)) {
+    const idx = tail.lastIndexOf('<file_edit>');
+    if (idx !== -1 && !tail.includes('</file_edit>', idx)) {
+      positions.push(windowStart + scanStart + idx);
+    }
+  }
+
+  // <fs-actions> ... </fs-actions>
+  if (/<fs-actions>/.test(tail)) {
+    const idx = tail.lastIndexOf('<fs-actions>');
+    if (idx !== -1 && !tail.includes('</fs-actions>', idx)) {
+      positions.push(windowStart + scanStart + idx);
+    }
+  }
+
+  // Heredoc:  WRITE|PATCH|APPLY_DIFF path  <<<  (open but no >>>)
+  const heredocOpenRe = /^(?:WRITE|PATCH|APPLY_DIFF)\s+\S+/m;
+  const hIdx = tail.search(heredocOpenRe);
+  if (hIdx !== -1) {
+    const after = tail.slice(hIdx);
+    // Unclosed if <<< has no matching >>> after it
+    if (/<<</.test(after) && !/>>>/.test(after)) {
+      positions.push(windowStart + scanStart + hIdx);
+    }
+  }
+
+  // cat > file << 'EOF'  (open but no closing delimiter on its own line)
+  // Require newline after opening to match extractCatHeredocEdits behaviour
+  const catMatch = tail.match(/cat\s*>>?\s*\S+\s*<<\s*['"]?(\w+)['"]?\s*\n/);
+  if (catMatch) {
+    const delimiter = catMatch[1];
+    const matchEnd = catMatch.index! + catMatch[0].length;
+    const afterMatch = tail.slice(matchEnd);
+    // Closing delimiter must be on its own line (preceded by \n) or at start
+    const closeRe = new RegExp(`(?:^|\\n)${delimiter.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}(?:\\s|$)`);
+    if (!closeRe.test(afterMatch)) {
+      positions.push(windowStart + scanStart + catMatch.index!);
+    }
+  }
+
+  // ```fs-actions or ```bash  (open fence but no closing ```)
+  const fenceRe = /```(?:fs-actions|bash)\s*\n?/g;
+  let fenceMatch: RegExpExecArray | null;
+  while ((fenceMatch = fenceRe.exec(tail)) !== null) {
+    const after = tail.slice(fenceMatch.index + fenceMatch[0].length);
+    if (!after.includes('```')) {
+      positions.push(windowStart + scanStart + fenceMatch.index);
+    }
+  }
+
+  // Generic ```  (open fence without close — for filename-hint blocks)
+  const genericFenceRe = /```\w*\s*\n?/g;
+  while ((fenceMatch = genericFenceRe.exec(tail)) !== null) {
+    // Skip if this was already caught by the specific fence check above
+    const after = tail.slice(fenceMatch.index + fenceMatch[0].length);
+    if (!after.includes('```')) {
+      // Avoid duplicate if already added by specific fence check
+      const pos = windowStart + scanStart + fenceMatch.index;
+      if (!positions.includes(pos)) {
+        positions.push(pos);
+      }
+    }
+  }
+
+  return positions;
+}
+
+/**
+ * Remove unclosed positions that are inside the new parse window
+ * (>= bufferPos) because they will be re-evaluated on this pass.
+ * Positions before bufferPos remain — they extend the next window.
+ */
+function pruneStaleUnclosed(state: IncrementalParseState, bufferPos: number): void {
+  if (state.unclosedPositions.size === 0) return;
+  for (const pos of state.unclosedPositions) {
+    if (pos >= bufferPos) {
+      state.unclosedPositions.delete(pos);
+    }
+  }
+}
+
+/**
+ * Return the earliest (smallest) value in a Set<number>, or Infinity if empty.
+ */
+function earliestPosition(positions: Set<number>): number {
+  let min = Infinity;
+  for (const pos of positions) {
+    if (pos < min) min = pos;
+  }
+  return min;
 }
 
 /**
@@ -813,32 +2012,116 @@ export function extractIncrementalFileEdits(
 ): FileEdit[] {
   const newEdits: FileEdit[] = [];
 
-  // Use the existing extractFileEdits to find all edits in the buffer
-  const allEdits = extractFileEdits(buffer);
+  if (buffer.length === state.lastPosition) {
+    return newEdits;
+  }
+
+  // Determine parse window start:
+  // 1. Default overlap for cross-chunk boundaries
+  // 2. Extend to earliest unclosed tag position from previous passes
+  //    (handles edits larger than the default overlap)
+  let parseStart = Math.max(0, state.lastPosition - INCREMENTAL_PARSE_OVERLAP_CHARS);
+  if (state.unclosedPositions.size > 0) {
+    const earliest = earliestPosition(state.unclosedPositions);
+    if (earliest < parseStart) parseStart = earliest;
+  }
+  const parseWindow = buffer.slice(parseStart);
+
+  // Collect all edits from supported formats on the parse window.
+  // Each extractor has its own fast-path check, so they bail out cheaply
+  // when their markers aren't present.
+  const allEdits: FileEdit[] = [...extractFileEdits(parseWindow)];
+
+  // fs-actions blocks (```fs-actions and <fs-actions>) with WRITE commands
+  for (const edit of extractFsActionWrites(parseWindow)) {
+    allEdits.push(edit);
+  }
+
+  // Top-level WRITE path <<<content>>> commands
+  for (const edit of extractTopLevelWrites(parseWindow)) {
+    allEdits.push(edit);
+  }
+
+  // Code blocks with filename hints (```typescript\n// path/to/file ...)
+  for (const edit of extractFilenameHintCodeBlocks(parseWindow)) {
+    allEdits.push(edit);
+  }
+
+  // Fenced diff blocks (```diff path\n...```)
+  for (const edit of extractFencedDiffEdits(parseWindow)) {
+    allEdits.push({ path: edit.path, content: edit.diff });
+  }
+
+  // Bash heredoc writes inside fenced ```bash blocks
+  for (const edit of extractBashHereDocWrites(parseWindow)) {
+    allEdits.push(edit);
+  }
+
+  // DELETE commands (single-line)
+  for (const edit of extractDeleteEdits(parseWindow)) {
+    allEdits.push({ path: edit.path, content: '', action: 'delete' });
+  }
+
+  // PATCH commands (PATCH path <<<diff>>>)
+  for (const edit of extractPatchEdits(parseWindow)) {
+    allEdits.push({ path: edit.path, content: edit.diff, action: 'patch' });
+  }
+
+  // CRITICAL FIX: Detect unclosed tags BEFORE filtering/emitting edits
+  // This prevents emitting incomplete edits during streaming
+  const unclosed = detectUnclosedTags(parseWindow, parseStart, UNCLOSED_SCAN_TAIL_CHARS);
+
+  // OPTIMIZATION: Pre-compute minimum unclosed position for O(1) lookup per edit
+  // This reduces complexity from O(edits × unclosed) to O(unclosed + edits)
+  const minUnclosedPos = unclosed.length > 0 ? Math.min(...unclosed) : Infinity;
 
   // Filter to only new edits we haven't emitted yet
   // Use path + content hash to handle same-file multiple edits
   for (const edit of allEdits) {
+    // CRITICAL FIX: Skip edits with empty content (incomplete streaming tags)
+    // Check both content and diff fields since some edits use diff
+    const editContent = edit.content || edit.diff || '';
+    if (!editContent || editContent.trim().length === 0) {
+      continue;
+    }
+
+    // CRITICAL FIX: Skip edits from unclosed tag regions
+    // If an opening tag exists without its closing tag, skip edits from that region
+    // This prevents emitting incomplete edits during streaming
+    if (unclosed.length > 0) {
+      // Check if this edit's path appears after an unclosed tag position
+      // If so, it's likely from an incomplete block - skip it
+      const editPathInBuffer = buffer.indexOf(edit.path, parseStart);
+      // OPTIMIZATION: O(1) comparison with pre-computed minimum instead of O(unclosed) array scan
+      const isInUnclosedRegion = editPathInBuffer >= minUnclosedPos;
+      if (isInUnclosedRegion) {
+        continue;
+      }
+    }
+
     // Create unique key from path + simple content hash
     // Use full content for short files (< 100 chars), otherwise hash first/last 50 chars + length
     let contentSignature: string;
-    if (edit.content.length <= 100) {
-      contentSignature = edit.content;
+    if (editContent.length <= 100) {
+      contentSignature = editContent;
     } else {
-      contentSignature = `${edit.content.length}-${edit.content.slice(0, 50)}-${edit.content.slice(-50)}`;
+      contentSignature = `${editContent.length}-${editContent.slice(0, 50)}-${editContent.slice(-50)}`;
     }
     const editKey = `${edit.path}::${contentSignature}`;
-    
+
     if (!state.emittedEdits.has(editKey)) {
       state.emittedEdits.add(editKey);
       newEdits.push(edit);
     }
   }
 
-  // Update position to end of buffer
-  // TODO Note: lastPosition tracking is available for future optimization
-  // Currently we re-parse from 0 to handle cases where earlier content
-  // changes affect later parsing (e.g., tag modifications mid-stream)
+  // After parsing, detect any tags that are still open (no closing marker found).
+  // On the next call, the parse window will extend back to these positions.
+  pruneStaleUnclosed(state, parseStart);
+  for (const pos of unclosed) {
+    state.unclosedPositions.add(pos);
+  }
+
   state.lastPosition = buffer.length;
 
   return newEdits;
