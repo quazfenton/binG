@@ -916,8 +916,13 @@ async function runV1ApiCompletion(
 async function attemptFallback(
   config: UnifiedAgentConfig,
   failedMode: string,
-  error: any
+  error: any,
+  triedModes: Set<string> = new Set()
 ): Promise<UnifiedAgentResult | null> {
+  // Track tried modes to prevent infinite loops
+  const visitedModes = new Set(triedModes);
+  visitedModes.add(failedMode);
+
   const health = checkProviderHealth();
 
   // Use task classifier for complexity detection (with regex fallback)
@@ -934,20 +939,20 @@ async function attemptFallback(
     isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(config.userMessage);
   }
 
-  // Try fallback chain based on what failed
+  // Try fallback chain based on what failed, excluding already tried modes
   // Priority: V2 Native (with StatefulAgent for complex) → V2 Containerized → V2 Local → V1 API
   const fallbackOrder: Array<'v2-native' | 'v2-containerized' | 'v2-local' | 'v1-api'> = [];
 
-  if (failedMode !== 'v2-native' && health.v2Native) {
+  if (!visitedModes.has('v2-native') && failedMode !== 'v2-native' && health.v2Native) {
     fallbackOrder.push('v2-native');
   }
-  if (failedMode !== 'v2-containerized' && health.v2Containerized) {
+  if (!visitedModes.has('v2-containerized') && failedMode !== 'v2-containerized' && health.v2Containerized) {
     fallbackOrder.push('v2-containerized');
   }
-  if (failedMode !== 'v2-local' && health.v2Local) {
+  if (!visitedModes.has('v2-local') && failedMode !== 'v2-local' && health.v2Local) {
     fallbackOrder.push('v2-local');
   }
-  if (failedMode !== 'v1-api' && health.v1Api) {
+  if (!visitedModes.has('v1-api') && failedMode !== 'v1-api' && health.v1Api) {
     fallbackOrder.push('v1-api');
   }
 
@@ -977,11 +982,18 @@ async function attemptFallback(
       });
 
       if (result.success) {
-        return result;
+        return {
+          ...result,
+          metadata: {
+            ...result.metadata,
+            fallbackFrom: failedMode,
+            triedModes: Array.from(visitedModes),
+          },
+        };
       }
     } catch (fallbackError) {
       console.warn(`[UnifiedAgent] Fallback to ${fallbackMode} also failed:`, fallbackError);
-      // Continue to next fallback
+      // Continue to next fallback with visitedModes passed
     }
   }
 

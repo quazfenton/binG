@@ -37,10 +37,18 @@ export function FileSyncStatus({
   useEffect(() => {
     if (!isDesktop) return;
 
+    // FIX: Track previous status to avoid clearing error state silently
+    let previousStatus: SyncStatus = status;
+
     // Poll for sync status every 5 seconds
     const interval = setInterval(() => {
       // In real implementation, this would check actual sync state
-      // For now, we'll simulate the status
+      // For now, we'll simulate the status - but preserve error state
+      if (previousStatus === 'error') {
+        // Don't clear error state automatically - only manual retry should clear it
+        return;
+      }
+      
       if (isSyncing) {
         setStatus('syncing');
       } else if (pendingCount > 0) {
@@ -48,10 +56,11 @@ export function FileSyncStatus({
       } else {
         setStatus('synced');
       }
+      previousStatus = status;
     }, 5000);
 
     return () => clearInterval(interval);
-  }, [isDesktop, isSyncing, pendingCount]);
+  }, [isDesktop, isSyncing, pendingCount, status]);
 
   const handleSync = async () => {
     if (!isDesktop || isSyncing) return;
