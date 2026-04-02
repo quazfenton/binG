@@ -21,20 +21,17 @@ import { toast } from "sonner";
 import type { LLMProvider } from "@/lib/chat/llm-providers";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
-import { setCurrentMode, detectNewProjectFolder } from "@/lib/chat/mode-manager";
-import {
-  createInputContext,
-  processSafeContent,
-  shouldGenerateDiffsForContext,
-  debugContentProcessing
-} from "@/lib/input-response-separator";
 import { useAuth } from "@/contexts/auth-context";
 import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from "@/lib/utils";
 import { generateSessionName, checkFileConflicts } from "@/lib/session-naming";
 import type { AttachedVirtualFile } from "@/hooks/use-virtual-filesystem";
-import { parsePatch, applyPatch } from "diff";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
+import {
+  parseFilesystemResponse,
+  detectNewProjectFolder,
+  type FileOperation,
+} from '@/lib/chat/file-edit-parser';
 
 /**
  * Render the main conversation interface with chat, filesystem attachments, providers/models selection,
@@ -246,14 +243,16 @@ export default function ConversationInterface() {
   
   // Track if LLM folder detection has already run for this session (one-time only)
   const [llmFolderDetected, setLlmFolderDetected] = useState(false);
+  // Store the detected folder name for immediate use in path resolution
+  const [detectedFolderName, setDetectedFolderName] = useState<string | null>(null);
   
   // Track pending approval required for existing session file edits
   const [pendingApprovalDiffs, setPendingApprovalDiffs] = useState<{ path: string; diff: string }[]>([]);
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
   
   const filesystemScopePath = useMemo(
-    () => `project/sessions/${filesystemSessionId}`,
-    [filesystemSessionId],
+    () => `project/sessions/${detectedFolderName || filesystemSessionId}`,
+    [filesystemSessionId, detectedFolderName],
   );
 
   const providerRef = useRef(currentProvider);
@@ -267,6 +266,13 @@ export default function ConversationInterface() {
   const persistedUiStateUpdatedAtRef = useRef(0);
   const continueProcessedRef = useRef<string | null>(null);
   const chatHistorySavedRef = useRef<string | null>(null);
+  const lastProcessedAssistantDiffSignatureRef = useRef<string>('');
+  const diffApplyQueueRef = useRef<Promise<void>>(Promise.resolve());
+  
+  // Track permanently rejected diffs to prevent infinite retry loops
+  // Key: "resolvedPath::diff_hash", Value: failure count
+  const rejectedDiffsRef = useRef<Map<string, number>>(new Map());
+  const MAX_RETRY_ATTEMPTS = 2;  // After this many failures, permanently reject
 
   useEffect(() => {
     providerRef.current = currentProvider;
@@ -344,10 +350,8 @@ export default function ConversationInterface() {
 
   const [activeTab, setActiveTab] = useState<"chat" | "extras" | "integrations" | "shell">("chat");
 
-  // Update mode manager when active tab changes
+  // Update active tab and trigger side effects
   useEffect(() => {
-    setCurrentMode(activeTab);
-
     // Auto-open and auto-connect terminal when shell tab is selected
     if (activeTab === 'shell') {
       if (!showTerminal) {
@@ -387,17 +391,39 @@ export default function ConversationInterface() {
     }
   });
 
-  // Diffs poller - manual refresh option for file changes
-  const diffsPoller = useDiffsPoller({
-    pollInterval: 8000,
-    maxFiles: 50,
-    autoShowNotification: false, // We'll handle notifications ourselves
-    onDiffsFetched: (diffs) => {
-      if (diffs.length > 0) {
-        toast.info(`${diffs.length} new file change${diffs.length === 1 ? '' : 's'} from polling`);
+  // Diffs are now handled via SSE filesystem events + useVirtualFilesystem
+  // Removed useDiffsPoller to prevent redundant polling (causes event storms)
+  // File changes are automatically synced via filesystem-updated events
+  const diffsPoller = {
+    diffs: [],
+    isPolling: false,
+    lastPolledAt: null,
+    pollCount: 0,
+    startPolling: () => {},
+    stopPolling: () => {},
+    pollNow: async () => {},
+    clearDiffs: () => {},
+    reset: () => {},
+  };
+
+  const queueCommandDiffs = useCallback((entries: Array<{ path: string; diff: string }>) => {
+    if (entries.length === 0) {
+      return;
+    }
+
+    setCommandsByFile((prev) => {
+      const next: Record<string, string[]> = { ...prev };
+      for (const { path, diff } of entries) {
+        if (!path) continue;
+        const list = next[path] ? [...next[path]] : [];
+        if (list.length === 0 || list[list.length - 1] !== diff) {
+          list.push(diff);
+          next[path] = list;
+        }
       }
-    },
-  });
+      return next;
+    });
+  }, []);
 
 
 
@@ -460,6 +486,8 @@ export default function ConversationInterface() {
       provider: providerRef.current,
       model: modelRef.current,
       stream: true,
+      mode: 'enhanced', // Enable spec amplification for enhanced responses
+      agentMode: 'v1', // Use V1 mode for spec amplification (V2 has its own planning)
       conversationId: filesystemSessionIdRef.current,
       filesystemContext: {
         attachedFiles: filesystemContextRef.current.attachedFiles.map((file) => ({
@@ -605,28 +633,52 @@ export default function ConversationInterface() {
   // Extract and persist streamed COMMANDS blocks into a per-file map
   useEffect(() => {
     if (messages.length === 0) return;
-    
+
     const lastAssistant = [...messages]
       .reverse()
       .find((m) => m.role === "assistant");
     if (!lastAssistant || typeof lastAssistant.content !== "string") return;
     
-    // Create context for API response processing
-    const responseContext = createInputContext('assistant');
-    const processedResponse = processSafeContent(lastAssistant.content, responseContext);
+    // CRITICAL FIX: Track last processed message ID to prevent re-processing the same message
+    const assistantSignature = `${lastAssistant.id}:${lastAssistant.content.length}`;
+    if (lastProcessedAssistantDiffSignatureRef.current === assistantSignature) {
+      return; // Already processed this message
+    }
+    lastProcessedAssistantDiffSignatureRef.current = assistantSignature;
     
-    // Debug content processing in development
-    debugContentProcessing(lastAssistant.content, responseContext, processedResponse);
+    // Create context for API response processing (simplified - no longer need input-response-separator)
+    // Directly parse the response using file-edit-parser
+    const parsedResponse = parseFilesystemResponse(lastAssistant.content);
     
-    // Only process diffs if context allows it
-    if (!shouldGenerateDiffsForContext(lastAssistant.content, responseContext) || !processedResponse.fileDiffs) return;
+    // Convert to legacy format for compatibility with existing code
+    const processedResponse = {
+      mode: parsedResponse.writes.length > 0 || parsedResponse.diffs.length > 0 ? 'code' as const : 'chat' as const,
+      content: lastAssistant.content,
+      codeBlocks: [],
+      fileDiffs: [
+        ...parsedResponse.writes.map(w => ({ path: w.path, diff: w.content, type: 'create' as const })),
+        ...parsedResponse.diffs.map(d => ({ path: d.path, diff: d.diff, type: 'modify' as const })),
+      ],
+      shouldShowDiffs: parsedResponse.writes.length > 0 || parsedResponse.diffs.length > 0,
+      shouldOpenCodePreview: parsedResponse.writes.length > 0 || parsedResponse.diffs.length > 0,
+      isInputParsing: false,
+    };
+
+    // Only process diffs if we have file edits
+    if (!processedResponse.shouldShowDiffs || !processedResponse.fileDiffs.length) return;
 
     // LLM Folder Detection: Check if AI response indicates a new project with single folder structure
     // This only applies to NEW sessions (no prior messages/files) with multiple files under one folder
     // Only run once per session to avoid re-triggering
+    // CRITICAL: This MUST run BEFORE applying diffs to ensure files go to correct session folder
     const detectedFolder = !llmFolderDetected && detectNewProjectFolder(lastAssistant.content);
+    
     if (detectedFolder && messages.length === 0) {
       // Only apply for new sessions with no prior messages - use LLM-suggested folder name
+      // Set the detected folder name immediately for use in path resolution
+      setDetectedFolderName(detectedFolder);
+      
+      // Generate the official session name (handles conflicts, registers in usedNames, etc.)
       generateSessionName(detectedFolder, true, true).then((newSessionId) => {
         setFilesystemSessionId(newSessionId);
         setLlmFolderDetected(true); // Mark as detected to prevent re-triggering
@@ -639,7 +691,62 @@ export default function ConversationInterface() {
       diff: fileDiff.diff,
     }));
 
-    if (newEntries.length === 0) return;
+    // CRITICAL FIX: Filter out obviously invalid paths BEFORE conflict detection
+    // This prevents infinite loops on malformed LLM output (JSX attributes, CSS values, etc.)
+    const validEntries = newEntries.filter(entry => {
+      const path = entry.path?.trim();
+      if (!path) {
+        console.warn('[ConversationInterface] Filtering out entry with empty path');
+        return false;
+      }
+      
+      // Reject paths ending with quotes (likely extracted from JSX/HTML attributes)
+      if (path.endsWith('"') || path.endsWith("'") || path.endsWith('`')) {
+        console.warn('[ConversationInterface] Filtering out path ending with quote (JSX/HTML fragment):', path);
+        return false;
+      }
+      
+      // Reject paths with spaces in the last segment (likely not a real file path)
+      const lastSegment = path.split('/').pop() || path;
+      if (/\s/.test(lastSegment)) {
+        console.warn('[ConversationInterface] Filtering out path with space in filename:', path);
+        return false;
+      }
+      
+      // Reject paths that are too short or too long
+      if (path.length < 3 || path.length > 500) {
+        console.warn('[ConversationInterface] Filtering out path with invalid length:', path);
+        return false;
+      }
+      
+      // Reject paths containing obvious code fragments
+      const codeFragmentPatterns = [
+        /["']\s*[>,)]\s*$/,  // Ends with quote followed by JSX/JS punctuation
+        /^\s*[<{]/,          // Starts with JSX/JS opening brackets
+        /[;}]\s*$/,          // Ends with JS closing brace/semicolon
+        /^\s*import\s+/,     // Import statement fragment
+        /^\s*export\s+/,     // Export statement fragment
+        /^\s*const\s+/,      // Variable declaration
+        /^\s*function\s+/,   // Function declaration
+      ];
+      if (codeFragmentPatterns.some(pattern => pattern.test(path))) {
+        console.warn('[ConversationInterface] Filtering out path that looks like code fragment:', path);
+        return false;
+      }
+      
+      return true;
+    });
+
+    if (validEntries.length === 0) {
+      console.log('[ConversationInterface] All entries filtered out as invalid - skipping diff application');
+      return;
+    }
+    
+    if (validEntries.length !== newEntries.length) {
+      console.log(`[ConversationInterface] Filtered from ${newEntries.length} to ${validEntries.length} valid entries`);
+    }
+
+    if (validEntries.length === 0) return;
 
     // Rule #2: For existing sessions, check if edits would overwrite existing files
     // SMART CONFLICT DETECTION:
@@ -670,6 +777,10 @@ export default function ConversationInterface() {
               // Malformed payload - treat as error
               throw new Error('Invalid filesystem list response');
             }
+          } else if (listResponse.status === 429) {
+            // Rate limited - skip conflict check, use attached files as fallback
+            console.warn('[ConflictCheck] Rate limited, using cached filesystem state');
+            existingFilePaths = Object.keys(attachedFilesystemFiles);
           } else {
             // Non-OK response - treat as error
             throw new Error(`Filesystem list failed: ${listResponse.status}`);
@@ -680,95 +791,60 @@ export default function ConversationInterface() {
           existingFilePaths = Object.keys(attachedFilesystemFiles);
         }
 
-        const newFilePaths = newEntries.map(e => e.path);
-        
+        const newFilePaths = validEntries.map(e => e.path);
+
         // SMART CONFLICT LOGIC:
         // 1. Check if ALL new files are editing existing files (expected behavior - auto-apply)
         // 2. Check if ANY new files would create conflicts with different content (require approval)
-        const allFilesExist = newFilePaths.every(newPath => 
+        const allFilesExist = newFilePaths.every(newPath =>
           existingFilePaths.some(existingPath => existingPath.toLowerCase() === newPath.toLowerCase())
         );
-        
+
         // If all files being edited already exist, this is expected behavior - auto-apply
         // This allows AI to fix bugs, update code, etc. in existing sessions
         if (allFilesExist && newFilePaths.length > 0) {
           console.log('[ConflictCheck] All files exist - this is an edit operation, auto-applying');
+          queueCommandDiffs(validEntries);
           // Auto-apply the detected diffs immediately
           if (applyDiffsRef.current) {
-            void applyDiffsRef.current(newEntries);
+            void applyDiffsRef.current(validEntries);
           }
           return;
         }
-        
+
         // Some files are new, check for actual conflicts
         const conflictCheck = checkFileConflicts(existingFilePaths, newFilePaths, true);
 
         if (conflictCheck.needsApproval) {
           // Store pending diffs for approval instead of auto-applying
-          setPendingApprovalDiffs(newEntries);
+          setPendingApprovalDiffs(validEntries);
           setShowApprovalDialog(true);
           toast.info(`${conflictCheck.existingFiles.length} file(s) would be overwritten. Review required.`);
 
           // Still store in commandsByFile for manual review
-          setCommandsByFile((prev) => {
-            const next: Record<string, string[]> = { ...prev };
-            for (const { path, diff } of newEntries) {
-              if (!path) continue;
-              const list = next[path] ? [...next[path]] : [];
-              if (list.length === 0 || list[list.length - 1] !== diff) {
-                list.push(diff);
-                next[path] = list;
-              }
-            }
-            return next;
-          });
+          queueCommandDiffs(validEntries);
           return; // Don't auto-apply - require approval
         }
 
         // Auto-apply the detected diffs immediately to trigger filesystem event for MessageBubble UI
         // The diffs will also be stored in commandsByFile for manual review/revert
+        queueCommandDiffs(validEntries);
         if (applyDiffsRef.current) {
-          void applyDiffsRef.current(newEntries);
+          void applyDiffsRef.current(validEntries);
         }
-
-        setCommandsByFile((prev) => {
-          const next: Record<string, string[]> = { ...prev };
-          for (const { path, diff } of newEntries) {
-            if (!path) continue;
-            const list = next[path] ? [...next[path]] : [];
-            if (list.length === 0 || list[list.length - 1] !== diff) {
-              list.push(diff);
-              next[path] = list;
-            }
-          }
-          return next;
-        });
       };
-      
+
       void checkConflicts();
       return;
     }
 
     // Auto-apply the detected diffs immediately to trigger filesystem event for MessageBubble UI
     // The diffs will also be stored in commandsByFile for manual review/revert
+    queueCommandDiffs(validEntries);
     if (applyDiffsRef.current) {
-      void applyDiffsRef.current(newEntries);
+      void applyDiffsRef.current(validEntries);
     }
-
-    setCommandsByFile((prev) => {
-      const next: Record<string, string[]> = { ...prev };
-      for (const { path, diff } of newEntries) {
-        if (!path) continue;
-        const list = next[path] ? [...next[path]] : [];
-        // avoid duplicate consecutive identical patches
-        if (list.length === 0 || list[list.length - 1] !== diff) {
-          list.push(diff);
-          next[path] = list;
-        }
-      }
-      return next;
-    });
-  }, [messages]);
+  }, [messages, attachedFilesystemFiles, currentConversationId, filesystemScopePath, queueCommandDiffs]);
 
   // Persist commands map by conversation id
   useEffect(() => {
@@ -793,6 +869,10 @@ export default function ConversationInterface() {
     } catch {
       setCommandsByFile({});
     }
+  }, [currentConversationId]);
+
+  useEffect(() => {
+    lastProcessedAssistantDiffSignatureRef.current = '';
   }, [currentConversationId]);
 
   // Fetch available providers on mount and align defaults with server config
@@ -1115,14 +1195,14 @@ export default function ConversationInterface() {
       toast.info("No pending command diffs to apply.");
       return;
     }
-    void applyDiffsToFilesystem(entries);
+    void applyDiffsToFilesystemQueued(entries);
   };
 
   const applyDiffsForFile = (path: string) => {
     const diffs = commandsByFile[path] || [];
     if (diffs.length === 0) return;
     const entries = diffs.map((diff) => ({ path, diff }));
-    void applyDiffsToFilesystem(entries);
+    void applyDiffsToFilesystemQueued(entries);
   };
 
   const clearAllCommandDiffs = () => {
@@ -1166,8 +1246,69 @@ export default function ConversationInterface() {
       filesystemSessionId,
     });
 
+    // Create simple hash for diff tracking
+    function hashDiff(diff: string): string {
+      return diff.length.toString(36) + '-' + diff.slice(0, 20).replace(/\s/g, '');
+    }
+
+    // Client-side path validation to prevent retry loops on invalid paths
+    // Matches server-side validation and pre-filter validation
+    function isValidFilePath(path: string): boolean {
+      const lastSegment = path.split('/').pop() || path;
+
+      // CRITICAL: Reject paths ending with quotes (JSX/HTML fragments)
+      if (path.endsWith('"') || path.endsWith("'") || path.endsWith('`')) {
+        console.warn('[applyDiffsToFilesystem] Rejecting path ending with quote (JSX fragment):', path);
+        return false;
+      }
+
+      // Reject CSS values, SCSS variables, operators, etc.
+      if (/^[0-9.]+[a-z]*$/i.test(lastSegment)) return false;  // "0.3s", "10px"
+      if (/^\$/.test(lastSegment)) return false;  // SCSS variables
+      if (/^[@.#:]/.test(lastSegment)) return false;  // CSS selectors
+      if (/^[,;:!?()\[\]{}\/]+$/.test(lastSegment)) return false;  // Operators
+      if (/^v-/.test(lastSegment)) return false;  // Vue directives
+      if (/[,\s]$/.test(lastSegment)) return false;  // Trailing comma/space
+      
+      // Reject paths with spaces in filename
+      if (/\s/.test(lastSegment)) return false;
+
+      return true;
+    }
+
     for (const entry of entries) {
       const resolvedPath = resolveScopedPath(entry.path, scopePath);
+      
+      // Check if this diff has been permanently rejected (exceeded retry limit)
+      const diffKey = `${resolvedPath}::${hashDiff(entry.diff)}`;
+      const failureCount = rejectedDiffsRef.current.get(diffKey) || 0;
+      if (failureCount >= MAX_RETRY_ATTEMPTS) {
+        console.warn('[applyDiffsToFilesystem] Skipping permanently rejected diff (exceeded retry limit):', {
+          path: resolvedPath,
+          failureCount,
+          diffLength: entry.diff.length,
+        });
+        continue;  // Skip this diff permanently
+      }
+
+      // CRITICAL FIX: Skip obviously invalid paths BEFORE attempting read
+      // This prevents infinite retry loops on CSS values, SCSS variables, etc.
+      if (!isValidFilePath(resolvedPath)) {
+        console.warn('[applyDiffsToFilesystem] Skipping invalid path (CSS value, SCSS var, etc.):', resolvedPath);
+        // Mark as permanently rejected to prevent retry
+        rejectedDiffsRef.current.set(diffKey, MAX_RETRY_ATTEMPTS);
+        failed[entry.path] = failed[entry.path] || [];
+        failed[entry.path].push(entry.diff);
+        continue;
+      }
+      
+      // CRITICAL FIX: Skip empty diffs entirely - don't add to failed list, just ignore
+      // This prevents infinite loops on malformed LLM output
+      if (!entry.diff || entry.diff.trim().length === 0) {
+        console.debug('[applyDiffsToFilesystem] Skipping empty diff (prevents infinite loop):', resolvedPath);
+        continue;
+      }
+      
       let currentContent = "";
       let readErrorMsg: string | null = null;
       try {
@@ -1181,6 +1322,19 @@ export default function ConversationInterface() {
           if (payload?.success && payload?.data?.content != null) {
             currentContent = payload.data.content;
           }
+        } else if (readResponse.status === 404) {
+          // File doesn't exist yet - this is OK for new file creation
+          // Set empty content and let diff/create logic handle it
+          currentContent = "";
+          readErrorMsg = null; // Clear error for 404 - it's expected for new files
+        } else if (readResponse.status === 400 || readResponse.status === 429) {
+          // Invalid path or rate limited - skip this file to prevent retry loop
+          console.warn('[applyDiffsToFilesystem] Skipping path due to server rejection:', resolvedPath, 'status:', readResponse.status);
+          // Mark as permanently rejected for 429 (rate limit) or 400 (invalid path)
+          rejectedDiffsRef.current.set(diffKey, MAX_RETRY_ATTEMPTS);
+          failed[entry.path] = failed[entry.path] || [];
+          failed[entry.path].push(entry.diff);
+          continue;
         } else {
           readErrorMsg = `Read failed with status ${readResponse.status}`;
         }
@@ -1192,6 +1346,9 @@ export default function ConversationInterface() {
       const nextContent = applyDiffToContent(currentContent, entry.path, entry.diff);
 
       if (nextContent == null) {
+        // Track failure for retry limit
+        rejectedDiffsRef.current.set(diffKey, failureCount + 1);
+        
         failed[entry.path] = failed[entry.path] || [];
         failed[entry.path].push(entry.diff);
         console.warn('[applyDiffsToFilesystem] Diff application returned null', {
@@ -1200,7 +1357,12 @@ export default function ConversationInterface() {
           currentContentPreview: currentContent.slice(0, 300),
           diffPreview: entry.diff.slice(0, 500),
           readError: readErrorMsg,
-          suggestion: 'This usually means the file content has changed since the diff was generated, or the diff targets text that no longer exists in the file.',
+          isNewFile: currentContent === "" && !readErrorMsg,
+          suggestion: readErrorMsg
+            ? 'File may not exist or read error occurred'
+            : 'Diff may not match current content or is malformed',
+          failureCount: failureCount + 1,
+          willRetry: failureCount + 1 < MAX_RETRY_ATTEMPTS,
         });
         continue;
       }
@@ -1246,24 +1408,38 @@ export default function ConversationInterface() {
           newContentLength: nextContent.length,
         });
       } catch (writeError: any) {
+        // Track failure for retry limit
+        rejectedDiffsRef.current.set(diffKey, failureCount + 1);
+        
         failed[entry.path] = failed[entry.path] || [];
         failed[entry.path].push(entry.diff);
         console.warn('[applyDiffsToFilesystem] Write failed', {
           path: resolvedPath,
           error: writeError.message,
           nextContentLength: nextContent.length,
+          failureCount: failureCount + 1,
+          willRetry: failureCount + 1 < MAX_RETRY_ATTEMPTS,
         });
       }
     }
 
     if (appliedCount > 0) {
-      emitFilesystemUpdated({
-        scopePath: filesystemScopePath || "project",
-        source: "command-diff",
-        workspaceVersion: lastWriteMetadata?.workspaceVersion,
-        commitId: lastWriteMetadata?.commitId,
-        sessionId: lastWriteMetadata?.sessionId || filesystemSessionId,
+      // CRITICAL FIX: Don't emit filesystem event for self-applied diffs
+      // This prevents infinite read loops where:
+      // 1. We apply diffs → emit event → trigger refresh → re-read files → apply diffs again
+      // The files are already updated in the VFS, no need to trigger refresh
+      console.debug('[applyDiffsToFilesystem] Skipping emitFilesystemUpdated for self-applied diffs (prevents infinite loop)', {
+        appliedCount,
+        scopePath: filesystemScopePath,
       });
+      // emitFilesystemUpdated({
+      //   scopePath: filesystemScopePath || "project",
+      //   paths: entries.map((entry) => resolveScopedPath(entry.path, scopePath)),
+      //   source: "command-diff",
+      //   workspaceVersion: lastWriteMetadata?.workspaceVersion,
+      //   commitId: lastWriteMetadata?.commitId,
+      //   sessionId: lastWriteMetadata?.sessionId || filesystemSessionId,
+      // });
     }
 
     setCommandsByFile((prev) => {
@@ -1306,11 +1482,25 @@ export default function ConversationInterface() {
     }
   }, [filesystemScopePath, filesystemSessionId]);
 
-  // Ref to hold applyDiffsToFilesystem for use in useEffect (before callback definition)
-  const applyDiffsRef = useRef(applyDiffsToFilesystem);
-  useEffect(() => {
-    applyDiffsRef.current = applyDiffsToFilesystem;
+  const applyDiffsToFilesystemQueued = useCallback((entries: Array<{ path: string; diff: string }>) => {
+    if (!entries.length) {
+      return Promise.resolve();
+    }
+
+    const run = async () => {
+      await applyDiffsToFilesystem(entries);
+    };
+
+    const queued = diffApplyQueueRef.current.then(run, run);
+    diffApplyQueueRef.current = queued.catch(() => {});
+    return queued;
   }, [applyDiffsToFilesystem]);
+
+  // Ref to hold applyDiffsToFilesystem for use in useEffect (before callback definition)
+  const applyDiffsRef = useRef(applyDiffsToFilesystemQueued);
+  useEffect(() => {
+    applyDiffsRef.current = applyDiffsToFilesystemQueued;
+  }, [applyDiffsToFilesystemQueued]);
 
   // Apply polled diffs to filesystem (defined after applyDiffsToFilesystem)
   const applyPolledDiffs = useCallback(async (pathsToApply?: string[]) => {
@@ -1325,12 +1515,12 @@ export default function ConversationInterface() {
 
     const entries = diffsToApply.map(d => ({ path: d.path, diff: d.diff }));
     try {
-      await applyDiffsToFilesystem(entries);
+      await applyDiffsToFilesystemQueued(entries);
     } finally {
       // Clear the applied diffs from the poller after apply completes
       diffsPoller.clearDiffs();
     }
-  }, [diffsPoller.diffs, applyDiffsToFilesystem, diffsPoller.clearDiffs]);
+  }, [diffsPoller.diffs, applyDiffsToFilesystemQueued, diffsPoller.clearDiffs]);
 
   // Handle chat submission - no login restrictions
   const refreshAttachedFiles = useCallback(async (

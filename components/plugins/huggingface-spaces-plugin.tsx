@@ -362,9 +362,7 @@ const HuggingFaceSpacesPlugin: React.FC<PluginProps> = ({ onClose, onResult, ini
                       url={spaceEmbedUrl}
                       reason={failureReason || 'failed'}
                       errorMessage={errorMessage || undefined}
-                      onRetry={handleRetry}
-                      onTryFallback={handleFallback}
-                      onOpenExternal={() => window.open(spaceUrl, '_blank', 'noopener,noreferrer')}
+                      onRetry={handleRetry}onOpenExternal={() => window.open(spaceUrl, '_blank', 'noopener,noreferrer')}
                       onClose={onClose}
                       autoRetryCount={retryCount}
                       maxRetries={3}

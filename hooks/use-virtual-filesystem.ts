@@ -12,6 +12,7 @@ import type {
 import { opfsAdapter, OPFSAdapter } from '@/lib/virtual-filesystem/opfs/opfs-adapter';
 import { opfsCore } from '@/lib/virtual-filesystem/opfs/opfs-core';
 import { onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
+import { sanitizeExtractedPath } from '@/lib/chat/file-edit-parser';
 
 export interface AttachedVirtualFile {
   path: string;
@@ -71,8 +72,8 @@ interface SnapshotCacheEntry {
 const snapshotCache = new Map<string, SnapshotCacheEntry>();
 const listCache = new Map<string, { nodes: VirtualFilesystemNode[]; timestamp: number }>();
 const inFlightRequests = new Map<string, Promise<any>>();
-const SNAPSHOT_CACHE_TTL_MS = 5000;  // 5 seconds for snapshots - reduced for fresher data
-const LIST_CACHE_TTL_MS = 3000;      // 3 seconds for directory listings - reduced for responsiveness
+const SNAPSHOT_CACHE_TTL_MS = 10000;  // 10 seconds for snapshots (was 5s) - reduced polling
+const LIST_CACHE_TTL_MS = 8000;      // 8 seconds for directory listings (was 3s) - reduced polling
 const SNAPSHOT_CACHE_MAX_ENTRIES = 100;
 
 // Debounce map to prevent duplicate API calls within short time windows
@@ -283,7 +284,7 @@ export function useVirtualFilesystem(
     };
   }, [useOPFS, offlineMode]);
 
-  // Update sync status periodically
+  // Update sync status periodically (reduced frequency — local in-memory read only)
   useEffect(() => {
     if (!useOPFS) return;
 
@@ -296,10 +297,17 @@ export function useVirtualFilesystem(
         lastSyncTime: status.lastSyncTime,
         isOnline: status.isOnline,
       }));
-    }, 5000);
+    }, 15000);
 
     return () => clearInterval(interval);
   }, [useOPFS]);
+
+  // Rate limit backoff state - persists across debounce cycles
+  const rateLimitBackoffRef = useRef<{ path: string; retryAfter: number; retryCount: number }>({
+    path: '',
+    retryAfter: 0,
+    retryCount: 0,
+  });
 
   // Listen for filesystem-updated events from other panels (code-preview-panel, conversation-interface, etc.)
   // and invalidate the snapshot cache AND trigger immediate re-fetch to ensure fresh data
@@ -312,6 +320,75 @@ export function useVirtualFilesystem(
     // CRITICAL: Keep one shared set across all events to accumulate paths
     // This prevents losing paths when rapid events clear the timer
     const pendingPathsToRefresh = new Set<string>();
+    
+    // Helper function to actually fetch and update directory listing
+    const fetchAndUpdateDirectory = (path: string, ownerId: string) => {
+      fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
+        method: 'GET',
+        headers: buildApiHeaders({ json: false }),
+        credentials: 'include',
+      })
+      .then(res => {
+        // Handle rate limiting (429) with exponential backoff
+        if (res.status === 429) {
+          const retryAfterHeader = res.headers.get('Retry-After') || res.headers.get('X-RateLimit-Reset');
+          let retryAfterMs = 2000; // default 2s
+          
+          if (retryAfterHeader) {
+            const parsed = parseInt(retryAfterHeader, 10);
+            if (!isNaN(parsed)) {
+              retryAfterMs = parsed > Date.now() ? parsed - Date.now() : parsed * 1000;
+            }
+          }
+          
+          // Check response body for retryAfter
+          return res.json().then(body => {
+            if (body?.retryAfter) {
+              retryAfterMs = body.retryAfter * 1000;
+            }
+            
+            logWarn(`[filesystem-updated] Rate limited on "${path}", backing off for ${retryAfterMs}ms`);
+            
+            // Set backoff state using ref
+            rateLimitBackoffRef.current = {
+              path,
+              retryAfter: Date.now() + retryAfterMs,
+              retryCount: rateLimitBackoffRef.current.retryCount + 1,
+            };
+            
+            // Schedule retry with backoff
+            if (rateLimitBackoffRef.current.retryCount <= 3) {
+              setTimeout(() => {
+                log(`[filesystem-updated] Retrying rate-limited path "${path}" (attempt ${rateLimitBackoffRef.current.retryCount})`);
+                fetchAndUpdateDirectory(path, ownerId);
+              }, retryAfterMs);
+            }
+            
+            return { success: false, rateLimited: true };
+          }).catch(() => ({ success: false, rateLimited: true }));
+        }
+        
+        // Sync session ID with server to prevent fragmentation
+        syncAnonymousSessionId(res);
+        return res.json();
+      })
+      .then((payload: any) => {
+        if (payload?.success && payload?.data) {
+          const data = payload.data;
+          log(`[filesystem-updated] Refreshed directory: "${data.path}", ${data.nodes.length} entries`);
+          setCachedList(path, ownerId, data.nodes);
+          // Update UI state if this is the current path
+          if (path === currentPathRef.current) {
+            setNodes(data.nodes);
+          }
+        } else if (payload?.rateLimited) {
+          logWarn(`[filesystem-updated] Rate limited response for "${path}"`);
+        }
+      })
+      .catch(err => {
+        logWarn(`[filesystem-updated] Failed to refresh "${path}":`, err);
+      });
+    };
 
     const unsubscribe = onFilesystemUpdated((event) => {
       const detail = event.detail;
@@ -322,14 +399,69 @@ export function useVirtualFilesystem(
 
       // Determine which paths need refresh (deduplicate)
       // Add to the SHARED pending set, not a local one
+      const addRefreshPath = (rawPath?: string) => {
+        if (!rawPath) return;
+        const path = sanitizeExtractedPath(rawPath, { isFolder: true });
+        if (!path) {
+          logWarn(`[filesystem-updated] Ignoring invalid refresh path: "${rawPath}"`);
+          return;
+        }
+        pendingPathsToRefresh.add(path);
+      };
+
       if (detail.scopePath) {
-        pendingPathsToRefresh.add(detail.scopePath);
+        addRefreshPath(detail.scopePath);
       }
       if (detail.path) {
-        pendingPathsToRefresh.add(detail.path);
+        addRefreshPath(detail.path);
       }
       if (detail.paths && detail.paths.length > 0) {
-        detail.paths.forEach(p => pendingPathsToRefresh.add(p));
+        detail.paths.forEach(addRefreshPath);
+      }
+
+      // CRITICAL FIX: Sync session ID from event detail to prevent fragmentation
+      // When files are written, the server may have used a different session ID than
+      // what the client currently has in localStorage. This causes reads to return
+      // empty results while writes went to a different workspace.
+
+      // CRITICAL FIX: Extract simple session ID from potentially composite IDs
+      // This handles formats like "anon:timestamp:001" -> "001" (same logic as server's normalizeSessionId)
+      // Returns empty string for invalid input - caller should handle this case
+      const extractSessionPart = (id: string): string => {
+        if (!id || typeof id !== 'string') return '';
+        const trimmed = id.trim();
+        if (!trimmed) return '';
+        // Extract last segment after any colons (handles composite IDs)
+        if (trimmed.includes(':')) {
+          const parts = trimmed.split(':');
+          return parts[parts.length - 1].trim();
+        }
+        return trimmed;
+      };
+      
+      // If event has a sessionId, sync with local session to prevent reading from wrong workspace
+      if (detail.sessionId) {
+        const eventSessionId = detail.sessionId;
+        const ownerId = getSessionId();
+        const currentSessionPart = extractSessionPart(ownerId);
+        
+        // If the session parts differ, sync to the server's session to ensure reads
+        // hit the same workspace where the writes occurred
+        if (eventSessionId !== currentSessionPart) {
+          log(`[filesystem-updated] Session mismatch - syncing to server session: event=${eventSessionId}, current=${currentSessionPart}`);
+          
+          // Update localStorage to match the server's session ID format
+          if (typeof window !== 'undefined') {
+            try {
+              // Store the full session ID (with anon_ prefix for consistency with getOrCreateAnonymousSessionId)
+              const fullSessionId = eventSessionId.startsWith('anon_') ? eventSessionId : `anon_${eventSessionId}`;
+              localStorage.setItem('anonymous_session_id', fullSessionId);
+            } catch {}
+          }
+          
+          // Clear ALL caches to force fresh reads with the correct session
+          invalidateSnapshotCache(undefined, undefined);
+        }
       }
 
       // Invalidate cache immediately (don't debounce this)
@@ -357,31 +489,28 @@ export function useVirtualFilesystem(
 
         // Fetch fresh data for all affected paths
         for (const path of pendingPathsToRefresh) {
-          // Use native fetch (bypassing the 'request' callback which is defined later)
-          fetch(`/api/filesystem/list?path=${encodeURIComponent(path)}`, {
-            method: 'GET',
-            headers: buildApiHeaders({ json: false }),
-            credentials: 'include',
-          })
-          .then(res => {
-            // Sync session ID with server to prevent fragmentation
-            syncAnonymousSessionId(res);
-            return res.json();
-          })
-          .then((payload: any) => {
-            if (payload?.success && payload?.data) {
-              const data = payload.data;
-              log(`[filesystem-updated] Refreshed directory: "${data.path}", ${data.nodes.length} entries`);
-              setCachedList(path, ownerId, data.nodes);
-              // Update UI state if this is the current path
-              if (path === currentPathRef.current) {
-                setNodes(data.nodes);
-              }
+          // CRITICAL FIX: Skip file paths - only directories should call listDirectory
+          // File paths (contain extension, no trailing slash) should use readFile instead
+          const isFilePath = path.includes('.') && !path.endsWith('/') && !path.endsWith('/.directory');
+          if (isFilePath) {
+            log(`[filesystem-updated] Skipping listDirectory for file path: "${path}" - invalidating cache only`);
+            invalidateSnapshotCache(path, ownerId);
+            continue;
+          }
+          
+          // Check if this path is currently rate limited using the ref
+          if (rateLimitBackoffRef.current.path === path && rateLimitBackoffRef.current.retryCount > 0) {
+            if (Date.now() < rateLimitBackoffRef.current.retryAfter) {
+              log(`[filesystem-updated] Skipping rate-limited path "${path}", retry after ${rateLimitBackoffRef.current.retryAfter - Date.now()}ms`);
+              continue;
+            } else {
+              // Backoff expired, reset retry count for this path
+              rateLimitBackoffRef.current.retryCount = 0;
             }
-          })
-          .catch(err => {
-            logWarn(`[filesystem-updated] Failed to refresh "${path}":`, err);
-          });
+          }
+          
+          // Use the helper function to fetch and update directory
+          fetchAndUpdateDirectory(path, ownerId);
         }
 
         // Clear the pending set AFTER all fetches are scheduled

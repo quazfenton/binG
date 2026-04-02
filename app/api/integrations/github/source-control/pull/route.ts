@@ -40,7 +40,7 @@ export async function POST(request: NextRequest) {
     // Get owner/repo from user's repos if not provided
     let targetOwner = owner;
     let targetRepo = repo;
-    
+
     if (!targetOwner || !targetRepo) {
       const reposResponse = await githubApi<any[]>('/user/repos?per_page=100', token);
       if (reposResponse.length === 0) {
@@ -48,8 +48,21 @@ export async function POST(request: NextRequest) {
       }
       [targetOwner, targetRepo] = reposResponse[0].full_name.split('/');
     }
-    
-    const targetBranch = branch || 'main';
+
+    // Get repository info to determine default branch
+    let targetBranch = branch;
+    if (!targetBranch) {
+      try {
+        const repoInfo = await githubApi<any>(
+          `/repos/${targetOwner}/${targetRepo}`,
+          token
+        );
+        targetBranch = repoInfo.default_branch || 'main';
+      } catch (error) {
+        console.warn('Failed to fetch repo info, using main as fallback:', error);
+        targetBranch = 'main';
+      }
+    }
     
     // Get latest commit from GitHub
     const refResponse = await githubApi<any>(

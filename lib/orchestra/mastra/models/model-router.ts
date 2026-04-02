@@ -10,6 +10,7 @@
 
 import { Agent } from '@mastra/core/agent';
 import { getMemory, withMemory } from '../memory';
+import { getProviderForTask, getModelForTask } from '@/lib/config/task-providers';
 
 /**
  * Model tier types for routing
@@ -22,6 +23,26 @@ export type ModelTier = 'fast' | 'reasoning' | 'coder' | 'costEffective';
  * FIXED: Added name property to all agents (required by Mastra SDK)
  * NEW: Added memory integration for conversation history
  */
+// Get user's configured model for agent tasks
+// Use mistral-small-latest as default (widely available) instead of gpt-4o
+const defaultModel = getModelForTask('agent', process.env.DEFAULT_MODEL || 'mistral-small-latest');
+
+/**
+ * Model configuration based on user's provider settings
+ * Uses environment-configured models for each tier
+ */
+function getModelConfig(tier: string): string {
+  const defaultModelValue = process.env.DEFAULT_MODEL || 'mistral-small-latest';
+  const modelMap: Record<string, string> = {
+    fast: getModelForTask('fast', defaultModelValue),
+    reasoning: getModelForTask('reasoning', defaultModelValue),
+    coder: getModelForTask('coder', defaultModelValue),
+    costEffective: getModelForTask('cost-effective', defaultModelValue),
+  };
+
+  return modelMap[tier] || defaultModel;
+}
+
 export const modelRouter = {
   /**
    * Fast model for simple tasks
@@ -32,7 +53,7 @@ export const modelRouter = {
     new Agent({
       id: 'fast-router',
       name: 'Fast Model Router',
-      model: 'openai/gpt-4o-mini',
+      model: getModelConfig('fast'),
       instructions: [
         'You are a fast, efficient assistant.',
         'Provide concise, direct answers.',
@@ -51,7 +72,7 @@ export const modelRouter = {
     new Agent({
       id: 'reasoning-router',
       name: 'Reasoning Model Router',
-      model: 'openai/gpt-4o',
+      model: getModelConfig('reasoning'),
       instructions: [
         'You are a thoughtful reasoning assistant.',
         'Think step-by-step before answering.',
@@ -71,7 +92,7 @@ export const modelRouter = {
     new Agent({
       id: 'coder-router',
       name: 'Coder Model Router',
-      model: 'anthropic/claude-3-5-sonnet-20241022',
+      model: getModelConfig('coder'),
       instructions: [
         'You are an expert coding assistant.',
         'Write clean, maintainable code.',
@@ -91,7 +112,7 @@ export const modelRouter = {
     new Agent({
       id: 'cost-effective-router',
       name: 'Cost-Effective Model Router',
-      model: 'google/gemini-2-0-flash',
+      model: getModelConfig('costEffective'),
       instructions: [
         'You are a helpful, cost-effective assistant.',
         'Provide useful answers while being efficient.',

@@ -10,6 +10,7 @@ const logger = createLogger('Preview:ErrorBoundary');
 interface PreviewErrorBoundaryProps {
   children: ReactNode;
   previewMode?: string;
+  framework?: string;
   onReset?: () => void;
   fallbackComponent?: ReactNode;
 }

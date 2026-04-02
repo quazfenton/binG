@@ -13,7 +13,6 @@ import { Button } from '../ui/button';
 import { Badge } from '../ui/badge';
 import {
   AlertCircle,
-  Shield,
   RefreshCw,
   ExternalLink,
   Copy,
@@ -21,9 +20,10 @@ import {
   Clock,
   Info,
   X,
+  Shield,
+  AlertTriangle,
   Globe,
   Lock,
-  AlertTriangle,
 } from 'lucide-react';
 import { toast } from 'sonner';
 
@@ -33,7 +33,6 @@ export interface IframeUnavailableProps {
   errorMessage?: string;
   onRetry?: () => void;
   onOpenExternal?: () => void;
-  onTryFallback?: () => void;
   onClose?: () => void;
   autoRetryCount?: number;
   maxRetries?: number;
@@ -45,7 +44,6 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
   errorMessage,
   onRetry,
   onOpenExternal,
-  onTryFallback,
   onClose,
   autoRetryCount = 0,
   maxRetries = 3,
@@ -122,7 +120,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
     switch (reason) {
       case 'x-frame-options':
         return {
-          icon: Lock,
+          icon: Lock as React.ComponentType<{ className?: string }>,
           title: 'Frame Embedding Blocked',
           description: 'This website does not allow embedding in iframes (X-Frame-Options header)',
           color: 'text-red-400',
@@ -131,7 +129,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
         };
       case 'csp-blocked':
         return {
-          icon: Shield,
+          icon: Shield as React.ComponentType<{ className?: string }>,
           title: 'Content Security Policy Block',
           description: 'The website\'s CSP policy prevents iframe embedding',
           color: 'text-orange-400',
@@ -140,7 +138,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
         };
       case 'timeout':
         return {
-          icon: Clock,
+          icon: Clock as React.ComponentType<{ className?: string }>,
           title: 'Connection Timeout',
           description: 'The website took too long to respond',
           color: 'text-yellow-400',
@@ -149,7 +147,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
         };
       case 'blocked':
         return {
-          icon: AlertTriangle,
+          icon: AlertTriangle as React.ComponentType<{ className?: string }>,
           title: 'Access Restricted',
           description: 'Access to this website is temporarily restricted',
           color: 'text-red-400',
@@ -158,7 +156,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
         };
       case 'header-detected':
         return {
-          icon: Info,
+          icon: Info as React.ComponentType<{ className?: string }>,
           title: 'Restrictive Headers Detected',
           description: 'The website has headers that prevent embedding',
           color: 'text-orange-400',
@@ -277,16 +275,6 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
 
         {/* Action Buttons */}
         <div className="flex flex-wrap gap-3 mt-auto">
-          {onTryFallback && (
-            <Button
-              onClick={onTryFallback}
-              className="flex-1 min-w-[140px] bg-gradient-to-r from-green-600 to-emerald-600 hover:from-green-700 hover:to-emerald-700 text-white"
-            >
-              <Globe className="w-4 h-4 mr-2" />
-              Try Fallback
-            </Button>
-          )}
-
           {onRetry && autoRetryCount < maxRetries && (
             <Button
               onClick={handleRetry}
@@ -296,12 +284,12 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
               {timeUntilRetry !== null && timeUntilRetry > 0 ? (
                 <>
                   <Clock className="w-4 h-4 mr-2" />
-                  Retry in {timeUntilRetry}s
+                  Retrying in {timeUntilRetry}s...
                 </>
               ) : (
                 <>
                   <RefreshCw className="w-4 h-4 mr-2" />
-                  Try Again
+                  Retry
                 </>
               )}
             </Button>

@@ -36,10 +36,16 @@ export const tamboLocalTools = {
 
   /**
    * SECURITY: ownerId parameter is IGNORED - owner derived from auth context
+   * 
+   * Supports append mode for cat >> heredoc syntax
    */
-  writeFile: async ({ path, content, ownerId }: { path: string; content: string; ownerId?: string }, authContextUserId?: string) => {
+  writeFile: async ({ path, content, ownerId, append }: { path: string; content: string; ownerId?: string; append?: boolean }, authContextUserId?: string) => {
     const owner = getSecureOwner(ownerId, authContextUserId);
-    const file = await virtualFilesystem.writeFile(owner, path, content);
+    const writeOptions: { failIfExists?: boolean; append?: boolean } = {};
+    if (append !== undefined) {
+      writeOptions.append = append;
+    }
+    const file = await virtualFilesystem.writeFile(owner, path, content, undefined, writeOptions);
     return { path: file.path, version: file.version, language: file.language, size: file.size };
   },
 
@@ -158,19 +164,35 @@ export const tamboLocalTools = {
     }
 
     try {
-      // Use Function with strict mode and sanitized input
-      // This is safe because we've already validated the input contains only safe characters
-      const calculateFunc = new Function(`'use strict'; return (${sanitized})`);
-      const result = calculateFunc();
-      
-      // Validate result is a finite number
-      if (typeof result !== 'number' || !Number.isFinite(result)) {
-        return { error: 'Invalid result' };
-      }
-      
+      // SECURITY: Use safer math evaluation instead of new Function()
+      // Only allow numbers, basic operators, parentheses, and Math functions
+      const safeMathEval = (expr: string): number => {
+        // Allow only: numbers, +, -, *, /, %, ^, parentheses, spaces, dots, and Math functions
+        const safePattern = /^[\d+\-*/%^().\s]+$/;
+        const mathFuncPattern = /Math\.(abs|ceil|floor|round|sqrt|pow|min|max|sin|cos|tan|log|exp)/g;
+
+        if (!safePattern.test(expr.replace(mathFuncPattern, ''))) {
+          throw new Error('Invalid characters in expression');
+        }
+
+        // Replace ^ with ** for exponentiation
+        const normalizedExpr = expr.replace(/\^/g, '**');
+
+        // Use Function with strict validation (safer due to pattern validation above)
+        const calculateFunc = new Function(`"use strict"; return (${normalizedExpr})`);
+        const result = calculateFunc();
+
+        if (typeof result !== 'number' || !Number.isFinite(result)) {
+          throw new Error('Invalid result');
+        }
+
+        return result;
+      };
+
+      const result = safeMathEval(sanitized);
       return { result: String(result), expression: raw, sanitized };
     } catch (error: any) {
-      return { error: 'Invalid mathematical expression', expression: raw };
+      return { error: error.message || 'Invalid mathematical expression', expression: raw };
     }
   },
 

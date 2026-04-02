@@ -47,6 +47,8 @@ export type SandboxProviderType =
   | 'zeroboot'
   | 'modal'
   | 'modal-com'
+  | 'terminaluse'
+  | 'agentfs'
 
 // Provider registry
 interface ProviderEntry {
@@ -425,6 +427,54 @@ function initializeRegistry() {
       return true;
     },
   })
+
+  // TerminalUse - Cloud agents with persistent filesystems
+  // Best for: Long-running agents, stateful tasks, multi-turn conversations
+  // Features: Persistent filesystems, task streaming, state management, ACP protocol
+  // Note: Requires TERMINALUSE_API_KEY environment variable
+  providerRegistry.set('terminaluse', {
+    provider: null as any as any,
+    priority: 4, // Medium-high priority - good for agent workloads
+    enabled: true,
+    available: !!process.env.TERMINALUSE_API_KEY,
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { TerminalUseProvider } = await import('./terminaluse-provider')
+      return new TerminalUseProvider()
+    },
+    healthCheck: async (provider) => {
+      if (provider.healthCheck) {
+        const result = await provider.healthCheck();
+        return result.healthy;
+      }
+      return true;
+    },
+  })
+
+  providerRegistry.set('agentfs', {
+    provider: null as any as any,
+    priority: 10, // Low priority — AgentFS is for storage, not command execution
+    enabled: true,
+    available: true, // Always available (local SQLite, Turso cloud optional)
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { agentFSProvider } = await import('./agentfs-provider')
+      return agentFSProvider
+    },
+    healthCheck: async (provider) => {
+      if (provider.healthCheck) {
+        const result = await provider.healthCheck();
+        return result.healthy;
+      }
+      return true;
+    },
+  })
 }
 
 // Initialize on module load
@@ -715,6 +765,10 @@ export { BlaxelProvider, verifyCallbackSignature, verifyCallbackMiddleware } fro
 export type { BlaxelSandboxHandle } from './blaxel-provider'
 export { SpritesProvider } from './sprites-provider'
 export { CodeSandboxProvider } from './codesandbox-provider'
+export { AgentFSProvider, agentFSProvider } from './agentfs-provider'
+export type { AgentFSConfig, AgentFSSandboxHandle } from './agentfs-provider'
+export { AgentFSMountManager, AgentFSMount, agentFSMountManager } from './agentfs-mount'
+export type { AgentFSMountConfig, MountStatus } from './agentfs-mount'
 export { WebContainerProvider } from './webcontainer-provider'
 export { WebContainerFileSystemProvider } from './webcontainer-filesystem-provider'
 export { WebContainerSpawnProvider } from './webcontainer-spawn-provider'
@@ -1035,3 +1089,18 @@ export function getMistralAgentProvider() {
   const { MistralAgentProvider } = require('./mistral/mistral-agent-provider')
   return new MistralAgentProvider()
 }
+
+// ===========================================
+// TerminalUse Provider Exports
+// ===========================================
+export {
+  TerminalUseProvider,
+  TerminalUseSandboxHandle,
+  TerminalUseClient,
+  type TerminalUseTask,
+  type TerminalUseEvent,
+  type TerminalUseFilesystem,
+  type TerminalUseAgent,
+  type TerminalUseState,
+  type TerminalUseMessage,
+} from './terminaluse-provider'

@@ -30,10 +30,15 @@
  */
 
 import { createLogger } from '@/lib/utils/logger'
+import { chatLogger } from '@/lib/chat/chat-logger'
 import { normalizeToolInvocations, type ToolInvocation } from '@/lib/types/tool-invocation'
 import { quotaManager } from '@/lib/management/quota-manager'
 import { detectRequestType } from '@/lib/utils/request-type-detector'
-import { extractFsActionWrites } from '@/lib/chat/file-edit-parser'
+import {
+  extractFsActionWrites,
+  extractReasoningContent,
+  parseStructuredPathList,
+} from '@/lib/chat/file-edit-parser'
 
 // Import router services
 import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from '@/lib/chat/fast-agent-service'
@@ -107,11 +112,16 @@ export interface RouterRequest {
   enableSandbox?: boolean
   enableComposio?: boolean
   conversationId?: string
+  /** When true, the Vercel AI SDK handles tool calling natively — skip regex intent parsing */
+  nativeToolCalling?: boolean
+  /** Spec amplification mode: 'normal' (disabled), 'enhanced', or 'max' */
+  mode?: 'normal' | 'enhanced' | 'max'
 }
 
 export interface RouterResponse {
   success: boolean
   content?: string
+  stream?: AsyncGenerator<any> // For real-time streaming responses
   data?: any
   source: string
   priority: number
@@ -122,6 +132,7 @@ export interface RouterResponse {
 export interface UnifiedResponse {
   success: boolean
   content: string
+  stream?: AsyncGenerator<any> // For real-time streaming responses
   source: string
   priority: number
   data: {
@@ -170,6 +181,7 @@ export interface UnifiedResponse {
     actualModel?: string
     messageMetadata?: Record<string, any>
     timestamp: string
+    streaming?: boolean // For real-time streaming responses
     specAmplification?: {
       enabled: boolean
       mode: 'normal' | 'enhanced' | 'max'
@@ -471,7 +483,30 @@ export class ResponseRouter {
       // Route request
       const routerResponse = await this.routeRequest(request, span)
 
-      // Format response
+      // NEW: Handle streaming responses (return stream generator for real-time parsing)
+      if (routerResponse.stream && typeof routerResponse.stream === 'object' && Symbol.asyncIterator in routerResponse.stream) {
+        // This is a streaming response - return it with the stream generator
+        // The caller will consume chunks as they arrive
+        // IMPORTANT: Preserve existing content for fallback standard streaming path
+        // (in case caller doesn't use the stream generator)
+        return {
+          success: true,
+          content: routerResponse.content || '', // Preserve content for standard streaming fallback
+          stream: routerResponse.stream, // Pass through the async generator
+          data: {
+            ...routerResponse.data,
+            streaming: true,
+          },
+          source: routerResponse.source,
+          priority: routerResponse.priority,
+          metadata: {
+            streaming: true,
+            timestamp: new Date().toISOString(),
+          },
+        }
+      }
+
+      // Format response (non-streaming path)
       const unifiedResponse = this.formatResponse(routerResponse, requestId)
 
       // Record metrics
@@ -554,9 +589,9 @@ export class ResponseRouter {
         // Sandbox requests need actual sandbox execution, not just LLM responses
         canHandle: (req: RouterRequest) => {
           const detectedType = detectRequestType(req.messages)
-          // Skip if this is a tool request and tools are enabled
-          // Tool requests should go to tool-execution (priority 4) or composio-tools (priority 5)
-          if (detectedType === 'tool' && req.enableTools !== false) {
+          // When native tool calling is enabled (Vercel AI SDK), handle tool requests here
+          // instead of routing to regex-based intent parsing
+          if (detectedType === 'tool' && req.enableTools !== false && !req.nativeToolCalling) {
             return false
           }
           // Skip if this is a sandbox request and sandbox is enabled
@@ -569,6 +604,39 @@ export class ResponseRouter {
         processRequest: async (req: RouterRequest) => {
           // Pass all required fields including tool/sandbox flags
           const detectedType = detectRequestType(req.messages)
+          
+          // NEW: Use streaming method when stream=true for real-time token streaming
+          if (req.stream === true) {
+            // For streaming, we return an async generator that yields tokens as they arrive
+            // The caller (routeWithSpecAmplification or routeAndFormat) handles the streaming
+            const streamGenerator = enhancedLLMService.generateStreamingResponse({
+              messages: req.messages,
+              provider: req.provider,
+              model: req.model,
+              temperature: req.temperature,
+              maxTokens: req.maxTokens,
+              stream: true,
+              userId: req.userId,
+              requestId: req.requestId,
+              conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
+              enableTools: req.enableTools ?? (detectedType === 'tool' && !!req.userId),
+              enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
+              isSandboxCommand: detectedType === 'sandbox',
+            } as EnhancedLLMRequest)
+            
+            return {
+              success: true,
+              content: '', // Will be filled by streaming chunks
+              stream: streamGenerator, // Pass stream generator to caller
+              data: {
+                source: 'original-system',
+                type: 'streaming',
+                streaming: true,
+              },
+            }
+          }
+          
+          // Non-streaming: use standard generateResponse
           const response = await enhancedLLMService.generateResponse({
             messages: req.messages,
             provider: req.provider,
@@ -862,6 +930,8 @@ export class ResponseRouter {
     const content = this.extractContent(response)
     const commands = this.extractCommands(content)
     const toolInvocations = this.extractToolInvocations(response)
+    const reasoning = this.extractReasoning(response, content)
+    const usage = this.calculateUsage(response, content)
     const toolName = response.data?.toolName
     const authProvider = this.inferProviderFromToolName(toolName)
     const requiresAuth = !!response.data?.requiresAuth
@@ -912,7 +982,7 @@ export class ResponseRouter {
       priority: response.priority || 999,
       data: {
         content: finalContent,
-        usage: this.calculateUsage(response),
+        usage,
         model: (response.metadata as any)?.actualModel || (response.data as any)?.model || (response as any)?.model,
         provider: (response.metadata as any)?.actualProvider || (response.data as any)?.provider || (response as any)?.provider,
         toolCalls: (response.data as any)?.toolCalls,
@@ -934,7 +1004,7 @@ export class ResponseRouter {
         authProvider,
         composioMcp: (response.data as any)?.composioMcp || response.metadata?.composioMcp,
         messageMetadata: (response.data as any)?.messageMetadata,
-        reasoning: this.extractReasoning(response),
+        reasoning,
       },
       commands,
       metadata: {
@@ -1078,31 +1148,48 @@ export class ResponseRouter {
    */
   private parseStructuredCommands(block: string): { request_files?: string[]; write_diffs?: Array<{ path: string; diff: string }> } | undefined {
     try {
-      const reqMatch = block.match(/request_files:\s*\[(.*?)\]/s)
-      const request_files = reqMatch
-        ? JSON.parse(`[${reqMatch[1]}]`.replace(/([a-zA-Z0-9_./-]+)(?=\s*[\],])/g, '"$1"'))
-        : []
+      const extractArraySection = (source: string, key: string): string | null => {
+        const match = source.match(new RegExp(`${key}:\\s*\\[`))
+        if (!match || match.index === undefined) return null
 
-      let write_diffs: Array<{ path: string; diff: string }> = []
-      // Bug #8 fix: Use bracket counting to find the end of the array properly
-      const diffsSectionMatch = block.match(/write_diffs:\s*\[/)
-      if (diffsSectionMatch) {
-        const startIdx = block.indexOf('[', diffsSectionMatch.index)
+        const startIdx = source.indexOf('[', match.index)
         let bracketDepth = 0
-        let endIdx = startIdx + 1
-        
-        for (let i = startIdx + 1; i < block.length; i++) {
-          if (block[i] === '[') bracketDepth++
-          else if (block[i] === ']') {
-            if (bracketDepth === 0) {
-              endIdx = i
-              break
+        let activeQuote: '"' | "'" | '`' | null = null
+
+        for (let i = startIdx + 1; i < source.length; i += 1) {
+          const char = source[i]
+          const previous = i > 0 ? source[i - 1] : ''
+
+          if (activeQuote) {
+            if (char === activeQuote && previous !== '\\') {
+              activeQuote = null
             }
-            bracketDepth--
+            continue
+          }
+
+          if (char === '"' || char === '\'' || char === '`') {
+            activeQuote = char
+            continue
+          }
+
+          if (char === '[') bracketDepth += 1
+          else if (char === ']') {
+            if (bracketDepth === 0) {
+              return source.substring(startIdx + 1, i)
+            }
+            bracketDepth -= 1
           }
         }
-        
-        const diffsContent = block.substring(startIdx + 1, endIdx)
+
+        return null
+      }
+
+      const requestFilesContent = extractArraySection(block, 'request_files')
+      const request_files = requestFilesContent ? parseStructuredPathList(requestFilesContent) : []
+
+      let write_diffs: Array<{ path: string; diff: string }> = []
+      const diffsContent = extractArraySection(block, 'write_diffs')
+      if (diffsContent !== null) {
         const items = diffsContent
           .split(/\},\s*\{/)
           .map(s => s.trim())
@@ -1167,7 +1254,7 @@ export class ResponseRouter {
   /**
    * Extract reasoning from response
    */
-  private extractReasoning(response: any): string | undefined {
+  private extractReasoning(response: any, content?: string): string | undefined {
     const explicitReasoning =
       response.data?.reasoning ||
       response.data?.reasoningTrace ||
@@ -1182,20 +1269,14 @@ export class ResponseRouter {
       return explicitReasoning.trim()
     }
 
-    const content = this.extractContent(response)
-    const thinkRegex = /<think>([\s\S]*?)<\/think>/gi
-    const captures: string[] = []
-    let match: RegExpExecArray | null
-    while ((match = thinkRegex.exec(content)) !== null) {
-      if (match[1]?.trim()) captures.push(match[1].trim())
-    }
-    return captures.length > 0 ? captures.join('\n') : undefined
+    const parsed = extractReasoningContent(content ?? this.extractContent(response))
+    return parsed.reasoning || undefined
   }
 
   /**
    * Calculate usage statistics
    */
-  private calculateUsage(response: any): { promptTokens: number; completionTokens: number; totalTokens: number } {
+  private calculateUsage(response: any, content?: string): { promptTokens: number; completionTokens: number; totalTokens: number } {
     if (response.usage || response.data?.usage) {
       const usage = response.usage || response.data.usage
       return {
@@ -1205,8 +1286,7 @@ export class ResponseRouter {
       }
     }
 
-    const content = this.extractContent(response)
-    const estimatedTokens = Math.ceil(content.length / 4)
+    const estimatedTokens = Math.ceil((content ?? this.extractContent(response)).length / 4)
 
     return {
       promptTokens: 0,
@@ -1946,14 +2026,14 @@ export class ResponseRouter {
               : JSON.stringify(lastUser?.content || '');
           })()
         ),
-        maxTokens: 2000,
+        maxTokens: 4000,
         stream: false,
         requestId: specRequestId
       })
 
       // Wait for primary response (needed for content)
       const primaryResult = await primaryPromise.catch(err => ({ success: false, error: err }))
-      
+
       // Always return primary response immediately
       if (!(primaryResult as any).success) {
         const err = (primaryResult as any).error
@@ -1962,36 +2042,21 @@ export class ResponseRouter {
       }
 
       const primaryData = (primaryResult as any).data
-      
+
       // Emit primary response immediately if emit is provided
       if (request.emit) {
         request.emit('primary_response', { content: primaryData.content, timestamp: Date.now() })
       }
 
-      // Start spec generation in background (don't await - run in parallel)
-      const specGenerationPromise = specPromise
-        .then(res => ({ success: true, data: res }))
-        .catch(err => ({ success: false, error: err }))
-
-      // Return primary response immediately, start background refinement
-      // Background refinement will emit events that appear as new chat messages
-      this.runBackgroundRefinement({
-        primaryData,
-        specGenerationPromise,
-        request,
-        fastModel,
-        startTime
-      }).catch(err => {
-        logger.error('Background refinement failed', { error: err })
-      })
-
       // Return primary response immediately
-      return primaryData
+      // Note: For ToolLoopAgent execution, code is generated during streaming
+      // Spec amplification should be triggered post-stream in the unified pipeline
+      return primaryData as UnifiedResponse
 
     } catch (error) {
       logger.error('Spec amplification failed', error)
       recordEndpointUsage('spec-generation', Date.now() - startTime, false)
-      
+
       // Fallback to normal routing
       return await this.routeAndFormat(request)
     } finally {
@@ -2057,6 +2122,16 @@ export class ResponseRouter {
         return
       }
 
+      // Emit spec as thinking/reasoning so it shows in the expandable thinking UI
+      if (request.emit) {
+        const specSummary = formatSpecForThinking(parsed, specScore);
+        request.emit('thinking', {
+          type: 'thinking',
+          content: specSummary,
+          timestamp: Date.now(),
+        });
+      }
+
       // Chunk spec
       let chunks = chunkSpec(parsed)
       if (request.mode === 'max') {
@@ -2077,6 +2152,7 @@ export class ResponseRouter {
         userId: request.userId,
         conversationId: request.conversationId,
         maxConcurrency: request.mode === 'max' ? 3 : 2,
+        timeBudgetMs: request.mode === 'max' ? 180_000 : 120_000,
         emit: request.emit
       })
 
@@ -2090,19 +2166,25 @@ export class ResponseRouter {
       const ownerIdForEdits = (request as any).filesystemOwnerId || request.userId;
       // Fallback: derive conversationId from requestId if missing (prevents refinement edits from being silently dropped)
       // SECURITY: Validate requestId to prevent path traversal attacks - only allow safe alphanumeric characters
-      const conversationIdForEdits =
+      const rawConversationId =
         request.conversationId ||
         (request.requestId && /^[a-zA-Z0-9_-]+$/.test(request.requestId) ? request.requestId : undefined);
 
-      if (ownerIdForEdits && conversationIdForEdits) {
+      if (ownerIdForEdits && rawConversationId) {
+        // CRITICAL FIX: Use normalizeSessionId to extract simple session folder name
+        // This prevents composite IDs like "anon:timestamp:001" from leaking into paths
+        const { normalizeSessionId } = await import('@/lib/virtual-filesystem/scope-utils');
+        const simpleSessionId = normalizeSessionId(rawConversationId) || rawConversationId; // Use original if normalize returns empty
+        const compositeConversationId = `${ownerIdForEdits}:${rawConversationId}`;
+
         try {
           const { applyFilesystemEditsFromResponse } = await import('@/app/api/chat/route')
 
           filesystemEdits = await applyFilesystemEditsFromResponse({
             ownerId: ownerIdForEdits.toString(),
-            conversationId: conversationIdForEdits,
+            conversationId: compositeConversationId,
             requestId: `refinement-${Date.now()}`,
-            scopePath: `project/sessions/${conversationIdForEdits}`,
+            scopePath: `project/sessions/${simpleSessionId}`,
             lastUserMessage: '',
             attachedPaths: [],
             responseContent: refinedOutput,
@@ -2113,20 +2195,30 @@ export class ResponseRouter {
       } else {
         logger.warn('Skipping filesystem edits for spec enhancement: missing ownerId or conversationId', {
           hasOwnerId: !!ownerIdForEdits,
-          hasConversationId: !!conversationIdForEdits,
+          hasConversationId: !!rawConversationId,
           source: (request as any).filesystemOwnerId ? 'filesystemOwnerId' : 'userId',
         })
       }
 
       // Send refined content via SSE
       if (request.emit) {
+        // Format improvements as a properly spaced list
+        const improvements = formatRefinementsAsList(parsed, refinedOutput, chunks, fileWriteEdits);
+
         const eventData: any = {
           stage: 'complete',
-          refinedContent: refinedOutput,
+          refinedContent: improvements,
           specScore,
           sectionsProcessed: chunks.length,
           hasFileWrites: fileWriteEdits.length > 0,
-          fileWrites: fileWriteEdits.map(w => ({ path: w.path, operation: 'write' }))
+          fileWrites: fileWriteEdits.map(w => ({ path: w.path, operation: 'write' })),
+          // CRITICAL FIX: Also emit fileEdits for frontend display
+          // Frontend uses this for enhanced-diff-viewer
+          fileEdits: fileWriteEdits.map(w => ({
+            path: w.path,
+            content: w.content,
+            operation: 'write',
+          }))
         }
 
         // Include filesystem metadata if edits were applied
@@ -2162,14 +2254,27 @@ export class ResponseRouter {
   /**
    * Create streaming events from unified response
    */
-  createStreamingEvents(response: UnifiedResponse, requestId: string): string[] {
+  createStreamingEvents(
+    response: UnifiedResponse,
+    requestId: string,
+    options?: {
+      includeReasoning?: boolean;
+      includeToolState?: boolean;
+      includeFilesystem?: boolean;
+      includeDiffs?: boolean;
+      chunkSize?: number;
+      emitPrimaryContentImmediately?: boolean;
+    }
+  ): string[] {
     // Use enhanced streaming events module
     const { createStreamingEvents } = require('./streaming-events')
     return createStreamingEvents(response, requestId, {
-      includeReasoning: true,
-      includeToolState: true,
-      includeFilesystem: true,
-      includeDiffs: true,
+      includeReasoning: options?.includeReasoning ?? true,
+      includeToolState: options?.includeToolState ?? true,
+      includeFilesystem: options?.includeFilesystem ?? true,
+      includeDiffs: options?.includeDiffs ?? true,
+      chunkSize: options?.chunkSize ?? 8,
+      emitPrimaryContentImmediately: options?.emitPrimaryContentImmediately ?? true,
     })
   }
 
@@ -2203,6 +2308,80 @@ export class ResponseRouter {
       endpoints: this.getAllEndpointStats(),
     }
   }
+}
+
+/**
+ * Format a parsed spec into a readable thinking/reasoning block
+ * for display in the expandable thinking UI.
+ */
+function formatSpecForThinking(spec: any, score: number): string {
+  const lines: string[] = [];
+  lines.push('## Spec Generation Plan');
+  lines.push('');
+  if (spec.goal) {
+    lines.push(`**Goal:** ${spec.goal}`);
+    lines.push('');
+  }
+  if (spec.sections && spec.sections.length > 0) {
+    lines.push(`**${spec.sections.length} sections planned:**`);
+    lines.push('');
+    for (const section of spec.sections) {
+      lines.push(`### ${section.title || section.name || 'Section'}`);
+      if (section.priority != null) {
+        lines.push(`Priority: ${section.priority}`);
+      }
+      if (section.tasks && section.tasks.length > 0) {
+        for (const task of section.tasks) {
+          const taskStr = typeof task === 'string' ? task : task.description || task.title || JSON.stringify(task);
+          lines.push(`- ${taskStr}`);
+        }
+      }
+      lines.push('');
+    }
+  }
+  if (spec.executionStrategy) {
+    lines.push(`**Strategy:** ${spec.executionStrategy}`);
+  }
+  lines.push(`**Quality score:** ${score}/10`);
+  return lines.join('\n');
+}
+
+/**
+ * Format refinement results as a clean, spaced list of improvements.
+ * Replaces the raw "spec completed" message with actual improvement details.
+ */
+function formatRefinementsAsList(spec: any, refinedOutput: string, chunks: any[], fileWrites: any[]): string {
+  const lines: string[] = [];
+
+  if (spec.sections && spec.sections.length > 0) {
+    lines.push('### Improvements Applied');
+    lines.push('');
+
+    for (const section of spec.sections) {
+      const sectionTitle = section.title || section.name || 'General';
+      const tasks = section.tasks || [];
+      if (tasks.length > 0) {
+        lines.push(`**${sectionTitle}:**`);
+        for (const task of tasks) {
+          const taskStr = typeof task === 'string' ? task : task.description || task.title || JSON.stringify(task);
+          lines.push(`- ${taskStr}`);
+        }
+        lines.push('');
+      }
+    }
+  }
+
+  if (fileWrites.length > 0) {
+    lines.push('**Files modified:**');
+    for (const fw of fileWrites) {
+      lines.push(`- \`${fw.path}\``);
+    }
+    lines.push('');
+  }
+
+  lines.push('Let me know if you want anything else!');
+
+  return lines.join('\n');
 }
 
 // ============================================================================

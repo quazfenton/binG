@@ -4,14 +4,17 @@
  * binG CLI - Agentic Workspace Command Line Interface
  * 
  * A powerful CLI tool that integrates all binG features:
- * - Chat with AI agents (V1 API, V2 OpenCode, StatefulAgent)
- * - Sandbox management (Daytona, E2B, Modal.com, Sprites, etc.)
- * - Filesystem operations (read, write, sync, snapshots)
+ * - Chat with AI agents (OpenAI, Anthropic, Google, Mistral, GitHub, NVIDIA NIM, etc.)
+ * - Sandbox management (Daytona, E2B, Blaxel, Sprites, CodeSandbox, WebContainer, OpenSandbox, etc.)
+ * - Filesystem operations (read, write, sync, snapshots, VFS)
  * - Voice features (TTS, speech-to-text)
- * - Image generation (Mistral, Replicate)
+ * - Image generation (Replicate, Mistral)
  * - Tool execution (Composio, Nango, Arcade, Smithery, MCP)
- * - Workflow orchestration (Mastra, LangGraph)
+ * - Workflow orchestration (Mastra, n8n)
  * - OAuth integrations (GitHub, Google, Notion, etc.)
+ * - Multi-provider fallback (automatic failover between providers)
+ * - Circuit breaker protection for providers
+ * - Quota management and cost tracking
  * 
  * @see https://github.com/quazfenton/binG
  */
@@ -21,7 +24,6 @@ import { createInterface } from 'readline';
 import { stdin as input, stdout as output } from 'process';
 import chalk from 'chalk';
 import ora from 'ora';
-import gradient from 'gradient-string';
 import fs from 'fs-extra';
 import axios from 'axios';
 import * as dotenv from 'dotenv';
@@ -31,7 +33,7 @@ import * as path from 'path';
 dotenv.config();
 
 // CLI Configuration
-const CLI_VERSION = '1.0.0';
+const CLI_VERSION = '1.2.0';
 const DEFAULT_API_BASE = process.env.BING_API_URL || 'http://localhost:3000/api';
 const CONFIG_DIR = path.join(process.env.HOME || process.env.USERPROFILE || '', '.bing-cli');
 const CONFIG_FILE = path.join(CONFIG_DIR, 'config.json');
@@ -47,7 +49,6 @@ const COLORS = {
   warning: chalk.yellow,
   error: chalk.red,
   info: chalk.blue,
-  gradient: gradient(['#00c6ff', '#0072ff']),
 };
 
 /**
@@ -63,8 +64,8 @@ function loadConfig(): any {
   }
   return {
     apiBase: DEFAULT_API_BASE,
-    provider: process.env.DEFAULT_LLM_PROVIDER || 'mistral',
-    model: process.env.DEFAULT_MODEL || 'mistral-large-latest',
+    provider: process.env.DEFAULT_LLM_PROVIDER || 'anthropic',
+    model: process.env.DEFAULT_MODEL || 'claude-3-5-sonnet-latest',
     sandboxProvider: process.env.SANDBOX_PROVIDER || 'daytona',
   };
 }
@@ -154,8 +155,8 @@ function prompt(question: string): Promise<string> {
  */
 async function chatLoop(options: { agent?: string; stream?: boolean }): Promise<void> {
   const config = loadConfig();
-  
-  console.log(COLORS.gradient(`
+
+  console.log(chalk.cyanBright(`
 ╔═══════════════════════════════════════════════════════════╗
 ║                    binG Chat Interface                     ║
 ║                                                           ║
@@ -732,31 +733,188 @@ program
 // ============================================================================
 
 program
-  .command('tools:list')
-  .description('List available tools')
+  .command('providers:list')
+  .description('List available LLM and sandbox providers')
   .action(async () => {
-    const spinner = ora('Fetching tools...').start();
+    const spinner = ora('Fetching providers...').start();
     
     try {
-      const result = await apiRequest('/tools', {
+      const result = await apiRequest('/providers', {
         method: 'GET',
       });
       
       spinner.stop();
       
-      if (result.tools && result.tools.length > 0) {
-        console.log(COLORS.primary(`\nAvailable Tools (${result.tools.length}):`));
+      if (result.llm && result.llm.length > 0) {
+        console.log(COLORS.primary(`\nAvailable LLM Providers (${result.llm.length}):`));
         console.table(
-          result.tools.map((tool: any) => ({
-            Name: tool.name,
-            Provider: tool.provider,
-            Description: tool.description?.substring(0, 50) + '...',
+          result.llm.map((p: any) => ({
+            Provider: p.id || p,
+            Status: p.isAvailable ? COLORS.success('Available') : COLORS.warning('Not configured'),
+            Models: p.models?.length || 'N/A',
+          }))
+        );
+      }
+      
+      if (result.sandbox && result.sandbox.length > 0) {
+        console.log(COLORS.primary(`\nAvailable Sandbox Providers (${result.sandbox.length}):`));
+        console.table(
+          result.sandbox.map((p: any) => ({
+            Provider: p.id || p,
+            Status: p.isAvailable ? COLORS.success('Available') : COLORS.warning('Not configured'),
+            Priority: p.priority || 'N/A',
+          }))
+        );
+      }
+      
+    } catch (error: any) {
+      spinner.stop();
+      console.log(COLORS.error(`Error: ${error.message}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('quota')
+  .description('Show quota usage for all providers')
+  .action(async () => {
+    const spinner = ora('Fetching quota information...').start();
+    
+    try {
+      const result = await apiRequest('/quota', { method: 'GET' });
+
+      spinner.stop();
+
+      if (result.success && result.quotas) {
+        console.log(chalk.cyanBright('\n=== Provider Quotas ===\n'));
+        
+        result.quotas.forEach((q: any) => {
+          const percentage = q.percentageUsed.toFixed(1);
+          const status = q.isDisabled 
+            ? COLORS.error('DISABLED')
+            : q.percentageUsed > 90
+              ? COLORS.error('CRITICAL')
+              : q.percentageUsed > 70
+                ? COLORS.warning('WARNING')
+                : COLORS.success('OK');
+          
+          console.log(`${COLORS.primary(q.provider)}:`);
+          console.log(`  Status: ${status}`);
+          console.log(`  Used: ${q.used} / ${q.limit} (${percentage}%)`);
+          console.log(`  Remaining: ${q.remaining}`);
+          console.log();
+        });
+      } else {
+        console.log(COLORS.info('\nNo quota information available'));
+      }
+
+    } catch (error: any) {
+      spinner.stop();
+      console.log(COLORS.error(`Error: ${error.message}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('workflow:list')
+  .description('List available workflows')
+  .action(async () => {
+    const spinner = ora('Fetching workflows...').start();
+    
+    try {
+      const result = await apiRequest('/mastra/status', { method: 'GET' });
+      
+      spinner.stop();
+      
+      if (result.workflows && result.workflows.length > 0) {
+        console.log(COLORS.primary('\nAvailable Workflows:'));
+        console.table(
+          result.workflows.map((w: any) => ({
+            Name: w.name,
+            Type: w.type,
+            Status: w.status,
           }))
         );
       } else {
-        console.log(COLORS.info('\nNo tools available'));
+        console.log(COLORS.info('\nNo workflows available'));
       }
+
+    } catch (error: any) {
+      spinner.stop();
+      console.log(COLORS.error(`Error: ${error.message}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('workflow:run <workflowType>')
+  .description('Run a Mastra workflow')
+  .option('-i, --input <json>', 'Input data as JSON')
+  .option('--wait', 'Wait for completion (default: stream)')
+  .action(async (workflowType, options) => {
+    const spinner = ora(`Running workflow: ${workflowType}`).start();
+
+    try {
+      let inputData = {};
+      if (options.input) {
+        inputData = JSON.parse(options.input);
+      }
+
+      const result = await apiRequest('/mastra/workflow', {
+        method: 'POST',
+        data: {
+          workflowType,
+          inputData,
+          stream: !options.wait,
+        },
+        timeout: 300000,
+      });
+
+      spinner.stop();
+
+      if (result.success) {
+        console.log(COLORS.success(`\nWorkflow ${options.wait ? 'completed' : 'started'}!`));
+        console.log(`  Run ID: ${COLORS.info(result.runId)}`);
+        if (options.wait) {
+          console.log('\nResult:');
+          console.log(JSON.stringify(result.result, null, 2));
+        }
+      } else {
+        console.log(COLORS.error(`Error: ${result.error}`));
+        process.exit(1);
+      }
+
+    } catch (error: any) {
+      spinner.stop();
+      console.log(COLORS.error(`Error: ${error.message}`));
+      process.exit(1);
+    }
+  });
+
+program
+  .command('integrations:list')
+  .description('List OAuth integrations')
+  .action(async () => {
+    const spinner = ora('Fetching integrations...').start();
+    
+    try {
+      const result = await apiRequest('/user/integrations/status', { method: 'GET' });
       
+      spinner.stop();
+      
+      if (result.integrations && result.integrations.length > 0) {
+        console.log(COLORS.primary('\nConnected Integrations:'));
+        console.table(
+          result.integrations.map((i: any) => ({
+            Provider: i.provider,
+            Status: i.connected ? COLORS.success('Connected') : COLORS.warning('Not Connected'),
+            Account: i.account || '-',
+          }))
+        );
+      } else {
+        console.log(COLORS.info('\nNo integrations configured'));
+      }
+
     } catch (error: any) {
       spinner.stop();
       console.log(COLORS.error(`Error: ${error.message}`));
@@ -826,8 +984,8 @@ program
     if (options.reset) {
       config = {
         apiBase: DEFAULT_API_BASE,
-        provider: 'mistral',
-        model: 'mistral-large-latest',
+        provider: 'anthropic',
+        model: 'claude-3-5-sonnet-latest',
         sandboxProvider: 'daytona',
       };
       saveConfig(config);
@@ -857,7 +1015,7 @@ program
   .option('--email <email>', 'Email address')
   .option('--password <password>', 'Password')
   .action(async (options) => {
-    console.log(COLORS.gradient('\n=== binG Authentication ===\n'));
+    console.log(chalk.cyanBright('\n=== binG Authentication ===\n'));
     
     let email = options.email;
     let password = options.password;
@@ -918,29 +1076,30 @@ program
   .command('status')
   .description('Show system status')
   .action(async () => {
-    console.log(COLORS.gradient('\n=== binG System Status ===\n'));
+    console.log(chalk.cyanBright('\n=== binG System Status ===\n'));
     
     try {
-      const [health, providers] = await Promise.all([
+      const [health, providers, quota] = await Promise.all([
         apiRequest('/health', { method: 'GET' }).catch(() => null),
         apiRequest('/providers', { method: 'GET' }).catch(() => null),
+        apiRequest('/quota', { method: 'GET' }).catch(() => null),
       ]);
-      
+
       const auth = loadAuth();
       const config = loadConfig();
-      
+
       console.log(COLORS.primary('Authentication:'));
       console.log(`  Status: ${auth.token ? COLORS.success('Logged in') : COLORS.warning('Not logged in')}`);
       if (auth.email) {
         console.log(`  User: ${COLORS.info(auth.email)}`);
       }
-      
+
       console.log('\n' + COLORS.primary('Configuration:'));
       console.log(`  API: ${COLORS.info(config.apiBase)}`);
-      console.log(`  Provider: ${COLORS.info(config.provider)}`);
+      console.log(`  LLM Provider: ${COLORS.info(config.provider)}`);
       console.log(`  Model: ${COLORS.info(config.model)}`);
       console.log(`  Sandbox: ${COLORS.info(config.sandboxProvider)}`);
-      
+
       console.log('\n' + COLORS.primary('System Health:'));
       if (health) {
         console.log(`  API: ${COLORS.success('Online')}`);
@@ -948,17 +1107,41 @@ program
       } else {
         console.log(`  API: ${COLORS.error('Offline')}`);
       }
-      
+
       if (providers) {
-        console.log('\n' + COLORS.primary('Available Providers:'));
-        providers.llm?.forEach((p: any) => {
-          console.log(`  ${COLORS.success('✓')} ${p}`);
-        });
-        providers.sandbox?.forEach((p: any) => {
-          console.log(`  ${COLORS.success('✓')} ${p}`);
-        });
+        console.log('\n' + COLORS.primary('LLM Providers:'));
+        if (providers.llm && providers.llm.length > 0) {
+          providers.llm.forEach((p: any) => {
+            const isAvailable = p.isAvailable !== false;
+            console.log(`  ${isAvailable ? COLORS.success('✓') : COLORS.warning('○')} ${p.id || p} (${p.models?.length || '?'} models)`);
+          });
+        } else {
+          console.log(`  ${COLORS.warning('No providers configured')}`);
+        }
+
+        console.log('\n' + COLORS.primary('Sandbox Providers:'));
+        if (providers.sandbox && providers.sandbox.length > 0) {
+          providers.sandbox.forEach((p: any) => {
+            const isAvailable = p.isAvailable !== false;
+            console.log(`  ${isAvailable ? COLORS.success('✓') : COLORS.warning('○')} ${p.id || p}`);
+          });
+        } else {
+          console.log(`  ${COLORS.warning('No providers configured')}`);
+        }
       }
-      
+
+      if (quota && quota.quotas) {
+        console.log('\n' + COLORS.primary('Quota Status:'));
+        quota.quotas.slice(0, 3).forEach((q: any) => {
+          const pct = q.percentageUsed.toFixed(0);
+          const status = q.percentageUsed > 90 ? COLORS.error('CRITICAL') : q.percentageUsed > 70 ? COLORS.warning('Warning') : COLORS.success('OK');
+          console.log(`  ${q.provider}: ${status} (${pct}%)`);
+        });
+        if (quota.quotas.length > 3) {
+          console.log(`  ${COLORS.info(`...and ${quota.quotas.length - 3} more`)}`);
+        }
+      }
+
     } catch (error: any) {
       console.log(COLORS.error(`Error: ${error.message}`));
     }
@@ -974,7 +1157,7 @@ program
   .option('-p, --port <port>', 'Port number (default: 3000)')
   .option('--ws-port <port>', 'WebSocket port (default: 8080)')
   .action((options) => {
-    console.log(COLORS.gradient(`
+    console.log(chalk.cyanBright(`
 ╔═══════════════════════════════════════════════════════════╗
 ║              Starting binG Development Server              ║
 ║                                                           ║
@@ -1003,9 +1186,12 @@ ${COLORS.primary('Examples:')}
   ${COLORS.info('bing sandbox:exec python train.py')}     Execute command
   ${COLORS.info('bing file:read /workspace/app.py')}      Read file
   ${COLORS.info('bing image:generate "A cute cat"')}      Generate image
-  ${COLORS.info('bing tools:list')}                List available tools
+  ${COLORS.info('bing providers:list')}            List available providers
   ${COLORS.info('bing config --provider openai')}   Set default provider
   ${COLORS.info('bing status')}                    Check system status
+  ${COLORS.info('bing quota')}                     Check provider quotas
+  ${COLORS.info('bing workflow:list')}             List available workflows
+  ${COLORS.info('bing workflow:run <type>')}       Run a workflow
 
 ${COLORS.primary('Documentation:')} https://github.com/quazfenton/binG/tree/main/docs
 ${COLORS.primary('Support:')} https://github.com/quazfenton/binG/issues

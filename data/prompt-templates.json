@@ -1,0 +1,87 @@
+[
+  {
+    "id": "tmpl-code-review",
+    "name": "Code Review Expert",
+    "description": "Comprehensive code review with security focus",
+    "template": "You are a senior software engineer reviewing code. Analyze the following code for:\n\n1. Security vulnerabilities\n2. Performance issues\n3. Code quality and best practices\n4. Potential bugs\n\nCode:\n{{code}}\n\nProvide specific, actionable feedback.",
+    "category": "coding",
+    "tags": [
+      "code-review",
+      "security",
+      "best-practices"
+    ],
+    "variables": [
+      "code"
+    ],
+    "createdAt": 1774849547484,
+    "updatedAt": 1774849547484,
+    "uses": 234,
+    "rating": 4.8,
+    "author": "system",
+    "isPublic": true
+  },
+  {
+    "id": "tmpl-api-docs",
+    "name": "API Documentation Generator",
+    "description": "Generate comprehensive API docs from code",
+    "template": "Generate comprehensive API documentation for the following endpoint:\n\n{{endpoint_code}}\n\nInclude:\n- Description\n- Parameters\n- Request/Response examples\n- Error codes\n- Usage examples\n\nFormat in Markdown.",
+    "category": "documentation",
+    "tags": [
+      "api",
+      "documentation",
+      "markdown"
+    ],
+    "variables": [
+      "endpoint_code"
+    ],
+    "createdAt": 1774763147485,
+    "updatedAt": 1774806347485,
+    "uses": 567,
+    "rating": 4.9,
+    "author": "system",
+    "isPublic": true
+  },
+  {
+    "id": "tmpl-bug-fix",
+    "name": "Bug Fix Assistant",
+    "description": "Debug and fix code issues",
+    "template": "Help me fix this bug:\n\n{{error_message}}\n\nCode:\n{{code}}\n\n1. Explain the root cause\n2. Provide the fixed code\n3. Explain the fix\n4. Suggest prevention strategies",
+    "category": "debugging",
+    "tags": [
+      "debugging",
+      "bug-fix",
+      "troubleshooting"
+    ],
+    "variables": [
+      "error_message",
+      "code"
+    ],
+    "createdAt": 1774676747485,
+    "updatedAt": 1774763147485,
+    "uses": 892,
+    "rating": 4.7,
+    "author": "system",
+    "isPublic": true
+  },
+  {
+    "id": "tmpl-architecture",
+    "name": "Architecture Designer",
+    "description": "Design system architecture",
+    "template": "Design a system architecture for:\n\n{{requirements}}\n\nConsider:\n- Scalability\n- Security\n- Performance\n- Cost\n- Maintainability\n\nProvide:\n1. High-level diagram description\n2. Component breakdown\n3. Technology recommendations\n4. Trade-offs analysis",
+    "category": "architecture",
+    "tags": [
+      "architecture",
+      "system-design",
+      "planning"
+    ],
+    "variables": [
+      "requirements"
+    ],
+    "createdAt": 1774590347485,
+    "updatedAt": 1774676747485,
+    "uses": 445,
+    "rating": 4.9,
+    "author": "system",
+    "isPublic": true
+  }
+]

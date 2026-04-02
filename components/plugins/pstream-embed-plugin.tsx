@@ -424,9 +424,7 @@ const PStreamEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                 url={embedUrl}
                 reason={failureReason || 'failed'}
                 errorMessage={errorMessage || undefined}
-                onRetry={handleRetry}
-                onTryFallback={handleFallback}
-                onOpenExternal={() => window.open(inputUrl, '_blank', 'noopener,noreferrer')}
+                onRetry={handleRetry}onOpenExternal={() => window.open(inputUrl, '_blank', 'noopener,noreferrer')}
                 onClose={onClose}
                 autoRetryCount={retryCount}
                 maxRetries={3}

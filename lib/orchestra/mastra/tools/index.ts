@@ -9,7 +9,7 @@
 
 import { Mastra } from '@mastra/core';
 import { z } from 'zod';
-import { virtualFilesystem } from '@/lib/virtual-filesystem/index';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { getSandboxProvider, type SandboxProvider } from '@/lib/sandbox/providers';
 
 // Local tool factory since @mastra/core doesn't export createTool
@@ -71,11 +71,22 @@ export function createTool<T extends z.ZodObject<any>, U extends z.ZodObject<any
 const vfs = virtualFilesystem;
 
 let _sandboxProvider: SandboxProvider | null = null;
+let _sandboxProviderPromise: Promise<SandboxProvider> | null = null;
 async function getProvider(): Promise<SandboxProvider> {
-  if (!_sandboxProvider) {
-    _sandboxProvider = await getSandboxProvider();
+  if (_sandboxProvider) return _sandboxProvider;
+  if (!_sandboxProviderPromise) {
+    _sandboxProviderPromise = getSandboxProvider()
+      .then(provider => {
+        _sandboxProvider = provider;
+        return provider;
+      })
+      .catch(error => {
+        // Reset the promise on failure so retries can work
+        _sandboxProviderPromise = null;
+        throw error;
+      });
   }
-  return _sandboxProvider;
+  return _sandboxProviderPromise;
 }
 
 // ===========================================

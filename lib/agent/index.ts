@@ -48,6 +48,15 @@ export {
   type CloudAgentResult,
 } from './cloud-agent-offload';
 
+// Orchestration Mode Handler - Multi-framework routing
+export {
+  getOrchestrationModeFromRequest,
+  executeWithOrchestrationMode,
+  type OrchestrationMode,
+  type OrchestrationRequest,
+  type OrchestrationResult,
+} from './orchestration-mode-handler';
+
 // Task Router
 export {
   taskRouter,

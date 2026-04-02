@@ -17,22 +17,17 @@ export async function DELETE(
       return NextResponse.json({ error: 'provider is required' }, { status: 400 });
     }
 
-    // Authenticate: try bearer token, then fall back to body userId
+    // Authenticate: require valid auth - NO fallback to body userId
     const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
 
-    let numericUserId: number;
-
-    if (authResult.success && authResult.userId) {
-      numericUserId = parseInt(authResult.userId, 10);
-    } else {
-      // Fallback: read userId from request body
-      const body = await request.json().catch(() => ({}));
-      const bodyUserId = body?.userId;
-      if (!bodyUserId) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-      }
-      numericUserId = parseInt(bodyUserId, 10);
+    if (!authResult.success || !authResult.userId) {
+      return NextResponse.json({ 
+        error: 'Authentication required',
+        requiresAuth: true,
+      }, { status: 401 });
     }
+
+    const numericUserId = parseInt(authResult.userId, 10);
 
     if (isNaN(numericUserId)) {
       return NextResponse.json({ error: 'Invalid userId' }, { status: 400 });

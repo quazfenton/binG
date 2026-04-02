@@ -1,27 +1,56 @@
 /**
- * Task Router - Routes tasks between OpenCode and Nullclaw with execution policy selection
+ * Task Router - Routes tasks between OpenCode, Nullclaw, and Advanced Agent Tasks
  *
  * OpenCode: Coding tasks (file ops, bash, code generation)
  * Nullclaw: Non-coding tasks (messaging, browsing, automation)
+ * Advanced Tasks: Mid-to-long term goals requiring external agent spawning
  *
  * Execution Policies:
  * - local-safe: Simple prompts, read-only
  * - sandbox-required: Bash, file writes
  * - sandbox-heavy: Full-stack apps, databases
  * - desktop-required: GUI, browser automation
+ *
+ * Advanced Task Detection:
+ * Routes to event system when task suggests:
+ * - Persistent agent loops (background cognition)
+ * - Multi-step research with depth control
+ * - DAG workflows with multiple dependencies
+ * - Skill bootstrapping (self-extending agents)
+ * - Cross-agent communication/specialization
  */
+
+import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 
 import { createLogger } from '../utils/logger';
 import type { ExecutionPolicy } from '../sandbox/types';
 import { determineExecutionPolicy } from '../sandbox/types';
+import { scheduleTask } from '@/lib/events/trigger-integration';
+import { emitEvent } from '@/lib/events/bus';
+import { EventTypes } from '@/lib/events/schema';
+import { getAgentKernel, AgentType, AgentPriority } from './agent-kernel';
 
 const logger = createLogger('Agent:TaskRouter');
 
-export type TaskType = 'coding' | 'messaging' | 'browsing' | 'automation' | 'api' | 'unknown';
+export type TaskType = 'coding' | 'messaging' | 'browsing' | 'automation' | 'api' | 'unknown' | 'advanced';
 
 // FIX (Bug 7): Separate the routing target from the preferred-agent type so
 // the dispatch is explicit and unreachable branches can't silently fire.
-type RoutingTarget = 'opencode' | 'nullclaw' | 'cli';
+type RoutingTarget = 'opencode' | 'nullclaw' | 'cli' | 'advanced';
+
+/**
+ * Advanced Task Types - Mid-to-long term goals requiring external agent spawning
+ * These are routed to the event system for background processing
+ */
+export type AdvancedTaskType =
+  | 'agent-loop'      // Persistent background cognition
+  | 'research'        // Multi-step research with depth
+  | 'dag-workflow'    // Multi-node workflow execution
+  | 'skill-build'     // Extract reusable skills
+  | 'consensus'       // Multi-agent debate/negotiation
+  | 'reflection'      // Self-improvement after execution
+  | 'tool-discover'   // Dynamic tool ranking
+  | 'cross-agent'     // Agent-to-agent communication;
 
 export interface TaskRequest {
   id: string;
@@ -76,6 +105,50 @@ class TaskRouter {
     'server', 'deploy', 'restart', 'backup', 'monitor', 'alert',
     'workflow', 'pipeline', 'ci', 'cd', 'integration',
   ];
+
+  // ============================================================================
+  // Advanced Task Keywords - Mid-to-long term goals requiring external agents
+  // ============================================================================
+  
+  private readonly ADVANCED_TASK_KEYWORDS = {
+    'agent-loop': [
+      'background', 'continuous', 'loop', 'persist', 'ongoing', 'monitor',
+      'watch', 'poll', 'cron', 'schedule', 'periodically', 'recurring',
+      'long-running', 'daemon', 'service', 'keep running', 'always on',
+    ],
+    'research': [
+      'research', 'deep dive', 'investigate', 'analyze', 'study',
+      'comprehensive', 'in-depth', 'thorough', 'explore', 'survey',
+      'summarize', 'report', 'find information', 'gather data',
+    ],
+    'dag-workflow': [
+      'workflow', 'pipeline', 'chain', 'sequence', 'steps', 'stages',
+      'dependencies', 'multi-step', 'multi-stage', 'execute in order',
+      'run after', 'depends on', 'dag', 'graph', 'execution plan',
+    ],
+    'skill-build': [
+      'learn', 'extract', 'pattern', 'template', 'reusable', 'skill',
+      'abstraction', 'generalize', 'create function', 'make reusable',
+      'build skill', 'bootstrap', 'self-extend', 'improve',
+    ],
+    'consensus': [
+      'debate', 'discuss', 'multiple', 'agents', 'agree', 'consensus',
+      'vote', 'compare', 'evaluate', 'different approaches', 'specialist',
+      'role', 'team', 'collaborate', 'negotiate', 'argue',
+    ],
+    'reflection': [
+      'reflect', 'improve', 'what went wrong', 'analyze result', 'self-correct',
+      'learn from', 'fix', 'debug', 'fix errors', 'retry', 'improve result',
+    ],
+    'tool-discover': [
+      'find tools', 'discover', 'available tools', 'what tools', 'capabilities',
+      'rank', 'best tool', 'compare tools', 'which tool', 'tool for',
+    ],
+    'cross-agent': [
+      'tell agent', 'send to', 'delegate', 'ask other', 'another agent',
+      'agent communication', 'message agent', 'notify agent', 'inform',
+    ],
+  };
 
   analyzeTask(task: string): TaskRoutingResult {
     const lowerTask = task.toLowerCase();
@@ -156,6 +229,404 @@ class TaskRouter {
     return score;
   }
 
+  // ============================================================================
+  // Advanced Task Detection - End of routing tree for mid-to-long term goals
+  // ============================================================================
+
+  /**
+   * Analyze if task requires advanced agent spawning (mid-to-long term goals)
+   * Called at end of routing tree when basic routing is ambiguous or task
+   * suggests persistent/background/external agent work
+   * 
+   * @param task - The user's task prompt
+   * @returns AdvancedTaskType or null if not an advanced task
+   */
+  analyzeAdvancedTask(task: string): AdvancedTaskType | null {
+    const lowerTask = task.toLowerCase();
+    const scores: Record<AdvancedTaskType, number> = {
+      'agent-loop': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['agent-loop']),
+      'research': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['research']),
+      'dag-workflow': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['dag-workflow']),
+      'skill-build': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['skill-build']),
+      'consensus': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['consensus']),
+      'reflection': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['reflection']),
+      'tool-discover': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['tool-discover']),
+      'cross-agent': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['cross-agent']),
+    };
+
+    const maxScore = Math.max(...Object.values(scores));
+    const threshold = 2; // Require at least 2 keyword matches
+
+    if (maxScore >= threshold) {
+      const advancedType = (Object.entries(scores)
+        .find(([, score]) => score === maxScore)?.[0] ?? null) as AdvancedTaskType | null;
+      
+      logger.info(`[TaskRouter] Advanced task detected: ${advancedType} (score: ${maxScore})`);
+      return advancedType;
+    }
+
+    return null;
+  }
+
+  /**
+   * Check if task is a simple query that shouldn't spawn advanced agents
+   */
+  isSimpleQuery(task: string): boolean {
+    const simpleIndicators = [
+      'what is', 'how do i', 'can you', 'help me', 'explain',
+      'show me', 'find', 'list', 'get', 'just',
+    ];
+    const lowerTask = task.toLowerCase();
+    
+    // Has simple indicator but no action keywords
+    const hasSimpleIndicator = simpleIndicators.some(i => lowerTask.includes(i));
+    const hasActionKeywords = this.scoreKeywords(lowerTask, [
+      'build', 'create', 'implement', 'write', 'make', 'develop',
+      'fix', 'refactor', 'deploy', 'run', 'execute', 'automate',
+    ]) > 0;
+    
+    return hasSimpleIndicator && !hasActionKeywords;
+  }
+
+  /**
+   * Execute advanced task via Agent Kernel (OS-like scheduler)
+   * Routes through kernel for proper lifecycle management
+   */
+  private async executeAdvancedTask(
+    request: TaskRequest,
+    advancedType: AdvancedTaskType
+  ): Promise<any> {
+    logger.info(`[TaskRouter] Executing advanced task via Kernel: ${advancedType}`);
+
+    const userId = request.userId;
+    const task = request.task;
+    const kernel = getAgentKernel();
+    
+    // Ensure kernel is started (lazy start)
+    if (!(kernel as any).running) {
+      kernel.start();
+      logger.info('[TaskRouter] Agent Kernel started');
+    }
+
+    try {
+      // Map advanced task type to kernel agent type and config
+      const agentConfig = this.mapAdvancedToKernelConfig(advancedType, userId, task);
+      
+      // Spawn agent through kernel
+      const agentId = await kernel.spawnAgent(agentConfig);
+      
+      logger.info(`[TaskRouter] Agent spawned via kernel`, { agentId, type: advancedType });
+      
+      // For non-persistent types, also submit initial work
+      if (agentConfig.type !== 'daemon') {
+        await kernel.submitWork(agentId, { task, requestId: request.id });
+      }
+      
+      return {
+        success: true,
+        agentId,
+        type: advancedType,
+        kernelManaged: true,
+        message: `Agent ${agentId} spawned and managed by Kernel`,
+      };
+    } catch (error: any) {
+      // Fallback to event system if kernel fails
+      logger.error(`[TaskRouter] Kernel execution failed, falling back to event system:`, error.message);
+      return this.executeAdvancedTaskFallback(request, advancedType);
+    }
+  }
+
+  /**
+   * Map advanced task type to kernel agent configuration
+   */
+  private mapAdvancedToKernelConfig(
+    advancedType: AdvancedTaskType,
+    userId: string,
+    task: string
+  ): {
+    type: AgentType;
+    name: string;
+    goal: string;
+    priority: AgentPriority;
+    schedule?: string;
+    maxIterations?: number;
+    context?: Record<string, any>;
+    userId: string;
+  } {
+    // Extract goal from task
+    const goalMatch = task.match(/(?:goal|objective|purpose|research|investigate)[:\s]*(.+)/i);
+    const goal = goalMatch?.[1] || task;
+
+    switch (advancedType) {
+      case 'agent-loop':
+    return {
+      type: 'persistent',
+      name: 'Agent Loop',
+      goal,
+      priority: 'normal',
+      schedule: '*/2 * * * *',
+      maxIterations: 100,
+      context: { loop: true },
+      userId,
+    };
+
+      case 'research':
+    return {
+      type: 'ephemeral',
+      name: 'Research Agent',
+      goal: `Research: ${goal}`,
+      priority: 'high',
+      maxIterations: 10,
+      context: { depth: 5, sources: ['web', 'news', 'code'] },
+      userId,
+    };
+
+      case 'dag-workflow':
+    return {
+      type: 'worker',
+      name: 'DAG Worker',
+      goal,
+      priority: 'normal',
+      maxIterations: 20,
+      context: { dag: true },
+      userId,
+    };
+
+      case 'skill-build':
+    return {
+      type: 'persistent',
+      name: 'Skill Builder',
+      goal: `Extract skills from: ${goal}`,
+      priority: 'low',
+      maxIterations: 5,
+      context: { skillExtraction: true },
+      userId,
+    };
+
+      case 'consensus':
+    return {
+      type: 'ephemeral',
+      name: 'Consensus Agent',
+      goal: `Debate and find consensus: ${goal}`,
+      priority: 'normal',
+      maxIterations: 3,
+      context: { roles: ['planner', 'executor', 'critic'] },
+      userId,
+    };
+
+      case 'reflection':
+        return {
+          type: 'ephemeral',
+          name: 'Reflection Agent',
+          goal: `Reflect on and improve: ${goal}`,
+          priority: 'low',
+          maxIterations: 2,
+          context: { reflection: true },
+          userId,
+        };
+
+      case 'tool-discover':
+        return {
+          type: 'persistent',
+          name: 'Tool Discovery',
+          goal: 'Discover and rank available tools',
+          priority: 'low',
+          schedule: '*/15 * * * *', // Every 15 min
+          maxIterations: 10,
+          context: { toolDiscovery: true },
+          userId,
+        };
+
+      case 'cross-agent':
+        return {
+          type: 'worker',
+          name: 'Message Router',
+          goal,
+          priority: 'high',
+          maxIterations: 1,
+          context: { messaging: true },
+          userId,
+        };
+
+      default:
+        return {
+          type: 'ephemeral',
+          name: 'Default Agent',
+          goal,
+          priority: 'normal',
+          userId,
+        };
+    }
+  }
+
+  /**
+   * Fallback to event system when kernel is unavailable
+   */
+  private async executeAdvancedTaskFallback(
+    request: TaskRequest,
+    advancedType: AdvancedTaskType
+  ): Promise<any> {
+    logger.info(`[TaskRouter] Using fallback event system for: ${advancedType}`);
+
+    const userId = request.userId;
+    const task = request.task;
+    const sessionId = request.conversationId;
+
+    try {
+      // Map advanced type to task type and context with full coverage
+      const fallbackConfig = this.getFallbackConfig(advancedType, task);
+
+      // Emit event for durable execution tracking
+      const eventResult = await emitEvent(
+        {
+          type: EventTypes.WORKFLOW,
+          templateId: advancedType,
+          sessionId,
+          userId,
+          phase: 'started',
+          metadata: {
+            taskType: fallbackConfig.taskType,
+            goal: fallbackConfig.payload.prompt,
+            priority: fallbackConfig.metadata.priority,
+          },
+        },
+        userId,
+        sessionId
+      );
+
+      logger.info(`[TaskRouter] Event emitted for advanced task`, {
+        eventId: eventResult.eventId,
+        advancedType,
+      });
+
+      // Also schedule the task for immediate execution
+      return await scheduleTask({
+        taskType: fallbackConfig.taskType,
+        schedule: fallbackConfig.schedule,
+        payload: { ...fallbackConfig.payload, prompt: fallbackConfig.payload.prompt || task },
+        metadata: {
+          ...fallbackConfig.metadata,
+          eventId: eventResult.eventId,
+        },
+        userId,
+      });
+    } catch (error: any) {
+      logger.error(`[TaskRouter] Fallback execution failed:`, error.message);
+
+      // Emit failure event
+      try {
+        await emitEvent(
+          {
+            type: EventTypes.WORKFLOW,
+            templateId: advancedType,
+            sessionId: request.conversationId,
+            userId: request.userId,
+            phase: 'failed',
+            error: error.message,
+          },
+          request.userId,
+          request.conversationId
+        );
+      } catch (emitError: any) {
+        logger.error(`[TaskRouter] Failed to emit failure event:`, emitError.message);
+      }
+
+      return { success: false, error: error.message, type: advancedType };
+    }
+  }
+
+  /**
+   * Get fallback config for all advanced task types
+   */
+  private getFallbackConfig(
+    advancedType: AdvancedTaskType,
+    task: string
+  ): {
+    taskType: string;
+    schedule: { type: string; expression?: string; delayMs?: number };
+    payload: Record<string, any>;
+    metadata: Record<string, any>;
+  } {
+    const goalMatch = task.match(/(?:goal|objective|purpose|research|investigate)[:\s]*(.+)/i);
+    const goal = goalMatch?.[1] || task;
+    const intervalMatch = task.match(/(?:every|interval)[:\s]*(\S+)/i);
+    const depthMatch = task.match(/(?:depth|level)[:\s]*(\d+)/i);
+    
+    switch (advancedType) {
+      case 'agent-loop':
+        return {
+          taskType: 'NULLCLAW_AGENT',
+          schedule: { type: 'cron', expression: intervalMatch?.[1] || '*/2 * * * *' },
+          payload: { prompt: goal, model: 'claude-3-opus', context: { loop: true } },
+          metadata: { name: 'Agent Loop', priority: 'normal', maxRetries: 3 },
+        };
+
+      case 'research':
+        return {
+          taskType: 'RESEARCH_TASK',
+          schedule: { type: 'immediate' },
+          payload: { query: goal, depth: parseInt(depthMatch?.[1] || '5', 10), sources: ['web', 'news', 'code'] },
+          metadata: { name: 'Research Task', priority: 'high', timeout: 300000 },
+        };
+
+      case 'dag-workflow':
+        return {
+          taskType: 'CUSTOM_DAG',
+          schedule: { type: 'immediate' },
+          payload: { url: 'internal://dag', dag: { task } },
+          metadata: { name: 'DAG Workflow', priority: 'normal', maxRetries: 3 },
+        };
+
+      case 'skill-build':
+        return {
+          taskType: 'RESEARCH_TASK',
+          schedule: { type: 'delay', delayMs: 60000 },
+          payload: { query: `Extract reusable skill from: ${goal}`, depth: 3 },
+          metadata: { name: 'Skill Builder', priority: 'low' },
+        };
+
+      case 'consensus':
+        return {
+          taskType: 'NULLCLAW_AGENT',
+          schedule: { type: 'immediate' },
+          payload: { prompt: `Debate and find consensus: ${goal}`, model: 'claude-3-opus', context: { roles: ['planner', 'executor', 'critic'] } },
+          metadata: { name: 'Consensus Task', priority: 'normal' },
+        };
+
+      case 'reflection':
+        return {
+          taskType: 'RESEARCH_TASK',
+          schedule: { type: 'delay', delayMs: 5000 },
+          payload: { query: `Analyze and improve: ${goal}. What went wrong? What can be fixed?`, depth: 2 },
+          metadata: { name: 'Reflection Task', priority: 'low' },
+        };
+
+      case 'tool-discover':
+        return {
+          taskType: 'HACKER_NEWS_DAILY',
+          schedule: { type: 'immediate' },
+          payload: { destination: null },
+          metadata: { name: 'Tool Discovery', priority: 'low' },
+        };
+
+      case 'cross-agent':
+        return {
+          taskType: 'WEBHOOK',
+          schedule: { type: 'immediate' },
+          payload: { url: `internal://agent/default`, method: 'POST', body: { from: 'task-router', message: goal } },
+          metadata: { name: 'Cross-Agent Message', priority: 'high' },
+        };
+
+      default:
+        return {
+          taskType: 'NULLCLAW_AGENT',
+          schedule: { type: 'immediate' },
+          payload: { prompt: task },
+          metadata: { name: 'Fallback Task', priority: 'normal' },
+        };
+    }
+  }
+
   async executeTask(request: TaskRequest): Promise<any> {
     // FIX (Bug 5 & 7): Handle preferred agent explicitly before routing.
     if (request.preferredAgent) {
@@ -163,7 +634,23 @@ class TaskRouter {
       return this.dispatchToTarget(request.preferredAgent, request);
     }
 
+    // First, do basic routing to determine task type
     const routing = this.analyzeTask(request.task);
+    
+    // END OF ROUTING TREE: Check for advanced tasks (mid-to-long term goals)
+    // Only route to advanced tasks if:
+    // 1. Task has explicit advanced task keywords
+    // 2. Task is NOT a simple query
+    const advancedType = this.analyzeAdvancedTask(request.task);
+    const isSimple = this.isSimpleQuery(request.task);
+    
+    if (advancedType && !isSimple) {
+      logger.info(`[TaskRouter] Routing to advanced task: ${advancedType} (confidence: ${routing.confidence})`);
+      // Cache the advanced type on the request for dispatchToTarget
+      (request as any).advancedType = advancedType;
+      return this.dispatchToTarget('advanced', request);
+    }
+
     logger.info(`Routing task to ${routing.target} (${routing.type})`);
     return this.dispatchToTarget(routing.target, request);
   }
@@ -174,6 +661,16 @@ class TaskRouter {
       case 'opencode': return this.executeWithOpenCode(request);
       case 'nullclaw': return this.executeWithNullclaw(request, this.analyzeTask(request.task).type);
       case 'cli':      return this.executeWithCliAgent(request);
+      case 'advanced': {
+        // END OF ROUTING TREE: Execute advanced task via event system
+        // Use cached advanced type from executeTask to avoid re-analysis
+        const advancedType = (request as any).advancedType || this.analyzeAdvancedTask(request.task);
+        if (!advancedType) {
+          // Fallback to nullclaw if no advanced type detected
+          return this.executeWithNullclaw(request, 'automation');
+        }
+        return this.executeAdvancedTask(request, advancedType);
+      }
       default: {
         // TypeScript exhaustiveness — should never reach here at runtime
         const _exhaustive: never = target;
@@ -198,7 +695,8 @@ class TaskRouter {
       const { createOpenCodeEngine } = await import('../session/agent/opencode-engine-service');
       const engine = createOpenCodeEngine({
         model: process.env.OPENCODE_MODEL,
-        workingDir: `/workspace/users/${request.userId}/sessions/${request.conversationId}`,
+        // CRITICAL FIX: Normalize conversationId to prevent composite IDs in paths
+        workingDir: `/workspace/users/${request.userId}/sessions/${normalizeSessionId(request.conversationId) || request.conversationId}`,
         enableBash: true,
         enableFileOps: true,
         enableCodegen: true,

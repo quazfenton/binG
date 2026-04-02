@@ -34,6 +34,7 @@ async function getCommitManager() {
   return ShadowCommitManager;
 }
 import { resolveScopedPath, normalizeScopePath, extractSessionIdFromPath } from './scope-utils';
+import { normalizeSessionId } from './scope-utils';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('FileImport');
@@ -146,7 +147,9 @@ export class FileImportService {
     // Determine destination path
     const timestamp = new Date().toISOString().slice(0, 10);
     const folderName = importFolderName || `imports-${timestamp}`;
-    const baseScopePath = scopePath || (sessionId ? `project/sessions/${sessionId}` : 'project');
+    // CRITICAL FIX: Normalize sessionId to prevent composite IDs in paths
+    const simpleSessionId = sessionId ? normalizeSessionId(sessionId) : undefined;
+    const baseScopePath = scopePath || (simpleSessionId ? `project/sessions/${simpleSessionId}` : 'project');
     const destinationPath = resolveScopedPath(folderName, baseScopePath);
 
     logger.info(`Starting import to ${destinationPath}`, {

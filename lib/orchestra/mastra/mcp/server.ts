@@ -21,7 +21,7 @@ import {
   ListToolsRequestSchema,
 } from '@modelcontextprotocol/sdk/types.js';
 import { z } from 'zod';
-import { virtualFilesystem } from '@/lib/virtual-filesystem/index';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/index.server';
 import { getSandboxProvider, type SandboxProvider } from '@/lib/sandbox/providers';
 
 // Use shared VFS singleton for consistent state across all routes
@@ -106,8 +106,15 @@ const mcpTools: MCPTool[] = [
         throw new Error('Invalid path: must be relative and not contain ".."');
       }
 
-      // @ts-ignore - listFiles is available on VirtualFilesystemService
-      const files = await vfs.listFiles(ownerId, path || '/');
+      const listing = await vfs.listDirectory(ownerId, path || '/');
+      // Map nodes to files structure for backward compatibility
+      const files = listing.nodes.map(node => ({
+        path: node.path,
+        name: node.name,
+        type: node.type,
+        size: node.size,
+        lastModified: node.lastModified,
+      }));
       return { files };
     },
   },

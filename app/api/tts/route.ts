@@ -1,14 +1,28 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { generateSpeech, checkKittenTTSAvailability, KITTEN_VOICES, KITTEN_MODELS } from '@/lib/voice/kitten-tts-server';
+import { auth0 } from '@/lib/auth0';
 
 const VALID_MODEL_IDS = KITTEN_MODELS.map(m => m.id);
 
 export async function POST(req: NextRequest) {
   try {
+    // Authenticate user before allowing TTS generation
+    const session = await auth0.getSession(req);
+    if (!session?.user) {
+      return NextResponse.json(
+        { 
+          error: 'Authentication required',
+          requiresAuth: true,
+        }, 
+        { status: 401 }
+      );
+    }
+
     const body = await req.json();
     const { text, voice, model } = body;
 
-    if (!text) {
+    // Validate text is a non-empty string
+    if (typeof text !== 'string' || text.trim().length === 0) {
       return NextResponse.json(
         { error: 'Text is required' },
         { status: 400 }
@@ -16,8 +30,8 @@ export async function POST(req: NextRequest) {
     }
 
     // Validate model against allowed IDs to prevent injection
-    const selectedModel = model && VALID_MODEL_IDS.includes(model) 
-      ? model 
+    const selectedModel = model && VALID_MODEL_IDS.includes(model)
+      ? model
       : 'KittenML/kitten-tts-mini-0.8';
 
     // Validate voice against allowed IDs
@@ -42,7 +56,8 @@ export async function POST(req: NextRequest) {
       success: true,
       audioData: result.audioData,
       voice: selectedVoice,
-      model: selectedModel
+      model: selectedModel,
+      userId: session.user.sub,
     });
   } catch (error: any) {
     console.error('[TTS API] Error:', error);
