@@ -16,13 +16,27 @@ import { isDesktopMode } from '@/lib/utils/desktop-env';
  */
 async function ensureAppDataDir(): Promise<void> {
   const appDataDir = getDesktopAppDataDir();
+  
   try {
+    // Check if app data dir exists and is a directory
+    const appDataStat = await fs.stat(appDataDir).catch(() => undefined);
+    if (appDataStat && !appDataStat.isDirectory()) {
+      throw new Error(`${appDataDir} exists and is not a directory`);
+    }
     await fs.mkdir(appDataDir, { recursive: true });
-    await fs.mkdir(path.join(appDataDir, 'data'), { recursive: true });
-    await fs.mkdir(path.join(appDataDir, 'checkpoints'), { recursive: true });
-    await fs.mkdir(path.join(appDataDir, 'logs'), { recursive: true });
-  } catch (error) {
-    console.error('Failed to create app data directory:', error);
+    
+    // Check and create subdirectories
+    const subdirs = ['data', 'checkpoints', 'logs'];
+    for (const subdir of subdirs) {
+      const subdirPath = path.join(appDataDir, subdir);
+      const subdirStat = await fs.stat(subdirPath).catch(() => undefined);
+      if (subdirStat && !subdirStat.isDirectory()) {
+        throw new Error(`${subdirPath} exists and is not a directory`);
+      }
+      await fs.mkdir(subdirPath, { recursive: true });
+    }
+  } catch (error: any) {
+    console.error('Failed to create app data directory:', error.message);
     throw error;
   }
 }

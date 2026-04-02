@@ -38,6 +38,15 @@ export function getDesktopUserContext(): DesktopUserContext | null {
   const email = process.env.DESKTOP_USER_EMAIL;
   const displayName = process.env.DESKTOP_USER_NAME || 'Local User';
 
+  // CRITICAL: Validate userId is not empty
+  if (!userId || userId.trim().length === 0) {
+    log.error('Invalid DESKTOP_USER_ID environment variable', {
+      userIdLength: userId?.length,
+      hasValue: !!userId,
+    });
+    return null;
+  }
+
   return {
     userId,
     email,
@@ -117,12 +126,25 @@ export async function withDesktopAuth<T extends NextResponse>(
       });
     }
 
+    // CRITICAL: Validate user object structure before proceeding
+    if (!user || !user.userId || user.userId.trim().length === 0) {
+      log.error('Invalid desktop user context', { 
+        path: request.nextUrl.pathname,
+        hasUserId: !!user?.userId,
+        userIdLength: user?.userId?.length 
+      });
+      return NextResponse.json(
+        { error: 'Invalid user context: userId is required' },
+        { status: 500 }
+      ) as T;
+    }
+
     log.debug('Desktop auth bypassed', {
       path: request.nextUrl.pathname,
-      userId: user!.userId,
+      userId: user.userId,
     });
 
-    return handler(request, user!);
+    return handler(request, user);
   };
 }
 

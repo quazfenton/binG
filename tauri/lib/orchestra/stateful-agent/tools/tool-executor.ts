@@ -265,7 +265,22 @@ export class ToolExecutor {
       };
     }
 
-    return this.context.sandboxHandle.listDirectory(path, pattern);
+    // Sandbox listDirectory doesn't support pattern filtering, so filter results manually
+    const listResult = await this.context.sandboxHandle.listDirectory(path);
+    if (!listResult.success || !listResult.output) {
+      return listResult;
+    }
+
+    // Parse and filter the output if pattern is provided
+    if (pattern) {
+      const files = listResult.output.split('\n').filter((f) => new RegExp(pattern).test(f));
+      return {
+        success: true,
+        output: files.join('\n'),
+      };
+    }
+
+    return listResult;
   }
 
   private async executeCreateFile({

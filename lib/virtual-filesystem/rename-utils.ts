@@ -220,7 +220,7 @@ export async function safeRename(options: RenameOptions): Promise<RenameResult> 
         workspaceVersion,
         applied: [{
           path: destinationPath,
-          operation: 'rename',  // Use 'rename' to accurately reflect the operation type
+          operation: overwrite ? 'update' : 'create',  // Use valid operation type
           timestamp: Date.now(),
           sourcePath,  // Include source path for rename operations
           destinationPath,  // Include destination path for clarity
