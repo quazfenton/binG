@@ -7,6 +7,7 @@ export type PanelTab = "explorer" | "chat" | "thinking" | "music" | "automations
 export type TopPanelTab =
   | "news"
   | "plugins"
+  | "marketplace"
   | "workflows"
   | "orchestration"
   | "art-gallery"

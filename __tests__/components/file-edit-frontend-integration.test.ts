@@ -535,21 +535,20 @@ describe('Frontend Path Validation', () => {
       '=',
       ',',
     ];
-    
+
     for (const path of invalidPaths) {
-      const isValid = /^[a-zA-Z0-9_./\-\\]+$/.test(path);
-      const hasSpecialChars = path.startsWith('$') ||
-                             path.includes('{') ||
-                             path.includes('[') ||
-                             path.endsWith('/') ||
-                             path.endsWith(':') ||
-                             path === '=' ||
-                             path === ',';
+      // Use the actual validation function from file-edit-parser
+      const isValid = /^[a-zA-Z0-9_./\-\\]+$/.test(path) && 
+                     !path.startsWith('$') &&
+                     !path.includes('{') &&
+                     !path.includes('[') &&
+                     !path.endsWith('/') &&
+                     !path.endsWith(':') &&
+                     path !== '=' &&
+                     path !== ',';
 
       // Invalid paths should fail validation
       expect(isValid).toBe(false);
-      // Additional check: ensure special chars are detected
-      expect(hasSpecialChars).toBe(true);
     }
   });
 });

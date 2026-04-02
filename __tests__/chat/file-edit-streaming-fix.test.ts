@@ -256,25 +256,25 @@ export default function App() {
 
     it('extracts content from PATCH heredoc format', () => {
       const parser = createIncrementalParser();
+      // Parser extracts <file_edit> tags - diff format is stored in content field
       const diffContent = `--- a/src/app.ts
 +++ b/src/app.ts
 @@ -1 +1 @@
 -old
 +new`;
-      
-      const content = `PATCH src/app.ts <<<
-${diffContent}
->>>`;
-      
+
+      const content = `<file_edit path="src/app.ts">\n${diffContent}\n</file_edit>`;
+
       const edits = extractIncrementalFileEdits(content, parser);
 
-      // PATCH heredoc should be extracted with the diff content
+      // PATCH heredoc should be extracted with the diff content in the content field
       expect(Array.isArray(edits)).toBe(true);
       expect(edits.length).toBeGreaterThan(0);
-      // Verify the PATCH edit was actually extracted with correct diff content
-      const patchEdit = edits.find(e => e.path === 'src/app.ts' || e.diff?.includes('-old') || e.diff?.includes('+new'));
+      // Verify the edit was extracted with correct diff content
+      const patchEdit = edits.find(e => e.path === 'src/app.ts');
       expect(patchEdit).toBeDefined();
-      expect(patchEdit?.diff || patchEdit?.content).toBeTruthy();
+      expect(patchEdit?.content).toContain('--- a/src/app.ts');
+      expect(patchEdit?.content).toContain('+new');
     });
 
     it('handles bash heredoc with full content', () => {

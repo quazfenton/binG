@@ -1,0 +1,351 @@
+/**
+ * Desktop Security Policy Engine
+ *
+ * Configurable security policies for desktop mode execution.
+ * Unlike cloud sandboxes, desktop mode is intentionally less restrictive
+ * since users have full control over their local machine.
+ *
+ * Features:
+ * - Blocked command patterns (regex)
+ * - Allowed directory restrictions
+ * - Approval requirements for risky operations
+ * - Command audit logging
+ */
+
+import { createLogger } from '@/lib/utils/logger';
+
+const log = createLogger('DesktopSecurityPolicy');
+
+export interface SecurityPolicyConfig {
+  /** Blocked command patterns (regex strings) */
+  blockedPatterns: string[];
+  /** Blocked exact commands */
+  blockedCommands: string[];
+  /** Allowed base directories for file operations */
+  allowedDirectories: string[];
+  /** Maximum command execution time in seconds */
+  maxExecutionTime: number;
+  /** Require approval for commands matching these patterns */
+  approvalRequiredPatterns: string[];
+  /** Enable command audit logging */
+  auditEnabled: boolean;
+  /** Block network-affecting commands */
+  blockNetworkCommands: boolean;
+}
+
+export type RiskLevel = 'low' | 'medium' | 'high' | 'critical';
+
+export interface CommandAnalysis {
+  allowed: boolean;
+  riskLevel: RiskLevel;
+  reason?: string;
+  requiresApproval: boolean;
+  matchedRule?: string;
+}
+
+export interface AuditLogEntry {
+  timestamp: string;
+  command: string;
+  riskLevel: RiskLevel;
+  allowed: boolean;
+  requiresApproval: boolean;
+  approved?: boolean;
+  userFeedback?: string;
+  workingDirectory: string;
+}
+
+// Default security policy for desktop mode
+export const DEFAULT_DESKTOP_POLICY: SecurityPolicyConfig = {
+  blockedPatterns: [
+    // Destructive filesystem operations
+    'rm\\s+-rf\\s+/$(?!\\w)',           // rm -rf / (root)
+    'rm\\s+-rf\\s+/\\s',                // rm -rf / (with space)
+    'mkfs\\.',                          // format filesystem
+    'dd\\s+if=.*of=/dev/',              // dd to device
+    ':\\(\\){ :\\|:& };:',              // fork bomb
+    'curl\\s+.*\\|\\s*sh',              // curl | sh
+    'wget\\s+.*\\|\\s*sh',              // wget | sh
+    // Privilege escalation
+    'sudo\\s+rm\\s+-rf',
+    'sudo\\s+dd\\s+if=',
+    'sudo\\s+mkfs',
+    // System modification
+    'chmod\\s+777\\s+/',
+    'chown\\s+-R\\s+root:',
+    // Data destruction
+    '>\\s*/etc/passwd',
+    '>\\s*/etc/shadow',
+    '>\\s*/dev/sd',
+  ],
+  blockedCommands: [
+    'mkfs',
+    'fdisk',
+    'parted',
+    ':(){:|:&};:',
+    'fork',
+    'shutdown',
+    'reboot',
+    'init 0',
+    'init 6',
+  ],
+  allowedDirectories: [], // Empty means no restriction (full access)
+  maxExecutionTime: 300, // 5 minutes
+  approvalRequiredPatterns: [
+    'rm\\s+-rf',
+    'sudo',
+    'chmod\\s+777',
+    'npm\\s+install\\s+-g',
+    'pip\\s+install\\s+--user',
+    'curl.*\\|',
+    'wget.*\\|',
+  ],
+  auditEnabled: true,
+  blockNetworkCommands: false, // Allow network commands in desktop mode
+};
+
+class DesktopSecurityPolicy {
+  private config: SecurityPolicyConfig;
+  private auditLog: AuditLogEntry[] = [];
+  private maxAuditEntries = 1000;
+
+  constructor(config: Partial<SecurityPolicyConfig> = {}) {
+    this.config = { ...DEFAULT_DESKTOP_POLICY, ...config };
+    log.info('DesktopSecurityPolicy initialized', { config: this.config });
+  }
+
+  /**
+   * Analyze a command and determine if it's allowed
+   */
+  analyzeCommand(command: string, workingDirectory?: string): CommandAnalysis {
+    const trimmed = command.trim();
+    const riskLevel = this.assessRisk(trimmed);
+
+    // Check blocked commands (exact match)
+    for (const blocked of this.config.blockedCommands) {
+      if (trimmed.toLowerCase().includes(blocked.toLowerCase())) {
+        log.warn('Blocked command detected (exact match)', { command: trimmed, blocked });
+        this.logAudit({
+          command: trimmed,
+          riskLevel,
+          allowed: false,
+          requiresApproval: false,
+          workingDirectory: workingDirectory || '',
+        });
+        return {
+          allowed: false,
+          riskLevel,
+          reason: `Command '${blocked}' is explicitly blocked`,
+          requiresApproval: false,
+          matchedRule: `blockedCommand:${blocked}`,
+        };
+      }
+    }
+
+    // Check blocked patterns (regex)
+    for (const pattern of this.config.blockedPatterns) {
+      try {
+        const regex = new RegExp(pattern, 'i');
+        if (regex.test(trimmed)) {
+          log.warn('Blocked command detected (pattern match)', { command: trimmed, pattern });
+          this.logAudit({
+            command: trimmed,
+            riskLevel,
+            allowed: false,
+            requiresApproval: false,
+            workingDirectory: workingDirectory || '',
+          });
+          return {
+            allowed: false,
+            riskLevel,
+            reason: `Command matches blocked pattern '${pattern}'`,
+            requiresApproval: false,
+            matchedRule: `blockedPattern:${pattern}`,
+          };
+        }
+      } catch (e) {
+        log.warn('Invalid regex pattern in blocked patterns', { pattern });
+      }
+    }
+
+    // Check if approval is required
+    let requiresApproval = false;
+    let matchedApprovalRule: string | undefined;
+
+    for (const pattern of this.config.approvalRequiredPatterns) {
+      try {
+        const regex = new RegExp(pattern, 'i');
+        if (regex.test(trimmed)) {
+          requiresApproval = true;
+          matchedApprovalRule = pattern;
+          break;
+        }
+      } catch (e) {
+        // Invalid regex, skip
+      }
+    }
+
+    // Log the command
+    this.logAudit({
+      command: trimmed,
+      riskLevel,
+      allowed: true,
+      requiresApproval,
+      workingDirectory: workingDirectory || '',
+    });
+
+    return {
+      allowed: true,
+      riskLevel,
+      requiresApproval,
+      matchedRule: matchedApprovalRule,
+    };
+  }
+
+  /**
+   * Check if a path is within allowed directories
+   */
+  isPathAllowed(filePath: string): { allowed: boolean; reason?: string } {
+    if (this.config.allowedDirectories.length === 0) {
+      // No restrictions - allow all
+      return { allowed: true };
+    }
+
+    const normalized = filePath.replace(/\\/g, '/');
+
+    for (const allowed of this.config.allowedDirectories) {
+      const allowedNormalized = allowed.replace(/\\/g, '/');
+      if (normalized.startsWith(allowedNormalized) || normalized === allowedNormalized) {
+        return { allowed: true };
+      }
+    }
+
+    return {
+      allowed: false,
+      reason: `Path '${filePath}' is not within allowed directories: ${this.config.allowedDirectories.join(', ')}`,
+    };
+  }
+
+  /**
+   * Assess the risk level of a command
+   */
+  private assessRisk(command: string): RiskLevel {
+    const lower = command.toLowerCase();
+
+    // Critical risk
+    if (
+      /rm\s+-rf\s+\/($|\s)/.test(lower) ||
+      /mkfs/.test(lower) ||
+      /dd\s+if=.*of=\/dev/.test(lower) ||
+      /:\(\){ :\|:& };:/.test(lower)
+    ) {
+      return 'critical';
+    }
+
+    // High risk
+    if (
+      /sudo\s+rm/.test(lower) ||
+      /sudo\s+dd/.test(lower) ||
+      />\s*\/dev\//.test(lower) ||
+      /chmod\s+777\s+\//.test(lower)
+    ) {
+      return 'high';
+    }
+
+    // Medium risk
+    if (
+      /rm\s+-rf/.test(lower) ||
+      /sudo/.test(lower) ||
+      /npm\s+install\s+-g/.test(lower) ||
+      /pip\s+install/.test(lower) ||
+      /curl.*\|/.test(lower) ||
+      /wget.*\|/.test(lower)
+    ) {
+      return 'medium';
+    }
+
+    // Low risk - default for safe commands
+    return 'low';
+  }
+
+  /**
+   * Log command to audit trail
+   */
+  private logAudit(entry: AuditLogEntry): void {
+    entry.timestamp = new Date().toISOString();
+    this.auditLog.push(entry);
+
+    // Trim old entries
+    if (this.auditLog.length > this.maxAuditEntries) {
+      this.auditLog = this.auditLog.slice(-this.maxAuditEntries);
+    }
+
+    if (this.config.auditEnabled) {
+      log.debug('Command audit', entry);
+    }
+  }
+
+  /**
+   * Get audit log entries
+   */
+  getAuditLog(limit?: number): AuditLogEntry[] {
+    if (limit) {
+      return this.auditLog.slice(-limit);
+    }
+    return [...this.auditLog];
+  }
+
+  /**
+   * Clear audit log
+   */
+  clearAuditLog(): void {
+    this.auditLog = [];
+  }
+
+  /**
+   * Update policy configuration
+   */
+  updateConfig(newConfig: Partial<SecurityPolicyConfig>): void {
+    this.config = { ...this.config, ...newConfig };
+    log.info('Security policy updated', { newConfig });
+  }
+
+  /**
+   * Get current configuration
+   */
+  getConfig(): SecurityPolicyConfig {
+    return { ...this.config };
+  }
+}
+
+// Export singleton instance with default config
+export const desktopSecurityPolicy = new DesktopSecurityPolicy();
+
+/**
+ * Helper function to analyze a command quickly
+ */
+export function analyzeDesktopCommand(
+  command: string,
+  workingDirectory?: string,
+  customPolicy?: DesktopSecurityPolicy
+): CommandAnalysis {
+  const policy = customPolicy || desktopSecurityPolicy;
+  return policy.analyzeCommand(command, workingDirectory);
+}
+
+/**
+ * Get risk level as a display-friendly string
+ */
+export function getRiskLevelDisplay(riskLevel: RiskLevel): string {
+  switch (riskLevel) {
+    case 'critical':
+      return 'CRITICAL - Blocked';
+    case 'high':
+      return 'HIGH - Requires Approval';
+    case 'medium':
+      return 'MEDIUM - May Require Approval';
+    case 'low':
+      return 'LOW - Safe to Execute';
+    default:
+      return 'UNKNOWN';
+  }
+}
