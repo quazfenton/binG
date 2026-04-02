@@ -203,23 +203,19 @@ export default function ConversationInterface() {
     return null;
   });
   // Generate initial session ID using new naming system
-  // Start empty, will be set asynchronously to allow filesystem scan
-  const [filesystemSessionId, setFilesystemSessionId] = useState<string>(() => {
-    const persisted = readPersistedConversationUiState();
-    if (persisted?.filesystemSessionId) {
-      return persisted.filesystemSessionId;
-    }
-    if (typeof window !== 'undefined') {
-      const saved = sessionStorage.getItem('current_filesystem_session_id');
-      if (saved) return saved;
-    }
-    return '';
-  });
+  // Always start fresh to prevent stale session IDs like "002" from being reused
+  const [filesystemSessionId, setFilesystemSessionId] = useState<string>('');
 
-  // Generate session name if not restored from persistence
+  // Generate session name on mount (always fresh, never restored)
   useEffect(() => {
     let cancelled = false;
     if (!filesystemSessionId) {
+      // Clear ANY stale sessionStorage to prevent old session IDs from persisting
+      if (typeof window !== 'undefined') {
+        sessionStorage.removeItem('current_filesystem_session_id');
+        sessionStorage.removeItem('current_conversation_id');
+      }
+      // Generate fresh session name starting from 000
       generateSessionName(undefined, true, false).then((newId) => {
         if (!cancelled) {
           setFilesystemSessionId(newId);
@@ -229,7 +225,7 @@ export default function ConversationInterface() {
     return () => {
       cancelled = true;
     };
-  }, [filesystemSessionId]);
+  }, []); // Empty deps - only run once on mount
 
   // Persist filesystemSessionId to sessionStorage so page refresh restores it
   useEffect(() => {
@@ -266,9 +262,12 @@ export default function ConversationInterface() {
   const persistedUiStateUpdatedAtRef = useRef(0);
   const continueProcessedRef = useRef<string | null>(null);
   const chatHistorySavedRef = useRef<string | null>(null);
-  const lastProcessedAssistantDiffSignatureRef = useRef<string>('');
   const diffApplyQueueRef = useRef<Promise<void>>(Promise.resolve());
-  
+
+  // Track processed message IDs to prevent re-processing on page reload
+  const processedMessageIdsRef = useRef<Set<string>>(new Set());
+  const hasLoadedInitialMessagesRef = useRef(false);
+
   // Track permanently rejected diffs to prevent infinite retry loops
   // Key: "resolvedPath::diff_hash", Value: failure count
   const rejectedDiffsRef = useRef<Map<string, number>>(new Map());
@@ -309,6 +308,24 @@ export default function ConversationInterface() {
     }
   }, [currentConversationId, filesystemSessionId, currentProvider, currentModel]);
 
+  // CRITICAL FIX: Clear any stale persisted filesystemSessionId on mount
+  // This ensures next page reload doesn't restore stale session IDs
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    const persisted = readPersistedConversationUiState();
+    if (persisted?.filesystemSessionId) {
+      // Always clear persisted filesystemSessionId to force fresh generation on next reload
+      // This prevents stale session IDs like "002" from persisting across page reloads
+      writePersistedConversationUiState({
+        currentConversationId: persisted.currentConversationId,
+        filesystemSessionId: '',  // Clear to force fresh generation
+        currentProvider: persisted.currentProvider,
+        currentModel: persisted.currentModel,
+      });
+      console.log('[ConversationInterface] Cleared stale persisted filesystemSessionId:', persisted.filesystemSessionId);
+    }
+  }, []);
+
   useEffect(() => {
     if (typeof window === "undefined") {
       return;
@@ -328,9 +345,11 @@ export default function ConversationInterface() {
       if (persisted.currentConversationId !== null) {
         setCurrentConversationId(persisted.currentConversationId);
       }
-      if (persisted.filesystemSessionId) {
-        setFilesystemSessionId(persisted.filesystemSessionId);
-      }
+      // CRITICAL FIX: Don't restore filesystemSessionId from storage - always use fresh generated ID
+      // This prevents stale session IDs from being restored via storage events
+      // if (persisted.filesystemSessionId) {
+      //   setFilesystemSessionId(persisted.filesystemSessionId);
+      // }
       if (persisted.currentProvider) {
         setCurrentProvider(persisted.currentProvider);
       }
@@ -634,22 +653,30 @@ export default function ConversationInterface() {
   useEffect(() => {
     if (messages.length === 0) return;
 
+    // Skip processing on initial load - messages are already persisted
+    if (!hasLoadedInitialMessagesRef.current) {
+      hasLoadedInitialMessagesRef.current = true;
+      // Mark all existing messages as processed to prevent re-processing on page reload
+      messages.forEach(m => processedMessageIdsRef.current.add(m.id));
+      console.log('[ConversationInterface] Initial load - marked', messages.length, 'messages as processed');
+      return;
+    }
+
     const lastAssistant = [...messages]
       .reverse()
       .find((m) => m.role === "assistant");
     if (!lastAssistant || typeof lastAssistant.content !== "string") return;
-    
-    // CRITICAL FIX: Track last processed message ID to prevent re-processing the same message
-    const assistantSignature = `${lastAssistant.id}:${lastAssistant.content.length}`;
-    if (lastProcessedAssistantDiffSignatureRef.current === assistantSignature) {
-      return; // Already processed this message
+
+    // Skip if already processed this message ID
+    if (processedMessageIdsRef.current.has(lastAssistant.id)) {
+      return;
     }
-    lastProcessedAssistantDiffSignatureRef.current = assistantSignature;
-    
+    processedMessageIdsRef.current.add(lastAssistant.id);
+
     // Create context for API response processing (simplified - no longer need input-response-separator)
     // Directly parse the response using file-edit-parser
     const parsedResponse = parseFilesystemResponse(lastAssistant.content);
-    
+
     // Convert to legacy format for compatibility with existing code
     const processedResponse = {
       mode: parsedResponse.writes.length > 0 || parsedResponse.diffs.length > 0 ? 'code' as const : 'chat' as const,
@@ -672,12 +699,14 @@ export default function ConversationInterface() {
     // Only run once per session to avoid re-triggering
     // CRITICAL: This MUST run BEFORE applying diffs to ensure files go to correct session folder
     const detectedFolder = !llmFolderDetected && detectNewProjectFolder(lastAssistant.content);
-    
-    if (detectedFolder && messages.length === 0) {
+
+    // Check if this is the first message being processed (initial project creation)
+    const isFirstMessage = processedMessageIdsRef.current.size === 1;
+    if (detectedFolder && isFirstMessage) {
       // Only apply for new sessions with no prior messages - use LLM-suggested folder name
       // Set the detected folder name immediately for use in path resolution
       setDetectedFolderName(detectedFolder);
-      
+
       // Generate the official session name (handles conflicts, registers in usedNames, etc.)
       generateSessionName(detectedFolder, true, true).then((newSessionId) => {
         setFilesystemSessionId(newSessionId);
@@ -699,26 +728,26 @@ export default function ConversationInterface() {
         console.warn('[ConversationInterface] Filtering out entry with empty path');
         return false;
       }
-      
+
       // Reject paths ending with quotes (likely extracted from JSX/HTML attributes)
       if (path.endsWith('"') || path.endsWith("'") || path.endsWith('`')) {
         console.warn('[ConversationInterface] Filtering out path ending with quote (JSX/HTML fragment):', path);
         return false;
       }
-      
+
       // Reject paths with spaces in the last segment (likely not a real file path)
       const lastSegment = path.split('/').pop() || path;
       if (/\s/.test(lastSegment)) {
         console.warn('[ConversationInterface] Filtering out path with space in filename:', path);
         return false;
       }
-      
+
       // Reject paths that are too short or too long
       if (path.length < 3 || path.length > 500) {
         console.warn('[ConversationInterface] Filtering out path with invalid length:', path);
         return false;
       }
-      
+
       // Reject paths containing obvious code fragments
       const codeFragmentPatterns = [
         /["']\s*[>,)]\s*$/,  // Ends with quote followed by JSX/JS punctuation
@@ -733,7 +762,7 @@ export default function ConversationInterface() {
         console.warn('[ConversationInterface] Filtering out path that looks like code fragment:', path);
         return false;
       }
-      
+
       return true;
     });
 
@@ -741,7 +770,7 @@ export default function ConversationInterface() {
       console.log('[ConversationInterface] All entries filtered out as invalid - skipping diff application');
       return;
     }
-    
+
     if (validEntries.length !== newEntries.length) {
       console.log(`[ConversationInterface] Filtered from ${newEntries.length} to ${validEntries.length} valid entries`);
     }
@@ -756,11 +785,11 @@ export default function ConversationInterface() {
     const isExistingSession = currentConversationId !== null || messages.length > 0;
 
     if (isExistingSession) {
-      // Query actual filesystem state for accurate conflict detection
-      let existingFilePaths: string[] = [];
+      // DEBOUNCE: Wait 500ms before checking conflicts to prevent request storms on app load
+      const debounceTimer = setTimeout(async () => {
+        // Query actual filesystem state for accurate conflict detection
+        let existingFilePaths: string[] = [];
 
-      // Wrap async code in an async IIFE since useEffect can't be async
-      const checkConflicts = async () => {
         try {
           const listResponse = await fetch(`/api/filesystem/list?path=${encodeURIComponent(filesystemScopePath)}`, {
             headers: buildFilesystemHeaders(),
@@ -778,7 +807,8 @@ export default function ConversationInterface() {
               throw new Error('Invalid filesystem list response');
             }
           } else if (listResponse.status === 429) {
-            // Rate limited - skip conflict check, use attached files as fallback
+            // Rate limited - skip conflict check for NOW, use attached files as fallback
+            // DO NOT permanently reject - rate limits are transient
             console.warn('[ConflictCheck] Rate limited, using cached filesystem state');
             existingFilePaths = Object.keys(attachedFilesystemFiles);
           } else {
@@ -832,10 +862,12 @@ export default function ConversationInterface() {
         if (applyDiffsRef.current) {
           void applyDiffsRef.current(validEntries);
         }
-      };
+      }, 500); // 500ms debounce
 
-      void checkConflicts();
-      return;
+      // Cleanup debounce timer on unmount or when dependencies change
+      return () => {
+        if (debounceTimer) clearTimeout(debounceTimer);
+      };
     }
 
     // Auto-apply the detected diffs immediately to trigger filesystem event for MessageBubble UI
@@ -845,6 +877,17 @@ export default function ConversationInterface() {
       void applyDiffsRef.current(validEntries);
     }
   }, [messages, attachedFilesystemFiles, currentConversationId, filesystemScopePath, queueCommandDiffs]);
+
+  // Reset processed message tracking when switching conversations
+  useEffect(() => {
+    if (!currentConversationId) return;
+    
+    // Clear processed IDs and reset initial load flag for new conversation
+    processedMessageIdsRef.current.clear();
+    hasLoadedInitialMessagesRef.current = false;
+    
+    console.log('[ConversationInterface] Conversation changed - reset processed tracking');
+  }, [currentConversationId]);
 
   // Persist commands map by conversation id
   useEffect(() => {
@@ -869,10 +912,6 @@ export default function ConversationInterface() {
     } catch {
       setCommandsByFile({});
     }
-  }, [currentConversationId]);
-
-  useEffect(() => {
-    lastProcessedAssistantDiffSignatureRef.current = '';
   }, [currentConversationId]);
 
   // Fetch available providers on mount and align defaults with server config
@@ -1934,11 +1973,7 @@ export default function ConversationInterface() {
         userId={user?.id?.toString() || getStableSessionId()}
         onAttachedFilesChange={handleAttachedFilesChange}
         filesystemScopePath={filesystemScopePath}
-        isPollingDiffs={diffsPoller.isPolling}
-        pollCount={diffsPoller.pollCount}
-        onStartPollingDiffs={diffsPoller.startPolling}
-        onStopPollingDiffs={diffsPoller.stopPolling}
-        onPollDiffsNow={diffsPoller.pollNow}
+        // Note: useDiffsPoller removed - file changes synced via filesystem-updated events + SSE
       />
 
       {/* Chat History Modal */}

@@ -604,10 +604,12 @@ export default function CodePreviewPanel({
             if (retryResponse.ok) {
               toast.success('Renamed to: ' + newName);
               void debouncedListDirectory(filesystemCurrentPath);
+              
+              // Emit filesystem SSE event for rename operation
               emitFilesystemUpdated({
                 path: newPath,
                 scopePath: normalizedFilesystemPath,
-                source: 'code-preview',
+                source: 'code-preview-rename',
                 type: 'update',
               });
             } else {
@@ -640,16 +642,17 @@ export default function CodePreviewPanel({
         setSelectedFilesystemContent('');
       }
 
+      // Emit filesystem SSE event for rename operation
       emitFilesystemUpdated({
         path: newPath,
         scopePath: normalizedFilesystemPath,
-        source: 'code-preview',
+        source: 'code-preview-rename',
         type: 'update',
       });
     } catch (err: any) {
       toast.error('Failed to rename: ' + err.message);
     }
-  }, [filesystemCurrentPath, normalizedFilesystemPath, selectedFilesystemPath]);
+  }, [filesystemCurrentPath, normalizedFilesystemPath, selectedFilesystemPath, emitFilesystemUpdated]);
 
   // Handle double-click to rename file
   const handleDoubleClickFile = useCallback((node: { path: string; name: string; type: string }) => {
@@ -725,17 +728,19 @@ export default function CodePreviewPanel({
         if (selectedFilesystemPath === sourcePath) {
           setSelectedFilesystemPath(targetPath);
         }
+        
+        // Emit filesystem SSE event for rename operation
         emitFilesystemUpdated({
           path: targetPath,
           scopePath: normalizedFilesystemPath,
-          source: 'code-preview',
+          source: 'code-preview-rename',
           type: 'update',
         });
       } catch (err: any) {
         toast.error('Failed to rename: ' + err.message);
       }
     }
-  }, [editingFilePath, editingFileName, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, selectedFilesystemPath, normalizedFilesystemPath]);
+  }, [editingFilePath, editingFileName, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, selectedFilesystemPath, normalizedFilesystemPath, emitFilesystemUpdated]);
 
   // Cancel rename editing
   const cancelRenameEdit = useCallback(() => {
@@ -812,17 +817,18 @@ export default function CodePreviewPanel({
         await debouncedListDirectory(filesystemCurrentPath);
         await debouncedListDirectory(targetDir);
         
+        // Emit filesystem SSE event for paste operation
         emitFilesystemUpdated({
           path: destPath,
           scopePath: normalizedFilesystemPath,
-          source: 'code-preview',
+          source: 'code-preview-paste',
           type: 'update',
         });
       } catch (err: any) {
         toast.error('Failed to paste: ' + err.message);
       }
     }
-  }, [clipboard, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, normalizedFilesystemPath]);
+  }, [clipboard, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, normalizedFilesystemPath, emitFilesystemUpdated]);
 
   // Handle drag start
   const handleDragStart = useCallback((e: React.DragEvent, node: { path: string; name: string }) => {
@@ -898,10 +904,12 @@ export default function CodePreviewPanel({
               toast.success(`Moved "${name}" to new location`);
               await debouncedListDirectory(filesystemCurrentPath);
               await debouncedListDirectory(targetDir);
+              
+              // Emit filesystem SSE event for move operation
               emitFilesystemUpdated({
                 path: newPath,
                 scopePath: normalizedFilesystemPath,
-                source: 'code-preview',
+                source: 'code-preview-move',
                 type: 'update',
               });
             } else {
@@ -924,10 +932,12 @@ export default function CodePreviewPanel({
       toast.success(`Moved "${name}" to new location`);
       await debouncedListDirectory(filesystemCurrentPath);
       await debouncedListDirectory(targetDir);
+      
+      // Emit filesystem SSE event for move operation
       emitFilesystemUpdated({
         path: newPath,
         scopePath: normalizedFilesystemPath,
-        source: 'code-preview',
+        source: 'code-preview-move',
         type: 'update',
       });
     } catch (err: any) {
@@ -935,7 +945,7 @@ export default function CodePreviewPanel({
     }
 
     setDraggedFile(null);
-  }, [filesystemCurrentPath, normalizedFilesystemPath, listFilesystemDirectory]);
+  }, [filesystemCurrentPath, normalizedFilesystemPath, listFilesystemDirectory, emitFilesystemUpdated]);
 
   // Helper to detect shell code blocks
   const isShellCodeBlock = useCallback((language: string, code: string): boolean => {
@@ -1461,45 +1471,49 @@ export default function CodePreviewPanel({
     }
   }, [codeBlocks.length, selectedFileIndex]);
 
-  // Auto-load preview when panel opens
-  // FIXED: Use refs to avoid dependency loop with handleManualPreview
-  // NOTE: VFS sync runs regardless of isOpen to support on-demand operations when closed
-  const autoLoadPreviewRef = useRef(false);
-  
+  // Auto-load preview when user EXPLICITLY opens the panel (not on mount)
+  // This prevents rate limit errors from multiple components calling listDirectory on app load
+  const wasOpenRef = useRef(false);
+
   useEffect(() => {
-    // Keep ref reset for open/close cycles, but allow other effects to run when closed
-    if (!isOpen) {
-      autoLoadPreviewRef.current = false;
-      // Don't return early - allow VFS sync to continue for on-demand commands
-    }
-    
-    // Only run once when panel opens
-    if (autoLoadPreviewRef.current) return;
-    autoLoadPreviewRef.current = true;
+    // Only trigger when panel transitions from closed → open (user action)
+    if (isOpen && !wasOpenRef.current) {
+      wasOpenRef.current = true;
+      
+      const autoLoadPreview = async () => {
+        log('[autoLoadPreview] user opened panel, checking if files exist');
 
-    const autoLoadPreview = async () => {
-      log('[autoLoadPreview] panel opened, checking if preview should load');
+        // Check if there are files in the filesystem
+        try {
+          const nodes = await listFilesystemDirectory(filesystemCurrentPath || filesystemScopePath || 'project');
+          const hasFiles = nodes.some(n => n.type === 'file');
 
-      // Check if there are files in the filesystem
-      try {
-        const nodes = await listFilesystemDirectory(filesystemCurrentPath || filesystemScopePath || 'project');
-        const hasFiles = nodes.some(n => n.type === 'file');
-
-        if (hasFiles && !isManualPreviewActive) {
-          log('[autoLoadPreview] files detected, loading preview automatically');
-          // Small delay to ensure panel is fully rendered
-          setTimeout(() => {
-            handleManualPreview();
-          }, 100);
+          if (hasFiles && !isManualPreviewActive) {
+            log('[autoLoadPreview] files detected, loading preview automatically');
+            // Small delay to ensure panel is fully rendered
+            setTimeout(() => {
+              handleManualPreview();
+            }, 100);
+          } else {
+            log('[autoLoadPreview] no files detected, skipping preview');
+          }
+        } catch (err) {
+          // Silently ignore rate limit errors - user can manually refresh
+          if (err instanceof Error && err.message.includes('rate limit')) {
+            log('[autoLoadPreview] rate limited, skipping preview check');
+          } else {
+            logError('[autoLoadPreview] failed to check for files', err);
+          }
         }
-      } catch (err) {
-        logError('[autoLoadPreview] failed to check for files', err);
-      }
-    };
+      };
 
-    autoLoadPreview();
+      autoLoadPreview();
+    } else if (!isOpen) {
+      // Reset when panel closes so it can auto-load again on next open
+      wasOpenRef.current = false;
+    }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [isOpen]); // Only depend on isOpen - run once when panel opens
+  }, [isOpen]); // Only trigger on open/close transitions
 
   // Files explorer - run regardless of isOpen to keep VFS synced
   useEffect(() => {
@@ -5881,6 +5895,7 @@ root.render(<App />);` };
                                   path: node.path,
                                   type: node.type,
                                 });
+                                return false;
                               }}
                               draggable={node.type === 'file'}
                               onDragStart={(e) => handleDragStart(e, { path: node.path, name: node.name })}
@@ -6412,12 +6427,20 @@ root.render(<App />);` };
       {contextMenu && (
         <>
           <div
-            className="fixed inset-0 z-40"
+            className="fixed inset-0 z-[100]"
             onClick={() => setContextMenu(null)}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              setContextMenu(null);
+            }}
           />
           <div
-            className="fixed z-50 bg-gray-900 border border-gray-700 rounded-lg shadow-xl py-1 min-w-[180px]"
+            className="fixed z-[101] bg-gray-900 border border-gray-700 rounded-lg shadow-2xl py-1 min-w-[180px]"
             style={{ left: contextMenu.x, top: contextMenu.y }}
+            onContextMenu={(e) => {
+              e.preventDefault();
+              e.stopPropagation();
+            }}
           >
             {/* Paste option if clipboard has content and it's a directory */}
             {clipboard && contextMenu.type === 'directory' && (

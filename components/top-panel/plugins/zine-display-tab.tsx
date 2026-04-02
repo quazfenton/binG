@@ -34,6 +34,7 @@ import {
   Layers,
 } from "lucide-react";
 import { toast } from "sonner";
+import { ComingSoon } from "@/components/coming-soon";
 import {
   type ZineFragment,
   type ZineTemplate,
@@ -1715,6 +1716,7 @@ export default function ZineDisplayTab() {
   const [isPaused, setIsPaused] = useState(false);
   const [showControls, setShowControls] = useState(true);
   const [showSources, setShowSources] = useState(false);
+  const [showInDev, setShowInDev] = useState(false); // Toggle to show real content in dev
   const canvasRef = useRef<HTMLDivElement>(null);
 
   const template = getTemplate(templateId);
@@ -1877,12 +1879,17 @@ export default function ZineDisplayTab() {
     template.displayMode === "hybrid";
 
   return (
-    <div className="h-full flex flex-col overflow-hidden">
-      {/* Controls bar */}
-      <AnimatePresence>
-        {showControls && (
-          <motion.div
-            initial={{ height: 0, opacity: 0 }}
+    <ComingSoon
+      featureName="Zine Display"
+      description="A dynamic, animated display for showcasing content fragments with various templates and layouts."
+      showInDev={showInDev}
+    >
+      <div className="h-full flex flex-col overflow-hidden">
+        {/* Controls bar */}
+        <AnimatePresence>
+          {showControls && (
+            <motion.div
+              initial={{ height: 0, opacity: 0 }}
             animate={{ height: "auto", opacity: 1 }}
             exit={{ height: 0, opacity: 0 }}
             className="shrink-0 border-b border-white/[0.06] bg-gradient-to-r from-purple-500/[0.03] via-transparent to-cyan-500/[0.03] overflow-hidden"
@@ -2268,6 +2275,7 @@ export default function ZineDisplayTab() {
         template={template}
       />
     </div>
+    </ComingSoon>
   );
 }
 

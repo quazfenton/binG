@@ -16,6 +16,7 @@ import { diffTracker } from './filesystem-diffs';
 import { stripWorkspacePrefixes } from './scope-utils';
 import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
+import { emitFilesystemUpdated } from './sync/sync-events';
 
 // Default configuration
 const DEFAULT_WORKSPACE_ROOT = process.env.DEFAULT_WORKSPACE_ROOT || 'project';
@@ -240,6 +241,18 @@ export class VirtualFilesystemService {
     diffTracker.trackChange(file, ownerId, previous?.content);
     this.emitFileChange(ownerId, normalizedPath, changeType, workspace.version);
     this.emitSnapshotChange(ownerId, workspace.version);
+
+    // CRITICAL: Emit filesystem-updated CustomEvent for UI components
+    // This is the CENTRAL emission point - ALL writeFile callers automatically notify UI
+    // Note: emitFilesystemUpdated checks typeof window, so it's safe to call from server
+    emitFilesystemUpdated({
+      path: normalizedPath,
+      paths: [normalizedPath],
+      type: changeType,
+      sessionId: ownerId.split(':').pop(), // Extract session ID from ownerId
+      workspaceVersion: workspace.version,
+      source: 'vfs-write',
+    });
 
     await this.persistWorkspace(ownerId, workspace);
 

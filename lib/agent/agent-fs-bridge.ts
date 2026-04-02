@@ -162,10 +162,13 @@ class AgentFSBridge {
       // CRITICAL FIX Bug #3: Emit filesystem-updated event after V2 sandbox sync
       // This ensures components update after V2 agent writes files
       if (syncedFiles.length > 0) {
+        // Map sandbox paths back to VFS paths for correct UI updates
+        const vfsPaths = syncedFiles.map((file) => file.replace(`${sandboxPath}/`, `${vfsPath}/`));
+        
         emitFilesystemUpdated({
           scopePath: vfsPath,
           sessionId: simpleSessionId,
-          paths: syncedFiles,
+          paths: vfsPaths,  // Use VFS paths, not sandbox paths
           type: 'update',
           source: 'v2-agent',
         });
