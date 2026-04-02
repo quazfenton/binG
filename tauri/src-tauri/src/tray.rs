@@ -48,37 +48,55 @@ pub fn init_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::erro
         .on_menu_event(move |app, event| {
             match event.id.as_ref() {
                 "quit" => {
-                    std::process::exit(0);
+                    // Graceful shutdown - let app handle cleanup
+                    if let Some(window) = app.get_webview_window("main") {
+                        let _ = window.close();
+                    }
+                    // App will exit naturally after window closes
                 }
                 "show" => {
                     if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.show();
-                        let _ = window.set_focus();
+                        if let Err(e) = window.show() {
+                            eprintln!("Failed to show window: {e}");
+                        }
+                        if let Err(e) = window.set_focus() {
+                            eprintln!("Failed to focus window: {e}");
+                        }
                     }
                 }
                 "hide" => {
                     if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.hide();
+                        if let Err(e) = window.hide() {
+                            eprintln!("Failed to hide window: {e}");
+                        }
                     }
                 }
                 "new_session" => {
                     if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.emit("tray-new-session", ());
+                        if let Err(e) = window.emit("tray-new-session", ()) {
+                            eprintln!("Failed to emit new session event: {e}");
+                        }
                     }
                 }
                 "stop_agent" => {
                     if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.emit("tray-stop-agent", ());
+                        if let Err(e) = window.emit("tray-stop-agent", ()) {
+                            eprintln!("Failed to emit stop agent event: {e}");
+                        }
                     }
                 }
                 "open_workspace" => {
                     if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.emit("tray-open-workspace", ());
+                        if let Err(e) = window.emit("tray-open-workspace", ()) {
+                            eprintln!("Failed to emit open workspace event: {e}");
+                        }
                     }
                 }
                 "settings" => {
                     if let Some(window) = app.get_webview_window("main") {
-                        let _ = window.emit("tray-open-settings", ());
+                        if let Err(e) = window.emit("tray-open-settings", ()) {
+                            eprintln!("Failed to emit open settings event: {e}");
+                        }
                     }
                 }
                 _ => {}
@@ -93,8 +111,12 @@ pub fn init_tray<R: Runtime>(app: &AppHandle<R>) -> Result<(), Box<dyn std::erro
             {
                 let app = tray.app_handle();
                 if let Some(window) = app.get_webview_window("main") {
-                    let _ = window.show();
-                    let _ = window.set_focus();
+                    if let Err(e) = window.show() {
+                        eprintln!("Failed to show window: {e}");
+                    }
+                    if let Err(e) = window.set_focus() {
+                        eprintln!("Failed to focus window: {e}");
+                    }
                 }
             }
         })

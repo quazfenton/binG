@@ -410,8 +410,8 @@ function PluginsTab({ visibleTabs, toggleTabVisibility, isTabVisible, setVisible
                     onClick={() => toggleTabVisibility(tab.value)}
                     className={`
                       p-3 rounded-lg border transition-all duration-200 flex items-center gap-2
-                      ${isVisible 
-                        ? 'bg-purple-500/20 border-purple-500/40 text-white' 
+                      ${isVisible
+                        ? 'bg-purple-500/20 border-purple-500/40 text-white'
                         : 'bg-white/5 border-white/10 text-white/50 hover:bg-white/10 hover:border-white/20'
                       }
                     `}

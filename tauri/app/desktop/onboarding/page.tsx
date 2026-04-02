@@ -122,9 +122,32 @@ export default function DesktopOnboardingPage() {
     }
   };
 
+  const isStepValid = (step: number): boolean => {
+    switch (step) {
+      case 1: // Workspace
+        return data.workspaceRoot.trim().length > 0;
+      case 2: // Shell
+        return data.shell.trim().length > 0;
+      case 3: // API
+        if (data.useLocalLLM) {
+          return data.localLLMUrl.trim().length > 0;
+        }
+        return data.llmProvider.trim().length > 0 && data.apiKey.trim().length > 0;
+      default:
+        return true;
+    }
+  };
+
   const handleNext = () => {
+    // Validate current step before proceeding
+    if (!isStepValid(currentStep)) {
+      setError('Please fill in all required fields before continuing');
+      return;
+    }
+
     if (currentStep < STEPS.length - 1) {
       setCurrentStep((prev) => prev + 1);
+      setError(null);
     }
   };
 
@@ -172,10 +195,18 @@ export default function DesktopOnboardingPage() {
       localStorage.setItem('desktop_settings', JSON.stringify(settings));
       localStorage.setItem('onboarding_completed', 'true');
 
-      // Save API key to env (in real implementation, use secure storage)
+      // Save API key to secure storage (Tauri store preferred, localStorage as fallback)
       if (data.apiKey) {
         const envKey = `${data.llmProvider.toUpperCase()}_API_KEY`;
-        localStorage.setItem(envKey, data.apiKey);
+        try {
+          // Try Tauri secure storage first
+          await tauriInvoke.saveSecret(envKey, data.apiKey);
+        } catch {
+          // Fallback to localStorage with encryption warning
+          // NOTE: In production, use proper encryption or require Tauri store
+          localStorage.setItem(envKey, data.apiKey);
+          log.warn('API key stored in localStorage (insecure). Use Tauri store in production.');
+        }
       }
 
       // Also save to Tauri store if available
@@ -313,7 +344,7 @@ export default function DesktopOnboardingPage() {
           </Button>
 
           {currentStep < STEPS.length - 1 && (
-            <Button onClick={handleNext}>
+            <Button onClick={handleNext} disabled={!isStepValid(currentStep)}>
               Next
               <ChevronRight className="h-4 w-4 ml-2" />
             </Button>
