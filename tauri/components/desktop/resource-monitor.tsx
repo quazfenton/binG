@@ -168,9 +168,11 @@ export function ResourceMonitor({
             </Tooltip>
             <span className="text-sm font-medium">{memoryPercent.toFixed(1)}%</span>
           </div>
+          {/* FIX: Apply color to the indicator via indicator class, not the container */}
           <Progress
             value={memoryPercent}
-            className={`h-2 ${getMemoryColor(memoryPercent)}`}
+            className="h-2"
+            indicatorClassName={getMemoryColor(memoryPercent)}
           />
         </div>
 
