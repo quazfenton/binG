@@ -2009,10 +2009,19 @@ export class ResponseRouter {
 
       // PRIMARY ALREADY DONE BY CALLER - extract from messages
       // The caller (route.ts) passes the assistant response in messages
+      logger.debug('Spec: Extracting primary from messages', { 
+        messageCount: request.messages.length,
+        lastRole: request.messages[request.messages.length - 1]?.role,
+      })
       const lastAssistantMsg = [...request.messages].reverse().find(m => m.role === 'assistant')
       const primaryContent = typeof lastAssistantMsg?.content === 'string' 
         ? lastAssistantMsg.content 
         : ''
+
+      logger.debug('Spec: Primary content extracted', { 
+        contentLength: primaryContent.length,
+        hasContent: !!primaryContent,
+      })
 
       const primaryData: UnifiedResponse = {
         success: true,
@@ -2031,17 +2040,21 @@ export class ResponseRouter {
       // Generate unique request ID for spec generation
       const specRequestId = `spec-${Date.now()}-${Math.random().toString(36).substring(2, 9)}`
 
+      // Extract user message for spec prompt
+      const lastUserMsg = [...request.messages].reverse().find(m => m.role === 'user')
+      const userContent = typeof lastUserMsg?.content === 'string' 
+        ? lastUserMsg.content 
+        : JSON.stringify(lastUserMsg?.content || '')
+      
+      logger.debug('Building spec prompt', { 
+        userContentLength: userContent.length,
+        specRequestId,
+      })
+
       const specPromise = enhancedLLMService.generateResponse({
         provider: fastModel.provider,
         model: fastModel.model,
-        messages: buildSpecPrompt(
-          (() => {
-            const lastUser = [...request.messages].reverse().find(m => m.role === 'user');
-            return typeof lastUser?.content === 'string'
-              ? lastUser.content
-              : JSON.stringify(lastUser?.content || '');
-          })()
-        ),
+        messages: buildSpecPrompt(userContent),
         maxTokens: 4000,
         stream: false,
         requestId: specRequestId
@@ -2071,6 +2084,7 @@ export class ResponseRouter {
           stack: err?.stack,
           requestId: request.requestId,
           hasPrimaryContent: !!primaryContent,
+          primaryContentLength: primaryData?.content?.length,
         })
       })
 
@@ -2118,15 +2132,28 @@ export class ResponseRouter {
     const { safeParseSpec, chunkSpec, explodeChunks } = await import('@/lib/chat/spec-parser')
     const { validateSpec, scoreSpec } = await import('@/lib/prompts/spec-generator')
 
+    logger.info('Spec: runBackgroundRefinement started', {
+      requestId: request.requestId,
+      mode: request.mode,
+      hasEmit: !!request.emit,
+      primaryContentLength: primaryData?.content?.length,
+      startTimeMs: Date.now() - startTime,
+    })
+
     try {
       // Wait for spec generation
+      logger.debug('Waiting for spec generation to complete')
       const specResult = await specGenerationPromise
+      logger.debug('Spec generation result', { 
+        success: specResult.success,
+        hasData: !!specResult.data,
+        error: specResult.error?.message,
+      })
 
       if (!specResult.success) {
         logger.warn('Spec generation failed in background', { error: specResult.error })
-        if (request.emit) {
-          request.emit('spec_amplification', { stage: 'spec_failed', error: specResult.error?.message })
-        }
+        const emitFunc = request.emit || (() => {});
+        emitFunc('spec_amplification', { stage: 'spec_failed', error: specResult.error?.message })
         return
       }
 
@@ -2135,69 +2162,136 @@ export class ResponseRouter {
 
       // Parse spec
       const parsed = safeParseSpec(rawSpec)
+      logger.debug('Spec parsed', { 
+        success: !!parsed, 
+        hasGoal: !!parsed?.goal,
+        sectionsCount: parsed?.sections?.length,
+        rawSpecLength: rawSpec.length,
+      })
       if (!parsed) {
         logger.warn('Spec parsing failed in background')
-        if (request.emit) {
-          request.emit('spec_amplification', { stage: 'parse_failed' })
-        }
+        const emitFunc2 = request.emit || (() => {});
+        emitFunc2('spec_amplification', { stage: 'parse_failed' })
         return
       }
 
       // Validate spec quality
-      if (!validateSpec(parsed)) {
+      const isValid = validateSpec(parsed)
+      logger.debug('Spec validation', { isValid, specGoal: parsed.goal?.substring(0, 50) })
+      if (!isValid) {
         logger.warn('Spec validation failed in background')
-        if (request.emit) {
-          request.emit('spec_amplification', { stage: 'validation_failed' })
-        }
+        const emitFunc3 = request.emit || (() => {});
+        emitFunc3('spec_amplification', { stage: 'validation_failed' })
         return
       }
 
       const specScore = scoreSpec(parsed)
+      logger.debug('Spec: Scored', { score: specScore, threshold: 4 })
       if (specScore < 4) {
         logger.warn('Spec quality too low in background', { score: specScore })
-        if (request.emit) {
-          request.emit('spec_amplification', { stage: 'low_quality', score: specScore })
-        }
+        const emitFunc4 = request.emit || (() => {});
+        emitFunc4('spec_amplification', { stage: 'low_quality', score: specScore })
         return
       }
 
+      logger.debug('Spec: About to emit thinking', { 
+        hasEmit: !!request.emit,
+        emitType: typeof request.emit,
+      })
       // Emit spec as thinking/reasoning so it shows in the expandable thinking UI
-      if (request.emit) {
+      // Use safe emit to avoid crash when stream is closed
+      const emitFuncThinking = request.emit || (() => {});
+      try {
         const specSummary = formatSpecForThinking(parsed, specScore);
-        request.emit('thinking', {
+        logger.debug('Spec: Thinking content length', { length: specSummary.length })
+        emitFuncThinking('thinking', {
           type: 'thinking',
           content: specSummary,
           timestamp: Date.now(),
         });
+      } catch (emitErr) {
+        logger.warn('Spec: Thinking emit failed (stream likely closed)', { 
+          error: emitErr?.message,
+          errorStack: emitErr?.stack,
+        })
       }
 
       // Chunk spec
       let chunks = chunkSpec(parsed)
+      logger.debug('Spec: Chunked', { chunkCount: chunks.length, mode: request.mode })
       if (request.mode === 'max') {
         chunks = explodeChunks(chunks)
       }
 
       const primaryProvider = primaryData.data?.provider || fastModel?.provider || 'openrouter'
       const primaryModel = primaryData.data?.model || fastModel?.model || request.model
-
-      // Run refinement with emit
-      const { executeRefinementWithDAG } = await import('@/lib/chat/dag-refinement-engine')
-      const refinedOutput = await executeRefinementWithDAG({
+      logger.debug('Spec: Refinement config', { 
+        provider: primaryProvider, 
         model: primaryModel,
-        provider: primaryProvider,
-        baseResponse: primaryData.content || '',
-        chunks,
-        mode: request.mode as 'enhanced' | 'max',
-        userId: request.userId,
-        conversationId: request.conversationId,
-        maxConcurrency: request.mode === 'max' ? 3 : 2,
-        timeBudgetMs: request.mode === 'max' ? 180_000 : 120_000,
-        emit: request.emit
+        baseResponseLength: (primaryData.content || '').length,
+        userId: !!request.userId,
+        conversationId: !!request.conversationId,
       })
+
+      // Check emit function status before DAG call
+      if (!request.emit) {
+        logger.warn('Spec: No emit function - stream likely closed before DAG')
+      } else {
+        logger.debug('Spec: Emit function present, will pass to DAG')
+      }
+
+      // FIX: Make emit function safe (no-op) instead of passing undefined
+      // This allows spec amplification events to be sent without crashing
+      // The emit calls are still wrapped in if (request.emit) checks
+      const safeEmit = request.emit ? request.emit : () => {};
+      
+      // Run refinement with safe emit function
+      const { executeRefinementWithDAG } = await import('@/lib/chat/dag-refinement-engine')
+      logger.info('Spec: Starting DAG refinement', { 
+        chunkCount: chunks.length, 
+        mode: request.mode,
+        emitPresent: !!request.emit,
+      })
+      
+      let refinedOutput: string
+      try {
+        logger.debug('About to call executeRefinementWithDAG')
+        refinedOutput = await executeRefinementWithDAG({
+          model: primaryModel,
+          provider: primaryProvider,
+          baseResponse: primaryData.content || '',
+          chunks,
+          mode: request.mode as 'enhanced' | 'max',
+          userId: request.userId,
+          conversationId: request.conversationId,
+          maxConcurrency: request.mode === 'max' ? 3 : 2,
+          timeBudgetMs: request.mode === 'max' ? 180_000 : 120_000,
+          emit: safeEmit // Use safe emit - won't crash even if stream is closed
+        })
+        logger.debug('Spec: DAG returned', { 
+          outputLength: refinedOutput.length, 
+          hasContent: !!refinedOutput,
+          outputPreview: refinedOutput.substring(0, 300),
+        })
+      } catch (dagErr) {
+        logger.error('Spec: DAG execution failed', { 
+          error: dagErr?.message, 
+          stack: dagErr?.stack,
+          chunkCount: chunks.length,
+          primaryContentLength: primaryData?.content?.length,
+        })
+        // Continue without refinement - don't block on DAG failure
+        refinedOutput = primaryData.content || ''
+      }
 
       // Apply filesystem edits from refined output using the same pipeline as main chat
       // Import the exported function from route.ts - ensures consistent handling
+      logger.debug('Spec: Extracting file writes from refined output', { 
+        refinedOutputLength: refinedOutput.length,
+        refinedOutputPreview: refinedOutput.substring(0, 200),
+      })
       const fileWriteEdits = extractFsActionWrites(refinedOutput);
+      logger.debug('File writes extracted', { count: fileWriteEdits.length, edits: fileWriteEdits.map(e => e.path) })
       let filesystemEdits: Awaited<ReturnType<typeof import('@/app/api/chat/route').applyFilesystemEditsFromResponse>> | null = null;
       
       // SECURITY: Only apply filesystem edits when we have a concrete owner and conversation context
@@ -2216,6 +2310,14 @@ export class ResponseRouter {
         const simpleSessionId = normalizeSessionId(rawConversationId) || rawConversationId; // Use original if normalize returns empty
         const compositeConversationId = `${ownerIdForEdits}:${rawConversationId}`;
 
+        logger.debug('Spec: Applying refinement filesystem edits', {
+          ownerId: ownerIdForEdits.toString(),
+          conversationId: compositeConversationId,
+          scopePath: `project/sessions/${simpleSessionId}`,
+          refinedOutputLength: refinedOutput.length,
+          hasFileWrites: fileWriteEdits.length > 0,
+        })
+
         try {
           const { applyFilesystemEditsFromResponse } = await import('@/app/api/chat/route')
 
@@ -2228,8 +2330,15 @@ export class ResponseRouter {
             attachedPaths: [],
             responseContent: refinedOutput,
           })
+          logger.debug('Refinement filesystem edits result', {
+            appliedCount: filesystemEdits?.applied?.length,
+            errors: filesystemEdits?.errors?.length,
+          })
         } catch (fsError) {
-          logger.error('Refinement filesystem edit application failed', fsError)
+          logger.error('Spec: Refinement filesystem edit application failed', {
+            error: fsError?.message,
+            stack: fsError?.stack,
+          })
         }
       } else {
         logger.warn('Skipping filesystem edits for spec enhancement: missing ownerId or conversationId', {
@@ -2239,54 +2348,69 @@ export class ResponseRouter {
         })
       }
 
-      // Send refined content via SSE
-      if (request.emit) {
-        // Format improvements as a properly spaced list
-        const improvements = formatRefinementsAsList(parsed, refinedOutput, chunks, fileWriteEdits);
+      // Send refined content via SSE - use safe emit to avoid crashes
+      // FIX: Always emit spec_amplification events (frontend can reconnect)
+      const emitFunc = request.emit || (() => {});
+      
+      // Emit stage: 'started' to trigger UI loading indicator
+      // Note: frontend handles 'started' not 'starting'
+      emitFunc('spec_amplification', { 
+        stage: 'started', 
+        timestamp: Date.now() 
+      });
+      // Format improvements as a properly spaced list
+      const improvements = formatRefinementsAsList(parsed, refinedOutput, chunks, fileWriteEdits);
 
-        const eventData: any = {
-          stage: 'complete',
-          refinedContent: improvements,
-          specScore,
-          sectionsProcessed: chunks.length,
-          hasFileWrites: fileWriteEdits.length > 0,
-          fileWrites: fileWriteEdits.map(w => ({ path: w.path, operation: 'write' })),
-          // CRITICAL FIX: Also emit fileEdits for frontend display
-          // Frontend uses this for enhanced-diff-viewer
-          fileEdits: fileWriteEdits.map(w => ({
-            path: w.path,
-            content: w.content,
-            operation: 'write',
-          }))
-        }
-
-        // Include filesystem metadata if edits were applied
-        // Frontend will display file edit UI with accept/deny options
-        if (filesystemEdits && filesystemEdits.transactionId) {
-          eventData.filesystem = {
-            status: filesystemEdits.status,
-            transactionId: filesystemEdits.transactionId,
-            applied: filesystemEdits.applied,
-            errors: filesystemEdits.errors,
-            requestedFiles: filesystemEdits.requestedFiles,
-            scopePath: filesystemEdits.scopePath,
-            sessionId: filesystemEdits.sessionId,
-          }
-        }
-
-        request.emit('spec_amplification', eventData)
+      const eventData: any = {
+        stage: 'complete',
+        refinedContent: improvements,
+        specScore,
+        sectionsProcessed: chunks.length,
+        hasFileWrites: fileWriteEdits.length > 0,
+        fileWrites: fileWriteEdits.map(w => ({ path: w.path, operation: 'write' })),
+        // CRITICAL FIX: Also emit fileEdits for frontend display
+        // Frontend uses this for enhanced-diff-viewer
+        fileEdits: fileWriteEdits.map(w => ({
+          path: w.path,
+          content: w.content,
+          operation: 'write',
+        }))
       }
+
+      // Include filesystem metadata if edits were applied
+      // Frontend will display file edit UI with accept/deny options
+      if (filesystemEdits && filesystemEdits.transactionId) {
+        eventData.filesystem = {
+          status: filesystemEdits.status,
+          transactionId: filesystemEdits.transactionId,
+          applied: filesystemEdits.applied,
+          errors: filesystemEdits.errors,
+          requestedFiles: filesystemEdits.requestedFiles,
+          scopePath: filesystemEdits.scopePath,
+          sessionId: filesystemEdits.sessionId,
+        }
+      }
+
+      // Use emitFunc for safe emission (works even if stream closed)
+      emitFunc('spec_amplification', eventData)
 
       logger.info('Background refinement complete', { specScore, sectionsProcessed: chunks.length })
 
     } catch (error) {
-      logger.error('Background refinement error', error)
-      if (request.emit) {
-        request.emit('spec_amplification', { 
-          stage: 'error', 
-          error: error instanceof Error ? error.message : 'Unknown error' 
-        })
-      }
+      logger.error('Background refinement error', {
+        error: error?.message,
+        stack: error?.stack,
+        hasPrimaryData: !!primaryData,
+        primaryContentLength: primaryData?.content?.length,
+        hasRequest: !!request,
+        requestId: request?.requestId,
+        mode: request?.mode,
+      })
+      const emitFuncErr = request.emit || (() => {});
+      emitFuncErr('spec_amplification', { 
+        stage: 'error', 
+        error: error instanceof Error ? error.message : 'Unknown error' 
+      })
     }
   }
 

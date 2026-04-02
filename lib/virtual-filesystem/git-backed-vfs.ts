@@ -140,7 +140,7 @@ export class GitBackedVFS {
       return { success: true, committedFiles: 0 };
     }
 
-    const result = await this.commitChanges(this.batchModeOwnerId, 'Batch write (refinement)');
+    const result = await this.commitChanges(this.batchModeOwnerId, 'Batch write');
 
     // Only restore auto-commit state after a successful flush
     // On failure, keep batch mode active so callers can retry or handle the error

@@ -76,6 +76,12 @@ export class DesktopMCPManager extends EventEmitter {
       throw new Error(`Server not found: ${serverId}`);
     }
 
+    // FIX: Add guard for 'starting' status to prevent concurrent calls spawning duplicate processes
+    if (server.status === 'starting') {
+      log.warn('Server is already starting, waiting for it to complete', { serverId });
+      return;
+    }
+
     if (server.status === 'running') {
       log.warn('Server already running', { serverId });
       return;
@@ -101,7 +107,13 @@ export class DesktopMCPManager extends EventEmitter {
         args: transport.args,
       });
 
-      const child = spawn(transport.command, transport.args || [], {
+      // FIX: On Windows, resolve 'npx' to 'npx.cmd' to avoid ENOENT error
+      let command = transport.command;
+      if (command === 'npx' && process.platform === 'win32') {
+        command = 'npx.cmd';
+      }
+      
+      const child = spawn(command, transport.args || [], {
         env: { ...process.env, ...transport.env },
         cwd: transport.cwd || process.cwd(),
         stdio: ['pipe', 'pipe', 'pipe'],

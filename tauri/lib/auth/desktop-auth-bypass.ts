@@ -79,8 +79,11 @@ export function shouldBypassAuth(request: NextRequest): boolean {
 /**
  * Desktop auth middleware for API routes
  * In desktop mode, uses local user context instead of JWT verification
+ * 
+ * FIX: Removed async wrapper - returns handler function directly, not Promise of handler
+ * The original `async` made it return Promise<NextResponse> which breaks Next.js middleware chaining
  */
-export async function withDesktopAuth<T extends NextResponse>(
+export function withDesktopAuth<T extends NextResponse>(
   handler: (request: NextRequest, user: DesktopUserContext) => Promise<T>,
   options: { allowAnonymous?: boolean } = {}
 ) {

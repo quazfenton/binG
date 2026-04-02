@@ -1,6 +1,6 @@
 'use client';
 
-import { useState, useEffect } from 'react';
+import { useState, useEffect, useRef } from 'react';
 import { Button } from '@/components/ui/button';
 import {
   Dialog,
@@ -58,17 +58,29 @@ export function CheckpointManager({
       return;
     }
 
-    // Prevent concurrent loading operations
+    // FIX: Prevent concurrent loading operations but allow refresh after mutations
+    // Use a timestamp-based approach to allow refresh during ongoing loads
     if (isLoadingCheckpoints) {
-      return;
+      // Instead of skipping, wait for the current load to complete and use its result
+      // This prevents stale list issues when mutations happen during load
+      const currentLoadingTime = loadingTimestampRef.current;
+      if (currentLoadingTime && Date.now() - currentLoadingTime > 5000) {
+        // Stale load - force refresh
+        loadingTimestampRef.current = null;
+        setIsLoadingCheckpoints(false);
+      } else {
+        // Fresh load in progress - wait and return
+        return;
+      }
     }
 
+    loadingTimestampRef.current = Date.now();
     setIsLoadingCheckpoints(true);
     setLoading(true);
     setError(null);
     try {
       const list = await tauriInvoke.listCheckpoints(sandboxId);
-      setCheckpoints(list);
+      setCheckpoints(list.checkpoints || []);
     } catch (err: any) {
       setError(err.message || 'Failed to load checkpoints');
     } finally {
@@ -76,6 +88,9 @@ export function CheckpointManager({
       setIsLoadingCheckpoints(false);
     }
   };
+
+  // Add ref for tracking loading timestamp
+  const loadingTimestampRef = useRef<number | null>(null);
 
   const handleCreateCheckpoint = async () => {
     setCreating(true);

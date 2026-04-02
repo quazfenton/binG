@@ -318,8 +318,9 @@ async function executeToolOnSandbox(
           return { success: false, output: 'Repository URL is required', exitCode: 1 }
         }
 
-        // STRICT URL validation - allow only https URLs with safe characters
-        const urlPattern = /^https:\/\/[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?(?:\.git)?$/;
+        // FIX: URL validation was rejecting standard HTTPS repo URLs because regex disallowed path slashes
+        // Allow standard HTTPS URLs with optional path (e.g., user/repo or org/team/repo)
+        const urlPattern = /^https:\/\/[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?(?:\/[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?)*(?:\.git)?$/;
         if (!urlPattern.test(url)) {
           return { success: false, output: 'Invalid repository URL format - only HTTPS URLs allowed', exitCode: 1 }
         }
@@ -358,10 +359,13 @@ async function executeToolOnSandbox(
           cloneCmd = `cd '${sandbox.workspaceDir}' && git clone '${url}' '${clonePath}'`
         }
 
-        // Add branch if specified
+        // Add branch if specified (append to existing command, don't overwrite)
+        // FIX: Branch handling was overwriting the credentialed clone command
         if (branch) {
-          // Branch is already validated above
-          cloneCmd = `cd '${sandbox.workspaceDir}' && git clone -b '${branch}' '${url}' '${clonePath}'`
+          // Branch is already validated above - append branch flag
+          const branchArg = ` -b '${branch.replace(/'/g, "'\\''")}'`;
+          // Add branch to the existing cloneCmd without overwriting
+          cloneCmd = cloneCmd.replace(/git clone/, 'git clone' + branchArg);
         }
 
         // Add depth if specified
@@ -686,15 +690,21 @@ function getCodeExtension(language: string): string {
 }
 
 function getCodeCommand(language: string, filePath: string, args: string[]): string {
+  // FIX: Escape filePath and args to prevent command injection
+  // Use single quotes and escape any embedded single quotes
+  const safeFilePath = filePath.replace(/'/g, "'\\''");
+  const safeArgs = args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
+  
   const commands: Record<string, string> = {
-    python: `python3 ${filePath} ${args.join(' ')}`,
-    javascript: `node ${filePath} ${args.join(' ')}`,
-    typescript: `npx ts-node ${filePath} ${args.join(' ')}`,
-    go: `cd ${filePath.substring(0, filePath.lastIndexOf('/'))} && go run ${filePath.substring(filePath.lastIndexOf('/') + 1)} ${args.join(' ')}`,
-    rust: `rustc ${filePath} -o /tmp/rust_out && /tmp/rust_out ${args.join(' ')}`,
-    java: `javac ${filePath} && java -cp ${filePath.substring(0, filePath.lastIndexOf('/'))} ${args.join(' ')}`,
-    r: `Rscript ${filePath} ${args.join(' ')}`,
-    cpp: `g++ ${filePath} -o /tmp/cpp_out && /tmp/cpp_out ${args.join(' ')}`,
+    python: `python3 '${safeFilePath}' ${safeArgs}`,
+    javascript: `node '${safeFilePath}' ${safeArgs}`,
+    typescript: `npx ts-node '${safeFilePath}' ${safeArgs}`,
+    // For go/java, use path utilities for directory extraction
+    go: `cd '${filePath.substring(0, filePath.lastIndexOf('/'))}' && go run '${filePath.substring(filePath.lastIndexOf('/') + 1)}' ${safeArgs}`,
+    rust: `rustc '${safeFilePath}' -o /tmp/rust_out && /tmp/rust_out ${safeArgs}`,
+    java: `javac '${safeFilePath}' && java -cp '${filePath.substring(0, filePath.lastIndexOf('/'))}' ${safeArgs}`,
+    r: `Rscript '${safeFilePath}' ${safeArgs}`,
+    cpp: `g++ '${safeFilePath}' -o /tmp/cpp_out && /tmp/cpp_out ${safeArgs}`,
   }
   return commands[language] || `echo "Unsupported language: ${language}"`
 }

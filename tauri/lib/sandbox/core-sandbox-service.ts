@@ -31,8 +31,14 @@ export const coreSandboxService = {
   },
   destroySandbox: async (sandboxId: string) => {
     const service = new SandboxService()
-    // Find session and destroy
-    return { success: true }
+    // FIX: Don't report success from a no-op destroy path - fail loudly instead
+    try {
+      // Try to destroy via provider - this would need proper implementation
+      // For now, we should fail since we can't actually destroy
+      return { success: false, error: 'destroySandbox not fully implemented - use SandboxService.destroyWorkspace()' }
+    } catch (error: any) {
+      return { success: false, error: error.message }
+    }
   },
 }
 

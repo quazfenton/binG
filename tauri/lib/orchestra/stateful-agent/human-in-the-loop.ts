@@ -70,7 +70,19 @@ class HumanInTheLoopManager {
       });
     });
 
-    this.handler(request);
+    // FIX: Await handler to prevent ignored resolves and unhandled rejections
+    try {
+      await this.handler(request);
+    } catch (handlerError) {
+      console.error('[HITL] Handler error:', handlerError);
+      // Resolve with error fallback - don't leave pending
+      const pending = this.pendingInterrupts.get(interruptId);
+      if (pending && !pending.resolved) {
+        pending.resolved = true;
+        pending.resolve({ approved: false, feedback: `Handler error: ${handlerError instanceof Error ? handlerError.message : String(handlerError)}` });
+        this.pendingInterrupts.delete(interruptId);
+      }
+    }
 
     // Parse timeout with validation (default: 5 minutes, min: 10s, max: 30 minutes)
     const configuredTimeout = parseInt(process.env.HITL_TIMEOUT || '300000');
@@ -427,15 +439,27 @@ export const desktopWorkflow: ApprovalWorkflow = {
   name: 'Desktop Workflow',
   type: 'auto',
   rules: [
+    // FIX: Broader destructive command matching - covers more dangerous shell patterns
     {
       id: 'system-destructive',
       name: 'System-Destructive Operations',
       condition: anyConditions(
-        (toolName, params) => /^(mkfs|dd\s+if=.*of=\/dev|:\(\)\{)/.test(params?.command || ''),
-        (toolName, params) => /rm\s+-rf\s+\/(?!\w)/.test(params?.command || ''),
+        // Format/disk destruction
+        (toolName, params) => /^mkfs/i.test(params?.command || ''),
+        (toolName, params) => /^dd\s+if=/i.test(params?.command || ''),
+        (toolName, params) => /:\(\)\{ :\|:& \};:/.test(params?.command || ''),
+        // Recursive force remove at root level
+        (toolName, params) => /rm\s+-rf\s+\//i.test(params?.command || ''),
+        // Overwrite device files
+        (toolName, params) => />\s*\/dev\//.test(params?.command || ''),
+        // Fork bomb variants - use new RegExp to avoid regex literal issues
+        (toolName, params) => new RegExp(':\(\)', 'i').test(params?.command || ''),
+        // Shutdown/reboot
+        (toolName, params) => /shutdown|reboot|init\s+[06]/i.test(params?.command || ''),
       ),
       action: 'require_approval',
       timeout: 60000,
+      description: 'Block system-destructive commands in desktop mode',
     },
   ],
   defaultAction: 'auto_approve',
@@ -511,7 +535,9 @@ export function evaluateWorkflow(
   }
 
   // No rules matched - use default action
-  const defaultAction = workflow.defaultAction || 'auto_approve';
+  // FIX: Fail closed (require approval) when rule evaluation fails to prevent bypassing security
+  // Only use auto_approve if explicitly set in defaultAction
+  const defaultAction = workflow.defaultAction || 'require_approval';
   return {
     requiresApproval: defaultAction === 'require_approval',
     action: defaultAction,

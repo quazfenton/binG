@@ -143,7 +143,12 @@ export class DesktopSandboxHandle implements SandboxHandle {
     // Security: Validate cwd is within workspace
     let effectiveCwd = this.workspaceDir;
     if (cwd) {
-      const resolvedCwd = path.resolve(cwd);
+      // FIX: Resolve relative cwd from workspaceDir, not host process cwd
+      // This prevents incorrectly blocking valid sandbox-relative directories
+      const resolvedCwd = path.isAbsolute(cwd) 
+        ? path.resolve(cwd)  // Absolute path - resolve normally
+        : path.resolve(this.workspaceDir, cwd);  // Relative - resolve from workspace
+      
       const resolvedWorkspace = path.resolve(this.workspaceDir);
       if (!resolvedCwd.startsWith(resolvedWorkspace + path.sep) && resolvedCwd !== resolvedWorkspace) {
         return { success: false, error: 'Working directory must be within workspace', blocked: true };

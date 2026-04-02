@@ -95,6 +95,8 @@ export default function DesktopOnboardingPage() {
     if (desktop) {
       checkExistingSetup();
     } else {
+      // FIX: Set checkedExisting in non-desktop branch to prevent stuck loading state
+      setCheckedExisting(true);
       setLoading(false);
     }
   }, []);
