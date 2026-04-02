@@ -269,13 +269,13 @@ interface PluginInfo {
 }
 
 interface PluginsTabProps {
-  visibleTabs?: TopPanelTab[];
-  toggleTabVisibility?: (tab: TopPanelTab) => void;
-  isTabVisible?: (tab: TopPanelTab) => boolean;
-  setVisibleTabs?: (tabs: TopPanelTab[]) => void;
+  visibleTabs: TopPanelTab[];
+  toggleTabVisibility: (tab: TopPanelTab) => void;
+  isTabVisible: (tab: TopPanelTab) => boolean;
+  setVisibleTabs: (tabs: TopPanelTab[]) => void;
 }
 
-function PluginsTab({ visibleTabs, toggleTabVisibility, isTabVisible, setVisibleTabs }: PluginsTabProps = {}) {
+function PluginsTab({ visibleTabs, toggleTabVisibility, isTabVisible, setVisibleTabs }: PluginsTabProps) {
   const [plugins, setPlugins] = useState<PluginInfo[]>([]);
   const [loading, setLoading] = useState(true);
   const [selectedPlugin, setSelectedPlugin] = useState<string | null>(null);
@@ -375,9 +375,9 @@ function PluginsTab({ visibleTabs, toggleTabVisibility, isTabVisible, setVisible
     return acc;
   }, {} as Record<string, PluginInfo[]>);
 
-  // All tabs can be shown/hidden except plugins and marketplace (needed for management)
+  // All tabs can be shown/hidden except plugins (needed for management UI)
   const optionalTabs = TAB_DEFS.filter(tab =>
-    !['plugins', 'marketplace'].includes(tab.value)
+    !['plugins'].includes(tab.value)
   );
 
   return (
@@ -429,7 +429,7 @@ function PluginsTab({ visibleTabs, toggleTabVisibility, isTabVisible, setVisible
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setVisibleTabs(['news', 'music-hub', 'plugins', 'immersive'])}
+                onClick={() => setVisibleTabs(['news', 'music-hub', 'plugins', 'marketplace', 'immersive'])}
                 className="text-xs border-white/20 text-white/70 hover:bg-white/10"
               >
                 Reset to Defaults
@@ -558,6 +558,7 @@ function PluginsTab({ visibleTabs, toggleTabVisibility, isTabVisible, setVisible
 const TAB_DEFS: TabDef[] = [
   { value: "news", label: "News", icon: Newspaper },
   { value: "plugins", label: "Plugins", icon: Puzzle },
+  { value: "marketplace", label: "Marketplace", icon: Store },
   { value: "workflows", label: "Workflows", icon: Workflow },
   { value: "orchestration", label: "Orchestration", icon: Cpu },
   { value: "art-gallery", label: "Art Gallery", icon: Image },
@@ -802,15 +803,15 @@ function ScrollableTabBar({
               </TabsTrigger>
             );
           })}
-          {/* Add/Manage Tabs Button */}
-          <TabsTrigger
-            value="manage-tabs"
+          {/* Add/Manage Tabs Button - Use plain button to avoid Radix onValueChange conflict */}
+          <button
+            type="button"
             onClick={() => setTopPanelTab('plugins')}
             className="flex items-center gap-1.5 px-2 py-1.5 rounded-md text-xs font-medium text-white/50 hover:text-white hover:bg-white/10 transition-all"
             title="Manage tabs"
           >
             <Plus className="w-3.5 h-3.5" />
-          </TabsTrigger>
+          </button>
         </TabsList>
       </div>
 
@@ -879,8 +880,8 @@ export default function TopPanel() {
         }
       }
     }
-    // Default visible tabs: News, Music Hub, Plugins, Immersive
-    return ['news', 'music-hub', 'plugins', 'immersive'];
+    // Default visible tabs: News, Music Hub, Plugins, Marketplace, Immersive
+    return ['news', 'music-hub', 'plugins', 'marketplace', 'immersive'];
   });
 
   // Save visible tabs to localStorage whenever they change
@@ -1061,8 +1062,9 @@ export default function TopPanel() {
                 {/* Mobile Tab Bar */}
                 <div className="p-2 border-b border-white/10">
                   <Tabs value={topPanelActiveTab} onValueChange={(v) => setTopPanelTab(v as TopPanelTab)}>
+                    {/* Mobile: Only show tabs that have mobile content implemented */}
                     <ScrollableTabBar
-                      tabs={TAB_DEFS}
+                      tabs={TAB_DEFS.filter(tab => ['news', 'plugins', 'marketplace'].includes(tab.value))}
                       activeTab={topPanelActiveTab}
                       onTabChange={setTopPanelTab}
                       isTabVisible={isTabVisible}

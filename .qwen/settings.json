@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(node *)",
+      "Bash(powershell *)",
+      "Bash(pnpm exec *)",
+      "Bash(select-object *)"
+    ]
+  },
+  "$version": 3
+}

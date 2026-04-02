@@ -581,6 +581,7 @@ export default function CodePreviewPanel({
 
       if (response.status === 409) {
         // Conflict detected - show confirmation dialog
+        setContextMenu(null); // Clear context menu before showing dialog
         setConfirmDialog({
           isOpen: true,
           title: 'File Already Exists',
@@ -880,6 +881,7 @@ export default function CodePreviewPanel({
 
       if (response.status === 409) {
         // Conflict detected - show confirmation dialog
+        setContextMenu(null); // Clear context menu before showing dialog
         setConfirmDialog({
           isOpen: true,
           title: 'File Already Exists',
