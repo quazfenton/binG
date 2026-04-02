@@ -385,7 +385,8 @@ export function EnhancedDiffViewer({
   }, [activeDiff, maxLines, isExpanded, fullyExpanded]);
 
   // Get displayed lines based on expanded state (always show all when fullyExpanded)
-  const displayedLines = fullyExpanded || isExpanded ? Infinity : maxLines;
+  // Using undefined instead of Infinity for .slice() to make "show all" intent explicit
+  const displayedLines = fullyExpanded || isExpanded ? undefined : maxLines;
 
   // Drag-to-scroll handlers
   const handleDragStart = useCallback((e: React.MouseEvent) => {
@@ -520,7 +521,8 @@ export function EnhancedDiffViewer({
                 <ChevronDown className="w-3.5 h-3.5" />
               </button>
             )}
-            {isExpanded && (
+            {/* Hide Collapse button when fullyExpanded - it would be a no-op */}
+            {isExpanded && !fullyExpanded && (
               <button
                 onClick={() => setIsExpanded(false)}
                 className="ml-auto px-2 py-1 bg-white/10 border border-white/20 text-white/80 hover:bg-white/20 hover:text-white rounded-full transition-all duration-200 flex items-center gap-1"
@@ -588,14 +590,14 @@ export function EnhancedDiffViewer({
                 wrapLines={true}
                 wrapLongLines={true}
               >
-                {serverContent.slice(0, maxLines * 100)}
+                {fullyExpanded ? serverContent : serverContent.slice(0, maxLines * 100)}
               </SyntaxHighlighter>
             ) : (
               <pre className="whitespace-pre-wrap break-all text-gray-300 font-mono">
-                {serverContent.slice(0, maxLines * 100)}
+                {fullyExpanded ? serverContent : serverContent.slice(0, maxLines * 100)}
               </pre>
             )}
-            {serverContent.length > maxLines * 100 && (
+            {!fullyExpanded && serverContent.length > maxLines * 100 && (
               <div className="text-xs text-gray-500 text-center py-2">
                 ... {serverContent.length - maxLines * 100} more characters
               </div>

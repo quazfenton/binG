@@ -56,6 +56,25 @@ function warnIfDangerous(command: string): void {
   }
 }
 
+/**
+ * Validate sandbox ID to prevent path traversal attacks
+ * Only allow alphanumeric characters, hyphens, and underscores
+ */
+function validateSandboxId(sandboxId: string): void {
+  if (!sandboxId || typeof sandboxId !== 'string') {
+    throw new Error('Invalid sandbox ID: must be a non-empty string');
+  }
+  if (!/^[a-zA-Z0-9_-]+$/.test(sandboxId)) {
+    throw new Error('Invalid sandbox ID: contains invalid characters');
+  }
+  if (sandboxId.includes('..') || sandboxId.includes('/') || sandboxId.includes('\\')) {
+    throw new Error('Invalid sandbox ID: path traversal not allowed');
+  }
+  if (sandboxId.length > 100) {
+    throw new Error('Invalid sandbox ID: too long');
+  }
+}
+
 export class DesktopProvider implements SandboxProvider {
   readonly name = 'desktop';
   private workspaceRoot: string;
@@ -98,6 +117,9 @@ export class DesktopProvider implements SandboxProvider {
   }
 
   async getSandbox(sandboxId: string): Promise<SandboxHandle> {
+    // Validate sandbox ID to prevent path traversal
+    validateSandboxId(sandboxId);
+    
     const cached = this.sandboxes.get(sandboxId);
     if (cached) return cached;
 
@@ -114,6 +136,9 @@ export class DesktopProvider implements SandboxProvider {
   }
 
   async destroySandbox(sandboxId: string): Promise<void> {
+    // Validate sandbox ID to prevent path traversal
+    validateSandboxId(sandboxId);
+    
     this.sandboxes.delete(sandboxId);
     const workspaceDir = path.join(this.workspaceRoot, sandboxId);
     try {

@@ -42,11 +42,7 @@ export class SandboxService {
    private sandboxProviderById = new Map<string, SandboxProvider>()
 
    constructor() {
-     // In desktop mode, default to the desktop provider
-     const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
-     this.primaryProviderType = isDesktop
-       ? 'desktop'
-       : (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona';
+     this.primaryProviderType = (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona'
      log.debug(`SandboxService initialized with primary provider: ${this.primaryProviderType}`)
    }
 
@@ -71,7 +67,6 @@ export class SandboxService {
   }
 
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
-    if (sandboxId.startsWith('desktop-')) return 'desktop'
     if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent'
     if (sandboxId.startsWith('mistral-')) return 'mistral'
     // Check specific blaxel-mcp prefix BEFORE the general blaxel- prefix

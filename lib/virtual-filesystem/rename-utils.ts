@@ -68,9 +68,9 @@ export async function checkRenameConflicts(
 }> {
   const conflicts: ConflictInfo[] = [];
 
-  // Normalize paths
-  const normalizedSource = sourcePath.replace(/\/+/g, '/').replace(/\/$/, '');
-  const normalizedDest = destinationPath.replace(/\/+/g, '/').replace(/\/$/, '');
+  // Normalize paths for comparison (handle both Unix and Windows separators)
+  const normalizedSource = sourcePath.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+  const normalizedDest = destinationPath.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
 
   // Check 1: Circular move (moving folder into itself)
   if (normalizedDest.startsWith(normalizedSource + '/')) {
@@ -136,9 +136,9 @@ export async function safeRename(options: RenameOptions): Promise<RenameResult> 
     sessionId,
   });
 
-  // Normalize paths for comparison
-  const normalizedSource = sourcePath.replace(/\/+/g, '/').replace(/\/$/, '');
-  const normalizedDest = destinationPath.replace(/\/+/g, '/').replace(/\/$/, '');
+  // Normalize paths for comparison (handle both Unix and Windows separators)
+  const normalizedSource = sourcePath.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
+  const normalizedDest = destinationPath.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/$/, '');
 
   // Early return if renaming to itself - no-op
   if (normalizedSource === normalizedDest) {

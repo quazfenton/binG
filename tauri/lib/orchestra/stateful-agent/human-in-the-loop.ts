@@ -428,31 +428,6 @@ export const permissiveWorkflow: ApprovalWorkflow = {
   updatedAt: Date.now(),
 };
 
-/**
- * Desktop workflow - auto-approves nearly everything for local execution.
- * Only blocks truly destructive system-level operations (format disk, fork bomb).
- */
-export const desktopWorkflow: ApprovalWorkflow = {
-  id: 'desktop',
-  name: 'Desktop Workflow',
-  type: 'auto',
-  rules: [
-    {
-      id: 'system-destructive',
-      name: 'System-Destructive Operations',
-      condition: anyConditions(
-        (toolName, params) => /^(mkfs|dd\s+if=.*of=\/dev|:\(\)\{)/.test(params?.command || ''),
-        (toolName, params) => /rm\s+-rf\s+\/(?!\w)/.test(params?.command || ''),
-      ),
-      action: 'require_approval',
-      timeout: 60000,
-    },
-  ],
-  defaultAction: 'auto_approve',
-  createdAt: Date.now(),
-  updatedAt: Date.now(),
-};
-
 // ==================== Workflow Registry ====================
 
 /**
@@ -462,7 +437,6 @@ export const workflowRegistry: Map<string, ApprovalWorkflow> = new Map([
   ['default', defaultWorkflow],
   ['strict', strictWorkflow],
   ['permissive', permissiveWorkflow],
-  ['desktop', desktopWorkflow],
 ]);
 
 /**
@@ -483,10 +457,7 @@ export function registerWorkflow(workflow: ApprovalWorkflow): void {
  * Get active workflow from environment or use default
  */
 export function getActiveWorkflow(): ApprovalWorkflow {
-  // Desktop mode defaults to the permissive desktop workflow
-  const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
-  const defaultId = isDesktop ? 'desktop' : 'default';
-  const workflowId = process.env.HITL_WORKFLOW_ID || defaultId;
+  const workflowId = process.env.HITL_WORKFLOW_ID || 'default';
   return getWorkflow(workflowId) || defaultWorkflow;
 }
 

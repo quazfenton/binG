@@ -446,6 +446,9 @@ importers:
       microsandbox:
         specifier: ^0.1.0
         version: 0.1.1
+      minimatch:
+        specifier: ^10.2.4
+        version: 10.2.4
       modal:
         specifier: ^0.7.3
         version: 0.7.3
