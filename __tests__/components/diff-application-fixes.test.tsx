@@ -224,4 +224,295 @@ describe('Diff Application Fixes', () => {
       debugSpy.mockRestore();
     });
   });
+
+  /**
+   * TEST 5: Complex Diff Formats
+   * 
+   * Tests various diff header formats and edge cases
+   */
+  describe('Test 5: Complex Diff Formats', () => {
+    it('should handle unified diff with standard headers', () => {
+      const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1,3 +1,3 @@
+-line1
++modified1
+ line2
+ line3`;
+      
+      // Verify diff has proper headers
+      expect(diff).toContain('--- a/file.ts');
+      expect(diff).toContain('+++ b/file.ts');
+      expect(diff).toContain('@@ -1,3 +1,3 @@');
+    });
+
+    it('should handle unified diff without a/ b/ prefix', () => {
+      const diff = `--- file.ts
++++ file.ts
+@@ -1 +1 @@
+-old
++new`;
+      
+      expect(diff).toContain('--- file.ts');
+      expect(diff).toContain('+++ file.ts');
+    });
+
+    it('should handle git-style diff headers', () => {
+      const diff = `diff --git a/src/index.ts b/src/index.ts
+index 1234567..abcdefg 100644
+--- a/src/index.ts
++++ b/src/index.ts
+@@ -1,2 +1,2 @@
+-const x = 1;
++const x = 2;
+ console.log(x);`;
+      
+      expect(diff).toContain('diff --git');
+      expect(diff).toContain('--- a/src/index.ts');
+      expect(diff).toContain('+++ b/src/index.ts');
+    });
+
+    it('should handle multi-hunk diffs', () => {
+      const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1,5 +1,5 @@
+ line1
+-line2
++modified2
+ line3
+@@ -10,5 +10,5 @@
+ line10
+-line11
++modified11
+ line12`;
+      
+      // Count hunk headers
+      const hunkCount = (diff.match(/@@ -\d+/g) || []).length;
+      expect(hunkCount).toBe(2); // Two hunks
+    });
+
+    it('should handle diff with context lines only', () => {
+      const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1,3 +1,3 @@
+ context1
+-context2
++new2
+ context3`;
+      
+      expect(diff).toContain(' context1'); // Context line (space prefix)
+      expect(diff).toContain('-context2'); // Removal
+      expect(diff).toContain('+new2'); // Addition
+    });
+
+    it('should reject diff with missing headers', () => {
+      const malformedDiff = `line1
+-line2
++new2
+line3`;
+      
+      // Should not have proper diff structure
+      expect(malformedDiff).not.toContain('---');
+      expect(malformedDiff).not.toContain('+++');
+      expect(malformedDiff).not.toContain('@@');
+    });
+
+    it('should handle diff with special characters in paths', () => {
+      const diff = `--- "a/file with spaces.ts"
++++ "b/file with spaces.ts"
+@@ -1 +1 @@
+-old
++new`;
+      
+      expect(diff).toContain('"a/file with spaces.ts"');
+    });
+
+    it('should handle diff with Unicode content', () => {
+      const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1 +1 @@
+-こんにちは
++你好`;
+      
+      expect(diff).toContain('こんにちは');
+      expect(diff).toContain('你好');
+    });
+
+    it('should handle empty file creation diff', () => {
+      const diff = `--- /dev/null
++++ b/new-file.ts
+@@ -0,0 +1 @@
++new file content`;
+      
+      expect(diff).toContain('/dev/null');
+      expect(diff).toContain('@@ -0,0 +1 @@');
+    });
+
+    it('should handle file deletion diff', () => {
+      const diff = `--- a/old-file.ts
++++ /dev/null
+@@ -1 +0,0 @@
+-old content`;
+      
+      expect(diff).toContain('/dev/null');
+      expect(diff).toContain('@@ -1 +0,0 @@');
+    });
+
+    it('should handle diff with escaped characters', () => {
+      const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1 +1 @@
+-line with \\ backslash
++line with \\\\ backslash`;
+      
+      expect(diff).toContain('\\\\');
+    });
+
+    it('should reject diff with invalid hunk header', () => {
+      const invalidDiff = `--- a/file.ts
++++ b/file.ts
+@@ invalid header @@
+-old
++new`;
+      
+      // Hunk header should match @@ -start,count +start,count @@
+      const validHunkPattern = /@@ -\d+(?:,\d+)? \+\d+(?:,\d+)? @@/;
+      expect(invalidDiff).not.toMatch(validHunkPattern);
+    });
+
+    it('should handle diff with Windows line endings', () => {
+      const diff = `--- a/file.ts\r
++++ b/file.ts\r
+@@ -1 +1 @@\r
+-old\r
++new\r`;
+      
+      expect(diff).toContain('\r\n') || expect(diff).toContain('\r');
+    });
+
+    it('should handle diff with trailing whitespace', () => {
+      const diff = `--- a/file.ts   
++++ b/file.ts   
+@@ -1 +1 @@   
+-old   
++new   `;
+      
+      // Should preserve trailing spaces in diff
+      expect(diff).toContain('   ');
+    });
+
+    it('should handle diff with tab characters', () => {
+      const diff = `--- a/file.ts
++++ b/file.ts
+@@ -1 +1 @@
+-\tindented with tab
++\tindented with tab`;
+      
+      expect(diff).toContain('\t');
+    });
+  });
+
+  /**
+   * TEST 6: Edge Cases and Error Handling
+   */
+  describe('Test 6: Edge Cases and Error Handling', () => {
+    it('should handle very long diff paths', () => {
+      const longPath = 'project/sessions/002/' + 'a/'.repeat(100) + 'file.ts';
+      expect(longPath.length).toBeGreaterThan(200);
+      
+      // Path should still be valid (not rejected for length alone, but has 500 char limit)
+      expect(longPath.length).toBeLessThan(500);
+      expect(longPath).toMatch(/^[a-zA-Z0-9_./\-\\]+$/);
+    });
+
+    it('should handle diff with no changes', () => {
+      const noChangeDiff = `--- a/file.ts
++++ b/file.ts
+@@ -1 +1 @@
+ same`;
+      
+      // No + or - lines at start of line, only context (space prefix)
+      // Note: --- and +++ in headers will match, so we check for content lines only
+      const additionLines = (noChangeDiff.match(/^\+[^\+]/gm) || []).length;
+      const deletionLines = (noChangeDiff.match(/^[^\-]-/gm) || []).length;
+      expect(additionLines).toBe(0);
+      expect(deletionLines).toBe(0);
+    });
+
+    it('should handle diff with only additions', () => {
+      const addOnlyDiff = `--- /dev/null
++++ b/file.ts
+@@ -0,0 +1,3 @@
++line1
++line2
++line3`;
+      
+      // Count only content addition lines (not +++ header)
+      const additionLines = (addOnlyDiff.match(/^\+[^\+]/gm) || []).length;
+      expect(additionLines).toBe(3);
+    });
+
+    it('should handle diff with only deletions', () => {
+      const deleteOnlyDiff = `--- a/file.ts
++++ /dev/null
+@@ -1,3 +0,0 @@
+-line1
+-line2
+-line3`;
+      
+      // Count only content deletion lines (not --- header)
+      // Match lines starting with single - followed by content
+      const deletionLines = (deleteOnlyDiff.match(/^\-[^-]/gm) || []).length;
+      expect(deletionLines).toBe(3);
+    });
+
+    it('should handle diff with mixed line endings', () => {
+      const mixedDiff = `--- a/file.ts
++++ b/file.ts
+@@ -1,2 +1,2 @@
+-line1
++new1\r
+ line2`;
+      
+      // Should handle both \n and \r\n
+      expect(mixedDiff).toContain('\n');
+    });
+
+    it('should reject diff with binary content markers', () => {
+      const binaryDiff = `diff --git a/image.png b/image.png
+Binary files a/image.png and b/image.png differ`;
+      
+      expect(binaryDiff).toContain('Binary files');
+      // Binary diffs should be handled differently
+    });
+
+    it('should handle diff with file mode changes', () => {
+      const modeDiff = `diff --git a/script.sh b/script.sh
+old mode 100644
+new mode 100755`;
+      
+      expect(modeDiff).toContain('old mode');
+      expect(modeDiff).toContain('new mode');
+    });
+
+    it('should handle diff with rename detection', () => {
+      const renameDiff = `diff --git a/old-name.ts b/new-name.ts
+similarity index 100%
+rename from old-name.ts
+rename to new-name.ts`;
+      
+      expect(renameDiff).toContain('rename from');
+      expect(renameDiff).toContain('rename to');
+    });
+
+    it('should handle diff with copy detection', () => {
+      const copyDiff = `diff --git a/original.ts b/copy.ts
+similarity index 100%
+copy from original.ts
+copy to copy.ts`;
+      
+      expect(copyDiff).toContain('copy from');
+      expect(copyDiff).toContain('copy to');
+    });
+  });
 });

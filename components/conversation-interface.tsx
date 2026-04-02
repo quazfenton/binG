@@ -391,17 +391,20 @@ export default function ConversationInterface() {
     }
   });
 
-  // Diffs poller - manual refresh option for file changes
-  const diffsPoller = useDiffsPoller({
-    pollInterval: 8000,
-    maxFiles: 50,
-    autoShowNotification: false, // We'll handle notifications ourselves
-    onDiffsFetched: (diffs) => {
-      if (diffs.length > 0) {
-        toast.info(`${diffs.length} new file change${diffs.length === 1 ? '' : 's'} from polling`);
-      }
-    },
-  });
+  // Diffs are now handled via SSE filesystem events + useVirtualFilesystem
+  // Removed useDiffsPoller to prevent redundant polling (causes event storms)
+  // File changes are automatically synced via filesystem-updated events
+  const diffsPoller = {
+    diffs: [],
+    isPolling: false,
+    lastPolledAt: null,
+    pollCount: 0,
+    startPolling: () => {},
+    stopPolling: () => {},
+    pollNow: async () => {},
+    clearDiffs: () => {},
+    reset: () => {},
+  };
 
   const queueCommandDiffs = useCallback((entries: Array<{ path: string; diff: string }>) => {
     if (entries.length === 0) {
