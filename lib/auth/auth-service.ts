@@ -218,14 +218,41 @@ export class AuthService {
   }
 
   /**
+   * Ensure database is initialized before proceeding
+   * Waits for async database initialization if needed
+   */
+  private async ensureDatabase(): Promise<void> {
+    if (!this.db) {
+      // Wait for database to initialize (poll every 50ms, max 5 seconds)
+      await new Promise<void>((resolve) => {
+        if (this.db) {
+          resolve();
+          return;
+        }
+        
+        const check = () => {
+          this.db = getDatabase();
+          if (this.db) {
+            resolve();
+          } else {
+            setTimeout(check, 50);
+          }
+        };
+        check();
+        
+        // Timeout after 5 seconds
+        setTimeout(() => resolve(), 5000);
+      });
+    }
+  }
+
+  /**
    * Register a new user
    */
   async register(credentials: RegisterCredentials, sessionInfo?: Partial<SessionInfo>): Promise<AuthResult> {
-    // Ensure database is available
-    if (!this.db) {
-      console.warn('[AuthService] Database not ready, using mock database');
-    }
-    
+    // Ensure database is ready
+    await this.ensureDatabase();
+
     try {
       // Validate email format
       if (!this.isValidEmail(credentials.email)) {
@@ -322,11 +349,9 @@ export class AuthService {
    * Enhanced with account lockout protection after failed attempts
    */
   async login(credentials: LoginCredentials, sessionInfo?: Partial<SessionInfo>): Promise<AuthResult> {
-    // Ensure database is available
-    if (!this.db) {
-      console.warn('[AuthService] Database not ready, using mock database');
-    }
-    
+    // Ensure database is ready
+    await this.ensureDatabase();
+
     try {
       // Check account lockout status FIRST (before any password checking)
       const lockout = checkAccountLockout(credentials.email);
@@ -407,10 +432,9 @@ export class AuthService {
     sessionId?: string;
     error?: string;
   }> {
-    // Ensure database is available
-    if (!this.db) {
-      console.warn("[AuthService] Database not ready, using mock database");
-    }
+    // Ensure database is ready
+    await this.ensureDatabase();
+
     try {
       const dbUser = this.dbOps.getUserById(userId) as any;
 
@@ -445,14 +469,13 @@ export class AuthService {
 
   /**
    * Logout user
-   * 
+   *
    * Invalidates session and blacklists JWT token if provided
    */
   async logout(sessionId: string, jwtToken?: string): Promise<{ success: boolean; error?: string }> {
-    // Ensure database is available
-    if (!this.db) {
-      console.warn("[AuthService] Database not ready, using mock database");
-    }
+    // Ensure database is ready
+    await this.ensureDatabase();
+
     try {
       // Use raw sessionId to match how sessions are stored
       this.dbOps.deleteSession(sessionId);
@@ -488,10 +511,9 @@ export class AuthService {
    * Validate session
    */
   async validateSession(sessionId: string): Promise<AuthResult> {
-    // Ensure database is available
-    if (!this.db) {
-      console.warn("[AuthService] Database not ready, using mock database");
-    }
+    // Ensure database is ready
+    await this.ensureDatabase();
+
     try {
       // Use raw sessionId to match how sessions are stored
       const session = this.dbOps.getSession(sessionId) as any;
@@ -532,10 +554,9 @@ export class AuthService {
    * Check if email exists
    */
   async checkEmailExists(email: string): Promise<boolean> {
-    // Ensure database is available
-    if (!this.db) {
-      console.warn("[AuthService] Database not ready, using mock database");
-    }
+    // Ensure database is ready
+    await this.ensureDatabase();
+
     try {
       const user = this.dbOps.getUserByEmail(email);
       return !!user;
@@ -549,10 +570,9 @@ export class AuthService {
    * Check if username exists
    */
   async checkUsernameExists(username: string): Promise<boolean> {
-    // Ensure database is available
-    if (!this.db) {
-      console.warn("[AuthService] Database not ready, using mock database");
-    }
+    // Ensure database is ready
+    await this.ensureDatabase();
+
     try {
       const stmt = this.db.prepare('SELECT id FROM users WHERE username = ? AND is_active = TRUE');
       const result = stmt.get(username);
@@ -567,10 +587,9 @@ export class AuthService {
    * Get user by ID
    */
   async getUserById(userId: number): Promise<User | null> {
-    // Ensure database is available
-    if (!this.db) {
-      console.warn("[AuthService] Database not ready, using mock database");
-    }
+    // Ensure database is ready
+    await this.ensureDatabase();
+
     try {
       const dbUser = this.dbOps.getUserById(userId) as any;
       return dbUser ? this.mapDbUserToUser(dbUser) : null;
@@ -658,10 +677,9 @@ export class AuthService {
    * Clean up expired sessions
    */
   async cleanupExpiredSessions(): Promise<void> {
-    // Ensure database is available
-    if (!this.db) {
-      console.warn("[AuthService] Database not ready, using mock database");
-    }
+    // Ensure database is ready
+    await this.ensureDatabase();
+
     try {
       this.dbOps.cleanupExpiredSessions();
     } catch (error) {
@@ -673,10 +691,9 @@ export class AuthService {
    * Get user sessions
    */
   async getUserSessions(userId: number): Promise<any[]> {
-    // Ensure database is available
-    if (!this.db) {
-      console.warn("[AuthService] Database not ready, using mock database");
-    }
+    // Ensure database is ready
+    await this.ensureDatabase();
+
     try {
       const stmt = this.db.prepare(`
         SELECT id, expires_at, created_at, ip_address, user_agent, is_active
@@ -695,10 +712,9 @@ export class AuthService {
    * Revoke session
    */
   async revokeSession(sessionId: string, userId: number): Promise<{ success: boolean; error?: string }> {
-    // Ensure database is available
-    if (!this.db) {
-      console.warn("[AuthService] Database not ready, using mock database");
-    }
+    // Ensure database is ready
+    await this.ensureDatabase();
+
     try {
       // Use raw sessionId to match how sessions are stored
       const stmt = this.db.prepare('DELETE FROM user_sessions WHERE session_id = ? AND user_id = ?');
@@ -722,10 +738,9 @@ export class AuthService {
    * Implements token rotation for security (old refresh token is invalidated)
    */
   async refreshToken(refreshToken: string, sessionInfo?: Partial<SessionInfo>): Promise<AuthResult> {
-    // Ensure database is available
-    if (!this.db) {
-      console.warn("[AuthService] Database not ready, using mock database");
-    }
+    // Ensure database is ready
+    await this.ensureDatabase();
+
     try {
       // Find session by refresh token
       // Note: In a production system, refresh tokens should be stored separately

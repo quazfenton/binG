@@ -335,12 +335,7 @@ interface InteractionPanelProps {
   userId?: string;
   onAttachedFilesChange?: (files: Record<string, AttachedVirtualFile>) => void;
   filesystemScopePath?: string;
-  // Diffs poller controls
-  isPollingDiffs?: boolean;
-  pollCount?: number;
-  onStartPollingDiffs?: () => void;
-  onStopPollingDiffs?: () => void;
-  onPollDiffsNow?: () => void;
+  // Note: useDiffsPoller removed - file changes synced via filesystem-updated events + SSE
 }
 
 // Memoized provider selector component
@@ -413,11 +408,7 @@ export default function InteractionPanel({
   onActiveTabChange,
   onAttachedFilesChange,
   filesystemScopePath,
-  isPollingDiffs,
-  pollCount,
-  onStartPollingDiffs,
-  onStopPollingDiffs,
-  onPollDiffsNow,
+  // Note: useDiffsPoller removed - file changes synced via filesystem-updated events + SSE
 }: InteractionPanelProps) {
   const { togglePanel, isOpen: isPanelOpen } = usePanel();
   const textareaRef = useRef<HTMLTextAreaElement>(null);

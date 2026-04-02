@@ -9,6 +9,7 @@ import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-serv
 import { agentSessionManager } from '../session/agent/agent-session-manager';
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { createLogger } from '../utils/logger';
+import { emitFilesystemUpdated } from '../virtual-filesystem/sync/sync-events';
 
 const logger = createLogger('Agent:FSBridge');
 
@@ -157,6 +158,18 @@ class AgentFSBridge {
 
       const duration = Date.now() - startTime;
       logger.info(`Sandbox → VFS sync complete: ${syncedFiles.length} files in ${duration}ms`);
+
+      // CRITICAL FIX Bug #3: Emit filesystem-updated event after V2 sandbox sync
+      // This ensures components update after V2 agent writes files
+      if (syncedFiles.length > 0) {
+        emitFilesystemUpdated({
+          scopePath: vfsPath,
+          sessionId: simpleSessionId,
+          paths: syncedFiles,
+          type: 'update',
+          source: 'v2-agent',
+        });
+      }
 
       return {
         success: errors.length === 0,

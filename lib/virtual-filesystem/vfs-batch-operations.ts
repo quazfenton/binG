@@ -137,15 +137,180 @@ export interface SearchReplaceResult {
 }
 
 /**
+ * Batch operation type
+ */
+export type BatchOperationType = 'create' | 'update' | 'delete' | 'read';
+
+/**
+ * Queued batch operation
+ */
+export interface QueuedBatchOperation {
+  type: BatchOperationType;
+  path: string;
+  content?: string;
+}
+
+/**
+ * Batch operation execution result
+ */
+export interface BatchExecutionResult {
+  success: boolean;
+  file?: VirtualFile;
+  error?: string;
+}
+
+/**
+ * Batch validation result
+ */
+export interface BatchValidationResult {
+  valid: boolean;
+  errors: Array<{ operation: number; message: string }>;
+}
+
+/**
+ * Batch operation summary
+ */
+export interface BatchSummary {
+  total: number;
+  creates: number;
+  updates: number;
+  deletes: number;
+  reads: number;
+}
+
+/**
  * VFS Batch Operations Manager
  *
- * Provides efficient batch file operations.
+ * Provides fluent API for batching file operations.
  */
 export class VFSBatchOperations {
   private ownerId: string;
+  private _operations: QueuedBatchOperation[] = [];
 
   constructor(ownerId: string) {
     this.ownerId = ownerId;
+  }
+
+  /**
+   * Get queued operations
+   */
+  get operations(): QueuedBatchOperation[] {
+    return this._operations;
+  }
+
+  /**
+   * Queue a file creation
+   */
+  create(path: string, content: string): this {
+    this._operations.push({ type: 'create', path, content });
+    return this;
+  }
+
+  /**
+   * Queue a file update
+   */
+  update(path: string, content: string): this {
+    this._operations.push({ type: 'update', path, content });
+    return this;
+  }
+
+  /**
+   * Queue a file deletion
+   */
+  delete(path: string): this {
+    this._operations.push({ type: 'delete', path });
+    return this;
+  }
+
+  /**
+   * Queue a file read
+   */
+  read(path: string): this {
+    this._operations.push({ type: 'read', path });
+    return this;
+  }
+
+  /**
+   * Execute all queued operations
+   */
+  async execute(vfs: any): Promise<BatchExecutionResult[]> {
+    const results: BatchExecutionResult[] = [];
+
+    for (const op of this._operations) {
+      try {
+        let file: VirtualFile | undefined;
+
+        switch (op.type) {
+          case 'create':
+          case 'update':
+            file = await vfs.writeFile(this.ownerId, op.path, op.content!);
+            break;
+          case 'delete':
+            await vfs.deletePath(this.ownerId, op.path);
+            break;
+          case 'read':
+            file = await vfs.readFile(this.ownerId, op.path);
+            break;
+        }
+
+        results.push({ success: true, file });
+      } catch (err: any) {
+        results.push({ success: false, error: err.message });
+      }
+    }
+
+    return results;
+  }
+
+  /**
+   * Validate all queued operations
+   */
+  validate(): BatchValidationResult {
+    const errors: Array<{ operation: number; message: string }> = [];
+
+    this._operations.forEach((op, index) => {
+      if (!op.path || op.path.trim().length === 0) {
+        errors.push({ operation: index, message: 'Path cannot be empty' });
+      }
+
+      if ((op.type === 'create' || op.type === 'update') && !op.content) {
+        errors.push({ operation: index, message: 'Content is required for create/update' });
+      }
+    });
+
+    return {
+      valid: errors.length === 0,
+      errors,
+    };
+  }
+
+  /**
+   * Clear all queued operations
+   */
+  clear(): void {
+    this._operations = [];
+  }
+
+  /**
+   * Get summary of queued operations
+   */
+  getSummary(): BatchSummary {
+    const summary: BatchSummary = {
+      total: this._operations.length,
+      creates: 0,
+      updates: 0,
+      deletes: 0,
+      reads: 0,
+    };
+
+    this._operations.forEach(op => {
+      if (op.type === 'create') summary.creates++;
+      else if (op.type === 'update') summary.updates++;
+      else if (op.type === 'delete') summary.deletes++;
+      else if (op.type === 'read') summary.reads++;
+    });
+
+    return summary;
   }
 
   /**

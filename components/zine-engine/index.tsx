@@ -39,14 +39,15 @@ export type DataSourceType =
   | "manual"
   | "notification";
 
-export type ContentType = 
+export type ContentType =
   | "text"
   | "image"
   | "video"
   | "audio"
   | "mixed"
   | "interactive"
-  | "embed";
+  | "embed"
+  | "article";
 
 export type LayoutStyle = 
   | "floating"
@@ -77,10 +78,15 @@ export interface ZineContent {
   title?: string;
   subtitle?: string;
   body?: string;
+  url?: string;
+  description?: string;
+  publishedAt?: string | number;
+  imageUrl?: string;
+  author?: string;
   media?: string[];
   metadata?: Record<string, any>;
   source?: string;
-  createdAt: number;
+  createdAt?: number;
   expiresAt?: number;
   priority?: number;
   style?: ContentStyle;

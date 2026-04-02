@@ -10,6 +10,7 @@
 import { checkCommandSecurity } from '@/lib/terminal/security/terminal-security';
 import { bashToolExecutor } from '@/lib/tools/tool-integration/bash-tool';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 
 export interface ToolCallResult {
   success: boolean;
@@ -103,6 +104,16 @@ export function createFilesystemTools(
       execute: async ({ path, content, language }: { path: string; content: string; language?: string }): Promise<ToolCallResult> => {
         try {
           const file = await virtualFilesystem.writeFile(userId, path, content, language);
+          
+          // CRITICAL FIX Bug #4: Emit filesystem-updated event after V2 file write
+          // This ensures components update after V2 agent writes files via tools
+          emitFilesystemUpdated({
+            path: file.path,
+            paths: [file.path],
+            type: 'create',
+            source: 'v2-tool',
+          });
+          
           return {
             success: true,
             path: file.path,
