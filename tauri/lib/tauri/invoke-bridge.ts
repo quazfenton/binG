@@ -69,6 +69,85 @@ export function isTauriAvailable(): boolean {
 }
 
 /**
+ * Save desktop settings to Tauri store
+ */
+export async function saveSettings(settings: Record<string, unknown>): Promise<{ success: boolean; error?: string }> {
+  if (!isTauriAvailable()) {
+    throw new Error('Tauri runtime not available');
+  }
+
+  try {
+    return await invoke<{ success: boolean; error?: string }>('save_settings', { settings });
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Load desktop settings from Tauri store
+ */
+export async function loadSettings(): Promise<Record<string, unknown> | null> {
+  if (!isTauriAvailable()) {
+    return null;
+  }
+
+  try {
+    return await invoke<Record<string, unknown>>('load_settings');
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * Open directory dialog
+ */
+export async function openDirectoryDialog(options: {
+  title?: string;
+  defaultPath?: string;
+}): Promise<{ success: boolean; path?: string; error?: string }> {
+  if (!isTauriAvailable()) {
+    // Fallback to browser file input
+    return { success: false, error: 'Tauri not available' };
+  }
+
+  try {
+    return await invoke<{ success: boolean; path?: string; error?: string }>('open_directory_dialog', options);
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Get resource usage (CPU, memory, disk)
+ */
+export async function getResourceUsage(): Promise<ResourceUsage> {
+  if (!isTauriAvailable()) {
+    return {
+      cpu_percent: 0,
+      memory_used_mb: 0,
+      memory_total_mb: 0,
+      disk_used_gb: 0,
+      disk_total_gb: 0,
+      active_processes: 0,
+    };
+  }
+
+  try {
+    return await invoke<ResourceUsage>('get_resource_usage');
+  } catch (error) {
+    // Return mock data if not available
+    return {
+      cpu_percent: 0,
+      memory_used_mb: 0,
+      memory_total_mb: 0,
+      disk_used_gb: 0,
+      disk_total_gb: 0,
+      active_processes: 0,
+    };
+  }
+}
+
+/**
  * Execute a shell command in the sandbox
  */
 export async function executeCommand(
@@ -251,22 +330,23 @@ export async function restoreCheckpoint(
 }
 
 /**
- * List checkpoints
+ * List checkpoints - returns error result instead of empty array on failure
  */
 export async function listCheckpoints(
   sandboxId: string
-): Promise<CheckpointInfo[]> {
+): Promise<{ success: boolean; checkpoints?: CheckpointInfo[]; error?: string }> {
   if (!isTauriAvailable()) {
-    return [];
+    return { success: false, error: 'Tauri not available' };
   }
 
   try {
-    return await invoke<CheckpointInfo[]>('list_checkpoints', {
+    const checkpoints = await invoke<CheckpointInfo[]>('list_checkpoints', {
       sandboxId,
     });
+    return { success: true, checkpoints };
   } catch (error: any) {
     log.error('list_checkpoints failed', error);
-    return [];
+    return { success: false, error: error.message || 'Failed to list checkpoints' };
   }
 }
 

@@ -8,7 +8,24 @@
 
 import path from 'node:path';
 import os from 'node:os';
+import fs from 'node:fs/promises';
 import { isDesktopMode } from '@/lib/utils/desktop-env';
+
+/**
+ * Ensure the app data directory exists
+ */
+async function ensureAppDataDir(): Promise<void> {
+  const appDataDir = getDesktopAppDataDir();
+  try {
+    await fs.mkdir(appDataDir, { recursive: true });
+    await fs.mkdir(path.join(appDataDir, 'data'), { recursive: true });
+    await fs.mkdir(path.join(appDataDir, 'checkpoints'), { recursive: true });
+    await fs.mkdir(path.join(appDataDir, 'logs'), { recursive: true });
+  } catch (error) {
+    console.error('Failed to create app data directory:', error);
+    throw error;
+  }
+}
 
 /**
  * Get the database path for the current environment
@@ -82,8 +99,13 @@ export function shouldUseDesktopDB(): boolean {
 /**
  * Get database configuration based on environment
  */
-export function getDatabaseConfig() {
+export async function getDatabaseConfig() {
   const isDesktop = shouldUseDesktopDB();
+
+  // Ensure desktop directories exist
+  if (isDesktop) {
+    await ensureAppDataDir();
+  }
 
   if (isDesktop) {
     return {

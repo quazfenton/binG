@@ -707,13 +707,15 @@ export default function MessageBubble({
                   </blockquote>
                 ),
                 a: ({ children, href, ...props }) => {
-                  const isEmbeddable = href && isEmbeddableUrl(href);
-                  const embedInfo = href ? transformToEmbed(href) : null;
+                  // Validate href before processing
+                  const isValidHref = typeof href === 'string' && href.trim().length > 0;
+                  const isEmbeddable = isValidHref && isEmbeddableUrl(href);
+                  const embedInfo = isValidHref ? transformToEmbed(href) : null;
                   const suggestedPlugin = embedInfo?.suggestedPluginId;
 
                   // SECURITY: Validate URL scheme to prevent XSS via javascript: URLs
-                  const safeHref = typeof href === 'string' && /^(https?:|mailto:|tel:)/i.test(href) 
-                    ? href 
+                  const safeHref = isValidHref && /^(https?:|mailto:|tel:)/i.test(href)
+                    ? href
                     : '#';
 
                   return (

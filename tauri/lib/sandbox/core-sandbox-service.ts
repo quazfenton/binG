@@ -42,7 +42,11 @@ export class SandboxService {
    private sandboxProviderById = new Map<string, SandboxProvider>()
 
    constructor() {
-     this.primaryProviderType = (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona'
+     // In desktop mode, default to the desktop provider
+     const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+     this.primaryProviderType = isDesktop
+       ? 'desktop'
+       : (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona';
      log.debug(`SandboxService initialized with primary provider: ${this.primaryProviderType}`)
    }
 
@@ -67,6 +71,7 @@ export class SandboxService {
   }
 
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
+    if (sandboxId.startsWith('desktop-')) return 'desktop'
     if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent'
     if (sandboxId.startsWith('mistral-')) return 'mistral'
     // Check specific blaxel-mcp prefix BEFORE the general blaxel- prefix
@@ -364,7 +369,17 @@ export class SandboxService {
     const provider = await this.resolveProviderForSandbox(sandboxId)
     await provider.destroySandbox(sandboxId)
     this.sandboxProviderById.delete(sandboxId)
-    updateSession(sessionId, { status: 'closed' })
-    deleteSession(sessionId)
+    
+    // FIXED: Add error handling for session update/delete to prevent inconsistent state
+    try {
+      updateSession(sessionId, { status: 'closed' })
+    } catch (err: any) {
+      log.error('Failed to update session status after sandbox destruction', { sessionId, error: err.message })
+    }
+    try {
+      deleteSession(sessionId)
+    } catch (err: any) {
+      log.error('Failed to delete session after sandbox destruction', { sessionId, error: err.message })
+    }
   }
 }

@@ -37,8 +37,39 @@ export interface EmbedInfo {
  * Transform a standard URL to an embed-friendly version
  */
 export function transformToEmbed(urlStr: string, domain: string = 'localhost'): EmbedInfo {
+  // Validate URL string before attempting to parse
+  if (!urlStr || typeof urlStr !== 'string') {
+    return {
+      provider: 'unknown',
+      embedUrl: '',
+      originalUrl: '',
+      canOpenInPlugin: false,
+    };
+  }
+
+  // Trim and check for basic URL structure
+  const trimmed = urlStr.trim();
+  if (!trimmed || trimmed.length > 2048) {
+    return {
+      provider: 'unknown',
+      embedUrl: trimmed,
+      originalUrl: trimmed,
+      canOpenInPlugin: false,
+    };
+  }
+
+  // Quick check for valid URL scheme before constructing URL object
+  if (!/^https?:\/\//i.test(trimmed) && !/^mailto:/i.test(trimmed) && !/^tel:/i.test(trimmed)) {
+    return {
+      provider: 'unknown',
+      embedUrl: trimmed,
+      originalUrl: trimmed,
+      canOpenInPlugin: false,
+    };
+  }
+
   try {
-    const url = new URL(urlStr);
+    const url = new URL(trimmed);
     const host = url.hostname.replace('www.', '');
     const pathParts = url.pathname.split('/').filter(Boolean);
 
@@ -263,17 +294,16 @@ export function transformToEmbed(urlStr: string, domain: string = 'localhost'): 
     // Unknown/Fallback - try as-is
     return {
       provider: 'unknown',
-      embedUrl: urlStr,
-      originalUrl: urlStr,
-      canOpenInPlugin: true,
-      suggestedPluginId: 'generic-embed',
+      embedUrl: trimmed,
+      originalUrl: trimmed,
+      canOpenInPlugin: false,
     };
   } catch (e) {
     console.error('Link transformation failed:', e);
     return {
       provider: 'unknown',
-      embedUrl: urlStr,
-      originalUrl: urlStr,
+      embedUrl: trimmed,
+      originalUrl: trimmed,
       canOpenInPlugin: false,
     };
   }

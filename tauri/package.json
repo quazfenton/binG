@@ -28,7 +28,11 @@
     "backup:local": "BACKUP_PROVIDER=local node scripts/backup-database.js",
     "backup:s3": "BACKUP_PROVIDER=s3 node scripts/backup-database.js",
     "backend:init": "node scripts/init-backend.js",
-    "export-telemetry": "tsx scripts/export-model-telemetry.ts"
+    "export-telemetry": "tsx scripts/export-model-telemetry.ts",
+    "tauri:dev": "tauri dev",
+    "tauri:build": "tauri build",
+    "desktop:dev": "DESKTOP_MODE=true DESKTOP_LOCAL_EXECUTION=true tauri dev",
+    "desktop:build": "DESKTOP_MODE=true DESKTOP_LOCAL_EXECUTION=true tauri build"
   },
   "dependencies": {
     "@ai-sdk/anthropic": "^3.0.64",
@@ -121,6 +125,7 @@
     "@tambo-ai/typescript-sdk": "^0.93.1",
     "@trigger.dev/sdk": "^4.4.3",
     "@tursodatabase/sync": "^0.5.1",
+    "@types/diff": "^8.0.0",
     "@types/js-yaml": "^4.0.9",
     "@types/uuid": "^10.0.0",
     "@typescript-eslint/typescript-estree": "^8.0.0",
@@ -146,6 +151,7 @@
     "clsx": "^2.1.1",
     "cmdk": "1.0.4",
     "cohere-ai": "^7.10.1",
+    "critters": "^0.0.25",
     "date-fns": "4.1.0",
     "diff": "^8.0.3",
     "diff-match-patch": "^1.0.5",
@@ -211,9 +217,14 @@
     "vm2": "^3.10.5",
     "webdav": "^5.8.0",
     "ws": "^8.19.0",
-    "zod": "^3.24.1"
+    "zod": "^3.24.1",
+    "@tauri-apps/api": "^2.0.0",
+    "@tauri-apps/plugin-dialog": "^2.0.0",
+    "@tauri-apps/plugin-fs": "^2.0.0",
+    "@tauri-apps/plugin-store": "^2.0.0"
   },
   "devDependencies": {
+    "@tauri-apps/cli": "^2.0.0",
     "@axe-core/playwright": "^4.11.1",
     "@eslint/js": "^9.39.4",
     "@playwright/test": "^1.58.2",
@@ -227,7 +238,6 @@
     "@types/esprima": "^4.0.6",
     "@types/node": "^22.10.5",
     "@types/nodemailer": "^7.0.11",
-    "@types/react-dom": "^19.2.3",
     "@types/react-syntax-highlighter": "^15.5.13",
     "@types/ws": "^8.18.1",
     "@vitest/eslint-plugin": "^1.6.9",

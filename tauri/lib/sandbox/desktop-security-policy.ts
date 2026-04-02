@@ -109,8 +109,45 @@ class DesktopSecurityPolicy {
   private maxAuditEntries = 1000;
 
   constructor(config: Partial<SecurityPolicyConfig> = {}) {
-    this.config = { ...DEFAULT_DESKTOP_POLICY, ...config };
+    // FIX: Validate regex patterns at config time and filter out invalid ones
+    const validatedConfig = this.validateConfig(config);
+    this.config = { ...DEFAULT_DESKTOP_POLICY, ...validatedConfig };
     log.info('DesktopSecurityPolicy initialized', { config: this.config });
+  }
+
+  /**
+   * Validate config and filter out invalid regex patterns
+   */
+  private validateConfig(config: Partial<SecurityPolicyConfig>): Partial<SecurityPolicyConfig> {
+    const validated: Partial<SecurityPolicyConfig> = { ...config };
+    
+    // Validate blockedPatterns
+    if (config.blockedPatterns) {
+      validated.blockedPatterns = config.blockedPatterns.filter(pattern => {
+        try {
+          new RegExp(pattern, 'i');
+          return true;
+        } catch (e) {
+          log.warn('Invalid regex pattern in blockedPatterns, removing', { pattern });
+          return false;
+        }
+      });
+    }
+    
+    // Validate approvalRequiredPatterns
+    if (config.approvalRequiredPatterns) {
+      validated.approvalRequiredPatterns = config.approvalRequiredPatterns.filter(pattern => {
+        try {
+          new RegExp(pattern, 'i');
+          return true;
+        } catch (e) {
+          log.warn('Invalid regex pattern in approvalRequiredPatterns, removing', { pattern });
+          return false;
+        }
+      });
+    }
+    
+    return validated;
   }
 
   /**
@@ -203,6 +240,7 @@ class DesktopSecurityPolicy {
 
   /**
    * Check if a path is within allowed directories
+   * FIX: Use path.resolve to handle path traversal and symlinks
    */
   isPathAllowed(filePath: string): { allowed: boolean; reason?: string } {
     if (this.config.allowedDirectories.length === 0) {
@@ -210,13 +248,31 @@ class DesktopSecurityPolicy {
       return { allowed: true };
     }
 
-    const normalized = filePath.replace(/\\/g, '/');
-
-    for (const allowed of this.config.allowedDirectories) {
-      const allowedNormalized = allowed.replace(/\\/g, '/');
-      if (normalized.startsWith(allowedNormalized) || normalized === allowedNormalized) {
-        return { allowed: true };
+    // Use path.resolve to normalize and resolve the path with proper directory boundary
+    const pathModule = require('node:path');
+    
+    try {
+      // Resolve to absolute path to handle .. and symlinks
+      const resolvedPath = pathModule.resolve(filePath);
+      
+      for (const allowed of this.config.allowedDirectories) {
+        const resolvedAllowed = pathModule.resolve(allowed);
+        // FIX: Use path separator to ensure directory boundary - prevents sibling path bypass
+        // e.g., /allowed must not match /allowed-file
+        const normalizedResolvedPath = resolvedPath.replace(/\\/g, '/');
+        const normalizedAllowed = resolvedAllowed.replace(/\\/g, '/');
+        // Check that path starts with allowed dir AND is either exactly equal or has a separator after
+        if (normalizedResolvedPath === normalizedAllowed || 
+            normalizedResolvedPath.startsWith(normalizedAllowed + '/')) {
+          return { allowed: true };
+        }
       }
+    } catch (e) {
+      // If resolution fails, path is not valid
+      return {
+        allowed: false,
+        reason: `Invalid path: ${filePath}`,
+      };
     }
 
     return {

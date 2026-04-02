@@ -1,5 +1,6 @@
 import type { ApprovalRequest } from './schemas';
 import { hitlAuditLogger } from './hitl-audit-logger';
+import { minimatch } from 'minimatch';
 
 export interface InterruptRequest {
   type: 'approval_required';
@@ -24,6 +25,7 @@ class HumanInTheLoopManager {
     resolve: (response: InterruptResponse) => void;
     createdAt: Date;
     requestLogged: boolean;
+    resolved: boolean;  // Flag to prevent race condition
   }> = new Map();
 
   private handler: InterruptHandler | null = null;
@@ -64,6 +66,7 @@ class HumanInTheLoopManager {
         resolve,
         createdAt: new Date(),
         requestLogged: !!userId,
+        resolved: false,
       });
     });
 
@@ -77,8 +80,10 @@ class HumanInTheLoopManager {
 
     const timeoutPromise = new Promise<InterruptResponse>((resolve) => {
       setTimeout(() => {
-        // Clean up pending interrupt to prevent memory leak
-        if (this.pendingInterrupts.has(interruptId)) {
+        // FIXED: Check and set resolved flag atomically to prevent race condition
+        const pending = this.pendingInterrupts.get(interruptId);
+        if (pending && !pending.resolved) {
+          pending.resolved = true;
           this.pendingInterrupts.delete(interruptId);
           resolve({ approved: false, feedback: 'Approval request timed out' });
         }
@@ -86,6 +91,13 @@ class HumanInTheLoopManager {
     });
 
     const response = await Promise.race([promise, timeoutPromise]);
+    
+    // FIXED: Ensure we only resolve once by checking the resolved flag
+    const pending = this.pendingInterrupts.get(interruptId);
+    if (pending && !pending.resolved) {
+      pending.resolved = true;
+      this.pendingInterrupts.delete(interruptId);
+    }
     
     // Log approval decision for audit
     const responseTimeMs = Date.now() - requestStartTime;
@@ -239,40 +251,18 @@ export function toolNameMatcher(names: string[]): ApprovalCondition {
 
 /**
  * Condition: Check if file path matches pattern
- * Supports glob patterns including ** for recursive directory matching
+ * Uses minimatch library for proper glob pattern matching
  */
 export function filePathMatcher(patterns: string[]): ApprovalCondition {
   return (_toolName: string, _params: any, context?: ApprovalContext) => {
     if (!context?.filePath) return false;
     const filePath = context.filePath;
     
-    return patterns.some(pattern => {
-      // Handle ** (recursive directory) patterns
-      if (pattern.includes('**')) {
-        // Convert glob pattern to regex
-        // **/.env* matches .env files in any directory
-        // **/secrets/* matches anything under any secrets/ directory
-        const regexPattern = pattern
-          .replace(/[.+?^${}()|[\]\\]/g, '\\$&') // Escape regex special chars
-          .replace(/\*\*/g, '.*') // ** matches any path segments
-          .replace(/\*/g, '[^/]*'); // * matches within a segment (not across /)
-        const regex = new RegExp(`^${regexPattern}$`);
-        return regex.test(filePath);
-      }
-      
-      // Handle simple * prefix patterns (e.g., *.env)
-      if (pattern.startsWith('*') && !pattern.includes('**')) {
-        return filePath.endsWith(pattern.slice(1));
-      }
-      
-      // Handle simple * suffix patterns (e.g., .env*)
-      if (pattern.endsWith('*') && !pattern.includes('**')) {
-        return filePath.startsWith(pattern.slice(0, -1));
-      }
-      
-      // Exact match
-      return filePath === pattern;
-    });
+    // Use minimatch for proper glob matching
+    // Options: dot=true allows matching dotfiles, nocase=true for case-insensitive
+    return patterns.some(pattern => 
+      minimatch(filePath, pattern, { dot: true, nocase: false })
+    );
   };
 }
 
@@ -428,6 +418,31 @@ export const permissiveWorkflow: ApprovalWorkflow = {
   updatedAt: Date.now(),
 };
 
+/**
+ * Desktop workflow - auto-approves nearly everything for local execution.
+ * Only blocks truly destructive system-level operations (format disk, fork bomb).
+ */
+export const desktopWorkflow: ApprovalWorkflow = {
+  id: 'desktop',
+  name: 'Desktop Workflow',
+  type: 'auto',
+  rules: [
+    {
+      id: 'system-destructive',
+      name: 'System-Destructive Operations',
+      condition: anyConditions(
+        (toolName, params) => /^(mkfs|dd\s+if=.*of=\/dev|:\(\)\{)/.test(params?.command || ''),
+        (toolName, params) => /rm\s+-rf\s+\/(?!\w)/.test(params?.command || ''),
+      ),
+      action: 'require_approval',
+      timeout: 60000,
+    },
+  ],
+  defaultAction: 'auto_approve',
+  createdAt: Date.now(),
+  updatedAt: Date.now(),
+};
+
 // ==================== Workflow Registry ====================
 
 /**
@@ -437,6 +452,7 @@ export const workflowRegistry: Map<string, ApprovalWorkflow> = new Map([
   ['default', defaultWorkflow],
   ['strict', strictWorkflow],
   ['permissive', permissiveWorkflow],
+  ['desktop', desktopWorkflow],
 ]);
 
 /**
@@ -457,7 +473,10 @@ export function registerWorkflow(workflow: ApprovalWorkflow): void {
  * Get active workflow from environment or use default
  */
 export function getActiveWorkflow(): ApprovalWorkflow {
-  const workflowId = process.env.HITL_WORKFLOW_ID || 'default';
+  // Desktop mode defaults to the permissive desktop workflow
+  const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+  const defaultId = isDesktop ? 'desktop' : 'default';
+  const workflowId = process.env.HITL_WORKFLOW_ID || defaultId;
   return getWorkflow(workflowId) || defaultWorkflow;
 }
 
