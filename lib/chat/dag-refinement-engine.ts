@@ -257,6 +257,8 @@ export class DAGExecutor {
 
   private buildRefinementPrompt(task: DAGTask): string {
     const tasksList = task.tasks.map((t, i) => `${i + 1}. ${t}`).join('\n')
+    // Use a placeholder to avoid template literal issues with code block markers
+    const codeBlockStart = '```'
     return `You are improving an existing AI-generated solution.
 
 FOCUS AREA:
@@ -265,17 +267,34 @@ ${task.title}
 TASKS:
 ${tasksList}
 
+OUTPUT FORMAT (REQUIRED - use this format exactly):
+When making changes to existing files, use PATCH format with unified diff:
+
+${codeBlockStart}fs-actions
+PATCH src/file.ts <<<
+@@ -1,5 +1,6 @@
+-old line to remove
++new line to add
+-another line to remove
++replacement line
+>>>
+${codeBlockStart}
+
+For NEW files (not modifications), use WRITE:
+
+${codeBlockStart}fs-actions
+WRITE new-file.ts <<<complete file content here>>>
+${codeBlockStart}
+
 RULES:
-- Improve depth and correctness for YOUR FOCUS AREA only
-- Add missing implementation details for YOUR assigned tasks
-- Include actual file improvements using fs-actions format:
-  \`\`\`fs-actions
-  WRITE path/to/file.js <<<content>>>
-  \`\`\`
+- Use PATCH format for changes to existing files (REQUIRED - this is most reliable)
+- Use WRITE only for entirely new files, not modifications
 - Do NOT duplicate content from other focus areas
 - Focus on QUALITY over speed
 - Make it PRODUCTION-READY
-- Output the improved response including any improved/added file content
+- Output the improved response including any file changes in fs-actions blocks
+
+FALLBACK: If you use a different format, the system will attempt fuzzy patching.
 
 Return the improved output with file edits embedded.`
   }
@@ -460,14 +479,15 @@ export async function executeRefinementWithDAG(
   emitFn?: SSEEmitter,
 ): Promise<string> {
   // Prefer config.emit; fall back to the parameter; then no-op
+  const hasRealEmitter = !!(config.emit || emitFn);
   const emitter: SSEEmitter = config.emit ?? emitFn ?? (() => {})
   const executor = new DAGExecutor(config)
 
   try {
     return await executor.execute(emitter)
   } catch (error) {
-    // Only emit if emitter is not the no-op (i.e., stream is still open)
-    if (emitter !== (() => {})) {
+    // Only emit if we have a real emitter (stream is still open)
+    if (hasRealEmitter) {
       emitter(SSE_EVENT_TYPES.SPEC_AMPLIFICATION, {
         stage: 'error',
         error: error instanceof Error ? error.message : 'DAG execution failed',

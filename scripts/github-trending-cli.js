@@ -291,9 +291,16 @@ async function main() {
   }
 
   const cloneIndex = args.indexOf('--clone');
-  const ranksToClone = cloneIndex !== -1
-    ? args[cloneIndex + 1].split(',').map(n => parseInt(n.trim(), 10))
+  const ranksToClone = (cloneIndex !== -1 && args[cloneIndex + 1])
+    ? args[cloneIndex + 1].split(',').map(n => parseInt(n.trim(), 10)).filter(n => !isNaN(n))
     : null;
+
+  // Validate --clone argument
+  if (cloneIndex !== -1 && (!args[cloneIndex + 1] || ranksToClone.length === 0)) {
+    console.error('❌ Invalid or missing argument for --clone. Please provide a comma-separated list of ranks.');
+    console.error('   Example: node scripts/github-trending-cli.js --clone 1,3,5');
+    process.exit(1);
+  }
 
   const outputJson = args.includes('--json');
 

@@ -70,20 +70,6 @@ class HumanInTheLoopManager {
       });
     });
 
-    // FIX: Await handler to prevent ignored resolves and unhandled rejections
-    try {
-      await this.handler(request);
-    } catch (handlerError) {
-      console.error('[HITL] Handler error:', handlerError);
-      // Resolve with error fallback - don't leave pending
-      const pending = this.pendingInterrupts.get(interruptId);
-      if (pending && !pending.resolved) {
-        pending.resolved = true;
-        pending.resolve({ approved: false, feedback: `Handler error: ${handlerError instanceof Error ? handlerError.message : String(handlerError)}` });
-        this.pendingInterrupts.delete(interruptId);
-      }
-    }
-
     // Parse timeout with validation (default: 5 minutes, min: 10s, max: 30 minutes)
     const configuredTimeout = parseInt(process.env.HITL_TIMEOUT || '300000');
     const timeout = Number.isNaN(configuredTimeout)
@@ -92,7 +78,7 @@ class HumanInTheLoopManager {
 
     const timeoutPromise = new Promise<InterruptResponse>((resolve) => {
       setTimeout(() => {
-        // FIXED: Check and set resolved flag atomically to prevent race condition
+        // Check and set resolved flag atomically to prevent race condition
         const pending = this.pendingInterrupts.get(interruptId);
         if (pending && !pending.resolved) {
           pending.resolved = true;
@@ -102,9 +88,25 @@ class HumanInTheLoopManager {
       }, timeout);
     });
 
+    // Race handler completion against timeout - handler runs in background without blocking timeout
+    const handlerPromise = (async () => {
+      try {
+        await this.handler(request);
+      } catch (handlerError) {
+        console.error('[HITL] Handler error:', handlerError);
+        // Resolve with error fallback - don't leave pending
+        const pending = this.pendingInterrupts.get(interruptId);
+        if (pending && !pending.resolved) {
+          pending.resolved = true;
+          pending.resolve({ approved: false, feedback: `Handler error: ${handlerError instanceof Error ? handlerError.message : String(handlerError)}` });
+          this.pendingInterrupts.delete(interruptId);
+        }
+      }
+    })();
+
     const response = await Promise.race([promise, timeoutPromise]);
     
-    // FIXED: Ensure we only resolve once by checking the resolved flag
+    // Ensure we only resolve once by checking the resolved flag
     const pending = this.pendingInterrupts.get(interruptId);
     if (pending && !pending.resolved) {
       pending.resolved = true;
@@ -314,7 +316,7 @@ export function createShellCommandRule(): ApprovalRule {
   return {
     id: 'shell-commands',
     name: 'Shell Command Approval',
-    condition: toolNameMatcher(['execShell', 'runCommand', 'executeCommand']),
+    condition: toolNameMatcher(['execShell', 'exec_shell', 'runCommand', 'run_command', 'executeCommand', 'execute_command']),
     action: 'require_approval',
     timeout: 300000, // 5 minutes
     description: 'Require approval for shell command execution',
@@ -342,7 +344,7 @@ export function createReadOnlyRule(): ApprovalRule {
   return {
     id: 'read-only',
     name: 'Read-Only Auto-Approval',
-    condition: toolNameMatcher(['readFile', 'listFiles', 'dir', 'ls', 'cat']),
+    condition: toolNameMatcher(['readFile', 'read_file', 'listFiles', 'list_dir', 'dir', 'ls', 'cat']),
     action: 'auto_approve',
     description: 'Auto-approve read-only operations',
   };
@@ -356,7 +358,7 @@ export function createHighRiskFileRule(): ApprovalRule {
     id: 'high-risk-files',
     name: 'High-Risk File Operations',
     condition: allConditions(
-      toolNameMatcher(['writeFile', 'deleteFile', 'applyDiff']),
+      toolNameMatcher(['writeFile', 'write_file', 'deleteFile', 'delete_file', 'applyDiff', 'apply_diff']),
       riskLevelMatcher(['high'])
     ),
     action: 'require_approval',
@@ -439,23 +441,50 @@ export const desktopWorkflow: ApprovalWorkflow = {
   name: 'Desktop Workflow',
   type: 'auto',
   rules: [
-    // FIX: Broader destructive command matching - covers more dangerous shell patterns
+    // FIX: Comprehensive destructive command matching - covers all dangerous shell patterns
     {
       id: 'system-destructive',
       name: 'System-Destructive Operations',
       condition: anyConditions(
-        // Format/disk destruction
-        (toolName, params) => /^mkfs/i.test(params?.command || ''),
-        (toolName, params) => /^dd\s+if=/i.test(params?.command || ''),
-        (toolName, params) => /:\(\)\{ :\|:& \};:/.test(params?.command || ''),
-        // Recursive force remove at root level
-        (toolName, params) => /rm\s+-rf\s+\//i.test(params?.command || ''),
-        // Overwrite device files
-        (toolName, params) => />\s*\/dev\//.test(params?.command || ''),
-        // Fork bomb variants - use new RegExp to avoid regex literal issues
-        (toolName, params) => new RegExp(':\(\)', 'i').test(params?.command || ''),
-        // Shutdown/reboot
-        (toolName, params) => /shutdown|reboot|init\s+[06]/i.test(params?.command || ''),
+        // Filesystem destruction: rm -rf with dangerous targets
+        (toolName, params) => /rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+(\/|~|\/\*|\$HOME|\$PWD)/i.test(params?.command || ''),
+        (toolName, params) => /rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)\s+--no-preserve-root/i.test(params?.command || ''),
+        (toolName, params) => /rm\s+.*--no-preserve-root/i.test(params?.command || ''),
+        (toolName, params) => /sudo\s+.*rm\s+(-[a-zA-Z]*r[a-zA-Z]*f[a-zA-Z]*|-[a-zA-Z]*f[a-zA-Z]*r[a-zA-Z]*)/i.test(params?.command || ''),
+
+        // Disk/partition destruction: mkfs, fdisk, format (but not --help)
+        (toolName, params) => {
+          const cmd = params?.command || '';
+          return /(^|\s|sudo\s+)(mkfs|mkfs\.\w+|fdisk|parted|format)\s/i.test(cmd) && !/\s--help/i.test(cmd);
+        },
+        (toolName, params) => /(^|\s|sudo\s+)dd\s+if=\/dev\/(zero|null)/i.test(params?.command || ''),
+        (toolName, params) => /sudo\s+.*dd\s+/i.test(params?.command || ''),
+
+        // Dangerous permission changes
+        (toolName, params) => /chmod\s+(-R\s+)?777\s+(\/|\/\w)/i.test(params?.command || ''),
+        (toolName, params) => /chmod\s+-R\s/i.test(params?.command || ''),
+        (toolName, params) => /chown\s+-R\s/i.test(params?.command || ''),
+        (toolName, params) => /sudo\s+.*(chmod|chown)\s/i.test(params?.command || ''),
+
+        // Device file overwrites: > /dev/sda, > /dev/hda, etc.
+        (toolName, params) => />\s*\/dev\/(sd[a-z]|hd[a-z]|nvme|vda|xvd|loop|ram|zero|null)/i.test(params?.command || ''),
+
+        // Fork bomb variants (multiple patterns to catch obfuscation)
+        (toolName, params) => /:\s*\(\)\s*\{.*:\|.*:&.*\}\s*;/.test(params?.command || ''),
+        (toolName, params) => /:\(\)/.test(params?.command || ''),
+        (toolName, params) => /fork\s*bomb/i.test(params?.command || ''),
+
+        // Pipe to shell execution: curl | bash, wget | sh
+        (toolName, params) => /(curl|wget)\s+.*\|\s*(bash|sh|zsh|fish|dash)/i.test(params?.command || ''),
+        (toolName, params) => /(curl|wget)\s+.*\|\|\s*(bash|sh|zsh|fish|dash)/i.test(params?.command || ''),
+
+        // System shutdown/reboot/init (but not --help)
+        (toolName, params) => {
+          const cmd = params?.command || '';
+          return /(^|\s|sudo\s+)(shutdown|reboot|halt|poweroff)(\s|$)/i.test(cmd) && !/\s--help/i.test(cmd);
+        },
+        (toolName, params) => /(^|\s|sudo\s+)init\s+[06]/i.test(params?.command || ''),
+        (toolName, params) => /systemctl\s+(reboot|poweroff|halt|suspend|hibernate)/i.test(params?.command || ''),
       ),
       action: 'require_approval',
       timeout: 60000,

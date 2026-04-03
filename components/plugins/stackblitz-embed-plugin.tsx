@@ -26,6 +26,7 @@ import {
 import { toast } from 'sonner';
 import useIframeLoader from '@/hooks/use-iframe-loader';
 import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
+import { IframeLoadingOverlay } from '../ui/iframe-loading-overlay';
 
 interface BookmarkEntry {
   projectId: string;
@@ -62,11 +63,14 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
     retryCount,
     canRetry,
     isUsingFallback,
+    fallbackLevel,
     fallbackUrl,
+    loadingProgress,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
+    handleLoadSuccess,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
@@ -304,15 +308,6 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
 
               {/* Iframe */}
               <div className="flex-1 relative bg-violet-950">
-                {isLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-violet-950/80 z-10">
-                    <div className="text-center space-y-4">
-                      <RefreshCw className="w-8 h-8 animate-spin mx-auto text-violet-500" />
-                      <p className="text-violet-200/60">Loading StackBlitz...</p>
-                    </div>
-                  </div>
-                )}
-
                 {isFailed || iframeError ? (
                   <div className="absolute inset-0">
                     <IframeUnavailableScreen
@@ -326,24 +321,34 @@ const StackBlitzEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =
                     />
                   </div>
                 ) : (
-                  <iframe
-                    key={iframeKey}
-                    src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
-                    className="w-full h-full border-0"
-                    title="StackBlitz"
-                    onLoad={() => {
-                      setIsReloading(false);
-                      handleLoad(iframeUrl); // Sync with useIframeLoader hook
-                    }}
-                    onError={() => {
-                      setIframeError('Failed to load StackBlitz. Note: StackBlitz requires valid project URLs.');
-                      setIsReloading(false);
-                    }}
-                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-top-navigation allow-top-navigation-by-user-activation"
-                    allow="fullscreen; encrypted-media"
-                    referrerPolicy="no-referrer"
-                    allowTransparency={true}
-                  />
+                  <>
+                    {/* Shared loading overlay with progress bar */}
+                    <IframeLoadingOverlay
+                      progress={loadingProgress}
+                      isLoading={isLoading}
+                      isUsingFallback={isUsingFallback}
+                      fallbackLevel={fallbackLevel}
+                      label="Loading StackBlitz"
+                    />
+                    <iframe
+                      key={iframeKey}
+                      src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
+                      className="w-full h-full border-0"
+                      title="StackBlitz"
+                      onLoad={() => {
+                        setIsReloading(false);
+                        handleLoadSuccess();
+                      }}
+                      onError={() => {
+                        setIframeError('Failed to load StackBlitz. Note: StackBlitz requires valid project URLs.');
+                        setIsReloading(false);
+                      }}
+                      sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-top-navigation allow-top-navigation-by-user-activation"
+                      allow="fullscreen; encrypted-media"
+                      referrerPolicy="no-referrer"
+                      allowTransparency={true}
+                    />
+                  </>
                 )}
               </div>
 

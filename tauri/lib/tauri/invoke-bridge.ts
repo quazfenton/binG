@@ -249,7 +249,16 @@ export async function getSystemInfo(): Promise<SystemInfo | null> {
   }
 
   try {
-    return await invoke<SystemInfo>('get_system_info');
+    const raw = await invoke<{ os: string; arch: string; hostname: string }>('get_system_info');
+    return {
+      platform: raw.os,
+      arch: raw.arch,
+      hostname: raw.hostname,
+      cpuCount: 0,
+      totalMemory: 0,
+      homeDir: '',
+      tempDir: '',
+    };
   } catch (error: any) {
     log.error('get_system_info failed', error);
     return null;
@@ -404,6 +413,18 @@ export const tauriInvoke = {
   getWorkspaceDir,
   openUrl,
   showNotification,
+  openDirectoryDialog,
+  saveSettings,
+  saveSecret: async (key: string, value: string) => {
+    if (!isTauriAvailable()) {
+      throw new Error('Tauri runtime not available');
+    }
+    try {
+      return await invoke<{ success: boolean; error?: string }>('save_secret', { key, value });
+    } catch (error: any) {
+      return { success: false, error: error.message };
+    }
+  },
 };
 
 export default tauriInvoke;

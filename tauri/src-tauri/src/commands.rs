@@ -44,43 +44,74 @@ pub async fn execute_command(command: String, cwd: Option<String>) -> Result<Com
         cmd.current_dir(dir);
     }
 
-    match cmd.output() {
-        Ok(output) => {
-            let stdout = String::from_utf8_lossy(&output.stdout).to_string();
-            let stderr = String::from_utf8_lossy(&output.stderr).to_string();
-            let combined = if stderr.is_empty() {
-                stdout.clone()
-            } else {
-                format!("{}\n--- stderr ---\n{}", stdout, stderr)
-            };
+    let output = tauri::async_runtime::spawn_blocking(move || cmd.output())
+        .await
+        .map_err(|e| format!("Failed to join command task: {}", e))?
+        .map_err(|e| format!("Failed to execute command: {}", e))?;
+    
+    let stdout = String::from_utf8_lossy(&output.stdout).to_string();
+    let stderr = String::from_utf8_lossy(&output.stderr).to_string();
+    let combined = if stderr.is_empty() {
+        stdout.clone()
+    } else {
+        format!("{}\n--- stderr ---\n{}", stdout, stderr)
+    };
 
-            Ok(CommandResult {
-                success: output.status.success(),
-                output: combined,
-                error: if output.status.success() { None } else { Some(stderr) },
-                exit_code: output.status.code(),
-            })
-        }
-        Err(e) => Err(format!("Failed to execute command: {}", e)),
-    }
+    Ok(CommandResult {
+        success: output.status.success(),
+        output: combined,
+        error: if output.status.success() { None } else { Some(stderr) },
+        exit_code: output.status.code(),
+    })
 }
 
 #[tauri::command]
 pub async fn read_file(file_path: String) -> Result<String, String> {
-    std::fs::read_to_string(&file_path).map_err(|e| format!("Failed to read file: {}", e))
+    // Validate path to prevent directory traversal attacks
+    let base_dir = std::env::current_dir()
+        .map_err(|e| format!("Failed to resolve base directory: {}", e))?;
+    let requested = std::path::Path::new(&file_path);
+    
+    if requested.is_absolute() || requested.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err("Access denied: path must stay within workspace".to_string());
+    }
+    
+    let full_path = base_dir.join(requested);
+    std::fs::read_to_string(&full_path).map_err(|e| format!("Failed to read file: {}", e))
 }
 
 #[tauri::command]
 pub async fn write_file(file_path: String, content: String) -> Result<(), String> {
-    if let Some(parent) = std::path::Path::new(&file_path).parent() {
+    // Validate path to prevent directory traversal attacks
+    let base_dir = std::env::current_dir()
+        .map_err(|e| format!("Failed to resolve base directory: {}", e))?;
+    let requested = std::path::Path::new(&file_path);
+    
+    if requested.is_absolute() || requested.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err("Access denied: path must stay within workspace".to_string());
+    }
+    
+    let full_path = base_dir.join(requested);
+    
+    if let Some(parent) = full_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
     }
-    std::fs::write(&file_path, content).map_err(|e| format!("Failed to write file: {}", e))
+    std::fs::write(&full_path, content).map_err(|e| format!("Failed to write file: {}", e))
 }
 
 #[tauri::command]
 pub async fn list_directory(dir_path: String) -> Result<Vec<FileEntry>, String> {
-    let entries = std::fs::read_dir(&dir_path).map_err(|e| format!("Failed to read directory: {}", e))?;
+    // Validate path to prevent directory traversal attacks
+    let base_dir = std::env::current_dir()
+        .map_err(|e| format!("Failed to resolve base directory: {}", e))?;
+    let requested = std::path::Path::new(&dir_path);
+    
+    if requested.is_absolute() || requested.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err("Access denied: path must stay within workspace".to_string());
+    }
+    
+    let full_path = base_dir.join(requested);
+    let entries = std::fs::read_dir(&full_path).map_err(|e| format!("Failed to read directory: {}", e))?;
 
     let mut result = Vec::new();
     for entry in entries {

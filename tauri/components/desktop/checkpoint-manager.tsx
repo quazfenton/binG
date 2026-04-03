@@ -49,8 +49,9 @@ export function CheckpointManager({
     setIsDesktop(isDesktopMode());
   }, []);
 
-  // FIX: Track loading state to prevent race conditions (declared before use)
-  const [isLoadingCheckpoints, setIsLoadingCheckpoints] = useState(false);
+  // Track loading state to prevent concurrent fetches.
+  // Using a ref so we don't trigger extra re-renders from the guard itself.
+  const isLoadingCheckpointsRef = useRef(false);
 
   const loadCheckpoints = async () => {
     if (!isDesktop) {
@@ -58,39 +59,29 @@ export function CheckpointManager({
       return;
     }
 
-    // FIX: Prevent concurrent loading operations but allow refresh after mutations
-    // Use a timestamp-based approach to allow refresh during ongoing loads
-    if (isLoadingCheckpoints) {
-      // Instead of skipping, wait for the current load to complete and use its result
-      // This prevents stale list issues when mutations happen during load
-      const currentLoadingTime = loadingTimestampRef.current;
-      if (currentLoadingTime && Date.now() - currentLoadingTime > 5000) {
-        // Stale load - force refresh
-        loadingTimestampRef.current = null;
-        setIsLoadingCheckpoints(false);
-      } else {
-        // Fresh load in progress - wait and return
-        return;
-      }
+    // If a load is already in progress, skip. This is safe because
+    // loadCheckpoints is idempotent -- the in-flight request will refresh
+    // the list for any mutations that triggered during it.
+    if (isLoadingCheckpointsRef.current) {
+      return;
     }
 
-    loadingTimestampRef.current = Date.now();
-    setIsLoadingCheckpoints(true);
+    isLoadingCheckpointsRef.current = true;
     setLoading(true);
     setError(null);
     try {
       const list = await tauriInvoke.listCheckpoints(sandboxId);
+      if (!list.success) {
+        throw new Error(list.error || 'Failed to load checkpoints');
+      }
       setCheckpoints(list.checkpoints || []);
     } catch (err: any) {
       setError(err.message || 'Failed to load checkpoints');
     } finally {
       setLoading(false);
-      setIsLoadingCheckpoints(false);
+      isLoadingCheckpointsRef.current = false;
     }
   };
-
-  // Add ref for tracking loading timestamp
-  const loadingTimestampRef = useRef<number | null>(null);
 
   const handleCreateCheckpoint = async () => {
     setCreating(true);
