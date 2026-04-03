@@ -56,6 +56,7 @@ import {
   ArrowRight,
   Plus,
   Check,
+  Film,
 } from "lucide-react";
 import WorkflowsTab from "./plugins/n8n-workflows-tab";
 import OrchestrationTab from "./plugins/orchestration-tab";
@@ -73,6 +74,7 @@ import ModelComparisonTab from "./top-panel/plugins/model-comparison-tab";
 import ZineDisplayTab from "./top-panel/plugins/zine-display-tab";
 import CodePlaygroundTab from "./plugins/code-playground-tab";
 import PluginMarketplace from "./plugins/plugin-marketplace";
+import PStreamEmbedPlugin from "./plugins/pstream-embed-plugin";
 import { MonacoVFSEditor } from "./monaco-vfs-editor";
 import { BookmarksCurationPlugin } from "@/components/bookmarks/bookmarks-curation-plugin";
 import { MCPStore } from "@/components/mcp/mcp-store";
@@ -429,7 +431,7 @@ function PluginsTab({ visibleTabs, toggleTabVisibility, isTabVisible, setVisible
               <Button
                 variant="outline"
                 size="sm"
-                onClick={() => setVisibleTabs(['news', 'music-hub', 'plugins', 'marketplace', 'immersive'])}
+                onClick={() => setVisibleTabs(['news', 'music-hub', 'plugins', 'marketplace', 'immersive', 'monaco-editor', 'events', 'prompt-lab', 'workflows', 'movies'])}
                 className="text-xs border-white/20 text-white/70 hover:bg-white/10"
               >
                 Reset to Defaults
@@ -576,6 +578,7 @@ const TAB_DEFS: TabDef[] = [
   { value: "model-comparison", label: "Model Compare", icon: Zap },
   { value: "zine-display", label: "Zine", icon: Palette },
   { value: "mcp", label: "MCP Store", icon: Puzzle },
+  { value: "movies", label: "Movies", icon: Film },
 ];
 
 // ---------------------------------------------------------------------------
@@ -880,8 +883,8 @@ export default function TopPanel() {
         }
       }
     }
-    // Default visible tabs: News, Music Hub, Plugins, Marketplace, Immersive
-    return ['news', 'music-hub', 'plugins', 'marketplace', 'immersive'];
+    // Default visible tabs: News, Music Hub, Plugins, Marketplace, Immersive, Monaco Editor, Events, Prompt Lab, Workflows, Movies
+    return ['news', 'music-hub', 'plugins', 'marketplace', 'immersive', 'monaco-editor', 'events', 'prompt-lab', 'workflows', 'movies'];
   });
 
   // Save visible tabs to localStorage whenever they change
@@ -1386,6 +1389,12 @@ export default function TopPanel() {
                   <TabsContent value="mcp" className="h-full mt-0">
                     <TabErrorBoundary tabName="MCP Store">
                       <MCPStore />
+                    </TabErrorBoundary>
+                  </TabsContent>
+
+                  <TabsContent value="movies" className="h-full mt-0">
+                    <TabErrorBoundary tabName="Movies">
+                      <PStreamEmbedPlugin onClose={() => {}} />
                     </TabErrorBoundary>
                   </TabsContent>
 

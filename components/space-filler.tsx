@@ -1,6 +1,6 @@
 "use client"
 
-import { ExperimentalWorkspacePanel } from "./workspace-panel"
+import { WorkspacePanel } from "./workspace-panel"
 
 /**
  * HorizontalSpaceFiller - Invisible component that fills horizontal space
@@ -23,8 +23,8 @@ export function HorizontalSpaceFiller() {
         aria-hidden="true"
       />
       
-      {/* Experimental Workspace Panel - slides in from left */}
-      <ExperimentalWorkspacePanel />
+      {/* Workspace Panel - slides in from left */}
+      <WorkspacePanel />
     </>
   )
 }

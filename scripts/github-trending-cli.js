@@ -18,7 +18,7 @@ import { spawn } from 'child_process';
 import path from 'path';
 import fs from 'fs';
 
-const GITHUB_TRENDING_URL = 'https://github.com/trending?since=daily';
+const GITHUB_TRENDING_URL = 'https://github.com/trending';
 const CLONE_BASE_PATH = path.join(process.cwd(), 'repos');
 
 /**
@@ -49,36 +49,57 @@ function fetchUrl(url) {
  */
 function parseTrendingRepos(html) {
   const repos = [];
-  const articleRegex = /<article[^>]*class="Box-row"[^>]*>([\s\S]*?)<\/article>/g;
+  const articleRegex = /<article[^>]*>([\s\S]*?)<\/article>/gi;
   let articleMatch;
   let rank = 1;
 
   while ((articleMatch = articleRegex.exec(html)) !== null) {
     const articleHtml = articleMatch[1];
-    
-    // Extract repo name and owner
-    const nameMatch = articleHtml.match(/href="\/([^"]+\/[^"]+)"[^>]*>\s*([\s\S]*?)<\//);
-    if (!nameMatch) continue;
 
-    const fullName = nameMatch[1].replace(/"/g, '').trim();
-    const [owner, name] = fullName.split('/');
-    
+    // Find repo link - skip invalid patterns
+    const linkRegex = /href="\/([^\/]+)\/([^\/"]+)"/g;
+    let linkMatch;
+    let fullName = '';
+    let owner = '';
+    let name = '';
+
+    const skipPaths = ['sponsors', 'orgs', 'trending', 'collections', 'features',
+      'security', 'customer-stories', 'enterprise', 'explore', 'topics',
+      'marketplace', 'settings', 'notifications', 'issues', 'pulls', 'followers', 'following'];
+
+    while ((linkMatch = linkRegex.exec(articleHtml)) !== null) {
+      const potentialOwner = linkMatch[1];
+      const potentialName = linkMatch[2];
+
+      if (skipPaths.includes(potentialOwner.toLowerCase()) ||
+          skipPaths.includes(potentialName.toLowerCase())) {
+        continue;
+      }
+
+      owner = potentialOwner;
+      name = potentialName;
+      fullName = `${owner}/${name}`;
+      break;
+    }
+
+    if (!fullName) continue;
+
     // Extract description
-    const descMatch = articleHtml.match(/<p[^>]*class="col-9 color-fg-muted text-sm mt-1"[^>]*>\s*([\s\S]*?)\s*<\/p>/);
-    const description = descMatch 
-      ? descMatch[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim() 
+    const descMatch = articleHtml.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+    const description = descMatch
+      ? descMatch[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
       : 'No description';
 
     // Extract language
-    const langMatch = articleHtml.match(/<span[^>]*class="color-fg-default text-sm ml-2"[^>]*>([^<]+)<\/span>/);
+    const langMatch = articleHtml.match(/class="repo-language-color"[^>]*>[^<]*<[^>]*>([^<]+)<\/span>/i);
     const language = langMatch ? langMatch[1].trim() : 'Unknown';
 
-    // Extract stars (simplified)
-    const starsMatch = articleHtml.match(/href="\/[^"]+\/stargazers"[^>]*>\s*([\d,\.]+[kKmM]?)\s*<\//);
+    // Extract stars
+    const starsMatch = articleHtml.match(/(\d[\d,\.]*[kKmM]?)\s*stars?/i);
     const stars = parseNumber(starsMatch ? starsMatch[1] : '0');
 
     // Extract forks
-    const forksMatch = articleHtml.match(/href="\/[^"]+\/forks"[^>]*>\s*([\d,\.]+[kKmM]?)\s*<\//);
+    const forksMatch = articleHtml.match(/(\d[\d,\.]*[kKmM]?)\s*forks?/i);
     const forks = parseNumber(forksMatch ? forksMatch[1] : '0');
 
     repos.push({
@@ -97,6 +118,47 @@ function parseTrendingRepos(html) {
   }
 
   return repos;
+}
+
+/**
+ * Fetch trending repos for a specific timeframe
+ */
+async function fetchTrendingForTimeframe(timeframe) {
+  const url = `${GITHUB_TRENDING_URL}?since=${timeframe}`;
+  console.error(`Fetching ${timeframe} trending from ${url}...`);
+  const html = await fetchUrl(url);
+  return parseTrendingRepos(html);
+}
+
+/**
+ * Fetch and deduplicate trending repos from multiple timeframes
+ */
+async function fetchAllTrendingRepos() {
+  const timeframes = ['weekly', 'monthly'];
+  const allRepos = [];
+
+  for (const timeframe of timeframes) {
+    try {
+      const repos = await fetchTrendingForTimeframe(timeframe);
+      allRepos.push(...repos);
+    } catch (err) {
+      console.error(`Failed to fetch ${timeframe} trending:`, err.message);
+    }
+  }
+
+  // Deduplicate by full_name
+  const seen = new Set();
+  const deduped = [];
+  for (const repo of allRepos) {
+    const key = repo.full_name.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(repo);
+    }
+  }
+
+  // Re-rank
+  return deduped.map((repo, idx) => ({ ...repo, rank: idx + 1 }));
 }
 
 /**
@@ -122,7 +184,7 @@ function parseNumber(str) {
  * Display repos in a formatted table
  */
 function displayRepos(repos) {
-  console.log('\n🔥 GitHub Trending Repositories (Daily)\n');
+  console.log('\n🔥 GitHub Trending Repositories (Weekly + Monthly)\n');
   console.log('='.repeat(80));
   
   repos.forEach((repo, idx) => {
@@ -196,9 +258,10 @@ Usage:
 Options:
   --help, -h          Show this help message
   --clone <ranks>     Clone repositories by rank (comma-separated)
-  --weekly            Fetch weekly trending instead of daily
-  --monthly           Fetch monthly trending instead of daily
   --json              Output as JSON instead of formatted text
+
+Note:
+  Fetches both weekly and monthly trending repos, deduplicated by repo URL.
 
 Examples:
   # Fetch and display trending repos
@@ -210,9 +273,6 @@ Examples:
   # Clone multiple repositories
   node scripts/github-trending-cli.js --clone 1,2,3
 
-  # Fetch weekly trending
-  node scripts/github-trending-cli.js --weekly
-
   # Output as JSON
   node scripts/github-trending-cli.js --json
 `);
@@ -223,37 +283,29 @@ Examples:
  */
 async function main() {
   const args = process.argv.slice(2);
-  
+
   // Parse arguments
   if (args.includes('--help') || args.includes('-h')) {
     showHelp();
     process.exit(0);
   }
-  
+
   const cloneIndex = args.indexOf('--clone');
-  const ranksToClone = cloneIndex !== -1 
+  const ranksToClone = cloneIndex !== -1
     ? args[cloneIndex + 1].split(',').map(n => parseInt(n.trim(), 10))
     : null;
-  
-  const useWeekly = args.includes('--weekly');
-  const useMonthly = args.includes('--monthly');
+
   const outputJson = args.includes('--json');
-  
-  const timeframe = useMonthly ? 'monthly' : useWeekly ? 'weekly' : 'daily';
-  
+
   try {
-    // Fetch trending page
-    const url = `${GITHUB_TRENDING_URL}&since=${timeframe}`;
-    const html = await fetchUrl(url);
-    
-    // Parse repositories
-    const repos = parseTrendingRepos(html);
-    
+    // Fetch trending repos from weekly and monthly, deduplicated
+    const repos = await fetchAllTrendingRepos();
+
     if (repos.length === 0) {
       console.error('❌ No repositories found. GitHub may have changed their HTML structure.');
       process.exit(1);
     }
-    
+
     // Output results
     if (outputJson) {
       console.log(JSON.stringify({ repos, fetchedAt: new Date().toISOString() }, null, 2));
@@ -270,7 +322,6 @@ async function main() {
           continue;
         }
 
-        // SECURITY: cloneRepo now returns a Promise, so we await it
         const success = await cloneRepo(repo.url, rank);
         if (success) {
           successful.push(rank);
@@ -287,7 +338,7 @@ async function main() {
       // Display formatted list
       displayRepos(repos);
     }
-    
+
   } catch (error) {
     console.error(`❌ Error: ${error.message}`);
     process.exit(1);

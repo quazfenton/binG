@@ -1021,6 +1021,16 @@ export default function InteractionPanel({
       defaultSize: { width: 800, height: 600 },
       minSize: { width: 600, height: 450 },
     },
+    {
+      id: "pstream-embed",
+      name: "Movies",
+      description: "Watch movies and TV shows from pstream.net",
+      icon: Film,
+      component: PStreamEmbedPlugin,
+      category: "media",
+      defaultSize: { width: 1000, height: 700 },
+      minSize: { width: 800, height: 600 },
+    },
   ];
 
   const [showFileSelector, setShowFileSelector] = useState(false);

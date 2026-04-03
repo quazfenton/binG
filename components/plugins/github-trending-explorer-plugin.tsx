@@ -268,7 +268,7 @@ const GitHubTrendingExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClo
               </div>
 
               {/* Repo Grid */}
-              <ScrollArea className="flex-1 p-4">
+              <div className="flex-1 overflow-y-auto p-4">
                 {isLoading ? (
                   <div className="flex items-center justify-center h-64">
                     <div className="text-center space-y-4">
@@ -391,7 +391,7 @@ const GitHubTrendingExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClo
                     ))}
                   </div>
                 )}
-              </ScrollArea>
+              </div>
             </div>
           </TabsContent>
 
