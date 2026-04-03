@@ -36,11 +36,16 @@ export default async function AuthErrorPage({
 }: {
   searchParams: Promise<{ error?: string; error_description?: string }>;
 }) {
-  const params = await searchParams;
+  let params: { error?: string; error_description?: string };
+  try {
+    params = await searchParams;
+  } catch {
+    params = { error: 'Unknown error', error_description: 'Failed to load error details.' };
+  }
   return (
     <ErrorCard error={params?.error} error_description={params?.error_description} />
   );
 }
 
 // Force dynamic rendering - this page depends on URL search params
-export const dynamicParams = true;
+export const dynamic = 'force-dynamic';

@@ -300,7 +300,8 @@ export function useIframeLoader({
     setIsFailed(false);
     setFailureReason(null);
     setErrorMessage(null);
-  }, []);
+    onLoaded?.();
+  }, [onLoaded]);
 
   const handleFailure = useCallback((error?: string) => {
     if (timeoutRef.current) {

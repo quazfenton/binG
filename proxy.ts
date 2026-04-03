@@ -142,6 +142,14 @@ export async function proxy(request: NextRequest) {
   // - qrserver.com QR code images
   // These headers should only be set on specific routes that explicitly need
   // cross-origin isolation (e.g., SharedArrayBuffer for threading).
+
+  // WebContainer preview route requires COEP/COOP for SharedArrayBuffer
+  if (request.nextUrl.pathname === '/webcontainer') {
+    response.headers.set('Cross-Origin-Embedder-Policy', 'require-corp');
+    response.headers.set('Cross-Origin-Opener-Policy', 'same-origin');
+    response.headers.set('Cross-Origin-Resource-Policy', 'cross-origin');
+  }
+
   // If you need cross-origin isolation for a specific feature, set headers
   // in that route handler instead of here.
 

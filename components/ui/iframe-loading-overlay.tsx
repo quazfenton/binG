@@ -31,14 +31,17 @@ export function IframeLoadingOverlay({
   isUsingFallback = false,
   fallbackLevel = 'none',
 }: IframeLoadingOverlayProps) {
-  if (!isLoading) return null;
+  // NOTE: useEffect must be called before any early return (rules of hooks)
+  const cappedProgress = Math.max(0, Math.min(progress, 100));
 
-  // Log fallback state for debugging (not shown to user)
   React.useEffect(() => {
     if (isUsingFallback && fallbackLevel !== 'none') {
       console.log(`[IframeLoadingOverlay] Using fallback: ${fallbackLevel}`);
     }
   }, [isUsingFallback, fallbackLevel]);
+
+  // Log fallback state for debugging (not shown to user)
+  if (!isLoading) return null;
 
   return (
     <div className="absolute inset-0 flex flex-col items-center justify-center bg-black/90 z-10 backdrop-blur-sm">
@@ -53,13 +56,13 @@ export function IframeLoadingOverlay({
         <div className="w-full h-1.5 bg-white/10 rounded-full overflow-hidden">
           <div
             className="h-full bg-gradient-to-r from-cyan-500 to-blue-500 rounded-full transition-all duration-150 ease-linear"
-            style={{ width: `${Math.min(progress, 100)}%` }}
+            style={{ width: `${cappedProgress}%` }}
           />
         </div>
 
         {/* Progress percentage */}
         <div className="flex items-center justify-between text-xs text-white/40">
-          <span>{Math.round(progress)}%</span>
+          <span>{Math.round(cappedProgress)}%</span>
           {progress > 80 && (
             <span className="flex items-center gap-1 text-yellow-400/60">
               <AlertCircle className="w-3 h-3" />

@@ -90,7 +90,7 @@ export function parseWebhookPayload(body: string): WebhookPayload {
  * @example
  * ```typescript
  * // app/api/webhooks/composio/route.ts
- * import { handleComposioWebhook } from '@/lib/platforms/composio/webhook-handler';
+ * import { handleComposioWebhook } from '@/lib/integrations/composio/webhook-handler';
  *
  * export async function POST(request: NextRequest) {
  *   return handleComposioWebhook(request);

@@ -19,7 +19,7 @@ import { sandboxBridge } from '../sandbox';
 import type { LLMMessage } from '../chat/llm-providers';
 import { detectRequestType } from '../utils/request-type-detector';
 import { normalizeToolInvocations } from '@/lib/types/tool-invocation';
-import { initializeComposioService, getComposioService, type ComposioToolRequest } from '../platforms/composio-service';
+import { initializeComposioService, getComposioService, type ComposioToolRequest } from '../integrations/composio-service';
 import { quotaManager } from '../management/quota-manager';
 
 // ===========================================

@@ -401,7 +401,9 @@ const OpenStreetMapEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }
                         handleLoadSuccess();
                       }}
                       onError={() => {
-                        setIframeError('Failed to load OpenStreetMap.');
+                        const msg = 'Failed to load OpenStreetMap. Try refreshing or use the external link button.';
+                        setIframeError(msg);
+                        console.warn('[OpenStreetMap Embed]', msg);
                         setIsLoading(false);
                       }}
                       sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"

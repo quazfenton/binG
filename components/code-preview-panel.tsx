@@ -322,6 +322,28 @@ export default function CodePreviewPanel({
   const webcontainerProcessRef = useRef<any>(null);
   const webcontainerUrlRef = useRef<string | null>(null);
 
+  // Open WebContainer preview in isolated route with COEP/COOP headers
+  const openWebContainerPreview = useCallback((files: Record<string, string>) => {
+    if (!files || Object.keys(files).length === 0) {
+      toast.error('No files to preview');
+      return;
+    }
+    try {
+      // Encode files as base64 JSON for URL transport
+      const json = JSON.stringify(files);
+      const encoded = btoa(encodeURIComponent(json));
+      // Truncate warning if too large for URL
+      if (encoded.length > 2000000) {
+        toast.warning('Project is large for WebContainer. Try Sandpack or OpenSandbox preview instead.');
+        return;
+      }
+      const url = `/webcontainer?files=${encodeURIComponent(encoded)}`;
+      window.open(url, '_blank', 'noopener,noreferrer');
+    } catch (err: any) {
+      toast.error('Failed to open WebContainer preview: ' + err.message);
+    }
+  }, []);
+
   // Track Sandpack normalization to avoid logging on every render
   const lastNormalizationRef = useRef<string>('');
 
@@ -4511,7 +4533,9 @@ root.render(<App />);` };
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => setPreviewMode('webcontainer')}
+                    onClick={() => openWebContainerPreview(
+                      manualPreviewFiles || scopedPreviewFiles || projectStructure?.files || {}
+                    )}
                     className="text-xs bg-gray-800 hover:bg-gray-700 text-white"
                   >
                     WebContainer
@@ -4685,7 +4709,9 @@ root.render(<App />);` };
                     {isCodesandboxLoading ? 'Starting...' : 'Launch Cloud IDE'}
                   </button>
                   <button
-                    onClick={() => setPreviewMode('webcontainer')}
+                    onClick={() => openWebContainerPreview(
+                      manualPreviewFiles || scopedPreviewFiles || projectStructure?.files || {}
+                    )}
                     className="px-3 py-1.5 text-xs font-medium text-white/70 hover:text-white bg-white/5 hover:bg-white/10 border border-white/10 rounded-lg transition-all duration-200 backdrop-blur-sm"
                   >
                     WebContainer
@@ -4861,7 +4887,9 @@ root.render(<App />);` };
                   <Button
                     size="sm"
                     variant="outline"
-                    onClick={() => setPreviewMode('webcontainer')}
+                    onClick={() => openWebContainerPreview(
+                      manualPreviewFiles || scopedPreviewFiles || projectStructure?.files || {}
+                    )}
                     className="text-xs bg-green-800 hover:bg-green-700 text-white"
                   >
                     Full WebContainer

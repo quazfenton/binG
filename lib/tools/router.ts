@@ -20,8 +20,8 @@ import {
 } from './capabilities';
 import type { ToolExecutionContext, ToolExecutionResult } from './tool-integration/types';
 import { getToolManager } from './index';
-import { getArcadeService } from '../platforms/arcade-service';
-import { getNangoService } from '../platforms/nango-service';
+import { getArcadeService } from '../integrations/arcade-service';
+import { getNangoService } from '../integrations/nango-service';
 import path from 'path';
 
 const logger = createLogger('Tools:CapabilityRouter');
@@ -1190,8 +1190,8 @@ class OAuthIntegrationProvider implements CapabilityProvider {
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
     try {
-      const { getNangoService } = await import('../platforms/nango-service');
-      const { getArcadeService } = await import('../platforms/arcade-service');
+      const { getNangoService } = await import('../integrations/nango-service');
+      const { getArcadeService } = await import('../integrations/arcade-service');
       const { getToolManager } = await import('../tools');
 
       switch (capabilityId) {

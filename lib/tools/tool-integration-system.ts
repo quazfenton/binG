@@ -731,7 +731,7 @@ export class ToolIntegrationManager {
       const arcadeApiKey = process.env.ARCADE_API_KEY;
       if (arcadeApiKey) {
         // Use require for dynamic import to handle missing module gracefully
-        const arcadeModule = await import('../platforms/arcade-service');
+        const arcadeModule = await import('../integrations/arcade-service');
         const getArcadeService = arcadeModule.getArcadeService;
         
         if (getArcadeService) {
@@ -798,7 +798,7 @@ export class ToolIntegrationManager {
     try {
       const arcadeApiKey = process.env.ARCADE_API_KEY;
       if (arcadeApiKey) {
-        const arcadeModule = await import('../platforms/arcade-service');
+        const arcadeModule = await import('../integrations/arcade-service');
         const getArcadeService = arcadeModule.getArcadeService;
         
         if (getArcadeService) {

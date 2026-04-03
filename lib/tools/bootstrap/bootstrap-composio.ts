@@ -35,7 +35,7 @@ export async function registerComposioTools(registry: ToolRegistry, config: Boot
     }
 
     // Import Composio service
-    const { getComposioService } = await import('../../platforms/composio-service');
+    const { getComposioService } = await import('../../integrations/composio-service');
     const composioService = getComposioService();
 
     if (!composioService) {

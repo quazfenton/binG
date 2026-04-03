@@ -1,0 +1,17 @@
+{
+  "name": "bing-monorepo",
+  "private": true,
+  "scripts": {
+    "dev:web": "pnpm --filter app dev",
+    "dev:desktop": "pnpm --filter desktop tauri dev",
+    "build:web": "pnpm --filter app build",
+    "build:desktop": "pnpm --filter desktop tauri build",
+    "start:web": "pnpm --filter app start",
+    "type-check": "pnpm --filter app type-check",
+    "lint": "pnpm --filter app lint",
+    "test": "pnpm --filter app test"
+  },
+  "devDependencies": {
+    "turbo": "^2.0.0"
+  }
+}

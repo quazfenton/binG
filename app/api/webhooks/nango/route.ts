@@ -13,7 +13,7 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getNangoService } from '@/lib/platforms/nango-service';
+import { getNangoService } from '@/lib/integrations/nango-service';
 
 export interface NangoWebhookPayload {
   type: string;

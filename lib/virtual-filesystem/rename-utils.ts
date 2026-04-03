@@ -212,10 +212,18 @@ export async function safeRename(options: RenameOptions): Promise<RenameResult> 
 
     // Emit filesystem updated event with error handling
     try {
+      // Derive scopePath from the normalized destination path (handles Windows backslashes)
+      const normalizedDestForScope = destinationPath.replace(/\\/g, '/');
+      const derivedScopePath = scopePath ?? (
+        normalizedDestForScope.includes('/')
+          ? normalizedDestForScope.slice(0, normalizedDestForScope.lastIndexOf('/'))
+          : normalizedDestForScope
+      );
+
       emitFilesystemUpdated({
         type: overwrite ? 'update' : 'create',
         path: destinationPath,
-        scopePath: scopePath ?? (destinationPath.includes('/') ? destinationPath.slice(0, destinationPath.lastIndexOf('/')) : destinationPath),
+        scopePath: derivedScopePath,
         sessionId,
         workspaceVersion,
         applied: [{

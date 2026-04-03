@@ -258,7 +258,7 @@ const ObservableEmbedPlugin: React.FC<ObservableEmbedPluginProps> = ({ onOpenWin
                   {/* Shared loading overlay with progress bar */}
                   <IframeLoadingOverlay
                     progress={loadingProgress}
-                    isLoading={isLoading}
+                    isLoading={hookIsLoading}
                     isUsingFallback={isUsingFallback}
                     fallbackLevel={fallbackLevel}
                     label={`Loading ${currentNotebook.name}`}

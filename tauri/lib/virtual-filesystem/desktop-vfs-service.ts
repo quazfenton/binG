@@ -183,10 +183,12 @@ export class DesktopVFSService {
           }
           this.syncedHashes.set(filePath, localHash);
         } catch (vfsError: any) {
-          // VFS file doesn't exist, import from local
+          // FIX: Non-ENOENT VFS read errors are real failures - don't treat as missing-file import
           if (vfsError?.code !== 'ENOENT') {
-            log.error('Error reading VFS file during import', { filePath, error: vfsError.message });
+            log.error('Error reading VFS file during import - skipping import', { filePath, error: vfsError.message });
+            return false;
           }
+          // VFS file doesn't exist, import from local
           await this.vfs.writeFile(ownerId, filePath, localContent);
           this.syncedHashes.set(filePath, localHash);
           return true;
@@ -210,7 +212,15 @@ export class DesktopVFSService {
     let imported = 0;
 
     const walk = async (currentDir: string): Promise<void> => {
-      const entries = await fs.readdir(currentDir, { withFileTypes: true });
+      let entries: fs.Dirent[];
+      try {
+        entries = await fs.readdir(currentDir, { withFileTypes: true });
+      } catch (err: any) {
+        // Skip directories that can't be read (permission errors, broken symlinks)
+        log.warn('Cannot read directory during import', { currentDir, error: err.message });
+        return;
+      }
+
       for (const entry of entries) {
         const fullPath = path.join(currentDir, entry.name);
         const relativePath = path.relative(dir, fullPath).replace(/\\/g, '/');
@@ -218,7 +228,24 @@ export class DesktopVFSService {
         // Skip hidden/system dirs
         if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
 
-        if (entry.isDirectory()) {
+        // Use lstat to detect symlinks - isDirectory() returns false for symlinks to dirs
+        let fileStats: fs.Stats;
+        try {
+          fileStats = await fs.lstat(fullPath);
+        } catch (err: any) {
+          // Broken symlink - skip
+          if (err.code === 'ENOENT') continue;
+          log.warn('Cannot stat file during import', { fullPath, error: err.message });
+          continue;
+        }
+
+        // Skip symlinks to avoid importing files outside the import directory
+        if (fileStats.isSymbolicLink()) {
+          log.debug('Skipping symlink during import', { fullPath, target: fileStats });
+          continue;
+        }
+
+        if (fileStats.isDirectory()) {
           await walk(fullPath);
         } else {
           try {
@@ -226,8 +253,11 @@ export class DesktopVFSService {
             await this.vfs.writeFile(ownerId, relativePath, content);
             this.syncedHashes.set(relativePath, this.hashContent(content));
             imported++;
-          } catch {
-            // Skip binary or unreadable files
+          } catch (err: any) {
+            // Skip binary or unreadable files, but log unexpected errors
+            if (err.code !== 'ENOENT' && err.code !== 'EISDIR') {
+              log.warn('Failed to import file', { fullPath, error: err.message });
+            }
           }
         }
       }

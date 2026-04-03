@@ -45,7 +45,7 @@ import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from 
 import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from '@/lib/chat/n8n-agent-service'
 import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from '@/lib/chat/custom-fallback-service'
 import { enhancedLLMService, type EnhancedLLMRequest } from '@/lib/chat/enhanced-llm-service'
-import { initializeComposioService, getComposioService, type ComposioToolRequest } from '@/lib/platforms/composio-service'
+import { initializeComposioService, getComposioService, type ComposioToolRequest } from '@/lib/integrations/composio-service'
 
 // Import tools
 import { getToolManager, getUnifiedToolRegistry, getToolDiscoveryService, getToolErrorHandler } from '@/lib/tools'

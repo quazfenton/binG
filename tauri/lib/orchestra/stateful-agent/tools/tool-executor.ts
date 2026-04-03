@@ -388,13 +388,15 @@ export class ToolExecutor {
       }
       currentContent = readResult.content;
     } else {
-      currentContent = this.context.vfs?.[path] ?? '';
-      if (currentContent === undefined && this.context.vfs) {
+      // FIX: Check for undefined BEFORE applying default to detect missing files
+      const vfsContent = this.context.vfs?.[path];
+      if (vfsContent === undefined && this.context.vfs) {
         return {
           success: false,
           error: `File not found in VFS: ${path}`,
         };
       }
+      currentContent = vfsContent ?? '';
     }
 
     // Perform the diff/replace
@@ -489,13 +491,15 @@ export class ToolExecutor {
       }
       currentContent = readResult.content;
     } else {
-      currentContent = this.context.vfs?.[path] ?? '';
-      if (currentContent === undefined && this.context.vfs) {
+      // FIX: Check for undefined BEFORE applying default to detect missing files
+      const vfsContent = this.context.vfs?.[path];
+      if (vfsContent === undefined && this.context.vfs) {
         return {
           success: false,
           error: `File not found in VFS: ${path}`,
         };
       }
+      currentContent = vfsContent ?? '';
     }
 
     // Only support TypeScript/JavaScript files
