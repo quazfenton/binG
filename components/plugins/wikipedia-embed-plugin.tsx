@@ -339,7 +339,9 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                         handleLoadSuccess();
                       }}
                       onError={() => {
-                        setIframeError('Failed to load Wikipedia. Note: Wikipedia restricts embedding in some contexts. Try using the external link button.');
+                        const msg = 'Wikipedia embedding may be restricted by the site. Try refreshing, checking your network connection, or using the external link button to open in a new tab.';
+                        setIframeError(msg);
+                        console.warn('[Wikipedia Embed]', msg);
                         setIsReloading(false);
                       }}
                       sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"

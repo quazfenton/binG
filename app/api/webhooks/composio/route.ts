@@ -11,7 +11,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import {
   handleComposioWebhookWithPayload,
   verifyWebhookSignature,
-} from '@/lib/platforms/composio/webhook-handler';
+} from '@/lib/integrations/composio/webhook-handler';
 import { checkRateLimitMiddleware } from '@/lib/middleware/rate-limit';
 import { addCORSHeaders } from '@/lib/middleware/cors';
 import { secureRandomId } from '@/lib/utils/crypto-random';

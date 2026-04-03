@@ -290,6 +290,13 @@ export async function GET(request: NextRequest) {
 
   // Auto-prepend https:// if protocol is missing
   if (!url.startsWith('http://') && !url.startsWith('https://')) {
+    // Reject URLs with ambiguous or unsupported schemes
+    if (url.includes('://')) {
+      return NextResponse.json(
+        { error: 'Unsupported URL scheme. Only HTTP and HTTPS are allowed.' },
+        { status: 400 }
+      );
+    }
     url = `https://${url}`;
   }
 
@@ -350,6 +357,133 @@ export async function GET(request: NextRequest) {
     );
   }
 
+  // Asset mode: serve non-HTML resources with strict content-type validation
+  if (mode === 'asset') {
+    const ALLOWED_ASSET_TYPES = [
+      'image/jpeg', 'image/png', 'image/gif', 'image/webp', 'image/svg+xml', 'image/x-icon',
+      'text/css',
+      'application/javascript', 'text/javascript',
+      'font/woff', 'font/woff2', 'application/font-woff', 'application/font-woff2', 'font/ttf', 'application/x-font-ttf',
+      'audio/mpeg', 'audio/ogg', 'audio/wav', 'audio/webm',
+      'video/mp4', 'video/webm', 'video/ogg',
+      'application/octet-stream',
+    ];
+
+    if (!ALLOWED_ASSET_TYPES.some(t => normalizedContentType.startsWith(t))) {
+      return NextResponse.json(
+        { error: `Disallowed asset type: ${normalizedContentType}` },
+        { status: 415 }
+      );
+    }
+
+    if (!response.body) {
+      return NextResponse.json(
+        { error: 'No response body from upstream' },
+        { status: 500 }
+      );
+    }
+
+    // Stream with size/time enforcement
+    const assetStreamController = new AbortController();
+    let assetTimeoutId = setTimeout(() => assetStreamController.abort(), FETCH_TIMEOUT);
+    let assetBytesReceived = 0;
+    const assetTransformStream = new TransformStream<Uint8Array, Uint8Array>({
+      transform(chunk, controller) {
+        clearTimeout(assetTimeoutId);
+        assetTimeoutId = setTimeout(() => assetStreamController.abort(), FETCH_TIMEOUT);
+
+        assetBytesReceived += chunk.byteLength;
+        if (assetBytesReceived > MAX_CONTENT_SIZE) {
+          clearTimeout(assetTimeoutId);
+          assetStreamController.abort();
+          response.body?.cancel().catch(() => {});
+          controller.error(new Error('Asset exceeds max size'));
+          return;
+        }
+        controller.enqueue(chunk);
+      },
+      flush() {
+        clearTimeout(assetTimeoutId);
+      },
+    });
+    const assetLimitedStream = response.body.pipeThrough(assetTransformStream);
+
+    return new NextResponse(assetLimitedStream, {
+      status: response.status,
+      headers: {
+        'Content-Type': contentType,
+        'X-Proxied': 'true',
+        'X-Final-Url': finalUrl,
+        'Cache-Control': response.headers.get('cache-control') || 'public, max-age=300',
+        // Restrict CORS to parent origin for embedded assets
+        'Access-Control-Allow-Origin': '*',
+        'Access-Control-Allow-Methods': 'GET, OPTIONS',
+        // Do NOT forward Set-Cookie from upstream
+      },
+    });
+  }
+
+  // For iframe mode with HTML, apply basic sanitization to strip dangerous elements
+  // This is a lightweight regex-based approach; for production-grade sanitization,
+  // consider adding jsdom + DOMPurify or sanitize-html as dependencies
+  if (allowHtml && (normalizedContentType.startsWith('text/html') || normalizedContentType.startsWith('application/xhtml+xml'))) {
+    const htmlText = await response.text();
+
+    // Strip dangerous elements
+    const sanitized = htmlText
+      // Remove script tags and content
+      .replace(/<script[\s\S]*?<\/script>/gi, '')
+      // Remove self-closing script tags
+      .replace(/<script[^>]*\/>/gi, '')
+      // Remove iframe tags
+      .replace(/<iframe[\s\S]*?<\/iframe>/gi, '')
+      // Remove object tags
+      .replace(/<object[\s\S]*?<\/object>/gi, '')
+      // Remove embed tags
+      .replace(/<embed[^>]*\/?>/gi, '')
+      // Remove form tags (keep content)
+      .replace(/<\/?form[^>]*>/gi, '')
+      // Remove base tags (prevent URL rewriting attacks)
+      .replace(/<base[^>]*\/?>/gi, '')
+      // Remove meta tags with http-equiv (prevent header injection)
+      .replace(/<meta\s+http-equiv[^>]*\/?>/gi, '')
+      // Remove event handler attributes
+      .replace(/\s+on\w+\s*=\s*(?:"[^"]*"|'[^']*'|[^\s>]+)/gi, '')
+      // Remove javascript: URLs
+      .replace(/href\s*=\s*["']?\s*javascript:[^"'\s>]*/gi, 'href="#"')
+      .replace(/src\s*=\s*["']?\s*javascript:[^"'\s>]*/gi, '');
+
+    const sanitizedHeaders: Record<string, string> = {
+      'Content-Type': 'text/html; charset=utf-8',
+      'X-Proxied': 'true',
+      'X-Final-Url': finalUrl,
+      'X-Original-Url': url,
+      // Strict CSP for sanitized HTML
+      'Content-Security-Policy': [
+        "default-src 'none'",
+        "img-src 'self' data: https:",
+        "style-src 'self' 'unsafe-inline'",
+        "font-src 'self' data: https:",
+        "connect-src 'self'",
+        "media-src 'self' https:",
+        "object-src 'none'",
+        "script-src 'none'",
+        "frame-ancestors 'self'",
+      ].join('; '),
+      'X-Frame-Options': 'SAMEORIGIN',
+      'Permissions-Policy': 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()',
+      'Access-Control-Allow-Origin': '*',
+      'Access-Control-Allow-Methods': 'GET, OPTIONS',
+    };
+
+    console.log('[Proxy] Sanitized HTML for iframe mode:', safeLogUrl(finalUrl));
+
+    return new NextResponse(sanitized, {
+      status: 200,
+      headers: sanitizedHeaders,
+    });
+  }
+
   // Stream response body with content size enforcement
   if (!response.body) {
     return NextResponse.json(
@@ -373,6 +507,8 @@ export async function GET(request: NextRequest) {
       if (bytesReceived > MAX_CONTENT_SIZE) {
         clearTimeout(timeoutId);
         streamController.abort();
+        // Cancel upstream to prevent resource leaks
+        response.body?.cancel().catch(() => {});
         controller.error(new Error(`Content size exceeds ${MAX_CONTENT_SIZE / 1024 / 1024}MB limit`));
         return;
       }
@@ -399,15 +535,30 @@ export async function GET(request: NextRequest) {
     'Access-Control-Allow-Headers': '*',
   };
 
-  // For iframe mode, add relaxed framing headers
+  // For iframe mode, add strict security headers
   if (allowHtml) {
     headers['X-Frame-Options'] = 'SAMEORIGIN';
-    // Allow the proxied content to be framed by our own origin
-    headers['Content-Security-Policy'] = "frame-ancestors 'self'";
+    // Strict CSP for proxied HTML: block scripts, restrict resources to self/proxy only
+    headers['Content-Security-Policy'] = [
+      "default-src 'none'",
+      "img-src 'self' data: https:",
+      "style-src 'self' 'unsafe-inline'",
+      "font-src 'self' data: https:",
+      "connect-src 'self'",
+      "media-src 'self' https:",
+      "object-src 'none'",
+      "script-src 'none'",
+      "frame-ancestors 'self'",
+    ].join('; ');
+    // Strict permissions policy for proxied HTML
+    headers['Permissions-Policy'] = 'camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(), accelerometer=()';
   } else {
     // Default mode: strict framing
     headers['X-Frame-Options'] = 'DENY';
   }
+
+  // NOTE: Upstream Set-Cookie headers are intentionally NOT forwarded to prevent
+  // cookie leakage from proxied sites into the parent origin's cookie scope.
 
   // Preserve cache headers from upstream
   const cacheControl = response.headers.get('cache-control');

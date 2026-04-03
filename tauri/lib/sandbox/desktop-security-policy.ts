@@ -234,12 +234,12 @@ class DesktopSecurityPolicy {
         'nmap',
       ];
       
-      // Use command-boundary regex matching instead of substring matching
-      const networkCommandRegex = /(^|[\s;|&])(curl|wget|ssh|scp|sftp|nc|netcat|telnet|ftp|nmap)(?=$|[\s;|&])/i;
-      const networkMatch = lowerTrimmed.match(networkCommandRegex);
+      // Use basename-matched tokens for network commands (same as blockedCommands)
+      const networkCommands = ['curl', 'wget', 'ssh', 'scp', 'sftp', 'nc', 'netcat', 'telnet', 'ftp', 'nmap'];
+      const isNetworkBlocked = commandTokens.some(token => networkCommands.includes(token));
       
-      if (networkMatch) {
-        const blockedCommand = networkMatch[2].toLowerCase();
+      if (isNetworkBlocked) {
+        const blockedCommand = commandTokens.find(token => networkCommands.includes(token)) || 'unknown';
         log.warn('Blocked network command (blockNetworkCommands enabled)', { command: trimmed, pattern: blockedCommand });
         this.logAudit({
           command: trimmed,
@@ -322,8 +322,14 @@ class DesktopSecurityPolicy {
       }
       
       for (const allowed of this.config.allowedDirectories) {
-        // Canonicalize allowed directories too
-        const canonicalAllowed = fs.realpathSync(pathModule.resolve(allowed));
+        // Wrap per-directory resolution in try-catch so one bad entry doesn't block the rest
+        let canonicalAllowed: string;
+        try {
+          canonicalAllowed = fs.realpathSync(pathModule.resolve(allowed));
+        } catch {
+          // Skip invalid allowed directories
+          continue;
+        }
         // Use path separator to ensure directory boundary - prevents sibling path bypass
         // e.g., /allowed must not match /allowed-file
         const normalizedResolvedPath = canonicalPath.replace(/\\/g, '/');

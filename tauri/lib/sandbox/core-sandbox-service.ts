@@ -38,6 +38,7 @@ export const coreSandboxService = {
       'daytona',
       'runloop',
       'blaxel',
+      'blaxel-mcp',
       'sprites',
       'codesandbox',
       'webcontainer',

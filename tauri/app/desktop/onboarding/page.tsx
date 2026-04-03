@@ -195,7 +195,6 @@ export default function DesktopOnboardingPage() {
       };
 
       localStorage.setItem('desktop_settings', JSON.stringify(settings));
-      localStorage.setItem('onboarding_completed', 'true');
 
       // Save API key to secure storage (Tauri store only - no insecure fallbacks)
       if (data.apiKey) {
@@ -209,6 +208,9 @@ export default function DesktopOnboardingPage() {
           return;
         }
       }
+
+      // Only mark onboarding complete after secure API key storage succeeds
+      localStorage.setItem('onboarding_completed', 'true');
 
       // Also save to Tauri store if available
       try {

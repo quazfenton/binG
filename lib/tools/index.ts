@@ -106,7 +106,7 @@ export {
   type ArcadeTool,
   type ArcadeConnection,
   type ArcadeExecutionResult,
-} from '../platforms/arcade-service';
+} from '../integrations/arcade-service';
 
 // Nango service
 export {
@@ -119,7 +119,7 @@ export {
   type NangoProxyRequest,
   type NangoProxyResponse,
   type NangoExecutionResult,
-} from '../platforms/nango-service';
+} from '../integrations/nango-service';
 
 // Smithery provider
 export {
@@ -266,4 +266,4 @@ export {
   type ComposioServiceConfig,
   type ComposioToolRequest,
   type ComposioToolResponse,
-} from '../platforms/composio-service';
+} from '../integrations/composio-service';

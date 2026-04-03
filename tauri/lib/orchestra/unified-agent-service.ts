@@ -978,10 +978,26 @@ async function attemptFallback(
         }
       }
 
-      // Pass visitedModes to recursive fallback calls to properly track tried modes
-      const result = await attemptFallback(config, fallbackMode, error, visitedModes);
+      // Execute the fallback mode directly instead of recursively calling attemptFallback
+      let result: UnifiedAgentResult;
+      switch (fallbackMode) {
+        case 'v2-native':
+          result = await runV2Native(config);
+          break;
+        case 'v2-containerized':
+          result = await runV2Containerized(config);
+          break;
+        case 'v2-local':
+          result = await runV2Local(config);
+          break;
+        case 'v1-api':
+          result = await runV1Api(config);
+          break;
+        default:
+          continue;
+      }
 
-      if (result) {
+      if (result.success) {
         // Update metadata to show the full chain of modes that were tried
         const fallbackTriedModes = result.metadata?.triedModes || [fallbackMode];
         return {

@@ -250,15 +250,20 @@ export async function cloneRepoToVFS(
       }
     } finally {
       filesProcessed++;
-      report({
-        phase: "writing",
-        filesProcessed,
-        filesWritten,
-        filesSkipped,
-        totalFiles: fileEntries.length,
-        currentFile: zipEntryPath,
-      });
+      // Always release the semaphore slot even if report() throws
       release();
+      try {
+        report({
+          phase: "writing",
+          filesProcessed,
+          filesWritten,
+          filesSkipped,
+          totalFiles: fileEntries.length,
+          currentFile: zipEntryPath,
+        });
+      } catch {
+        // Ignore report errors
+      }
     }
   });
 

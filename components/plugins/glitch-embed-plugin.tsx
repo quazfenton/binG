@@ -283,7 +283,7 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
                     {/* Shared loading overlay with progress bar */}
                     <IframeLoadingOverlay
                       progress={loadingProgress}
-                      isLoading={isLoading}
+                      isLoading={hookIsLoading}
                       isUsingFallback={isUsingFallback}
                       fallbackLevel={fallbackLevel}
                       label={`Loading ${currentProject.name}`}
