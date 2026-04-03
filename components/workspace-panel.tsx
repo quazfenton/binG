@@ -815,7 +815,11 @@ export function WorkspacePanel() {
       const saved = localStorage.getItem('workspaceVisibleTabs');
       if (saved) {
         try {
-          return JSON.parse(saved) as PanelTab[];
+          const parsed = JSON.parse(saved);
+          // Validate shape before using parsed localStorage data as PanelTab[]
+          if (Array.isArray(parsed) && parsed.every((t): t is PanelTab => typeof t === 'string')) {
+            return parsed;
+          }
         } catch {
           // Fallback to defaults if parsing fails
         }

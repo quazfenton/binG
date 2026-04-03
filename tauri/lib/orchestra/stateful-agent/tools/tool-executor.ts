@@ -91,11 +91,13 @@ export class ToolExecutor {
    * Redact sensitive params from tool execution logging
    */
   private redactParams(toolName: string, params: Record<string, any>): Record<string, any> {
-    const sensitiveKeys = new Set(['content', 'diff', 'replace', 'password', 'token', 'secret', 'apiKey', 'credential']);
+    // Use lowercase keys in set for case-insensitive matching
+    const sensitiveKeys = new Set(['content', 'diff', 'replace', 'password', 'token', 'secret', 'apikey', 'credential']);
     const redacted: Record<string, any> = {};
     
     for (const [key, value] of Object.entries(params)) {
-      if (sensitiveKeys.has(key.toLowerCase()) || key.toLowerCase().includes('secret') || key.toLowerCase().includes('password')) {
+      const lowerKey = key.toLowerCase();
+      if (sensitiveKeys.has(lowerKey) || lowerKey.includes('secret') || lowerKey.includes('password')) {
         redacted[key] = '[REDACTED]';
       } else if (typeof value === 'string' && value.length > 500) {
         redacted[key] = value.substring(0, 100) + '...[truncated]';
@@ -378,7 +380,7 @@ export class ToolExecutor {
     let currentContent: string;
     if (this.context.sandboxHandle) {
       const readResult = await this.context.sandboxHandle.readFile(path);
-      if (!readResult.success || !readResult.content) {
+      if (!readResult.success || readResult.content === undefined) {
         return {
           success: false,
           error: readResult.error || `Failed to read file: ${path}`,
@@ -386,8 +388,8 @@ export class ToolExecutor {
       }
       currentContent = readResult.content;
     } else {
-      currentContent = this.context.vfs?.[path] || '';
-      if (!currentContent && this.context.vfs) {
+      currentContent = this.context.vfs?.[path] ?? '';
+      if (currentContent === undefined && this.context.vfs) {
         return {
           success: false,
           error: `File not found in VFS: ${path}`,
@@ -479,7 +481,7 @@ export class ToolExecutor {
     let currentContent: string;
     if (this.context.sandboxHandle) {
       const readResult = await this.context.sandboxHandle.readFile(path);
-      if (!readResult.success || !readResult.content) {
+      if (!readResult.success || readResult.content === undefined) {
         return {
           success: false,
           error: readResult.error || `Failed to read file: ${path}`,
@@ -487,8 +489,8 @@ export class ToolExecutor {
       }
       currentContent = readResult.content;
     } else {
-      currentContent = this.context.vfs?.[path] || '';
-      if (!currentContent && this.context.vfs) {
+      currentContent = this.context.vfs?.[path] ?? '';
+      if (currentContent === undefined && this.context.vfs) {
         return {
           success: false,
           error: `File not found in VFS: ${path}`,
@@ -639,9 +641,11 @@ export class ToolExecutor {
     if (cwd) {
       const { getDesktopConfig } = await import('@/lib/utils/desktop-env');
       const config = getDesktopConfig();
-      const resolvedCwd = require('path').resolve(cwd);
-      const workspaceRoot = require('path').resolve(config.workspaceRoot);
-      if (!resolvedCwd.startsWith(workspaceRoot)) {
+      const path = require('path');
+      const resolvedCwd = path.resolve(cwd);
+      const resolvedWorkspace = path.resolve(config.workspaceRoot);
+      const isWithinWorkspace = resolvedCwd === resolvedWorkspace || resolvedCwd.startsWith(resolvedWorkspace + path.sep);
+      if (!isWithinWorkspace) {
         return {
           success: false,
           error: 'Working directory must be within workspace',

@@ -12,7 +12,7 @@ import path from 'node:path';
 import fs from 'node:fs';
 import { isDesktopMode } from '@/lib/utils/desktop-env';
 import { createLogger } from '@/lib/utils/logger';
-import type { MCPServerConfig, MCPTransportConfig } from './types';
+import type { MCPServerConfig, MCPTransportConfig } from '@/lib/mcp/types';
 
 const log = createLogger('DesktopMCP');
 
@@ -124,6 +124,17 @@ export class DesktopMCPManager extends EventEmitter {
       server.status = 'running';
       server.startedAt = new Date();
 
+      // Wait for spawn event or error before marking as running
+      await new Promise<void>((resolve, reject) => {
+        child.once('spawn', () => resolve());
+        child.once('error', (err) => {
+          server.status = 'error';
+          server.error = err.message;
+          this.emit('serverError', serverId, err);
+          reject(err);
+        });
+      });
+
       // Log stdout/stderr
       child.stdout?.on('data', (data: Buffer) => {
         this.writeLog(serverId, 'stdout', data.toString());
@@ -174,28 +185,13 @@ export class DesktopMCPManager extends EventEmitter {
     const process = server.process;
 
     return new Promise((resolve, reject) => {
-      let resolved = false;
-
-      // Remove any existing listeners to prevent memory leaks and duplicate calls
-      process.removeAllListeners('exit');
-      process.removeAllListeners('error');
-
-      // Use once: true to ensure listeners are only triggered once
+      // Use once listeners to simply resolve/reject the promise.
+      // Do NOT mutate state or re-emit events - startServer's listeners already handle that.
       const exitHandler = () => {
-        if (resolved) return;
-        resolved = true;
-        server.status = 'stopped';
-        server.process = undefined;
-        this.emit('serverStopped', serverId);
         resolve();
       };
 
       const errorHandler = (error: Error) => {
-        if (resolved) return;
-        resolved = true;
-        server.status = 'error';
-        server.error = error.message;
-        this.emit('serverError', serverId, error);
         reject(error);
       };
 
@@ -207,23 +203,17 @@ export class DesktopMCPManager extends EventEmitter {
 
       if (!gracefulKilled) {
         // Process already dead, resolve immediately
-        exitHandler();
+        resolve();
         return;
       }
 
-      // Force kill after 5 seconds with guaranteed cleanup
+      // Force kill after 5 seconds if still running
       setTimeout(() => {
-        if (server.process && server.status !== 'stopped') {
-          const forceKilled = server.process.kill('SIGKILL');
-          if (!forceKilled) {
-            // Force kill failed, clean up anyway
-            server.status = 'stopped';
-            server.process = undefined;
-            this.emit('serverStopped', serverId);
-            if (!resolved) {
-              resolved = true;
-              resolve();
-            }
+        if (server.process?.pid) {
+          try {
+            process.kill('SIGKILL');
+          } catch {
+            // Process may already be dead
           }
         }
       }, 5000);

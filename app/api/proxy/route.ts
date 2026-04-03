@@ -270,10 +270,16 @@ export async function HEAD(request: NextRequest) {
 
 /**
  * GET /api/proxy - Proxy external URL
+ * 
+ * Supports two modes:
+ * - Default: API/data proxy (blocks HTML for security)
+ * - iframe mode: Proxies HTML for iframe embedding (?mode=iframe)
  */
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   let url = searchParams.get('url');
+  const mode = searchParams.get('mode'); // 'iframe' for HTML proxying
+  const allowHtml = mode === 'iframe';
 
   if (!url) {
     return NextResponse.json(
@@ -287,7 +293,7 @@ export async function GET(request: NextRequest) {
     url = `https://${url}`;
   }
 
-  console.log('[Proxy] Request received:', safeLogUrl(url));
+  console.log('[Proxy] Request received:', safeLogUrl(url), { mode });
 
   // Validate URL
   const validation = await validateProxyUrl(url);
@@ -318,20 +324,20 @@ export async function GET(request: NextRequest) {
       { status: 400 }
     );
   }
-  
+
   const contentType = contentTypeHeader;
   const normalizedContentType = contentType.split(';')[0].trim().toLowerCase();
 
-  // Block HTML/XHTML responses to prevent same-origin attacks
-  if (normalizedContentType.startsWith('text/html') || normalizedContentType.startsWith('application/xhtml+xml')) {
+  // Block HTML/XHTML responses unless explicitly requested for iframe mode
+  if ((normalizedContentType.startsWith('text/html') || normalizedContentType.startsWith('application/xhtml+xml')) && !allowHtml) {
     return NextResponse.json(
-      { error: 'HTML content is not allowed through the proxy for security reasons' },
+      { error: 'HTML content is not allowed through the proxy. Use ?mode=iframe for iframe embedding.', hint: 'Add &mode=iframe to enable HTML proxying' },
       { status: 415 }
     );
   }
 
   // Log if content type is unexpected
-  if (!ALLOWED_CONTENT_TYPES.some(allowed => normalizedContentType.startsWith(allowed))) {
+  if (!ALLOWED_CONTENT_TYPES.some(allowed => normalizedContentType.startsWith(allowed)) && !allowHtml) {
     console.log('[Proxy] Unusual content type:', normalizedContentType);
   }
 
@@ -355,14 +361,14 @@ export async function GET(request: NextRequest) {
   // Create a transform stream that enforces content size limit and keeps timeout alive
   const streamController = new AbortController();
   let timeoutId = setTimeout(() => streamController.abort(), FETCH_TIMEOUT);
-  
+
   let bytesReceived = 0;
   const transformStream = new TransformStream<Uint8Array, Uint8Array>({
     transform(chunk, controller) {
       // Reset timeout on each chunk received
       clearTimeout(timeoutId);
       timeoutId = setTimeout(() => streamController.abort(), FETCH_TIMEOUT);
-      
+
       bytesReceived += chunk.byteLength;
       if (bytesReceived > MAX_CONTENT_SIZE) {
         clearTimeout(timeoutId);
@@ -386,16 +392,22 @@ export async function GET(request: NextRequest) {
     'X-Proxied': 'true',
     'X-Final-Url': finalUrl,
     'X-Original-Url': url,
-    
+
     // CORS headers for iframe consumption
     'Access-Control-Allow-Origin': '*',
     'Access-Control-Allow-Methods': 'GET, OPTIONS',
     'Access-Control-Allow-Headers': '*',
-    
-    // Relax framing headers for proxied content
-    'X-Frame-Options': 'SAMEORIGIN',
-    'Content-Security-Policy': "frame-ancestors 'self' *",
   };
+
+  // For iframe mode, add relaxed framing headers
+  if (allowHtml) {
+    headers['X-Frame-Options'] = 'SAMEORIGIN';
+    // Allow the proxied content to be framed by our own origin
+    headers['Content-Security-Policy'] = "frame-ancestors 'self'";
+  } else {
+    // Default mode: strict framing
+    headers['X-Frame-Options'] = 'DENY';
+  }
 
   // Preserve cache headers from upstream
   const cacheControl = response.headers.get('cache-control');
@@ -413,7 +425,7 @@ export async function GET(request: NextRequest) {
     headers['Last-Modified'] = lastModified;
   }
 
-  console.log('[Proxy] Successfully proxied:', safeLogUrl(finalUrl));
+  console.log('[Proxy] Successfully proxied:', safeLogUrl(finalUrl), { mode, htmlAllowed: allowHtml });
 
   // Return proxied response with size-limited stream
   return new NextResponse(limitedStream, {

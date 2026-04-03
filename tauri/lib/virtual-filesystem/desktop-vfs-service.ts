@@ -94,6 +94,15 @@ export class DesktopVFSService {
         // Local file may not exist
       }
     }
+
+    // Clean up hash cache for deleted path and its children
+    const prefix = `${targetPath.replace(/\/+$/, '')}/`;
+    for (const key of Array.from(this.syncedHashes.keys())) {
+      if (key === targetPath || key.startsWith(prefix)) {
+        this.syncedHashes.delete(key);
+      }
+    }
+
     return result;
   }
 
@@ -173,15 +182,22 @@ export class DesktopVFSService {
             await this.vfs.writeFile(ownerId, filePath, localContent);
           }
           this.syncedHashes.set(filePath, localHash);
-        } catch {
+        } catch (vfsError: any) {
           // VFS file doesn't exist, import from local
+          if (vfsError?.code !== 'ENOENT') {
+            log.error('Error reading VFS file during import', { filePath, error: vfsError.message });
+          }
           await this.vfs.writeFile(ownerId, filePath, localContent);
           this.syncedHashes.set(filePath, localHash);
           return true;
         }
       }
-    } catch {
-      // Local file doesn't exist, that's fine
+    } catch (error: any) {
+      // Only ignore missing local file (ENOENT), rethrow other errors
+      if (error?.code !== 'ENOENT') {
+        log.error('Error importing local file', { filePath, error: error.message });
+        throw error;
+      }
     }
     return false;
   }
@@ -197,7 +213,7 @@ export class DesktopVFSService {
       const entries = await fs.readdir(currentDir, { withFileTypes: true });
       for (const entry of entries) {
         const fullPath = path.join(currentDir, entry.name);
-        const relativePath = path.relative(this.localRoot, fullPath).replace(/\\/g, '/');
+        const relativePath = path.relative(dir, fullPath).replace(/\\/g, '/');
 
         // Skip hidden/system dirs
         if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;

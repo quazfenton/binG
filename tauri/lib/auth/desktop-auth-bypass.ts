@@ -73,7 +73,7 @@ export function shouldBypassAuth(request: NextRequest): boolean {
     '/api/agent/stream',
   ];
 
-  return bypassPaths.some((p) => path.startsWith(p));
+  return bypassPaths.some((p) => path === p || path.startsWith(`${p}/`));
 }
 
 /**

@@ -189,7 +189,7 @@ export default function DesktopOnboardingPage() {
         maxMemoryMB: 4096,
         auditEnabled: true,
         llmProvider: data.llmProvider,
-        apiKey: data.apiKey,
+        // apiKey intentionally excluded from localStorage; stored via secure Tauri store
         useLocalLLM: data.useLocalLLM,
         localLLMUrl: data.localLLMUrl,
       };
@@ -197,23 +197,26 @@ export default function DesktopOnboardingPage() {
       localStorage.setItem('desktop_settings', JSON.stringify(settings));
       localStorage.setItem('onboarding_completed', 'true');
 
-      // Save API key to secure storage (Tauri store preferred, localStorage as fallback)
+      // Save API key to secure storage (Tauri store only - no insecure fallbacks)
       if (data.apiKey) {
         const envKey = `${data.llmProvider.toUpperCase()}_API_KEY`;
         try {
-          // Try Tauri secure storage first
           await tauriInvoke.saveSecret(envKey, data.apiKey);
-        } catch {
-          // Fallback to localStorage with encryption warning
-          // NOTE: In production, use proper encryption or require Tauri store
-          localStorage.setItem(envKey, data.apiKey);
-          log.warn('API key stored in localStorage (insecure). Use Tauri store in production.');
+        } catch (err: any) {
+          log.error('Failed to save API key to secure storage', err);
+          setError('Failed to securely store API key. Please ensure Tauri desktop storage is available and try again.');
+          setSaving(false);
+          return;
         }
       }
 
       // Also save to Tauri store if available
       try {
-        await tauriInvoke.saveSettings(settings);
+        const { saveSettings } = await import('@/lib/tauri/invoke-bridge');
+        const result = await saveSettings(settings);
+        if (!result.success) {
+          log.warn('Tauri store save failed', result.error);
+        }
       } catch {
         // Tauri store not available
       }

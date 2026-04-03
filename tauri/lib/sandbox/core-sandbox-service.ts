@@ -27,18 +27,41 @@ export const coreSandboxService = {
   },
   executeCommand: async (sandboxId: string, command: string, opts?: { timeout?: number }) => {
     const service = new SandboxService()
-    return service.executeCommand(sandboxId, command)
+    const handle = await service.getSandbox(sandboxId)
+    return handle.executeCommand(command, undefined, opts?.timeout)
   },
   destroySandbox: async (sandboxId: string) => {
     const service = new SandboxService()
-    // FIX: Don't report success from a no-op destroy path - fail loudly instead
-    try {
-      // Try to destroy via provider - this would need proper implementation
-      // For now, we should fail since we can't actually destroy
-      return { success: false, error: 'destroySandbox not fully implemented - use SandboxService.destroyWorkspace()' }
-    } catch (error: any) {
-      return { success: false, error: error.message }
+    // Try to destroy via provider - find the provider that owns this sandbox
+    const providerTypes: SandboxProviderType[] = [
+      'desktop',
+      'daytona',
+      'runloop',
+      'blaxel',
+      'sprites',
+      'codesandbox',
+      'webcontainer',
+      'webcontainer-filesystem',
+      'webcontainer-spawn',
+      'opensandbox',
+      'opensandbox-code-interpreter',
+      'opensandbox-agent',
+      'microsandbox',
+      'e2b',
+      'mistral-agent',
+      'mistral',
+      'vercel-sandbox',
+    ]
+    for (const providerType of providerTypes) {
+      try {
+        const provider = await getSandboxProvider(providerType)
+        await provider.destroySandbox(sandboxId)
+        return { success: true }
+      } catch {
+        // try next provider
+      }
     }
+    return { success: false, error: `Sandbox ${sandboxId} not found on any provider` }
   },
 }
 
@@ -250,7 +273,13 @@ export class SandboxService {
 
     // Only use warm pool when no custom config is specified
     // Custom configs (language, resources, env vars) require fresh sandbox
-    if (process.env.SANDBOX_WARM_POOL === 'true' && !config && preferredType === this.primaryProviderType) {
+    // Disable warm pool for desktop provider to avoid provider mismatch
+    if (
+      process.env.SANDBOX_WARM_POOL === 'true' &&
+      !config &&
+      preferredType === this.primaryProviderType &&
+      this.primaryProviderType !== 'desktop'
+    ) {
       log.debug('Attempting to acquire sandbox from warm pool')
       try {
         handle = await warmPool.acquire(userId)

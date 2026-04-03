@@ -1845,8 +1845,8 @@ root.render(<App />);`,
         for (const binding of serverBindings) {
           const escapedBinding = binding.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
           transformed = transformed.replace(
-            new RegExp(`\\b${escapedBinding}\\s*\\([^)]*\\)`, 'g'),
-            "/* SSR not available in browser */ ({ body: '', head: '' })"
+            new RegExp(`(^|[^\\w$])${escapedBinding}\\s*\\((?:[^)(]|\\([^)(]*\\))*\\)`, 'gm'),
+            "$1/* SSR not available in browser */ ({ body: '', head: '' })"
           );
         }
         

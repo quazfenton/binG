@@ -16,6 +16,7 @@ import { Label } from "../ui/label";
 import { ExternalLink, RefreshCw, BarChart2, BarChart3, Monitor } from "lucide-react";
 import useIframeLoader from '@/hooks/use-iframe-loader';
 import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
+import { IframeLoadingOverlay } from '../ui/iframe-loading-overlay';
 
 export interface ObservableEmbedPluginProps {
   onOpenWindow?: (notebookId: string, title: string) => void;
@@ -48,11 +49,14 @@ const ObservableEmbedPlugin: React.FC<ObservableEmbedPluginProps> = ({ onOpenWin
     retryCount,
     canRetry,
     isUsingFallback,
+    fallbackLevel,
     fallbackUrl,
+    loadingProgress,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
+    handleLoadSuccess,
   } = useIframeLoader({
     url: currentNotebook?.embedUrl || '',
     timeout: 30000,
@@ -236,7 +240,7 @@ const ObservableEmbedPlugin: React.FC<ObservableEmbedPluginProps> = ({ onOpenWin
             </div>
 
             {/* Embed iframe */}
-            <div className="border rounded-lg overflow-hidden" style={{ height: "700px" }}>
+            <div className="border rounded-lg overflow-hidden relative" style={{ height: "700px" }}>
               {isFailed ? (
                 <div className="w-full h-full">
                   <IframeUnavailableScreen
@@ -250,13 +254,24 @@ const ObservableEmbedPlugin: React.FC<ObservableEmbedPluginProps> = ({ onOpenWin
                   />
                 </div>
               ) : (
-                <iframe
-                  src={isUsingFallback && fallbackUrl ? fallbackUrl : currentNotebook.embedUrl}
-                  className="w-full h-full"
-                  title={`Observable Notebook: ${currentNotebook.name}`}
-                  allow="accelerometer; ambient-light-sensor; camera; encrypted-media; geolocation; gyroscope; microphone; midi; usb; vr; xr-spatial-tracking"
-                  sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
-                />
+                <>
+                  {/* Shared loading overlay with progress bar */}
+                  <IframeLoadingOverlay
+                    progress={loadingProgress}
+                    isLoading={isLoading}
+                    isUsingFallback={isUsingFallback}
+                    fallbackLevel={fallbackLevel}
+                    label={`Loading ${currentNotebook.name}`}
+                  />
+                  <iframe
+                    src={isUsingFallback && fallbackUrl ? fallbackUrl : currentNotebook.embedUrl}
+                    className="w-full h-full"
+                    title={`Observable Notebook: ${currentNotebook.name}`}
+                    allow="accelerometer; ambient-light-sensor; camera; encrypted-media; geolocation; gyroscope; microphone; midi; usb; vr; xr-spatial-tracking"
+                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals allow-downloads"
+                    onLoad={handleLoadSuccess}
+                  />
+                </>
               )}
             </div>
             

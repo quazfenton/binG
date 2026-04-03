@@ -92,7 +92,7 @@ export default function DesktopSettingsPage() {
   const loadSystemInfo = async () => {
     try {
       const info = await tauriInvoke.getSystemInfo();
-      setSystemInfo(info);
+      setSystemInfo(info ?? {});
     } catch (err: any) {
       log.error('Failed to load system info', err);
     }
@@ -109,7 +109,11 @@ export default function DesktopSettingsPage() {
 
       // Also save to Tauri store if available
       try {
-        await tauriInvoke.saveSettings(settings);
+        const tauriResult = await tauriInvoke.saveSettings(settings);
+        if (!tauriResult.success) {
+          log.warn('Tauri store save failed', tauriResult.error);
+          setWarning('Settings saved locally, but failed to sync with desktop store.');
+        }
       } catch (tauriErr: any) {
         // Tauri store failed, warn user about partial save
         log.warn('Tauri store save failed', tauriErr);
@@ -421,7 +425,11 @@ export default function DesktopSettingsPage() {
                   </div>
                   <div>
                     <Label className="text-muted-foreground">Total Memory</Label>
-                    <p className="font-medium">{Math.round(systemInfo.totalMemory / 1024 / 1024 / 1024)}GB</p>
+                    <p className="font-medium">
+                      {typeof systemInfo.totalMemory === 'number'
+                        ? `${Math.round(systemInfo.totalMemory / 1024 / 1024 / 1024)}GB`
+                        : 'Unknown'}
+                    </p>
                   </div>
                   <div>
                     <Label className="text-muted-foreground">Home Directory</Label>

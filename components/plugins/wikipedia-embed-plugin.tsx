@@ -26,6 +26,7 @@ import {
 import { toast } from 'sonner';
 import useIframeLoader from '@/hooks/use-iframe-loader';
 import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
+import { IframeLoadingOverlay } from '../ui/iframe-loading-overlay';
 
 interface BookmarkEntry {
   url: string;
@@ -60,11 +61,14 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     retryCount,
     canRetry,
     isUsingFallback,
+    fallbackLevel,
     fallbackUrl,
+    loadingProgress,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
+    handleLoadSuccess,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
@@ -303,15 +307,6 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
 
               {/* Iframe */}
               <div className="flex-1 relative bg-amber-950">
-                {isLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-amber-950/80 z-10">
-                    <div className="text-center space-y-4">
-                      <RefreshCw className="w-8 h-8 animate-spin mx-auto text-amber-500" />
-                      <p className="text-amber-200/60">Loading Wikipedia...</p>
-                    </div>
-                  </div>
-                )}
-
                 {isFailed || iframeError ? (
                   <div className="absolute inset-0">
                     <IframeUnavailableScreen
@@ -325,20 +320,33 @@ const WikipediaEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
                     />
                   </div>
                 ) : (
-                  <iframe
-                    key={iframeKey}
-                    src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
-                    className="w-full h-full border-0"
-                    title="Wikipedia"
-                    onLoad={() => { setIsReloading(false); }}
-                    onError={() => {
-                      setIframeError('Failed to load Wikipedia. Note: Wikipedia restricts embedding in some contexts. Try using the external link button.');
-                      setIsReloading(false);
-                    }}
-                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
-                    allow="fullscreen"
-                    referrerPolicy="no-referrer"
-                  />
+                  <>
+                    {/* Shared loading overlay with progress bar */}
+                    <IframeLoadingOverlay
+                      progress={loadingProgress}
+                      isLoading={isLoading}
+                      isUsingFallback={isUsingFallback}
+                      fallbackLevel={fallbackLevel}
+                      label="Loading Wikipedia"
+                    />
+                    <iframe
+                      key={iframeKey}
+                      src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
+                      className="w-full h-full border-0"
+                      title="Wikipedia"
+                      onLoad={() => {
+                        setIsReloading(false);
+                        handleLoadSuccess();
+                      }}
+                      onError={() => {
+                        setIframeError('Failed to load Wikipedia. Note: Wikipedia restricts embedding in some contexts. Try using the external link button.');
+                        setIsReloading(false);
+                      }}
+                      sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
+                      allow="fullscreen"
+                      referrerPolicy="no-referrer"
+                    />
+                  </>
                 )}
               </div>
 

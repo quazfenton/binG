@@ -707,15 +707,16 @@ export default function MessageBubble({
                   </blockquote>
                 ),
                 a: ({ children, href, ...props }) => {
-                  // Validate href before processing
-                  const isValidHref = typeof href === 'string' && href.trim().length > 0;
-                  const isEmbeddable = isValidHref && isEmbeddableUrl(href);
-                  const embedInfo = isValidHref ? transformToEmbed(href) : null;
+                  // Normalize href once and use the normalized value for all checks
+                  const normalizedHref = typeof href === 'string' ? href.trim() : '';
+                  const isValidHref = normalizedHref.length > 0;
+                  const isEmbeddable = isValidHref && isEmbeddableUrl(normalizedHref);
+                  const embedInfo = isValidHref ? transformToEmbed(normalizedHref) : null;
                   const suggestedPlugin = embedInfo?.suggestedPluginId;
 
                   // SECURITY: Validate URL scheme to prevent XSS via javascript: URLs
-                  const safeHref = isValidHref && /^(https?:|mailto:|tel:)/i.test(href)
-                    ? href
+                  const safeHref = isValidHref && /^(https?:|mailto:|tel:)/i.test(normalizedHref)
+                    ? normalizedHref
                     : '#';
 
                   return (
@@ -1093,7 +1094,7 @@ export default function MessageBubble({
                         compareWithGit={false}
                         showUnsynced={false}
                         isFullContent={!hasUnifiedDiff} // Let EnhancedDiffViewer auto-detect if unsure
-                        fullyExpanded={true} // Always show full content (no "Show all" button)
+                        fullyExpanded={false} // Keep large diffs bounded but allow scrolling
                       />
                     );
                   })}

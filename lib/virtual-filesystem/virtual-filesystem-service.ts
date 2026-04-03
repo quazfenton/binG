@@ -242,11 +242,12 @@ export class VirtualFilesystemService {
 
     // Persist workspace FIRST before emitting events
     // This ensures events only fire for successfully saved changes
+    const persistedVersion = workspace.version;
     await this.persistWorkspace(ownerId, workspace);
 
-    // Emit events AFTER successful persistence
-    this.emitFileChange(ownerId, normalizedPath, changeType, workspace.version);
-    this.emitSnapshotChange(ownerId, workspace.version);
+    // Emit events AFTER successful persistence - use captured version to avoid race
+    this.emitFileChange(ownerId, normalizedPath, changeType, persistedVersion);
+    this.emitSnapshotChange(ownerId, persistedVersion);
 
     // NOTE: Central emitFilesystemUpdated() deferred - keeping existing per-component emit implementations
     // Future TODO: Centralize all emits here for consistency:

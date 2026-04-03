@@ -689,11 +689,12 @@ function getCodeExtension(language: string): string {
   return extensions[language] || 'txt'
 }
 
-function getCodeCommand(language: string, filePath: string, args: string[]): string {
+function getCodeCommand(language: string, filePath: string, args: unknown[]): string {
   // FIX: Escape filePath and args to prevent command injection
   // Use single quotes and escape any embedded single quotes
   const safeFilePath = filePath.replace(/'/g, "'\\''");
-  const safeArgs = args.map(a => `'${a.replace(/'/g, "'\\''")}'`).join(' ');
+  // Ensure args are strings before calling replace
+  const safeArgs = (args as string[]).map(a => String(a).replace(/'/g, "'\\''")).join(' ');
   
   const commands: Record<string, string> = {
     python: `python3 '${safeFilePath}' ${safeArgs}`,

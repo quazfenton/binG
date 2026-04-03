@@ -36,6 +36,7 @@ import { toast } from 'sonner';
 import { transformToEmbed, isEmbeddableUrl, detectEmbeddableLinks, EmbedInfo, formatUrlForDisplay, getSecondaryFallbackUrl } from '@/lib/utils/iframe-helper';
 import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
 import useIframeLoader from '@/hooks/use-iframe-loader';
+import { IframeLoadingOverlay } from '../ui/iframe-loading-overlay';
 
 interface BookmarkEntry {
   url: string;
@@ -136,10 +137,12 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
     isUsingFallback,
     fallbackLevel,
     fallbackUrl,
+    loadingProgress,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
+    handleLoadSuccess,
   } = useIframeLoader({
     url: currentUrl,
     timeout: 30000,
@@ -433,15 +436,6 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
 
               {/* Iframe */}
               <div className="flex-1 relative bg-slate-950">
-                {isLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-slate-950/80 z-10">
-                    <div className="text-center space-y-4">
-                      <RefreshCw className="w-8 h-8 animate-spin mx-auto text-blue-500" />
-                      <p className="text-slate-400">Loading embed...</p>
-                    </div>
-                  </div>
-                )}
-
                 {isFailed || iframeError ? (
                   <div className="absolute inset-0">
                     <IframeUnavailableScreen
@@ -459,27 +453,37 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
                     />
                   </div>
                 ) : (
-                  <iframe
-                    key={iframeKey}
-                    src={isUsingFallback && fallbackUrl ? fallbackUrl : currentUrl}
-                    className="w-full h-full border-0"
-                    title="Embed"
-                    onLoad={() => {
-                      setIsReloading(false);
-                      setIframeError(null);
-                      // Do not restart loader on successful iframe load.
-                    }}
-                    onError={() => {
-                      setIframeError('Failed to load content. This site may block embedding.');
-                      // Auto-trigger cascading fallback on error (proxy → webfuse)
-                      setTimeout(() => {
-                        handleFallback();
-                      }, 500);
-                    }}
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-autoplay allow-top-navigation allow-top-navigation-by-user-activation"
-                    allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
-                    referrerPolicy="no-referrer"
-                  />
+                  <>
+                    {/* Shared loading overlay with progress bar */}
+                    <IframeLoadingOverlay
+                      progress={loadingProgress}
+                      isLoading={isLoading}
+                      isUsingFallback={isUsingFallback}
+                      fallbackLevel={fallbackLevel}
+                      label="Loading embed"
+                    />
+                    <iframe
+                      key={iframeKey}
+                      src={isUsingFallback && fallbackUrl ? fallbackUrl : currentUrl}
+                      className="w-full h-full border-0"
+                      title="Embed"
+                      onLoad={() => {
+                        setIsReloading(false);
+                        setIframeError(null);
+                        handleLoadSuccess();
+                      }}
+                      onError={() => {
+                        setIframeError('Failed to load content. This site may block embedding.');
+                        // Auto-trigger cascading fallback on error (proxy → webfuse)
+                        setTimeout(() => {
+                          handleFallback();
+                        }, 500);
+                      }}
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-presentation allow-autoplay allow-top-navigation allow-top-navigation-by-user-activation"
+                      allow="autoplay; encrypted-media; fullscreen; picture-in-picture"
+                      referrerPolicy="no-referrer"
+                    />
+                  </>
                 )}
               </div>
 

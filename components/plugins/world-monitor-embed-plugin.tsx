@@ -9,6 +9,7 @@ import { Tabs, TabsList, TabsTrigger, TabsContent } from '../ui/tabs';
 import { ScrollArea } from '../ui/scroll-area';
 import useIframeLoader from '@/hooks/use-iframe-loader';
 import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
+import { IframeLoadingOverlay } from '../ui/iframe-loading-overlay';
 import {
   Globe,
   X,
@@ -71,11 +72,14 @@ const WorldMonitorEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
     retryCount,
     canRetry,
     isUsingFallback,
+    fallbackLevel,
     fallbackUrl,
+    loadingProgress,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
+    handleLoadSuccess,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
@@ -283,15 +287,6 @@ const WorldMonitorEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
 
               {/* Iframe */}
               <div className="flex-1 relative bg-slate-950">
-                {isLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-slate-900/80 z-10">
-                    <div className="text-center space-y-4">
-                      <RefreshCw className="w-8 h-8 animate-spin mx-auto text-blue-500" />
-                      <p className="text-slate-400">Loading World Monitor...</p>
-                    </div>
-                  </div>
-                )}
-
                 {isFailed || iframeError ? (
                   <div className="absolute inset-0">
                     <IframeUnavailableScreen
@@ -305,20 +300,33 @@ const WorldMonitorEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose })
                     />
                   </div>
                 ) : iframeUrl ? (
-                  <iframe
-                    key={iframeKey}
-                    src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
-                    className="w-full h-full border-0"
-                    title="World Monitor"
-                    onLoad={() => setIsLoading(false)}
-                    onError={() => {
-                      setIframeError('Failed to load the website. The site may not allow embedding.');
-                      setIsLoading(false);
-                    }}
-                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
-                    allow="fullscreen"
-                    referrerPolicy="no-referrer"
-                  />
+                  <>
+                    {/* Shared loading overlay with progress bar */}
+                    <IframeLoadingOverlay
+                      progress={loadingProgress}
+                      isLoading={hookIsLoading || isLoading}
+                      isUsingFallback={isUsingFallback}
+                      fallbackLevel={fallbackLevel}
+                      label="Loading World Monitor"
+                    />
+                    <iframe
+                      key={iframeKey}
+                      src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
+                      className="w-full h-full border-0"
+                      title="World Monitor"
+                      onLoad={() => {
+                        setIsLoading(false);
+                        handleLoadSuccess();
+                      }}
+                      onError={() => {
+                        setIframeError('Failed to load the website. The site may not allow embedding.');
+                        setIsLoading(false);
+                      }}
+                      sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-top-navigation allow-top-navigation-by-user-activation"
+                      allow="fullscreen"
+                      referrerPolicy="no-referrer"
+                    />
+                  </>
                 ) : (
                   <div className="absolute inset-0 flex items-center justify-center text-slate-500">
                     <p>Enter a URL to load content</p>

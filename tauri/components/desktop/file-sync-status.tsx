@@ -55,7 +55,13 @@ export function FileSyncStatus({
       } else {
         setStatus('synced');
       }
-      previousStatusRef.current = status;
+      // Compute next status once and store that value to avoid stale ref
+      const nextStatus: SyncStatus = isSyncing
+        ? 'syncing'
+        : pendingCount > 0
+        ? 'pending'
+        : 'synced';
+      previousStatusRef.current = nextStatus;
     }, 5000);
 
     return () => clearInterval(interval);
@@ -172,8 +178,13 @@ export function FileSyncStatus({
 /**
  * Compact sync status indicator for toolbar
  */
-export function SyncIndicator({ className }: { className?: string }) {
-  const [status, setStatus] = useState<SyncStatus>('synced');
+export function SyncIndicator({
+  className,
+  status = 'synced',
+}: {
+  className?: string;
+  status?: SyncStatus;
+}) {
   const [isDesktop, setIsDesktop] = useState(false);
 
   useEffect(() => {

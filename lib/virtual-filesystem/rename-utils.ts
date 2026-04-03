@@ -215,7 +215,7 @@ export async function safeRename(options: RenameOptions): Promise<RenameResult> 
       emitFilesystemUpdated({
         type: overwrite ? 'update' : 'create',
         path: destinationPath,
-        scopePath,  // Use passed scopePath, not derived from destinationPath
+        scopePath: scopePath ?? (destinationPath.includes('/') ? destinationPath.slice(0, destinationPath.lastIndexOf('/')) : destinationPath),
         sessionId,
         workspaceVersion,
         applied: [{

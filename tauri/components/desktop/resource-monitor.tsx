@@ -49,9 +49,28 @@ export function ResourceMonitor({
     setIsDesktop(desktop);
 
     if (desktop) {
-      loadResources();
-      const interval = setInterval(loadResources, refreshInterval);
-      return () => clearInterval(interval);
+      // Use sequential polling to avoid overlapping fetches
+      let timeout: ReturnType<typeof setTimeout> | null = null;
+      let cancelled = false;
+      let inFlight = false;
+
+      const poll = async () => {
+        if (cancelled || inFlight) return;
+        inFlight = true;
+        await loadResources();
+        inFlight = false;
+        if (!cancelled) {
+          timeout = setTimeout(poll, refreshInterval);
+        }
+      };
+
+      // Start the polling loop
+      void poll();
+
+      return () => {
+        cancelled = true;
+        if (timeout) clearTimeout(timeout);
+      };
     } else {
       setLoading(false);
     }
@@ -168,12 +187,13 @@ export function ResourceMonitor({
             </Tooltip>
             <span className="text-sm font-medium">{memoryPercent.toFixed(1)}%</span>
           </div>
-          {/* FIX: Apply color to the indicator via indicator class, not the container */}
-          <Progress
-            value={memoryPercent}
-            className="h-2"
-            indicatorClassName={getMemoryColor(memoryPercent)}
-          />
+          {/* Custom progress bar with colored indicator */}
+          <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+            <div
+              className={`h-full transition-all ${getMemoryColor(memoryPercent)}`}
+              style={{ width: `${Math.min(100, Math.max(0, memoryPercent))}%` }}
+            />
+          </div>
         </div>
 
         {/* Disk */}
@@ -192,10 +212,13 @@ export function ResourceMonitor({
             </Tooltip>
             <span className="text-sm font-medium">{diskPercent.toFixed(1)}%</span>
           </div>
-          <Progress
-            value={diskPercent}
-            className={`h-2 ${getDiskColor(diskPercent)}`}
-          />
+          {/* Custom progress bar with colored indicator */}
+          <div className="h-2 w-full overflow-hidden rounded-full bg-secondary">
+            <div
+              className={`h-full transition-all ${getDiskColor(diskPercent)}`}
+              style={{ width: `${Math.min(100, Math.max(0, diskPercent))}%` }}
+            />
+          </div>
         </div>
 
         {showDetails && (

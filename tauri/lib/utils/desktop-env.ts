@@ -29,7 +29,7 @@ export function isTauriRuntime(): boolean {
 export function isDesktopMode(): boolean {
   if (isTauriRuntime()) return true;
   if (typeof process !== 'undefined' && process.env) {
-    return process.env.DESKTOP_MODE === 'true';
+    return process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
   }
   return false;
 }
@@ -188,8 +188,11 @@ function validateWorkspacePath(path: string): boolean {
     
     // Check if path exists and is writable
     if (fs.existsSync(path)) {
-      // Try to write a test file
-      const testFile = pathModule.join(path, '.write-test');
+      // Try to write a test file with unique name to avoid race conditions
+      const testFile = pathModule.join(
+        path,
+        `.write-test-${process.pid}-${Date.now()}-${Math.random().toString(36).slice(2)}`
+      );
       try {
         fs.writeFileSync(testFile, 'test');
         fs.unlinkSync(testFile);
