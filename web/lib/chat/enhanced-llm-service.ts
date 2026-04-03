@@ -38,6 +38,16 @@ export interface EnhancedLLMRequest extends LLMRequest {
   conversationId?: string;
   requestId?: string;
   task?: 'chat' | 'code' | 'embedding' | 'image' | 'tool' | 'agent' | 'ocr'; // Task-specific provider selection
+  /** Request a bundled context pack (file tree + contents) for LLM */
+  contextPack?: {
+    format?: 'markdown' | 'xml' | 'json' | 'plain';
+    maxTotalSize?: number;
+    includePatterns?: string[];
+    excludePatterns?: string[];
+    maxLinesPerFile?: number;
+  };
+  /** Auto-attach relevant files to subsequent LLM calls as agent discovers areas to edit */
+  autoAttachFiles?: boolean;
 }
 
 export interface LLMEndpointConfig {
@@ -151,20 +161,74 @@ export class EnhancedLLMService {
   }
 
   async generateResponse(request: EnhancedLLMRequest): Promise<LLMResponse> {
-    const { enableTools, enableSandbox, userId, conversationId, requestId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, task, ...llmRequest } = request;
+    const { enableTools, enableSandbox, userId, conversationId, requestId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, task, apiKeys, contextPack, autoAttachFiles, ...llmRequest } = request;
     const requestStartTime = Date.now();
 
     // Use explicitly passed provider first, then task-specific provider, then default
     const actualProvider = provider || (task ? getProviderForTask(task) : getProviderForTask('chat'));
-    const actualModel = task 
-      ? getModelForTask(task, llmRequest.model) 
+    const actualModel = task
+      ? getModelForTask(task, llmRequest.model)
       : llmRequest.model || 'default';  // Default model if none specified
+
+    // Override API key with user-provided key if available for this provider
+    const userApiKey = apiKeys?.[actualProvider];
+    if (userApiKey) {
+      chatLogger.debug('Using user-provided API key', { requestId, provider: actualProvider });
+    }
+
+    // Generate context pack if requested — bundle workspace files into LLM-readable format
+    let contextPackBundle = '';
+    if (contextPack && userId && conversationId) {
+      try {
+        const { contextPackService } = await import('@/lib/virtual-filesystem/context-pack-service');
+        const rootPath = conversationId.split(':').pop() || '/';
+        const pack = await contextPackService.generateContextPack(userId, rootPath, contextPack);
+        contextPackBundle = pack.bundle;
+        chatLogger.debug('Context pack generated', { requestId }, {
+          fileCount: pack.fileCount,
+          totalSize: pack.totalSize,
+          estimatedTokens: pack.estimatedTokens,
+        });
+      } catch (error: any) {
+        chatLogger.warn('Context pack generation failed, continuing without it', { requestId }, {
+          error: error.message,
+        });
+      }
+    }
+
+    // Inject context pack bundle into system message if available
+    let processedMessages = llmRequest.messages;
+    if (contextPackBundle) {
+      processedMessages = [
+        ...llmRequest.messages,
+      ];
+      // Prepend context pack to first system message or add as new system message
+      const systemMsgIdx = processedMessages.findIndex(m => m.role === 'system');
+      const contextPrefix = `\n\n--- WORKSPACE CONTEXT ---\n${contextPackBundle}\n--- END CONTEXT ---\n`;
+      if (systemMsgIdx >= 0) {
+        const sysMsg = processedMessages[systemMsgIdx];
+        processedMessages[systemMsgIdx] = {
+          ...sysMsg,
+          content: typeof sysMsg.content === 'string'
+            ? sysMsg.content + contextPrefix
+            : sysMsg.content,
+        };
+      } else {
+        processedMessages = [
+          { role: 'system' as const, content: contextPrefix },
+          ...processedMessages,
+        ];
+      }
+    }
 
     chatLogger.debug('Enhanced LLM service processing request', { requestId, provider: actualProvider, model: actualModel, userId }, {
       task,
       enableTools,
       enableSandbox,
       fallbackProviders: fallbackProviders?.length,
+      usesUserApiKey: !!userApiKey,
+      hasContextPack: !!contextPackBundle,
+      autoAttachFiles: !!autoAttachFiles,
     });
 
     // If tools are enabled and user ID is provided, process tools
@@ -201,7 +265,9 @@ export class EnhancedLLMService {
           provider: actualProvider,
           model: actualModel,
           toolCalls: toolResult.toolCalls,
-          toolResults: toolResult.toolResults
+          toolResults: toolResult.toolResults,
+          // Pass user API key to provider after tool execution
+          apiKey: userApiKey,
         };
 
         return await this.callProviderWithEnhancedClient(actualProvider, updatedRequest, retryOptions, enableCircuitBreaker, requestId);
@@ -224,8 +290,15 @@ export class EnhancedLLMService {
 
     // Try primary provider first
     try {
-      const fullRequest = { ...llmRequest, provider: actualProvider, model: actualModel }
-      
+      const fullRequest = {
+        ...llmRequest,
+        messages: processedMessages,
+        provider: actualProvider,
+        model: actualModel,
+        // Use user's API key if provided, otherwise the provider config's key will be used
+        apiKey: userApiKey,
+      }
+
       // Log request start for telemetry
       await chatRequestLogger.logRequestStart(
         requestId || `llm-${Date.now()}`,
@@ -323,8 +396,11 @@ export class EnhancedLLMService {
 
           const fallbackRequest = {
             ...llmRequest,
+            messages: processedMessages,
             model: supportedModel,
-            provider: fallbackProvider
+            provider: fallbackProvider,
+            // Pass user API key to fallback provider
+            apiKey: userApiKey,
           };
 
           const response = await this.callProviderWithEnhancedClient(
@@ -375,11 +451,55 @@ export class EnhancedLLMService {
   }
 
   async *generateStreamingResponse(request: EnhancedLLMRequest): AsyncGenerator<StreamingResponse> {
-    const { provider, fallbackProviders, requestId, ...llmRequest } = request;
+    const { provider, fallbackProviders, requestId, apiKeys, contextPack, ...llmRequest } = request;
     const primaryProvider = provider || getProviderForTask('chat');
     const streamStartTime = Date.now();
 
-    chatLogger.debug('Starting streaming request', { requestId, provider: primaryProvider, model: llmRequest.model });
+    // Use user-provided API key if available for this provider
+    const userApiKey = apiKeys?.[primaryProvider];
+    if (userApiKey) {
+      chatLogger.debug('Using user-provided API key (streaming)', { requestId, provider: primaryProvider });
+    }
+
+    // Generate context pack if requested — bundle workspace files
+    let contextPackBundle = '';
+    if (contextPack && request.userId && request.conversationId) {
+      try {
+        const { contextPackService } = await import('@/lib/virtual-filesystem/context-pack-service');
+        const rootPath = request.conversationId.split(':').pop() || '/';
+        const pack = await contextPackService.generateContextPack(request.userId, rootPath, contextPack);
+        contextPackBundle = pack.bundle;
+        chatLogger.debug('Context pack generated (streaming)', { requestId }, {
+          fileCount: pack.fileCount,
+          totalSize: pack.totalSize,
+        });
+      } catch (error: any) {
+        chatLogger.warn('Context pack generation failed (streaming)', { requestId }, {
+          error: error.message,
+        });
+      }
+    }
+
+    // Inject context pack into system message
+    let processedMessages = llmRequest.messages;
+    if (contextPackBundle) {
+      const systemMsgIdx = processedMessages.findIndex(m => m.role === 'system');
+      const contextPrefix = `\n\n--- WORKSPACE CONTEXT ---\n${contextPackBundle}\n--- END CONTEXT ---\n`;
+      if (systemMsgIdx >= 0) {
+        const sysMsg = processedMessages[systemMsgIdx];
+        processedMessages = processedMessages.map((m, i) =>
+          i === systemMsgIdx
+            ? { ...m, content: typeof m.content === 'string' ? m.content + contextPrefix : m.content }
+            : m
+        );
+      } else {
+        processedMessages = [{ role: 'system' as const, content: contextPrefix }, ...processedMessages];
+      }
+    }
+
+    chatLogger.debug('Starting streaming request', { requestId, provider: primaryProvider, model: llmRequest.model }, {
+      hasContextPack: !!contextPackBundle,
+    });
 
     try {
       // NEW: Use Vercel AI SDK for unified streaming across all providers
@@ -451,10 +571,11 @@ export class EnhancedLLMService {
         yield* streamWithVercelAI({
           provider: vercelProvider,
           model: llmRequest.model || 'default',
-          messages: llmRequest.messages,
+          messages: processedMessages,
           temperature: llmRequest.temperature || 0.7,
           maxTokens: llmRequest.maxTokens || 4096,
-          apiKey: llmRequest.apiKey,
+          // Use user's API key if provided, otherwise the provider config's key
+          apiKey: userApiKey || llmRequest.apiKey,
           maxRetries: 0,
           tools: vercelTools,
           toolCallStreaming: !!vercelTools,
@@ -470,8 +591,8 @@ export class EnhancedLLMService {
 
       // Fallback to legacy streaming for unsupported providers
       chatLogger.warn('Provider not supported by Vercel AI SDK, using legacy streaming', { provider: primaryProvider });
-      
-      const fullRequest = { ...llmRequest, provider: primaryProvider };
+
+      const fullRequest = { ...llmRequest, messages: processedMessages, provider: primaryProvider, apiKey: userApiKey || llmRequest.apiKey };
       yield* llmService.generateStreamingResponse(fullRequest);
       const streamLatency = Date.now() - streamStartTime;
       chatLogger.info('Legacy streaming completed successfully', { requestId, provider: primaryProvider, model: llmRequest.model }, {
@@ -507,8 +628,11 @@ export class EnhancedLLMService {
         chatLogger.info('Falling back to streaming provider', { requestId, provider: fallbackProvider, model: supportedModel });
         const fallbackRequest = {
           ...llmRequest,
+          messages: processedMessages,
           model: supportedModel,
-          provider: fallbackProvider
+          provider: fallbackProvider,
+          // Pass user API key to fallback provider
+          apiKey: userApiKey,
         };
 
         yield* llmService.generateStreamingResponse(fallbackRequest);
@@ -538,12 +662,18 @@ export class EnhancedLLMService {
       throw new Error(`Provider ${provider} not configured`);
     }
 
+    // Use request's API key if provided (user override), otherwise fall back to server config
+    const effectiveApiKey = (request.apiKey && request.apiKey.trim() !== '')
+      ? request.apiKey
+      : config.apiKey;
+
     // CRITICAL: Validate API key is present before making request
-    if (!config.apiKey || config.apiKey.trim() === '') {
+    if (!effectiveApiKey || effectiveApiKey.trim() === '') {
       chatLogger.error(`Provider ${provider} missing API key`, { requestId, provider }, {
-        hasApiKey: !!config.apiKey,
-        apiKeyLength: config.apiKey?.length || 0,
+        hasApiKey: !!effectiveApiKey,
+        apiKeyLength: effectiveApiKey?.length || 0,
         envVarName: this.getEnvVarNameForProvider(provider),
+        isUserProvided: !!request.apiKey,
       });
       throw new Error(`${provider} API key not configured. Please set ${this.getEnvVarNameForProvider(provider)} in your environment variables.`);
     }
@@ -557,10 +687,8 @@ export class EnhancedLLMService {
     const providerRequest = {
       ...request,
       messages: filteredMessages,
-      // CRITICAL FIX: Pass API key explicitly in request for providers that support it
-      // This ensures API keys from env vars are used even if llmService wasn't initialized properly
-      // Note: Using 'apiKey' (singular) which is read by generateResponse method
-      apiKey: config.apiKey,
+      // Use effective API key (user-provided or server config)
+      apiKey: effectiveApiKey,
     };
 
     chatLogger.debug('Calling provider', { requestId, provider, model: request.model }, {

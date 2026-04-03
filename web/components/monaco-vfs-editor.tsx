@@ -54,6 +54,7 @@ import {
   Video,
   FileQuestion,
 } from "lucide-react";
+import { clipboard } from "@bing/platform/clipboard";
 
 // ============================================================================
 // Types
@@ -579,7 +580,7 @@ export function MonacoVFSEditor({
     if (!currentFile) return;
 
     try {
-      await navigator.clipboard.writeText(currentFile.content);
+      await clipboard.writeText(currentFile.content);
       toast.success("Content copied to clipboard");
     } catch (error) {
       toast.error("Failed to copy content");

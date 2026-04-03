@@ -21,6 +21,7 @@ import {
 } from 'lucide-react';
 import type { LLMProvider } from '../lib/chat/llm-providers';
 import { useMultiRotatingStatements } from '@/hooks/use-rotating-statements';
+import { clipboard } from "@bing/platform/clipboard";
 
 interface ModelResponse {
   provider: string;
@@ -131,6 +132,9 @@ export default function MultiModelComparison({
         ));
         
         const token = (await import('@bing/platform/secrets')).secrets.get('auth-token');
+        const { secrets } = await import('@bing/platform/secrets');
+        const storedApiKeys = await secrets.get('user-api-keys');
+        const apiKeys = storedApiKeys ? JSON.parse(storedApiKeys) : undefined;
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: {
@@ -144,7 +148,8 @@ export default function MultiModelComparison({
             temperature: 0.7,
             maxTokens: 4096,
             stream: true,
-            agentMode: 'v1'
+            agentMode: 'v1',
+            apiKeys: Object.keys(apiKeys || {}).length > 0 ? apiKeys : undefined,
           }),
         });
 
@@ -283,6 +288,9 @@ export default function MultiModelComparison({
         ));
         
         const token = (await import('@bing/platform/secrets')).secrets.get('auth-token');
+        const { secrets } = await import('@bing/platform/secrets');
+        const storedApiKeys = await secrets.get('user-api-keys');
+        const apiKeys = storedApiKeys ? JSON.parse(storedApiKeys) : undefined;
         const response = await fetch('/api/chat', {
           method: 'POST',
           headers: {
@@ -296,7 +304,8 @@ export default function MultiModelComparison({
             temperature: 0.7,
             maxTokens: 4096,
             stream: true,
-            agentMode: 'v1'
+            agentMode: 'v1',
+            apiKeys: Object.keys(apiKeys || {}).length > 0 ? apiKeys : undefined,
           }),
         });
 
@@ -415,7 +424,7 @@ export default function MultiModelComparison({
   };
 
   const handleCopy = (text: string) => {
-    navigator.clipboard.writeText(text);
+    clipboard.writeText(text);
   };
 
   const getResponseTime = (response: ModelResponse) => {

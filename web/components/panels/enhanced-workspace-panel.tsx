@@ -56,6 +56,7 @@ import {
   Copy,
   RefreshCw,
 } from "lucide-react";
+import { clipboard } from "@bing/platform/clipboard";
 
 // ============================================================================
 // Types
@@ -100,7 +101,7 @@ function MessageBubble({ message, isStreaming }: { message: Message; isStreaming
 
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(message.content);
+      await clipboard.writeText(message.content);
       setIsCopied(true);
       toast.success("Message copied");
       setTimeout(() => setIsCopied(false), 2000);

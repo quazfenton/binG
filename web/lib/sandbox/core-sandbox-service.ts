@@ -6,6 +6,7 @@ import { provisionBaseImage, warmPool } from './base-image'
 import { randomUUID } from 'crypto'
 import { quotaManager } from '../management/quota-manager'
 import { createLogger } from '@/lib/utils/logger'
+import { isDesktopMode } from '@bing/platform/env'
 
 const log = createLogger('SandboxService')
 
@@ -42,8 +43,11 @@ export class SandboxService {
    private sandboxProviderById = new Map<string, SandboxProvider>()
 
    constructor() {
-     this.primaryProviderType = (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona'
-     log.debug(`SandboxService initialized with primary provider: ${this.primaryProviderType}`)
+      // In desktop mode, default to the desktop provider
+      this.primaryProviderType = isDesktopMode()
+        ? 'desktop'
+        : (process.env.SANDBOX_PROVIDER as SandboxProviderType) || 'daytona';
+      log.debug(`SandboxService initialized with primary provider: ${this.primaryProviderType}`);
    }
 
    private async getProvider(): Promise<SandboxProvider> {
@@ -176,6 +180,7 @@ export class SandboxService {
     // For resolving existing sandboxes, try ALL configured providers (not just quota-available ones)
     // Sandboxes created before quota was hit should remain accessible even if provider is now over quota
     const allProviderTypes: SandboxProviderType[] = [
+      'desktop',
       'daytona',
       'runloop',
       'blaxel',
@@ -239,7 +244,12 @@ export class SandboxService {
 
     // Only use warm pool when no custom config is specified
     // Custom configs (language, resources, env vars) require fresh sandbox
-    if (process.env.SANDBOX_WARM_POOL === 'true' && !config && preferredType === this.primaryProviderType) {
+    // Disable warm pool for desktop provider to avoid provider mismatch
+    const useWarmPool = process.env.SANDBOX_WARM_POOL === 'true'
+      && !config
+      && preferredType === this.primaryProviderType
+      && this.primaryProviderType !== 'desktop';
+    if (useWarmPool) {
       log.debug('Attempting to acquire sandbox from warm pool')
       try {
         handle = await warmPool.acquire(userId)

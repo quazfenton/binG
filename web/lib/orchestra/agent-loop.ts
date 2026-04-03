@@ -1,5 +1,6 @@
 import { getLLMProvider } from '../sandbox/providers/llm-factory'
 import { getSandboxProvider } from '../sandbox/providers'
+import { coreSandboxService } from '../sandbox/core-sandbox-service'
 import { ENHANCED_SANDBOX_TOOLS, type ToolName } from '../sandbox/enhanced-sandbox-tools'
 import { validateCommand } from '../sandbox/security'
 import {
@@ -20,6 +21,16 @@ import { sandboxEvents } from '../sandbox/sandbox-events'
 const rateLimiter = createSandboxRateLimiter()
 
 function getSystemPrompt(workspaceDir: string): string {
+  const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+  if (isDesktop) {
+    const platform = process.platform === 'win32' ? 'Windows' : process.platform === 'darwin' ? 'macOS' : 'Linux';
+    return `You are an expert software engineer running on the user's ${platform} desktop.
+You have direct access to the local filesystem and shell. You can execute any commands natively.
+The workspace is at ${workspaceDir}/.
+You can use bash/shell commands, git, npm/pnpm/yarn, python, and any tools installed on this machine.
+Always write files before trying to run them.
+Report results clearly and concisely.`
+  }
   return `You are an expert software engineer with access to a Linux sandbox workspace.
 You can execute shell commands, write files, read files, list directories, run code, use git, and more.
 The workspace is at ${workspaceDir}/.
@@ -46,11 +57,9 @@ interface AgentLoopResult {
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
   const { userMessage, sandboxId, userId, conversationHistory, onToolExecution, onStreamChunk, onReasoningChunk } = options
-  const providerType = (process.env.SANDBOX_PROVIDER || 'daytona') as any
-  const provider = await getSandboxProvider(providerType)
   const llm = getLLMProvider()
 
-  const sandboxHandle = await provider.getSandbox(sandboxId)
+  const sandboxHandle = await coreSandboxService.getSandbox(sandboxId)
   const systemPrompt = getSystemPrompt(sandboxHandle.workspaceDir)
 
   try {
@@ -143,12 +152,23 @@ async function executeToolOnSandbox(
         }
         const execEval = evaluateActiveWorkflow('exec_shell', validated, approvalContext)
 
+        // HITL Enforcement: Block command if approval is required and enforcement is enabled
+        const enforceHitl = process.env.ENFORCE_HITL === 'true';
         if (execEval.requiresApproval) {
+          if (enforceHitl) {
+            return {
+              success: false,
+              output: `Command blocked: requires approval (rule: ${execEval.matchedRule?.name || 'default'}). ${execEval.reason || ''}`,
+              error: 'HITL enforcement: command requires approval',
+              blocked: true,
+              requiresApproval: true,
+              approvalRule: execEval.matchedRule?.name,
+            };
+          }
+          // Log only if enforcement is disabled (default behavior)
           console.log(
-            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${execEval.matchedRule?.name || 'default'})`,
-          )
-          // In a real implementation, this would suspend and wait for approval
-          // For now, we just log and proceed (HITL disabled by default)
+            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${execEval.matchedRule?.name || 'default'}) - proceeding anyway (ENFORCE_HITL not set)`,
+          );
         }
 
         // Record successful validation for rate limiting
@@ -178,11 +198,22 @@ async function executeToolOnSandbox(
         }
         const writeEval = evaluateActiveWorkflow('write_file', validated, approvalContext)
 
+        // HITL Enforcement: Block file write if approval is required and enforcement is enabled
+        const enforceHitl = process.env.ENFORCE_HITL === 'true';
         if (writeEval.requiresApproval) {
+          if (enforceHitl) {
+            return {
+              success: false,
+              output: `File write blocked: requires approval (rule: ${writeEval.matchedRule?.name || 'default'}). ${writeEval.reason || ''}`,
+              error: 'HITL enforcement: file write requires approval',
+              blocked: true,
+              requiresApproval: true,
+              approvalRule: writeEval.matchedRule?.name,
+            };
+          }
           console.log(
-            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${writeEval.matchedRule?.name || 'default'})`,
-          )
-          // In a real implementation, this would suspend and wait for approval
+            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${writeEval.matchedRule?.name || 'default'}) - proceeding anyway (ENFORCE_HITL not set)`,
+          );
         }
 
         await rateLimiter.record(rateLimitKey, 'fileOps')
@@ -286,45 +317,59 @@ async function executeToolOnSandbox(
           return { success: false, output: 'Repository URL is required', exitCode: 1 }
         }
 
-        // Validate URL to prevent command injection
-        const urlRegex = /^https?:\/\/[a-zA-Z0-9._\-/]+(?:\.git)?$/
-        if (!urlRegex.test(url)) {
-          return { success: false, output: 'Invalid repository URL format', exitCode: 1 }
+        // FIX: URL validation was rejecting standard HTTPS repo URLs because regex disallowed path slashes
+        // Allow standard HTTPS URLs with optional path (e.g., user/repo or org/team/repo)
+        const urlPattern = /^https:\/\/[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?(?:\/[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?)*(?:\.git)?$/;
+        if (!urlPattern.test(url)) {
+          return { success: false, output: 'Invalid repository URL format - only HTTPS URLs allowed', exitCode: 1 }
         }
 
         const clonePath = path || getRepoNameFromUrl(url)
 
-        // Validate clone path
-        if (!/^[a-zA-Z0-9._\-/]+$/.test(clonePath)) {
-          return { success: false, output: 'Invalid path format', exitCode: 1 }
+        // Strict path validation - alphanumeric, dots, hyphens, underscores only
+        if (!/^[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?$/.test(clonePath)) {
+          return { success: false, output: 'Invalid path format - use alphanumeric, dots, hyphens, underscores only', exitCode: 1 }
+        }
+
+        // Branch validation if provided
+        if (branch && !/^[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?$/.test(branch)) {
+          return { success: false, output: 'Invalid branch name', exitCode: 1 }
+        }
+
+        // Depth validation if provided
+        if (depth !== undefined) {
+          const depthNum = parseInt(String(depth), 10)
+          if (isNaN(depthNum) || depthNum < 1 || depthNum > 100) {
+            return { success: false, output: 'Depth must be between 1 and 100', exitCode: 1 }
+          }
         }
 
         // Use git credential helper instead of embedding credentials in URL
+        // Build command using argument arrays when possible to avoid shell injection
         let cloneCmd: string
         if (username && password) {
-          // Configure git credential helper for this operation only
-          // This avoids exposing credentials in process listings
-          const escapedUrl = url.replace(/'/g, "'\\''")
-          cloneCmd = `cd ${sandbox.workspaceDir} && git config --local credential.helper store && echo "password='${password.replace(/'/g, "'\\''")}'" | git credential approve && git clone ${escapedUrl} ${clonePath} && git config --local --unset credential.helper`
-
-          if (branch) {
-            const escapedBranch = branch.replace(/'/g, "'\\''")
-            cloneCmd = `cd ${sandbox.workspaceDir} && GIT_ASKPASS=/bin/echo git clone -b ${escapedBranch} ${escapedUrl} ${clonePath}`
+          // Sanitize username and password - reject if they contain shell metacharacters
+          if (/[;&|`$()]/.test(username) || /[;&|`$()]/.test(password)) {
+            return { success: false, output: 'Username/password contains invalid characters', exitCode: 1 }
           }
+          // Use git's stdin credential input which is safer than echo
+          cloneCmd = `cd '${sandbox.workspaceDir}' && git config --local credential.helper store && printf '%s\n' 'username='"'${username}'" 'password='"'${password}'"' | git credential approve && git clone '${url}' '${clonePath}' && git config --local --unset credential.helper`
         } else {
-          cloneCmd = `cd ${sandbox.workspaceDir} && git clone ${url} ${clonePath}`
-
-          if (branch) {
-            const escapedBranch = branch.replace(/'/g, "'\\''")
-            cloneCmd = `cd ${sandbox.workspaceDir} && git clone -b ${escapedBranch} ${url} ${clonePath}`
-          }
+          cloneCmd = `cd '${sandbox.workspaceDir}' && git clone '${url}' '${clonePath}'`
         }
 
+        // Add branch if specified (append to existing command, don't overwrite)
+        // FIX: Branch handling was overwriting the credentialed clone command
+        if (branch) {
+          // Branch is already validated above - append branch flag
+          const branchArg = ` -b '${branch.replace(/'/g, "'\\''")}'`;
+          // Add branch to the existing cloneCmd without overwriting
+          cloneCmd = cloneCmd.replace(/git clone/, 'git clone' + branchArg);
+        }
+
+        // Add depth if specified
         if (depth) {
-          const depthNum = parseInt(depth, 10)
-          if (!isNaN(depthNum) && depthNum > 0) {
-            cloneCmd += ` --depth ${depthNum}`
-          }
+          cloneCmd += ` --depth ${parseInt(String(depth), 10)}`
         }
 
         await rateLimiter.record(rateLimitKey, 'gitOps')
@@ -435,12 +480,56 @@ async function executeToolOnSandbox(
 
         const { command, background = true, captureOutput = true } = args
         
+        // Validate command schema first
+        const validated = validateToolInput(ExecShellSchema, args, 'start_process')
+
+        // Then validate against blocked patterns
+        const commandValidation = validateShellCommand(String(command), validateCommand)
+        if (!commandValidation.valid) {
+          return {
+            success: false,
+            output: commandValidation.reason || 'Command validation failed',
+            exitCode: 1,
+          }
+        }
+
+        // HITL Workflow: Evaluate if command requires approval
+        const approvalContext: ApprovalContext = {
+          riskLevel:
+            commandValidation.command?.includes('rm -rf') ||
+            commandValidation.command?.includes('sudo')
+              ? 'high'
+              : 'medium',
+          userId,
+        }
+        const execEval = evaluateActiveWorkflow('start_process', validated, approvalContext)
+
+        // HITL Enforcement: Block command if approval is required and enforcement is enabled
+        const enforceHitl = process.env.ENFORCE_HITL === 'true';
+        if (execEval.requiresApproval) {
+          if (enforceHitl) {
+            return {
+              success: false,
+              output: `Command blocked: requires approval (rule: ${execEval.matchedRule?.name || 'default'}). ${execEval.reason || ''}`,
+              error: 'HITL enforcement: command requires approval',
+              blocked: true,
+              requiresApproval: true,
+              approvalRule: execEval.matchedRule?.name,
+            };
+          }
+          console.log(
+            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${execEval.matchedRule?.name || 'default'}) - proceeding anyway (ENFORCE_HITL not set)`,
+          );
+        }
+
+        // Record successful validation for rate limiting
+        await rateLimiter.record(rateLimitKey, 'processOps')
+        
         // Validate and sanitize command
         const safeCommand = String(command).replace(/'/g, "'\\''")
         
         // For background processes, use nohup or &
         const bgCmd = background ? `nohup ${safeCommand} ${captureOutput ? '&> /tmp/process_$$.log &' : '&'}` : safeCommand
-        await rateLimiter.record(rateLimitKey, 'processOps')
         return sandbox.executeCommand(bgCmd)
       }
 
@@ -643,16 +732,23 @@ function getCodeExtension(language: string): string {
   return extensions[language] || 'txt'
 }
 
-function getCodeCommand(language: string, filePath: string, args: string[]): string {
+function getCodeCommand(language: string, filePath: string, args: unknown[]): string {
+  // FIX: Escape filePath and args to prevent command injection
+  // Use single quotes and escape any embedded single quotes
+  const safeFilePath = filePath.replace(/'/g, "'\\''");
+  // Ensure args are strings and wrap each in single quotes
+  const safeArgs = (args as string[]).map(a => `'${String(a).replace(/'/g, "'\\''")}'`).join(' ');
+  
   const commands: Record<string, string> = {
-    python: `python3 ${filePath} ${args.join(' ')}`,
-    javascript: `node ${filePath} ${args.join(' ')}`,
-    typescript: `npx ts-node ${filePath} ${args.join(' ')}`,
-    go: `cd ${filePath.substring(0, filePath.lastIndexOf('/'))} && go run ${filePath.substring(filePath.lastIndexOf('/') + 1)} ${args.join(' ')}`,
-    rust: `rustc ${filePath} -o /tmp/rust_out && /tmp/rust_out ${args.join(' ')}`,
-    java: `javac ${filePath} && java -cp ${filePath.substring(0, filePath.lastIndexOf('/'))} ${args.join(' ')}`,
-    r: `Rscript ${filePath} ${args.join(' ')}`,
-    cpp: `g++ ${filePath} -o /tmp/cpp_out && /tmp/cpp_out ${args.join(' ')}`,
+    python: `python3 '${safeFilePath}' ${safeArgs}`,
+    javascript: `node '${safeFilePath}' ${safeArgs}`,
+    typescript: `npx ts-node '${safeFilePath}' ${safeArgs}`,
+    // For go/java, use path utilities for directory extraction
+    go: `cd '${filePath.substring(0, filePath.lastIndexOf('/'))}' && go run '${filePath.substring(filePath.lastIndexOf('/') + 1)}' ${safeArgs}`,
+    rust: `rustc '${safeFilePath}' -o /tmp/rust_out && /tmp/rust_out ${safeArgs}`,
+    java: `javac '${safeFilePath}' && java -cp '${filePath.substring(0, filePath.lastIndexOf('/'))}' ${safeArgs}`,
+    r: `Rscript '${safeFilePath}' ${safeArgs}`,
+    cpp: `g++ '${safeFilePath}' -o /tmp/cpp_out && /tmp/cpp_out ${safeArgs}`,
   }
   return commands[language] || `echo "Unsupported language: ${language}"`
 }

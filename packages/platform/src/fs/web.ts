@@ -63,11 +63,23 @@ class WebFs implements FsAdapter {
       input.accept = options?.accept ?? '*';
       input.multiple = options?.multiple ?? false;
 
+      const cleanup = () => {
+        window.removeEventListener('focus', onWindowFocus);
+        input.remove();
+      };
+
+      const onWindowFocus = () => {
+        cleanup();
+        resolve(Array.from(input.files || []));
+      };
+
       input.onchange = () => {
+        cleanup();
         const files = Array.from(input.files || []);
         resolve(files);
       };
 
+      window.addEventListener('focus', onWindowFocus, { once: true });
       input.click();
     });
   }

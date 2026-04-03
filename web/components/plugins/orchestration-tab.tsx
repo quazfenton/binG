@@ -72,6 +72,7 @@ import {
   X,
 } from "lucide-react";
 import { toast } from "sonner";
+import { useOrchestrationMode, type OrchestrationMode } from "@/contexts/orchestration-mode-context";
 import OrchestrationVisualizer, { type AgentNode, type AgentEdge, type AgentLog } from "@/components/orchestration-visualizer";
 import FrameworkVisualizer, {
   type WorkflowConfig,
@@ -218,7 +219,7 @@ interface AgentOption {
   successRate: number;
 }
 
-interface OrchestrationMode {
+interface OrchestrationModeOption {
   id: string;
   name: string;
   description: string;
@@ -226,6 +227,19 @@ interface OrchestrationMode {
   config: Record<string, any>;
   providers: string[];
   features: string[];
+  orchestrationMode?: OrchestrationMode;
+  executionType?: 'v1' | 'v2' | 'both';
+  v1Capabilities?: string[];
+  v2Capabilities?: string[];
+  configOptions?: Record<string, {
+    type: string;
+    label: string;
+    default: any;
+    options?: string[];
+    min?: number;
+    max?: number;
+    description?: string;
+  }>;
 }
 
 // DAG Visualizer Types
@@ -257,51 +271,50 @@ interface DAGWorkflow {
 const MOCK_EVENTS: EventBusEvent[] = [
   {
     id: "evt-1",
-    type: "AGENT_REQUEST",
-    timestamp: Date.now() - 5000,
-    source: "chat-panel",
-    target: "agent-gateway",
-    payload: { task: "Build a Next.js app", provider: "mistral" },
-    status: "completed",
-    duration: 2340,
+    type: "ORCHESTRATION_PROGRESS",
+    timestamp: Date.now() - 60000,
+    source: "agent-team",
+    target: "architect",
+    payload: {
+      mode: "agent-team",
+      phase: "planning",
+      nodeId: "architect-1",
+      nodeRole: "architect",
+      nodeModel: "claude-sonnet-4",
+      nodeProvider: "claude-code",
+      currentAction: "Creating execution plan",
+      currentStepIndex: 0,
+      totalSteps: 3,
+      steps: [
+        { id: "step-1", title: "Planning", status: "running" },
+        { id: "step-2", title: "Development", status: "pending" },
+        { id: "step-3", title: "Review", status: "pending" },
+      ],
+      nodes: [
+        { id: "architect-1", role: "architect", model: "claude-sonnet-4", provider: "claude-code", status: "working" },
+        { id: "developer-1", role: "developer", model: "claude-sonnet-4", provider: "claude-code", status: "waiting" },
+        { id: "reviewer-1", role: "reviewer", model: "claude-sonnet-4", provider: "claude-code", status: "idle" },
+      ],
+    },
+    status: "processing",
   },
   {
     id: "evt-2",
-    type: "TOOL_EXECUTION",
-    timestamp: Date.now() - 4000,
-    source: "agent-gateway",
+    type: "AGENT_REQUEST",
+    timestamp: Date.now() - 120000,
+    source: "chat-panel",
     target: "sandbox-provider",
-    payload: { tool: "file.write", path: "/workspace/app.ts" },
+    payload: { model: "claude-sonnet-4", provider: "openrouter" },
     status: "completed",
-    duration: 890,
   },
   {
     id: "evt-3",
     type: "ORCHESTRATION_STEP",
-    timestamp: Date.now() - 3000,
+    timestamp: Date.now() - 180000,
     source: "orchestrator",
     target: "worker-1",
-    payload: { step: "plan", phase: 1 },
-    status: "processing",
-  },
-  {
-    id: "evt-4",
-    type: "PROVIDER_ROUTING",
-    timestamp: Date.now() - 2000,
-    source: "llm-router",
-    target: "openrouter",
-    payload: { model: "mistral-large", latency: 234 },
+    payload: { phase: "acting", iteration: 2 },
     status: "completed",
-    duration: 234,
-  },
-  {
-    id: "evt-5",
-    type: "SANDBOX_CREATE",
-    timestamp: Date.now() - 1000,
-    source: "sandbox-orchestrator",
-    target: "daytona",
-    payload: { language: "typescript", autoStop: 60 },
-    status: "pending",
   },
 ];
 
@@ -365,42 +378,138 @@ const MOCK_AGENTS: AgentOption[] = [
   },
 ];
 
-const MOCK_MODES: OrchestrationMode[] = [
+const MOCK_MODES: OrchestrationModeOption[] = [
   {
-    id: "mode-1",
-    name: "V2 Agent (OpenCode)",
-    description: "Containerized OpenCode CLI with full tool access",
-    active: false,
-    config: { containerized: true, maxSteps: 15 },
-    providers: ["opencode", "daytona"],
-    features: ["File Operations", "Bash Execution", "MCP Tools"],
-  },
-  {
-    id: "mode-2",
-    name: "Stateful Agent",
-    description: "Plan-Act-Verify with persistent session state",
+    id: "mode-task-router",
+    name: "Task Router (Default)",
+    description: "Routes tasks between OpenCode and Nullclaw based on task type",
     active: true,
-    config: { planType: "iterative", verification: true },
-    providers: ["mistral", "sandbox"],
-    features: ["Session Persistence", "Auto-Verification", "Rollback"],
+    config: {},
+    providers: ["opencode", "nullclaw", "cli"],
+    features: ["Task Classification", "Auto-Routing", "Policy Selection"],
+    orchestrationMode: "task-router",
+    executionType: "both",
   },
   {
-    id: "mode-3",
-    name: "Mastra Workflow",
-    description: "Workflow-based orchestration with step management",
+    id: "mode-unified",
+    name: "Unified Agent Service",
+    description: "Intelligent fallback chain: StatefulAgent → V2 → V1 API",
+    active: true,
+    config: { mode: "auto" },
+    providers: ["openai", "anthropic", "mistral"],
+    features: ["Fallback Chain", "Task Classifier", "Multi-Provider"],
+    orchestrationMode: "unified-agent",
+    executionType: "both",
+  },
+  {
+    id: "mode-sa",
+    name: "Stateful Agent",
+    description: "Plan-Act-Verify with ToolExecutor and smartApply",
     active: false,
-    config: { workflowId: "default", suspendResume: true },
-    providers: ["mastra"],
-    features: ["Workflow Steps", "Suspend/Resume", "Event Streaming"],
+    config: { enforcePlanActVerify: true, maxSelfHealAttempts: 3 },
+    providers: ["sandbox", "vfs"],
+    features: ["Plan-Act-Verify", "ToolExecutor", "Smart Apply", "Diff Repair"],
+    orchestrationMode: "stateful-agent",
+    executionType: "both",
   },
   {
-    id: "mode-4",
+    id: "mode-kernel",
+    name: "Agent Kernel",
+    description: "OS-like priority scheduler with agent lifecycle management",
+    active: true,
+    config: { maxConcurrent: 8, timeSlice: 60000 },
+    providers: ["internal"],
+    features: ["Priority Scheduling", "Resource Quotas", "Self-Healing"],
+    orchestrationMode: "agent-kernel",
+    executionType: "both",
+  },
+  {
+    id: "mode-loop",
+    name: "Agent Loop",
+    description: "ToolLoopAgent - iterative tool-loop execution",
+    active: false,
+    config: { maxIterations: 10 },
+    providers: ["openrouter", "chutes", "github", "nvidia"],
+    features: ["ToolLoopAgent", "Filesystem Tools", "Multi-Provider"],
+    orchestrationMode: "agent-loop",
+    executionType: "both",
+  },
+  {
+    id: "mode-dag",
+    name: "Execution Graph",
+    description: "DAG dependency engine for parallel task execution",
+    active: true,
+    config: { maxRetries: 3 },
+    providers: ["internal"],
+    features: ["DAG Dependencies", "Parallel Execution", "Auto-Retry"],
+    orchestrationMode: "execution-graph",
+    executionType: "both",
+  },
+  {
+    id: "mode-nullclaw",
+    name: "Nullclaw",
+    description: "External server for messaging, browsing, automation",
+    active: false,
+    config: {},
+    providers: ["nullclaw"],
+    features: ["Discord/Telegram", "Web Browsing", "API Calls"],
+    orchestrationMode: "nullclaw",
+    executionType: "v2",
+  },
+  {
+    id: "mode-opencode-sdk",
+    name: "OpenCode SDK",
+    description: "Direct SDK connection to local OpenCode server (remote CLI agent)",
+    active: false,
+    config: { hostname: "127.0.0.1", port: 4096 },
+    providers: ["openai", "anthropic", "google"],
+    features: ["SDK Integration", "Session Management", "Git Ops"],
+    orchestrationMode: "opencode-sdk",
+    executionType: "v2",
+  },
+  {
+    id: "mode-mastra",
+    name: "Mastra Workflow",
+    description: "Workflow engine with planner/executor/critic pattern",
+    active: false,
+    config: { workflowId: "code-agent", selfHealing: true },
+    providers: ["mastra"],
+    features: ["Workflow Steps", "Self-Healing", "Code Quality Evals"],
+    orchestrationMode: "mastra-workflow",
+    executionType: "both",
+  },
+  {
+    id: "mode-crewai",
     name: "CrewAI Multi-Agent",
     description: "Role-based multi-agent collaboration",
     active: false,
     config: { process: "sequential", memory: true },
     providers: ["crewai"],
     features: ["Role Assignment", "Task Delegation", "Memory"],
+    orchestrationMode: "crewai",
+    executionType: "both",
+  },
+  {
+    id: "mode-v2",
+    name: "V2 Containerized",
+    description: "OpenCode containerized execution with sandbox isolation",
+    active: false,
+    config: { containerized: true, maxSteps: 15 },
+    providers: ["opencode", "daytona"],
+    features: ["Sandbox Isolation", "File Operations", "Bash Execution"],
+    orchestrationMode: "v2-executor",
+    executionType: "v2",
+  },
+  {
+    id: "mode-team",
+    name: "Agent Team",
+    description: "Multi-agent team orchestration with 5 collaboration strategies",
+    active: true,
+    config: { strategy: "hierarchical", maxIterations: 3 },
+    providers: ["claude-code", "amp", "codex", "opencode"],
+    features: ["Hierarchical", "Collaborative", "Consensus", "Relay", "Competitive"],
+    orchestrationMode: "agent-team",
+    executionType: "v2",
   },
 ];
 
@@ -479,9 +588,10 @@ interface KernelStats {
 }
 
 export default function OrchestrationTab() {
+  const { setMode: setOrchestrationMode } = useOrchestrationMode();
   const [events, setEvents] = useState<EventBusEvent[]>(MOCK_EVENTS);
   const [agents, setAgents] = useState<AgentOption[]>([]);
-  const [modes, setModes] = useState<OrchestrationMode[]>(MOCK_MODES);
+  const [modes, setModes] = useState<OrchestrationModeOption[]>(MOCK_MODES);
   const [isPaused, setIsPaused] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<EventBusEvent | null>(null);
   const [filterType, setFilterType] = useState<string>("all");
@@ -521,6 +631,36 @@ export default function OrchestrationTab() {
     }
   }, []);
 
+  // Fetch orchestration modes from API
+  const loadModes = useCallback(async () => {
+    try {
+      const response = await fetch('/api/chat/modes');
+      const data = await response.json();
+      if (data.success && data.modes) {
+        // Transform API data to OrchestrationModeOption format
+        const mappedModes = data.modes.map((m: any) => ({
+          id: m.id,
+          name: m.name,
+          description: m.description,
+          active: m.active,
+          config: {},
+          providers: m.providers || [],
+          features: m.features || [],
+          orchestrationMode: m.id as OrchestrationMode,
+          executionType: m.executionType || 'v2',
+          v1Capabilities: m.v1Capabilities,
+          v2Capabilities: m.v2Capabilities,
+          configOptions: m.configOptions,
+        }));
+        setModes(mappedModes);
+      }
+    } catch (err: any) {
+      console.error('[OrchestrationTab] Failed to fetch modes:', err);
+      // Fallback to mock data if API fails
+      setModes(MOCK_MODES);
+    }
+  }, []);
+
   // Fetch workflows from API
   const loadWorkflows = useCallback(async () => {
     try {
@@ -536,17 +676,18 @@ export default function OrchestrationTab() {
       setLoading(true);
       await Promise.all([
         loadAgents(),
+        loadModes(),
         loadWorkflows(),
       ]);
       setLoading(false);
     };
 
     loadData();
-    
+
     // Refresh every 30 seconds
     const interval = setInterval(loadData, 30000);
     return () => clearInterval(interval);
-  }, [loadAgents, loadWorkflows]);
+  }, [loadAgents, loadModes, loadWorkflows]);
 
   // Fetch real kernel data
   const fetchKernelData = useCallback(async () => {
@@ -829,15 +970,50 @@ export default function OrchestrationTab() {
     if (isPaused) return;
 
     const interval = setInterval(() => {
+      const eventTypes = ["AGENT_REQUEST", "TOOL_EXECUTION", "ORCHESTRATION_STEP", "ORCHESTRATION_PROGRESS", "PROVIDER_ROUTING", "SANDBOX_CREATE"];
+      const type = eventTypes[Math.floor(Math.random() * eventTypes.length)];
+
+      let payload: Record<string, unknown> = { test: "data" };
+
+      if (type === "ORCHESTRATION_PROGRESS") {
+        const phases = ["planning", "acting", "verifying", "responding"] as const;
+        const roles = ["architect", "developer", "reviewer", "researcher", "tester"] as const;
+        const providers = ["opencode", "claude-code", "amp", "codex"] as const;
+        const statuses = ["idle", "working", "waiting", "failed"] as const;
+        const phase = phases[Math.floor(Math.random() * phases.length)];
+        const role = roles[Math.floor(Math.random() * roles.length)];
+        payload = {
+          mode: "agent-team",
+          phase,
+          nodeId: `${role}-${Math.floor(Math.random() * 3)}`,
+          nodeRole: role,
+          nodeModel: "claude-sonnet-4",
+          nodeProvider: providers[Math.floor(Math.random() * providers.length)],
+          currentAction: phase === "planning" ? "Creating execution plan" : phase === "acting" ? "Implementing changes" : phase === "verifying" ? "Running tests" : "Finalizing response",
+          currentStepIndex: Math.floor(Math.random() * 5),
+          totalSteps: 5,
+          nodes: [
+            { id: "architect-0", role: "architect", provider: "opencode", status: statuses[Math.floor(Math.random() * statuses.length)] },
+            { id: "developer-0", role: "developer", provider: "claude-code", status: statuses[Math.floor(Math.random() * statuses.length)] },
+            { id: "reviewer-0", role: "reviewer", provider: "amp", status: statuses[Math.floor(Math.random() * statuses.length)] },
+          ],
+          steps: [
+            { id: "s1", title: "Analyze", status: "completed" },
+            { id: "s2", title: "Plan", status: phase === "planning" ? "running" : "completed" },
+            { id: "s3", title: "Implement", status: phase === "acting" ? "running" : "pending" },
+            { id: "s4", title: "Verify", status: phase === "verifying" ? "running" : "pending" },
+            { id: "s5", title: "Respond", status: phase === "responding" ? "running" : "pending" },
+          ],
+        };
+      }
+
       const newEvent: EventBusEvent = {
         id: `evt-${Date.now()}`,
-        type: ["AGENT_REQUEST", "TOOL_EXECUTION", "ORCHESTRATION_STEP", "PROVIDER_ROUTING", "SANDBOX_CREATE"][
-          Math.floor(Math.random() * 5)
-        ],
+        type,
         timestamp: Date.now(),
         source: ["chat-panel", "agent-gateway", "orchestrator", "llm-router"][Math.floor(Math.random() * 4)],
         target: ["sandbox-provider", "daytona", "openrouter", "worker-1"][Math.floor(Math.random() * 4)],
-        payload: { test: "data" },
+        payload,
         status: ["pending", "processing", "completed"][Math.floor(Math.random() * 3)] as any,
       };
 
@@ -859,7 +1035,17 @@ export default function OrchestrationTab() {
       ...m,
       active: m.id === modeId,
     })));
-    toast.success("Orchestration mode activated");
+    
+    // Map to actual orchestration mode and persist via context
+    const mode = modes.find(m => m.id === modeId);
+    if (mode?.orchestrationMode) {
+      setOrchestrationMode(mode.orchestrationMode);
+      toast.success(`Orchestration mode activated`, {
+        description: `Now using ${mode.name}`,
+      });
+    } else {
+      toast.success("Orchestration mode activated");
+    }
   };
 
   const handleClearEvents = () => {
@@ -1093,7 +1279,18 @@ export default function OrchestrationTab() {
                           <p className="text-xs text-white/40">{mode.description}</p>
                         </div>
                       </div>
-                      {mode.active && <CheckCircle className="w-4 h-4 text-purple-400" />}
+                      <div className="flex items-center gap-1">
+                        {mode.executionType && (
+                          <Badge variant="outline" className={`text-[8px] ${
+                            mode.executionType === 'v2' ? 'border-blue-500/40 text-blue-300'
+                            : mode.executionType === 'v1' ? 'border-cyan-500/40 text-cyan-300'
+                            : 'border-purple-500/40 text-purple-300'
+                          }`}>
+                            {mode.executionType === 'v1' ? 'V1 API' : mode.executionType === 'v2' ? 'V2 Agent' : 'V1+V2'}
+                          </Badge>
+                        )}
+                        {mode.active && <CheckCircle className="w-4 h-4 text-purple-400" />}
+                      </div>
                     </div>
                     <div className="flex flex-wrap gap-1">
                       {mode.features.map((feature, i) => (

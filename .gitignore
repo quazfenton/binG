@@ -1,12 +1,12 @@
 # See https://help.github.com/articles/ignoring-files/ for more about ignoring files.
-data/virtual-filesystem/*
-.agent-commits/
-.agent-vfs/
+**/data/virtual-filesystem/*
+**/.agent-commits/
+**/.agent-vfs/
 # dependencies
-/node_modules
+**/node_modules/
 
 # next.js
-/.next/
+**/.next/
 /out/
 
 # production
@@ -18,16 +18,16 @@ yarn-debug.log*
 yarn-error.log*
 .pnpm-debug.log*
 *.log
-logs/
+**/logs/
 
 # env files
-.env*
+**/.env*
 fastagent.secrets.yaml
 venv/
 .venv/
 
 # vercel
-.vercel
+*.vercel
 
 # typescript
 *.tsbuildinfo
@@ -51,14 +51,13 @@ node_modules*
 *.db
 *.db-shm
 *.db-wal
-*.sqlite
-*.sqlite3
-/data/*.db
-/data/*.db-*
+**/.sqlite
+**/.sqlite3
+**/data/*.db
+**/data/*.db-*
 
 # Backup files
 *.backup
-*.bak
 *.dump
 *.sql.gz
 /backups/

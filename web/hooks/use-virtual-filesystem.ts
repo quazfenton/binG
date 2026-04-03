@@ -2,7 +2,7 @@
 
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { getOrCreateAnonymousSessionId, buildApiHeaders, syncAnonymousSessionId } from '@/lib/utils';
-import { createDebugLogger } from '@/config/features';
+import { createDebugLogger } from '../../infra/config/config/features';
 import type {
   VirtualFile,
   VirtualFilesystemNode,

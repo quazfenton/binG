@@ -14,7 +14,7 @@ import { createLogger } from '../utils/logger'
 import { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
 import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
-import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '../agent/nullclaw-integration'
+import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '@bing/shared/agent/nullclaw-integration'
 import { standaloneGitTools } from '../tools/git-tools'
 
 // Blaxel codegen tool definitions for LLM tool calling

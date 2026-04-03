@@ -91,6 +91,7 @@ import { useMultiRotatingStatements } from "@/hooks/use-rotating-statements";
 import { useReasoningUI } from "@/lib/chat/use-chat-hooks";
 import { useOrchestrationMode, getOrchestrationModeHeaders } from "@/contexts/orchestration-mode-context";
 import AgentTab from "@/components/agent-tab";
+import { clipboard } from "@bing/platform/clipboard";
 
 function ChatLoadingIndicator({ provider, model }: { provider: string; model: string }) {
   const statement = useMultiRotatingStatements(['interesting', 'funny', 'task'], 2500);
@@ -117,7 +118,7 @@ function MessageBubble({ message, isStreaming }: { message: Message; isStreaming
 
   const handleCopy = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(message.content);
+      await clipboard.writeText(message.content);
       setIsCopied(true);
       toast.success("Message copied");
       setTimeout(() => setIsCopied(false), 2000);
@@ -1774,7 +1775,7 @@ export function WorkspacePanel() {
     const chatText = chatMessages.map((msg) => 
       `[${new Date(msg.timestamp).toLocaleString()}] ${msg.role === 'user' ? 'You' : 'Assistant'}: ${msg.content}`
     ).join('\n\n');
-    navigator.clipboard.writeText(chatText);
+    clipboard.writeText(chatText);
     toast.success("Chat history copied to clipboard");
   }, [chatMessages]);
 
@@ -1796,7 +1797,7 @@ export function WorkspacePanel() {
 
   const exportNotes = useCallback(() => {
     const notesText = thinkingNotes.map((note, i) => `${i + 1}. ${note}`).join('\n\n');
-    navigator.clipboard.writeText(notesText);
+    clipboard.writeText(notesText);
     toast.success("Notes copied to clipboard");
   }, [thinkingNotes]);
 

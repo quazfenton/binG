@@ -6,9 +6,6 @@ const projectRoot = resolve(__dirname);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  turbopack: {
-    root: projectRoot,
-  },
   images: {
     unoptimized: false,
     // SECURITY: Use custom loader for dynamic image validation instead of wildcard
@@ -222,6 +219,7 @@ const nextConfig = {
       config.resolve.fallback = {
         ...config.resolve.fallback,
         fs: false,
+        'fs/promises': false,
         net: false,
         tls: false,
         crypto: false,
@@ -238,6 +236,7 @@ const nextConfig = {
         buffer: false,
         util: false,
         events: false,
+        child_process: false,
       };
 
       config.resolve.alias = {

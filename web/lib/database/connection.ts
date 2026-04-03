@@ -31,13 +31,23 @@ function getDBPath(): string {
   if (process.env.DATABASE_PATH) {
     return process.env.DATABASE_PATH;
   }
-  
+
+  // Desktop mode: use user's app data directory
+  if (process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true') {
+    try {
+      const { getDesktopDBPath } = require('./desktop-database');
+      return getDesktopDBPath();
+    } catch {
+      // Fallback to default if desktop-database not available
+    }
+  }
+
   // Only call process.cwd() in Node.js runtime (not Edge)
   let cwd: string | undefined;
   if (typeof process !== 'undefined' && process.env.NEXT_RUNTIME === 'nodejs') {
     cwd = process.cwd?.();
   }
-  
+
   return cwd ? path.join(cwd, 'data', 'binG.db') : './data/binG.db';
 }
 

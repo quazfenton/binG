@@ -39,7 +39,7 @@ const shouldUseStatefulAgent = isComplexTask || (hasMultipleSteps && mentionsFil
 **Created:** `lib/agent/task-classifier.ts`
 
 ```typescript
-import { createTaskClassifier } from '@/lib/agent/task-classifier';
+import { createTaskClassifier } from '@bing/shared/agent/task-classifier';
 
 const classifier = createTaskClassifier({
   simpleThreshold: 0.3,

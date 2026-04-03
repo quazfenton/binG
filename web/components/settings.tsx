@@ -145,23 +145,31 @@ export default function Settings({
 
   // Load user API keys from localStorage on mount
   useEffect(() => {
+    let cancelled = false;
     if (typeof window === 'undefined') return;
-    const saved = (await import('@bing/platform/secrets')).secrets.get('user-api-keys');
-    if (saved) {
+    (async () => {
       try {
-        setUserApiKeys(JSON.parse(saved));
+        const { secrets } = await import('@bing/platform/secrets');
+        const saved = await secrets.get('user-api-keys');
+        if (!cancelled && saved) {
+          setUserApiKeys(JSON.parse(saved));
+        }
       } catch (e) {
         console.error('Failed to load user API keys:', e);
       }
-    }
+    })();
+    return () => { cancelled = true; };
   }, []);
 
   // Save user API keys to localStorage
-  const handleSaveApiKeys = () => {
+  const handleSaveApiKeys = async () => {
     if (typeof window !== 'undefined') {
-      (await import('@bing/platform/secrets')).secrets.set('user-api-keys', JSON.stringify(userApiKeys));
+      const { secrets } = await import('@bing/platform/secrets');
+      await secrets.set('user-api-keys', JSON.stringify(userApiKeys));
       setHasApiKeyChanges(false);
       toast.success('API keys saved (stored locally in browser)');
+      // Notify other components (e.g., conversation-interface) to refresh provider availability
+      window.dispatchEvent(new CustomEvent('user-api-keys-changed'));
     }
   };
 

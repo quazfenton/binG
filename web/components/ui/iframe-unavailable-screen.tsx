@@ -26,6 +26,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { clipboard } from '@bing/platform/clipboard';
 
 export interface IframeUnavailableProps {
   url: string;
@@ -73,7 +74,7 @@ export const IframeUnavailableScreen: React.FC<IframeUnavailableProps> = ({
 
   const handleCopyUrl = async () => {
     try {
-      await navigator.clipboard.writeText(url);
+      await clipboard.writeText(url);
       setCopied(true);
       toast.success('URL copied to clipboard');
       setTimeout(() => { setCopied(false); }, 2000);
