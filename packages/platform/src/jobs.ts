@@ -31,6 +31,11 @@ export interface JobResult {
   error?: string;
 }
 
+export interface JobRunResult {
+  jobId: string;
+  result: JobResult;
+}
+
 export interface JobStatus {
   id: string;
   name: string;
@@ -45,16 +50,20 @@ const webJobRegistry = new Map<string, JobStatus>();
 /**
  * Run a background job
  */
-export async function runJob(name: string, payload: any): Promise<JobResult> {
+export async function runJob(name: string, payload: any): Promise<JobRunResult> {
   if (isDesktopMode()) {
     // Offload to Rust via Tauri invoke
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<JobResult>(name, payload);
+      const result = await invoke<JobResult>(name, payload);
+      return { jobId: `${name}-${Date.now()}`, result };
     } catch (error: any) {
       return {
-        success: false,
-        error: error.message || String(error),
+        jobId: '',
+        result: {
+          success: false,
+          error: error.message || String(error),
+        },
       };
     }
   }
@@ -72,18 +81,18 @@ export async function runJob(name: string, payload: any): Promise<JobResult> {
     // Look for registered JS job handlers
     const handler = jobHandlers.get(name);
     if (handler) {
-      const result = await handler(payload);
+      const data = await handler(payload);
       webJobRegistry.set(jobId, {
         id: jobId,
         name,
         status: 'completed',
         progress: 100,
-        result: { success: true, data: result },
+        result: { success: true, data },
       });
-      return { success: true, data: result };
+      return { jobId, result: { success: true, data } };
     }
 
-    return { success: false, error: `No handler registered for job: ${name}` };
+    return { jobId, result: { success: false, error: `No handler registered for job: ${name}` } };
   } catch (error: any) {
     webJobRegistry.set(jobId, {
       id: jobId,
@@ -92,7 +101,7 @@ export async function runJob(name: string, payload: any): Promise<JobResult> {
       progress: 0,
       result: { success: false, error: error.message },
     });
-    return { success: false, error: error.message };
+    return { jobId, result: { success: false, error: error.message } };
   }
 }
 

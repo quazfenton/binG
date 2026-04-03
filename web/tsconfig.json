@@ -33,6 +33,12 @@
       ],
       "@bing/shared/*": [
         "../packages/shared/src/*"
+      ],
+      "@bing/shared/agent": [
+        "../../packages/shared/agent/index.ts"
+      ],
+      "@bing/shared/agent/*": [
+        "../../packages/shared/agent/*"
       ]
     },
     "plugins": [

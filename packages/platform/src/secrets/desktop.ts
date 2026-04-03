@@ -1,12 +1,12 @@
 /**
- * Desktop Secrets Implementation (Tauri Secure Store)
+ * Desktop Secrets Implementation (Tauri Custom Commands)
  *
- * Uses the OS keychain/credential manager for secure storage.
+ * Uses custom Rust commands defined in desktop/src-tauri/
+ * for secure storage via OS keychain/credential manager.
+ *
  * On macOS: Keychain
  * On Windows: Credential Manager
  * On Linux: libsecret (GNOME Keyring / KDE Wallet)
- *
- * @see https://tauri.app/v1/api/js/secure-store
  */
 
 export interface SecretsAdapter {
@@ -23,13 +23,7 @@ class DesktopSecrets implements SecretsAdapter {
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke<string>('get_secret', { service: SERVICE_NAME, key });
     } catch {
-      // Fallback to plugin if available
-      try {
-        const { get } = await import('@tauri-apps/plugin-secure-store');
-        return await get(SERVICE_NAME, key);
-      } catch {
-        return null;
-      }
+      return null;
     }
   }
 
@@ -37,15 +31,9 @@ class DesktopSecrets implements SecretsAdapter {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('set_secret', { service: SERVICE_NAME, key, value });
-    } catch {
-      // Fallback to plugin if available
-      try {
-        const { set } = await import('@tauri-apps/plugin-secure-store');
-        await set(SERVICE_NAME, key, value);
-      } catch (error) {
-        console.error('[DesktopSecrets] Failed to set secret:', error);
-        throw error;
-      }
+    } catch (error) {
+      console.error('[DesktopSecrets] Failed to set secret:', error);
+      throw error;
     }
   }
 
@@ -53,15 +41,9 @@ class DesktopSecrets implements SecretsAdapter {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       await invoke('delete_secret', { service: SERVICE_NAME, key });
-    } catch {
-      // Fallback to plugin if available
-      try {
-        const { remove } = await import('@tauri-apps/plugin-secure-store');
-        await remove(SERVICE_NAME, key);
-      } catch (error) {
-        console.error('[DesktopSecrets] Failed to remove secret:', error);
-        throw error;
-      }
+    } catch (error) {
+      console.error('[DesktopSecrets] Failed to remove secret:', error);
+      throw error;
     }
   }
 }

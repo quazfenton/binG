@@ -151,20 +151,27 @@ export class EnhancedLLMService {
   }
 
   async generateResponse(request: EnhancedLLMRequest): Promise<LLMResponse> {
-    const { enableTools, enableSandbox, userId, conversationId, requestId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, task, ...llmRequest } = request;
+    const { enableTools, enableSandbox, userId, conversationId, requestId, provider, fallbackProviders, retryOptions, enableCircuitBreaker = true, task, apiKeys, ...llmRequest } = request;
     const requestStartTime = Date.now();
 
     // Use explicitly passed provider first, then task-specific provider, then default
     const actualProvider = provider || (task ? getProviderForTask(task) : getProviderForTask('chat'));
-    const actualModel = task 
-      ? getModelForTask(task, llmRequest.model) 
+    const actualModel = task
+      ? getModelForTask(task, llmRequest.model)
       : llmRequest.model || 'default';  // Default model if none specified
+
+    // Override API key with user-provided key if available for this provider
+    const userApiKey = apiKeys?.[actualProvider];
+    if (userApiKey) {
+      chatLogger.debug('Using user-provided API key', { requestId, provider: actualProvider });
+    }
 
     chatLogger.debug('Enhanced LLM service processing request', { requestId, provider: actualProvider, model: actualModel, userId }, {
       task,
       enableTools,
       enableSandbox,
       fallbackProviders: fallbackProviders?.length,
+      usesUserApiKey: !!userApiKey,
     });
 
     // If tools are enabled and user ID is provided, process tools
@@ -201,7 +208,9 @@ export class EnhancedLLMService {
           provider: actualProvider,
           model: actualModel,
           toolCalls: toolResult.toolCalls,
-          toolResults: toolResult.toolResults
+          toolResults: toolResult.toolResults,
+          // Pass user API key to provider after tool execution
+          apiKey: userApiKey,
         };
 
         return await this.callProviderWithEnhancedClient(actualProvider, updatedRequest, retryOptions, enableCircuitBreaker, requestId);
@@ -224,8 +233,14 @@ export class EnhancedLLMService {
 
     // Try primary provider first
     try {
-      const fullRequest = { ...llmRequest, provider: actualProvider, model: actualModel }
-      
+      const fullRequest = {
+        ...llmRequest,
+        provider: actualProvider,
+        model: actualModel,
+        // Use user's API key if provided, otherwise the provider config's key will be used
+        apiKey: userApiKey,
+      }
+
       // Log request start for telemetry
       await chatRequestLogger.logRequestStart(
         requestId || `llm-${Date.now()}`,
@@ -324,7 +339,9 @@ export class EnhancedLLMService {
           const fallbackRequest = {
             ...llmRequest,
             model: supportedModel,
-            provider: fallbackProvider
+            provider: fallbackProvider,
+            // Pass user API key to fallback provider
+            apiKey: userApiKey,
           };
 
           const response = await this.callProviderWithEnhancedClient(
@@ -375,9 +392,15 @@ export class EnhancedLLMService {
   }
 
   async *generateStreamingResponse(request: EnhancedLLMRequest): AsyncGenerator<StreamingResponse> {
-    const { provider, fallbackProviders, requestId, ...llmRequest } = request;
+    const { provider, fallbackProviders, requestId, apiKeys, ...llmRequest } = request;
     const primaryProvider = provider || getProviderForTask('chat');
     const streamStartTime = Date.now();
+
+    // Use user-provided API key if available for this provider
+    const userApiKey = apiKeys?.[primaryProvider];
+    if (userApiKey) {
+      chatLogger.debug('Using user-provided API key (streaming)', { requestId, provider: primaryProvider });
+    }
 
     chatLogger.debug('Starting streaming request', { requestId, provider: primaryProvider, model: llmRequest.model });
 
@@ -454,7 +477,8 @@ export class EnhancedLLMService {
           messages: llmRequest.messages,
           temperature: llmRequest.temperature || 0.7,
           maxTokens: llmRequest.maxTokens || 4096,
-          apiKey: llmRequest.apiKey,
+          // Use user's API key if provided, otherwise the provider config's key
+          apiKey: userApiKey || llmRequest.apiKey,
           maxRetries: 0,
           tools: vercelTools,
           toolCallStreaming: !!vercelTools,
@@ -470,8 +494,8 @@ export class EnhancedLLMService {
 
       // Fallback to legacy streaming for unsupported providers
       chatLogger.warn('Provider not supported by Vercel AI SDK, using legacy streaming', { provider: primaryProvider });
-      
-      const fullRequest = { ...llmRequest, provider: primaryProvider };
+
+      const fullRequest = { ...llmRequest, provider: primaryProvider, apiKey: userApiKey || llmRequest.apiKey };
       yield* llmService.generateStreamingResponse(fullRequest);
       const streamLatency = Date.now() - streamStartTime;
       chatLogger.info('Legacy streaming completed successfully', { requestId, provider: primaryProvider, model: llmRequest.model }, {
@@ -508,7 +532,9 @@ export class EnhancedLLMService {
         const fallbackRequest = {
           ...llmRequest,
           model: supportedModel,
-          provider: fallbackProvider
+          provider: fallbackProvider,
+          // Pass user API key to fallback provider
+          apiKey: userApiKey,
         };
 
         yield* llmService.generateStreamingResponse(fallbackRequest);
@@ -538,12 +564,18 @@ export class EnhancedLLMService {
       throw new Error(`Provider ${provider} not configured`);
     }
 
+    // Use request's API key if provided (user override), otherwise fall back to server config
+    const effectiveApiKey = (request.apiKey && request.apiKey.trim() !== '')
+      ? request.apiKey
+      : config.apiKey;
+
     // CRITICAL: Validate API key is present before making request
-    if (!config.apiKey || config.apiKey.trim() === '') {
+    if (!effectiveApiKey || effectiveApiKey.trim() === '') {
       chatLogger.error(`Provider ${provider} missing API key`, { requestId, provider }, {
-        hasApiKey: !!config.apiKey,
-        apiKeyLength: config.apiKey?.length || 0,
+        hasApiKey: !!effectiveApiKey,
+        apiKeyLength: effectiveApiKey?.length || 0,
         envVarName: this.getEnvVarNameForProvider(provider),
+        isUserProvided: !!request.apiKey,
       });
       throw new Error(`${provider} API key not configured. Please set ${this.getEnvVarNameForProvider(provider)} in your environment variables.`);
     }
@@ -557,10 +589,8 @@ export class EnhancedLLMService {
     const providerRequest = {
       ...request,
       messages: filteredMessages,
-      // CRITICAL FIX: Pass API key explicitly in request for providers that support it
-      // This ensures API keys from env vars are used even if llmService wasn't initialized properly
-      // Note: Using 'apiKey' (singular) which is read by generateResponse method
-      apiKey: config.apiKey,
+      // Use effective API key (user-provided or server config)
+      apiKey: effectiveApiKey,
     };
 
     chatLogger.debug('Calling provider', { requestId, provider, model: request.model }, {

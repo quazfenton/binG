@@ -159,6 +159,10 @@ export function useDesktopUser(): DesktopUserContext | null {
     return null;
   }
 
+  if (!isDesktopMode()) {
+    return null;
+  }
+
   // Check for desktop user in localStorage or session
   const desktopUserStr = localStorage.getItem('desktop_user');
   if (desktopUserStr) {

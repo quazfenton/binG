@@ -622,6 +622,7 @@ export class ResponseRouter {
               enableTools: req.enableTools ?? (detectedType === 'tool' && !!req.userId),
               enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
               isSandboxCommand: detectedType === 'sandbox',
+              apiKeys: req.apiKeys,
             } as EnhancedLLMRequest)
             
             return {
@@ -650,6 +651,7 @@ export class ResponseRouter {
             enableTools: req.enableTools ?? (detectedType === 'tool' && !!req.userId),
             enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
             isSandboxCommand: detectedType === 'sandbox',
+            apiKeys: req.apiKeys,
           } as EnhancedLLMRequest)
           return this.normalizeOriginalResponse(response)
         },
@@ -800,6 +802,7 @@ export class ResponseRouter {
             enableTools: false,  // Disable tools for fallback
             enableSandbox: false,  // Disable sandbox for fallback
             isSandboxCommand: false,
+            apiKeys: req.apiKeys,
           } as EnhancedLLMRequest)
           
           // Preserve normalized metadata (usage, model, provider) while adding fallback flags

@@ -90,11 +90,12 @@ export default function IntegrationAuthPrompt({
   const [popupWindow, setPopupWindow] = useState<Window | null>(null);
 
   /**
-   * Get auth token from localStorage safely
+   * Get auth token from secrets storage safely
    */
-  const getStoredToken = useCallback((): string | null => {
+  const getStoredToken = useCallback(async (): Promise<string | null> => {
     try {
-      return (await import('@bing/platform/secrets')).secrets.get('auth-token');
+      const { secrets } = await import('@bing/platform/secrets');
+      return await secrets.get('auth-token');
     } catch {
       return null;
     }
@@ -102,7 +103,7 @@ export default function IntegrationAuthPrompt({
 
   const isProviderConnected = useCallback(async () => {
     try {
-      const token = getStoredToken();
+      const token = await getStoredToken();
       const response = await fetch('/api/tools/execute', {
         headers: token ? { Authorization: `Bearer ${token}` } : undefined,
       });

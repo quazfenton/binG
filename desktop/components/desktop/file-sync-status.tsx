@@ -85,6 +85,7 @@ export function FileSyncStatus({
     } catch (error) {
       log.error('Sync failed', error);
       setStatus('error');
+      previousStatusRef.current = 'error';
     } finally {
       setIsSyncing(false);
     }

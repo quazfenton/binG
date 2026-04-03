@@ -239,5 +239,19 @@ export const startCacheCleanup = () => {
   cleanup();
 };
 
+// Content hashing for incremental indexing
+export function contentHash(content: string): string {
+  let hash = 0;
+  for (let i = 0; i < content.length; i++) {
+    const char = content.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash |= 0;
+  }
+  return hash.toString(36);
+}
+
+// Embedding cache - avoids re-embedding unchanged content
+export const embeddingCache = new Cache(1000);
+
 // Export default cache instance
 export default responseCache;

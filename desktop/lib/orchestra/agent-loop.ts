@@ -1,5 +1,6 @@
 import { getLLMProvider } from '../sandbox/providers/llm-factory'
 import { getSandboxProvider } from '../sandbox/providers'
+import { coreSandboxService } from '../sandbox/core-sandbox-service'
 import { ENHANCED_SANDBOX_TOOLS, type ToolName } from '../sandbox/enhanced-sandbox-tools'
 import { validateCommand } from '../sandbox/security'
 import {
@@ -56,11 +57,9 @@ interface AgentLoopResult {
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {
   const { userMessage, sandboxId, userId, conversationHistory, onToolExecution, onStreamChunk, onReasoningChunk } = options
-  const providerType = (process.env.SANDBOX_PROVIDER || 'daytona') as any
-  const provider = await getSandboxProvider(providerType)
   const llm = getLLMProvider()
 
-  const sandboxHandle = await provider.getSandbox(sandboxId)
+  const sandboxHandle = await coreSandboxService.getSandbox(sandboxId)
   const systemPrompt = getSystemPrompt(sandboxHandle.workspaceDir)
 
   try {
@@ -481,12 +480,56 @@ async function executeToolOnSandbox(
 
         const { command, background = true, captureOutput = true } = args
         
+        // Validate command schema first
+        const validated = validateToolInput(ExecShellSchema, args, 'start_process')
+
+        // Then validate against blocked patterns
+        const commandValidation = validateShellCommand(String(command), validateCommand)
+        if (!commandValidation.valid) {
+          return {
+            success: false,
+            output: commandValidation.reason || 'Command validation failed',
+            exitCode: 1,
+          }
+        }
+
+        // HITL Workflow: Evaluate if command requires approval
+        const approvalContext: ApprovalContext = {
+          riskLevel:
+            commandValidation.command?.includes('rm -rf') ||
+            commandValidation.command?.includes('sudo')
+              ? 'high'
+              : 'medium',
+          userId,
+        }
+        const execEval = evaluateActiveWorkflow('start_process', validated, approvalContext)
+
+        // HITL Enforcement: Block command if approval is required and enforcement is enabled
+        const enforceHitl = process.env.ENFORCE_HITL === 'true';
+        if (execEval.requiresApproval) {
+          if (enforceHitl) {
+            return {
+              success: false,
+              output: `Command blocked: requires approval (rule: ${execEval.matchedRule?.name || 'default'}). ${execEval.reason || ''}`,
+              error: 'HITL enforcement: command requires approval',
+              blocked: true,
+              requiresApproval: true,
+              approvalRule: execEval.matchedRule?.name,
+            };
+          }
+          console.log(
+            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${execEval.matchedRule?.name || 'default'}) - proceeding anyway (ENFORCE_HITL not set)`,
+          );
+        }
+
+        // Record successful validation for rate limiting
+        await rateLimiter.record(rateLimitKey, 'processOps')
+        
         // Validate and sanitize command
         const safeCommand = String(command).replace(/'/g, "'\\''")
         
         // For background processes, use nohup or &
         const bgCmd = background ? `nohup ${safeCommand} ${captureOutput ? '&> /tmp/process_$$.log &' : '&'}` : safeCommand
-        await rateLimiter.record(rateLimitKey, 'processOps')
         return sandbox.executeCommand(bgCmd)
       }
 

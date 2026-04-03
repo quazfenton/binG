@@ -17,6 +17,7 @@ import { E2BDesktopProvider, desktopSessionManager, type DesktopSandboxHandle as
 import { CircuitBreaker, providerCircuitBreakers, createCircuitBreakerWithMetrics } from '@/lib/utils/circuit-breaker'
 import { sandboxMetrics } from '@/lib/backend/metrics'
 import { createLogger } from '@/lib/utils/logger'
+import { isDesktopMode } from '@bing/platform/env'
 
 const log = createLogger('SandboxProviders')
 
@@ -25,6 +26,7 @@ const log = createLogger('SandboxProviders')
  * Add new provider keys here when registering new providers.
  */
 export type SandboxProviderType =
+  | 'desktop'
   | 'daytona'
   | 'e2b'
   | 'runloop'
@@ -71,6 +73,23 @@ const providerRegistry = new Map<SandboxProviderType, ProviderEntry>()
 function initializeRegistry() {
   // Register providers with priority (lower = higher priority in fallback chain)
   // Use async factory functions for lazy initialization to avoid SDK import errors in tests
+
+  // Desktop - Local execution via Tauri desktop app
+  // Best for: Desktop app mode, local development, unrestricted execution
+  providerRegistry.set('desktop', {
+    provider: null as any as any,
+    priority: 0, // Highest priority when in desktop mode
+    enabled: true,
+    available: isDesktopMode(),
+    healthy: false,
+    initializing: false,
+    initPromise: null,
+    failureCount: 0,
+    asyncFactory: async () => {
+      const { DesktopProvider } = await import('./desktop-provider')
+      return new DesktopProvider()
+    },
+  })
 
   providerRegistry.set('daytona', {
     provider: null as any as any,

@@ -17,14 +17,14 @@ import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
-import { executeV2Task, executeV2TaskStreaming } from '@/lib/agent/v2-executor';
+import { executeV2Task, executeV2TaskStreaming } from '@bing/shared/agent/v2-executor';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
-import { workforceManager } from '@/lib/agent/workforce-manager';
+import { workforceManager } from '@bing/shared/agent/workforce-manager';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
-import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@/lib/agent/orchestration-mode-handler';
+import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/orchestration-mode-handler';
 import {
   sanitizeAssistantDisplayContent,
   parseFilesystemResponse,

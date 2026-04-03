@@ -21,6 +21,10 @@ export const coreSandboxService = {
       },
     }
   },
+  getSandbox: async (sandboxId: string) => {
+    const service = new SandboxService()
+    return service.getSandbox(sandboxId)
+  },
   writeFile: async (sandboxId: string, filePath: string, content: string) => {
     const service = new SandboxService()
     return service.writeFile(sandboxId, filePath, content)

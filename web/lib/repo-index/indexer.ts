@@ -9,6 +9,7 @@
 
 import { createLogger } from '@/lib/utils/logger';
 import { getDatabase } from '@/lib/database/connection';
+import { getEmbeddingProvider } from '@/lib/vector-memory/embeddings';
 
 const logger = createLogger('RepoIndex');
 
@@ -550,19 +551,19 @@ export class RepoIndexer {
   }
 
   private async generateEmbeddings(content: string): Promise<number[]> {
-    // Placeholder for embedding generation
-    // In production, use actual embedding model (e.g., via API or local model)
-    // For now, return a simple hash-based vector
-
-    const vectorSize = 384; // Common embedding size
-    const vector = new Array(vectorSize).fill(0);
-
-    // Simple hash-based embedding (not semantic, just for demonstration)
-    for (let i = 0; i < content.length && i < vectorSize; i++) {
-      vector[i] = content.charCodeAt(i) / 255;
+    try {
+      const provider = getEmbeddingProvider();
+      return await provider.embed(content);
+    } catch (error: any) {
+      logger.warn('Embedding generation failed, using hash fallback', { error: error.message });
+      // Hash fallback so indexing never blocks on a missing provider
+      const vectorSize = 384;
+      const vector = new Array(vectorSize).fill(0);
+      for (let i = 0; i < content.length && i < vectorSize; i++) {
+        vector[i] = content.charCodeAt(i) / 255;
+      }
+      return vector;
     }
-
-    return vector;
   }
 
   private calculateMatchScore(line: string, query: string): number {

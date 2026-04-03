@@ -44,3 +44,69 @@ export function isWeb(): boolean {
 export function getPlatform(): 'desktop' | 'web' {
   return isDesktopMode() ? 'desktop' : 'web';
 }
+
+/**
+ * Check if local (non-sandbox) execution is enabled
+ * Used by the server to determine whether to execute commands locally
+ */
+export function isLocalExecution(): boolean {
+  if (typeof process !== 'undefined' && process.env) {
+    return (
+      process.env.DESKTOP_LOCAL_EXECUTION === 'true' ||
+      process.env.DESKTOP_MODE === 'true'
+    );
+  }
+  return isTauriRuntime();
+}
+
+/**
+ * Get the platform-appropriate shell command
+ * Used by the sandbox provider for command execution
+ */
+export function getShellCommand(): { shell: string; args: string[] } {
+  const platform = typeof process !== 'undefined' ? process.platform : 'linux';
+
+  if (platform === 'win32') {
+    return { shell: 'powershell.exe', args: ['-NoProfile', '-Command'] };
+  }
+
+  const userShell = typeof process !== 'undefined' ? process.env.SHELL : undefined;
+  const fallbackShells = ['/bin/bash', '/bin/sh', '/usr/bin/bash', '/usr/bin/sh'];
+
+  // Try user shell first, then fallbacks
+  const shellsToTry = userShell ? [userShell, ...fallbackShells] : fallbackShells;
+
+  for (const shell of shellsToTry) {
+    try {
+      if (typeof require !== 'undefined') {
+        const fs = require('fs');
+        if (fs.existsSync(shell)) {
+          return { shell, args: ['-c'] };
+        }
+      } else {
+        // Can't check - use first available
+        return { shell, args: ['-c'] };
+      }
+    } catch {
+      continue;
+    }
+  }
+
+  // Final fallback
+  return { shell: '/bin/sh', args: ['-c'] };
+}
+
+/**
+ * Get the default workspace root for the current platform
+ */
+export function getDefaultWorkspaceRoot(): string {
+  const platform = typeof process !== 'undefined' ? process.platform : 'linux';
+
+  if (platform === 'win32') {
+    const userProfile = typeof process !== 'undefined' ? process.env.USERPROFILE : undefined;
+    return `${userProfile || 'C:\\Users\\Default'}\\opencode-workspaces`;
+  }
+
+  const home = typeof process !== 'undefined' ? process.env.HOME : undefined;
+  return `${home || '/tmp'}/opencode-workspaces`;
+}

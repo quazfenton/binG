@@ -4,7 +4,7 @@ import { diffLines } from 'diff';
 import * as fs from 'node:fs/promises';
 import path from 'node:path';
 import crypto from 'node:crypto';
-import { FEATURE_FLAGS } from '@/config/features';
+import { FEATURE_FLAGS } from '../../../infra/config/config/features';
 
 export const dynamic = 'force-dynamic';
 

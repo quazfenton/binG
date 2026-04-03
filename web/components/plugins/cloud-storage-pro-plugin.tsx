@@ -75,14 +75,19 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
 
   const providerPrefix = activeProvider.toLowerCase().replace(/\s+/g, '-');
 
-  const getToken = (): string | null => {
-    return (await import('@bing/platform/secrets')).secrets.get('auth-token');
+  const getToken = async (): Promise<string | null> => {
+    try {
+      const { secrets } = await import('@bing/platform/secrets');
+      return await secrets.get('auth-token');
+    } catch {
+      return null;
+    }
   };
 
   const refreshFiles = async () => {
     setLoading(true);
     try {
-      const token = getToken();
+      const token = await getToken();
       if (!token) {
         setBackendMode(false);
         // Load local files when not signed in
