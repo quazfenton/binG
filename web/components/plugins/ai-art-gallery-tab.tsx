@@ -44,6 +44,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { Label } from "@/components/ui/label";
+import { clipboard } from '@bing/platform/clipboard';
 
 // Helper to ensure image URLs go through the proxy
 function getProxiedImageUrl(url: string | undefined): string | undefined {
@@ -321,7 +322,7 @@ export default function ArtGalleryTab() {
   };
 
   const handleShare = (image: GeneratedImage) => {
-    navigator.clipboard.writeText(`${image.prompt}\n\nGenerated with binG AI`);
+    clipboard.writeText(`${image.prompt}\n\nGenerated with binG AI`);
     toast.success("Copied to clipboard");
   };
 

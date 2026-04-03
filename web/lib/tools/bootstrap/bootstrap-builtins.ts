@@ -98,6 +98,41 @@ export async function registerBuiltInCapabilities(registry: ToolRegistry): Promi
     count++;
   }
 
+  // Register context-pack as the provider for project.bundle capability
+  try {
+    const { contextPackService } = await import('@/lib/virtual-filesystem/context-pack-service');
+    await registry.registerTool({
+      name: 'context-pack:bundle',
+      capability: 'project.bundle',
+      provider: 'context-pack',
+      handler: async (args: any, context: any) => {
+        const ownerId = context.userId || 'anonymous';
+        const rootPath = args.path || '/';
+        return await contextPackService.generateContextPack(ownerId, rootPath, {
+          format: args.format || 'markdown',
+          maxFileSize: args.maxFileSize,
+          maxTotalSize: args.maxTotalSize,
+          includePatterns: args.includePatterns,
+          excludePatterns: args.excludePatterns,
+          includeContents: args.includeContents ?? true,
+          includeTree: args.includeTree ?? true,
+          maxLinesPerFile: args.maxLinesPerFile,
+          lineNumbers: args.lineNumbers ?? false,
+        });
+      },
+      metadata: {
+        latency: 'medium',
+        cost: 'low',
+        reliability: 0.99,
+        tags: ['context', 'bundle', 'repomix', 'project'],
+      },
+      permissions: ['file:read'],
+    });
+    count++;
+  } catch (error: any) {
+    logger.warn('Context-pack provider not available', error.message);
+  }
+
   return count;
 }
 

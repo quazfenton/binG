@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
 import { toast } from 'sonner';
+import { clipboard } from '@bing/platform/clipboard';
 
 const LANGUAGES = [
   { id: 'javascript', name: 'JavaScript', ext: 'js', mode: 'javascript' },
@@ -161,13 +162,13 @@ export default function CodeSandboxPlugin({ onClose }: PluginProps) {
   };
 
   const copyCode = () => {
-    navigator.clipboard.writeText(code);
+    clipboard.writeText(code);
     toast.success('Code copied to clipboard');
   };
 
   const shareCode = () => {
     const url = `${window.location.origin}/sandbox?lang=${language}&code=${encodeURIComponent(code)}`;
-    navigator.clipboard.writeText(url);
+    clipboard.writeText(url);
     toast.success('Share link copied!');
   };
 

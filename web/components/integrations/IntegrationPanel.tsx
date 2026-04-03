@@ -337,8 +337,11 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
     if (!userId) return;
 
     try {
-      const token = (() => {
-        try { return (await import('@bing/platform/secrets')).secrets.get('auth-token'); } catch { return null; }
+      const token = await (async () => {
+        try {
+          const { secrets } = await import('@bing/platform/secrets');
+          return await secrets.get('auth-token');
+        } catch { return null; }
       })();
 
       // Fetch connection status and source from API
@@ -419,8 +422,11 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
       let authEndpoint: string;
       
       // Resolve auth token once for all service types
-      const token = (() => {
-        try { return (await import('@bing/platform/secrets')).secrets.get('auth-token'); } catch { return null; }
+      const token = await (async () => {
+        try {
+          const { secrets } = await import('@bing/platform/secrets');
+          return await secrets.get('auth-token');
+        } catch { return null; }
       })();
       const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
@@ -497,8 +503,11 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
     setLoading(integration.id);
 
     try {
-      const token = (() => {
-        try { return (await import('@bing/platform/secrets')).secrets.get('auth-token'); } catch { return null; }
+      const token = await (async () => {
+        try {
+          const { secrets } = await import('@bing/platform/secrets');
+          return await secrets.get('auth-token');
+        } catch { return null; }
       })();
 
       // Call API to revoke connection

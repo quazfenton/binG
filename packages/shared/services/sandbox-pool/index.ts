@@ -16,7 +16,7 @@ import { createServer } from 'http';
 import { createLogger } from '@/lib/utils/logger';
 import { getSandboxProvider, getSandboxProviderWithFallback } from '../../lib/sandbox/providers';
 import type { SandboxHandle, SandboxCreateConfig, SandboxProviderType } from '@/lib/sandbox/providers';
-import { backgroundExecutor } from '@/lib/agent/background-jobs';
+import { backgroundExecutor } from '@bing/shared/agent/background-jobs';
 import { resourceMonitor, createResourceMonitor } from '@/lib/management/resource-monitor';
 import Redis from 'ioredis';
 

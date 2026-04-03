@@ -39,9 +39,10 @@ export default function ToolAuthPrompt({
 
   const isProviderConnected = useCallback(async () => {
     try {
-      const token = (() => {
+      const token = await (async () => {
         try {
-          return (await import('@bing/platform/secrets')).secrets.get('auth-token');
+          const { secrets } = await import('@bing/platform/secrets');
+          return await secrets.get('auth-token');
         } catch {
           return null;
         }

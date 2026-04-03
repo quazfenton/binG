@@ -44,3 +44,40 @@ export function isWeb(): boolean {
 export function getPlatform(): 'desktop' | 'web' {
   return isDesktopMode() ? 'desktop' : 'web';
 }
+
+/**
+ * Check if local (non-sandbox) execution is enabled
+ * Used by the server to determine whether to execute commands locally
+ */
+export function isLocalExecution(): boolean {
+  if (typeof process !== 'undefined' && process.env) {
+    return (
+      process.env.DESKTOP_LOCAL_EXECUTION === 'true' ||
+      process.env.DESKTOP_MODE === 'true'
+    );
+  }
+  return isTauriRuntime();
+}
+
+/**
+ * Get the default workspace root for the current platform
+ */
+export function getDefaultWorkspaceRoot(): string {
+  const platform = typeof process !== 'undefined' ? process.platform : 'linux';
+
+  if (platform === 'win32') {
+    const userProfile = typeof process !== 'undefined' ? process.env.USERPROFILE : undefined;
+    return `${userProfile || 'C:\\Users\\Default'}\\opencode-workspaces`;
+  }
+
+  const home = typeof process !== 'undefined' ? process.env.HOME : undefined;
+  return `${home || '/tmp'}/opencode-workspaces`;
+}
+
+export interface DesktopConfig {
+  workspaceRoot: string;
+  shell: string;
+  shellArgs: string[];
+  isLocalExecution: boolean;
+  platform: 'win32' | 'darwin' | 'linux';
+}

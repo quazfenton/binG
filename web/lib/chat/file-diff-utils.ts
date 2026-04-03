@@ -25,11 +25,39 @@
 
 import { parsePatch, applyPatch, createTwoFilesPatch } from 'diff';
 import diff_match_patch from 'diff-match-patch';
+import { withRetry, isRetryableError } from '@/lib/vector-memory/retry';
 
 export interface DiffEdit {
   path: string;
   diff: string;
 }
+
+/**
+ * Result of a smart patch application with metadata
+ */
+export interface PatchResult {
+  content: string | null;
+  strategy: 'unified' | 'fuzzy' | 'line' | 'symbol' | 'repaired' | 'full_file';
+  confidence: number;
+  attempts?: number;
+}
+
+/**
+ * Symbol context for structure-aware patching
+ */
+export interface SymbolContext {
+  name: string;
+  kind: 'function' | 'class' | 'method' | 'block';
+  startLine: number;
+  endLine: number;
+}
+
+/**
+ * LLM caller for the diff repair loop.
+ * Consumers wire in their own LLM call (e.g. llmService.generateResponse)
+ * so this module stays free of hard provider coupling.
+ */
+export type DiffRepairLLM = (prompt: string) => Promise<string>;
 
 /**
  * Apply unified diff to content with robust error handling
@@ -315,4 +343,185 @@ export function looksLikeCompleteFile(content: string): boolean {
   
   // Check for lack of diff markers (most reliable indicator)
   return isFullFileContent(content);
+}
+
+// ============================================================================
+// Symbol-based patching
+// ============================================================================
+
+/**
+ * Apply a patch by replacing a symbol's line range in the original content.
+ * Falls back gracefully if the symbol range is out of bounds.
+ */
+export function applySymbolPatch(
+  content: string,
+  symbol: SymbolContext,
+  newCode: string
+): string | null {
+  const lines = content.split('\n');
+
+  if (symbol.startLine < 0 || symbol.endLine >= lines.length) {
+    console.warn('[applySymbolPatch] Symbol range out of bounds', {
+      symbol: symbol.name,
+      startLine: symbol.startLine,
+      endLine: symbol.endLine,
+      totalLines: lines.length,
+    });
+    return null;
+  }
+
+  const before = lines.slice(0, symbol.startLine);
+  const after = lines.slice(symbol.endLine + 1);
+
+  const result = [...before, newCode, ...after].join('\n');
+
+  if (result.trim().length === 0 && content.trim().length > 0) {
+    return null;
+  }
+
+  return result;
+}
+
+/**
+ * Extract the "added" code from a unified diff (lines starting with +, excluding header).
+ */
+export function extractAddedCode(diff: string): string {
+  return diff
+    .split('\n')
+    .filter((line) => line.startsWith('+') && !line.startsWith('+++'))
+    .map((line) => line.slice(1))
+    .join('\n');
+}
+
+// ============================================================================
+// Self-healing diff repair loop
+// ============================================================================
+
+/**
+ * Attempt to repair a broken diff by asking an LLM to fix it.
+ * The `llm` parameter is an injected caller so the module stays decoupled.
+ */
+export async function repairDiff(opts: {
+  original: string;
+  diff: string;
+  path: string;
+  llm: DiffRepairLLM;
+  maxAttempts?: number;
+}): Promise<PatchResult> {
+  const { original, diff, path, llm, maxAttempts = 3 } = opts;
+
+  const repairPrompt = [
+    'The following unified diff failed to apply to the file.',
+    'Fix the diff so it applies cleanly. Return ONLY a valid unified diff, nothing else.',
+    '',
+    `File: ${path}`,
+    '',
+    '--- Original ---',
+    original.length > 6000 ? original.slice(0, 6000) + '\n…(truncated)' : original,
+    '',
+    '--- Broken Diff ---',
+    diff,
+  ].join('\n');
+
+  for (let attempt = 0; attempt < maxAttempts; attempt++) {
+    try {
+      const fixedDiff = await llm(repairPrompt);
+      if (!fixedDiff || fixedDiff.trim().length === 0) continue;
+
+      const result = applyDiffToContent(original, path, fixedDiff);
+      if (result !== null) {
+        return {
+          content: result,
+          strategy: 'repaired',
+          confidence: 0.7 - attempt * 0.1,
+          attempts: attempt + 1,
+        };
+      }
+    } catch (error) {
+      console.warn(`[repairDiff] Attempt ${attempt + 1} failed`, {
+        error: error instanceof Error ? error.message : String(error),
+      });
+    }
+  }
+
+  return { content: null, strategy: 'repaired', confidence: 0, attempts: maxAttempts };
+}
+
+// ============================================================================
+// Smart apply — hybrid strategy with confidence metadata
+// ============================================================================
+
+/**
+ * Apply a diff using the best available strategy, returning metadata
+ * about which strategy succeeded and the confidence level.
+ *
+ * Strategy order:
+ *  1. Full-file content detection (highest confidence)
+ *  2. Unified diff
+ *  3. diff-match-patch (fuzzy)
+ *  4. Simple line diff
+ *  5. Symbol-based patching (if symbolContext provided)
+ *  6. LLM repair loop (if llm callback provided)
+ */
+export async function smartApply(opts: {
+  content: string;
+  path: string;
+  diff: string;
+  symbolContext?: SymbolContext;
+  llm?: DiffRepairLLM;
+}): Promise<PatchResult> {
+  const { content, path, diff, symbolContext, llm } = opts;
+
+  if (!diff || diff.trim().length === 0) {
+    return { content: null, strategy: 'unified', confidence: 0 };
+  }
+
+  // Strategy 0: full-file content
+  if (looksLikeCompleteFile(diff)) {
+    return { content: diff, strategy: 'full_file', confidence: 0.95 };
+  }
+
+  // Strategy 1: unified diff
+  const unified = applyUnifiedDiffToContent(content, path, diff);
+  if (unified !== null && unified.trim().length > 0) {
+    return { content: unified, strategy: 'unified', confidence: 0.95 };
+  }
+
+  // Strategy 2: fuzzy diff-match-patch
+  const fuzzy = applyDiffMatchPatch(content, diff);
+  if (fuzzy !== null && fuzzy.trim().length > 0) {
+    return { content: fuzzy, strategy: 'fuzzy', confidence: 0.8 };
+  }
+
+  // Strategy 3: simple line diff
+  const lineDiff = applySimpleLineDiff(content, diff);
+  if (lineDiff !== null && lineDiff.trim().length > 0) {
+    return { content: lineDiff, strategy: 'line', confidence: 0.6 };
+  }
+
+  // Strategy 4: symbol-based patching
+  if (symbolContext) {
+    const newCode = extractAddedCode(diff);
+    if (newCode.trim().length > 0) {
+      const symbolResult = applySymbolPatch(content, symbolContext, newCode);
+      if (symbolResult !== null) {
+        return { content: symbolResult, strategy: 'symbol', confidence: 0.7 };
+      }
+    }
+  }
+
+  // Strategy 5: LLM repair loop
+  if (llm) {
+    const repaired = await repairDiff({
+      original: content,
+      diff,
+      path,
+      llm,
+    });
+    if (repaired.content !== null) {
+      return repaired;
+    }
+  }
+
+  return { content: null, strategy: 'unified', confidence: 0 };
 }

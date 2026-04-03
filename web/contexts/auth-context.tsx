@@ -1,7 +1,7 @@
 "use client";
 
 import { createContext, useState, useContext, useEffect, ReactNode } from 'react';
-import { FEATURE_FLAGS } from '@/config/features';
+import { FEATURE_FLAGS } from '../../infra/config/config/features';
 
 interface User {
   id: number;
@@ -20,8 +20,8 @@ interface AuthContextType {
   login: (email: string, password: string) => Promise<void>;
   logout: () => Promise<void>;
   register: (email: string, password: string, username?: string) => Promise<void>;
-  getApiKeys: () => Record<string, string>;
-  setApiKeys: (keys: Record<string, string>) => void;
+  getApiKeys: () => Promise<Record<string, string>>;
+  setApiKeys: (keys: Record<string, string>) => Promise<void>;
   refreshToken: () => Promise<boolean>;
   isLoading: boolean;
 }
@@ -36,21 +36,37 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   const isDev = FEATURE_FLAGS.IS_DEVELOPMENT;
   const skipAuth = isDev && FEATURE_FLAGS.SKIP_AUTH_IN_DEV;
 
-  // Token management utilities (kept for backward compatibility)
-  const getStoredToken = (): string | null => {
+  // Token management utilities - uses secure secrets storage
+  const getStoredToken = async (): Promise<string | null> => {
     if (typeof window === 'undefined') return null;
-    return localStorage.getItem('token');
-  };
-
-  const setStoredToken = (token: string): void => {
-    if (typeof window !== 'undefined') {
-      localStorage.setItem('token', token);
+    try {
+      const { secrets } = await import('@bing/platform/secrets');
+      return await secrets.get('auth-token');
+    } catch {
+      return null;
     }
   };
 
-  const removeStoredToken = (): void => {
+  const setStoredToken = async (token: string): Promise<void> => {
     if (typeof window !== 'undefined') {
-      localStorage.removeItem('token');
+      try {
+        const { secrets } = await import('@bing/platform/secrets');
+        await secrets.set('auth-token', token);
+      } catch {
+        // Fallback to localStorage if secrets module fails
+        localStorage.setItem('token', token);
+      }
+    }
+  };
+
+  const removeStoredToken = async (): Promise<void> => {
+    if (typeof window !== 'undefined') {
+      try {
+        const { secrets } = await import('@bing/platform/secrets');
+        await secrets.remove('auth-token');
+      } catch {
+        localStorage.removeItem('token');
+      }
       localStorage.removeItem('user');
     }
   };
@@ -58,7 +74,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
   // Validate session and get user info
   const validateSession = async (): Promise<User | null> => {
     try {
-      const token = getStoredToken();
+      const token = await getStoredToken();
       const response = await fetch('/api/auth/validate', {
         method: 'POST',
         headers: {
@@ -101,7 +117,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
           console.log('[AuthContext] Auth0 session found, created local session for:', data.user.email);
           // Store token if provided
           if (data.token) {
-            setStoredToken(data.token);
+            await setStoredToken(data.token);
           }
           return {
             ...data.user,
@@ -333,7 +349,7 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       if (response.ok) {
         const data = await response.json();
         if (data.token) {
-          setStoredToken(data.token);
+          await setStoredToken(data.token);
         }
         return true;
       }
@@ -348,15 +364,26 @@ export function AuthProvider({ children }: { children: ReactNode }) {
     }
   };
 
-  const getApiKeys = () => {
+  const getApiKeys = async (): Promise<Record<string, string>> => {
     if (typeof window === 'undefined') return {};
-    const storedKeys = localStorage.getItem('apiKeys');
-    return storedKeys ? JSON.parse(storedKeys) : {};
+    try {
+      const { secrets } = await import('@bing/platform/secrets');
+      const storedKeys = await secrets.get('user-api-keys');
+      return storedKeys ? JSON.parse(storedKeys) : {};
+    } catch {
+      return {};
+    }
   };
 
-  const setApiKeys = (keys: Record<string, string>) => {
+  const setApiKeys = async (keys: Record<string, string>): Promise<void> => {
     if (typeof window === 'undefined') return;
-    localStorage.setItem('apiKeys', JSON.stringify(keys));
+    try {
+      const { secrets } = await import('@bing/platform/secrets');
+      await secrets.set('user-api-keys', JSON.stringify(keys));
+    } catch {
+      // Fallback to localStorage if secrets module fails
+      localStorage.setItem('apiKeys', JSON.stringify(keys));
+    }
   };
 
   const value = {

@@ -158,7 +158,7 @@ import {
   isNullclawAvailable,
   getNullclawStatus,
   getNullclawMode
-} from '@/lib/agent/nullclaw-integration';
+} from '@bing/shared/agent/nullclaw-integration';
 
 console.log(`Available: ${isNullclawAvailable()}`);
 console.log(`Mode: ${getNullclawMode()}`);
@@ -167,7 +167,7 @@ console.log(`Status:`, getNullclawStatus());
 
 ### Execute Task
 ```typescript
-import { sendNullclawDiscordMessage } from '@/lib/agent/nullclaw-integration';
+import { sendNullclawDiscordMessage } from '@bing/shared/agent/nullclaw-integration';
 
 const task = await sendNullclawDiscordMessage(
   'channel-id',

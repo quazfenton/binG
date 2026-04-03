@@ -18,6 +18,7 @@ import { ReasoningDisplay, ReasoningSummary } from "@/components/reasoning-displ
 import { ToolInvocationsList } from "@/components/tool-invocation-card"
 import { VersionHistoryPanel, VersionIndicator } from "@/components/version-history-panel"
 import { AgentStatusDisplay, MultiAgentStatusDisplay } from "@/components/agent-status-display"
+import { clipboard } from "@bing/platform/clipboard"
 import { SpecAmplificationProgress, DAGProgressDisplay } from "@/components/spec-amplification-progress"
 import { normalizeToolInvocations } from "@/lib/types/tool-invocation"
 import { useReasoningStream } from "@/hooks/use-reasoning-stream"
@@ -334,7 +335,7 @@ export default function MessageBubble({
     // Use sanitized content for copy to match what's displayed in UI
     const contentToCopy = isUser ? message.content : sanitizedContent;
     try {
-      await navigator.clipboard.writeText(contentToCopy)
+      await clipboard.writeText(contentToCopy)
       setCopied(true)
       setTimeout(() => setCopied(false), 2000)
     } catch (error) {
@@ -953,7 +954,7 @@ export default function MessageBubble({
                             className="h-7 text-xs"
                             onClick={(e) => {
                               e.stopPropagation();
-                              navigator.clipboard.writeText(artifact.content || '');
+                              clipboard.writeText(artifact.content || '');
                               toast.success('Copied', { duration: 1500 });
                             }}
                           >

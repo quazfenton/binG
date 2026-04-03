@@ -48,11 +48,12 @@ import {
   parseCodeBlocksFromMessages,
   type CodeBlock as ParsedCodeBlock,
 } from "../lib/code-parser";
-import { createDebugLogger } from "@/config/features";
+import { createDebugLogger } from "../../infra/config/config/features";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { checkFileConflicts } from "@/lib/session-naming";
 import { buildApiHeaders } from "@/lib/utils";
 import { usePanel } from "@/contexts/panel-context";
+import { clipboard } from "@bing/platform/clipboard";
 
 // Import live preview offloading functions
 import {
@@ -6214,7 +6215,7 @@ root.render(<App />);` };
                               <button
                                 className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
                                 onClick={() => {
-                                  navigator.clipboard.writeText(codeBlocks[selectedFileIndex].code);
+                                  clipboard.writeText(codeBlocks[selectedFileIndex].code);
                                 }}
                               >
                                 <CodeIcon className="w-4 h-4 mr-1" />
@@ -6329,7 +6330,7 @@ root.render(<App />);` };
                                   <button
                                     className="flex items-center text-sm hover:bg-gray-200 px-2 py-1 rounded"
                                     onClick={() => {
-                                      navigator.clipboard.writeText(selectedFilesystemContent);
+                                      clipboard.writeText(selectedFilesystemContent);
                                     }}
                                   >
                                     <CodeIcon className="w-4 h-4 mr-1" />

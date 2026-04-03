@@ -19,6 +19,7 @@
 import { ChatOpenAI } from '@langchain/openai';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
+import { withRetry, isRetryableError } from '@/lib/vector-memory/retry';
 
 export type ModelTier = 'fast' | 'reasoning' | 'coder' | 'auto';
 
@@ -66,12 +67,28 @@ export async function routeLLM(
   }
 
   try {
-    return await model.invoke(messages);
+    return await withRetry(
+      () => model.invoke(messages),
+      {
+        maxRetries: 2,
+        baseDelay: 1000,
+        context: `routeLLM:${tier}`,
+        shouldRetry: (error) => isRetryableError(error),
+      }
+    );
   } catch (error) {
     // Fallback to reasoning model if tier fails
     if (tier !== 'reasoning') {
       console.warn(`Model ${tier} failed, falling back to reasoning model`);
-      return await modelMap.reasoning.invoke(messages);
+      return await withRetry(
+        () => modelMap.reasoning.invoke(messages),
+        {
+          maxRetries: 1,
+          baseDelay: 1000,
+          context: 'routeLLM:fallback',
+          shouldRetry: (error) => isRetryableError(error),
+        }
+      );
     }
     throw error;
   }

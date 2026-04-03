@@ -30,19 +30,20 @@ import {
   type StatefulAgentResult,
 } from './stateful-agent/agents/stateful-agent';
 import { createLogger } from '@/lib/utils/logger';
-import { mastraWorkflowIntegration } from '../agent/mastra-workflow-integration';
+import { mastraWorkflowIntegration } from '@bing/shared/agent/mastra-workflow-integration';
 
 import {
   AgentOrchestrator,
   type OrchestratorConfig,
   type OrchestratorEvent
-} from '../agent/orchestration/agent-orchestrator';
+} from '@bing/shared/agent/orchestration/agent-orchestrator';
 
 import {
   createTaskClassifier,
   type TaskClassification,
   type ClassificationContext,
-} from '../agent/task-classifier';
+} from '@bing/shared/agent/task-classifier';
+import { getProjectServices, type ProjectContext } from '@/lib/project-context';
 
 const log = createLogger('UnifiedAgentService');
 
@@ -68,6 +69,9 @@ export interface UnifiedAgentConfig {
   systemPrompt?: string;
   conversationHistory?: Array<{ role: string; content: string }>;
 
+  // Project isolation (provides project-scoped vector memory and retrieval)
+  projectContext?: ProjectContext;
+
   // Tools
   tools?: any[];
   executeTool?: (name: string, args: Record<string, any>) => Promise<ToolResult>;
@@ -82,8 +86,8 @@ export interface UnifiedAgentConfig {
   maxTokens?: number;
 
   // Mode override (optional - auto-detected from env if not specified)
-  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'auto';
-  
+  mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'auto';
+
   // Mastra workflow options
   workflowId?: string; // Use specific Mastra workflow
   enableMastraWorkflows?: boolean; // Enable Mastra workflow routing
@@ -98,7 +102,7 @@ export interface UnifiedAgentResult {
     result: ToolResult;
   }>;
   totalSteps?: number;
-  mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow';
+  mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop';
   error?: string;
   metadata?: {
     model?: string;
@@ -116,7 +120,8 @@ export interface ProviderHealth {
   v2Local: boolean;
   v2Native: boolean;  // OpenCode CLI directly (new primary engine)
   v1Api: boolean;
-  preferredMode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native';
+  desktop: boolean;   // Tauri desktop local execution
+  preferredMode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'desktop';
 }
 
 /**
@@ -126,6 +131,9 @@ export function checkProviderHealth(): ProviderHealth {
   const containerized = process.env.OPENCODE_CONTAINERIZED === 'true';
   const sandboxProvider = process.env.SANDBOX_PROVIDER || 'daytona';
   const sandboxKey = process.env[`${sandboxProvider.toUpperCase()}_API_KEY`];
+
+  // Desktop: Tauri desktop mode with local execution
+  const desktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
 
   // V2 Containerized: requires sandbox provider + API key + opencode
   const v2Containerized = containerized && !!sandboxKey;
@@ -141,10 +149,12 @@ export function checkProviderHealth(): ProviderHealth {
   const apiKeyEnv = `${llmProvider.toUpperCase()}_API_KEY`;
   const v1Api = !!process.env[apiKeyEnv] || !!process.env.OPENROUTER_API_KEY;
 
-  // Determine preferred mode - OPENCODE V2 IS PRIMARY FOR AGENCY
-  let preferredMode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' = 'v1-api';
+  // Determine preferred mode - Desktop takes priority when enabled
+  let preferredMode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'desktop' = 'v1-api';
 
-  if (v2Native) {
+  if (desktop) {
+    preferredMode = 'desktop';
+  } else if (v2Native) {
     // OpenCode engine is primary for agentic tasks
     preferredMode = containerized ? 'v2-containerized' : (v2Local ? 'v2-local' : 'v2-native');
   } else if (v1Api) {
@@ -157,6 +167,7 @@ export function checkProviderHealth(): ProviderHealth {
     v2Local,
     v2Native,
     v1Api,
+    desktop,
     preferredMode,
   };
 }
@@ -168,12 +179,18 @@ export function checkProviderHealth(): ProviderHealth {
  * Returns both mode and classification for logging/metrics.
  */
 async function determineMode(config: UnifiedAgentConfig): Promise<{
-  mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow';
+  mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop';
   classification?: TaskClassification;
 }> {
   // Explicit mode override
   if (config.mode && config.mode !== 'auto') {
     return { mode: config.mode };
+  }
+
+  // Desktop mode takes priority when enabled
+  const health = checkProviderHealth();
+  if (health.desktop) {
+    return { mode: 'desktop' };
   }
 
   // Check if Mastra workflow should be used
@@ -246,6 +263,9 @@ export async function processUnifiedAgentRequest(
 
   try {
     switch (mode) {
+      case 'desktop':
+        return await runDesktopMode(config, classification);
+
       case 'v2-native':
         return await runV2Native(config, classification);
 
@@ -264,7 +284,8 @@ export async function processUnifiedAgentRequest(
     }
   } catch (error) {
     // Attempt fallback on error
-    const fallbackResult = await attemptFallback(config, mode, error);
+    const triedModes = new Set<string>([mode]);
+    const fallbackResult = await attemptFallback(config, mode, error, triedModes);
 
     if (fallbackResult) {
       return {
@@ -417,19 +438,114 @@ async function runV2Native(
 }
 
 /**
+ * Run Desktop mode - Local execution via Tauri desktop provider
+ * Uses the user's local filesystem and shell directly without cloud sandboxes.
+ */
+async function runDesktopMode(
+  config: UnifiedAgentConfig,
+  classification?: TaskClassification
+): Promise<UnifiedAgentResult> {
+  const startTime = Date.now();
+  log.info('Running Desktop mode (local execution)', {
+    userMessageLength: config.userMessage.length,
+    classification: classification?.complexity,
+  });
+
+  // Desktop mode uses the StatefulAgent with a desktop sandbox provider
+  // for complex tasks, or the OpenCode engine for simple tasks
+  const shouldUseStatefulAgent = classification
+    ? classification.complexity === 'complex' || classification.recommendedMode === 'stateful-agent'
+    : /(create|build|implement|refactor|migrate)/i.test(config.userMessage);
+
+  if (shouldUseStatefulAgent && process.env.ENABLE_STATEFUL_AGENT !== 'false') {
+    log.info('Desktop: Complex task, routing to StatefulAgent with desktop provider');
+    return await runStatefulAgentMode(config);
+  }
+
+  // For simple tasks, use the OpenCode engine with desktop sandbox
+  try {
+    const engineConfig: OpenCodeEngineConfig = {
+      model: process.env.OPENCODE_MODEL,
+      systemPrompt: config.systemPrompt || 'You are an expert software engineer running on the user\'s desktop. You have direct access to the local filesystem and shell. Execute commands freely to complete tasks.',
+      maxSteps: config.maxSteps || 25,
+      timeout: 300000,
+      enableBash: true,
+      enableFileOps: true,
+      enableCodegen: true,
+      onStreamChunk: config.onStreamChunk,
+      onToolCall: (tool, args) => {
+        config.onToolExecution?.(tool, args, { success: true, output: 'Tool called' });
+      },
+    };
+
+    const engine = createOpenCodeEngine(engineConfig);
+    const result = await engine.execute(config.userMessage);
+
+    if (!result.success) {
+      throw new Error(result.error || 'Desktop execution failed');
+    }
+
+    const steps = [
+      ...(result.bashCommands || []).map(cmd => ({
+        toolName: 'execute_bash' as const,
+        args: { command: cmd.command },
+        result: {
+          success: cmd.exitCode === 0,
+          output: cmd.output,
+          exitCode: cmd.exitCode,
+        },
+      })),
+      ...(result.fileChanges || []).map(file => ({
+        toolName: 'file_operation' as const,
+        args: { path: file.path, action: file.action },
+        result: {
+          success: true,
+          output: `File ${file.action}: ${file.path}`,
+        },
+      })),
+    ];
+
+    return {
+      success: true,
+      response: result.response,
+      steps,
+      totalSteps: result.steps,
+      mode: 'desktop',
+      metadata: {
+        provider: 'desktop',
+        model: result.metadata?.model,
+        duration: Date.now() - startTime,
+      },
+    };
+  } catch (error) {
+    log.error('Desktop mode failed, falling back to V1 API', error);
+    // Fall back to V1 API if desktop execution fails
+    return await runV1Api(config);
+  }
+}
+
+/**
  * Run StatefulAgent mode - Plan-Act-Verify workflow for complex tasks
  * Uses comprehensive orchestration with task decomposition, self-healing, and verification
  */
 async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
 
+  // Initialize project-scoped services if projectContext provided
+  let projectServices: ReturnType<typeof getProjectServices> | null = null;
+  if (config.projectContext) {
+    projectServices = getProjectServices(config.projectContext);
+  }
+
   try {
     const agentOptions: StatefulAgentOptions = {
-      sessionId: `unified-${Date.now()}`,
+      sessionId: config.projectContext?.id || `unified-${Date.now()}`,
       maxSelfHealAttempts: parseInt(process.env.STATEFUL_AGENT_MAX_SELF_HEAL_ATTEMPTS || '3'),
       enforcePlanActVerify: true,
       enableReflection: process.env.STATEFUL_AGENT_ENABLE_REFLECTION !== 'false',
       enableTaskDecomposition: process.env.STATEFUL_AGENT_ENABLE_TASK_DECOMPOSITION !== 'false',
+      // Pass project-scoped retrieval for project-isolated memory access
+      projectServices: projectServices || undefined,
     };
 
     const agent = new StatefulAgent(agentOptions);
@@ -813,8 +929,13 @@ async function runV1ApiCompletion(
 async function attemptFallback(
   config: UnifiedAgentConfig,
   failedMode: string,
-  error: any
+  error: any,
+  triedModes: Set<string> = new Set()
 ): Promise<UnifiedAgentResult | null> {
+  // Track tried modes to prevent infinite loops
+  const visitedModes = new Set(triedModes);
+  visitedModes.add(failedMode);
+
   const health = checkProviderHealth();
 
   // Use task classifier for complexity detection (with regex fallback)
@@ -831,20 +952,20 @@ async function attemptFallback(
     isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(config.userMessage);
   }
 
-  // Try fallback chain based on what failed
+  // Try fallback chain based on what failed, excluding already tried modes
   // Priority: V2 Native (with StatefulAgent for complex) → V2 Containerized → V2 Local → V1 API
   const fallbackOrder: Array<'v2-native' | 'v2-containerized' | 'v2-local' | 'v1-api'> = [];
 
-  if (failedMode !== 'v2-native' && health.v2Native) {
+  if (!visitedModes.has('v2-native') && failedMode !== 'v2-native' && health.v2Native) {
     fallbackOrder.push('v2-native');
   }
-  if (failedMode !== 'v2-containerized' && health.v2Containerized) {
+  if (!visitedModes.has('v2-containerized') && failedMode !== 'v2-containerized' && health.v2Containerized) {
     fallbackOrder.push('v2-containerized');
   }
-  if (failedMode !== 'v2-local' && health.v2Local) {
+  if (!visitedModes.has('v2-local') && failedMode !== 'v2-local' && health.v2Local) {
     fallbackOrder.push('v2-local');
   }
-  if (failedMode !== 'v1-api' && health.v1Api) {
+  if (!visitedModes.has('v1-api') && failedMode !== 'v1-api' && health.v1Api) {
     fallbackOrder.push('v1-api');
   }
 
@@ -863,22 +984,49 @@ async function attemptFallback(
             metadata: {
               ...result.metadata,
               fallbackFrom: failedMode,
+              triedModes: Array.from(visitedModes),
             },
           };
         }
       }
 
-      const result = await processUnifiedAgentRequest({
-        ...config,
-        mode: fallbackMode,
-      });
+      // Execute the fallback mode directly instead of recursively calling attemptFallback
+      let result: UnifiedAgentResult;
+      switch (fallbackMode) {
+        case 'v2-native':
+          result = await runV2Native(config);
+          break;
+        case 'v2-containerized':
+          result = await runV2Containerized(config);
+          break;
+        case 'v2-local':
+          result = await runV2Local(config);
+          break;
+        case 'v1-api':
+          result = await runV1Api(config);
+          break;
+        default:
+          continue;
+      }
 
       if (result.success) {
-        return result;
+        // Update metadata to show the full chain of modes that were tried
+        const fallbackTriedModes = result.metadata?.triedModes || [fallbackMode];
+        return {
+          ...result,
+          metadata: {
+            ...result.metadata,
+            fallbackFrom: failedMode,
+            // Combine current visitedModes with the fallback's triedModes
+            triedModes: [...Array.from(visitedModes), ...fallbackTriedModes],
+          },
+        };
       }
     } catch (fallbackError) {
       console.warn(`[UnifiedAgent] Fallback to ${fallbackMode} also failed:`, fallbackError);
-      // Continue to next fallback
+      // Add the failed fallback mode to visitedModes to prevent re-trying
+      visitedModes.add(fallbackMode);
+      // Continue to next fallback with updated visitedModes
     }
   }
 

@@ -48,6 +48,8 @@ export const SSE_EVENT_TYPES = {
   DAG_TASK_STATUS: 'dag_task_status',
   /** Initialization event */
   INIT: 'init',
+  /** Orchestration progress update (agent nodes, steps, HITL, etc.) */
+  ORCHESTRATION_PROGRESS: 'orchestration_progress',
 } as const;
 
 export type SSEEventTypeName = typeof SSE_EVENT_TYPES[keyof typeof SSE_EVENT_TYPES];
@@ -237,6 +239,69 @@ export interface SSEInitPayload {
   timestamp: number;
 }
 
+/**
+ * Orchestration progress event — real-time updates from agent execution.
+ * All fields except type/timestamp are optional — only emit what's available.
+ */
+export interface SSEOrchestrationProgressPayload {
+  mode?: string;                                // Orchestration mode name
+  nodeId?: string;                              // Current agent/node ID
+  nodeRole?: string;                            // Role (planner, coder, reviewer, etc.)
+  nodeModel?: string;                           // Model name
+  nodeProvider?: string;                        // Provider (opencode, codex, amp, etc.)
+
+  // Plan/step tracking
+  steps?: Array<{
+    id?: string;
+    title?: string;
+    description?: string;
+    status?: 'pending' | 'running' | 'completed' | 'failed' | 'skipped';
+  }>;
+  currentStepIndex?: number;
+  totalSteps?: number;
+
+  currentAction?: string;                       // Human-readable "what's happening now"
+  phase?: 'planning' | 'acting' | 'verifying' | 'responding' | 'idle';
+
+  // Multi-agent topology
+  nodes?: Array<{
+    id?: string;
+    role?: string;
+    model?: string;
+    provider?: string;
+    status?: 'idle' | 'working' | 'waiting' | 'failed';
+  }>;
+
+  // Inter-node communication
+  nodeCommunication?: {
+    from?: string;
+    to?: string;
+    content?: string;
+    type?: 'delegation' | 'response' | 'review' | 'consensus' | 'relay';
+  };
+
+  // Errors/retries
+  errors?: Array<{
+    nodeId?: string;
+    message: string;
+    retryCount?: number;
+    recovered?: boolean;
+  }>;
+
+  // HITL requests
+  hitlRequests?: Array<{
+    id?: string;
+    action?: string;
+    reason?: string;
+    status?: 'pending' | 'approved' | 'rejected' | 'expired';
+    timeoutAt?: number;
+  }>;
+
+  // Extensibility
+  metadata?: Record<string, unknown>;
+  timestamp: number;
+}
+
 // ---------------------------------------------------------------------------
 // Discriminated union (useful on the consumer side)
 // ---------------------------------------------------------------------------
@@ -254,6 +319,7 @@ export type SSEEvent =
   | { type: typeof SSE_EVENT_TYPES.SPEC_AMPLIFICATION; data: SSESpecAmplificationPayload }
   | { type: typeof SSE_EVENT_TYPES.SPEC_REFINEMENT; data: SSESpecRefinementPayload }
   | { type: typeof SSE_EVENT_TYPES.DAG_TASK_STATUS; data: SSEDAGTaskStatusPayload }
+  | { type: typeof SSE_EVENT_TYPES.ORCHESTRATION_PROGRESS; data: SSEOrchestrationProgressPayload }
   | { type: typeof SSE_EVENT_TYPES.INIT; data: SSEInitPayload }
   | { type: typeof SSE_EVENT_TYPES.DONE; data: SSEDonePayload }
   | { type: typeof SSE_EVENT_TYPES.ERROR; data: SSEErrorPayload }

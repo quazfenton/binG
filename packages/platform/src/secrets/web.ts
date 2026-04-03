@@ -25,7 +25,7 @@ function getObfuscationKey(): string {
     navigator.userAgent,
     navigator.language,
     screen.colorDepth,
-    new Date().getTimezoneOffset(),
+    Intl.DateTimeFormat().resolvedOptions().timeZone,
   ].join('|');
 
   // Simple hash to derive a key
@@ -45,7 +45,7 @@ function obfuscate(value: string): string {
   const key = getObfuscationKey();
   let result = '';
   for (let i = 0; i < value.length; i++) {
-    result += String.fromCharCode(value.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+    result += String.fromCharCode((value.charCodeAt(i) ^ key.charCodeAt(i % key.length)) & 0xFF);
   }
   return btoa(result);
 }

@@ -108,8 +108,8 @@ function writePersistedConversationUiState(state: Omit<PersistedConversationUiSt
 
 const buildFilesystemHeaders = (): HeadersInit => buildApiHeaders();
 
-// Use shared file diff utilities
-import { applyDiffToContent } from '@/lib/chat/file-diff-utils';
+// Use shared file diff utilities - smartApply supersedes applyDiffToContent
+import { smartApply } from '@/lib/chat/file-diff-utils';
 
 export default function ConversationInterface() {
   const { user } = useAuth();
@@ -288,6 +288,66 @@ export default function ConversationInterface() {
   useEffect(() => {
     filesystemSessionIdRef.current = filesystemSessionId;
   }, [filesystemSessionId]);
+
+  // Load user API keys from secrets storage for provider override
+  const apiKeysRef = useRef<Record<string, string>>({});
+  const [userApiKeysLoaded, setUserApiKeysLoaded] = useState(false);
+
+  // Reload user API keys from secrets storage
+  const reloadUserApiKeys = useCallback(async () => {
+    try {
+      const { secrets } = await import('@bing/platform/secrets');
+      const stored = await secrets.get('user-api-keys');
+      if (stored) {
+        apiKeysRef.current = JSON.parse(stored);
+      } else {
+        apiKeysRef.current = {};
+      }
+      setUserApiKeysLoaded(true);
+      return apiKeysRef.current;
+    } catch {
+      setUserApiKeysLoaded(true);
+      return {};
+    }
+  }, []);
+
+  // Re-merge user API keys into available providers (marks them as available)
+  const refreshProviderAvailability = useCallback((providers: LLMProvider[], userKeys: Record<string, string>) => {
+    if (Object.keys(userKeys).length === 0) return providers;
+    return providers.map((p) => {
+      if (userKeys[p.id]) {
+        return { ...p, isAvailable: true };
+      }
+      return p;
+    });
+  }, []);
+
+  // Initial load on mount
+  useEffect(() => {
+    reloadUserApiKeys();
+  }, [reloadUserApiKeys]);
+
+  // Listen for API key changes from settings panel
+  useEffect(() => {
+    const handleKeysChanged = async () => {
+      const newKeys = await reloadUserApiKeys();
+      // Re-fetch providers from server to merge with user keys
+      try {
+        const res = await fetch("/api/providers", { credentials: 'include' });
+        const data = await res.json();
+        if (data.success) {
+          let providers: LLMProvider[] = data.data.providers || [];
+          providers = refreshProviderAvailability(providers, newKeys);
+          setAvailableProviders(providers);
+        }
+      } catch (e) {
+        console.error('[ConversationInterface] Failed to refresh providers after key change:', e);
+      }
+    };
+
+    window.addEventListener('user-api-keys-changed', handleKeysChanged);
+    return () => window.removeEventListener('user-api-keys-changed', handleKeysChanged);
+  }, [reloadUserApiKeys, refreshProviderAvailability]);
   
   // Persist currentConversationId to sessionStorage
   useEffect(() => {
@@ -512,6 +572,8 @@ export default function ConversationInterface() {
       mode: 'enhanced', // Enable spec amplification for enhanced responses
       agentMode: 'v1', // Use V1 mode for spec amplification (V2 has its own planning)
       conversationId: filesystemSessionIdRef.current,
+      // Pass user API keys for provider override (if user set custom keys)
+      apiKeys: Object.keys(apiKeysRef.current).length > 0 ? apiKeysRef.current : undefined,
       filesystemContext: {
         attachedFiles: filesystemContextRef.current.attachedFiles.map((file) => ({
           path: file.path,
@@ -931,12 +993,17 @@ export default function ConversationInterface() {
   }, [currentConversationId]);
 
   // Fetch available providers on mount and align defaults with server config
+  // Also merges user-provided API keys so providers with user keys appear in dropdown
   useEffect(() => {
     fetch("/api/providers", { credentials: 'include' })
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
-          const providers: LLMProvider[] = data.data.providers || [];
+          let providers: LLMProvider[] = data.data.providers || [];
+
+          // Merge user-provided API keys: mark providers as available if user has a key
+          providers = refreshProviderAvailability(providers, apiKeysRef.current);
+
           setAvailableProviders(providers);
 
           // Attempt to restore persisted selection first
@@ -1009,7 +1076,7 @@ export default function ConversationInterface() {
           setCurrentModel("gemini-2.5-flash");
         }
       });
-  }, []); // initial load only
+  }, [refreshProviderAvailability]);
 
   // Effect to fetch chat history on mount to ensure it's available
   useEffect(() => {
@@ -1398,7 +1465,42 @@ export default function ConversationInterface() {
         currentContent = "";
       }
 
-      const nextContent = applyDiffToContent(currentContent, entry.path, entry.diff);
+      const patchResult = await smartApply({
+        content: currentContent,
+        path: entry.path,
+        diff: entry.diff,
+        // LLM repair callback: asks the chat API to fix a broken diff
+        llm: async (prompt: string): Promise<string> => {
+          try {
+            const response = await fetch('/api/chat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...buildFilesystemHeaders() },
+              body: JSON.stringify({
+                messages: [{ role: 'user', content: prompt }],
+                provider: 'openai',
+                model: 'gpt-4o-mini',
+                maxTokens: 4000,
+                temperature: 0,
+              }),
+            });
+            if (!response.ok) return '';
+            const data = await response.json();
+            return data.content || data.response || '';
+          } catch {
+            return '';
+          }
+        },
+      });
+
+      const nextContent = patchResult.content;
+
+      if (patchResult.strategy !== 'unified') {
+        console.debug('[applyDiffsToFilesystem] Used strategy:', patchResult.strategy, {
+          path: resolvedPath,
+          confidence: patchResult.confidence,
+          attempts: patchResult.attempts,
+        });
+      }
 
       if (nextContent == null) {
         // Track failure for retry limit

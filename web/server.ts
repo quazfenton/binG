@@ -81,7 +81,7 @@ async function startup() {
     logger.info('Provider health checker started');
 
     // Start Agent Kernel (OS-like scheduler)
-    const { startAgentKernel } = await import('@/lib/agent/agent-kernel');
+    const { startAgentKernel } = await import('@bing/shared/agent/agent-kernel');
     await startAgentKernel();
     logger.info('Agent Kernel started');
 
