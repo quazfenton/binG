@@ -21,6 +21,7 @@ import type {
 } from './sandbox-provider';
 import type { ToolResult } from '../types';
 import { createLogger } from '@/lib/utils/logger';
+import { analyzeDesktopCommand as analyzeSecurityCommand, desktopSecurityPolicy } from './desktop-security-policy';
 
 const log = createLogger('DesktopProvider');
 
@@ -138,6 +139,30 @@ export class DesktopSandboxHandle implements SandboxHandle {
 
   async executeCommand(command: string, cwd?: string, timeout?: number): Promise<ToolResult> {
     warnIfDangerous(command);
+
+    // Security: Analyze command against desktop security policy
+    const securityAnalysis = analyzeSecurityCommand(command, this.workspaceDir);
+    if (!securityAnalysis.allowed) {
+      log.warn('Command blocked by security policy', {
+        command: command.slice(0, 200),
+        reason: securityAnalysis.reason,
+        riskLevel: securityAnalysis.riskLevel,
+      });
+      return {
+        success: false,
+        error: securityAnalysis.reason || 'Command blocked by security policy',
+        blocked: true,
+      };
+    }
+
+    // Log audit entry for commands requiring approval
+    if (securityAnalysis.requiresApproval) {
+      log.info('Command requires approval', {
+        command: command.slice(0, 200),
+        riskLevel: securityAnalysis.riskLevel,
+      });
+    }
+
     const { shell, flag } = getShell();
     
     // Security: Validate cwd is within workspace

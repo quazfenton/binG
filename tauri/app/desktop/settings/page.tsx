@@ -92,7 +92,7 @@ export default function DesktopSettingsPage() {
   const loadSystemInfo = async () => {
     try {
       const info = await tauriInvoke.getSystemInfo();
-      setSystemInfo(info ?? {});
+      setSystemInfo(info);
     } catch (err: any) {
       log.error('Failed to load system info', err);
     }

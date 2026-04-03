@@ -578,6 +578,12 @@ async function cloneRepoToVFS(
     const entries = await fs.readdir(dir, { withFileTypes: true });
 
     for (const entry of entries) {
+      // Security: reject symlinks to prevent reading files outside tmpDir
+      if (entry.isSymbolicLink()) {
+        filesSkipped++;
+        continue;
+      }
+
       // Security: skip hidden/system dirs and known large dirs
       if (entry.isDirectory() && (entry.name.startsWith('.') || SKIP_DIRS.includes(entry.name))) {
         continue;
@@ -598,28 +604,18 @@ async function cloneRepoToVFS(
         if (stat.size > MAX_FILE_SIZE) continue;
 
         try {
-          // Check if file already exists - avoid overwrites
-          let existedBefore = false;
-          try {
-            await virtualFilesystem.readFile(ownerId, vfsPath);
-            existedBefore = true;
-          } catch {
-            // File doesn't exist - good, we can write it
-          }
-
-          if (existedBefore) {
-            filesSkipped++;
-            continue;
-          }
-
+          // Atomic write with failIfExists to prevent TOCTOU race conditions
           const content = await fs.readFile(fullPath, 'utf-8');
           const language = detectLanguage(entry.name);
-          await virtualFilesystem.writeFile(ownerId, vfsPath, content, language);
+          await virtualFilesystem.writeFile(ownerId, vfsPath, content, language, { failIfExists: true });
           filesWritten++;
           writtenPaths.push(vfsPath);
         } catch (err) {
-          // Skip files that can't be read as UTF-8 (binary files with wrong extension)
-          console.warn(`[GitHub Clone] Skipping file ${vfsPath}:`, (err as Error).message);
+          // Skip files that can't be read as UTF-8 or already exist (atomic check prevented race)
+          const errMsg = (err as Error).message;
+          if (!errMsg.startsWith('File already exists:')) {
+            console.warn(`[GitHub Clone] Skipping file ${vfsPath}:`, errMsg);
+          }
           filesSkipped++;
         }
       }

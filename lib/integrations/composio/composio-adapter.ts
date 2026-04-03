@@ -6,7 +6,7 @@
  * SECURITY: All tool calls now require userId for proper isolation.
  */
 
-import { getComposioService } from '@/lib/platforms/composio-service';
+import { getComposioService } from '@/lib/integrations/composio-service';
 
 const composioService = getComposioService();
 

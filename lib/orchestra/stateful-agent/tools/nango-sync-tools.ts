@@ -10,7 +10,7 @@
  * @see https://nango.dev/docs/syncs
  */
 
-import { getNangoService } from '@/lib/platforms/nango-service';
+import { getNangoService } from '@/lib/integrations/nango-service';
 
 export interface SyncToolResult {
   success: boolean;

@@ -130,7 +130,6 @@ export class DesktopMCPManager extends EventEmitter {
         child.once('error', (err) => {
           server.status = 'error';
           server.error = err.message;
-          this.emit('serverError', serverId, err);
           reject(err);
         });
       });

@@ -12,7 +12,7 @@ import { parseMCPServerConfigs, initializeMCP, shutdownMCP, getMCPSettings, isMC
 import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } from './mcporter-integration'
 import { createLogger } from '../utils/logger'
 import { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
-import { ArcadeService, getArcadeService } from '../platforms/arcade-service'
+import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
 import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
 import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '../agent/nullclaw-integration'
 import { standaloneGitTools } from '../tools/git-tools'

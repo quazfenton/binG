@@ -89,7 +89,7 @@ import {
   LLMError
 } from '../../enhanced-code-system/core/error-types'
 
-import { initializeComposioService, getComposioService, type ComposioService } from '../platforms/composio-service'
+import { initializeComposioService, getComposioService, type ComposioService } from '../integrations/composio-service'
 import { chatLogger } from './chat-logger'
 
 export interface LLMProvider {
