@@ -18,8 +18,10 @@ import {
   Download,
   Loader2,
   FolderPlus,
+  ArrowLeft,
 } from 'lucide-react';
 import { ScrollArea } from '../ui/scroll-area';
+import { buildApiHeaders } from '@/lib/utils';
 
 interface GitHubRepo {
   name: string;
@@ -37,6 +39,19 @@ interface PopularRepo {
   stargazers_count: number;
   forks_count: number;
   html_url: string;
+}
+
+interface TrendingRepo {
+  rank: number;
+  name: string;
+  full_name: string;
+  owner: string;
+  description: string;
+  language: string;
+  stars: number;
+  forks: number;
+  todayStars: number;
+  url: string;
 }
 
 interface GitHubFile {
@@ -58,6 +73,8 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
   const [token, setToken] = useState('');
   const [popularRepos, setPopularRepos] = useState<PopularRepo[]>([]);
   const [isPopularLoading, setIsPopularLoading] = useState(false);
+  const [trendingRepos, setTrendingRepos] = useState<TrendingRepo[]>([]);
+  const [isTrendingLoading, setIsTrendingLoading] = useState(false);
   const [cloneRepoUrl, setCloneRepoUrl] = useState('');
   const [clonePath, setClonePath] = useState('repos');
   const [isCloning, setIsCloning] = useState(false);
@@ -119,9 +136,27 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
     }
   }, [ghFetch]);
 
+  const fetchTrendingRepos = useCallback(async () => {
+    setIsTrendingLoading(true);
+    try {
+      const response = await fetch('/api/integrations/github?type=trending');
+      const result = await response.json();
+      if (result.success) {
+        setTrendingRepos(result.data.repos || []);
+      } else {
+        setError(result.error || 'Failed to load trending repositories.');
+      }
+    } catch (err: any) {
+      setError(err.message || 'Failed to load trending repositories.');
+    } finally {
+      setIsTrendingLoading(false);
+    }
+  }, []);
+
   useEffect(() => {
     fetchPopularRepos();
-  }, [fetchPopularRepos]);
+    fetchTrendingRepos();
+  }, [fetchPopularRepos, fetchTrendingRepos]);
 
   const fetchRepoData = useCallback(async (inputUrl?: string) => {
     const sourceUrl = (inputUrl ?? repoUrl).trim();
@@ -228,31 +263,83 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
 
     setIsCloning(true);
     setCloneResult(null);
+
+    // Parse owner/repo from URL (needed for both client and fallback)
+    const parsed = parseRepoUrl(source.trim());
+    if (!parsed) {
+      setCloneResult('Invalid repository URL. Use owner/repo or a full GitHub URL.');
+      setIsCloning(false);
+      return;
+    }
+
     try {
-      const response = await fetch('/api/integrations/github', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          action: 'clone',
-          repoUrl: source.trim(),
-          destinationPath: clonePath.trim() || 'repos',
-        }),
-      });
+      const vfsPath = `project/sessions/${parsed.repo}`;
 
-      const data = await response.json();
-      if (!response.ok || !data.success) {
-        throw new Error(data.error || 'Clone failed');
-      }
+      // Primary: client-side clone via GitHub API zipball
+      const { cloneRepoToVFS } = await import('@/lib/github/client-clone');
+      const result = await cloneRepoToVFS(
+        parsed.owner,
+        parsed.repo,
+        vfsPath,
+        {
+          onProgress: (progress) => {
+            if (progress.phase === 'writing') {
+              setCloneResult(`Cloning... ${progress.filesWritten} files written, ${progress.filesSkipped || 0} skipped (${progress.filesProcessed}/${progress.totalFiles})`);
+            } else if (progress.phase === 'downloading') {
+              setCloneResult('Downloading repository...');
+            } else if (progress.phase === 'extracting') {
+              setCloneResult('Extracting files...');
+            }
+          },
+          githubToken: token || undefined,
+        },
+      );
 
-      setCloneResult(`Cloned to ${data.data.destinationPath}`);
+      setCloneResult(`Cloned ${result.filesWritten} files to ${result.vfsPath} (${result.filesSkipped} skipped)`);
     } catch (err: any) {
-      setCloneResult(err.message || 'Clone failed');
+      // Fallback: server-side clone
+      try {
+        setCloneResult('Client clone failed, trying server-side...');
+        const response = await fetch('/api/integrations/github', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({
+            action: 'clone',
+            repoUrl: source.trim(),
+            destinationPath: `project/sessions/${parsed.repo}`,
+          }),
+        });
+
+        const data = await response.json();
+        if (!response.ok || !data.success) {
+          throw new Error(data.error || 'Clone failed');
+        }
+
+        setCloneResult(`Cloned to ${data.data.vfsPath} (${data.data.filesWritten} files, ${data.data.filesSkipped || 0} skipped)`);
+
+        // Trigger filesystem refresh
+        try {
+          await fetch('/api/filesystem/list', {
+            headers: { ...buildApiHeaders() },
+          });
+        } catch {
+          // Best-effort refresh
+        }
+      } catch (fallbackErr: any) {
+        setCloneResult(`Clone failed: ${fallbackErr.message || err.message}`);
+      }
     } finally {
       setIsCloning(false);
     }
   };
 
   const loadPopularRepo = (fullName: string) => {
+    setRepoUrl(fullName);
+    setCloneRepoUrl(fullName);
+    fetchRepoData(fullName);
+  };
+
+  const loadTrendingRepo = (fullName: string) => {
     setRepoUrl(fullName);
     setCloneRepoUrl(fullName);
     fetchRepoData(fullName);
@@ -339,6 +426,52 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
         {!repoData && (
           <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
             <div className="flex items-center gap-2 mb-3">
+              <Flame className="w-4 h-4 text-pink-400" />
+              <h3 className="font-semibold">Trending Repositories</h3>
+            </div>
+            {isTrendingLoading ? (
+              <div className="text-zinc-400 text-sm">Loading trending repositories...</div>
+            ) : (
+              <div className="overflow-y-auto max-h-[500px] pr-2 space-y-3">
+                <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                  {trendingRepos.map((repo) => (
+                    <button
+                      key={repo.full_name}
+                      onClick={() => loadTrendingRepo(repo.full_name)}
+                      className="text-left rounded-md border border-zinc-800 p-3 bg-zinc-900/60 hover:bg-zinc-800 transition-colors"
+                    >
+                      <div className="flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-2 min-w-0">
+                          <span className="text-xs text-zinc-500 font-mono">#{repo.rank}</span>
+                          <p className="font-medium truncate">{repo.full_name}</p>
+                        </div>
+                        <ExternalLink className="w-4 h-4 text-zinc-400 shrink-0" />
+                      </div>
+                      <p className="text-xs text-zinc-400 mt-1 line-clamp-2">{repo.description || 'No description.'}</p>
+                      <div className="flex items-center gap-3 mt-2 text-xs text-zinc-300">
+                        <span className="flex items-center gap-1">
+                          <Star className="w-3 h-3 text-yellow-400" />
+                          {repo.stars.toLocaleString()}
+                        </span>
+                        <span className="flex items-center gap-1">
+                          <GitFork className="w-3 h-3 text-sky-400" />
+                          {repo.forks.toLocaleString()}
+                        </span>
+                        {repo.language && (
+                          <span className="text-zinc-500 truncate">{repo.language}</span>
+                        )}
+                      </div>
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
+        )}
+
+        {!repoData && (
+          <div className="rounded-lg border border-zinc-800 bg-zinc-950 p-3">
+            <div className="flex items-center gap-2 mb-3">
               <Flame className="w-4 h-4 text-orange-400" />
               <h3 className="font-semibold">Popular Repositories</h3>
             </div>
@@ -376,6 +509,22 @@ const GitHubExplorerPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) =>
 
         {repoData && (
           <div className="border-t border-zinc-800 pt-4 mt-4">
+            <div className="flex items-center gap-2 mb-4">
+              <Button
+                variant="ghost"
+                size="sm"
+                onClick={() => {
+                  setRepoData(null);
+                  setTree([]);
+                  setSelectedFile(null);
+                  setTotalTreeCount(0);
+                }}
+                className="text-zinc-400 hover:text-white hover:bg-zinc-800"
+              >
+                <ArrowLeft className="w-4 h-4 mr-1" />
+                Back
+              </Button>
+            </div>
             <div className="flex justify-between items-start mb-4 gap-2">
               <div>
                 <h2 className="text-xl font-bold">{repoData.name}</h2>

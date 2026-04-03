@@ -23,6 +23,7 @@ import {
 import { Label } from "@/components/ui/label";
 import { Switch } from "@/components/ui/switch";
 import { toast } from "sonner";
+import { buildApiHeaders } from "@/lib/utils";
 import {
   ImageIcon,
   Sparkles,
@@ -269,7 +270,10 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
     try {
       const response = await fetch("/api/image/generate", {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          ...buildApiHeaders(),
+        },
         body: JSON.stringify({
           prompt: params.prompt,
           negativePrompt: params.negativePrompt,

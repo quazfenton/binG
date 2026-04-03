@@ -15,11 +15,55 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { auth0 } from '@/lib/auth0';
 import path from 'path';
 import fs from 'fs/promises';
+import { existsSync, statSync, readdirSync, readFileSync, rmSync } from 'fs';
 import { spawn } from 'child_process';
+import { generateSecureId } from '@/lib/utils';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { resolveFilesystemOwnerWithFallback } from '@/app/api/filesystem/utils';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
+import crypto from 'crypto';
 
 export const runtime = 'nodejs';
 
 const GITHUB_API = 'https://api.github.com';
+
+// ============================================
+// Simple in-memory cache with TTL
+// ============================================
+
+interface CacheEntry<T> {
+  data: T;
+  expiresAt: number;
+}
+
+class SimpleCache {
+  private store = new Map<string, CacheEntry<any>>();
+
+  get<T>(key: string): T | null {
+    const entry = this.store.get(key);
+    if (!entry) return null;
+    if (Date.now() > entry.expiresAt) {
+      this.store.delete(key);
+      return null;
+    }
+    return entry.data as T;
+  }
+
+  set<T>(key: string, data: T, ttlMs: number): void {
+    this.store.set(key, { data, expiresAt: Date.now() + ttlMs });
+  }
+
+  clear(key: string): void {
+    this.store.delete(key);
+  }
+}
+
+// Shared cache instance (persists across requests in Node.js)
+const cache = new SimpleCache();
+
+// Cache TTLs
+const TRENDING_CACHE_TTL = 15 * 60 * 1000; // 15 minutes (GitHub updates ~every 15 min)
+const POPULAR_CACHE_TTL = 30 * 60 * 1000;  // 30 minutes (popular repos change slowly)
 
 interface GitHubFile {
   name: string;
@@ -154,13 +198,13 @@ function parseGitHubUrl(url: string): { owner: string; repo: string; branch?: st
 // TRENDING REPOS (Scraping - no API key needed)
 // ============================================
 
-async function scrapeTrendingRepos(timeframe: 'daily' | 'weekly' | 'monthly' = 'daily'): Promise<ScrapedRepo[]> {
+async function scrapeTrendingReposForTimeframe(timeframe: 'weekly' | 'monthly'): Promise<ScrapedRepo[]> {
   const url = `https://github.com/trending?since=${timeframe}`;
-  
+
   const response = await fetch(url, {
     headers: {
       'Accept': 'text/html,application/xhtml+xml,application/xml;q=0.9,image/webp,*/*;q=0.8',
-      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36',
+      'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
     },
   });
 
@@ -171,40 +215,77 @@ async function scrapeTrendingRepos(timeframe: 'daily' | 'weekly' | 'monthly' = '
   const html = await response.text();
   const repos: ScrapedRepo[] = [];
 
-  const articleRegex = /<article[^>]*class="Box-row"[^>]*>([\s\S]*?)<\/article>/g;
+  // Split HTML into article blocks
+  const articleRegex = /<article[^>]*>([\s\S]*?)<\/article>/gi;
   let articleMatch;
   let rank = 1;
 
   while ((articleMatch = articleRegex.exec(html)) !== null) {
     const articleHtml = articleMatch[1];
-    
-    const nameMatch = articleHtml.match(/href="\/([^"]+\/[^"]+)"[^>]*>\s*([\s\S]*?)<\//);
-    if (!nameMatch) continue;
 
-    const fullName = nameMatch[1].replace(/"/g, '').trim();
-    const [owner, name] = fullName.split('/');
-    
-    const descMatch = articleHtml.match(/<p[^>]*class="col-9 color-fg-muted text-sm mt-1"[^>]*>\s*([\s\S]*?)\s*<\/p>/);
-    const description = descMatch 
-      ? descMatch[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim() 
+    // Find repo link - look for /owner/repo pattern in href
+    const linkRegex = /href="\/([^\/]+)\/([^\/"]+)"/g;
+    let linkMatch;
+    let fullName = '';
+    let owner = '';
+    let name = '';
+
+    // Find the first valid repo link (skip sponsor, orgs, etc.)
+    while ((linkMatch = linkRegex.exec(articleHtml)) !== null) {
+      const potentialOwner = linkMatch[1];
+      const potentialName = linkMatch[2];
+
+      // Skip invalid patterns
+      if (potentialOwner.toLowerCase() === 'sponsors' ||
+          potentialOwner.toLowerCase() === 'orgs' ||
+          potentialOwner.toLowerCase() === 'trending' ||
+          potentialOwner.toLowerCase() === 'collections' ||
+          potentialOwner.toLowerCase() === 'features' ||
+          potentialOwner.toLowerCase() === 'security' ||
+          potentialOwner.toLowerCase() === 'customer-stories' ||
+          potentialOwner.toLowerCase() === 'enterprise' ||
+          potentialOwner.toLowerCase() === 'explore' ||
+          potentialOwner.toLowerCase() === 'topics' ||
+          potentialOwner.toLowerCase() === 'marketplace' ||
+          potentialOwner.toLowerCase() === 'settings' ||
+          potentialOwner.toLowerCase() === 'notifications' ||
+          potentialOwner.toLowerCase() === 'issues' ||
+          potentialOwner.toLowerCase() === 'pulls' ||
+          potentialName.toLowerCase() === 'sponsors' ||
+          potentialName.toLowerCase() === 'followers' ||
+          potentialName.toLowerCase() === 'following') {
+        continue;
+      }
+
+      // Valid repo link found
+      owner = potentialOwner;
+      name = potentialName;
+      fullName = `${owner}/${name}`;
+      break;
+    }
+
+    if (!fullName) continue;
+
+    // Extract description
+    const descMatch = articleHtml.match(/<p[^>]*>([\s\S]*?)<\/p>/);
+    const description = descMatch
+      ? descMatch[1].replace(/<[^>]*>/g, '').replace(/\s+/g, ' ').trim()
       : '';
 
-    const langMatch = articleHtml.match(/<span[^>]*class="color-fg-default text-sm ml-2"[^>]*>([^<]+)<\/span>/);
+    // Extract language
+    const langMatch = articleHtml.match(/class="repo-language-color"[^>]*>[^<]*<[^>]*>([^<]+)<\/span>/i) ||
+                      articleHtml.match(/<span[^>]*>([^<]+)<\/span>[^<]*<span[^>]*>stars<\/span>/i);
     const language = langMatch ? langMatch[1].trim() : '';
 
-    const starsMatch = articleHtml.match(/href="\/[^"]+\/stargazers"[^>]*>\s*([\d,\.]+[kKmM]?)\s*<\//);
-    const stars = parseNumber(starsMatch ? starsMatch[1] : '0');
+    // Extract total stars
+    const starsMatch = articleHtml.match(/(\d[\d,\.]*[kKmM]?)\s*stars?/i) ||
+                       articleHtml.match(/href="\/[^"]+\/stargazers"[^>]*>.*?(\d[\d,\.]*[kKmM]?)/i);
+    const stars = starsMatch ? parseNumber(starsMatch[1]) : 0;
 
-    const forksMatch = articleHtml.match(/href="\/[^"]+\/forks"[^>]*>\s*([\d,\.]+[kKmM]?)\s*<\//);
-    const forks = parseNumber(forksMatch ? forksMatch[1] : '0');
-
-    let todayStars = 0;
-    if (timeframe === 'daily') {
-      const todayStarsMatch = articleHtml.match(/<svg[^>]*class="octicon octicon-star"[^>]*<\/svg>[^<]*([\d,\.]+[kKmM]?)/);
-      if (todayStarsMatch) {
-        todayStars = parseNumber(todayStarsMatch[1]);
-      }
-    }
+    // Extract forks
+    const forksMatch = articleHtml.match(/(\d[\d,\.]*[kKmM]?)\s*forks?/i) ||
+                       articleHtml.match(/href="\/[^"]+\/forks"[^>]*>.*?(\d[\d,\.]*[kKmM]?)/i);
+    const forks = forksMatch ? parseNumber(forksMatch[1]) : 0;
 
     repos.push({
       rank,
@@ -215,19 +296,56 @@ async function scrapeTrendingRepos(timeframe: 'daily' | 'weekly' | 'monthly' = '
       language,
       stars,
       forks,
-      todayStars,
+      todayStars: 0,
       url: `https://github.com/${fullName}`,
     });
 
     rank++;
   }
 
+  console.log(`[GitHub Trending] Scraped ${repos.length} repos from ${url}`);
   return repos;
+}
+
+async function scrapeTrendingRepos(): Promise<ScrapedRepo[]> {
+  // Fetch both weekly and monthly trending
+  const [weeklyRepos, monthlyRepos] = await Promise.allSettled([
+    scrapeTrendingReposForTimeframe('weekly'),
+    scrapeTrendingReposForTimeframe('monthly'),
+  ]);
+
+  let results: ScrapedRepo[] = [];
+
+  if (weeklyRepos.status === 'fulfilled') {
+    results = results.concat(weeklyRepos.value);
+  } else {
+    console.warn('[GitHub Trending] Weekly scraping failed:', weeklyRepos.reason);
+  }
+
+  if (monthlyRepos.status === 'fulfilled') {
+    results = results.concat(monthlyRepos.value);
+  } else {
+    console.warn('[GitHub Trending] Monthly scraping failed:', monthlyRepos.reason);
+  }
+
+  // Deduplicate by full_name (repo URL hash)
+  const seen = new Set<string>();
+  const deduped: ScrapedRepo[] = [];
+  for (const repo of results) {
+    const key = repo.full_name.toLowerCase();
+    if (!seen.has(key)) {
+      seen.add(key);
+      deduped.push(repo);
+    }
+  }
+
+  // Re-rank after deduplication
+  return deduped.map((repo, idx) => ({ ...repo, rank: idx + 1 }));
 }
 
 async function fetchPopularReposFallback(): Promise<ScrapedRepo[]> {
   const response = await fetch(
-    'https://api.github.com/search/repositories?q=stars:>10000&sort=stars&order=desc&per_page=25',
+    'https://api.github.com/search/repositories?q=stars:>1000&sort=stars&order=desc&per_page=50',
     {
       headers: {
         'Accept': 'application/vnd.github.v3+json',
@@ -241,7 +359,7 @@ async function fetchPopularReposFallback(): Promise<ScrapedRepo[]> {
   }
 
   const data = await response.json();
-  
+
   return (data.items || []).map((repo: any, idx: number) => ({
     rank: idx + 1,
     name: repo.name,
@@ -379,6 +497,123 @@ async function runGitClone(repoUrl: string, destinationDir: string): Promise<str
   });
 }
 
+/**
+ * Walk a cloned repo directory and write all files to the user's VFS
+ * Security: skips .git directory, binary files, and files > 5MB
+ */
+const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5MB
+const SKIP_DIRS = ['.git', 'node_modules', '.next', 'dist', 'build', '__pycache__', '.venv', 'venv'];
+const BINARY_EXTENSIONS = new Set([
+  '.png', '.jpg', '.jpeg', '.gif', '.bmp', '.ico', '.webp', '.svg',
+  '.woff', '.woff2', '.ttf', '.eot', '.otf',
+  '.zip', '.tar', '.gz', '.rar', '.7z', '.bz2',
+  '.exe', '.dll', '.so', '.dylib', '.a', '.lib',
+  '.pyc', '.pyo', '.class', '.o', '.obj',
+  '.pdf', '.doc', '.docx', '.xls', '.xlsx',
+  '.mp3', '.mp4', '.avi', '.mov', '.webm',
+  '.wasm', '.bin', '.dat',
+]);
+
+function detectLanguage(filePath: string): string | undefined {
+  const ext = path.extname(filePath).toLowerCase();
+  const langMap: Record<string, string> = {
+    '.ts': 'typescript', '.tsx': 'typescript', '.js': 'javascript', '.jsx': 'javascript',
+    '.py': 'python', '.rs': 'rust', '.go': 'go', '.java': 'java',
+    '.rb': 'ruby', '.php': 'php', '.cs': 'csharp', '.cpp': 'cpp', '.c': 'c',
+    '.h': 'c', '.hpp': 'cpp', '.swift': 'swift', '.kt': 'kotlin',
+    '.html': 'html', '.css': 'css', '.scss': 'scss', '.sass': 'sass',
+    '.json': 'json', '.xml': 'xml', '.yaml': 'yaml', '.yml': 'yaml',
+    '.md': 'markdown', '.txt': 'text', '.sh': 'shell', '.bash': 'shell',
+    '.sql': 'sql', '.graphql': 'graphql', '.toml': 'toml',
+  };
+  return langMap[ext];
+}
+
+async function cloneRepoToVFS(
+  cloneDir: string,
+  ownerId: string,
+  vfsBasePath: string,
+  repoName: string
+): Promise<{ filesWritten: number; filesSkipped: number; writtenPaths: string[] }> {
+  let filesWritten = 0;
+  let filesSkipped = 0;
+  const writtenPaths: string[] = [];
+
+  async function walkDir(dir: string, relativePath: string) {
+    const entries = readdirSync(dir, { withFileTypes: true });
+
+    for (const entry of entries) {
+      // Security: skip hidden/system dirs and known large dirs
+      if (entry.isDirectory() && (entry.name.startsWith('.') || SKIP_DIRS.includes(entry.name))) {
+        continue;
+      }
+
+      const fullPath = path.join(dir, entry.name);
+      const relPath = path.join(relativePath, entry.name);
+      const vfsPath = path.posix.join(vfsBasePath, repoName, relPath.replace(/\\/g, '/'));
+
+      if (entry.isDirectory()) {
+        await walkDir(fullPath, relPath);
+      } else {
+        // Skip binary/large files
+        const ext = path.extname(entry.name).toLowerCase();
+        if (BINARY_EXTENSIONS.has(ext)) continue;
+
+        const stat = statSync(fullPath);
+        if (stat.size > MAX_FILE_SIZE) continue;
+
+        try {
+          // Check if file already exists - avoid overwrites
+          let existedBefore = false;
+          try {
+            await virtualFilesystem.readFile(ownerId, vfsPath);
+            existedBefore = true;
+          } catch {
+            // File doesn't exist - good, we can write it
+          }
+
+          if (existedBefore) {
+            filesSkipped++;
+            continue;
+          }
+
+          const content = readFileSync(fullPath, 'utf-8');
+          const language = detectLanguage(entry.name);
+          await virtualFilesystem.writeFile(ownerId, vfsPath, content, language);
+          filesWritten++;
+          writtenPaths.push(vfsPath);
+        } catch (err) {
+          // Skip files that can't be read as UTF-8 (binary files with wrong extension)
+          console.warn(`[GitHub Clone] Skipping file ${vfsPath}:`, (err as Error).message);
+          filesSkipped++;
+        }
+      }
+    }
+  }
+
+  await walkDir(cloneDir, '');
+
+  // Emit filesystem update event for UI refresh
+  if (writtenPaths.length > 0) {
+    const scopePath = path.posix.join(vfsBasePath, repoName);
+    emitFilesystemUpdated({
+      path: scopePath,
+      paths: writtenPaths,
+      scopePath,
+      type: 'create',
+      workspaceVersion: Date.now(),
+      applied: writtenPaths.map(p => ({
+        path: p,
+        operation: 'write' as const,
+        timestamp: Date.now(),
+      })),
+      source: 'github-clone',
+    });
+  }
+
+  return { filesWritten, filesSkipped, writtenPaths };
+}
+
 // ============================================
 // API ROUTES
 // ============================================
@@ -391,17 +626,44 @@ async function runGitClone(repoUrl: string, destinationDir: string): Promise<str
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const type = searchParams.get('type') || 'repos';
-  const timeframe = searchParams.get('timeframe') as 'daily' | 'weekly' | 'monthly' || 'daily';
 
   // GET /api/integrations/github?type=trending
   if (type === 'trending') {
     try {
+      // Check cache first
+      const cached = cache.get<{ repos: ScrapedRepo[]; source: string }>('trending-repos');
+      if (cached) {
+        return NextResponse.json({
+          success: true,
+          data: {
+            repos: cached.repos,
+            fetchedAt: new Date().toISOString(),
+            source: cached.source,
+            cached: true,
+          },
+        });
+      }
+
       let repos: ScrapedRepo[];
+      let source = 'github-trending';
       try {
-        repos = await scrapeTrendingRepos(timeframe);
+        repos = await scrapeTrendingRepos();
+        console.log(`[GitHub Trending] Scraping returned ${repos.length} repos`);
+
+        // If scraping returned too few results, use API fallback
+        if (repos.length < 5) {
+          console.warn('[GitHub Trending] Too few repos from scraping, using API fallback');
+          repos = await fetchPopularReposFallback();
+          source = 'github-api-popular';
+          cache.set('trending-repos', { repos, source }, POPULAR_CACHE_TTL);
+        } else {
+          cache.set('trending-repos', { repos, source }, TRENDING_CACHE_TTL);
+        }
       } catch (scrapeError) {
         console.warn('Scraping failed, using API fallback:', scrapeError);
         repos = await fetchPopularReposFallback();
+        source = 'github-api-popular';
+        cache.set('trending-repos', { repos, source }, POPULAR_CACHE_TTL);
       }
 
       if (repos.length === 0) {
@@ -416,7 +678,8 @@ export async function GET(request: NextRequest) {
         data: {
           repos,
           fetchedAt: new Date().toISOString(),
-          source: 'github-trending',
+          source,
+          cached: false,
         },
       });
     } catch (error) {
@@ -496,9 +759,25 @@ export async function POST(request: NextRequest) {
 
     // POST /api/integrations/github { action: 'clone', repoUrl, destinationPath }
     if (action === 'clone') {
-      const authResult = await resolveRequestAuth(request, { allowAnonymous: false });
-      if (!authResult.success || !authResult.userId) {
-        return NextResponse.json({ error: 'Authentication required' }, { status: 401 });
+      // Allow anonymous cloning for public repos
+      const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
+      let anonSessionId: string | null = null;
+      if (!authResult.success) {
+        anonSessionId = generateSecureId('anon');
+      }
+
+      // Resolve VFS owner for writing files
+      let ownerId: string;
+      if (authResult.success && authResult.userId) {
+        ownerId = authResult.userId;
+      } else {
+        const fsOwner = await resolveFilesystemOwnerWithFallback(request, { route: 'clone', requestId: crypto.randomUUID() });
+        if (!fsOwner.ownerId) {
+          // Generate anonymous owner
+          ownerId = `anon:${generateSecureId('anon')}`;
+        } else {
+          ownerId = fsOwner.ownerId;
+        }
       }
 
       const validation = cloneRequestSchema.safeParse(body);
@@ -522,46 +801,64 @@ export async function POST(request: NextRequest) {
         );
       }
 
-      const safeDestinationPath = validateDestinationPath(validation.data.destinationPath);
       const repoName = extractRepoName(normalizedRepoUrl);
+      // Default to project/sessions/{repoName} if no path specified
+      const vfsDestinationPath = validation.data.destinationPath || `project/sessions/${repoName}`;
 
-      const workspaceRoot = process.cwd();
-      const destinationBase = path.resolve(workspaceRoot, safeDestinationPath);
-      const workspaceRootWithSep = workspaceRoot.endsWith(path.sep) ? workspaceRoot : `${workspaceRoot}${path.sep}`;
-
-      if (destinationBase !== workspaceRoot && !destinationBase.startsWith(workspaceRootWithSep)) {
+      // Security: validate VFS destination path
+      const normalizedVfsPath = vfsDestinationPath.replace(/\\/g, '/').replace(/^\/+/, '');
+      // Ensure path starts with project/sessions for security isolation
+      if (!normalizedVfsPath.startsWith('project/sessions') || normalizedVfsPath.includes('..') || normalizedVfsPath.includes('\0')) {
         return NextResponse.json(
-          { success: false, error: 'Destination path must stay inside the application workspace.' },
-          { status: 400 },
+          { success: false, error: 'Destination path must be within project/sessions/' },
+          { status: 400 }
         );
       }
 
-      await fs.mkdir(destinationBase, { recursive: true });
+      // Clone to a temp directory inside the app (isolated, auto-cleaned)
+      const appRoot = process.cwd();
+      const tmpBase = path.join(appRoot, '.tmp');
+      // Ensure .tmp directory exists
+      await fs.mkdir(tmpBase, { recursive: true });
+      const tmpDir = path.join(tmpBase, `clone-${crypto.randomUUID()}`);
 
-      const destinationDir = path.join(destinationBase, repoName);
-      const destinationExists = await fs.stat(destinationDir).then(() => true).catch(() => false);
-      if (destinationExists) {
-        const entries = await fs.readdir(destinationDir);
-        if (entries.length > 0) {
-          return NextResponse.json(
-            { success: false, error: `Destination already exists and is not empty: ${destinationDir}` },
-            { status: 400 },
-          );
+      try {
+        // Clone repo to temp dir
+        await runGitClone(normalizedRepoUrl, tmpDir);
+
+        // Walk cloned repo and write files to VFS
+        const cloneResult = await cloneRepoToVFS(tmpDir, ownerId, normalizedVfsPath, repoName);
+
+        const init: ResponseInit = { status: 200 };
+        if (anonSessionId) {
+          const isSecure = process.env.NODE_ENV === 'production';
+          init.headers = {
+            'Set-Cookie': `anon-session-id=${anonSessionId}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${isSecure ? '; Secure' : ''}`,
+          };
+        }
+
+        return NextResponse.json({
+          success: true,
+          data: {
+            repoUrl: normalizedRepoUrl,
+            vfsPath: `${normalizedVfsPath}/${repoName}`,
+            filesWritten: cloneResult.filesWritten,
+            filesSkipped: cloneResult.filesSkipped,
+            terminalCommand: `git clone ${normalizedRepoUrl}`,
+            validatedHost: urlValidation.hostname,
+          },
+        }, init);
+      } catch (error) {
+        const message = error instanceof Error ? error.message : 'Clone failed';
+        return NextResponse.json({ success: false, error: message }, { status: 500 });
+      } finally {
+        // ALWAYS clean up temp directory
+        try {
+          rmSync(tmpDir, { recursive: true, force: true });
+        } catch (cleanupError) {
+          console.error('[GitHub Clone] Failed to clean temp dir:', tmpDir, cleanupError);
         }
       }
-
-      const output = await runGitClone(normalizedRepoUrl, destinationDir);
-
-      return NextResponse.json({
-        success: true,
-        data: {
-          repoUrl: normalizedRepoUrl,
-          destinationPath: destinationDir,
-          output,
-          terminalCommand: `git clone ${normalizedRepoUrl} ${destinationDir}`,
-          validatedHost: urlValidation.hostname,
-        },
-      });
     }
 
     // POST /api/integrations/github { action: 'import', owner, repo, branch }
