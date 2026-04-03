@@ -11,6 +11,12 @@ import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
 import { Card, CardHeader, CardContent } from "@/components/ui/card";
 import {
+  DropdownMenu,
+  DropdownMenuContent,
+  DropdownMenuItem,
+  DropdownMenuTrigger,
+} from "@/components/ui/dropdown-menu";
+import {
   FolderOpen,
   FileText,
   MessageSquare,
@@ -369,9 +375,21 @@ interface ScrollableTabBarProps {
   tabs: TabDef[];
   activeTab: PanelTab;
   onTabChange: (tab: PanelTab) => void;
+  isTabVisible: (tab: PanelTab) => boolean;
+  toggleTabVisibility: (tab: PanelTab) => void;
+  setVisibleTabs: (tabs: PanelTab[]) => void;
+  visibleTabs: PanelTab[];
 }
 
-function ScrollableTabBar({ tabs, activeTab, onTabChange }: ScrollableTabBarProps) {
+function ScrollableTabBar({ 
+  tabs, 
+  activeTab, 
+  onTabChange,
+  isTabVisible,
+  toggleTabVisibility,
+  setVisibleTabs,
+  visibleTabs,
+}: ScrollableTabBarProps) {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [canScrollLeft, setCanScrollLeft] = useState(false);
   const [canScrollRight, setCanScrollRight] = useState(false);
@@ -462,6 +480,10 @@ function ScrollableTabBar({ tabs, activeTab, onTabChange }: ScrollableTabBarProp
     el.scrollBy({ left: direction === 'left' ? -200 : 200, behavior: 'smooth' });
   };
 
+  // Filter tabs by visibility
+  const visibleTabDefs = tabs.filter(tab => isTabVisible(tab.value));
+  const hiddenTabDefs = tabs.filter(tab => !isTabVisible(tab.value));
+
   return (
     <div className="relative flex items-center flex-1 min-w-0">
       {/* Left fade + arrow */}
@@ -490,7 +512,7 @@ function ScrollableTabBar({ tabs, activeTab, onTabChange }: ScrollableTabBarProp
         onMouseUp={handleMouseUpOrLeave}
         onMouseLeave={handleMouseUpOrLeave}
       >
-        {tabs.map((tab) => {
+        {visibleTabDefs.map((tab) => {
           const Icon = tab.icon;
           const isActive = activeTab === tab.value;
           return (
@@ -520,6 +542,35 @@ function ScrollableTabBar({ tabs, activeTab, onTabChange }: ScrollableTabBarProp
             </button>
           );
         })}
+        
+        {/* Add tab button */}
+        {hiddenTabDefs.length > 0 && (
+          <DropdownMenu>
+            <DropdownMenuTrigger asChild>
+              <button
+                className="flex items-center justify-center h-6 w-6 rounded-full text-white/50 hover:text-white/80 hover:bg-white/10 transition-all shrink-0"
+                title="Add tab"
+              >
+                <Plus className="w-3 h-3" />
+              </button>
+            </DropdownMenuTrigger>
+            <DropdownMenuContent align="start" className="w-48 bg-black/95 border border-white/20">
+              {hiddenTabDefs.map((tab) => {
+                const Icon = tab.icon;
+                return (
+                  <DropdownMenuItem
+                    key={tab.value}
+                    onClick={() => toggleTabVisibility(tab.value)}
+                    className="flex items-center gap-2 cursor-pointer"
+                  >
+                    <Icon className="w-3.5 h-3.5" />
+                    <span>{tab.label}</span>
+                  </DropdownMenuItem>
+                );
+              })}
+            </DropdownMenuContent>
+          </DropdownMenu>
+        )}
       </div>
 
       {/* Right fade + arrow */}
@@ -656,7 +707,7 @@ const automationData: AutomationItem[] = [
   { id: 'nanobanana', name: 'NanoBanana Video Gen', description: 'Auto-share to socials via Blotato', icon: Share2, category: 'media', available: false, tags: ['NanoBanana', 'VEO3', 'Blotato'] },
 ];
 
-export function ExperimentalWorkspacePanel() {
+export function WorkspacePanel() {
   const { isOpen, activeTab, closePanel, setTab, openMonacoEditor } = usePanel();
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
@@ -757,6 +808,50 @@ export function ExperimentalWorkspacePanel() {
     }
     return width;
   }, []);
+
+  // Tab visibility state - stored in localStorage
+  const [visibleTabs, setVisibleTabs] = useState<PanelTab[]>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('workspaceVisibleTabs');
+      if (saved) {
+        try {
+          return JSON.parse(saved) as PanelTab[];
+        } catch {
+          // Fallback to defaults if parsing fails
+        }
+      }
+    }
+    // Default visible tabs: Files, Chat, Automate, Compare, Remote, Actions, Videos
+    return ['explorer', 'chat', 'automations', 'compare', 'remote', 'command-deck', 'youtube'];
+  });
+
+  // Save visible tabs to localStorage whenever they change
+  useEffect(() => {
+    if (typeof window !== 'undefined') {
+      localStorage.setItem('workspaceVisibleTabs', JSON.stringify(visibleTabs));
+    }
+  }, [visibleTabs]);
+
+  // Function to toggle tab visibility
+  const toggleTabVisibility = useCallback((tab: PanelTab) => {
+    setVisibleTabs(prev => {
+      if (prev.includes(tab)) {
+        // Don't allow hiding if only one tab would remain visible
+        if (prev.length <= 1) {
+          toast.error('At least one tab must be visible');
+          return prev;
+        }
+        return prev.filter(t => t !== tab);
+      } else {
+        return [...prev, tab];
+      }
+    });
+  }, []);
+
+  // Function to check if a tab is visible
+  const isTabVisible = useCallback((tab: PanelTab) => {
+    return visibleTabs.includes(tab);
+  }, [visibleTabs]);
 
   const handleMouseDown = useCallback((e: React.MouseEvent) => {
     e.preventDefault();
@@ -2604,7 +2699,7 @@ export function ExperimentalWorkspacePanel() {
                 <div className="flex items-center gap-2">
                   <Zap className="h-4 w-4 text-yellow-400" />
                   <span className="text-sm font-semibold text-white/90">
-                    Experimental Workspace
+                    Workspace
                   </span>
                 </div>
                 <div className="flex gap-2">
@@ -2753,6 +2848,10 @@ export function ExperimentalWorkspacePanel() {
                     tabs={TAB_DEFS}
                     activeTab={activeTab}
                     onTabChange={setTab}
+                    isTabVisible={isTabVisible}
+                    toggleTabVisibility={toggleTabVisibility}
+                    setVisibleTabs={setVisibleTabs}
+                    visibleTabs={visibleTabs}
                   />
                 </div>
 
