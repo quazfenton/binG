@@ -91,6 +91,17 @@ describe('API Contract Tests', () => {
       expect(result.error?.errors[0].path).toContain('messages');
     });
 
+    it('should reject empty messages array', () => {
+      const invalidRequest = {
+        messages: [],
+        provider: 'openai',
+        model: 'gpt-4',
+      };
+
+      const result = ChatRequestSchema.safeParse(invalidRequest);
+      expect(result.success).toBe(false);
+    });
+
     it('should reject invalid chat request - invalid role', () => {
       const invalidRequest = {
         messages: [
