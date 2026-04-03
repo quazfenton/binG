@@ -1,16 +1,17 @@
 import { openai } from '@ai-sdk/openai';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
+import type { ProjectServices } from '@/lib/project-context';
 import { ToolExecutor } from '../tools/tool-executor';
 import { reflectionEngine } from '@/lib/orchestra/reflection-engine';
-import { executionGraphEngine } from '@/lib/agent/execution-graph';
+import { executionGraphEngine } from '@bing/shared/agent/execution-graph';
 import { generateObject } from 'ai';
 import { z } from 'zod';
 import { createLogger } from '@/lib/utils/logger';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { detectTemplate, templateToTaskGraph, type TemplateType } from './template-flows';
-import { createLoopDetector, type LoopDetectionResult } from '@/lib/agent/loop-detection';
-import { createCapabilityChain, type CapabilityChain } from '@/lib/agent/capability-chain';
-import { createBootstrappedAgency, type BootstrappedAgency } from '@/lib/agent/bootstrapped-agency';
+import { createLoopDetector, type LoopDetectionResult } from '@bing/shared/agent/loop-detection';
+import { createCapabilityChain, type CapabilityChain } from '@bing/shared/agent/capability-chain';
+import { createBootstrappedAgency, type BootstrappedAgency } from '@bing/shared/agent/bootstrapped-agency';
 
 const log = createLogger('StatefulAgent');
 
@@ -68,6 +69,8 @@ export interface StatefulAgentOptions {
   enableCapabilityChaining?: boolean;
   // Enable bootstrapped agency for learning from past executions
   enableBootstrappedAgency?: boolean;
+  // Project-scoped services for project-isolated memory and retrieval
+  projectServices?: ProjectServices;
 }
 
 export interface StatefulAgentResult {
@@ -180,9 +183,13 @@ export class StatefulAgent {
   private enableBootstrappedAgency: boolean;
   private agency?: BootstrappedAgency;
 
+  // Project-scoped services for project-isolated memory and retrieval
+  private projectServices?: ProjectServices;
+
   constructor(options: StatefulAgentOptions = {}) {
     this.sessionId = options.sessionId || crypto.randomUUID();
     this.sandboxHandle = options.sandboxHandle;
+    this.projectServices = options.projectServices;
     this.maxSelfHealAttempts = options.maxSelfHealAttempts || 3;
     this.enforcePlanActVerify = options.enforcePlanActVerify ?? true;
     this.enableReflection = options.enableReflection ?? true;

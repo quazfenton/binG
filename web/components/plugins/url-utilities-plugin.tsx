@@ -2,6 +2,7 @@
 
 import React, { useState, useCallback } from 'react';
 import { toast } from 'sonner';
+import { clipboard } from '@bing/platform/clipboard';
 import { secureRandomString } from '@/lib/utils';
 import { Button } from '../ui/button';
 import { Input } from '../ui/input';
@@ -232,7 +233,7 @@ export const UrlUtilitiesPlugin: React.FC<PluginProps> = ({
 
   const copyToClipboard = async (text: string, id: string) => {
     try {
-      await navigator.clipboard.writeText(text);
+      await clipboard.writeText(text);
       setCopied(id);
       setTimeout(() => setCopied(''), 2000);
     } catch (error) {

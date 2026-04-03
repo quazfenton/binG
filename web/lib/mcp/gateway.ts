@@ -27,7 +27,7 @@ let agentKernel: any = null;
 async function getAgentKernel() {
   if (!agentKernel) {
     try {
-      const kernelModule = await import('../agent/agent-kernel');
+      const kernelModule = await import('@bing/shared/agent/agent-kernel');
       agentKernel = kernelModule.getAgentKernel();
     } catch (e) {
       console.warn('[Gateway] Agent Kernel not available:', e);

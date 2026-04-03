@@ -42,6 +42,7 @@ import {
   Eye,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { clipboard } from '@bing/platform/clipboard';
 
 interface SiteEntry {
   id: string;
@@ -186,7 +187,7 @@ export default function VercelMediaEmbedPlugin({ onClose, initialUrl }: VercelMe
 
   const handleCopyUrl = () => {
     if (!currentUrl) return;
-    navigator.clipboard.writeText(currentUrl);
+    clipboard.writeText(currentUrl);
     setCopied(true);
     toast.success('URL copied');
     setTimeout(() => setCopied(false), 2000);

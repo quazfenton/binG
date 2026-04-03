@@ -48,6 +48,7 @@ import {
   ImageOff,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
+import { clipboard } from "@bing/platform/clipboard";
 
 /**
  * Image Generation Tab Component
@@ -458,7 +459,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
       } else {
         // Last resort: just copy the URL
         try {
-          await navigator.clipboard.writeText(imageUrl);
+          await clipboard.writeText(imageUrl);
           toast.success("Image URL copied to clipboard (paste in browser to download)");
         } catch (clipboardError) {
           console.error('Clipboard write failed:', clipboardError);
@@ -481,7 +482,7 @@ export default function ImageGenerationTab({ onImageGenerated }: ImageGeneration
   // Copy image prompt
   const copyPrompt = useCallback(async () => {
     try {
-      await navigator.clipboard.writeText(params.prompt);
+      await clipboard.writeText(params.prompt);
       toast.success("Prompt copied to clipboard");
     } catch (error) {
       console.error('Clipboard write failed:', error);

@@ -39,6 +39,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { PersistentCache } from "@/lib/cache";
+import { clipboard } from '@bing/platform/clipboard';
 
 // Helper to ensure image URLs go through the proxy
 function getProxiedImageUrl(url: string | undefined): string | undefined {
@@ -1100,7 +1101,7 @@ export default function FlowEngine() {
                       <Button
                         onClick={() => {
                           toast.info('Webhook endpoint: /api/zine/webhook');
-                          navigator.clipboard.writeText(`${window.location.origin}/api/zine/webhook`);
+                          clipboard.writeText(`${window.location.origin}/api/zine/webhook`);
                         }}
                         variant="outline"
                         size="sm"

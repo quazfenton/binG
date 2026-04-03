@@ -15,7 +15,7 @@ import {
   sandboxManager,
 } from '@/lib/sandbox/sandbox-manager';
 import { QuotaManager, quotaManager } from '@/lib/management/quota';
-import { WorkspaceManager, workspaceManager } from '@/lib/agent/agent-workspace';
+import { WorkspaceManager, workspaceManager } from '@bing/shared/agent/agent-workspace';
 import { sandboxMetrics } from '@/lib/backend/metrics';
 
 // Mock LocalStorageBackend for testing

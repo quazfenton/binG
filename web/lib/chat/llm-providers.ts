@@ -91,6 +91,7 @@ import {
 
 import { initializeComposioService, getComposioService, type ComposioService } from '../integrations/composio-service'
 import { chatLogger } from './chat-logger'
+import { withRetry, isRetryableError } from '../vector-memory/retry'
 
 export interface LLMProvider {
   id: string
@@ -820,108 +821,112 @@ class LLMService {
     await this.initializeProviders()
 
     const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId, apiKey } = request
-    const requestStartTime = Date.now();
 
-    try {
-      const responseStartTime = Date.now();
-      let response: LLMResponse;
+    return withRetry(
+      async () => {
+        const responseStartTime = Date.now();
+        let response: LLMResponse;
 
-      switch (provider) {
-        case 'openai':
-          response = await this.generateOpenAIResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'anthropic':
-          response = await this.generateAnthropicResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'google':
-          response = await this.generateGoogleResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'cohere':
-          response = await this.generateCohereResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'together':
-          response = await this.generateTogetherResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'replicate':
-          response = await this.generateReplicateResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'portkey':
-          response = await this.generatePortkeyResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'openrouter':
-          response = await this.generateOpenRouterResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'chutes':
-          response = await this.generateChutesResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'mistral':
-          response = await this.generateMistralResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'github':
-          response = await this.generateGitHubResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'zen':
-          response = await this.generatezenResponse(model, messages, temperature, maxTokens, requestId, apiKey)
-          break;
-        case 'opencode':
-          await this.initOpencodeClient()
-          response = await this.opencodeClient.provider.generateResponse(request)
-          break;
-        default:
-          throw createLLMError(`Unsupported provider: ${provider}`, {
-            code: ERROR_CODES.LLM.UNSUPPORTED_PROVIDER,
-            severity: 'high',
-            recoverable: false,
-            context: { provider }
-          });
+        switch (provider) {
+          case 'openai':
+            response = await this.generateOpenAIResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'anthropic':
+            response = await this.generateAnthropicResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'google':
+            response = await this.generateGoogleResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'cohere':
+            response = await this.generateCohereResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'together':
+            response = await this.generateTogetherResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'replicate':
+            response = await this.generateReplicateResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'portkey':
+            response = await this.generatePortkeyResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'openrouter':
+            response = await this.generateOpenRouterResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'chutes':
+            response = await this.generateChutesResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'mistral':
+            response = await this.generateMistralResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'github':
+            response = await this.generateGitHubResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'zen':
+            response = await this.generatezenResponse(model, messages, temperature, maxTokens, requestId, apiKey)
+            break;
+          case 'opencode':
+            await this.initOpencodeClient()
+            response = await this.opencodeClient.provider.generateResponse(request)
+            break;
+          default:
+            throw createLLMError(`Unsupported provider: ${provider}`, {
+              code: ERROR_CODES.LLM.UNSUPPORTED_PROVIDER,
+              severity: 'high',
+              recoverable: false,
+              context: { provider }
+            });
+        }
+
+        const responseLatency = Date.now() - responseStartTime;
+        response.provider = provider;
+        response.timestamp = new Date();
+
+        // Set metadata with actual provider/model that generated the response
+        // This is critical for fallback scenarios to log correct provider/model
+        response.metadata = {
+          ...response.metadata,
+          actualProvider: provider,
+          actualModel: model,
+        };
+
+        chatLogger.info('LLM provider response generated', { requestId, provider, model }, {
+          latencyMs: responseLatency,
+          tokensUsed: response.tokensUsed,
+          finishReason: response.finishReason,
+          contentLength: response.content.length,
+        });
+
+        return response;
+      },
+      {
+        maxRetries: 2,
+        baseDelay: 1000,
+        maxDelay: 10000,
+        backoffFactor: 2,
+        jitter: true,
+        context: `LLM.generateResponse(${provider}/${model})`,
+        shouldRetry: (error) => isRetryableError(error),
       }
-
-      const responseLatency = Date.now() - responseStartTime;
-      response.provider = provider;
-      response.timestamp = new Date();
-      
-      // Set metadata with actual provider/model that generated the response
-      // This is critical for fallback scenarios to log correct provider/model
-      response.metadata = {
-        ...response.metadata,
-        actualProvider: provider,
-        actualModel: model,
-      };
-
-      chatLogger.info('LLM provider response generated', { requestId, provider, model }, {
-        latencyMs: responseLatency,
-        tokensUsed: response.tokensUsed,
-        finishReason: response.finishReason,
-        contentLength: response.content.length,
-      });
-
-      return response;
-    } catch (error) {
-      const requestLatency = Date.now() - requestStartTime;
-      chatLogger.error('LLM provider request failed', { requestId, provider, model }, {
-        latencyMs: requestLatency,
-        error: error instanceof Error ? error.message : String(error),
-      });
-
-      // If it's already an LLMError, re-throw it instead of wrapping it again
-      if (error instanceof LLMError) {
-        throw error;
-      }
-
-      throw createLLMError(`LLM request failed: ${error instanceof Error ? error.message : String(error)}`, {
-        code: ERROR_CODES.LLM.REQUEST_FAILED,
-        severity: 'high',
-        recoverable: true,
-        context: { provider, error: error instanceof Error ? { message: error.message, name: error.name } : error }
-      });
-    }
+    );
   }
 
   async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingResponse> {
-    // Initialize providers lazily on first use
-    await this.initializeProviders()
-    
+    // Initialize providers lazily on first use, with retry for transient failures
     const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId } = request
+
+    await withRetry(
+      async () => this.initializeProviders(),
+      {
+        maxRetries: 2,
+        baseDelay: 500,
+        maxDelay: 5000,
+        backoffFactor: 2,
+        jitter: true,
+        context: `LLM.initializeProviders(for streaming)`,
+        shouldRetry: (error) => isRetryableError(error),
+      }
+    );
+
     const streamStartTime = Date.now();
     let chunkCount = 0;
 

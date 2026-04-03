@@ -44,6 +44,7 @@ import {
   RefreshCw,
 } from "lucide-react";
 import { toast } from "sonner";
+import { clipboard } from '@bing/platform/clipboard';
 
 // Types
 interface CodeSnippet {
@@ -281,7 +282,7 @@ export default function CodePlaygroundTab() {
   };
 
   const handleCopyCode = () => {
-    navigator.clipboard.writeText(code);
+    clipboard.writeText(code);
     toast.success("Copied to clipboard");
   };
 

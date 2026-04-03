@@ -148,6 +148,8 @@ export interface AgentMemoryConfig {
   enableSemanticSearch?: boolean;
   /** Embedding model */
   embeddingModel?: string;
+  /** Project ID for memory isolation (scopes memories per project) */
+  projectId?: string;
 }
 
 // ============================================================================
@@ -157,9 +159,12 @@ export interface AgentMemoryConfig {
 class LocalVectorStore {
   private indexPath: string;
   private index: Map<string, { vector: number[]; entry: MemoryEntry }> = new Map();
+  private projectId: string | undefined;
 
-  constructor(workspaceDir: string) {
-    this.indexPath = path.join(workspaceDir, '.agent-memory', 'vector-index.json');
+  constructor(workspaceDir: string, projectId?: string) {
+    this.projectId = projectId;
+    const projectSuffix = projectId ? `-${projectId}` : '';
+    this.indexPath = path.join(workspaceDir, '.agent-memory', `vector-index${projectSuffix}.json`);
     this.loadIndex();
   }
 
@@ -240,20 +245,25 @@ export class AgentMemory extends EventEmitter {
   private memoryDir: string;
   private consolidationTimer?: NodeJS.Timeout;
   private destroyed: boolean = false;
+  private projectId: string | undefined;
 
   constructor(config: AgentMemoryConfig) {
     super();
+    this.projectId = config.projectId;
     this.config = {
       vectorStore: 'local',
       maxConversationHistory: 100,
       consolidationInterval: 300000, // 5 minutes
       enableSemanticSearch: true,
       embeddingModel: 'local',
+      projectId: undefined,
       ...config,
     };
 
-    this.memoryDir = path.join(config.workspaceDir, '.agent-memory', config.agentId);
-    this.vectorStore = new LocalVectorStore(config.workspaceDir);
+    // Scope memory directory by project if provided
+    const projectSuffix = config.projectId ? `-${config.projectId}` : '';
+    this.memoryDir = path.join(config.workspaceDir, '.agent-memory', config.agentId + projectSuffix);
+    this.vectorStore = new LocalVectorStore(config.workspaceDir, config.projectId);
 
     logger.info(`Creating memory for agent: ${config.agentId}`, {
       vectorStore: this.config.vectorStore,

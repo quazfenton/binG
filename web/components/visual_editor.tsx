@@ -123,7 +123,8 @@ import {
   Figma,
 } from "lucide-react";
 
-import { createDebugLogger } from "@/config/features";
+import { createDebugLogger } from "../../infra/config/config/features";
+import { clipboard } from "@bing/platform/clipboard";
 
 // Use any for VFSProject type since the import path doesn't work well with TypeScript
 type VFSProject = any;
@@ -3257,7 +3258,7 @@ function SettingsPanel() {
                   <button
                     onClick={() => {
                       const classes = s.className || s.tailwindClasses || "";
-                      navigator.clipboard?.writeText(classes);
+                      clipboard.writeText(classes);
                       toast.info("Classes copied to clipboard");
                     }}
                     className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[10px] text-[#8b949e] hover:text-white transition-colors"
@@ -3268,7 +3269,7 @@ function SettingsPanel() {
                   <button
                     onClick={async () => {
                       try {
-                        const text = await navigator.clipboard?.readText();
+                        const text = await clipboard.readText();
                         if (text) {
                           setStyle("className", text);
                           setStyle("tailwindClasses", text);
@@ -3904,7 +3905,7 @@ function SettingsPanel() {
                   <button
                     onClick={() => {
                       const classes = s.className || s.tailwindClasses || "";
-                      navigator.clipboard?.writeText(classes);
+                      clipboard.writeText(classes);
                       toast.info("Classes copied to clipboard");
                     }}
                     className="px-2 py-1 bg-[#21262d] hover:bg-[#30363d] border border-[#30363d] rounded text-[10px] text-[#8b949e] hover:text-white transition-colors"
@@ -3915,7 +3916,7 @@ function SettingsPanel() {
                   <button
                     onClick={async () => {
                       try {
-                        const text = await navigator.clipboard?.readText();
+                        const text = await clipboard.readText();
                         if (text) {
                           setStyle("className", text);
                           setStyle("tailwindClasses", text);
@@ -6139,7 +6140,7 @@ export function VisualEditorMain({
       const jsxString = craftNodesToJSX(craftNodes);
       
       // Copy JSX to clipboard for manual import to Figma
-      await navigator.clipboard.writeText(jsxString);
+      await clipboard.writeText(jsxString);
       
       toast.success('Design copied to clipboard as JSX. Paste into Figma plugin or save as file.');
     } catch (error) {

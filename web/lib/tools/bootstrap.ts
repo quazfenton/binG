@@ -127,6 +127,18 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     }
   }
 
+  // Register Tauri invoke tools (desktop mode only)
+  try {
+    const { registerTauriTools } = await import('./bootstrap/bootstrap-tauri');
+    const count = await registerTauriTools(registry);
+    if (count > 0) {
+      toolCount += count;
+      logger.info(`Registered ${count} Tauri invoke tools`);
+    }
+  } catch (error: any) {
+    logger.debug('Tauri invoke tools not available (expected in web mode)', error.message);
+  }
+
   // Register sandbox tools (if enabled)
   if (config.enableSandbox !== false) {
     try {

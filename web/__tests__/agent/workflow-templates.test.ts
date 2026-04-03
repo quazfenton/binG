@@ -7,7 +7,7 @@ import {
   workflowTemplateService,
   type WorkflowTemplateId,
   type TemplateExecutionConfig,
-} from '@/lib/agent/workflow-templates';
+} from '@bing/shared/agent/workflow-templates';
 
 describe('Workflow Templates', () => {
   beforeEach(() => {

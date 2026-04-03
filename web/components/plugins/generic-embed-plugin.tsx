@@ -33,6 +33,7 @@ import {
   Archive,
 } from 'lucide-react';
 import { toast } from 'sonner';
+import { clipboard } from '@bing/platform/clipboard';
 import { transformToEmbed, isEmbeddableUrl, detectEmbeddableLinks, EmbedInfo, formatUrlForDisplay, getSecondaryFallbackUrl } from '@/lib/utils/iframe-helper';
 import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
 import useIframeLoader from '@/hooks/use-iframe-loader';
@@ -276,7 +277,7 @@ const GenericEmbedPlugin: React.FC<{ onClose: () => void, initialUrl?: string }>
   };
 
   const handleCopyUrl = () => {
-    navigator.clipboard.writeText(currentUrl);
+    clipboard.writeText(currentUrl);
     setCopied(true);
     toast.success('Embed URL copied');
     setTimeout(() => setCopied(false), 2000);

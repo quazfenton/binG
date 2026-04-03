@@ -116,6 +116,16 @@ export interface RouterRequest {
   nativeToolCalling?: boolean
   /** Spec amplification mode: 'normal' (disabled), 'enhanced', or 'max' */
   mode?: 'normal' | 'enhanced' | 'max'
+  /** Request a bundled context pack (file tree + contents) for LLM */
+  contextPack?: {
+    format?: 'markdown' | 'xml' | 'json' | 'plain'
+    maxTotalSize?: number
+    includePatterns?: string[]
+    excludePatterns?: string[]
+    maxLinesPerFile?: number
+  }
+  /** Auto-attach relevant files to subsequent LLM calls as agent discovers areas to edit */
+  autoAttachFiles?: boolean
 }
 
 export interface RouterResponse {
@@ -622,6 +632,9 @@ export class ResponseRouter {
               enableTools: req.enableTools ?? (detectedType === 'tool' && !!req.userId),
               enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
               isSandboxCommand: detectedType === 'sandbox',
+              apiKeys: req.apiKeys,
+              contextPack: req.contextPack,
+              autoAttachFiles: req.autoAttachFiles,
             } as EnhancedLLMRequest)
             
             return {
@@ -650,6 +663,11 @@ export class ResponseRouter {
             enableTools: req.enableTools ?? (detectedType === 'tool' && !!req.userId),
             enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
             isSandboxCommand: detectedType === 'sandbox',
+            apiKeys: req.apiKeys,
+            // Context pack: bundle workspace files into LLM-readable format
+            contextPack: req.contextPack,
+            // Auto-attach relevant files as agent discovers areas to edit
+            autoAttachFiles: req.autoAttachFiles,
           } as EnhancedLLMRequest)
           return this.normalizeOriginalResponse(response)
         },
@@ -800,6 +818,9 @@ export class ResponseRouter {
             enableTools: false,  // Disable tools for fallback
             enableSandbox: false,  // Disable sandbox for fallback
             isSandboxCommand: false,
+            apiKeys: req.apiKeys,
+            contextPack: req.contextPack,
+            autoAttachFiles: req.autoAttachFiles,
           } as EnhancedLLMRequest)
           
           // Preserve normalized metadata (usage, model, provider) while adding fallback flags

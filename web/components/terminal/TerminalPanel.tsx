@@ -18,8 +18,10 @@ import { useVirtualFilesystem } from '@/hooks/use-virtual-filesystem';
 import { wireTerminalHandlers, cleanupHandlers, type TerminalHandlers } from '@/lib/terminal/commands/terminal-handler-wiring';
 import type { LocalFilesystemEntry } from '@/lib/terminal/commands/local-filesystem-executor';
 import { extractSessionIdFromPath, normalizeScopePath } from '@/lib/virtual-filesystem/scope-utils';
+import { clipboard } from '@bing/platform/clipboard';
 import { emitFilesystemUpdated, onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { createRefreshScheduler } from '@/lib/virtual-filesystem/refresh-scheduler';
+import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from '@/lib/ads/ethical-ads-service';
 
 const logger = createLogger('TerminalPanel');
 
@@ -73,10 +75,11 @@ interface LocalFileSystem {
   };
 }
 
-function getAuthToken(): string | null {
+async function getAuthToken(): Promise<string | null> {
   if (typeof window === 'undefined') return null;
   try {
-    return (await import('@bing/platform/secrets')).secrets.get('auth-token');
+    const { secrets } = await import('@bing/platform/secrets');
+    return await secrets.get('auth-token');
   } catch {
     return null;
   }
@@ -99,17 +102,10 @@ function getAnonymousSessionId(): string | null {
 }
 
 function getAuthHeaders(): Record<string, string> {
-  const token = getAuthToken();
-  const headers: Record<string, string> = {};
-
-  if (token) {
-    headers.Authorization = `Bearer ${token}`;
-  }
-
-  // Anonymous session is now handled via HttpOnly cookie - no need to send header
-  // The server sets anon-session-id cookie and credentials: 'include' sends it automatically
-
-  return headers;
+  // Auth is handled via HttpOnly cookies (credentials: 'include')
+  // No need to manually set Authorization header
+  // Token-based auth was replaced by cookie-based auth for security
+  return {};
 }
 
 const createMinimalProject = (scopePath: string = 'project'): LocalFileSystem => {
@@ -136,6 +132,22 @@ export default function TerminalPanel({
   const [isSplitView, setIsSplitView] = useState(false);
   const [terminalHeight, setTerminalHeight] = useState<number>(450); // Default height in pixels
   const [isResizing, setIsResizing] = useState(false);
+
+  // Rotating sponsor ad (EthicalAds)
+  const [sponsorAd, setSponsorAd] = useState<EthicalAdResponse | null>(null);
+
+  useEffect(() => {
+    if (!isOpen || !adsEnabled()) return;
+    let cancelled = false;
+    const loadAd = async () => {
+      const ad = await getSponsorAd(['ai', 'developer-tools', 'typescript']);
+      if (!cancelled && ad) setSponsorAd(ad);
+    };
+    void loadAd();
+    // Rotate every 60 seconds
+    const interval = setInterval(loadAd, 60_000);
+    return () => { cancelled = true; clearInterval(interval); };
+  }, [isOpen]);
 
   const DEBUG = true;
   const log = (...args: any[]) => console.log('[TerminalPanel]', ...args);
@@ -1555,7 +1567,7 @@ export default function TerminalPanel({
     try {
       const selection = active.terminal.getSelection();
       if (selection) {
-        await navigator.clipboard.writeText(selection);
+        await clipboard.writeText(selection);
         toast.success('Selection copied');
         return;
       }
@@ -1566,7 +1578,7 @@ export default function TerminalPanel({
         if (line) lines.push(line);
       }
       const text = lines.join('\n');
-      await navigator.clipboard.writeText(text);
+      await clipboard.writeText(text);
       toast.success('Copied to clipboard');
     } catch {
       toast.error('Failed to copy to clipboard');
@@ -1578,7 +1590,7 @@ export default function TerminalPanel({
     if (!active?.terminal) return;
 
     try {
-      const text = await navigator.clipboard.readText();
+      const text = await clipboard.readText();
       if (text) {
         active.terminal.write(text);
         toast.success('Pasted from clipboard');
@@ -1588,7 +1600,7 @@ export default function TerminalPanel({
     }
   }, [activeTerminalId]);
 
-  const selectAll = useCallback(() => {
+  const selectAll = useCallback(async () => {
     const active = terminalsRef.current.find(t => t.id === activeTerminalId);
     if (!active?.terminal) return;
 
@@ -1604,8 +1616,12 @@ export default function TerminalPanel({
     }
     
     // Write to clipboard
-    navigator.clipboard.writeText(allText.trim());
-    toast.success('All visible content copied');
+    try {
+      await clipboard.writeText(allText.trim());
+      toast.success('All visible content copied');
+    } catch {
+      toast.error('Failed to copy to clipboard');
+    }
   }, [activeTerminalId]);
 
   const handleContextMenu = useCallback((e: React.MouseEvent, terminalId: string) => {
@@ -2103,7 +2119,21 @@ export default function TerminalPanel({
       )}
 
       {activeTerminal && (
-        <div className="flex items-center justify-between px-4 py-1.5 border-t border-white/10 bg-black/50 text-[10px] text-white/40 shrink-0">
+        <>
+          {/* Rotating sponsor ad bar — subtle, terminal-styled */}
+          {sponsorAd && (
+            <a
+              href={sponsorAd.url}
+              target="_blank"
+              rel="noopener sponsored"
+              className="block px-4 py-1 border-t border-white/5 bg-gradient-to-r from-purple-500/5 via-transparent to-cyan-500/5 text-[10px] text-white/30 hover:text-white/60 hover:from-purple-500/10 hover:to-cyan-500/10 transition-all duration-500 shrink-0"
+              onClick={() => trackAdView(sponsorAd)}
+            >
+              <span className="uppercase tracking-wider opacity-50 mr-2">Sponsor</span>
+              {sponsorAd.text}
+            </a>
+          )}
+          <div className="flex items-center justify-between px-4 py-1.5 border-t border-white/10 bg-black/50 text-[10px] text-white/40 shrink-0">
           <div className="flex items-center gap-4">
             <span className="flex items-center gap-1">
               {modeInfo?.icon}
@@ -2120,6 +2150,7 @@ export default function TerminalPanel({
             <span className="font-mono">{activeTerminal.sandboxInfo.sandboxId.slice(0, 12)}…</span>
           )}
         </div>
+        </>
       )}
     </motion.div>
   );

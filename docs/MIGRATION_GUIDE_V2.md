@@ -71,7 +71,7 @@ docker-compose -f docker-compose.v2.yml exec redis redis-cli ping
 **Before (V1 - Direct OpenCode):**
 ```typescript
 // app/api/chat/route.ts (OLD)
-import { executeV2Task } from '@/lib/agent/v2-executor';
+import { executeV2Task } from '@bing/shared/agent/v2-executor';
 
 const result = await executeV2Task({
   userId,

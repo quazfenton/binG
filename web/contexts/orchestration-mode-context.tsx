@@ -15,12 +15,19 @@ import React, { createContext, useContext, useState, useEffect, useCallback } fr
  * - 'crewai': CrewAI role-based agents (lib/crewai/)
  * - 'v2-executor': V2 containerized execution (lib/agent/v2-executor.ts)
  */
-export type OrchestrationMode = 
+export type OrchestrationMode =
   | 'task-router'           // Default - current behavior
   | 'unified-agent'         // lib/orchestra/unified-agent-service.ts
+  | 'stateful-agent'        // lib/orchestra/stateful-agent (direct with ToolExecutor)
+  | 'agent-kernel'          // packages/shared/agent/agent-kernel (priority scheduler)
+  | 'agent-loop'            // lib/orchestra/mastra/agent-loop (ToolLoopAgent)
+  | 'execution-graph'       // packages/shared/agent/execution-graph (DAG engine)
+  | 'nullclaw'              // packages/shared/agent/nullclaw-integration (external server)
+  | 'opencode-sdk'          // lib/chat/opencode-sdk-provider (SDK → local server)
   | 'mastra-workflow'       // lib/orchestra/mastra/
   | 'crewai'                // lib/crewai/
-  | 'v2-executor';          // lib/agent/v2-executor.ts
+  | 'v2-executor'           // lib/agent/v2-executor.ts
+  | 'agent-team';           // lib/spawn/orchestration/agent-team (multi-agent)
 
 export interface OrchestrationModeConfig {
   mode: OrchestrationMode;
@@ -49,9 +56,16 @@ const STORAGE_KEY = 'orchestration_mode_config';
 const VALID_MODES = new Set<OrchestrationMode>([
   'task-router',
   'unified-agent',
+  'stateful-agent',
+  'agent-kernel',
+  'agent-loop',
+  'execution-graph',
+  'nullclaw',
+  'opencode-sdk',
   'mastra-workflow',
   'crewai',
   'v2-executor',
+  'agent-team',
 ]);
 
 /**
@@ -113,13 +127,13 @@ export function OrchestrationModeProvider({ children }: { children: React.ReactN
     // Validate before saving to prevent persisting invalid configs
     const validated = validatePersistedConfig(newConfig);
     const finalConfig = { ...DEFAULT_CONFIG, ...validated };
-    
+
     setConfig(finalConfig);
     if (typeof window !== 'undefined') {
       try {
         localStorage.setItem(STORAGE_KEY, JSON.stringify(finalConfig));
       } catch (error) {
-        console.warn('[OrchestrationMode] Failed to save config:', error);
+        console.warn('[OrchestrationMode] Failed to save config to localStorage:', error);
       }
     }
   }, []);
@@ -130,7 +144,30 @@ export function OrchestrationModeProvider({ children }: { children: React.ReactN
       console.warn('[OrchestrationMode] Invalid mode:', mode);
       return;
     }
+
+    const previousMode = config.mode;
+
+    // Update local state immediately for responsive UI
     saveConfig({ ...config, mode });
+
+    // Persist to server-side DB (fire-and-forget — doesn't block UI)
+    if (typeof window !== 'undefined') {
+      fetch('/api/chat/modes', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          mode,
+          source: 'ui',
+          config: { autoApply: config.autoApply, streamEnabled: config.streamEnabled },
+        }),
+      }).then(res => {
+        if (!res.ok) {
+          console.warn('[OrchestrationMode] Server persistence failed:', res.status);
+        }
+      }).catch(err => {
+        console.warn('[OrchestrationMode] Server persistence error:', err.message);
+      });
+    }
   }, [config, saveConfig]);
 
   const setAutoApply = useCallback((enabled: boolean) => {
@@ -143,6 +180,11 @@ export function OrchestrationModeProvider({ children }: { children: React.ReactN
 
   const resetToDefault = useCallback(() => {
     saveConfig(DEFAULT_CONFIG);
+
+    // Reset server-side too
+    if (typeof window !== 'undefined') {
+      fetch('/api/chat/modes?userId=default', { method: 'DELETE' }).catch(() => {});
+    }
   }, [saveConfig]);
 
   const isOverridden = config.mode !== DEFAULT_CONFIG.mode;

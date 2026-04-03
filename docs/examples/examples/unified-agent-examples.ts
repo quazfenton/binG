@@ -5,7 +5,7 @@
  * for various AI agent scenarios.
  */
 
-import { createAgent, createQuickAgent } from '@/lib/agent/unified-agent'
+import { createAgent, createQuickAgent } from '@bing/shared/agent/unified-agent'
 
 // ==================== Example 1: Basic Terminal Agent ====================
 

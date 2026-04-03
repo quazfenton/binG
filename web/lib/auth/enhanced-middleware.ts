@@ -1,6 +1,6 @@
 /**
  * Enhanced Authentication Middleware
- * 
+ *
  * Combines existing auth-service with new security utilities
  * for comprehensive API protection.
  */
@@ -12,6 +12,33 @@ import { RateLimiter, securityHeaders } from '@/lib/security';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Auth:Middleware');
+
+/**
+ * Check if desktop auth bypass should be used
+ * Lazily imported to avoid circular deps
+ */
+async function checkDesktopBypass(request: NextRequest): Promise<boolean> {
+  try {
+    const { shouldBypassAuth } = await import('./desktop-auth-bypass');
+    return shouldBypassAuth(request);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get desktop user context if in desktop mode
+ * Lazily imported to avoid circular deps
+ */
+async function getDesktopUser(request: NextRequest): Promise<{ userId: string; email?: string } | null> {
+  try {
+    const { getDesktopUserContext } = await import('./desktop-auth-bypass');
+    const user = getDesktopUserContext();
+    return user ? { userId: user.userId, email: user.email } : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Rate limiter for auth endpoints
@@ -170,9 +197,17 @@ export function withAuth<T extends NextResponse>(
 
       // Authentication check
       const authHeader = request.headers.get('authorization');
-      
+
+      // Desktop mode: check for local user context
       if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        if (allowAnonymous) {
+        const desktopUser = await getDesktopUser(request);
+        if (desktopUser) {
+          authResult.authenticated = true;
+          authResult.success = true;
+          authResult.userId = desktopUser.userId;
+          authResult.email = desktopUser.email;
+          logger.debug('Desktop auth bypass used', { userId: desktopUser.userId });
+        } else if (allowAnonymous) {
           authResult.authenticated = true;
           authResult.success = true;
         } else {

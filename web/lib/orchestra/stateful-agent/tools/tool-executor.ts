@@ -1,5 +1,6 @@
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 import type { ToolResult, ToolContext } from './sandbox-tools';
+import { smartApply } from '@/lib/chat/file-diff-utils';
 
 export interface ToolExecution {
   toolName: string;
@@ -350,6 +351,60 @@ export class ToolExecutor {
 
     // Perform the diff/replace
     if (!currentContent.includes(search)) {
+      // Try smartApply as fallback — cascades through unified diff, fuzzy, line, symbol, and LLM repair
+      const diff = `--- ${path}\n+++ ${path}\n@@\n-${search.replace(/\n/g, '\n-')}\n+${replace.replace(/\n/g, '\n+')}`;
+      const patchResult = await smartApply({
+        content: currentContent,
+        path,
+        diff,
+        // LLM repair callback using the enhanced LLM service
+        llm: async (prompt: string): Promise<string> => {
+          try {
+            const { llmService } = await import('@/lib/chat/llm-providers');
+            const response = await llmService.generateResponse({
+              provider: 'openai',
+              model: 'gpt-4o-mini',
+              messages: [{ role: 'user', content: prompt }],
+              temperature: 0,
+              maxTokens: 4000,
+            });
+            return response.content || '';
+          } catch {
+            return '';
+          }
+        },
+      });
+
+      if (patchResult.content !== null && patchResult.content !== currentContent) {
+        if (this.context.sandboxHandle) {
+          const result = await this.context.sandboxHandle.writeFile(path, patchResult.content);
+          if (result.success && this.context.transactionLog) {
+            this.context.transactionLog.push({
+              path, type: 'UPDATE', timestamp: Date.now(),
+              originalContent: currentContent, newContent: patchResult.content,
+              search, replace,
+            });
+          }
+          return result;
+        }
+        if (this.context.vfs) {
+          this.context.vfs[path] = patchResult.content;
+          if (this.context.transactionLog) {
+            this.context.transactionLog.push({
+              path, type: 'UPDATE', timestamp: Date.now(),
+              originalContent: currentContent, newContent: patchResult.content,
+              search, replace,
+            });
+          }
+          return {
+            success: true,
+            output: `Applied diff to ${path} via ${patchResult.strategy} strategy (confidence: ${(patchResult.confidence * 100).toFixed(0)}%)`,
+            content: patchResult.content,
+            metadata: { strategy: patchResult.strategy, confidence: patchResult.confidence, attempts: patchResult.attempts },
+          };
+        }
+      }
+
       return {
         success: false,
         error: `Search pattern not found in ${path}. Make sure the search string exactly matches the content you want to replace.`,

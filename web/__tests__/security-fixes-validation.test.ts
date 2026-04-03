@@ -11,7 +11,7 @@
 
 import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
 import { parseDiffResult } from '@/lib/chat/file-diff-utils';
-import { simulatedOrchestrator } from '@/lib/agent/simulated-orchestration';
+import { simulatedOrchestrator } from '@bing/shared/agent/simulated-orchestration';
 import { fetchGitHubRepoFiles } from '@/lib/oauth/connections';
 
 // ============================================================================

@@ -372,7 +372,7 @@ V1 API (fallback)
 ### 1. Initialize Orchestration
 
 ```typescript
-import { initializeOrchestration } from '@/lib/agent/orchestration';
+import { initializeOrchestration } from '@bing/shared/agent/orchestration';
 
 // At application startup
 await initializeOrchestration();
@@ -381,7 +381,7 @@ await initializeOrchestration();
 ### 2. Create Session with Full Features
 
 ```typescript
-import { sessionManager } from '@/lib/agent/orchestration';
+import { sessionManager } from '@bing/shared/agent/orchestration';
 
 const session = await sessionManager.getOrCreateSession(
   'user-123',
@@ -409,7 +409,7 @@ await sessionManager.startBackgroundJob(session.id, {
 ### 4. Execute Workflow Template
 
 ```typescript
-import { workflowTemplateService } from '@/lib/agent/orchestration';
+import { workflowTemplateService } from '@bing/shared/agent/orchestration';
 
 const result = await workflowTemplateService.executeTemplate({
   templateId: 'code-review',
@@ -421,7 +421,7 @@ const result = await workflowTemplateService.executeTemplate({
 ### 5. Deploy to Cloud
 
 ```typescript
-import { cloudDeploymentService } from '@/lib/agent/orchestration';
+import { cloudDeploymentService } from '@bing/shared/agent/orchestration';
 
 const deployment = await cloudDeploymentService.deploy(
   'user-123',
@@ -438,7 +438,7 @@ const deployment = await cloudDeploymentService.deploy(
 ### 6. Get Comprehensive Statistics
 
 ```typescript
-import { getOrchestrationStats } from '@/lib/agent/orchestration';
+import { getOrchestrationStats } from '@bing/shared/agent/orchestration';
 
 const stats = getOrchestrationStats();
 console.log(stats);

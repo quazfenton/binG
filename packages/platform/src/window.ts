@@ -179,7 +179,37 @@ class WindowControl {
       console.error('[WindowControl] Failed to focus:', error);
     }
   }
+
+  /**
+   * Open a URL — handles OAuth popups, external links, etc.
+   * Desktop: Opens in system browser (doesn't navigate away from Tauri window)
+   * Web: Opens in new browser tab/window
+   *
+   * @param url - The URL to open
+   * @param target - '_blank' (default) or '_self'
+   */
+  async openUrl(url: string, target: '_blank' | '_self' = '_blank'): Promise<void> {
+    if (isDesktopMode()) {
+      try {
+        const { open } = await import('@tauri-apps/plugin-opener');
+        await open(url);
+      } catch (error) {
+        // Fallback to window.open if Tauri opener fails
+        window.open(url, target);
+      }
+    } else {
+      window.open(url, target);
+    }
+  }
 }
 
 export const windowControl = new WindowControl();
+
+/**
+ * Convenience function to open a URL (OAuth flows, external links, etc.)
+ */
+export async function openUrl(url: string, target: '_blank' | '_self' = '_blank'): Promise<void> {
+  await windowControl.openUrl(url, target);
+}
+
 export default windowControl;

@@ -18,9 +18,10 @@
 'use client'
 
 import React, { useEffect, useRef, useState, useCallback } from 'react'
-import { useAgent } from '@/lib/agent/use-agent'
-import type { UnifiedAgentConfig } from '@/lib/agent/unified-agent'
+import { useAgent } from '@bing/shared/agent/use-agent'
+import type { UnifiedAgentConfig } from '@bing/shared/agent/unified-agent'
 import { TerminalIcon, Wifi, WifiOff, Copy, Trash2, Play, Square } from 'lucide-react'
+import { clipboard } from '@bing/platform/clipboard'
 
 interface AgentTerminalProps extends UnifiedAgentConfig {
   /** Terminal height */
@@ -203,7 +204,7 @@ export function AgentTerminal({
     // First try to copy selected text if there's a selection
     const selection = terminal.getSelection();
     if (selection && selection.trim()) {
-      navigator.clipboard.writeText(selection).catch(() => {});
+      clipboard.writeText(selection).catch(() => {});
       return;
     }
 
@@ -221,7 +222,7 @@ export function AgentTerminal({
       }
     }
 
-    navigator.clipboard.writeText(lines.join('\n')).catch(() => {});
+    clipboard.writeText(lines.join('\n')).catch(() => {});
   }, []);
 
   return (
