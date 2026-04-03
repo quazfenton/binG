@@ -5,7 +5,12 @@
       "Bash(powershell *)",
       "Bash(pnpm exec *)",
       "Bash(select-object *)",
-      "Bash(mkdir *)"
+      "Bash(mkdir *)",
+      "Bash(@mkdir *)",
+      "Bash(@if *)",
+      "Bash(move *)",
+      "Bash(d *)",
+      "Bash(@echo *)"
     ]
   },
   "$version": 3
