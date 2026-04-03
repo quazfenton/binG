@@ -1,0 +1,30 @@
+{
+  "extends": "expo/tsconfig.base",
+  "compilerOptions": {
+    "strict": true,
+    "baseUrl": ".",
+    "paths": {
+      "@/*": [
+        "./*"
+      ],
+      "@bing/platform": [
+        "../packages/platform/src/env.ts"
+      ],
+      "@bing/platform/*": [
+        "../packages/platform/src/*"
+      ],
+      "@bing/shared": [
+        "../packages/shared/src/index.ts"
+      ],
+      "@bing/shared/*": [
+        "../packages/shared/src/*"
+      ]
+    }
+  },
+  "include": [
+    "**/*.ts",
+    "**/*.tsx",
+    ".expo/types/**/*.ts",
+    "expo-env.d.ts"
+  ]
+}
