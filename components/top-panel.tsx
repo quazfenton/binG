@@ -1064,11 +1064,14 @@ export default function TopPanel() {
               <div className="relative h-full">
                 {/* Mobile Tab Bar */}
                 <div className="p-2 border-b border-white/10">
-                  <Tabs value={topPanelActiveTab} onValueChange={(v) => setTopPanelTab(v as TopPanelTab)}>
+                  <Tabs
+                    value={(['news', 'plugins', 'marketplace'] as TopPanelTab[]).includes(topPanelActiveTab) ? topPanelActiveTab : 'news'}
+                    onValueChange={(v) => setTopPanelTab(v as TopPanelTab)}
+                  >
                     {/* Mobile: Only show tabs that have mobile content implemented */}
                     <ScrollableTabBar
                       tabs={TAB_DEFS.filter(tab => ['news', 'plugins', 'marketplace'].includes(tab.value))}
-                      activeTab={topPanelActiveTab}
+                      activeTab={(['news', 'plugins', 'marketplace'] as TopPanelTab[]).includes(topPanelActiveTab) ? topPanelActiveTab : 'news'}
                       onTabChange={setTopPanelTab}
                       isTabVisible={isTabVisible}
                       setTopPanelTab={setTopPanelTab}
@@ -1394,7 +1397,7 @@ export default function TopPanel() {
 
                   <TabsContent value="movies" className="h-full mt-0">
                     <TabErrorBoundary tabName="Movies">
-                      <PStreamEmbedPlugin onClose={() => {}} />
+                      <PStreamEmbedPlugin onClose={closeTopPanel} />
                     </TabErrorBoundary>
                   </TabsContent>
 

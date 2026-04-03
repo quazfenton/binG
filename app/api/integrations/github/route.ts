@@ -15,7 +15,7 @@ import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { auth0 } from '@/lib/auth0';
 import path from 'path';
 import fs from 'fs/promises';
-import { existsSync, statSync, readdirSync, readFileSync, rmSync } from 'fs';
+import { existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { generateSecureId } from '@/lib/utils';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
@@ -64,6 +64,41 @@ const cache = new SimpleCache();
 // Cache TTLs
 const TRENDING_CACHE_TTL = 15 * 60 * 1000; // 15 minutes (GitHub updates ~every 15 min)
 const POPULAR_CACHE_TTL = 30 * 60 * 1000;  // 30 minutes (popular repos change slowly)
+
+// ============================================
+// Concurrency Control for Clone Operations
+// ============================================
+
+const MAX_CONCURRENT_CLONES = parseInt(process.env.MAX_CONCURRENT_CLONES || '3', 10);
+let activeClones = 0;
+const cloneQueue: Array<() => void> = [];
+
+/**
+ * Acquire a clone slot, waiting if at capacity
+ */
+async function acquireCloneSlot(): Promise<void> {
+  if (activeClones < MAX_CONCURRENT_CLONES) {
+    activeClones++;
+    return;
+  }
+
+  // Wait for a slot to become available
+  return new Promise<void>((resolve) => {
+    cloneQueue.push(resolve);
+  });
+}
+
+/**
+ * Release a clone slot and process next in queue
+ */
+function releaseCloneSlot(): void {
+  activeClones--;
+  const next = cloneQueue.shift();
+  if (next) {
+    activeClones++;
+    next();
+  }
+}
 
 interface GitHubFile {
   name: string;
@@ -540,7 +575,7 @@ async function cloneRepoToVFS(
   const writtenPaths: string[] = [];
 
   async function walkDir(dir: string, relativePath: string) {
-    const entries = readdirSync(dir, { withFileTypes: true });
+    const entries = await fs.readdir(dir, { withFileTypes: true });
 
     for (const entry of entries) {
       // Security: skip hidden/system dirs and known large dirs
@@ -559,7 +594,7 @@ async function cloneRepoToVFS(
         const ext = path.extname(entry.name).toLowerCase();
         if (BINARY_EXTENSIONS.has(ext)) continue;
 
-        const stat = statSync(fullPath);
+        const stat = await fs.stat(fullPath);
         if (stat.size > MAX_FILE_SIZE) continue;
 
         try {
@@ -577,7 +612,7 @@ async function cloneRepoToVFS(
             continue;
           }
 
-          const content = readFileSync(fullPath, 'utf-8');
+          const content = await fs.readFile(fullPath, 'utf-8');
           const language = detectLanguage(entry.name);
           await virtualFilesystem.writeFile(ownerId, vfsPath, content, language);
           filesWritten++;
@@ -762,21 +797,24 @@ export async function POST(request: NextRequest) {
       // Allow anonymous cloning for public repos
       const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
       let anonSessionId: string | null = null;
-      if (!authResult.success) {
-        anonSessionId = generateSecureId('anon');
-      }
 
-      // Resolve VFS owner for writing files
+      // Resolve VFS owner for writing files first, so we can use consistent anonymous IDs
       let ownerId: string;
       if (authResult.success && authResult.userId) {
         ownerId = authResult.userId;
       } else {
         const fsOwner = await resolveFilesystemOwnerWithFallback(request, { route: 'clone', requestId: crypto.randomUUID() });
-        if (!fsOwner.ownerId) {
-          // Generate anonymous owner
-          ownerId = `anon:${generateSecureId('anon')}`;
-        } else {
+        if (fsOwner.ownerId) {
           ownerId = fsOwner.ownerId;
+          // Use the same anonSessionId from fsOwner resolution for cookie consistency
+          if (!authResult.success && fsOwner.anonSessionId) {
+            anonSessionId = fsOwner.anonSessionId;
+          }
+        } else {
+          // Generate anonymous owner - reuse the same ID for both owner and cookie
+          const generatedAnonId = generateSecureId('anon');
+          ownerId = `anon:${generatedAnonId}`;
+          anonSessionId = generatedAnonId;
         }
       }
 
@@ -802,8 +840,11 @@ export async function POST(request: NextRequest) {
       }
 
       const repoName = extractRepoName(normalizedRepoUrl);
-      // Default to project/sessions/{repoName} if no path specified
-      const vfsDestinationPath = validation.data.destinationPath || `project/sessions/${repoName}`;
+      // Treat 'repos' as omitted value and default to project/sessions/{repoName}
+      const vfsDestinationPath =
+        !validation.data.destinationPath || validation.data.destinationPath === 'repos'
+          ? `project/sessions/${repoName}`
+          : validation.data.destinationPath;
 
       // Security: validate VFS destination path
       const normalizedVfsPath = vfsDestinationPath.replace(/\\/g, '/').replace(/^\/+/, '');
@@ -821,6 +862,9 @@ export async function POST(request: NextRequest) {
       // Ensure .tmp directory exists
       await fs.mkdir(tmpBase, { recursive: true });
       const tmpDir = path.join(tmpBase, `clone-${crypto.randomUUID()}`);
+
+      // Acquire concurrency slot (waits if at capacity)
+      await acquireCloneSlot();
 
       try {
         // Clone repo to temp dir
@@ -852,11 +896,14 @@ export async function POST(request: NextRequest) {
         const message = error instanceof Error ? error.message : 'Clone failed';
         return NextResponse.json({ success: false, error: message }, { status: 500 });
       } finally {
-        // ALWAYS clean up temp directory
+        // ALWAYS clean up temp directory (async to avoid blocking event loop)
         try {
-          rmSync(tmpDir, { recursive: true, force: true });
+          await fs.rm(tmpDir, { recursive: true, force: true });
         } catch (cleanupError) {
           console.error('[GitHub Clone] Failed to clean temp dir:', tmpDir, cleanupError);
+        } finally {
+          // Release concurrency slot
+          releaseCloneSlot();
         }
       }
     }

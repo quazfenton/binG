@@ -667,9 +667,15 @@ export default function ConversationInterface() {
       .find((m) => m.role === "assistant");
     if (!lastAssistant || typeof lastAssistant.content !== "string") return;
 
+    const assistantContent = lastAssistant.content.trim();
+    const isIncompleteResponse =
+      assistantContent.includes('⚠️ _Response may be incomplete due to a connection issue._') ||
+      (lastAssistant as any)?.metadata?.isPending === true;
+
     // CRITICAL FIX: Don't process while streaming - wait for complete content
     // This ensures we parse complete file diffs, not partial content
-    if (isLoading) {
+    // Also skip parsing for incomplete/truncated responses
+    if (isLoading || !assistantContent || isIncompleteResponse) {
       return;
     }
 

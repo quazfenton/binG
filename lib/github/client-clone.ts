@@ -73,10 +73,11 @@ function detectLanguage(filePath: string): string | undefined {
 
 function shouldSkipFile(path: string): boolean {
   const parts = path.split("/");
-  for (const part of parts) {
+  for (let i = 0; i < parts.length - 1; i++) {
+    const part = parts[i];
     // Skip known large/irrelevant directories
     if (SKIP_DIRS.has(part)) return true;
-    // Skip hidden directories (including .git)
+    // Skip hidden directories (including .git) but not hidden files at the end
     if (part.startsWith(".") && part !== "." && part !== "..") return true;
   }
   // Check binary extension
@@ -169,73 +170,100 @@ export async function cloneRepoToVFS(
   let filesProcessed = 0;
   const writtenPaths: string[] = [];
 
-  for (const [zipEntryPath, entry] of fileEntries) {
-    filesProcessed++;
-    report({
-      phase: "writing",
-      filesProcessed,
-      filesWritten,
-      filesSkipped,
-      totalFiles: fileEntries.length,
-      currentFile: zipEntryPath,
-    });
+  // Concurrency pool to process files in parallel (limit: 10 concurrent writes)
+  const CONCURRENCY_LIMIT = 10;
+  const semaphore = { count: CONCURRENCY_LIMIT, queue: [] as Array<() => void> };
 
-    // Strip root folder from path
-    const relativePath = rootFolder
-      ? zipEntryPath.substring(rootFolder.length + 1)
-      : zipEntryPath;
-
-    if (!relativePath) continue;
-
-    // Skip unwanted files
-    if (shouldSkipFile(relativePath)) continue;
-
-    try {
-      const content = await entry.async("string");
-      if (!content || content.length > MAX_FILE_SIZE) continue;
-
-      const language = detectLanguage(relativePath);
-      const vfsFilePath = `${vfsPath}/${relativePath}`;
-
-      // Check if file already exists - avoid overwrites
-      const checkRes = await fetch(`/api/filesystem/read?path=${encodeURIComponent(vfsFilePath)}`, {
-        headers: buildApiHeaders(),
-        signal,
-      });
-
-      if (checkRes.ok) {
-        // File already exists - skip to avoid overwrite
-        filesSkipped++;
-        continue;
-      }
-
-      const writeRes = await fetch("/api/filesystem/write", {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          ...buildApiHeaders(),
-        },
-        body: JSON.stringify({
-          path: vfsFilePath,
-          content,
-          language,
-        }),
-        signal,
-      });
-
-      if (writeRes.ok) {
-        filesWritten++;
-        writtenPaths.push(vfsFilePath);
-      } else {
-        filesSkipped++;
-      }
-    } catch (err) {
-      if (signal?.aborted) throw err;
-      // Skip files that fail to write (binary, encoding issues, rate limits, etc.)
-      console.warn(`[Clone] Skipping ${relativePath}:`, err);
-      filesSkipped++;
+  const acquire = (): Promise<void> => {
+    if (semaphore.count > 0) {
+      semaphore.count--;
+      return Promise.resolve();
     }
-  }
+    return new Promise<void>((resolve) => semaphore.queue.push(resolve));
+  };
+
+  const release = () => {
+    if (semaphore.queue.length > 0) {
+      const next = semaphore.queue.shift()!;
+      next();
+    } else {
+      semaphore.count++;
+    }
+  };
+
+  // Process files with concurrency limit
+  const fileTasks = fileEntries.map(([zipEntryPath, entry]) => async () => {
+    await acquire();
+    try {
+      // Strip root folder from path
+      const relativePath = rootFolder
+        ? zipEntryPath.substring(rootFolder.length + 1)
+        : zipEntryPath;
+
+      if (!relativePath) return;
+
+      // Skip unwanted files
+      if (shouldSkipFile(relativePath)) {
+        filesSkipped++;
+        return;
+      }
+
+      try {
+        const content = await entry.async("string");
+        if (content.length > MAX_FILE_SIZE) return;
+
+        const language = detectLanguage(relativePath);
+        const vfsFilePath = `${vfsPath}/${relativePath}`;
+
+        // Atomic write - backend handles existence check to avoid race conditions
+        // The write API returns 409 Conflict if file already exists (safe creation)
+        const writeRes = await fetch("/api/filesystem/write", {
+          method: "POST",
+          headers: {
+            "Content-Type": "application/json",
+            ...buildApiHeaders(),
+          },
+          body: JSON.stringify({
+            path: vfsFilePath,
+            content,
+            language,
+            // Signal intent: only create if not exists (atomic check-and-write)
+            ifNotExists: true,
+          }),
+          signal,
+        });
+
+        if (writeRes.ok) {
+          filesWritten++;
+          writtenPaths.push(vfsFilePath);
+        } else if (writeRes.status === 409) {
+          // File already exists - skip (atomic check prevented race condition)
+          filesSkipped++;
+        } else {
+          filesSkipped++;
+        }
+      } catch (err) {
+        if (signal?.aborted) throw err;
+        // Skip files that fail to write (binary, encoding issues, rate limits, etc.)
+        console.warn(`[Clone] Skipping ${relativePath}:`, err);
+        filesSkipped++;
+      }
+    } finally {
+      filesProcessed++;
+      report({
+        phase: "writing",
+        filesProcessed,
+        filesWritten,
+        filesSkipped,
+        totalFiles: fileEntries.length,
+        currentFile: zipEntryPath,
+      });
+      release();
+    }
+  });
+
+  // Execute all tasks with concurrency limit
+  await Promise.allSettled(fileTasks.map(task => task()));
 
   // Emit filesystem update event for UI refresh
   if (writtenPaths.length > 0) {

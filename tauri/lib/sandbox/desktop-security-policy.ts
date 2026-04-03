@@ -157,14 +157,25 @@ class DesktopSecurityPolicy {
     const trimmed = command.trim();
     const riskLevel = this.assessRisk(trimmed);
 
-    // FIX: Use boundary-aware matching for blockedCommands (not just substring)
-    // Check blocked commands (word boundary match)
-    const commandWords = trimmed.toLowerCase().split(/\s+/);
+    // Parse command tokens with shell separators and compare each token's basename to blocked single-word commands
+    const lowerTrimmed = trimmed.toLowerCase();
+    const pathModule = require('node:path');
+    const commandTokens = lowerTrimmed
+      .split(/[\s;|&]+/)
+      .filter(Boolean)
+      .map((token: string) => pathModule.basename(token));
+
+    // Check blocked commands with path-aware matching
     for (const blocked of this.config.blockedCommands) {
       const blockedLower = blocked.toLowerCase();
-      // Check if blocked command appears as a standalone word or at command start
-      if (commandWords.includes(blockedLower) || trimmed.toLowerCase().startsWith(blockedLower)) {
-        log.warn('Blocked command detected (boundary match)', { command: trimmed, blocked });
+      // Multi-word commands check as substring anywhere, single-word commands check against token basenames
+      const isMultiWord = blockedLower.includes(' ');
+      const isBlocked = isMultiWord
+        ? lowerTrimmed.includes(blockedLower)  // Contains multi-word command anywhere
+        : commandTokens.includes(blockedLower); // Single word matches token basename
+
+      if (isBlocked) {
+        log.warn('Blocked command detected (path-aware match)', { command: trimmed, blocked });
         this.logAudit({
           command: trimmed,
           riskLevel,
@@ -223,24 +234,27 @@ class DesktopSecurityPolicy {
         'nmap',
       ];
       
-      for (const pattern of networkPatterns) {
-        if (trimmed.toLowerCase().includes(pattern)) {
-          log.warn('Blocked network command (blockNetworkCommands enabled)', { command: trimmed, pattern });
-          this.logAudit({
-            command: trimmed,
-            riskLevel,
-            allowed: false,
-            requiresApproval: false,
-            workingDirectory: workingDirectory || '',
-          });
-          return {
-            allowed: false,
-            riskLevel: 'high',
-            reason: `Network command '${pattern}' is blocked (blockNetworkCommands enabled)`,
-            requiresApproval: false,
-            matchedRule: `blockNetworkCommand:${pattern}`,
-          };
-        }
+      // Use command-boundary regex matching instead of substring matching
+      const networkCommandRegex = /(^|[\s;|&])(curl|wget|ssh|scp|sftp|nc|netcat|telnet|ftp|nmap)(?=$|[\s;|&])/i;
+      const networkMatch = lowerTrimmed.match(networkCommandRegex);
+      
+      if (networkMatch) {
+        const blockedCommand = networkMatch[2].toLowerCase();
+        log.warn('Blocked network command (blockNetworkCommands enabled)', { command: trimmed, pattern: blockedCommand });
+        this.logAudit({
+          command: trimmed,
+          riskLevel,
+          allowed: false,
+          requiresApproval: false,
+          workingDirectory: workingDirectory || '',
+        });
+        return {
+          allowed: false,
+          riskLevel: 'high',
+          reason: `Network command '${blockedCommand}' is blocked (blockNetworkCommands enabled)`,
+          requiresApproval: false,
+          matchedRule: `blockNetworkCommand:${blockedCommand}`,
+        };
       }
     }
 
@@ -290,17 +304,30 @@ class DesktopSecurityPolicy {
 
     // Use path.resolve to normalize and resolve the path with proper directory boundary
     const pathModule = require('node:path');
+    const fs = require('node:fs');
     
     try {
-      // Resolve to absolute path to handle .. and symlinks
+      // Resolve to canonical path to handle .. and symlink traversal
       const resolvedPath = pathModule.resolve(filePath);
+      let canonicalPath: string;
+      try {
+        // Try realpath first for existing files
+        canonicalPath = fs.realpathSync(resolvedPath);
+      } catch {
+        // For non-existing paths, resolve parent and basename separately
+        canonicalPath = pathModule.resolve(
+          fs.realpathSync(pathModule.dirname(resolvedPath)),
+          pathModule.basename(resolvedPath)
+        );
+      }
       
       for (const allowed of this.config.allowedDirectories) {
-        const resolvedAllowed = pathModule.resolve(allowed);
-        // FIX: Use path separator to ensure directory boundary - prevents sibling path bypass
+        // Canonicalize allowed directories too
+        const canonicalAllowed = fs.realpathSync(pathModule.resolve(allowed));
+        // Use path separator to ensure directory boundary - prevents sibling path bypass
         // e.g., /allowed must not match /allowed-file
-        const normalizedResolvedPath = resolvedPath.replace(/\\/g, '/');
-        const normalizedAllowed = resolvedAllowed.replace(/\\/g, '/');
+        const normalizedResolvedPath = canonicalPath.replace(/\\/g, '/');
+        const normalizedAllowed = canonicalAllowed.replace(/\\/g, '/');
         // Check that path starts with allowed dir AND is either exactly equal or has a separator after
         if (normalizedResolvedPath === normalizedAllowed || 
             normalizedResolvedPath.startsWith(normalizedAllowed + '/')) {
@@ -401,8 +428,9 @@ class DesktopSecurityPolicy {
    * Update policy configuration
    */
   updateConfig(newConfig: Partial<SecurityPolicyConfig>): void {
-    this.config = { ...this.config, ...newConfig };
-    log.info('Security policy updated', { newConfig });
+    const validatedConfig = this.validateConfig(newConfig);
+    this.config = { ...this.config, ...validatedConfig };
+    log.info('Security policy updated', { newConfig: validatedConfig });
   }
 
   /**

@@ -280,7 +280,8 @@ export async function processUnifiedAgentRequest(
     }
   } catch (error) {
     // Attempt fallback on error
-    const fallbackResult = await attemptFallback(config, mode, error);
+    const triedModes = new Set<string>([mode]);
+    const fallbackResult = await attemptFallback(config, mode, error, triedModes);
 
     if (fallbackResult) {
       return {
@@ -971,13 +972,14 @@ async function attemptFallback(
             metadata: {
               ...result.metadata,
               fallbackFrom: failedMode,
+              triedModes: Array.from(visitedModes),
             },
           };
         }
       }
 
-      // FIX: Pass visitedModes to recursive fallback calls to properly track tried modes
-      const result = await attemptFallback(config, fallbackMode, fallbackError, visitedModes);
+      // Pass visitedModes to recursive fallback calls to properly track tried modes
+      const result = await attemptFallback(config, fallbackMode, error, visitedModes);
 
       if (result) {
         // Update metadata to show the full chain of modes that were tried
@@ -994,7 +996,9 @@ async function attemptFallback(
       }
     } catch (fallbackError) {
       console.warn(`[UnifiedAgent] Fallback to ${fallbackMode} also failed:`, fallbackError);
-      // Continue to next fallback with visitedModes passed
+      // Add the failed fallback mode to visitedModes to prevent re-trying
+      visitedModes.add(fallbackMode);
+      // Continue to next fallback with updated visitedModes
     }
   }
 

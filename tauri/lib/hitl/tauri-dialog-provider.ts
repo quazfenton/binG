@@ -196,17 +196,17 @@ export async function saveFileDialog(
  */
 export async function showMessage(
   title: string,
-  message: string,
+  messageText: string,
   type: 'info' | 'warning' | 'error' = 'info'
 ): Promise<DialogResult<void>> {
   if (!isDialogAvailable()) {
-    log.warn('Tauri dialogs not available, using console', { title, message });
-    console.log(`[${type.toUpperCase()}] ${title}: ${message}`);
+    log.warn('Tauri dialogs not available, using console', { title, message: messageText });
+    console.log(`[${type.toUpperCase()}] ${title}: ${messageText}`);
     return { success: true };
   }
 
   try {
-    await message(message, { title, kind: type });
+    await message(messageText, { title, kind: type });
     return { success: true };
   } catch (error: any) {
     log.error('Failed to show message dialog', error);

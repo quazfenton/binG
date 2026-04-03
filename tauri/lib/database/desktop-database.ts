@@ -83,7 +83,7 @@ export function getDesktopWorkspaceDir(): string {
   }
 
   if (platform === 'win32') {
-    return path.join(homeDir, 'Documents', 'opencode-workspaces');
+    return path.join(homeDir, 'opencode-workspaces');
   }
 
   return path.join(homeDir, 'opencode-workspaces');

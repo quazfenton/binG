@@ -25,6 +25,7 @@ import {
 import { toast } from 'sonner';
 import useIframeLoader from '@/hooks/use-iframe-loader';
 import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
+import { IframeLoadingOverlay } from '../ui/iframe-loading-overlay';
 
 interface BookmarkEntry {
   sandboxId: string;
@@ -61,11 +62,14 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
     retryCount,
     canRetry,
     isUsingFallback,
+    fallbackLevel,
     fallbackUrl,
+    loadingProgress,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
+    handleLoadSuccess,
   } = useIframeLoader({
     url: iframeUrl,
     timeout: 30000,
@@ -294,15 +298,6 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
 
               {/* Iframe */}
               <div className="flex-1 relative bg-cyan-950">
-                {isLoading && (
-                  <div className="absolute inset-0 flex items-center justify-center bg-cyan-950/80 z-10">
-                    <div className="text-center space-y-4">
-                      <RefreshCw className="w-8 h-8 animate-spin mx-auto text-cyan-500" />
-                      <p className="text-cyan-200/60">Loading CodeSandbox...</p>
-                    </div>
-                  </div>
-                )}
-                
                 {isFailed || iframeError ? (
                   <div className="absolute inset-0">
                     <IframeUnavailableScreen
@@ -316,21 +311,34 @@ const CodeSandboxEmbedPlugin: React.FC<{ onClose: () => void }> = ({ onClose }) 
                     />
                   </div>
                 ) : (
-                  <iframe
-                    key={iframeKey}
-                    src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
-                    className="w-full h-full border-0"
-                    title="CodeSandbox"
-                    onLoad={() => setIsLoading(false)}
-                    onError={() => {
-                      setIframeError('Failed to load CodeSandbox. Note: CodeSandbox requires valid sandbox IDs.');
-                      setIsLoading(false);
-                    }}
-                    sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-top-navigation allow-top-navigation-by-user-activation"
-                    allow="fullscreen; encrypted-media"
-                    referrerPolicy="no-referrer"
-                    allowTransparency={true}
-                  />
+                  <>
+                    {/* Shared loading overlay with progress bar */}
+                    <IframeLoadingOverlay
+                      progress={loadingProgress}
+                      isLoading={hookIsLoading || isLoading}
+                      isUsingFallback={isUsingFallback}
+                      fallbackLevel={fallbackLevel}
+                      label="Loading CodeSandbox"
+                    />
+                    <iframe
+                      key={iframeKey}
+                      src={isUsingFallback && fallbackUrl ? fallbackUrl : iframeUrl}
+                      className="w-full h-full border-0"
+                      title="CodeSandbox"
+                      onLoad={() => {
+                        setIsLoading(false);
+                        handleLoadSuccess();
+                      }}
+                      onError={() => {
+                        setIframeError('Failed to load CodeSandbox. Note: CodeSandbox requires valid sandbox IDs.');
+                        setIsLoading(false);
+                      }}
+                      sandbox="allow-same-origin allow-scripts allow-popups allow-forms allow-modals allow-top-navigation allow-top-navigation-by-user-activation"
+                      allow="fullscreen; encrypted-media"
+                      referrerPolicy="no-referrer"
+                      allowTransparency={true}
+                    />
+                  </>
                 )}
               </div>
 

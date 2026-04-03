@@ -384,9 +384,19 @@ export function EnhancedDiffViewer({
     return !isExpanded && totalLines > maxLines;
   }, [activeDiff, maxLines, isExpanded, fullyExpanded]);
 
-  // Get displayed lines based on expanded state (always show all when fullyExpanded)
-  // Using undefined instead of Infinity for .slice() to make "show all" intent explicit
-  const displayedLines = fullyExpanded || isExpanded ? undefined : maxLines;
+  // Get displayed hunks based on expanded state and line count
+  // Compute the slice limit as the number of hunks needed to cover at most maxLines lines
+  const displayedLines = useMemo(() => {
+    if (fullyExpanded || isExpanded || !activeDiff) return undefined;
+    let lineCount = 0;
+    let hunkCount = 0;
+    for (const hunk of activeDiff.hunks) {
+      lineCount += hunk.length;
+      hunkCount++;
+      if (lineCount >= maxLines) break;
+    }
+    return hunkCount;
+  }, [fullyExpanded, isExpanded, activeDiff, maxLines]);
 
   // Drag-to-scroll handlers
   const handleDragStart = useCallback((e: React.MouseEvent) => {

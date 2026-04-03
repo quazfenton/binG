@@ -23,6 +23,7 @@ import {
 } from "../ui/select";
 import useIframeLoader from '@/hooks/use-iframe-loader';
 import { IframeUnavailableScreen } from '../ui/iframe-unavailable-screen';
+import { IframeLoadingOverlay } from '../ui/iframe-loading-overlay';
 
 export interface GlitchEmbedPluginProps {
   onOpenWindow?: (projectId: string, title: string) => void;
@@ -56,11 +57,14 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
     retryCount,
     canRetry,
     isUsingFallback,
+    fallbackLevel,
     fallbackUrl,
+    loadingProgress,
     handleLoad,
     handleRetry,
     handleReset,
     handleFallback,
+    handleLoadSuccess,
   } = useIframeLoader({
     url: currentProject?.embedUrl || '',
     timeout: 30000,
@@ -275,14 +279,24 @@ const GlitchEmbedPlugin: React.FC<GlitchEmbedPluginProps> = ({ onOpenWindow }) =
                     />
                   </div>
                 ) : (
-                  <iframe
-                    src={isUsingFallback && fallbackUrl ? fallbackUrl : currentProject.embedUrl}
-                    className="w-full h-full"
-                    style={{ height: embedMode === "both" ? "50%" : "100%" }}
-                    title={`Glitch Project: ${currentProject.name}`}
-                    allow="camera; microphone; midi; geolocation; display-capture; encrypted-media; fullscreen"
-                    sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
-                  />
+                  <div className="relative w-full" style={{ height: embedMode === "both" ? "50%" : "100%" }}>
+                    {/* Shared loading overlay with progress bar */}
+                    <IframeLoadingOverlay
+                      progress={loadingProgress}
+                      isLoading={isLoading}
+                      isUsingFallback={isUsingFallback}
+                      fallbackLevel={fallbackLevel}
+                      label={`Loading ${currentProject.name}`}
+                    />
+                    <iframe
+                      src={isUsingFallback && fallbackUrl ? fallbackUrl : currentProject.embedUrl}
+                      className="w-full h-full"
+                      title={`Glitch Project: ${currentProject.name}`}
+                      allow="camera; microphone; midi; geolocation; display-capture; encrypted-media; fullscreen"
+                      sandbox="allow-scripts allow-same-origin allow-forms allow-popups allow-modals"
+                      onLoad={handleLoadSuccess}
+                    />
+                  </div>
                 )
               )}
               {embedMode === "both" && (
