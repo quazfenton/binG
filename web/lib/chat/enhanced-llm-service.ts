@@ -151,7 +151,9 @@ export class EnhancedLLMService {
     this.fallbackChains.set('deepinfra', ['nvidia', 'groq', 'together', 'fireworks', 'openrouter', 'mistral']);
     this.fallbackChains.set('anyscale', ['nvidia', 'groq', 'together', 'openrouter', 'mistral', 'google']);
     this.fallbackChains.set('lepton', ['nvidia', 'groq', 'openrouter', 'together', 'mistral', 'google']);
-    this.fallbackChains.set('openai', ['google', 'mistral',  'openrouter', 'github', 'nvidia', 'groq']);
+    this.fallbackChains.set('google', ['mistral', 'openrouter', 'openai', 'github', 'nvidia', 'groq']);
+    this.fallbackChains.set('mistral', ['google', 'openrouter', 'openai', 'github', 'nvidia', 'groq']);
+    this.fallbackChains.set('openai', ['google', 'mistral', 'openrouter', 'github', 'nvidia', 'groq']);
 
   }
 

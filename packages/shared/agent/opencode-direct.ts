@@ -15,6 +15,7 @@ import { agentSessionManager } from '../session/agent/agent-session-manager';
 import type { ExecutionPolicy } from '../sandbox/types';
 import { determineExecutionPolicy } from '../sandbox/types';
 import type { ToolIntegrationManager } from '@/lib/tools/tool-integration-system';
+import { applyPromptModifiers, type PromptParameters } from './prompt-parameters';
 
 const logger = createLogger('Agent:OpencodeDirect');
 
@@ -34,6 +35,11 @@ interface OpenCodeDirectOptions {
    * If provided, tools will be executed via ToolIntegrationManager
    */
   toolManager?: ToolIntegrationManager;
+  /**
+   * Optional prompt parameters to modify response style
+   * Applied as a suffix to the base OPENCODE_SYSTEM_PROMPT
+   */
+  promptParams?: PromptParameters;
 }
 
 interface FileChange {
@@ -55,7 +61,7 @@ interface OpenCodeDirectResult {
  * Run OpenCode with execution policy-based sandbox selection
  */
 export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise<OpenCodeDirectResult> {
-  const { userId, conversationId, task, onChunk, onTool, executionPolicy: explicitPolicy, toolManager } = options;
+  const { userId, conversationId, task, onChunk, onTool, executionPolicy: explicitPolicy, toolManager, promptParams } = options;
 
   // Auto-detect execution policy from task if not explicitly specified
   const detectedPolicy = explicitPolicy || determineExecutionPolicy({
@@ -106,7 +112,7 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
       description: t.function.description,
       parameters: t.function.parameters,
     })),
-    systemPrompt: process.env.OPENCODE_SYSTEM_PROMPT,
+    systemPrompt: (process.env.OPENCODE_SYSTEM_PROMPT || '') + applyPromptModifiers(promptParams ?? {}),
     maxSteps: parseInt(process.env.OPENCODE_MAX_STEPS || '15', 10),
     onStreamChunk: onChunk,
     onToolExecution: async (toolName, args, toolResult) => {

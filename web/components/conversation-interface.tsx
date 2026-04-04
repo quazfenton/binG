@@ -24,7 +24,9 @@ import { useStreamingState } from "@/hooks/use-streaming-state";
 import { useAuth } from "@/contexts/auth-context";
 import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from "@/lib/utils";
 import { generateSessionName, checkFileConflicts } from "@/lib/session-naming";
-import type { AttachedVirtualFile } from "@/hooks/use-virtual-filesystem";
+import { useOrchestrationMode, getOrchestrationModeHeaders } from "@/contexts/orchestration-mode-context";
+import type { OrchestrationMode } from "@/contexts/orchestration-mode-context";
+import { useResponseStyle } from "@/contexts/response-style-context";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 import {
@@ -114,6 +116,8 @@ import { smartApply } from '@/lib/chat/file-diff-utils';
 export default function ConversationInterface() {
   const { user } = useAuth();
   const { isOpen: isWorkspaceOpen } = usePanel();
+  const { config: orchestrationConfig } = useOrchestrationMode();
+  const { params: responseStyleParams, presetKey: responseStylePreset } = useResponseStyle();
   const [embedMode, setEmbedMode] = useState(false);
 
   // Chat panel horizontal resizing state
@@ -565,6 +569,7 @@ export default function ConversationInterface() {
     setInput, // Destructure setInput from enhanced chat hook
   } = useEnhancedChat({
     api: "/api/chat",
+    orchestrationMode: orchestrationConfig.mode,
     body: () => ({
       provider: providerRef.current,
       model: modelRef.current,
@@ -574,6 +579,16 @@ export default function ConversationInterface() {
       conversationId: filesystemSessionIdRef.current,
       // Pass user API keys for provider override (if user set custom keys)
       apiKeys: Object.keys(apiKeysRef.current).length > 0 ? apiKeysRef.current : undefined,
+      // Pass response style parameters
+      presetKey: responseStylePreset || undefined,
+      responseDepth: responseStyleParams.responseDepth,
+      expertiseLevel: responseStyleParams.expertiseLevel,
+      reasoningMode: responseStyleParams.reasoningMode,
+      tone: responseStyleParams.tone,
+      creativityLevel: responseStyleParams.creativityLevel,
+      citationStrictness: responseStyleParams.citationStrictness,
+      outputFormat: responseStyleParams.outputFormat,
+      selfCorrection: responseStyleParams.selfCorrection,
       filesystemContext: {
         attachedFiles: filesystemContextRef.current.attachedFiles.map((file) => ({
           path: file.path,

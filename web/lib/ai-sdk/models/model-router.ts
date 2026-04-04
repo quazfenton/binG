@@ -19,26 +19,28 @@
 import { ChatOpenAI } from '@langchain/openai';
 import { ChatAnthropic } from '@langchain/anthropic';
 import { ChatGoogleGenerativeAI } from '@langchain/google-genai';
+import { ChatMistralAI } from '@langchain/mistralai';
 import { withRetry, isRetryableError } from '@/lib/vector-memory/retry';
 
 export type ModelTier = 'fast' | 'reasoning' | 'coder' | 'auto';
 
 /**
  * Model configuration map
+ * Priority: explicit env var → sensible default (mistral/google over openai)
  */
 const modelMap = {
-  fast: new ChatOpenAI({ 
-    model: process.env.FAST_MODEL || 'gpt-4o-mini', 
+  fast: new ChatMistralAI({
+    model: process.env.FAST_MODEL || 'mistral-small-latest',
     temperature: 0.3,
     maxTokens: 2000,
   }),
-  reasoning: new ChatOpenAI({ 
-    model: process.env.REASONING_MODEL || 'gpt-4o', 
+  reasoning: new ChatGoogleGenerativeAI({
+    model: process.env.REASONING_MODEL || 'gemini-2.5-flash',
     temperature: 0.7,
     maxTokens: 4000,
   }),
-  coder: new ChatAnthropic({ 
-    model: process.env.CODER_MODEL || 'claude-sonnet-4-20250514', 
+  coder: new ChatAnthropic({
+    model: process.env.CODER_MODEL || 'claude-sonnet-4-20250514',
     temperature: 0.2,
     maxTokens: 4000,
   }),
@@ -141,14 +143,14 @@ export function chooseTier(messages: any[]): ModelTier {
 export function getModelInfo(tier: ModelTier) {
   const info = {
     fast: {
-      model: process.env.FAST_MODEL || 'gpt-4o-mini',
-      cost: '$0.15/1M tokens',
+      model: process.env.FAST_MODEL || 'mistral-small-latest',
+      cost: '~$0.20/1M tokens',
       speed: 'Fast',
       bestFor: 'Simple tasks, classification, extraction',
     },
     reasoning: {
-      model: process.env.REASONING_MODEL || 'gpt-4o',
-      cost: '$2.50/1M tokens',
+      model: process.env.REASONING_MODEL || 'gemini-2.5-flash',
+      cost: '~$0.30/1M tokens',
       speed: 'Medium',
       bestFor: 'Complex reasoning, analysis, planning',
     },
