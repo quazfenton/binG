@@ -8,7 +8,8 @@ let count = 0;
 files.forEach(f => {
   try {
     let c = fs.readFileSync(f, 'utf8');
-    c = c.replace(/from ['"]@\/lib\/agent\//g, "from '@bing/shared/agent/");
+    // Preserve original quote style by capturing it and reusing
+    c = c.replace(/from (['"])@\/lib\/agent\//g, "from $1@bing/shared/agent/");
     fs.writeFileSync(f, c);
     console.log('Updated:', f);
     count++;

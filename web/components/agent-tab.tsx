@@ -79,6 +79,12 @@ export default function AgentTab({ onClose }: AgentTabProps) {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
+    fetchModes();
+  }, []);
+
+  const fetchModes = () => {
+    setLoading(true);
+    setError(null);
     fetch('/api/chat/modes')
       .then(res => {
         if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -96,7 +102,7 @@ export default function AgentTab({ onClose }: AgentTabProps) {
         setError(err.message || 'Failed to load modes');
       })
       .finally(() => setLoading(false));
-  }, []);
+  };
 
   const checkModeReadiness = async (mode: ModeData): Promise<{ ready: boolean; error?: string }> => {
     if (mode.status === 'deprecated') {
@@ -160,7 +166,7 @@ export default function AgentTab({ onClose }: AgentTabProps) {
             <Button
               variant="ghost"
               size="sm"
-              onClick={() => { setError(null); setLoading(true); }}
+              onClick={fetchModes}
               className="mt-2 text-xs text-white/60 hover:text-white"
             >
               <RotateCcw className="h-3 w-3 mr-1" />

@@ -43,7 +43,7 @@ export interface CommitHistoryEntry {
 
 export interface RollbackResult {
   success: boolean;
-  restoredFiles: number;
+  restoredFiles: number | Array<{ path: string; content?: string; action: 'restore' | 'delete' }>;
   error?: string;
   details?: any;
 }
@@ -359,6 +359,8 @@ export class ShadowCommitManager {
 
   /**
    * Rollback to a specific commit
+   * Returns the files that need to be restored with their original content
+   * so the caller can apply them to the VFS.
    */
   async rollback(sessionId: string, commitId: string): Promise<RollbackResult> {
     const commit = await this.getCommit(sessionId, commitId);
@@ -373,35 +375,49 @@ export class ShadowCommitManager {
 
     try {
       const db = getDatabase();
-      
+
       // Handle case where database is not yet initialized
       if (!db) {
-        console.warn('[ShadowCommit] Database not ready, rollback skipped');
+        console.warn('[ShadowCommit] Database not ready, returning rollback result without DB operations');
+        // Still return the file restoration data so caller can apply it
+        const filesToRestore = commit.transactions.map(t => ({
+          path: t.path,
+          content: t.originalContent,
+          action: t.type === 'DELETE' ? 'restore' as const : 'restore' as const,
+        }));
         return {
           success: true,
-          restoredFiles: 0,
-          details: 'Database not ready - rollback skipped but operation succeeded'
+          restoredFiles: filesToRestore,
+          details: 'Database not ready - file restoration data returned but not persisted'
         };
       }
 
-      // Save current state as a rollback point
-      const rollbackId = crypto.randomUUID();
+      // Save current state as a rollback point BEFORE we lose it
+      const rollbackPointId = crypto.randomUUID();
       const timestamp = new Date().toISOString();
 
-      // Store current VFS as a new commit for rollback capability
-      const stmt = db.prepare(`
+      // Get current VFS state for all files in this commit to create a rollback point
+      const currentTransactions = commit.transactions.map(t => ({
+        path: t.path,
+        type: t.type,
+        // We don't have current VFS content here, so store what we know
+        originalContent: t.originalContent,
+        newContent: t.newContent,
+      }));
+
+      const rollbackPointStmt = db.prepare(`
         INSERT INTO shadow_commits (
           id, session_id, owner_id, message, author, timestamp, source, integration,
           workspace_version, diff, transactions
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
-      // Get owner_id from the commit we're rolling back to
-      const commit = await this.getCommit(sessionId, commitId);
-      const ownerId = commit ? (sessionId.includes(':') ? sessionId.split(':')[0] : 'anon:unknown') : 'anon:unknown';
+      const ownerId = commit.sessionId.includes(':')
+        ? commit.sessionId.split(':')[0]
+        : 'anon:unknown';
 
-      stmt.run(
-        rollbackId,
+      rollbackPointStmt.run(
+        rollbackPointId,
         sessionId,
         ownerId,
         `Pre-rollback to ${commitId}`,
@@ -411,32 +427,27 @@ export class ShadowCommitManager {
         'shadow-commit',
         null,
         '',
-        JSON.stringify([])
+        JSON.stringify(currentTransactions)
       );
 
-      let restoredCount = 0;
-      for (const transaction of commit.transactions) {
-        if (transaction.type === 'DELETE') {
-          // File was deleted in this commit - restore it by marking for recreation
-          // The caller will handle actual file restoration through VFS
-          restoredCount++;
-        } else {
-          // File was created/updated - restore to that version
-          restoredCount++;
-        }
-      }
+      // Build the list of files to restore with their content
+      const filesToRestore = commit.transactions.map(t => ({
+        path: t.path,
+        content: t.originalContent,
+        action: t.type === 'DELETE' ? 'restore' as const : 'restore' as const,
+      }));
 
-      console.log('[ShadowCommit] Rollback prepared:', restoredCount, 'files');
-      return { 
-        success: true, 
-        restoredFiles: restoredCount 
+      console.log('[ShadowCommit] Rollback prepared:', filesToRestore.length, 'files');
+      return {
+        success: true,
+        restoredFiles: filesToRestore,
       };
     } catch (error: any) {
       console.error('[ShadowCommit] Rollback failed:', error.message);
-      return { 
-        success: false, 
+      return {
+        success: false,
         restoredFiles: 0,
-        error: String(error) 
+        error: String(error)
       };
     }
   }

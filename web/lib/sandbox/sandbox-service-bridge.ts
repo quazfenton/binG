@@ -23,6 +23,10 @@ import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-s
 import { sandboxFilesystemSync } from '../virtual-filesystem/sync/sandbox-filesystem-sync';
 import { sandboxPersistenceManager } from '../storage/persistence-manager';
 
+import { createLogger } from '@/lib/utils/logger';
+
+const logger = createLogger('SandboxBridge');
+
 // Track pending session creations to prevent race conditions
 const pendingCreations = new Map<string, Promise<WorkspaceSession>>();
 
@@ -205,14 +209,14 @@ export class SandboxServiceBridge {
       return;
     }
 
+    const currentVersion = await virtualFilesystem.getWorkspaceVersion(session.userId);
+    const mountedVersion = this.mountedFilesystemVersionBySandbox.get(sandboxId);
+
+    if (mountedVersion === currentVersion) {
+      return;
+    }
+
     try {
-      const currentVersion = await virtualFilesystem.getWorkspaceVersion(session.userId);
-      const mountedVersion = this.mountedFilesystemVersionBySandbox.get(sandboxId);
-
-      if (mountedVersion === currentVersion) {
-        return;
-      }
-
       const snapshot = await virtualFilesystem.exportWorkspace(session.userId);
       const provider = this.inferProviderFromSandboxId(sandboxId);
       const providerObj = await this.getProvider(provider);
@@ -220,11 +224,19 @@ export class SandboxServiceBridge {
 
       // Attempt incremental sync first for efficiency
       const syncResult = await sandboxPersistenceManager.syncIncremental(handle, snapshot.files);
-      console.log(`[SandboxBridge] Incremental sync to ${provider}: ${syncResult.synced} written, ${syncResult.skipped} skipped in ${syncResult.duration}ms`);
+      logger.info(`Incremental sync to ${provider}: ${syncResult.synced} written, ${syncResult.skipped} skipped in ${syncResult.duration}ms`);
 
       this.mountedFilesystemVersionBySandbox.set(sandboxId, currentVersion);
     } catch (error: any) {
-      console.warn(`[SandboxBridge] Mounting failed: ${error.message}`);
+      logger.error(`Mounting virtual filesystem failed for sandbox ${sandboxId}: ${error.message}`, {
+        sandboxId,
+        userId: session.userId,
+        currentVersion,
+        mountedVersion,
+        error: error.stack,
+      });
+      // Re-throw so callers know the mount failed and can handle appropriately
+      throw new Error(`Failed to mount virtual filesystem: ${error.message}`, { cause: error });
     }
   }
 

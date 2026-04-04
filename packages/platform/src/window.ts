@@ -194,11 +194,17 @@ class WindowControl {
         const { open } = await import('@tauri-apps/plugin-opener');
         await open(url);
       } catch (error) {
-        // Fallback to window.open if Tauri opener fails
-        window.open(url, target);
+        console.warn('[WindowControl] Tauri opener failed, falling back to window.open:', error);
+        const openedWindow = window.open(url, target, 'noopener,noreferrer');
+        if (openedWindow) {
+          openedWindow.opener = null;
+        }
       }
     } else {
-      window.open(url, target);
+      const openedWindow = window.open(url, target, 'noopener,noreferrer');
+      if (openedWindow) {
+        openedWindow.opener = null;
+      }
     }
   }
 }

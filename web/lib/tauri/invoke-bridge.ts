@@ -53,6 +53,23 @@ export interface CheckpointInfo {
   file_count?: number;
 }
 
+// PTY Session Types
+export interface PtyCreateResult {
+  session_id: string;
+  success: boolean;
+  error?: string;
+}
+
+export interface PtyInputResult {
+  success: boolean;
+  error?: string;
+}
+
+export interface PtyOutputEvent {
+  session_id: string;
+  data: string;
+}
+
 export interface ResourceUsage {
   cpu_percent: number;
   memory_used_mb: number;
@@ -398,6 +415,90 @@ export async function showNotification(
 }
 
 // Export all functions as a unified API object
+/**
+ * Create a PTY session for real terminal interaction
+ */
+export async function createPtySession(
+  cols?: number,
+  rows?: number,
+  cwd?: string,
+  shell?: string
+): Promise<PtyCreateResult> {
+  if (!isTauriAvailable()) {
+    return { session_id: '', success: false, error: 'Tauri not available' };
+  }
+
+  try {
+    return await invoke<PtyCreateResult>('create_pty_session', {
+      cols: cols || 80,
+      rows: rows || 24,
+      cwd,
+      shell,
+    });
+  } catch (error: any) {
+    return { session_id: '', success: false, error: error.message };
+  }
+}
+
+/**
+ * Write input to PTY session
+ */
+export async function writePtyInput(
+  sessionId: string,
+  data: string
+): Promise<PtyInputResult> {
+  if (!isTauriAvailable()) {
+    return { success: false, error: 'Tauri not available' };
+  }
+
+  try {
+    return await invoke<PtyInputResult>('write_pty_input', {
+      sessionId,
+      data,
+    });
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Resize PTY session
+ */
+export async function resizePty(
+  sessionId: string,
+  cols: number,
+  rows: number
+): Promise<PtyInputResult> {
+  if (!isTauriAvailable()) {
+    return { success: false, error: 'Tauri not available' };
+  }
+
+  try {
+    return await invoke<PtyInputResult>('resize_pty', {
+      sessionId,
+      cols,
+      rows,
+    });
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
+/**
+ * Close PTY session
+ */
+export async function closePtySession(sessionId: string): Promise<PtyInputResult> {
+  if (!isTauriAvailable()) {
+    return { success: false, error: 'Tauri not available' };
+  }
+
+  try {
+    return await invoke<PtyInputResult>('close_pty_session', { sessionId });
+  } catch (error: any) {
+    return { success: false, error: error.message };
+  }
+}
+
 export const tauriInvoke = {
   isAvailable: isTauriAvailable,
   executeCommand,
@@ -415,6 +516,11 @@ export const tauriInvoke = {
   showNotification,
   openDirectoryDialog,
   saveSettings,
+  // PTY functions
+  createPtySession,
+  writePtyInput,
+  resizePty,
+  closePtySession,
   saveSecret: async (key: string, value: string) => {
     if (!isTauriAvailable()) {
       throw new Error('Tauri runtime not available');

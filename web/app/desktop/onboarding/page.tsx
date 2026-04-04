@@ -27,6 +27,10 @@ import {
   Loader2,
   AlertTriangle,
   Info,
+  Shield,
+  Lock,
+  Unlock,
+  FolderLock,
 } from 'lucide-react';
 import { isDesktopMode, getDesktopWorkspaceDir } from '@/lib/utils/desktop-env';
 import { tauriInvoke } from '@/lib/tauri/invoke-bridge';
@@ -43,11 +47,15 @@ interface OnboardingData {
   localLLMUrl: string;
   autoApprove: boolean;
   enableTelemetry: boolean;
+  // Workspace boundary settings
+  boundaryEnabled: boolean;
+  boundaryMode: 'session' | 'project' | 'none';
 }
 
 const STEPS = [
   { id: 'welcome', title: 'Welcome', description: 'Get started with binG Desktop' },
   { id: 'workspace', title: 'Workspace', description: 'Choose your workspace directory' },
+  { id: 'boundary', title: 'Boundary', description: 'Configure file access limits' },
   { id: 'shell', title: 'Shell', description: 'Configure your preferred shell' },
   { id: 'api', title: 'API Keys', description: 'Set up your LLM provider' },
   { id: 'complete', title: 'Complete', description: 'Ready to go!' },
@@ -76,6 +84,8 @@ const DEFAULT_DATA: OnboardingData = {
   localLLMUrl: 'http://localhost:11434',
   autoApprove: true,
   enableTelemetry: true,
+  boundaryEnabled: false,
+  boundaryMode: 'session',
 };
 
 export default function DesktopOnboardingPage() {
@@ -128,9 +138,11 @@ export default function DesktopOnboardingPage() {
     switch (step) {
       case 1: // Workspace
         return data.workspaceRoot.trim().length > 0;
-      case 2: // Shell
+      case 2: // Boundary - always valid (has default)
+        return true;
+      case 3: // Shell
         return data.shell.trim().length > 0;
-      case 3: // API
+      case 4: // API
         if (data.useLocalLLM) {
           return data.localLLMUrl.trim().length > 0;
         }
@@ -180,7 +192,7 @@ export default function DesktopOnboardingPage() {
     setError(null);
 
     try {
-      // Save settings
+      // Save settings including boundary configuration
       const settings = {
         workspaceRoot: data.workspaceRoot,
         shell: data.shell,
@@ -192,6 +204,9 @@ export default function DesktopOnboardingPage() {
         // apiKey intentionally excluded from localStorage; stored via secure Tauri store
         useLocalLLM: data.useLocalLLM,
         localLLMUrl: data.localLLMUrl,
+        // Workspace boundary settings
+        boundaryEnabled: data.boundaryEnabled,
+        boundaryMode: data.boundaryMode,
       };
 
       localStorage.setItem('desktop_settings', JSON.stringify(settings));
@@ -310,13 +325,23 @@ export default function DesktopOnboardingPage() {
             )}
 
             {currentStep === 2 && (
+              <BoundaryStep
+                boundaryEnabled={data.boundaryEnabled}
+                boundaryMode={data.boundaryMode}
+                workspaceRoot={data.workspaceRoot}
+                onEnabledChange={(value) => setData((prev) => ({ ...prev, boundaryEnabled: value }))}
+                onModeChange={(value) => setData((prev) => ({ ...prev, boundaryMode: value }))}
+              />
+            )}
+
+            {currentStep === 3 && (
               <ShellStep
                 shell={data.shell}
                 onChange={(value) => setData((prev) => ({ ...prev, shell: value }))}
               />
             )}
 
-            {currentStep === 3 && (
+            {currentStep === 4 && (
               <APIKeyStep
                 llmProvider={data.llmProvider}
                 apiKey={data.apiKey}
@@ -329,7 +354,7 @@ export default function DesktopOnboardingPage() {
               />
             )}
 
-            {currentStep === 4 && (
+            {currentStep === 5 && (
               <CompleteStep
                 settings={data}
                 onComplete={saveAndComplete}
@@ -445,6 +470,140 @@ function WorkspaceStep({ workspaceRoot, onChange, onSelect }: WorkspaceStepProps
             <li>macOS/Linux: ~/binG-workspaces</li>
           </ul>
         </div>
+      </div>
+    </div>
+  );
+}
+
+interface BoundaryStepProps {
+  boundaryEnabled: boolean;
+  boundaryMode: 'session' | 'project' | 'none';
+  workspaceRoot: string;
+  onEnabledChange: (value: boolean) => void;
+  onModeChange: (value: 'session' | 'project' | 'none') => void;
+}
+
+const BOUNDARY_MODES = [
+  { 
+    value: 'none', 
+    label: 'No Boundary', 
+    description: 'Agent can access all files in workspace',
+    icon: Unlock,
+    iconColor: 'text-green-400',
+  },
+  { 
+    value: 'session', 
+    label: 'Session Boundary', 
+    description: 'Each session gets isolated folder',
+    icon: FolderLock,
+    iconColor: 'text-yellow-400',
+  },
+  { 
+    value: 'project', 
+    label: 'Project Boundary', 
+    description: 'Agent can only access project folder',
+    icon: Lock,
+    iconColor: 'text-blue-400',
+  },
+];
+
+function BoundaryStep({ boundaryEnabled, boundaryMode, workspaceRoot, onEnabledChange, onModeChange }: BoundaryStepProps) {
+  
+  return (
+    <div className="space-y-6 py-4">
+      <div className="text-center mb-6">
+        <div className="w-16 h-16 mx-auto bg-orange-500/20 rounded-full flex items-center justify-center mb-4">
+          <Shield className="h-8 w-8 text-orange-400" />
+        </div>
+        <h3 className="text-lg font-semibold">Workspace Boundary</h3>
+        <p className="text-muted-foreground text-sm">
+          Limit which files the AI agent can access
+        </p>
+      </div>
+
+      <div className="space-y-4">
+        {/* Enable/Disable Toggle */}
+        <div className="flex items-center justify-between p-4 rounded-lg border border-slate-700">
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-full flex items-center justify-center ${boundaryEnabled ? 'bg-orange-500/20' : 'bg-slate-700'}`}>
+              <Shield className={`h-5 w-5 ${boundaryEnabled ? 'text-orange-400' : 'text-slate-400'}`} />
+            </div>
+            <div>
+              <p className="font-medium">Enable File Access Limits</p>
+              <p className="text-sm text-muted-foreground">
+                Restrict agent to specific folders
+              </p>
+            </div>
+          </div>
+          <Switch
+            checked={boundaryEnabled}
+            onCheckedChange={onEnabledChange}
+          />
+        </div>
+
+        {boundaryEnabled && (
+          <>
+            <div className="p-3 bg-slate-800/50 rounded-lg text-sm">
+              <p className="text-muted-foreground">
+                <span className="font-medium text-foreground">Workspace:</span> {workspaceRoot}
+              </p>
+            </div>
+
+            <RadioGroup
+              value={boundaryMode}
+              onValueChange={(value) => onModeChange(value as 'session' | 'project' | 'none')}
+              className="grid grid-cols-1 gap-3"
+            >
+              {BOUNDARY_MODES.map((mode) => (
+                <div key={mode.value}>
+                  <RadioGroupItem
+                    value={mode.value}
+                    id={mode.value}
+                    className="peer sr-only"
+                  />
+                  <Label
+                    htmlFor={mode.value}
+                    className="flex items-start gap-3 p-4 rounded-lg border-2 border-slate-700 hover:border-slate-600 cursor-pointer peer-data-[state=checked]:border-orange-500 peer-data-[state=checked]:bg-orange-500/10 transition-colors"
+                  >
+                    <mode.icon className={`h-5 w-5 mt-0.5 ${mode.iconColor}`} />
+                    <div>
+                      <span className="font-medium">{mode.label}</span>
+                      <p className="text-sm text-muted-foreground">{mode.description}</p>
+                      {mode.value === 'session' && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Creates: {workspaceRoot}/session-abc123/
+                        </p>
+                      )}
+                      {mode.value === 'project' && (
+                        <p className="text-xs text-muted-foreground mt-1">
+                          Agent can only read/write in: {workspaceRoot}/
+                        </p>
+                      )}
+                    </div>
+                  </Label>
+                </div>
+              ))}
+            </RadioGroup>
+
+            <Alert className="bg-blue-500/10 border-blue-500/30">
+              <Info className="h-4 w-4" />
+              <AlertDescription className="text-sm">
+                You can change this setting later in Desktop Settings. Boundary mode adds an 
+                extra layer of security by limiting what files the AI agent can access.
+              </AlertDescription>
+            </Alert>
+          </>
+        )}
+
+        {!boundaryEnabled && (
+          <Alert className="bg-yellow-500/10 border-yellow-500/30">
+            <AlertTriangle className="h-4 w-4" />
+            <AlertDescription className="text-sm">
+              Without boundaries, the agent can read and write any file in your workspace. 
+              Enable boundaries for more control over file access.
+            </AlertDescription>
+          </Alert>
+        )}
       </div>
     </div>
   );
@@ -631,6 +790,10 @@ function CompleteStep({ settings, onComplete, onSkip, saving }: CompleteStepProp
           <li className="flex items-center gap-2">
             <CheckCircle className="h-4 w-4 text-green-400" />
             <span>Workspace: {settings.workspaceRoot || 'Default'}</span>
+          </li>
+          <li className="flex items-center gap-2">
+            <CheckCircle className="h-4 w-4 text-green-400" />
+            <span>Boundary: {settings.boundaryEnabled ? settings.boundaryMode : 'Disabled'}</span>
           </li>
           <li className="flex items-center gap-2">
             <CheckCircle className="h-4 w-4 text-green-400" />

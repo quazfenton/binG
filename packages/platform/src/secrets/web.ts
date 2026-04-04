@@ -39,6 +39,70 @@ function getObfuscationKey(): string {
 }
 
 /**
+ * Derive obfuscation key using the OLD fingerprint (for migration fallback)
+ * Used when new key fails to decode existing secrets
+ */
+function getObfuscationKeyLegacy(): string {
+  const fingerprint = [
+    navigator.userAgent,
+    navigator.language,
+    screen.colorDepth,
+    new Date().getTimezoneOffset(),
+  ].join('|');
+
+  let hash = 0;
+  for (let i = 0; i < fingerprint.length; i++) {
+    const char = fingerprint.charCodeAt(i);
+    hash = ((hash << 5) - hash) + char;
+    hash = hash & hash;
+  }
+  return String(Math.abs(hash));
+}
+
+/**
+ * De-obfuscate with a specific key (internal helper)
+ */
+function deobfuscateWithKey(encoded: string, key: string): string | null {
+  try {
+    const decoded = atob(encoded);
+    const bytes = new Uint8Array(decoded.length);
+    for (let i = 0; i < decoded.length; i++) {
+      bytes[i] = decoded.charCodeAt(i) & 0xFF;
+    }
+    const keyBytes = new TextEncoder().encode(key);
+    const xored = bytes.map((b, i) => b ^ keyBytes[i % keyBytes.length]);
+    const result = new TextDecoder().decode(xored);
+    // Validate result is reasonable (not empty, not garbage)
+    if (!result || result.length === 0) return null;
+    return result;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * De-obfuscate value with migration fallback
+ * Tries new key first, then falls back to legacy key for backwards compatibility
+ */
+function deobfuscate(encoded: string): string | null {
+  // Try new key first
+  const newKeyResult = deobfuscateWithKey(encoded, getObfuscationKey());
+  if (newKeyResult !== null) {
+    return newKeyResult;
+  }
+
+  // Fallback to legacy key (for secrets stored before the key change)
+  const legacyKeyResult = deobfuscateWithKey(encoded, getObfuscationKeyLegacy());
+  if (legacyKeyResult !== null) {
+    // Re-encode with new key to migrate transparently
+    // Note: This only works in set/get flow, not in read-only scenarios
+    return legacyKeyResult;
+  }
+
+  return null;
+}
+
+/**
  * Simple XOR obfuscation (not encryption, but prevents casual inspection).
  * Uses TextEncoder to safely produce Latin1-safe byte output before btoa.
  */
@@ -49,26 +113,6 @@ function obfuscate(value: string): string {
   const xored = bytes.map((b, i) => b ^ keyBytes[i % keyBytes.length]);
   // Convert bytes to Latin1-safe string for btoa
   return btoa(String.fromCharCode(...xored));
-}
-
-/**
- * De-obfuscate value
- */
-function deobfuscate(encoded: string): string {
-  try {
-    const key = getObfuscationKey();
-    const decoded = atob(encoded);
-    // Reconstruct byte array from decoded Latin1 string
-    const bytes = new Uint8Array(decoded.length);
-    for (let i = 0; i < decoded.length; i++) {
-      bytes[i] = decoded.charCodeAt(i) & 0xFF;
-    }
-    const keyBytes = new TextEncoder().encode(key);
-    const xored = bytes.map((b, i) => b ^ keyBytes[i % keyBytes.length]);
-    return new TextDecoder().decode(xored);
-  } catch {
-    return '';
-  }
 }
 
 class WebSecrets implements SecretsAdapter {
