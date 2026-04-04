@@ -29,8 +29,8 @@ import { getSandboxProvider, getSandboxProviderWithFallback } from '../sandbox/p
 import type { SandboxHandle, SandboxCreateConfig } from '../sandbox/providers/sandbox-provider';
 import { createOpencodeSessionManager, type OpencodeSessionManager } from '@/lib/opencode';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
-import { enhancedBackgroundJobsManager, type EnhancedJobConfig, type EnhancedJob } from '@bing/shared/agent/enhanced-background-jobs';
-import { executionGraphEngine } from '@bing/shared/agent/execution-graph';
+import { enhancedBackgroundJobsManager, type EnhancedJobConfig, type EnhancedJob } from '../../packages/shared/agent/enhanced-background-jobs';
+import { executionGraphEngine } from '../../packages/shared/agent/execution-graph';
 
 const logger = createLogger('Session:Manager');
 

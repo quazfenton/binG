@@ -126,7 +126,7 @@ export class MultiAgentCollaboration extends EventEmitter {
 
         let agent: any;
         try {
-          const { createAgent } = await import('@bing/shared/agent/unified-agent');
+          const { createAgent } = await import('./unified-agent');
           agent = await createAgent({
             provider: context?.provider || 'e2b',
             capabilities: ['terminal'],
@@ -195,7 +195,7 @@ export class MultiAgentCollaboration extends EventEmitter {
         this.assignTask(task.id, agentId);
 
         try {
-          const { createAgent } = await import('@bing/shared/agent/unified-agent');
+          const { createAgent } = await import('./unified-agent');
           const agent = await createAgent({
             provider: context?.provider || 'e2b',
             capabilities: ['terminal', 'file-ops', 'code-execution'],

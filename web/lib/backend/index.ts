@@ -137,7 +137,7 @@ export {
   type BackgroundJob,
   type JobExecutionResult,
   type JobExecutor,
-} from '@bing/shared/agent/background-jobs';
+} from '../../packages/shared/agent/background-jobs';
 
 // Snapshot Manager
 export {
@@ -158,4 +158,4 @@ export {
   type WorkerListing,
   type PublishWorkerRequest,
   type ExecRequest,
-} from '@bing/shared/agent/agent-workspace';
+} from '../../packages/shared/agent/agent-workspace';

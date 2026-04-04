@@ -6,7 +6,7 @@
  */
 
 import { NextResponse } from 'next/server';
-import { getAgentKernel } from '@bing/shared/agent/agent-kernel';
+import { getAgentKernel } from '../../packages/shared/agent/agent-kernel';
 
 export async function GET() {
   try {

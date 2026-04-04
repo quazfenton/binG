@@ -20,7 +20,7 @@ import {
   initializeOrchestration,
   shutdownOrchestration,
   getOrchestrationStats,
-} from '@bing/shared/agent/orchestration';
+} from '../../packages/shared/agent/orchestration';
 
 describe('Agent Orchestration Integration', () => {
   const testUserId = 'test-user-orchestration';

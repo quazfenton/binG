@@ -13,7 +13,7 @@
  * 
  * @example
  * ```typescript
- * import { getAgentPool } from '@bing/shared/agent/agent-pool';
+ * import { getAgentPool } from '../../packages/shared/agent/agent-pool';
  * 
  * const pool = getAgentPool('claude-code', {
  *   minSize: 2,

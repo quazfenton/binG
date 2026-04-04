@@ -30,19 +30,19 @@ import {
   type StatefulAgentResult,
 } from './stateful-agent/agents/stateful-agent';
 import { createLogger } from '@/lib/utils/logger';
-import { mastraWorkflowIntegration } from '@bing/shared/agent/mastra-workflow-integration';
+import { mastraWorkflowIntegration } from '../../packages/shared/agent/mastra-workflow-integration';
 
 import {
   AgentOrchestrator,
   type OrchestratorConfig,
   type OrchestratorEvent
-} from '@bing/shared/agent/orchestration/agent-orchestrator';
+} from '../../packages/shared/agent/orchestration/agent-orchestrator';
 
 import {
   createTaskClassifier,
   type TaskClassification,
   type ClassificationContext,
-} from '@bing/shared/agent/task-classifier';
+} from '../../packages/shared/agent/task-classifier';
 import { getProjectServices, type ProjectContext } from '@/lib/project-context';
 
 const log = createLogger('UnifiedAgentService');

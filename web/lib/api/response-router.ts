@@ -53,7 +53,7 @@ import { toolAuthManager } from '@/lib/tools/tool-authorization-manager'
 import { sandboxBridge } from '@/lib/sandbox'
 
 // Import state for session management
-import { sessionManager } from '@/lib/session/session-manager'
+import { sessionManager } from '../../session/session-manager'
 
 // Import V2 gateway client for containerized OpenCode
 import {

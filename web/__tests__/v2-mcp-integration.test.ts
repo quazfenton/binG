@@ -24,7 +24,7 @@ vi.mock('../lib/utils/logger', () => ({
   })
 }))
 
-vi.mock('@bing/shared/agent/nullclaw-integration', () => ({
+vi.mock('../../packages/shared/agent/nullclaw-integration', () => ({
   nullclawIntegration: {
     startContainer: vi.fn(() => Promise.resolve({
       id: 'nullclaw-123',
@@ -213,7 +213,7 @@ describe('V2 + MCP Architecture Integration', () => {
 
   describe('Error Handling', () => {
     it('should handle tool execution failure gracefully', async () => {
-      const nullclaw = await import('@bing/shared/agent/nullclaw-integration');
+      const nullclaw = await import('../../packages/shared/agent/nullclaw-integration');
       vi.mocked(nullclaw.nullclawIntegration.executeTask).mockRejectedValueOnce(
         new Error('Connection refused')
       );

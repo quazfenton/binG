@@ -447,9 +447,14 @@ class NullclawIntegration {
         this.logger.info(`Nullclaw container spawned: ${dockerContainerId} on port ${port}`);
       });
 
+      // FIX (Bug 8): Actively consume stderr to prevent pipe buffer backpressure
+      // that can hang the docker process. Log warnings but don't fail on them.
       docker.stderr.on('data', (data) => {
-        // Log but don't fail — docker stderr can contain non-fatal warnings
-        this.logger.warn(`Nullclaw docker stderr: ${data.toString().trim()}`);
+        const stderrText = data.toString().trim();
+        // Only log actual errors, not warnings
+        if (!stderrText.includes('Warning') && !stderrText.includes('Using default tag')) {
+          this.logger.warn(`Nullclaw docker stderr: ${stderrText}`);
+        }
       });
 
       docker.on('close', async (code) => {
@@ -539,8 +544,16 @@ class NullclawIntegration {
     const interval = timeout / maxAttempts;
 
     for (let i = 0; i < maxAttempts; i++) {
+      // FIX (Bug 9): Abort health check if container was marked as error
+      if (container.status === 'error' || !this.containers.has(container.id)) {
+        this.logger.debug('Container removed during health check, aborting');
+        return false;
+      }
+
       try {
-        const response = await fetch(container.healthUrl);
+        const response = await fetch(container.healthUrl, {
+          signal: AbortSignal.timeout(Math.max(interval * 2, 5000)), // Per-request timeout
+        });
         if (response.ok) {
           return true;
         }

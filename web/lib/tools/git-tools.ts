@@ -13,7 +13,7 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import { GitManager, type GitStatusResult } from '@bing/shared/agent/git-manager';
+import { GitManager, type GitStatusResult } from '../../packages/shared/agent/git-manager';
 import type { SandboxHandle } from '@/lib/sandbox/providers';
 import { getGitVFSSync, type GitVFSStatus } from '@/lib/virtual-filesystem/opfs/git-vfs-sync';
 import { ShadowCommitManager, type CommitResult, type CommitHistoryEntry, type TransactionEntry } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';

@@ -225,6 +225,9 @@ class WorkforceManager {
       return;
     }
 
+    // FIX (Bug 11): Attach a .catch handler to prevent unhandled promise rejections.
+    // The promise is fire-and-forget (nobody awaits it), so without this catch,
+    // any error that escapes the try/catch/finally would become an unhandled rejection.
     const promise = (async () => {
       try {
         await updateTask(userId, conversationId, task.id, {
@@ -253,19 +256,27 @@ class WorkforceManager {
         // Update execution graph node status
         this.updateExecutionGraphNode(conversationId, task.id, 'completed', result);
 
-      } catch (error: any) {
+      } catch (error: unknown) {
+        const message = error instanceof Error ? error.message : 'Task failed';
         await updateTask(userId, conversationId, task.id, {
           status: 'failed',
           completedAt: new Date().toISOString(),
-          error: error.message || 'Task failed',
+          error: message,
         });
 
         // Update execution graph node with error
-        this.updateExecutionGraphNode(conversationId, task.id, 'failed', undefined, error);
+        this.updateExecutionGraphNode(conversationId, task.id, 'failed', undefined, error instanceof Error ? error : new Error(message));
       } finally {
         this.activeTasks.delete(task.id);
       }
     })();
+
+    // Prevent unhandled rejection — errors are already caught inside the IIFE
+    promise.catch((err) => {
+      // This should never trigger since the inner try/catch handles everything,
+      // but it's a safety net for errors in the catch/finally blocks themselves.
+      logger.error('[WorkforceManager] Unhandled error in runTask (safety net):', err);
+    });
 
     this.activeTasks.set(task.id, promise);
   }

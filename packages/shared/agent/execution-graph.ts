@@ -54,6 +54,8 @@ export interface ExecutionNode {
   retryCount: number;
   maxRetries: number;
   metadata?: Record<string, any>;
+  /** Abort controller for cancelling in-flight operations */
+  abortController?: AbortController;
 }
 
 /**
@@ -235,6 +237,9 @@ export class ExecutionGraphEngine {
 
     node.status = 'running';
     node.startedAt = Date.now();
+    // FIX (Bug 12): Create abort controller for this node so it can be
+    // cancelled later via cancelGraph()
+    node.abortController = new AbortController();
 
     if (graph.status === 'pending') {
       graph.status = 'running';
@@ -263,6 +268,8 @@ export class ExecutionGraphEngine {
     node.status = 'completed';
     node.result = result;
     node.completedAt = Date.now();
+    // Clean up abort controller — no longer needed
+    node.abortController = undefined;
     const duration = node.completedAt - (node.startedAt || node.completedAt);
 
     logger.debug('Node marked as complete', {
@@ -320,6 +327,8 @@ export class ExecutionGraphEngine {
     node.status = 'failed';
     node.error = error;
     node.completedAt = Date.now();
+    // Clean up abort controller — no longer needed
+    node.abortController = undefined;
 
     // Mark all dependent nodes as blocked
     this.markDependentsBlocked(graph, nodeId);
@@ -418,13 +427,24 @@ export class ExecutionGraphEngine {
   }
 
   /**
-   * Cancel graph execution
+   * Cancel graph execution, aborting any in-flight operations.
+   * FIX (Bug 12): Creates and triggers abort signals for running nodes
+   * so that downstream operations can clean up properly.
    */
   cancelGraph(graph: ExecutionGraph): void {
     graph.status = 'cancelled';
 
     for (const node of graph.nodes.values()) {
-      if (node.status === 'pending' || node.status === 'running') {
+      if (node.status === 'running') {
+        // FIX: Abort in-flight operations via abort controller
+        if (node.abortController) {
+          node.abortController.abort('Graph cancelled');
+          node.abortController = undefined;
+        }
+        node.status = 'cancelled';
+        node.completedAt = Date.now();
+        node.error = 'Cancelled by graph';
+      } else if (node.status === 'pending' || node.status === 'blocked') {
         node.status = 'cancelled';
       }
     }
