@@ -22,6 +22,8 @@ import { clipboard } from '@bing/platform/clipboard';
 import { emitFilesystemUpdated, onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { createRefreshScheduler } from '@/lib/virtual-filesystem/refresh-scheduler';
 import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from '@/lib/ads/ethical-ads-service';
+import { desktopPtyManager, shouldUseDesktopPty, type DesktopPtyInstance } from '@/lib/terminal/desktop-pty-provider';
+import { isDesktopMode } from '@/lib/utils/desktop-env';
 
 const logger = createLogger('TerminalPanel');
 
@@ -43,7 +45,7 @@ interface SandboxInfo {
   };
 }
 
-type TerminalMode = 'local' | 'connecting' | 'pty' | 'sandbox-cmd' | 'editor' | 'command-mode';
+type TerminalMode = 'local' | 'connecting' | 'pty' | 'sandbox-cmd' | 'editor' | 'command-mode' | 'desktop-pty';
 
 /*
   'local' - Local shell simulation in browser
@@ -64,6 +66,8 @@ interface TerminalInstance {
   eventSource: EventSource | null;
   websocket: WebSocket | null;
   isConnected: boolean;
+  // Desktop PTY session
+  ptyInstance?: DesktopPtyInstance;
 }
 
 interface LocalFileSystem {
@@ -928,6 +932,11 @@ export default function TerminalPanel({
       // Abort any pending connection
       connectAbortRef.current[terminalId]?.abort();
       delete connectAbortRef.current[terminalId];
+      
+      // Close desktop PTY session if any
+      if (terminal.ptyInstance) {
+        await terminal.ptyInstance.close();
+      }
       // Clear connection timeout
       if ((terminal as any).__connectionTimeout) {
         clearTimeout((terminal as any).__connectionTimeout);
@@ -1118,6 +1127,8 @@ export default function TerminalPanel({
         return `\x1b[35m[sandbox]\x1b[0m \x1b[1;32m${displayCwd}$\x1b[0m `;
       case 'connecting':
         return `\x1b[33m[connecting...]\x1b[0m \x1b[1;32m${displayCwd}$\x1b[0m `;
+      case 'desktop-pty':
+        return `\x1b[36m[desktop]\x1b[0m \x1b[1;32m${displayCwd}$\x1b[0m `;
       case 'editor':
         return `\x1b[33m[editor]\x1b[0m \x1b[1;32m${displayCwd}$\x1b[0m `;
       default:
@@ -1319,9 +1330,95 @@ export default function TerminalPanel({
 
       // Write welcome message - will be updated by VFS sync effect
       terminal.writeln('');
-      terminal.writeln('\x1b[1;32m● Terminal Ready\x1b[0m');
-      terminal.writeln('\x1b[90m  Initializing workspace...\x1b[0m');
-      terminal.writeln('\x1b[90m  Type "connect" to connect to sandbox.\x1b[0m');
+      // Check if we should use desktop PTY
+      if (isDesktopMode() && shouldUseDesktopPty()) {
+        terminal.writeln('');
+        terminal.writeln('\x1b[1;33m● Desktop Mode - Using Local PTY\x1b[0m');
+        terminal.writeln('\x1b[90m  Connecting to real shell...\x1b[0m');
+        
+        // Initialize desktop PTY
+        let pty = null;
+        try {
+          pty = await desktopPtyManager.createSession(terminalId, {
+            cols: terminal.cols,
+            rows: terminal.rows,
+            cwd: localShellCwdRef.current[terminalId] || 'project/sessions',
+          });
+        } catch (ptyError) {
+          console.error('[TerminalPanel] Failed to create desktop PTY:', ptyError);
+          terminal.writeln('\x1b[31m✗ Failed to connect to local shell\x1b[0m');
+          terminal.writeln('\x1b[90m  Falling back to simulated terminal.\x1b[0m');
+        }
+        
+        if (pty) {
+          // Update terminal to use PTY
+          const termRef = terminalsRef.current.find(t => t.id === terminalId);
+          if (termRef) {
+            termRef.ptyInstance = pty;
+            termRef.mode = 'desktop-pty';
+            termRef.isConnected = true;
+            
+            // Handle PTY output
+            pty.onOutput((data) => {
+              termRef.terminal?.write(data);
+            });
+            
+            // Handle PTY close
+            pty.onClose(() => {
+              termRef.mode = 'local';
+              termRef.isConnected = false;
+              termRef.ptyInstance = undefined;
+              termRef.terminal?.writeln('\r\n\x1b[31m[PTY session closed]\x1b[0m');
+              termRef.terminal?.write(getPrompt('local', localShellCwdRef.current[terminalId] || 'project'));
+            });
+            
+            // Handle file changes from PTY - sync to VFS and local filesystem view
+            pty.onFileChange((path, type) => {
+              console.log('[TerminalPanel] PTY file change:', type, path);
+              
+              // Update local filesystem state
+              if (type === 'delete') {
+                delete localFileSystemRef.current[path];
+              } else if (type === 'create' || type === 'update') {
+                localFileSystemRef.current[path] = {
+                  type: 'file',
+                  content: '',
+                  createdAt: Date.now(),
+                  modifiedAt: Date.now(),
+                };
+              }
+              
+              // Sync to VFS
+              if (type !== 'delete' && localFileSystemRef.current[path]) {
+                // Read the actual content from file and sync to VFS
+                // For now, just trigger a VFS refresh
+                getVfsSnapshot().then(snapshot => {
+                  lastWorkspaceVersionRef.current = Math.max(
+                    lastWorkspaceVersionRef.current,
+                    snapshot?.version || 0
+                  );
+                }).catch(console.error);
+              }
+              
+              // Sync to terminal executors
+              Object.values(terminalHandlersRef.current).forEach(handlers => {
+                if (handlers?.localFS) {
+                  handlers.localFS.syncFileSystem(localFileSystemRef.current);
+                }
+              });
+            });
+          }
+          
+          terminal.writeln('\x1b[1;32m✓ Connected to local shell\x1b[0m');
+          terminal.writeln('');
+        } else {
+          terminal.writeln('\x1b[90m  Falling back to simulated terminal.\x1b[0m');
+        }
+      } else {
+        terminal.writeln('\x1b[1;32m● Terminal Ready\x1b[0m');
+        terminal.writeln('\x1b[90m  Initializing workspace...\x1b[0m');
+        terminal.writeln('\x1b[90m  Type "connect" to connect to sandbox.\x1b[0m');
+      }
       terminal.writeln('');
 
       const cwd = localShellCwdRef.current[terminalId] || normalizeScopePath(filesystemScopePathRef.current);
@@ -1346,6 +1443,12 @@ export default function TerminalPanel({
 
         // GET HANDLERS FOR THIS TERMINAL
         const handlers = terminalHandlersRef.current[terminalId];
+
+        // Desktop PTY mode: forward raw bytes to local PTY
+        if (term.mode === 'desktop-pty' && term.ptyInstance) {
+          term.ptyInstance.writeInput(data);
+          return;
+        }
 
         // PTY mode: forward raw bytes to sandbox, skip local handling
         if (term.mode === 'pty' && term.sandboxInfo.sessionId) {
@@ -1386,6 +1489,14 @@ export default function TerminalPanel({
 
       terminal.onResize(({ cols, rows }: { cols: number; rows: number }) => {
         const term = terminalsRef.current.find(t => t.id === terminalId);
+        
+        // Desktop PTY: resize the local PTY
+        if (term?.mode === 'desktop-pty' && term.ptyInstance) {
+          term.ptyInstance.resize(cols, rows);
+          return;
+        }
+        
+        // Sandbox PTY: send resize to sandbox
         if (term?.isConnected && term.sandboxInfo.sessionId) {
           sendResize(term.sandboxInfo.sessionId, cols, rows);
         }
@@ -1734,6 +1845,8 @@ export default function TerminalPanel({
         return { icon: <span className="w-2 h-2 bg-purple-400 rounded-full" />, text: 'Command Mode', color: 'text-purple-400' };
       case 'editor':
         return { icon: <span className="w-2 h-2 bg-orange-400 rounded-full" />, text: 'Editor', color: 'text-orange-400' };
+      case 'desktop-pty':
+        return { icon: <Wifi className="w-3 h-3" />, text: 'Desktop', color: 'text-cyan-400' };
       default:
         return { icon: <WifiOff className="w-3 h-3" />, text: 'Unknown', color: 'text-gray-400' };
     }

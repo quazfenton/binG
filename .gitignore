@@ -51,8 +51,8 @@ node_modules*
 *.db
 *.db-shm
 *.db-wal
-**/.sqlite
-**/.sqlite3
+**/*.sqlite
+**/*.sqlite3
 **/data/*.db
 **/data/*.db-*
 

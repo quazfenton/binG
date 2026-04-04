@@ -32,8 +32,16 @@ export const coreSandboxService = {
   },
   destroySandbox: async (sandboxId: string) => {
     const service = new SandboxService()
-    // Find session and destroy
-    return { success: true }
+    try {
+      const provider = await service['resolveProviderForSandbox'](sandboxId)
+      await provider.destroySandbox(sandboxId)
+      service['sandboxProviderById'].delete(sandboxId)
+      log.info(`Sandbox destroyed via singleton: ${sandboxId}`)
+      return { success: true }
+    } catch (error: any) {
+      log.error(`Failed to destroy sandbox via singleton: ${error.message}`)
+      return { success: false, error: error.message }
+    }
   },
 }
 

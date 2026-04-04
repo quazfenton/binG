@@ -988,10 +988,21 @@ const PARAMETER_KEYS = [
 function paramsCacheKey(params: PromptParameters): string {
   const parts: string[] = [];
   for (const key of PARAMETER_KEYS) {
-    if (key === 'customInstructions') continue;
     const value = params[key as keyof PromptParameters];
     if (value !== undefined) {
-      parts.push(`${key}=${value}`);
+      // Include customInstructions in cache key (hash long strings to keep key short)
+      if (key === 'customInstructions' && typeof value === 'string') {
+        if (value.trim()) {
+          let hash = 0;
+          for (let i = 0; i < value.length; i++) {
+            hash = ((hash << 5) - hash) + value.charCodeAt(i);
+            hash = hash & hash;
+          }
+          parts.push(`${key}=hash:${Math.abs(hash)}`);
+        }
+      } else {
+        parts.push(`${key}=${value}`);
+      }
     }
   }
   return parts.length > 0 ? parts.join('&') : '__empty__';

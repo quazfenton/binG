@@ -141,7 +141,7 @@ export function getSession(sessionId: string): WorkspaceSession | undefined {
     const row = stmtGet.get(sessionId) as WorkspaceSession | undefined
     if (row) {
       log.debug(`Session ${sessionId} found in SQLite`)
-      return row || undefined
+      return row
     }
     log.debug(`Session ${sessionId} not found in SQLite`)
     return undefined
@@ -168,7 +168,7 @@ export function getSessionByUserId(userId: string): WorkspaceSession | undefined
     const row = stmtGetByUser.get(userId) as WorkspaceSession | undefined
     if (row) {
       log.debug(`Active session found for user ${userId}: ${row.sessionId}`)
-      return row || undefined
+      return row
     }
     log.debug(`No active session found for user ${userId}`)
     return undefined

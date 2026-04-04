@@ -20,6 +20,32 @@ import { sandboxEvents } from '../sandbox/sandbox-events'
 // Create rate limiter instance (singleton per process)
 const rateLimiter = createSandboxRateLimiter()
 
+/**
+ * Background process registry
+ * Tracks processes spawned by the agent loop per sandbox
+ */
+interface TrackedProcess {
+  pid?: string;
+  command: string;
+  startedAt: Date;
+  sandboxId: string;
+  logFile?: string;
+}
+
+const processRegistry = new Map<string, TrackedProcess[]>()
+
+function registerProcess(sandboxId: string, process: TrackedProcess): void {
+  const existing = processRegistry.get(sandboxId) || [];
+  existing.push(process);
+  processRegistry.set(sandboxId, existing);
+}
+
+function getProcessesForSandbox(sandboxId: string): TrackedProcess[] {
+  return processRegistry.get(sandboxId) || [];
+}
+
+export { processRegistry, registerProcess, getProcessesForSandbox, type TrackedProcess }
+
 function getSystemPrompt(workspaceDir: string): string {
   const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
   if (isDesktop) {
@@ -524,13 +550,34 @@ async function executeToolOnSandbox(
 
         // Record successful validation for rate limiting
         await rateLimiter.record(rateLimitKey, 'processOps')
-        
+
         // Validate and sanitize command
         const safeCommand = String(command).replace(/'/g, "'\\''")
-        
+
         // For background processes, use nohup or &
-        const bgCmd = background ? `nohup ${safeCommand} ${captureOutput ? '&> /tmp/process_$$.log &' : '&'}` : safeCommand
-        return sandbox.executeCommand(bgCmd)
+        const logFile = captureOutput ? `/tmp/agent_${Date.now()}.log` : null
+        const bgCmd = background
+          ? `nohup ${safeCommand} ${logFile ? `&> '${logFile}'` : '>/dev/null 2>&1'} & echo "PID: $!"`
+          : safeCommand
+
+        const result = await sandbox.executeCommand(bgCmd)
+
+        // Track the background process
+        if (background && result.success) {
+          // Extract PID from output if available
+          const pidMatch = typeof result.output === 'string' ? result.output.match(/PID:\s*(\d+)/) : null
+          const pid = pidMatch ? pidMatch[1] : undefined
+
+          registerProcess(sandbox.id, {
+            pid,
+            command: String(command),
+            startedAt: new Date(),
+            sandboxId: sandbox.id,
+            logFile: logFile || undefined,
+          })
+        }
+
+        return result
       }
 
       case 'stop_process': {
@@ -559,14 +606,32 @@ async function executeToolOnSandbox(
             return { success: false, output: 'Invalid PID', exitCode: 1 }
           }
           await rateLimiter.record(rateLimitKey, 'processOps')
-          return sandbox.executeCommand(`kill -${signal} ${pidNum}`)
+          const result = await sandbox.executeCommand(`kill -${signal} ${pidNum}`)
+
+          // Remove from registry if tracked
+          const tracked = processRegistry.get(sandbox.id) || []
+          const filtered = tracked.filter(p => p.pid !== String(pidNum))
+          if (filtered.length !== tracked.length) {
+            processRegistry.set(sandbox.id, filtered)
+          }
+
+          return result
         }
 
         if (name) {
           // Escape the process name to prevent command injection
           const escapedName = String(name).replace(/'/g, "'\\''")
           await rateLimiter.record(rateLimitKey, 'processOps')
-          return sandbox.executeCommand(`pkill -${signal} -f '${escapedName}'`)
+          const result = await sandbox.executeCommand(`pkill -${signal} -f '${escapedName}'`)
+
+          // Remove matching processes from registry
+          const tracked = processRegistry.get(sandbox.id) || []
+          const filtered = tracked.filter(p => !p.command.includes(String(name)))
+          if (filtered.length !== tracked.length) {
+            processRegistry.set(sandbox.id, filtered)
+          }
+
+          return result
         }
 
         return { success: false, output: 'PID or process name required', exitCode: 1 }
@@ -585,7 +650,22 @@ async function executeToolOnSandbox(
 
         const userFilter = args.user ? ` | grep '${String(args.user).replace(/'/g, "'\\''")}'` : ''
         await rateLimiter.record(rateLimitKey, 'processOps')
-        return sandbox.executeCommand(`ps aux${userFilter}`)
+        const psResult = await sandbox.executeCommand(`ps aux${userFilter}`)
+
+        // Augment with tracked process info
+        const tracked = getProcessesForSandbox(sandbox.id)
+        if (tracked.length > 0 && psResult.success) {
+          const trackedInfo = tracked.map(p =>
+            `[Tracked] PID=${p.pid || 'unknown'} CMD="${p.command}" STARTED=${p.startedAt.toISOString()} LOG=${p.logFile || 'none'}`
+          ).join('\n')
+          return {
+            ...psResult,
+            output: `${psResult.output}\n\n--- Agent-Tracked Processes ---\n${trackedInfo}`,
+            metadata: { ...psResult.metadata, trackedProcesses: tracked.length },
+          }
+        }
+
+        return psResult
       }
 
       // Enhanced tools - preview management

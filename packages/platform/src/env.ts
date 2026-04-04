@@ -48,30 +48,45 @@ export function getPlatform(): 'desktop' | 'web' {
 /**
  * Check if local (non-sandbox) execution is enabled
  * Used by the server to determine whether to execute commands locally
+ *
+ * DESKTOP_LOCAL_EXECUTION: Explicitly enables local execution
+ * DESKTOP_MODE: Enables desktop mode (which implies local execution)
  */
 export function isLocalExecution(): boolean {
   if (typeof process !== 'undefined' && process.env) {
-    return (
-      process.env.DESKTOP_LOCAL_EXECUTION === 'true' ||
-      process.env.DESKTOP_MODE === 'true'
-    );
+    // Explicit local execution flag takes priority
+    if (process.env.DESKTOP_LOCAL_EXECUTION === 'true') {
+      return true;
+    }
+    // Desktop mode implies local execution
+    if (process.env.DESKTOP_MODE === 'true') {
+      return true;
+    }
   }
+  // Tauri runtime always supports local execution
   return isTauriRuntime();
 }
 
 /**
  * Get the default workspace root for the current platform
+ * Returns null if no suitable home directory can be determined
  */
-export function getDefaultWorkspaceRoot(): string {
+export function getDefaultWorkspaceRoot(): string | null {
   const platform = typeof process !== 'undefined' ? process.platform : 'linux';
 
   if (platform === 'win32') {
     const userProfile = typeof process !== 'undefined' ? process.env.USERPROFILE : undefined;
-    return `${userProfile || 'C:\\Users\\Default'}\\opencode-workspaces`;
+    if (!userProfile) {
+      return null;
+    }
+    return `${userProfile}\\opencode-workspaces`;
   }
 
   const home = typeof process !== 'undefined' ? process.env.HOME : undefined;
-  return `${home || '/tmp'}/opencode-workspaces`;
+  if (!home) {
+    return null;
+  }
+  return `${home}/opencode-workspaces`;
 }
 
 export interface DesktopConfig {

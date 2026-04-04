@@ -1,5 +1,10 @@
+use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
+use std::io::{Read, Write};
 use std::process::Command;
+use std::sync::Mutex;
+use tauri::{AppHandle, Emitter, Manager, State};
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CommandResult {
@@ -127,6 +132,210 @@ pub async fn list_directory(dir_path: String) -> Result<Vec<FileEntry>, String> 
     }
 
     Ok(result)
+}
+
+// PTY session state
+pub struct PtySessions(Mutex<HashMap<String, PtySession>>);
+
+pub struct PtySession {
+    master: Box<dyn MasterPty + Send>,
+    child: Box<dyn Send + std::process::Child>,
+}
+
+impl Default for PtySessions {
+    fn default() -> Self {
+        Self(Mutex::new(HashMap::new()))
+    }
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PtyCreateResult {
+    pub session_id: String,
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct PtyInputResult {
+    pub success: bool,
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, Deserialize)]
+pub struct PtyOutputEvent {
+    pub session_id: String,
+    pub data: String,
+}
+
+#[tauri::command]
+pub async fn create_pty_session(
+    app: AppHandle,
+    sessions: State<'_, PtySessions>,
+    cols: Option<u16>,
+    rows: Option<u16>,
+    cwd: Option<String>,
+    shell: Option<String>,
+) -> Result<PtyCreateResult, String> {
+    let pty_system = native_pty_system();
+    
+    let pair = pty_system
+        .openpty(PtySize {
+            rows: rows.unwrap_or(24),
+            cols: cols.unwrap_or(80),
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| format!("Failed to open PTY: {}", e))?;
+
+    let shell_cmd = shell.unwrap_or_else(|| {
+        if cfg!(target_os = "windows") {
+            "powershell".to_string()
+        } else {
+            "bash".to_string()
+        }
+    });
+
+    let mut cmd = CommandBuilder::new(shell_cmd);
+    
+    if let Some(dir) = cwd {
+        cmd.cwd(dir);
+    }
+
+    // Set environment for interactive shell
+    cmd.env("TERM", "xterm-256color");
+
+    let child = cmd
+        .spawn(&pair.slave)
+        .map_err(|e| format!("Failed to spawn shell: {}", e))?;
+
+    let session_id = format!("pty-{}", uuid::Uuid::new_v4().to_string().split('-').next().unwrap());
+
+    // Store session
+    {
+        let mut sessions = sessions.0.lock().map_err(|e| e.to_string())?;
+        sessions.insert(session_id.clone(), PtySession {
+            master: pair.master,
+            child,
+        });
+    }
+
+    // Start reading output in background
+    let session_id_clone = session_id.clone();
+    let app_clone = app.clone();
+    let sessions_clone = sessions.0.clone();
+    
+    std::thread::spawn(move || {
+        let mut buffer = [0u8; 4096];
+        loop {
+            // Get master from sessions
+            let master = {
+                let sessions = match sessions_clone.lock() {
+                    Ok(s) => s,
+                    Err(_) => break,
+                };
+                match sessions.get(&session_id_clone) {
+                    Some(s) => s.master.try_clone_reader(),
+                    None => break,
+                }
+            };
+            
+            let mut reader = match master {
+                Ok(r) => r,
+                Err(_) => break,
+            };
+
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(n) => {
+                    let data = String::from_utf8_lossy(&buffer[..n]).to_string();
+                    let _ = app_clone.emit("pty-output", PtyOutputEvent {
+                        session_id: session_id_clone.clone(),
+                        data,
+                    });
+                }
+                Err(_) => break,
+            }
+        }
+        // Emit close event
+        let _ = app_clone.emit("pty-closed", serde_json::json!({ "session_id": session_id_clone }));
+    });
+
+    Ok(PtyCreateResult {
+        session_id,
+        success: true,
+        error: None,
+    })
+}
+
+#[tauri::command]
+pub async fn write_pty_input(
+    sessions: State<'_, PtySessions>,
+    session_id: String,
+    data: String,
+) -> Result<PtyInputResult, String> {
+    let sessions = sessions.0.lock().map_err(|e| e.to_string())?;
+    
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| "Session not found".to_string())?;
+    
+    let mut writer = session.master.take_writer().map_err(|e| e.to_string())?;
+    writer.write_all(data.as_bytes()).map_err(|e| e.to_string())?;
+    writer.flush().map_err(|e| e.to_string())?;
+    
+    // Put writer back
+    drop(writer);
+    
+    Ok(PtyInputResult {
+        success: true,
+        error: None,
+    })
+}
+
+#[tauri::command]
+pub async fn resize_pty(
+    sessions: State<'_, PtySessions>,
+    session_id: String,
+    cols: u16,
+    rows: u16,
+) -> Result<PtyInputResult, String> {
+    let sessions = sessions.0.lock().map_err(|e| e.to_string())?;
+    
+    let session = sessions
+        .get(&session_id)
+        .ok_or_else(|| "Session not found".to_string())?;
+    
+    session.master
+        .resize(PtySize {
+            rows,
+            cols,
+            pixel_width: 0,
+            pixel_height: 0,
+        })
+        .map_err(|e| format!("Failed to resize: {}", e))?;
+
+    Ok(PtyInputResult {
+        success: true,
+        error: None,
+    })
+}
+
+#[tauri::command]
+pub async fn close_pty_session(
+    sessions: State<'_, PtySessions>,
+    session_id: String,
+) -> Result<PtyInputResult, String> {
+    let mut sessions = sessions.0.lock().map_err(|e| e.to_string())?;
+    
+    if let Some(session) = sessions.remove(&session_id) {
+        // Kill the child process
+        let _ = session.child.kill();
+    }
+    
+    Ok(PtyInputResult {
+        success: true,
+        error: None,
+    })
 }
 
 #[tauri::command]
