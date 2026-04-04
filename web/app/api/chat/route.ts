@@ -46,6 +46,7 @@ import {
   chatMessageSchema,
   chatRequestSchema,
 } from './chat-helpers';
+import { applyPromptModifiers, getPreset, PROMPT_PRESETS, generateDebugHeaderValue, emitTelemetryEvent, type PromptParameters } from '@bing/shared/agent/prompt-parameters';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -437,6 +438,36 @@ export async function POST(request: NextRequest) {
       workspaceSessionContext,
     );
 
+    // V1 / Regular LLM: Apply response style modifiers to messages
+    // This injects prompt parameters (depth, expertise, tone, etc.) into the V1 path
+    // by appending a system message suffix to the message array
+    const v1PromptParams: PromptParameters = {
+      responseDepth: body.responseDepth,
+      expertiseLevel: body.expertiseLevel,
+      reasoningMode: body.reasoningMode,
+      tone: body.tone,
+      creativityLevel: body.creativityLevel,
+      citationStrictness: body.citationStrictness,
+      outputFormat: body.outputFormat,
+      selfCorrection: body.selfCorrection,
+    };
+    let v1PromptSuffix = '';
+    if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
+      const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
+      v1PromptSuffix = applyPromptModifiers({ ...preset, ...v1PromptParams });
+    } else if (Object.values(v1PromptParams).some(v => v !== undefined)) {
+      v1PromptSuffix = applyPromptModifiers(v1PromptParams);
+    }
+    if (v1PromptSuffix) {
+      // Append as system message — the LLM provider will prepend it to existing system messages
+      contextualMessages.push({ role: 'system', content: v1PromptSuffix });
+      emitTelemetryEvent(v1PromptParams, body.presetKey || null);
+      const debugHeaderValue = generateDebugHeaderValue(v1PromptParams, body.presetKey || null);
+      if (debugHeaderValue !== 'default') {
+        chatLogger.debug('V1 response style active', { requestId }, { style: debugHeaderValue });
+      }
+    }
+
     chatLogger.debug('Validation passed, routing through priority chain', { requestId, provider, model });
 
     // NEW: Add tool/sandbox detection
@@ -594,13 +625,43 @@ export async function POST(request: NextRequest) {
         });
       }
 
+      // Build system prompt with optional response style modifiers
+      const baseSystemPrompt = process.env.OPENCODE_SYSTEM_PROMPT || '';
+      const promptParams: PromptParameters = {
+        responseDepth: body.responseDepth,
+        expertiseLevel: body.expertiseLevel,
+        reasoningMode: body.reasoningMode,
+        tone: body.tone,
+        creativityLevel: body.creativityLevel,
+        citationStrictness: body.citationStrictness,
+        outputFormat: body.outputFormat,
+        selfCorrection: body.selfCorrection,
+      };
+      let promptSuffix = '';
+      if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
+        const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
+        promptSuffix = applyPromptModifiers({ ...preset, ...promptParams });
+      } else if (Object.values(promptParams).some(v => v !== undefined)) {
+        promptSuffix = applyPromptModifiers(promptParams);
+      }
+      const systemPrompt = promptSuffix ? baseSystemPrompt + promptSuffix : baseSystemPrompt;
+
+      // Emit telemetry event for analytics (non-blocking, fire-and-forget)
+      emitTelemetryEvent(promptParams, body.presetKey || null);
+
+      // Log active response style for debugging
+      const debugHeaderValue = generateDebugHeaderValue(promptParams, body.presetKey || null);
+      if (debugHeaderValue !== 'default') {
+        chatLogger.debug('Response style active', { requestId }, { style: debugHeaderValue });
+      }
+
       const config: UnifiedAgentConfig = {
         userMessage: context ? `${context}\n\nTASK:\n${task}` : task,
         conversationHistory: contextualMessages.map((m) => ({
           role: m.role,
           content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
         })),
-        systemPrompt: process.env.OPENCODE_SYSTEM_PROMPT,
+        systemPrompt,
         maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
         temperature,
         maxTokens,
@@ -1017,39 +1078,39 @@ export async function POST(request: NextRequest) {
           const encoder = new TextEncoder();
           const streamBody = new ReadableStream({
             async start(controller) {
+              const enqueue = (eventType: string, data: Record<string, unknown>) => {
+                try {
+                  controller.enqueue(encoder.encode(`event: ${eventType}\ndata: ${JSON.stringify({ ...data, timestamp: Date.now() })}\n\n`));
+                } catch {
+                  // Stream may be closed — ignore
+                }
+              };
+
               try {
                 // Send initial metadata
-                controller.enqueue(encoder.encode(
-                  `event: metadata\ndata: ${JSON.stringify({
-                    mode: orchestrationMode,
-                    agentType: orchestrationResult.metadata?.agentType,
-                  })}\n\n`
-                ));
+                enqueue('init', {
+                  agent: 'orchestrator',
+                  currentAction: `Running in ${orchestrationMode} mode`,
+                  mode: orchestrationMode,
+                });
 
                 // Send response content
                 if (orchestrationResult.response) {
-                  controller.enqueue(encoder.encode(
-                    `event: content\ndata: ${JSON.stringify({
-                      content: orchestrationResult.response,
-                    })}\n\n`
-                  ));
+                  enqueue('token', {
+                    content: orchestrationResult.response,
+                  });
                 }
 
                 // Send completion
-                controller.enqueue(encoder.encode(
-                  `event: done\ndata: ${JSON.stringify({
-                    success: orchestrationResult.success,
-                    metadata: orchestrationResult.metadata,
-                  })}\n\n`
-                ));
+                enqueue('done', {
+                  success: orchestrationResult.success,
+                  content: orchestrationResult.response,
+                  metadata: orchestrationResult.metadata,
+                });
 
                 controller.close();
               } catch (error: any) {
-                controller.enqueue(encoder.encode(
-                  `event: error\ndata: ${JSON.stringify({
-                    message: error.message,
-                  })}\n\n`
-                ));
+                enqueue('error', { message: error.message });
                 controller.close();
               }
             },

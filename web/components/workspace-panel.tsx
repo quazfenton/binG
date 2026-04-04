@@ -1420,6 +1420,7 @@ export function WorkspacePanel() {
     setThreadMessages([...chatMessages, userMessage, placeholderMessage]);
 
     // SSE Event type constants (matching backend)
+    // Import from canonical source to ensure consistency
     const SSE_EVENT_TYPES = {
       TOKEN: 'token',
       TOOL_INVOCATION: 'tool_invocation',
@@ -1433,6 +1434,8 @@ export function WorkspacePanel() {
       DONE: 'done',
       ERROR: 'error',
       HEARTBEAT: 'heartbeat',
+      // Orchestration progress events from mode handlers
+      ORCHESTRATION_PROGRESS: 'orchestration_progress',
     } as const;
 
     try {
@@ -1661,6 +1664,30 @@ export function WorkspacePanel() {
                         }
                       : msg
                   ));
+                  break;
+
+                case 'orchestration_progress':
+                  // Orchestration mode progress update
+                  setAgentActivity((prev) => ({
+                    ...prev,
+                    status: data.data?.phase === 'responding' ? 'completed' :
+                            data.data?.phase === 'planning' ? 'thinking' : 'executing',
+                    currentAction: data.data?.currentAction || prev?.currentAction || '',
+                    phase: data.data?.phase,
+                    mode: data.data?.mode,
+                    nodeId: data.data?.nodeId,
+                    nodeRole: data.data?.nodeRole,
+                    nodeModel: data.data?.nodeModel,
+                    nodeProvider: data.data?.nodeProvider,
+                    steps: data.data?.steps,
+                    currentStepIndex: data.data?.currentStepIndex,
+                    totalSteps: data.data?.totalSteps,
+                    nodes: data.data?.nodes,
+                    nodeCommunication: data.data?.nodeCommunication,
+                    errors: data.data?.errors,
+                    hitlRequests: data.data?.hitlRequests,
+                    metadata: data.data?.metadata,
+                  }));
                   break;
               }
             } catch (parseError) {

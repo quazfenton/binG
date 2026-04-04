@@ -27,7 +27,7 @@ export class GeminiProvider implements LLMProvider {
     } = options
 
     const model = this.genAI.getGenerativeModel({
-      model: process.env.GEMINI_MODEL ?? 'gemini-2.5-flash',
+      model: process.env.GEMINI_MODEL ?? 'gemini-3-flash-preview',
       systemInstruction: systemPrompt,
       tools: [{ functionDeclarations: tools as any }],
     })

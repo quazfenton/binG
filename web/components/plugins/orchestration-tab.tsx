@@ -81,31 +81,34 @@ import FrameworkVisualizer, {
   MOCK_CREWAI_WORKFLOW
 } from "@/components/framework-visualizer";
 
-// Fetch agents from API
-async function fetchAgents(): Promise<AgentOption[]> {
+// Fetch events from API
+async function fetchEvents(limit = 50): Promise<EventBusEvent[]> {
   try {
-    const response = await fetch('/api/orchestration/agents');
-    const data = await response.json();
-    
-    if (!data.success) {
-      throw new Error(data.error || 'Failed to fetch agents');
+    const response = await fetch(`/api/events?limit=${limit}`, { credentials: 'include' });
+
+    if (!response.ok) {
+      if (response.status === 401) return []; // Not authenticated — silent
+      throw new Error(`HTTP ${response.status}`);
     }
-    
-    return (data.agents || []).map((agent: any) => ({
-      id: agent.id,
-      name: agent.name,
-      type: 'llm' as const,
-      provider: agent.provider,
-      model: agent.model,
-      active: agent.active,
-      priority: 1,
-      status: agent.status === 'running' ? 'online' : agent.status === 'error' ? 'error' : 'busy',
-      lastActive: agent.lastActive,
-      executions: 0,
-      successRate: 100,
+
+    const data = await response.json();
+
+    if (!data.success) {
+      throw new Error(data.error || 'Failed to fetch events');
+    }
+
+    return (data.events || []).map((evt: any) => ({
+      id: evt.id || `evt-${Date.now()}`,
+      type: evt.type || 'UNKNOWN',
+      timestamp: evt.created_at ? new Date(evt.created_at).getTime() : Date.now(),
+      source: evt.user_id || 'system',
+      target: evt.session_id || undefined,
+      payload: typeof evt.payload === 'string' ? JSON.parse(evt.payload) : (evt.payload || {}),
+      status: evt.status || 'pending',
+      duration: evt.processed_at && evt.created_at ? new Date(evt.processed_at).getTime() - new Date(evt.created_at).getTime() : undefined,
     }));
   } catch (err: any) {
-    console.error('[Orchestration] Failed to fetch agents:', err);
+    console.error('[Orchestration] Failed to fetch events:', err);
     return [];
   }
 }
@@ -200,7 +203,7 @@ interface EventBusEvent {
   timestamp: number;
   source: string;
   target?: string;
-  payload: any;
+  payload: Record<string, unknown>;
   status: "pending" | "processing" | "completed" | "failed";
   duration?: number;
 }
@@ -267,298 +270,6 @@ interface DAGWorkflow {
   createdAt: number;
 }
 
-// Mock data (will be replaced with real event bus data)
-const MOCK_EVENTS: EventBusEvent[] = [
-  {
-    id: "evt-1",
-    type: "ORCHESTRATION_PROGRESS",
-    timestamp: Date.now() - 60000,
-    source: "agent-team",
-    target: "architect",
-    payload: {
-      mode: "agent-team",
-      phase: "planning",
-      nodeId: "architect-1",
-      nodeRole: "architect",
-      nodeModel: "claude-sonnet-4",
-      nodeProvider: "claude-code",
-      currentAction: "Creating execution plan",
-      currentStepIndex: 0,
-      totalSteps: 3,
-      steps: [
-        { id: "step-1", title: "Planning", status: "running" },
-        { id: "step-2", title: "Development", status: "pending" },
-        { id: "step-3", title: "Review", status: "pending" },
-      ],
-      nodes: [
-        { id: "architect-1", role: "architect", model: "claude-sonnet-4", provider: "claude-code", status: "working" },
-        { id: "developer-1", role: "developer", model: "claude-sonnet-4", provider: "claude-code", status: "waiting" },
-        { id: "reviewer-1", role: "reviewer", model: "claude-sonnet-4", provider: "claude-code", status: "idle" },
-      ],
-    },
-    status: "processing",
-  },
-  {
-    id: "evt-2",
-    type: "AGENT_REQUEST",
-    timestamp: Date.now() - 120000,
-    source: "chat-panel",
-    target: "sandbox-provider",
-    payload: { model: "claude-sonnet-4", provider: "openrouter" },
-    status: "completed",
-  },
-  {
-    id: "evt-3",
-    type: "ORCHESTRATION_STEP",
-    timestamp: Date.now() - 180000,
-    source: "orchestrator",
-    target: "worker-1",
-    payload: { phase: "acting", iteration: 2 },
-    status: "completed",
-  },
-];
-
-const MOCK_AGENTS: AgentOption[] = [
-  {
-    id: "agent-1",
-    name: "Primary LLM",
-    type: "llm",
-    provider: "mistral",
-    model: "mistral-large-latest",
-    active: true,
-    priority: 1,
-    status: "online",
-    executions: 1247,
-    successRate: 98.5,
-  },
-  {
-    id: "agent-2",
-    name: "Fallback LLM",
-    type: "llm",
-    provider: "openrouter",
-    model: "google/gemini-2.0-flash",
-    active: true,
-    priority: 2,
-    status: "online",
-    executions: 342,
-    successRate: 97.2,
-  },
-  {
-    id: "agent-3",
-    name: "Code Agent",
-    type: "sandbox",
-    provider: "daytona",
-    active: true,
-    priority: 1,
-    status: "busy",
-    executions: 892,
-    successRate: 99.1,
-  },
-  {
-    id: "agent-4",
-    name: "Tool Executor",
-    type: "tool",
-    provider: "composio",
-    active: false,
-    priority: 3,
-    status: "offline",
-    executions: 156,
-    successRate: 94.8,
-  },
-  {
-    id: "agent-5",
-    name: "Orchestrator",
-    type: "orchestrator",
-    provider: "mastra",
-    active: true,
-    priority: 0,
-    status: "online",
-    executions: 2156,
-    successRate: 99.8,
-  },
-];
-
-const MOCK_MODES: OrchestrationModeOption[] = [
-  {
-    id: "mode-task-router",
-    name: "Task Router (Default)",
-    description: "Routes tasks between OpenCode and Nullclaw based on task type",
-    active: true,
-    config: {},
-    providers: ["opencode", "nullclaw", "cli"],
-    features: ["Task Classification", "Auto-Routing", "Policy Selection"],
-    orchestrationMode: "task-router",
-    executionType: "both",
-  },
-  {
-    id: "mode-unified",
-    name: "Unified Agent Service",
-    description: "Intelligent fallback chain: StatefulAgent → V2 → V1 API",
-    active: true,
-    config: { mode: "auto" },
-    providers: ["openai", "anthropic", "mistral"],
-    features: ["Fallback Chain", "Task Classifier", "Multi-Provider"],
-    orchestrationMode: "unified-agent",
-    executionType: "both",
-  },
-  {
-    id: "mode-sa",
-    name: "Stateful Agent",
-    description: "Plan-Act-Verify with ToolExecutor and smartApply",
-    active: false,
-    config: { enforcePlanActVerify: true, maxSelfHealAttempts: 3 },
-    providers: ["sandbox", "vfs"],
-    features: ["Plan-Act-Verify", "ToolExecutor", "Smart Apply", "Diff Repair"],
-    orchestrationMode: "stateful-agent",
-    executionType: "both",
-  },
-  {
-    id: "mode-kernel",
-    name: "Agent Kernel",
-    description: "OS-like priority scheduler with agent lifecycle management",
-    active: true,
-    config: { maxConcurrent: 8, timeSlice: 60000 },
-    providers: ["internal"],
-    features: ["Priority Scheduling", "Resource Quotas", "Self-Healing"],
-    orchestrationMode: "agent-kernel",
-    executionType: "both",
-  },
-  {
-    id: "mode-loop",
-    name: "Agent Loop",
-    description: "ToolLoopAgent - iterative tool-loop execution",
-    active: false,
-    config: { maxIterations: 10 },
-    providers: ["openrouter", "chutes", "github", "nvidia"],
-    features: ["ToolLoopAgent", "Filesystem Tools", "Multi-Provider"],
-    orchestrationMode: "agent-loop",
-    executionType: "both",
-  },
-  {
-    id: "mode-dag",
-    name: "Execution Graph",
-    description: "DAG dependency engine for parallel task execution",
-    active: true,
-    config: { maxRetries: 3 },
-    providers: ["internal"],
-    features: ["DAG Dependencies", "Parallel Execution", "Auto-Retry"],
-    orchestrationMode: "execution-graph",
-    executionType: "both",
-  },
-  {
-    id: "mode-nullclaw",
-    name: "Nullclaw",
-    description: "External server for messaging, browsing, automation",
-    active: false,
-    config: {},
-    providers: ["nullclaw"],
-    features: ["Discord/Telegram", "Web Browsing", "API Calls"],
-    orchestrationMode: "nullclaw",
-    executionType: "v2",
-  },
-  {
-    id: "mode-opencode-sdk",
-    name: "OpenCode SDK",
-    description: "Direct SDK connection to local OpenCode server (remote CLI agent)",
-    active: false,
-    config: { hostname: "127.0.0.1", port: 4096 },
-    providers: ["openai", "anthropic", "google"],
-    features: ["SDK Integration", "Session Management", "Git Ops"],
-    orchestrationMode: "opencode-sdk",
-    executionType: "v2",
-  },
-  {
-    id: "mode-mastra",
-    name: "Mastra Workflow",
-    description: "Workflow engine with planner/executor/critic pattern",
-    active: false,
-    config: { workflowId: "code-agent", selfHealing: true },
-    providers: ["mastra"],
-    features: ["Workflow Steps", "Self-Healing", "Code Quality Evals"],
-    orchestrationMode: "mastra-workflow",
-    executionType: "both",
-  },
-  {
-    id: "mode-crewai",
-    name: "CrewAI Multi-Agent",
-    description: "Role-based multi-agent collaboration",
-    active: false,
-    config: { process: "sequential", memory: true },
-    providers: ["crewai"],
-    features: ["Role Assignment", "Task Delegation", "Memory"],
-    orchestrationMode: "crewai",
-    executionType: "both",
-  },
-  {
-    id: "mode-v2",
-    name: "V2 Containerized",
-    description: "OpenCode containerized execution with sandbox isolation",
-    active: false,
-    config: { containerized: true, maxSteps: 15 },
-    providers: ["opencode", "daytona"],
-    features: ["Sandbox Isolation", "File Operations", "Bash Execution"],
-    orchestrationMode: "v2-executor",
-    executionType: "v2",
-  },
-  {
-    id: "mode-team",
-    name: "Agent Team",
-    description: "Multi-agent team orchestration with 5 collaboration strategies",
-    active: true,
-    config: { strategy: "hierarchical", maxIterations: 3 },
-    providers: ["claude-code", "amp", "codex", "opencode"],
-    features: ["Hierarchical", "Collaborative", "Consensus", "Relay", "Competitive"],
-    orchestrationMode: "agent-team",
-    executionType: "v2",
-  },
-];
-
-// Mock DAG Workflows
-const MOCK_DAG_WORKFLOWS: DAGWorkflow[] = [
-  {
-    id: "dag-1",
-    name: "Code Review Pipeline",
-    createdAt: Date.now() - 3600000,
-    nodes: [
-      { id: "n1", label: "Start", type: "start", status: "completed", x: 50, y: 100 },
-      { id: "n2", label: "Lint Code", type: "task", status: "completed", x: 150, y: 50 },
-      { id: "n3", label: "Run Tests", type: "task", status: "completed", x: 150, y: 150 },
-      { id: "n4", label: "All Passed?", type: "decision", status: "completed", x: 280, y: 100 },
-      { id: "n5", label: "Build", type: "task", status: "pending", x: 400, y: 50 },
-      { id: "n6", label: "Report Error", type: "task", status: "pending", x: 400, y: 150 },
-      { id: "n7", label: "End", type: "end", status: "pending", x: 520, y: 100 },
-    ],
-    edges: [
-      { id: "e1", source: "n1", target: "n2" },
-      { id: "e2", source: "n1", target: "n3" },
-      { id: "e3", source: "n2", target: "n4" },
-      { id: "e4", source: "n3", target: "n4" },
-      { id: "e5", source: "n4", target: "n5", label: "Yes" },
-      { id: "e6", source: "n4", target: "n6", label: "No" },
-      { id: "e7", source: "n5", target: "n7" },
-      { id: "e8", source: "n6", target: "n7" },
-    ],
-  },
-  {
-    id: "dag-2",
-    name: "Research Agent",
-    createdAt: Date.now() - 7200000,
-    nodes: [
-      { id: "r1", label: "Start", type: "start", status: "completed", x: 50, y: 80 },
-      { id: "r2", label: "Search", type: "task", status: "completed", x: 150, y: 80 },
-      { id: "r3", label: "Analyze", type: "task", status: "running", x: 280, y: 80 },
-      { id: "r4", label: "Report", type: "task", status: "pending", x: 400, y: 80 },
-      { id: "r5", label: "End", type: "end", status: "pending", x: 520, y: 80 },
-    ],
-    edges: [
-      { id: "re1", source: "r1", target: "r2" },
-      { id: "re2", source: "r2", target: "r3" },
-      { id: "re3", source: "r3", target: "r4" },
-      { id: "re4", source: "r4", target: "r5" },
-    ],
-  },
-];
-
 // Kernel data types (mirrored from agent-kernel.ts for client)
 interface KernelAgent {
   id: string;
@@ -589,15 +300,16 @@ interface KernelStats {
 
 export default function OrchestrationTab() {
   const { setMode: setOrchestrationMode } = useOrchestrationMode();
-  const [events, setEvents] = useState<EventBusEvent[]>(MOCK_EVENTS);
+  const [events, setEvents] = useState<EventBusEvent[]>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
-  const [modes, setModes] = useState<OrchestrationModeOption[]>(MOCK_MODES);
+  const [modes, setModes] = useState<OrchestrationModeOption[]>([]);
   const [isPaused, setIsPaused] = useState(false);
   const [selectedEvent, setSelectedEvent] = useState<EventBusEvent | null>(null);
   const [filterType, setFilterType] = useState<string>("all");
   const [autoScroll, setAutoScroll] = useState(true);
   const [showAgentDetails, setShowAgentDetails] = useState<Record<string, boolean>>({});
   const [loading, setLoading] = useState(true);
+  const [eventsError, setEventsError] = useState<string | null>(null);
 
   // Real Kernel Data State
   const [kernelStats, setKernelStats] = useState<KernelStats | null>(null);
@@ -656,8 +368,6 @@ export default function OrchestrationTab() {
       }
     } catch (err: any) {
       console.error('[OrchestrationTab] Failed to fetch modes:', err);
-      // Fallback to mock data if API fails
-      setModes(MOCK_MODES);
     }
   }, []);
 
@@ -678,6 +388,7 @@ export default function OrchestrationTab() {
         loadAgents(),
         loadModes(),
         loadWorkflows(),
+        loadEvents(),
       ]);
       setLoading(false);
     };
@@ -687,7 +398,7 @@ export default function OrchestrationTab() {
     // Refresh every 30 seconds
     const interval = setInterval(loadData, 30000);
     return () => clearInterval(interval);
-  }, [loadAgents, loadModes, loadWorkflows]);
+  }, [loadAgents, loadModes, loadWorkflows, loadEvents]);
 
   // Fetch real kernel data
   const fetchKernelData = useCallback(async () => {
@@ -706,8 +417,8 @@ export default function OrchestrationTab() {
         } else if (response.status === 404) {
           // Kernel API not available - use mock data silently
           console.log('[OrchestrationTab] Kernel API not available, using mock data');
-          setDagWorkflows(MOCK_DAG_WORKFLOWS);
-          setSelectedDag(MOCK_DAG_WORKFLOWS[0]);
+          setDagWorkflows([]);
+          setSelectedDag(null);
           setKernelLoading(false);
           return;
         } else {
@@ -748,10 +459,10 @@ export default function OrchestrationTab() {
         duration: 5000,
       });
       
-      // Fallback to mock data for graceful degradation
-      console.log('[OrchestrationTab] Falling back to mock data');
-      setDagWorkflows(MOCK_DAG_WORKFLOWS);
-      setSelectedDag(MOCK_DAG_WORKFLOWS[0]);
+      // Fallback to empty for graceful degradation
+      console.log('[OrchestrationTab] Falling back to empty state');
+      setDagWorkflows([]);
+      setSelectedDag(null);
     } finally {
       setKernelLoading(false);
     }
@@ -965,63 +676,97 @@ export default function OrchestrationTab() {
     }
   }, [events, autoScroll]);
 
-  // Simulate live events (replace with real event bus connection)
+  // Load initial events
+  const loadEvents = useCallback(async () => {
+    try {
+      const evtList = await fetchEvents(50);
+      // Client-side filter
+      const filtered = filterType === "all" ? evtList : evtList.filter(e => e.type === filterType);
+      setEvents(filtered);
+      setEventsError(null);
+    } catch (err: any) {
+      console.error('[OrchestrationTab] Failed to load events:', err);
+      setEventsError(err.message || 'Failed to load events');
+    }
+  }, [filterType]);
+
+  // SSE event streaming connection
   useEffect(() => {
     if (isPaused) return;
 
-    const interval = setInterval(() => {
-      const eventTypes = ["AGENT_REQUEST", "TOOL_EXECUTION", "ORCHESTRATION_STEP", "ORCHESTRATION_PROGRESS", "PROVIDER_ROUTING", "SANDBOX_CREATE"];
-      const type = eventTypes[Math.floor(Math.random() * eventTypes.length)];
+    // Load initial batch when filter changes
+    loadEvents();
 
-      let payload: Record<string, unknown> = { test: "data" };
+    let eventSource: EventSource | null = null;
+    let retryTimer: ReturnType<typeof setTimeout> | null = null;
 
-      if (type === "ORCHESTRATION_PROGRESS") {
-        const phases = ["planning", "acting", "verifying", "responding"] as const;
-        const roles = ["architect", "developer", "reviewer", "researcher", "tester"] as const;
-        const providers = ["opencode", "claude-code", "amp", "codex"] as const;
-        const statuses = ["idle", "working", "waiting", "failed"] as const;
-        const phase = phases[Math.floor(Math.random() * phases.length)];
-        const role = roles[Math.floor(Math.random() * roles.length)];
-        payload = {
-          mode: "agent-team",
-          phase,
-          nodeId: `${role}-${Math.floor(Math.random() * 3)}`,
-          nodeRole: role,
-          nodeModel: "claude-sonnet-4",
-          nodeProvider: providers[Math.floor(Math.random() * providers.length)],
-          currentAction: phase === "planning" ? "Creating execution plan" : phase === "acting" ? "Implementing changes" : phase === "verifying" ? "Running tests" : "Finalizing response",
-          currentStepIndex: Math.floor(Math.random() * 5),
-          totalSteps: 5,
-          nodes: [
-            { id: "architect-0", role: "architect", provider: "opencode", status: statuses[Math.floor(Math.random() * statuses.length)] },
-            { id: "developer-0", role: "developer", provider: "claude-code", status: statuses[Math.floor(Math.random() * statuses.length)] },
-            { id: "reviewer-0", role: "reviewer", provider: "amp", status: statuses[Math.floor(Math.random() * statuses.length)] },
-          ],
-          steps: [
-            { id: "s1", title: "Analyze", status: "completed" },
-            { id: "s2", title: "Plan", status: phase === "planning" ? "running" : "completed" },
-            { id: "s3", title: "Implement", status: phase === "acting" ? "running" : "pending" },
-            { id: "s4", title: "Verify", status: phase === "verifying" ? "running" : "pending" },
-            { id: "s5", title: "Respond", status: phase === "responding" ? "running" : "pending" },
-          ],
+    const connect = () => {
+      try {
+        // Server-side filtering by types via query param
+        const types = filterType === "all" ? '' : filterType;
+        const url = `/api/events/stream${types ? `?types=${encodeURIComponent(types)}` : ''}`;
+        // EventSource for same-origin requests automatically includes document cookies
+        // No need for credentials: 'include' — browser handles this natively
+        eventSource = new EventSource(url);
+
+        eventSource.onopen = () => {
+          setEventsError(null);
         };
+
+        eventSource.addEventListener('event', (e: MessageEvent) => {
+          try {
+            const wrapper = JSON.parse(e.data);
+            // The SSE endpoint wraps events as { type: 'event', event: {...} }
+            const raw = wrapper.event || wrapper;
+            const evt: EventBusEvent = {
+              id: raw.id || `evt-${Date.now()}`,
+              type: raw.type || 'UNKNOWN',
+              timestamp: raw.created_at ? new Date(raw.created_at).getTime() : Date.now(),
+              source: raw.user_id || 'system',
+              target: raw.session_id || undefined,
+              payload: typeof raw.payload === 'string' ? JSON.parse(raw.payload) : (raw.payload || {}),
+              status: raw.status || 'pending',
+              duration: raw.processed_at && raw.created_at ? new Date(raw.processed_at).getTime() - new Date(raw.created_at).getTime() : undefined,
+            };
+            // Also apply client-side filter for safety
+            if (filterType !== "all" && evt.type !== filterType) return;
+
+            setEvents(prev => {
+              const next = [...prev, evt];
+              return next.length > 200 ? next.slice(-200) : next;
+            });
+          } catch (parseError) {
+            console.warn('[OrchestrationTab] Failed to parse SSE event:', e.data, parseError);
+          }
+        });
+
+        eventSource.onerror = () => {
+          // Connection lost — will reconnect after delay
+          eventSource?.close();
+          eventSource = null;
+          retryTimer = setTimeout(connect, 3000);
+        };
+      } catch (err: any) {
+        console.error('[OrchestrationTab] SSE connection failed:', err);
+        retryTimer = setTimeout(connect, 5000);
       }
+    };
 
-      const newEvent: EventBusEvent = {
-        id: `evt-${Date.now()}`,
-        type,
-        timestamp: Date.now(),
-        source: ["chat-panel", "agent-gateway", "orchestrator", "llm-router"][Math.floor(Math.random() * 4)],
-        target: ["sandbox-provider", "daytona", "openrouter", "worker-1"][Math.floor(Math.random() * 4)],
-        payload,
-        status: ["pending", "processing", "completed"][Math.floor(Math.random() * 3)] as any,
-      };
+    connect();
 
-      setEvents(prev => [...prev.slice(-99), newEvent]); // Keep last 100 events
-    }, 2000);
+    return () => {
+      if (retryTimer) clearTimeout(retryTimer);
+      eventSource?.close();
+    };
+  }, [isPaused, filterType, loadEvents]);
 
+  // Refresh events periodically
+  useEffect(() => {
+    if (isPaused) return;
+
+    const interval = setInterval(loadEvents, 10000);
     return () => clearInterval(interval);
-  }, [isPaused]);
+  }, [isPaused, loadEvents]);
 
   const handleToggleAgent = (agentId: string) => {
     setAgents(prev => prev.map(a => 
@@ -1086,10 +831,15 @@ export default function OrchestrationTab() {
 
   const getEventTypeIcon = (type: string) => {
     switch (type) {
+      case "ORCHESTRATION_PROGRESS": return <Activity className="w-3 h-3 text-purple-400" />;
+      case "ORCHESTRATION_STEP": return <Workflow className="w-3 h-3" />;
+      case "WORKFLOW": return <GitBranch className="w-3 h-3" />;
+      case "HUMAN_APPROVAL": return <AlertCircle className="w-3 h-3 text-orange-400" />;
+      case "SELF_HEALING": return <RefreshCw className="w-3 h-3 text-green-400" />;
+      case "BACKGROUND_JOB": return <Clock className="w-3 h-3" />;
       case "AGENT_REQUEST": return <MessageSquare className="w-3 h-3" />;
       case "TOOL_EXECUTION": return <Code className="w-3 h-3" />;
-      case "ORCHESTRATION_STEP": return <Workflow className="w-3 h-3" />;
-      case "PROVIDER_ROUTING": return <GitBranch className="w-3 h-3" />;
+      case "PROVIDER_ROUTING": return <Network className="w-3 h-3" />;
       case "SANDBOX_CREATE": return <Box className="w-3 h-3" />;
       default: return <Activity className="w-3 h-3" />;
     }
@@ -1318,8 +1068,12 @@ export default function OrchestrationTab() {
                     </SelectTrigger>
                     <SelectContent>
                       <SelectItem value="all">All</SelectItem>
-                      <SelectItem value="AGENT_REQUEST">Requests</SelectItem>
-                      <SelectItem value="TOOL_EXECUTION">Tools</SelectItem>
+                      <SelectItem value="ORCHESTRATION_PROGRESS">Progress</SelectItem>
+                      <SelectItem value="ORCHESTRATION_STEP">Steps</SelectItem>
+                      <SelectItem value="WORKFLOW">Workflow</SelectItem>
+                      <SelectItem value="HUMAN_APPROVAL">HITL</SelectItem>
+                      <SelectItem value="SELF_HEALING">Self-Healing</SelectItem>
+                      <SelectItem value="BACKGROUND_JOB">Background</SelectItem>
                     </SelectContent>
                   </Select>
                   <Button variant="ghost" size="icon" onClick={() => setIsPaused(!isPaused)} className={isPaused ? "text-yellow-400" : "text-white/60"}>
@@ -1330,30 +1084,156 @@ export default function OrchestrationTab() {
                   </Button>
                 </div>
               </div>
+
+              {eventsError && (
+                <div className="p-3 rounded-lg border border-red-500/20 bg-red-500/10 text-red-300 text-xs mb-2">
+                  <AlertCircle className="w-3 h-3 inline mr-1" />
+                  {eventsError}
+                </div>
+              )}
+
+              {events.length === 0 && !eventsError && (
+                <div className="p-8 text-center text-white/30 text-sm">
+                  <Activity className="w-8 h-8 mx-auto mb-2 opacity-50" />
+                  <p>No events yet. Events will appear when orchestration modes are active.</p>
+                </div>
+              )}
+
               <div className="space-y-2">
-                {events.filter(e => filterType === "all" || e.type === filterType).map((event) => (
-                  <motion.div key={event.id} initial={{ opacity: 0, x: -20 }} animate={{ opacity: 1, x: 0 }} className={`p-3 rounded-lg border cursor-pointer transition-all ${getStatusColor(event.status)} ${selectedEvent?.id === event.id ? "ring-2 ring-purple-500" : ""}`} onClick={() => setSelectedEvent(event)}>
-                    <div className="flex items-center justify-between mb-2">
-                      <div className="flex items-center gap-2">
-                        {getEventTypeIcon(event.type)}
-                        <span className="text-xs font-medium">{event.type}</span>
-                      </div>
-                      <span className="text-[10px]">{new Date(event.timestamp).toLocaleTimeString()}</span>
-                    </div>
-                    <div className="text-xs space-y-1">
-                      <div className="flex items-center gap-2">
-                        <span className="text-white/40">From:</span>
-                        <span className="text-white/80">{event.source}</span>
-                      </div>
-                      {event.target && (
+                {events.filter(e => filterType === "all" || e.type === filterType).map((event) => {
+                  const isProgress = event.type === "ORCHESTRATION_PROGRESS";
+                  const p = event.payload || {};
+
+                  return (
+                    <motion.div
+                      key={event.id}
+                      initial={{ opacity: 0, x: -20 }}
+                      animate={{ opacity: 1, x: 0 }}
+                      className={`p-3 rounded-lg border cursor-pointer transition-all ${getStatusColor(event.status)} ${selectedEvent?.id === event.id ? "ring-2 ring-purple-500" : ""}`}
+                      onClick={() => setSelectedEvent(event)}
+                    >
+                      <div className="flex items-center justify-between mb-2">
                         <div className="flex items-center gap-2">
-                          <span className="text-white/40">To:</span>
-                          <span className="text-white/80">{event.target}</span>
+                          {getEventTypeIcon(event.type)}
+                          <span className="text-xs font-medium">{event.type}</span>
+                          {isProgress && (p as any).mode && (
+                            <Badge className="text-[8px] bg-purple-500/20 text-purple-300 border border-purple-500/30">
+                              {(p as any).mode}
+                            </Badge>
+                          )}
+                        </div>
+                        <span className="text-[10px]">{new Date(event.timestamp).toLocaleTimeString()}</span>
+                      </div>
+
+                      {/* Enhanced display for ORCHESTRATION_PROGRESS events */}
+                      {isProgress ? (
+                        <div className="text-xs space-y-1">
+                          {/* Phase badge */}
+                          {(p as any).phase && (
+                            <Badge className={`text-[8px] mr-1 ${
+                              (p as any).phase === 'planning' ? 'bg-blue-500/20 text-blue-300 border-blue-500/30' :
+                              (p as any).phase === 'acting' ? 'bg-green-500/20 text-green-300 border-green-500/30' :
+                              (p as any).phase === 'verifying' ? 'bg-yellow-500/20 text-yellow-300 border-yellow-500/30' :
+                              (p as any).phase === 'responding' ? 'bg-cyan-500/20 text-cyan-300 border-cyan-500/30' :
+                              'bg-gray-500/20 text-gray-300 border-gray-500/30'
+                            }`}>
+                              {(p as any).phase}
+                            </Badge>
+                          )}
+
+                          {/* Current action */}
+                          {(p as any).currentAction && (
+                            <p className="text-white/70 truncate">{(p as any).currentAction}</p>
+                          )}
+
+                          {/* Step progress */}
+                          {(p as any).currentStepIndex !== undefined && (p as any).totalSteps !== undefined && (
+                            <div className="flex items-center gap-2 mt-1">
+                              <div className="flex-1 h-1 bg-white/10 rounded-full overflow-hidden">
+                                <div
+                                  className="h-full bg-purple-500 rounded-full transition-all"
+                                  style={{ width: `${(((p as any).currentStepIndex + 1) / (p as any).totalSteps) * 100}%` }}
+                                />
+                              </div>
+                              <span className="text-[10px] text-white/40">
+                                {(p as any).currentStepIndex + 1}/{(p as any).totalSteps}
+                              </span>
+                            </div>
+                          )}
+
+                          {/* Node info */}
+                          {(p as any).nodeRole && (
+                            <p className="text-white/40 text-[10px]">
+                              Node: <span className="text-white/60">{(p as any).nodeRole}</span>
+                              {(p as any).nodeModel && ` · ${(p as any).nodeModel}`}
+                              {(p as any).nodeProvider && ` (${(p as any).nodeProvider})`}
+                            </p>
+                          )}
+
+                          {/* Multi-agent topology */}
+                          {Array.isArray((p as any).nodes) && (p as any).nodes.length > 0 && (
+                            <div className="flex gap-1 flex-wrap mt-1">
+                              {(p as any).nodes.map((n: any, i: number) => (
+                                <Badge key={i} variant="outline" className={`text-[8px] ${
+                                  n.status === 'working' ? 'border-green-500/40 text-green-300' :
+                                  n.status === 'waiting' ? 'border-yellow-500/40 text-yellow-300' :
+                                  n.status === 'failed' ? 'border-red-500/40 text-red-300' :
+                                  'border-white/20 text-white/40'
+                                }`}>
+                                  {n.role || n.id}: {n.status || 'unknown'}
+                                </Badge>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Steps list */}
+                          {Array.isArray((p as any).steps) && (p as any).steps.length > 0 && (
+                            <div className="flex gap-1 flex-wrap mt-1">
+                              {(p as any).steps.map((s: any, i: number) => (
+                                <span key={s.id || i} className={`text-[8px] px-1 py-0.5 rounded ${
+                                  s.status === 'running' ? 'bg-purple-500/20 text-purple-300' :
+                                  s.status === 'completed' ? 'bg-green-500/20 text-green-300' :
+                                  s.status === 'failed' ? 'bg-red-500/20 text-red-300' :
+                                  'bg-white/5 text-white/30'
+                                }`}>
+                                  {s.title || s.id || `Step ${i + 1}`}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          {/* Errors */}
+                          {Array.isArray((p as any).errors) && (p as any).errors.length > 0 && (
+                            <p className="text-red-300 text-[10px] mt-1">
+                              {(p as any).errors.map((e: any) => e.message).join('; ')}
+                            </p>
+                          )}
+
+                          {/* HITL requests */}
+                          {Array.isArray((p as any).hitlRequests) && (p as any).hitlRequests.length > 0 && (
+                            <Badge className="text-[8px] bg-orange-500/20 text-orange-300 border-orange-500/30 mt-1">
+                              {(p as any).hitlRequests.map((h: any) => h.action).join(', ')} — awaiting approval
+                            </Badge>
+                          )}
+                        </div>
+                      ) : (
+                        /* Standard event display */
+                        <div className="text-xs space-y-1">
+                          <div className="flex items-center gap-2">
+                            <span className="text-white/40">From:</span>
+                            <span className="text-white/80">{event.source}</span>
+                          </div>
+                          {event.target && (
+                            <div className="flex items-center gap-2">
+                              <span className="text-white/40">To:</span>
+                              <span className="text-white/80">{event.target}</span>
+                            </div>
+                          )}
                         </div>
                       )}
-                    </div>
-                  </motion.div>
-                ))}
+                    </motion.div>
+                  );
+                })}
                 <div ref={eventsEndRef} />
               </div>
             </div>

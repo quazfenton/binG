@@ -26,6 +26,7 @@
 import { NextRequest } from 'next/server';
 import { createLogger } from '@/lib/utils/logger';
 import { createHash } from 'crypto';
+import { applyPromptModifiers, type PromptParameters } from './prompt-parameters';
 
 const logger = createLogger('Agent:OrchestrationMode');
 
@@ -86,6 +87,8 @@ export interface ModeConfig {
   // generic
   temperature?: number;
   maxTokens?: number;
+  /** Optional prompt parameters for response style modification */
+  promptParams?: PromptParameters;
   [key: string]: any;
 }
 
@@ -192,10 +195,15 @@ export async function executeWithOrchestrationMode(
       case 'unified-agent': {
         const { processUnifiedAgentRequest } = await import('@/lib/orchestra/unified-agent-service');
 
+        const modeConfig = (request as any).modeConfig as ModeConfig | undefined;
+        const promptParams = modeConfig?.promptParams;
+        const baseSystemPrompt = process.env.OPENCODE_SYSTEM_PROMPT || '';
+        const systemPrompt = baseSystemPrompt + applyPromptModifiers(promptParams ?? {});
+
         const unifiedResult = await processUnifiedAgentRequest({
           userMessage: request.task,
           sandboxId: request.sessionId,
-          systemPrompt: process.env.OPENCODE_SYSTEM_PROMPT,
+          systemPrompt,
           maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
           mode: 'auto', // Let unified agent auto-select best execution mode
         });
@@ -593,6 +601,7 @@ export async function executeWithOrchestrationMode(
       // ========================================================================
       case 'agent-team': {
         const { createAgentTeam } = await import('@/lib/spawn/orchestration/agent-team');
+        const { emitEvent } = await import('@/lib/events/bus');
 
         const workspacePath = request.workspacePath || process.cwd() || '/tmp/agent-team';
         const strategy = (request as any).strategy || 'hierarchical';
@@ -608,7 +617,6 @@ export async function executeWithOrchestrationMode(
 
         // Emit initial progress to event store
         try {
-          const { emitEvent } = await import('@/lib/events/bus');
           await emitEvent({
             type: 'ORCHESTRATION_PROGRESS',
             userId: request.ownerId,
@@ -631,10 +639,13 @@ export async function executeWithOrchestrationMode(
             timestamp: Date.now(),
           }, request.ownerId, request.sessionId);
         } catch {
-          // Non-fatal
+          // Non-fatal — don't block execution if event storage fails
         }
 
         let team: any = null;
+        // Track event listener cleanup functions
+        const cleanupListeners: Array<() => void> = [];
+
         try {
           team = await createAgentTeam({
             name: `orchestration-team-${request.sessionId}`,
@@ -647,45 +658,44 @@ export async function executeWithOrchestrationMode(
           });
 
           // Hook into team progress events and emit to event store
-          team.on('task:progress', async (progress: any) => {
-            try {
-              const { emitEvent } = await import('@/lib/events/bus');
-              await emitEvent({
-                type: 'ORCHESTRATION_PROGRESS',
-                userId: request.ownerId,
-                sessionId: request.sessionId,
-                mode: 'agent-team',
-                phase: progress.progress < 50 ? 'acting' : 'verifying',
-                nodeId: progress.currentAgent,
-                currentAction: progress.message,
-                currentStepIndex: progress.iteration,
-                totalSteps: maxIterations,
-                metadata: { progressPercent: progress.progress },
-                timestamp: Date.now(),
-              }, request.ownerId, request.sessionId);
-            } catch {
-              // Non-fatal
-            }
-          });
+          // Use synchronous wrapper to prevent unhandled promise rejections
+          const onProgress = (progress: any) => {
+            emitEvent({
+              type: 'ORCHESTRATION_PROGRESS',
+              userId: request.ownerId,
+              sessionId: request.sessionId,
+              mode: 'agent-team',
+              phase: progress.progress < 50 ? 'acting' : 'verifying',
+              nodeId: progress.currentAgent,
+              currentAction: progress.message,
+              currentStepIndex: progress.iteration,
+              totalSteps: maxIterations,
+              metadata: { progressPercent: progress.progress },
+              timestamp: Date.now(),
+            }, request.ownerId, request.sessionId).catch((err: any) => {
+              logger.debug('Failed to emit progress event (non-fatal)', { error: err.message });
+            });
+          };
+          team.on('task:progress', onProgress);
+          cleanupListeners.push(() => team.off('task:progress', onProgress));
 
           // Hook into step completions
-          team.on('task:step', async (step: any) => {
-            try {
-              const { emitEvent } = await import('@/lib/events/bus');
-              await emitEvent({
-                type: 'ORCHESTRATION_PROGRESS',
-                userId: request.ownerId,
-                sessionId: request.sessionId,
-                mode: 'agent-team',
-                phase: 'acting',
-                nodeRole: step.role,
-                currentAction: `Step completed: ${step.role}`,
-                timestamp: Date.now(),
-              }, request.ownerId, request.sessionId);
-            } catch {
-              // Non-fatal
-            }
-          });
+          const onStep = (step: any) => {
+            emitEvent({
+              type: 'ORCHESTRATION_PROGRESS',
+              userId: request.ownerId,
+              sessionId: request.sessionId,
+              mode: 'agent-team',
+              phase: 'acting',
+              nodeRole: step.role,
+              currentAction: `Step completed: ${step.role}`,
+              timestamp: Date.now(),
+            }, request.ownerId, request.sessionId).catch((err: any) => {
+              logger.debug('Failed to emit step event (non-fatal)', { error: err.message });
+            });
+          };
+          team.on('task:step', onStep);
+          cleanupListeners.push(() => team.off('task:step', onStep));
 
           const teamResult = await team.execute({
             task: request.task,
@@ -703,7 +713,6 @@ export async function executeWithOrchestrationMode(
 
           // Emit final progress
           try {
-            const { emitEvent } = await import('@/lib/events/bus');
             await emitEvent({
               type: 'ORCHESTRATION_PROGRESS',
               userId: request.ownerId,
@@ -733,6 +742,8 @@ export async function executeWithOrchestrationMode(
             },
           };
         } finally {
+          // Clean up event listeners before destroying team
+          cleanupListeners.forEach(fn => fn());
           if (team) {
             await team.destroy().catch(() => {});
           }

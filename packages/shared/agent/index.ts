@@ -66,8 +66,10 @@ export {
 
 // V2 Executor
 export {
+  executeV2Task,
   executeV2TaskStreaming,
   type V2ExecuteOptions,
+  type V2ExecutionResult,
 } from './v2-executor';
 
 // Workforce State + Manager
@@ -236,3 +238,53 @@ export {
   type GeneralDomainRoleV4,
   type GeneralDomainRoleConfigV4,
 } from './general-domain-prompts-v4';
+
+// Prompt Parameters — Optional response modifiers for any role
+export {
+  // Enums
+  ResponseDepth,
+  ExpertiseLevel,
+  ReasoningMode,
+  CitationStrictness,
+  Tone,
+  CreativityLevel,
+  RiskPosture,
+  OutputFormat,
+  SelfCorrection,
+  ConfidenceExpression,
+  // Types
+  type PromptParameters,
+  type PromptPresetKey,
+  type TelemetryEvent,
+  type TelemetryCallback,
+  type PresetFragment,
+  // Defaults & Presets
+  DEFAULT_PROMPT_PARAMETERS,
+  PROMPT_PRESETS,
+  // Functions
+  applyPromptModifiers,
+  clearModifierCache,
+  generateDebugHeaderValue,
+  getPreset,
+  applyPresetWithOverrides,
+  mergePromptParameters,
+  hasActiveModifiers,
+  composePreset,
+  // Telemetry
+  onTelemetryEvent,
+  emitTelemetryEvent,
+} from './prompt-parameters';
+
+// Prompt Parameter Codec — Serialization, fingerprinting, diffing
+export {
+  encodeParams,
+  decodeParams,
+  paramsFingerprint,
+  diffParams,
+  derivePreset,
+  validateParams,
+  appendParamsToUrl,
+  extractParamsFromUrl,
+  type ParamDiff,
+  type PresetDerivation,
+} from './prompt-parameters.codec';

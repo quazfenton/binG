@@ -301,7 +301,7 @@ class TaskRouter {
     const userId = request.userId;
     const task = request.task;
     const kernel = getAgentKernel();
-    
+
     // Ensure kernel is started (lazy start)
     if (!(kernel as any).running) {
       kernel.start();
@@ -311,27 +311,71 @@ class TaskRouter {
     try {
       // Map advanced task type to kernel agent type and config
       const agentConfig = this.mapAdvancedToKernelConfig(advancedType, userId, task);
-      
+
       // Spawn agent through kernel
       const agentId = await kernel.spawnAgent(agentConfig);
-      
+
       logger.info(`[TaskRouter] Agent spawned via kernel`, { agentId, type: advancedType });
-      
+
       // For non-persistent types, also submit initial work
       if (agentConfig.type !== 'daemon') {
         await kernel.submitWork(agentId, { task, requestId: request.id });
       }
-      
+
+      // FIX (Bug 4): Enforce timeout properly with signal cleanup
+      const timeoutMs = Math.min(
+        120_000,
+        Number(request.executionPolicy?.timeoutMs) || 60_000,
+      );
+      const pollInterval = 1_000;
+      const maxAttempts = Math.ceil(timeoutMs / pollInterval);
+      let attempts = 0;
+      let timedOut = false;
+
+      await new Promise<void>((resolve, reject) => {
+        const interval = setInterval(() => {
+          attempts++;
+          try {
+            const agentStatus = kernel.getAgentStatus(agentId);
+            if (agentStatus?.status === 'completed' || agentStatus?.status === 'failed') {
+              clearInterval(interval);
+              resolve();
+              return;
+            }
+          } catch {
+            // Agent may have been removed — treat as completed
+            clearInterval(interval);
+            resolve();
+            return;
+          }
+
+          if (attempts >= maxAttempts) {
+            timedOut = true;
+            clearInterval(interval);
+            // Attempt to cancel the agent
+            try { kernel.cancelAgent(agentId); } catch { /* ignore */ }
+            resolve(); // Don't reject — return timeout status instead
+          }
+        }, pollInterval);
+      });
+
+      const agentStatus = kernel.getAgentStatus(agentId);
+
       return {
-        success: true,
+        success: !timedOut && agentStatus?.status === 'completed',
         agentId,
         type: advancedType,
         kernelManaged: true,
-        message: `Agent ${agentId} spawned and managed by Kernel`,
+        timedOut,
+        agentStatus: agentStatus?.status,
+        message: timedOut
+          ? `Agent ${agentId} timed out after ${timeoutMs}ms`
+          : `Agent ${agentId} ${agentStatus?.status || 'completed'}`,
       };
-    } catch (error: any) {
+    } catch (error: unknown) {
       // Fallback to event system if kernel fails
-      logger.error(`[TaskRouter] Kernel execution failed, falling back to event system:`, error.message);
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error(`[TaskRouter] Kernel execution failed, falling back to event system: ${message}`);
       return this.executeAdvancedTaskFallback(request, advancedType);
     }
   }
@@ -801,10 +845,15 @@ class TaskRouter {
         await initializeNullclaw();
       }
 
-      const nullclawType: 'message' | 'browse' | 'automate' =
-        taskType === 'messaging' ? 'message' :
-        taskType === 'browsing'  ? 'browse'  :
-        'automate';
+      // FIX (Bug 3): Map task-router task types to nullclaw task types correctly.
+      // task-router returns: 'coding' | 'messaging' | 'browsing' | 'automation' | 'api' | 'unknown'
+      // nullclaw expects:   'message' | 'browse' | 'automate' | 'api' | 'schedule'
+      const nullclawType: 'message' | 'browse' | 'automate' | 'api' | 'schedule' =
+        taskType === 'messaging'  ? 'message' :
+        taskType === 'browsing'   ? 'browse'  :
+        taskType === 'api'        ? 'api'     :
+        taskType === 'automation' ? 'automate' :
+        'automate'; // default for coding/unknown
 
       const task = {
         id: request.id,
@@ -826,8 +875,28 @@ class TaskRouter {
         error: result.error,
         agent: 'nullclaw',
       };
-    } catch (error: any) {
-      logger.error('[TaskRouter] Nullclaw execution failed:', error.message);
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('[TaskRouter] Nullclaw execution failed:', message);
+
+      // Emit failure event for observability
+      try {
+        await emitEvent(
+          {
+            type: EventTypes.WORKFLOW,
+            templateId: 'nullclaw',
+            sessionId: request.conversationId,
+            userId: request.userId,
+            phase: 'failed',
+            error: message,
+          },
+          request.userId,
+          request.conversationId,
+        );
+      } catch {
+        // Non-fatal — don't mask the original error
+      }
+
       throw error;
     }
   }
