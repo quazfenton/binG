@@ -55,14 +55,17 @@ export async function runJob(name: string, payload: any): Promise<JobRunResult> 
     // Offload to Rust via Tauri invoke
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      const result = await invoke<JobResult>(name, payload);
-      return { jobId: `${name}-${Date.now()}`, result };
+      const result = await invoke<JobResult & { jobId?: string }>(name, payload);
+      // Use backend jobId if available, otherwise generate local one
+      const jobId = result.jobId || `${name}-${Date.now()}`;
+      return { jobId, result: { success: result.success, data: result.data, error: result.error } };
     } catch (error: any) {
+      const errorMsg = error?.message || String(error);
       return {
         jobId: '',
         result: {
           success: false,
-          error: error.message || String(error),
+          error: errorMsg,
         },
       };
     }
@@ -94,14 +97,15 @@ export async function runJob(name: string, payload: any): Promise<JobRunResult> 
 
     return { jobId, result: { success: false, error: `No handler registered for job: ${name}` } };
   } catch (error: any) {
+    const errorMsg = error?.message || String(error);
     webJobRegistry.set(jobId, {
       id: jobId,
       name,
       status: 'failed',
       progress: 0,
-      result: { success: false, error: error.message },
+      result: { success: false, error: errorMsg },
     });
-    return { jobId, result: { success: false, error: error.message } };
+    return { jobId, result: { success: false, error: errorMsg } };
   }
 }
 

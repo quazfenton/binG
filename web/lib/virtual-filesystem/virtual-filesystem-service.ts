@@ -1,6 +1,11 @@
 // Server-only module - do not import directly in Client Components
 export const runtime = 'nodejs';
 
+import { isDesktopMode } from '@bing/platform/env';
+import { fsBridge, isUsingLocalFS, initializeFSBridge } from '../../../../packages/shared/FS/fs-bridge';
+import type { FileSystemWatchEvent } from '../../../../packages/shared/FS/index';
+import { emitFilesystemUpdated } from './sync/sync-events';
+
 import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
 import * as crypto from 'node:crypto';
@@ -122,13 +127,114 @@ export class VirtualFilesystemService {
   }
 
   constructor(options: { workspaceRoot?: string; storageDir?: string } = {}) {
+    // Initialize FS Bridge for desktop mode - set flag BEFORE async call to prevent race condition
+    if (isDesktopMode()) {
+      // Mark as attempting initialization to prevent race condition
+      (this as any)._fsBridgeInitializing = true;
+      this.initializeFSBridge().catch(err => {
+        console.warn('[VFS] FS Bridge initialization deferred:', err.message);
+      }).finally(() => {
+        (this as any)._fsBridgeInitializing = false;
+      });
+    }
+    
     this.workspaceRoot = (options.workspaceRoot || DEFAULT_WORKSPACE_ROOT).replace(/^\/+|\/+$/g, '') || DEFAULT_WORKSPACE_ROOT;
     this.storageDir = options.storageDir
       ? path.resolve(options.storageDir)
       : path.resolve(process.env.VIRTUAL_FILESYSTEM_STORAGE_DIR || DEFAULT_STORAGE_DIR);
   }
 
+  private async initializeFSBridge(): Promise<void> {
+    try {
+      // Use environment variable or default path for workspace root
+      const workspaceRoot = process.env.DESKTOP_WORKSPACE_ROOT || undefined;
+      
+      // Read boundary settings from saved desktop settings (only in browser environment)
+      let boundaryEnabled = false;
+      if (typeof window !== 'undefined' && typeof localStorage !== 'undefined') {
+        try {
+          const savedSettings = localStorage.getItem('desktop_settings');
+          if (savedSettings) {
+            const parsed = JSON.parse(savedSettings);
+            boundaryEnabled = parsed.boundaryEnabled === true;
+          }
+        } catch (e) {
+          // Use default (false) if settings can't be read
+        }
+      }
+      
+      await initializeFSBridge('desktop-user', { 
+        boundaryEnabled,
+        workspaceRoot 
+      });
+      
+      // Register handler for external file watch events to emit global sync events
+      this.registerWatchEventHandler();
+      
+      console.log('[VFS] FS Bridge initialized for desktop mode');
+    } catch (err: any) {
+      console.warn('[VFS] FS Bridge initialization failed:', err.message);
+    }
+  }
+  
+  /**
+   * Register handler for external file watcher events
+   * When files change externally (e.g., in another app), emit global sync events for UI refresh
+   */
+  private registerWatchEventHandler(): void {
+    const watchHandler = (event: FileSystemWatchEvent) => {
+      console.log('[VFS] External file change event received', { 
+        type: event.type, 
+        paths: event.paths 
+      });
+      
+      // Get current version after the change
+      const version = Date.now(); // Use timestamp as version for external changes
+      
+      // Emit global filesystem-updated event for cross-tab sync and real-time UI updates
+      emitFilesystemUpdated({
+        path: event.paths[0] || '',
+        paths: event.paths,
+        type: event.type === 'create' ? 'create' : 
+              event.type === 'modify' ? 'update' : 
+              event.type === 'delete' ? 'delete' : 'update',
+        workspaceVersion: version,
+        source: 'desktop-fs-external-watch',
+        sessionId: 'desktop-user',
+      });
+      
+      // Also emit internal events for local listeners
+      for (const filePath of event.paths) {
+        this.emitFileChange('desktop-user', filePath, event.type === 'delete' ? 'delete' : 'update', version);
+      }
+      this.emitSnapshotChange('desktop-user', version);
+    };
+    
+    // Register the handler with fsBridge
+    (fsBridge as any).onWatchEvent?.(watchHandler);
+  }
+
   async readFile(ownerId: string, filePath: string): Promise<VirtualFile> {
+    // Desktop mode: Use local filesystem instead of VFS
+    if (isDesktopMode() && isUsingLocalFS()) {
+      try {
+        const file = await fsBridge.readFile(ownerId, filePath);
+        return {
+          path: file.path,
+          content: file.content,
+          language: file.language,
+          lastModified: file.lastModified,
+          createdAt: file.createdAt,
+          size: file.size,
+          version: 1,
+        };
+      } catch (error: any) {
+        // In desktop mode, propagate error instead of falling back to VFS
+        // VFS won't have user's files - better to fail explicitly
+        throw new Error(`Failed to read file from local filesystem: ${error.message}`);
+      }
+    }
+    
     console.log('[VFS] readFile called', { ownerId, filePath });
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
@@ -148,6 +254,45 @@ export class VirtualFilesystemService {
     language?: string,
     options?: { failIfExists?: boolean; append?: boolean },
   ): Promise<VirtualFile> {
+    // Desktop mode: Use local filesystem instead of VFS
+    if (isDesktopMode() && isUsingLocalFS()) {
+      try {
+        // Check if file already exists to determine change type
+        const existingFile = await fsBridge.exists(ownerId, filePath).catch(() => false);
+        const changeType: FilesystemChangeType = existingFile ? 'update' : 'create';
+        
+        const file = await fsBridge.writeFile(ownerId, filePath, content, language);
+        
+        // Emit filesystem change event for UI updates
+        const version = await fsBridge.getVersion(ownerId);
+        this.emitFileChange(ownerId, file.path, changeType, version);
+        this.emitSnapshotChange(ownerId, version);
+        
+        // Emit global filesystem-updated event for cross-tab sync and real-time UI updates
+        emitFilesystemUpdated({
+          path: file.path,
+          paths: [file.path],
+          type: changeType,
+          workspaceVersion: version,
+          source: changeType === 'update' ? 'desktop-fs-update' : 'desktop-fs-create',
+          sessionId: ownerId,
+        });
+        
+        return {
+          path: file.path,
+          content: file.content,
+          language: file.language,
+          lastModified: file.lastModified,
+          createdAt: file.createdAt,
+          size: file.size,
+          version: version,
+        };
+      } catch (error: any) {
+        // In desktop mode, propagate error instead of falling back to VFS
+        throw new Error(`Failed to write file to local filesystem: ${error.message}`);
+      }
+    }
+    
     console.log('[VFS] writeFile called', { ownerId, filePath, contentLength: content?.length, append: options?.append });
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(filePath);
@@ -375,6 +520,32 @@ export class VirtualFilesystemService {
   }
 
   async deletePath(ownerId: string, targetPath: string): Promise<{ deletedCount: number }> {
+    // Desktop mode: Use local filesystem instead of VFS
+    if (isDesktopMode() && isUsingLocalFS()) {
+      try {
+        const result = await fsBridge.deletePath(ownerId, targetPath);
+        
+        // Emit filesystem change event for UI updates
+        const version = await fsBridge.getVersion(ownerId);
+        this.emitFileChange(ownerId, targetPath, 'delete', version);
+        this.emitSnapshotChange(ownerId, version);
+        
+        // Emit global filesystem-updated event for cross-tab sync and real-time UI updates
+        emitFilesystemUpdated({
+          path: targetPath,
+          paths: [targetPath],
+          type: 'delete',
+          workspaceVersion: version,
+          source: 'desktop-fs-delete',
+          sessionId: ownerId,
+        });
+        
+        return result;
+      } catch (error: any) {
+        throw new Error(`Failed to delete from local filesystem: ${error.message}`);
+      }
+    }
+
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedPath = this.normalizePath(targetPath);
     const normalizedPrefix = `${normalizedPath}/`;
@@ -430,6 +601,26 @@ export class VirtualFilesystemService {
   }
 
   async listDirectory(ownerId: string, directoryPath: string = this.workspaceRoot): Promise<VirtualFilesystemDirectoryListing> {
+    // Desktop mode: Use local filesystem instead of VFS
+    if (isDesktopMode() && isUsingLocalFS()) {
+      try {
+        const listing = await fsBridge.listDirectory(ownerId, directoryPath);
+        return {
+          path: listing.path,
+          nodes: listing.nodes.map(node => ({
+            type: node.type,
+            name: node.name,
+            path: node.path,
+            language: node.type === 'file' ? this.getLanguageFromPath(node.name) : undefined,
+            size: node.size,
+            lastModified: new Date().toISOString(),
+          })),
+        };
+      } catch (error: any) {
+        throw new Error(`Failed to list directory from local filesystem: ${error.message}`);
+      }
+    }
+
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedDirectoryPath = this.normalizePath(directoryPath);
     
@@ -514,6 +705,25 @@ export class VirtualFilesystemService {
       language?: string;
     } = {},
   ): Promise<{ files: VirtualFilesystemSearchResult[] }> {
+    // Desktop mode: Use local filesystem instead of VFS
+    if (isDesktopMode() && isUsingLocalFS()) {
+      try {
+        const results = await fsBridge.search(ownerId, query, { path: options.path, limit: options.limit });
+        return {
+          files: results.map(r => ({
+            path: r.path,
+            name: r.name,
+            language: r.language,
+            score: r.score,
+            snippet: r.snippet,
+            lastModified: r.lastModified,
+          })),
+        };
+      } catch (error: any) {
+        throw new Error(`Failed to search local filesystem: ${error.message}`);
+      }
+    }
+
     const workspace = await this.ensureWorkspace(ownerId);
     const normalizedQuery = query.trim().toLowerCase();
     if (!normalizedQuery) {
@@ -1057,6 +1267,22 @@ class GitBackedVFSProxy {
   }
 
   async deletePath(ownerId: string, targetPath: string): Promise<{ deletedCount: number }> {
+    // Desktop mode: Use local filesystem instead of VFS
+    if (isDesktopMode() && isUsingLocalFS()) {
+      try {
+        const result = await fsBridge.deletePath(ownerId, targetPath);
+        
+        // Emit filesystem change event for UI updates
+        const version = await fsBridge.getVersion(ownerId);
+        this.emitFileChange(ownerId, targetPath, 'delete', version);
+        this.emitSnapshotChange(ownerId, version);
+        
+        return result;
+      } catch (error: any) {
+        throw new Error(`Failed to delete from local filesystem: ${error.message}`);
+      }
+    }
+
     // Track deletion in git
     const gitVFS = this.vfs.getGitBackedVFS(ownerId);
     const listing = await this.vfs.listDirectory(ownerId, targetPath);

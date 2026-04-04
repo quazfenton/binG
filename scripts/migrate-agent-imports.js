@@ -32,7 +32,8 @@ let updated = 0;
 files.forEach(f => {
   let c = fs.readFileSync(f, 'utf8');
   const orig = c;
-  c = c.replace(/from\s+['"]@\/lib\/agent/g, "from '@bing/shared/agent");
+  // Preserve original quote style by capturing and reusing it
+  c = c.replace(/from\s+(['"])@\/lib\/agent/g, "from $1@bing/shared/agent");
   if (c !== orig) {
     fs.writeFileSync(f, c);
     console.log('  Updated:', path.relative('web', f));

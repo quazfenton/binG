@@ -22,7 +22,12 @@ class DesktopSecrets implements SecretsAdapter {
     try {
       const { invoke } = await import('@tauri-apps/api/core');
       return await invoke<string>('get_secret', { service: SERVICE_NAME, key });
-    } catch {
+    } catch (error) {
+      // Return null for missing secrets (expected behavior), log unexpected errors
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      if (!errorMsg.includes('not found') && !errorMsg.includes('NotFound')) {
+        console.warn('[DesktopSecrets] Failed to get secret:', errorMsg);
+      }
       return null;
     }
   }
