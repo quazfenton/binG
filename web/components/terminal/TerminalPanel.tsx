@@ -916,7 +916,7 @@ export default function TerminalPanel({
     onMinimize,
   ]);
 
-  const closeTerminal = useCallback((terminalId: string) => {
+  const closeTerminal = useCallback(async (terminalId: string) => {
     const terminal = terminalsRef.current.find(t => t.id === terminalId);
     if (terminal) {
       // CLEANUP HANDLERS FIRST

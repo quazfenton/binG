@@ -12,7 +12,7 @@
  * - Progress reporting
  */
 
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Execution:Graph');
 

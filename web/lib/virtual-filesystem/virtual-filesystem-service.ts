@@ -2,8 +2,8 @@
 export const runtime = 'nodejs';
 
 import { isDesktopMode } from '@bing/platform/env';
-import { fsBridge, isUsingLocalFS, initializeFSBridge } from '../../../../packages/shared/FS/fs-bridge';
-import type { FileSystemWatchEvent } from '../../../../packages/shared/FS/index';
+import { fsBridge, isUsingLocalFS, initializeFSBridge } from '@bing/shared/FS/fs-bridge';
+import type { FileSystemWatchEvent } from '@bing/shared/FS/index';
 import { emitFilesystemUpdated } from './sync/sync-events';
 
 import { promises as fs } from 'node:fs';

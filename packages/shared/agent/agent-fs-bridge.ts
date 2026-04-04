@@ -5,11 +5,11 @@
  * Ensures user's VFS files are available in sandbox and changes are synced back.
  */
 
-import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
-import { agentSessionManager } from '../session/agent/agent-session-manager';
-import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
-import { createLogger } from '../utils/logger';
-import { emitFilesystemUpdated } from '../virtual-filesystem/sync/sync-events';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
+import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
+import { createLogger } from '@/lib/utils/logger';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 
 const logger = createLogger('Agent:FSBridge');
 

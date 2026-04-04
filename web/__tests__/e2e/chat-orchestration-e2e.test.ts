@@ -101,7 +101,7 @@ describe('Chat Route — Orchestration Flow', () => {
       const { readFileSync } = await import('fs');
       const path = await import('path');
       const content = readFileSync(
-        path.join(__dirname, '../../../../packages/shared/agent/orchestration-mode-handler.ts'),
+        path.join(__dirname, '../../@bing/shared/agent/orchestration-mode-handler.ts'),
         'utf-8',
       );
 
@@ -113,7 +113,7 @@ describe('Chat Route — Orchestration Flow', () => {
       const { readFileSync } = await import('fs');
       const path = await import('path');
       const content = readFileSync(
-        path.join(__dirname, '../../../../packages/shared/agent/orchestration-mode-handler.ts'),
+        path.join(__dirname, '../../@bing/shared/agent/orchestration-mode-handler.ts'),
         'utf-8',
       );
 
@@ -141,7 +141,7 @@ describe('Chat Route — Orchestration Flow', () => {
       const { readFileSync } = await import('fs');
       const path = await import('path');
       const content = readFileSync(
-        path.join(__dirname, '../../../../packages/shared/agent/orchestration-mode-handler.ts'),
+        path.join(__dirname, '../../@bing/shared/agent/orchestration-mode-handler.ts'),
         'utf-8',
       );
 
@@ -221,7 +221,7 @@ describe('Chat Route — Orchestration Flow', () => {
       const { readFileSync } = await import('fs');
       const path = await import('path');
       const content = readFileSync(
-        path.join(__dirname, '../../../../packages/shared/agent/v2-executor.ts'),
+        path.join(__dirname, '../../@bing/shared/agent/v2-executor.ts'),
         'utf-8',
       );
 

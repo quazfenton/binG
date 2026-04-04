@@ -32,7 +32,7 @@
  * @see lib/agent/stateful-agent.ts - Production agent implementation
  */
 
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Agent:SimulatedOrchestration');
 

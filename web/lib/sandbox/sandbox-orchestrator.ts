@@ -5,12 +5,12 @@
  * DOES NOT replace existing components - orchestrates them.
  */
 
-import { ESCALATION_PROFILES } from '../../packages/shared/agent/timeout-escalation';
+import { ESCALATION_PROFILES } from '@bing/shared/agent/timeout-escalation';
 import { createLogger } from '../utils/logger';
 import { providerRouter, type TaskContext } from './provider-router';
 import { sessionManager } from '../session/session-manager';
 import { resourceMonitor, type ResourceMetrics } from '../management/resource-monitor';
-import { taskRouter } from '../../packages/shared/agent/task-router';
+import { taskRouter } from '@bing/shared/agent/task-router';
 import {
   assessRisk,
   type ExecutionPolicy,

@@ -11,7 +11,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { executionGraphEngine, type ExecutionGraph, type ExecutionNode } from '../execution-graph';
+import { executionGraphEngine, type ExecutionGraph, type ExecutionNode } from '@bing/shared/agent/execution-graph';
 
 describe('Execution Graph — DAG Creation', () => {
   it('creates a graph with unique ID', () => {

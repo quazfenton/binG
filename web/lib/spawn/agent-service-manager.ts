@@ -16,7 +16,7 @@
  * 
  * @example
  * ```typescript
- * import { AgentServiceManager } from '../../packages/shared/agent/agent-service-manager';
+ * import { AgentServiceManager } from '@bing/shared/agent/agent-service-manager';
  * 
  * const manager = new AgentServiceManager();
  * 

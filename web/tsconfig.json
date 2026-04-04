@@ -29,16 +29,16 @@
         "../packages/platform/src/*"
       ],
       "@bing/shared": [
-        "../packages/shared/src/index.ts"
+        "../packages/shared/index.ts"
       ],
       "@bing/shared/*": [
-        "../packages/shared/src/*"
+        "../packages/shared/*"
       ],
       "@bing/shared/agent": [
-        "../../packages/shared/agent/index.ts"
+        "../packages/shared/agent/index.ts"
       ],
       "@bing/shared/agent/*": [
-        "../../packages/shared/agent/*"
+        "../packages/shared/agent/*"
       ]
     },
     "plugins": [
