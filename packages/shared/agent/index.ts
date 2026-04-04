@@ -92,7 +92,7 @@ export {
   runStatefulAgent,
   type StatefulAgentOptions,
   type StatefulAgentResult,
-} from '@/lib/orchestra/stateful-agent';
+} from '../../../web/lib/orchestra/stateful-agent/agents/stateful-agent';
 
 // Execution Graph - DAG-based task execution with parallel support
 export {

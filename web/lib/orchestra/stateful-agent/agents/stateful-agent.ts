@@ -3,15 +3,15 @@ import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 import type { ProjectServices } from '@/lib/project-context';
 import { ToolExecutor } from '../tools/tool-executor';
 import { reflectionEngine } from '@/lib/orchestra/reflection-engine';
-import { executionGraphEngine } from '@bing/shared/agent/execution-graph';
+import { executionGraphEngine } from '../../packages/shared/agent/execution-graph';
 import { generateObject } from 'ai';
 import { z } from 'zod';
 import { createLogger } from '@/lib/utils/logger';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
 import { detectTemplate, templateToTaskGraph, type TemplateType } from './template-flows';
-import { createLoopDetector, type LoopDetectionResult } from '@bing/shared/agent/loop-detection';
-import { createCapabilityChain, type CapabilityChain } from '@bing/shared/agent/capability-chain';
-import { createBootstrappedAgency, type BootstrappedAgency } from '@bing/shared/agent/bootstrapped-agency';
+import { createLoopDetector, type LoopDetectionResult } from '../../packages/shared/agent/loop-detection';
+import { createCapabilityChain, type CapabilityChain } from '../../packages/shared/agent/capability-chain';
+import { createBootstrappedAgency, type BootstrappedAgency } from '../../packages/shared/agent/bootstrapped-agency';
 
 const log = createLogger('StatefulAgent');
 

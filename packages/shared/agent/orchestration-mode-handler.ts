@@ -272,35 +272,54 @@ export async function executeWithOrchestrationMode(
         // Submit work to the agent and wait for completion
         const workId = await kernel.submitWork(agentId, { type: 'task', content: request.task }, 'normal');
 
-        // Poll for completion with proper cleanup
+        // FIX (Bug 4): Enforce timeout with proper interval cleanup and agent cancellation
         let agentStatus = kernel.getAgentStatus(agentId);
-        const timeoutMs = Math.min(60000, Number(request.timeoutMs || 60000));
-        const pollInterval = 1000;
+        const timeoutMs = Math.min(120_000, Number(request.timeoutMs || 60_000));
+        const pollInterval = 1_000;
         const maxAttempts = Math.ceil(timeoutMs / pollInterval);
         let attempts = 0;
+        let timedOut = false;
 
         await new Promise<void>((resolve) => {
           const interval = setInterval(() => {
             attempts++;
-            agentStatus = kernel.getAgentStatus(agentId);
-            if (agentStatus?.status === 'completed' || agentStatus?.status === 'failed' || attempts >= maxAttempts) {
+            try {
+              agentStatus = kernel.getAgentStatus(agentId);
+            } catch {
+              // Agent may have been removed
               clearInterval(interval);
+              resolve();
+              return;
+            }
+
+            if (agentStatus?.status === 'completed' || agentStatus?.status === 'failed') {
+              clearInterval(interval);
+              resolve();
+              return;
+            }
+
+            if (attempts >= maxAttempts) {
+              timedOut = true;
+              clearInterval(interval);
+              // Attempt to cancel the running agent
+              try { kernel.cancelAgent(agentId); } catch { /* best-effort */ }
               resolve();
             }
           }, pollInterval);
         });
 
         result = {
-          success: agentStatus?.status === 'completed',
-          response: agentStatus?.status === 'completed'
+          success: !timedOut && agentStatus?.status === 'completed',
+          response: !timedOut && agentStatus?.status === 'completed'
             ? `Task completed by agent kernel (agent: ${agentId}, work: ${workId})`
-            : `Task still running or timed out (agent: ${agentId}, status: ${agentStatus?.status})`,
+            : `Task ${timedOut ? 'timed out' : 'still running'} (agent: ${agentId}, status: ${agentStatus?.status})`,
           metadata: {
             agentType: 'agent-kernel',
             agentId,
             workId,
             agentStatus: agentStatus?.status,
             iterations: agentStatus?.iterations,
+            timedOut,
             duration: Date.now() - startTime,
           },
         };
@@ -372,8 +391,33 @@ export async function executeWithOrchestrationMode(
 
           // Use user-selected model for planning
           const graphModel = request.model || process.env.AGENT_MODEL || process.env.DEFAULT_MODEL || 'gpt-4o-mini';
-          // Determine provider from model prefix (e.g. "anthropic/claude-3-5-sonnet" → "anthropic")
-          const graphProvider = graphModel.includes('/') ? graphModel.split('/')[0] : 'openai';
+
+          // FIX (Bug 5): Resolve provider from model using a known prefix map
+          // instead of defaulting to 'openai' which incorrectly maps models like
+          // "claude-3-5-sonnet" (no slash) to the wrong provider.
+          const PROVIDER_PREFIXES: Record<string, string> = {
+            'claude': 'anthropic',
+            'gpt-4': 'openai',
+            'gpt-3.5': 'openai',
+            'o1': 'openai',
+            'o3': 'openai',
+            'gemini': 'google',
+            'llama': 'ollama',
+            'mistral': 'mistral',
+            'deepseek': 'deepseek',
+            'grok': 'xai',
+          };
+
+          let graphProvider: string;
+          if (graphModel.includes('/')) {
+            // e.g. "anthropic/claude-3-5-sonnet" → "anthropic"
+            graphProvider = graphModel.split('/')[0];
+          } else {
+            // Try to match known model prefixes
+            graphProvider = Object.entries(PROVIDER_PREFIXES).find(([prefix]) =>
+              graphModel.startsWith(prefix),
+            )?.[1] ?? 'openai'; // fallback to openai only as last resort
+          }
 
           // Plan phase
           executionGraphEngine.markRunning(graph, planNode.id);
@@ -407,25 +451,30 @@ export async function executeWithOrchestrationMode(
               completed: progress.completed,
               status: progress.status,
               model: graphModel,
+              provider: graphProvider,
               duration: Date.now() - startTime,
             },
           };
-        } catch (llmError: any) {
+        } catch (llmError: unknown) {
+          const errorMessage = llmError instanceof Error ? llmError.message : String(llmError);
           // Mark all running nodes as failed to avoid inconsistent state
-          executionGraphEngine.markFailed(graph, planNode.id, llmError.message);
-          executionGraphEngine.markFailed(graph, execNode.id, 'Skipped due to plan failure');
-          executionGraphEngine.markFailed(graph, verifyNode.id, 'Skipped due to plan failure');
+          try { executionGraphEngine.markFailed(graph, planNode.id, errorMessage); } catch { /* already failed */ }
+          try { executionGraphEngine.markFailed(graph, execNode.id, 'Skipped due to plan failure'); } catch { /* already failed */ }
+          try { executionGraphEngine.markFailed(graph, verifyNode.id, 'Skipped due to plan failure'); } catch { /* already failed */ }
 
+          // FIX: Graceful degradation — return the error info instead of a bare failure
           result = {
             success: false,
-            error: `Execution graph plan failed: ${llmError.message}`,
+            error: `Execution graph plan failed: ${errorMessage}`,
+            response: `Planning failed. The LLM provider (${graphProvider}) may be unavailable or misconfigured.`,
             metadata: {
               agentType: 'execution-graph',
               graphId: graph.id,
               nodeCount: graph.nodes.size,
               completed: 0,
               status: 'failed',
-              model: request.model,
+              model: graphModel,
+              provider: graphProvider,
               duration: Date.now() - startTime,
             },
           };

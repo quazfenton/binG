@@ -435,7 +435,9 @@ export async function GET(request: NextRequest) {
   if (url.searchParams.get('current') === '1') {
     // Resolve user identity from session_id cookie, JWT, or anonymous session
     const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
-    const userId = authResult.success ? authResult.userId : authResult.anonymousId;
+    const userId = authResult.success && authResult.userId 
+      ? authResult.userId 
+      : request.cookies.get('anon-session-id')?.value || undefined;
 
     if (!userId) {
       return NextResponse.json(
@@ -577,7 +579,9 @@ export async function POST(request: NextRequest) {
   try {
     // Resolve user identity from session_id cookie, JWT, or anonymous session
     const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
-    const userId = authResult.success ? authResult.userId : authResult.anonymousId;
+    const userId = authResult.success && authResult.userId 
+      ? authResult.userId 
+      : request.cookies.get('anon-session-id')?.value || undefined;
 
     if (!userId) {
       return NextResponse.json(
@@ -737,7 +741,9 @@ export async function DELETE(request: NextRequest) {
   try {
     // Resolve user identity from session_id cookie, JWT, or anonymous session
     const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
-    const userId = authResult.success ? authResult.userId : authResult.anonymousId;
+    const userId = authResult.success && authResult.userId 
+      ? authResult.userId 
+      : request.cookies.get('anon-session-id')?.value || undefined;
 
     if (!userId) {
       return NextResponse.json(
