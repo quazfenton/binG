@@ -17,14 +17,14 @@ import { createNDJSONParser } from '@/lib/utils/ndjson-parser';
 import type { LLMMessage, StreamingResponse } from "@/lib/chat/llm-providers";
 import { checkRateLimit } from '@/lib/middleware/rate-limiter';
 import { createFilesystemTools, createAgentLoop } from '@/lib/orchestra/mastra';
-import { executeV2Task, executeV2TaskStreaming } from '../../packages/shared/agent/v2-executor';
+import { executeV2Task, executeV2TaskStreaming } from '@bing/shared/agent/v2-executor';
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
-import { workforceManager } from '../../packages/shared/agent/workforce-manager';
+import { workforceManager } from '@bing/shared/agent/workforce-manager';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
-import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '../../packages/shared/agent/orchestration-mode-handler';
+import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/orchestration-mode-handler';
 import {
   sanitizeAssistantDisplayContent,
   parseFilesystemResponse,
@@ -46,7 +46,7 @@ import {
   chatMessageSchema,
   chatRequestSchema,
 } from './chat-helpers';
-import { applyPromptModifiers, getPreset, PROMPT_PRESETS, generateDebugHeaderValue, emitTelemetryEvent, type PromptParameters } from '../../packages/shared/agent/prompt-parameters';
+import { applyPromptModifiers, getPreset, PROMPT_PRESETS, generateDebugHeaderValue, emitTelemetryEvent, type PromptParameters } from '@bing/shared/agent/prompt-parameters';
 
 // Force Node.js runtime for Daytona SDK compatibility
 export const runtime = 'nodejs';
@@ -83,7 +83,8 @@ const MAX_PENDING_EVENTS = 64;
 const SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED =
   process.env.SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED !== 'false';
 
-// FIX 2: Pre-compiled RegExp for isCodeOrAgenticRequest (module-level, not per request)
+// FIX 2: Pre-compiled RegExp for legacy fallback detection (used when task classifier is unavailable)
+// These patterns are now SECONDARY to the multi-factor task classifier
 const STRONG_CODE_PATTERN =
   /\b(refactor|bug\s*fix|stack\s*trace|typescript|javascript|python|react|next\.js|vue\.js|angular|node\.?js|endpoint|database|schema|compile|lint|migrations?|docker|kubernetes|k8s|redis|mongodb|postgresql|mysql|sqlite|express|fastapi|flask|django|spring|rails|laravel|symfony|golang|rust|java|c\+\+|cpp|c#|dotnet|swift|kotlin|flutter|react\s*native|electron|code|build|implement|create\s+app|create\s+project|scaffold|generate\s+app)\b/i
 
@@ -95,6 +96,85 @@ const WEAK_CODE_KEYWORDS = [
 const WEAK_CODE_PATTERNS = WEAK_CODE_KEYWORDS.map(
   kw => new RegExp(`\\b${kw}\\b`, 'i'),
 )
+
+// Task classifier cache — initialized lazily to avoid blocking module load
+let _taskClassifierCache: ReturnType<typeof createTaskClassifierShared> | null = null;
+
+function getTaskClassifier() {
+  if (!_taskClassifierCache) {
+    _taskClassifierCache = createTaskClassifierShared({
+      simpleThreshold: parseFloat(process.env.TASK_CLASSIFIER_SIMPLE_THRESHOLD || '0.3'),
+      complexThreshold: parseFloat(process.env.TASK_CLASSIFIER_COMPLEX_THRESHOLD || '0.7'),
+      keywordWeight: 0.4,
+      semanticWeight: parseFloat(process.env.TASK_CLASSIFIER_SEMANTIC_WEIGHT || '0.3'),
+      contextWeight: parseFloat(process.env.TASK_CLASSIFIER_CONTEXT_WEIGHT || '0.2'),
+      historicalWeight: parseFloat(process.env.TASK_CLASSIFIER_HISTORY_WEIGHT || '0.1'),
+      enableSemanticAnalysis: process.env.TASK_CLASSIFIER_ENABLE_SEMANTIC !== 'false',
+      enableHistoricalLearning: process.env.TASK_CLASSIFIER_ENABLE_HISTORY !== 'false',
+      enableContextAwareness: process.env.TASK_CLASSIFIER_ENABLE_CONTEXT !== 'false',
+    });
+  }
+  return _taskClassifierCache;
+}
+
+/**
+ * Classify request using multi-factor task classifier.
+ * Falls back to regex-based detection if classifier fails.
+ */
+async function classifyRequest(
+  messages: LLMMessage[],
+  attachedFiles: ChatFilesystemFileContext[],
+): Promise<{ isCodeRequest: boolean; complexity: string; confidence: number; recommendedMode: string }> {
+  // Attached files always indicate a code/agentic request
+  if (attachedFiles.length > 0) {
+    return { isCodeRequest: true, complexity: 'moderate', confidence: 0.9, recommendedMode: 'v2-native' };
+  }
+
+  const lastUser = [...messages].reverse().find(m => m.role === 'user');
+  const content = typeof lastUser?.content === 'string' ? lastUser.content : JSON.stringify(lastUser?.content || '');
+
+  try {
+    const classifier = getTaskClassifier();
+    const result = await classifier.classify(content, {
+      projectSize: process.env.PROJECT_SIZE as any,
+    });
+
+    // Code/agentic request if classifier recommends v2-native or stateful-agent,
+    // or if complexity is moderate/complex
+    const isCodeRequest = result.recommendedMode === 'v2-native' ||
+                          result.recommendedMode === 'stateful-agent' ||
+                          result.complexity === 'moderate' ||
+                          result.complexity === 'complex';
+
+    return {
+      isCodeRequest,
+      complexity: result.complexity,
+      confidence: result.confidence,
+      recommendedMode: result.recommendedMode,
+    };
+  } catch (error: any) {
+    // FALLBACK: Use legacy regex detection
+    chatLogger.debug('Task classifier failed, using regex fallback', { error: error.message });
+
+    let isCodeRequest = false;
+    if (STRONG_CODE_PATTERN.test(content)) {
+      isCodeRequest = true;
+    } else {
+      let weakMatches = 0;
+      for (const re of WEAK_CODE_PATTERNS) {
+        if (re.test(content) && ++weakMatches >= 2) {
+          isCodeRequest = true;
+          break;
+        }
+      }
+    }
+
+    return { isCodeRequest, complexity: 'unknown', confidence: 0, recommendedMode: 'v1-api' };
+  }
+}
+
+// Import task classifier from shared package
+import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared/agent/task-classifier';
 
 // FIX 3: Pre-compiled RegExp for shouldUseContextPack
 const CONTEXT_PACK_PATTERN = new RegExp(
@@ -344,6 +424,16 @@ export async function POST(request: NextRequest) {
       m => m === model || m.startsWith(`${model}:`)
     ) || model;
     const attachedFilesystemFiles = normalizeFilesystemContext(filesystemContext?.attachedFiles);
+
+    // Extract @mentions from the last user message to prioritize files
+    const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
+    const lastUserText = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content : '';
+    const atMentionPattern = /@([\w\-/.]+\.(?:tsx?|jsx?|py|rs|go|java|css|scss|json|md|yaml|yml|toml|sh|bash|html|sql|graphql|proto|tf|hcl))/gi;
+    const explicitFilesFromMentions: string[] = [];
+    let match;
+    while ((match = atMentionPattern.exec(lastUserText)) !== null) {
+      explicitFilesFromMentions.push(match[1]);
+    }
     
     // Resolve the session folder name - use sequential naming (001, 002) instead of composite IDs
     let resolvedConversationId: string;
@@ -371,7 +461,17 @@ export async function POST(request: NextRequest) {
       // No conversationId provided - generate new sequential session name
       resolvedConversationId = await generateSessionName();
     }
-    
+
+    // O(1) Session File Tracking: Track file references incrementally as messages flow
+    // This avoids re-scanning messages with regex on every context generation
+    try {
+      const { trackSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
+      await trackSessionFiles(resolvedConversationId, messages);
+    } catch (error: any) {
+      // Don't fail the request if tracking fails
+      chatLogger.debug('Session file tracking failed (non-critical)', { error: error.message });
+    }
+
     const defaultScopePath = `project/sessions/${sanitizePathSegment(resolvedConversationId)}`;
     // Sanitize scopePath to ensure folder names are not corrupted with ownerId prefix
     // e.g., "project/sessions/anon:1774710784761_6TB03h8Ow:002" -> "project/sessions/002"
@@ -1181,7 +1281,13 @@ export async function POST(request: NextRequest) {
       // When Vercel AI SDK handles tool calling natively, skip regex intent parsing
       nativeToolCalling: VERCEL_AI_PROVIDERS.has(provider) && !!authenticatedUserId,
       // Context pack: bundle workspace files into LLM-readable format
-      contextPack,
+      contextPack: contextPack ? {
+        ...contextPack,
+        // Pass @mentioned files as include patterns for highest priority
+        includePatterns: explicitFilesFromMentions.length > 0
+          ? [...(contextPack.includePatterns || []), ...explicitFilesFromMentions]
+          : contextPack.includePatterns,
+      } : undefined,
       // Auto-attach relevant files as agent discovers areas to edit
       autoAttachFiles,
     };

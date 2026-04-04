@@ -581,4 +581,4 @@ export const historyTool = tool({
     const history = await manager.getCommitHistory(session_id, limit);
     return { success: true, history };
   },
-} as any);
+} as any);

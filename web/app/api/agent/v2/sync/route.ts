@@ -8,7 +8,7 @@ import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
-import { agentFSBridge } from '../../packages/shared/agent/agent-fs-bridge';
+import { agentFSBridge } from '@bing/shared/agent/agent-fs-bridge';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:AgentV2:Sync');

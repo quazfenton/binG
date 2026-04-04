@@ -12,7 +12,7 @@
  * - Integration with task router for execution
  */
 
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 import { addTask, loadState, updateTask, type WorkforceTask } from './workforce-state';
 import { taskRouter } from './task-router';
 import { executionGraphEngine } from './execution-graph';

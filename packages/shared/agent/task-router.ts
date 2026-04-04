@@ -20,11 +20,11 @@
  * - Cross-agent communication/specialization
  */
 
-import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
+import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 
-import { createLogger } from '../utils/logger';
-import type { ExecutionPolicy } from '../sandbox/types';
-import { determineExecutionPolicy } from '../sandbox/types';
+import { createLogger } from '@/lib/utils/logger';
+import type { ExecutionPolicy } from '@/lib/sandbox/types';
+import { determineExecutionPolicy } from '@/lib/sandbox/types';
 import { scheduleTask } from '@/lib/events/trigger-integration';
 import { emitEvent } from '@/lib/events/bus';
 import { EventTypes } from '@/lib/events/schema';
@@ -776,9 +776,9 @@ class TaskRouter {
       };
     }
 
-    const { OpencodeV2Provider } = await import('../sandbox/spawn/opencode-cli');
+    const { OpencodeV2Provider } = await import('@/lib/sandbox/spawn/opencode-cli');
     const { agentSessionManager } = await import('@/lib/session/agent/agent-session-manager');
-    const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('../mcp');
+    const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('@/lib/mcp');
 
     const session = await agentSessionManager.getOrCreateSession(
       request.userId,

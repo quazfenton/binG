@@ -161,3 +161,46 @@ pnpm test
 4. Migrate `agent.py` standalone script into the monorepo with proper Python package structure
 5. Add property-based tests (fast-check) for response sanitization functions
 6. Implement graceful shutdown signal handling for WebSocket server (SIGTERM/SIGINT)
+
+## [Unreleased] — Smart Context & @mention Autocomplete System
+
+### 🧠 Smart Context Pack System
+
+- **Intelligent file ranking** — Replaced blanket context-pack with scored file selection: explicit @mentions (1000), exact filename match (500), extension match (200), keyword match (100×N), import relationships (75), same-directory (50), session history (30), current project boost (40)
+- **O(1) session file tracking** — New `session-file-tracker.ts` incrementally collects file references as messages arrive; eliminates O(n·m) regex re-scanning on every context generation (~100-500x improvement)
+- **Auto-continue mechanism** — Detects LLM file read requests (`<request_file>`, "read X.ts", tool calls) and automatically generates follow-up context packs with requested files attached
+- **Import map optimization** — Lazy scanning limited to 30 code files max; skips external packages (`react`, `lodash`, `@/` aliases); caches file contents to avoid reading same file multiple times
+- **Project awareness** — `currentProjectPath` option prioritizes files in the active project, preventing LLM from editing wrong project when user has multiple sessions
+- **Circular symlink protection** — `buildTreeString` now tracks visited directories to prevent infinite recursion
+
+### 🎯 @mention Autocomplete (Client-Side)
+
+- **`useFileMentionAutocomplete` hook** — Detects `@` pattern in textarea, fetches VFS file list via snapshot API, provides ranked suggestions with keyboard navigation (↑↓ Enter/Tab/Esc)
+- **`FileMentionMenu` component** — Dropdown UI with file/folder icons, loading state, selected item scroll-into-view, keyboard shortcut hints
+- **`FileMentionAutocompleteIntegration`** — Wraps existing Textarea in InteractionPanel while preserving all original behavior: voice input, file attachment, pending input queue, shift+enter newline, mobile scroll-into-view
+- **Backend @mention extraction** — Chat route extracts `@filename.ext` patterns from last user message and passes as `includePatterns` for max-priority file ranking
+
+### 🐛 Bug Fixes
+
+- **`scoreFile()` early return** — Fixed exact filename match returning before accumulating extension/keyword/import signals; now accumulates all signals for accurate scoring
+- **Session cleanup memory leak** — `cleanupExpiredSessions()` now auto-starts on module import (5-minute interval with `.unref()`)
+- **XML injection** — Added `escapeXml()` for file paths and reason strings in XML-format context bundles
+- **Null safety** — Added comprehensive null/length checks for `llmRequest.messages` access in both streaming and non-streaming paths
+- **Import map filtering** — Skips bare imports (`react`, `lodash`), only tracks relative imports that reference local files; added path length validation (max 200 chars)
+- **File request detection false positives** — Added word boundary checks, length validation (2-500 chars), space rejection for file patterns
+- **VFS type mismatch** — Fixed `node.isDirectory` → `node.type === 'directory'` across `buildTreeString` and `collectAllFiles`; added missing `VirtualFile` properties (`language`, `createdAt`)
+
+### 📦 New Files
+
+- `web/lib/virtual-filesystem/session-file-tracker.ts` — O(1) incremental session file tracking with LRU eviction
+- `web/hooks/use-file-mention-autocomplete.ts` — Client-side @mention detection and autocomplete hook
+- `web/components/file-mention-menu.tsx` — Autocomplete dropdown UI component
+- `web/lib/virtual-filesystem/__tests__/smart-context.test.ts` — Unit tests for session tracker, file detection, @mention extraction
+
+### 📊 Performance
+
+- Session file lookup: O(n·m) regex scan → O(1) Map lookup
+- File content reads: 3× per file → 1× per file (caching)
+- Import map: All files → max 30 code files
+- Auto-cleanup: Manual → every 5 minutes with `.unref()`
+

@@ -10,7 +10,7 @@
  * instead of a single hard cutoff.
  */
 
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Agent:TimeoutEscalation');
 

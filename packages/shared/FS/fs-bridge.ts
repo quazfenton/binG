@@ -6,11 +6,27 @@
  * seamless fallback for agents that expect VFS operations.
  */
 
-import { isDesktopMode, getPlatform, getDefaultWorkspaceRoot } from '../platform/env';
+import { isDesktopMode, getPlatform, getDefaultWorkspaceRoot } from '@bing/platform/env';
 import { workspaceManager } from './workspace-manager';
 import { createFileSystem, type IFileSystem, type FSFile, type FSDirectoryListing, type FSSearchResult, type FSStats, type FileWatcherCallback, type FileSystemWatchEvent } from './index';
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 import { randomUUID } from 'crypto';
+
+// Import Tauri event listening for Rust file change events
+let tauriListen: typeof import('@tauri-apps/api/event').listen | null = null;
+let tauriUnlisten: import('@tauri-apps/api/event').UnlistenFn | null = null;
+
+try {
+  if (typeof window !== 'undefined') {
+    import('@tauri-apps/api/event').then((eventModule) => {
+      tauriListen = eventModule.listen;
+    }).catch(() => {
+      tauriListen = null;
+    });
+  }
+} catch {
+  tauriListen = null;
+}
 
 const log = createLogger('FSBridge');
 
@@ -23,6 +39,12 @@ export interface FSBridgeConfig {
   workspaceRoot?: string;
   boundaryEnabled?: boolean;
   sessionId?: string;
+}
+
+export interface RustFileChangeEvent {
+  path: string;
+  change_type: string; // "create" | "update" | "delete"
+  timestamp: string;
 }
 
 export interface FSBridgeStats {
@@ -44,6 +66,7 @@ class FSBridge {
   private version: number = 0;
   private watchCallback: FileWatcherCallback | null = null;
   private externalWatchHandlers: Array<(event: FileSystemWatchEvent) => void> = [];
+  private rustFileChangeUnlisten: import('@tauri-apps/api/event').UnlistenFn | null = null;
 
   /**
    * Initialize the FS bridge
@@ -74,9 +97,12 @@ class FSBridge {
         
         // Start file watcher for auto-refresh when external changes occur
         await this.startFileWatcher();
-        
-        log.info('FS Bridge initialized with workspace manager', { 
-          workspaceId: workspace.id 
+
+        // Start listening for file change events from Rust commands
+        await this.startRustFileChangeListener();
+
+        log.info('FS Bridge initialized with workspace manager', {
+          workspaceId: workspace.id
         });
         this.initializing = false;
       } catch (err) {
@@ -95,7 +121,10 @@ class FSBridge {
         
         // Start file watcher for auto-refresh when external changes occur
         await this.startFileWatcher();
-        
+
+        // Start listening for file change events from Rust commands
+        await this.startRustFileChangeListener();
+
         this.initializing = false;
       }
     } else {
@@ -374,15 +403,66 @@ class FSBridge {
   }
 
   /**
+   * Start listening for file change events emitted by Rust commands
+   * When Rust write_file is called, it emits a 'file-change' event
+   * This allows the TypeScript VFS layer to create shadow commits
+   */
+  private async startRustFileChangeListener(): Promise<void> {
+    if (!tauriListen) {
+      log.debug('Tauri event listening not available, skipping Rust file change listener');
+      return;
+    }
+
+    try {
+      this.rustFileChangeUnlisten = await tauriListen<RustFileChangeEvent>('file-change', (event) => {
+        log.info('Rust file change event received', {
+          path: event.payload.path,
+          changeType: event.payload.change_type,
+          timestamp: event.payload.timestamp,
+        });
+
+        // Increment version
+        this.version++;
+
+        // Convert to FileSystemWatchEvent and notify handlers
+        const watchEvent: FileSystemWatchEvent = {
+          type: event.payload.change_type as FileSystemWatchEvent['type'],
+          paths: [event.payload.path],
+          timestamp: new Date(event.payload.timestamp).getTime(),
+        };
+
+        // Notify external handlers (VFS service will register for UI updates)
+        for (const handler of this.externalWatchHandlers) {
+          try {
+            handler(watchEvent);
+          } catch (err) {
+            log.error('Rust file change handler error:', err);
+          }
+        }
+      });
+
+      log.info('Rust file change listener started');
+    } catch (err) {
+      log.warn('Failed to start Rust file change listener:', err);
+    }
+  }
+
+  /**
    * Cleanup resources
    */
   async destroy(): Promise<void> {
+    // Stop Rust file change listener
+    if (this.rustFileChangeUnlisten) {
+      this.rustFileChangeUnlisten();
+      this.rustFileChangeUnlisten = null;
+    }
+
     // Stop watching first
     if (this.fs && typeof this.fs.stopWatching === 'function') {
       await this.fs.stopWatching();
     }
     this.watchCallback = null;
-    
+
     if (this.fs) {
       await this.fs.destroy();
       this.fs = null;

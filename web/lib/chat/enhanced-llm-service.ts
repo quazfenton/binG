@@ -178,21 +178,44 @@ export class EnhancedLLMService {
       chatLogger.debug('Using user-provided API key', { requestId, provider: actualProvider });
     }
 
-    // Generate context pack if requested — bundle workspace files into LLM-readable format
+    // Generate smart context pack if requested — intelligently select and rank files
     let contextPackBundle = '';
     if (contextPack && userId && conversationId) {
       try {
-        const { contextPackService } = await import('@/lib/virtual-filesystem/context-pack-service');
+        const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
         const rootPath = conversationId.split(':').pop() || '/';
-        const pack = await contextPackService.generateContextPack(userId, rootPath, contextPack);
+        
+        // O(1) Session File Lookup: Use incremental tracker instead of re-scanning messages
+        let recentFiles: string[] = [];
+        try {
+          const { getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
+          recentFiles = getSessionFiles(conversationId, 10); // O(1) lookup
+        } catch (error: any) {
+          chatLogger.debug('Session file lookup failed', { error: error.message });
+        }
+        
+        const pack = await generateSmartContext({
+          userId,
+          prompt: (llmRequest.messages && llmRequest.messages.length > 0 && typeof llmRequest.messages[llmRequest.messages.length - 1]?.content === 'string') 
+            ? llmRequest.messages[llmRequest.messages.length - 1].content 
+            : '',
+          conversationId,
+          explicitFiles: contextPack.includePatterns || [],
+          recentSessionFiles: recentFiles,
+          maxTotalSize: contextPack.maxTotalSize || 500000,
+          format: contextPack.format || 'markdown',
+          maxLinesPerFile: contextPack.maxLinesPerFile || 500,
+        });
+        
         contextPackBundle = pack.bundle;
-        chatLogger.debug('Context pack generated', { requestId }, {
-          fileCount: pack.fileCount,
-          totalSize: pack.totalSize,
-          estimatedTokens: pack.estimatedTokens,
+        chatLogger.debug('Smart context pack generated', { requestId }, {
+          filesIncluded: pack.filesIncluded,
+          totalFilesInVfs: pack.totalFilesInVfs,
+          vfsIsEmpty: pack.vfsIsEmpty,
+          warnings: pack.warnings.length,
         });
       } catch (error: any) {
-        chatLogger.warn('Context pack generation failed, continuing without it', { requestId }, {
+        chatLogger.warn('Smart context pack generation failed, continuing without it', { requestId }, {
           error: error.message,
         });
       }
@@ -463,20 +486,44 @@ export class EnhancedLLMService {
       chatLogger.debug('Using user-provided API key (streaming)', { requestId, provider: primaryProvider });
     }
 
-    // Generate context pack if requested — bundle workspace files
+    // Generate smart context pack if requested — intelligently select and rank files
     let contextPackBundle = '';
     if (contextPack && request.userId && request.conversationId) {
       try {
-        const { contextPackService } = await import('@/lib/virtual-filesystem/context-pack-service');
+        const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
         const rootPath = request.conversationId.split(':').pop() || '/';
-        const pack = await contextPackService.generateContextPack(request.userId, rootPath, contextPack);
+        
+        // O(1) Session File Lookup: Use incremental tracker instead of re-scanning messages
+        let recentFiles: string[] = [];
+        try {
+          const { getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
+          recentFiles = getSessionFiles(request.conversationId || '', 10); // O(1) lookup
+        } catch (error: any) {
+          chatLogger.debug('Session file lookup failed (streaming)', { error: error.message });
+        }
+        
+        const pack = await generateSmartContext({
+          userId: request.userId,
+          prompt: (llmRequest.messages && llmRequest.messages.length > 0 && typeof llmRequest.messages[llmRequest.messages.length - 1]?.content === 'string') 
+            ? llmRequest.messages[llmRequest.messages.length - 1].content 
+            : '',
+          conversationId: request.conversationId,
+          explicitFiles: contextPack.includePatterns || [],
+          recentSessionFiles: recentFiles,
+          maxTotalSize: contextPack.maxTotalSize || 500000,
+          format: contextPack.format || 'markdown',
+          maxLinesPerFile: contextPack.maxLinesPerFile || 500,
+        });
+        
         contextPackBundle = pack.bundle;
-        chatLogger.debug('Context pack generated (streaming)', { requestId }, {
-          fileCount: pack.fileCount,
-          totalSize: pack.totalSize,
+        chatLogger.debug('Smart context pack generated (streaming)', { requestId }, {
+          filesIncluded: pack.filesIncluded,
+          totalFilesInVfs: pack.totalFilesInVfs,
+          vfsIsEmpty: pack.vfsIsEmpty,
+          warnings: pack.warnings.length,
         });
       } catch (error: any) {
-        chatLogger.warn('Context pack generation failed (streaming)', { requestId }, {
+        chatLogger.warn('Smart context pack generation failed (streaming)', { requestId }, {
           error: error.message,
         });
       }
@@ -570,7 +617,9 @@ export class EnhancedLLMService {
           }
         }
 
-        yield* streamWithVercelAI({
+        // Wrap with auto-continue support
+        const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
+        const baseStream = streamWithVercelAI({
           provider: vercelProvider,
           model: llmRequest.model || 'default',
           messages: processedMessages,
@@ -584,6 +633,12 @@ export class EnhancedLLMService {
           smoothStreaming: true,
         });
 
+        yield* streamWithAutoContinue(baseStream, {
+          userId: request.userId || 'anonymous',
+          conversationId: request.conversationId,
+          enableAutoContinue: true,
+        });
+
         const streamLatency = Date.now() - streamStartTime;
         chatLogger.info('Vercel AI SDK streaming completed', { requestId, provider: primaryProvider, model: llmRequest.model }, {
           latencyMs: streamLatency,
@@ -595,7 +650,16 @@ export class EnhancedLLMService {
       chatLogger.warn('Provider not supported by Vercel AI SDK, using legacy streaming', { provider: primaryProvider });
 
       const fullRequest = { ...llmRequest, messages: processedMessages, provider: primaryProvider, apiKey: userApiKey || llmRequest.apiKey };
-      yield* llmService.generateStreamingResponse(fullRequest);
+      
+      // Wrap with auto-continue support
+      const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
+      const baseStream = llmService.generateStreamingResponse(fullRequest);
+      yield* streamWithAutoContinue(baseStream, {
+        userId: request.userId || 'anonymous',
+        conversationId: request.conversationId,
+        enableAutoContinue: true,
+      });
+      
       const streamLatency = Date.now() - streamStartTime;
       chatLogger.info('Legacy streaming completed successfully', { requestId, provider: primaryProvider, model: llmRequest.model }, {
         latencyMs: streamLatency,
@@ -637,7 +701,15 @@ export class EnhancedLLMService {
           apiKey: userApiKey,
         };
 
-        yield* llmService.generateStreamingResponse(fallbackRequest);
+        // Wrap with auto-continue support
+        const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
+        const baseStream = llmService.generateStreamingResponse(fallbackRequest);
+        yield* streamWithAutoContinue(baseStream, {
+          userId: request.userId || 'anonymous',
+          conversationId: request.conversationId,
+          enableAutoContinue: true,
+        });
+        
         const fallbackLatency = Date.now() - streamStartTime;
         chatLogger.info('Streaming fallback completed', { requestId, provider: fallbackProvider, model: supportedModel }, {
           latencyMs: fallbackLatency,

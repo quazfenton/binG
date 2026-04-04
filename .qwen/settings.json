@@ -10,7 +10,8 @@
       "Bash(@if *)",
       "Bash(move *)",
       "Bash(d *)",
-      "Bash(@echo *)"
+      "Bash(@echo *)",
+      "Bash(dir *)"
     ]
   },
   "$version": 3

@@ -744,55 +744,6 @@ function generateModifierText(key: string, value: string): string {
 // ============================================================================
 
 /**
- * Apply prompt modifiers to generate a suffix that modifies any base prompt.
- *
- * @param params - The prompt parameter configuration (any field optional)
- * @returns A string to append to the base role prompt
- *
- * @example
- * ```ts
- * const params: PromptParameters = {
- *   responseDepth: ResponseDepth.Comprehensive,
- *   expertiseLevel: ExpertiseLevel.Expert,
- *   reasoningMode: ReasoningMode.Deliberative,
- * };
- * const suffix = applyPromptModifiers(params);
- * const fullPrompt = coderBasePrompt + suffix;
- * ```
- */
-export function applyPromptModifiers(params: PromptParameters): string {
-  const parts: string[] = [];
-
-  // Generate modifier text for each set parameter
-  for (const [key, value] of Object.entries(params)) {
-    if (key === 'customInstructions') continue;
-    if (value === undefined || value === null) continue;
-
-    const modifierText = generateModifierText(key, value);
-    if (modifierText) {
-      parts.push(modifierText);
-    }
-  }
-
-  // Append custom instructions if provided
-  if (params.customInstructions?.trim()) {
-    parts.push(`
-============================================
-# CUSTOM INSTRUCTIONS
-============================================
-${params.customInstructions.trim()}
-`);
-  }
-
-  if (parts.length === 0) return '';
-
-  return `
-
-${parts.join('\n')}
-`;
-}
-
-/**
  * Quick presets for common UI configuration scenarios.
  * These are pre-built combinations that cover typical use cases.
  */

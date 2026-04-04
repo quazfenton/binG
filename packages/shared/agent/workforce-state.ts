@@ -1,7 +1,7 @@
 import yaml from 'js-yaml';
-import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
-import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
-import { createLogger } from '../utils/logger';
+import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
+import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
+import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Agent:WorkforceState');
 

@@ -11,7 +11,7 @@
  * - Real-time progress tracking
  */
 
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 import { EventEmitter } from 'node:events';
 
 const logger = createLogger('Agent:MastraIntegration');
@@ -420,7 +420,7 @@ export class MastraWorkflowIntegration extends EventEmitter {
   private async executeCodeAgentWorkflow(data: any): Promise<any> {
     // Import and execute code agent workflow
     try {
-      const { codeAgentWorkflow } = await import('../orchestra/mastra/workflows/code-agent-workflow');
+      const { codeAgentWorkflow } = await import('@/lib/orchestra/mastra/workflows/code-agent-workflow');
 
       // Execute the workflow
       const run = await codeAgentWorkflow.createRun();
@@ -451,7 +451,7 @@ export class MastraWorkflowIntegration extends EventEmitter {
    */
   private async executeHITLWorkflow(data: any): Promise<any> {
     try {
-      const { hitlWorkflow } = await import('../orchestra/mastra/workflows/hitl-workflow');
+      const { hitlWorkflow } = await import('@/lib/orchestra/mastra/workflows/hitl-workflow');
 
       const run = await hitlWorkflow.createRun();
       const result = await run.start({
@@ -486,7 +486,7 @@ export class MastraWorkflowIntegration extends EventEmitter {
    */
   private async executeParallelWorkflow(data: any): Promise<any> {
     try {
-      const { parallelWorkflow } = await import('../orchestra/mastra/workflows/parallel-workflow');
+      const { parallelWorkflow } = await import('@/lib/orchestra/mastra/workflows/parallel-workflow');
 
       const run = await parallelWorkflow.createRun();
       const result = await run.start({

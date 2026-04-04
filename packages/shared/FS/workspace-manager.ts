@@ -9,9 +9,9 @@
  */
 
 import { createFileSystem, type IFileSystem, type WorkspaceConfig, type FSStats } from './index';
-import { isDesktopMode, getDefaultWorkspaceRoot } from '../platform/env';
+import { isDesktopMode, getDefaultWorkspaceRoot } from '@bing/platform/env';
 import { randomUUID } from 'crypto';
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 
 const log = createLogger('WorkspaceManager');
 

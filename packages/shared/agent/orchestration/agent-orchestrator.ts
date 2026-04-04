@@ -12,9 +12,9 @@
  * 4. Streaming: Native SSE event emission at every state transition.
  */
 
-import { llmService, type LLMRequest } from '../../chat/llm-providers';
-import { verifyChanges } from '../../orchestra/stateful-agent/agents/verification';
-import { SelfHealingExecutor } from '../../crewai/runtime/self-healing';
+import { llmService, type LLMRequest } from '@/lib/chat/llm-providers';
+import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
+import { SelfHealingExecutor } from '@/lib/crewai/runtime/self-healing';
 
 export interface IterationConfig {
   maxIterations: number;

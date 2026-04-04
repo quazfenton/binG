@@ -13,11 +13,11 @@ import Redis from 'ioredis';
 import * as fs from 'fs/promises';
 import { createLogger } from './logger';
 import { getOpenCodeEngine, OpenCodeEngine } from './opencode-engine';
-import { executeV2Task } from '../../../v2-executor';
-import { taskRouter } from '../../../task-router';
-import { providerRouter, latencyTracker } from '../../../../sandbox/provider-router';
-import { determineExecutionPolicy } from '../../../../sandbox/types';
-import { normalizeSessionId } from '../../../../virtual-filesystem/scope-utils';
+import { executeV2Task } from '@bing/shared/agent/v2-executor';
+import { taskRouter } from '@bing/shared/agent/task-router';
+import { providerRouter, latencyTracker } from '@/lib/sandbox/provider-router';
+import { determineExecutionPolicy } from '@/lib/sandbox/types';
+import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 
 const logger = createLogger('Agent:Worker');
 

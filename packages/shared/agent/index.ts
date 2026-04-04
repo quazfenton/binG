@@ -21,7 +21,7 @@ export {
   AgentSessionManager,
   type AgentSession,
   type AgentSessionConfig,
-} from '../session/agent/agent-session-manager';
+} from '@/lib/session/agent/agent-session-manager';
 
 // Filesystem Bridge
 export {
@@ -92,7 +92,7 @@ export {
   runStatefulAgent,
   type StatefulAgentOptions,
   type StatefulAgentResult,
-} from '../../../web/lib/orchestra/stateful-agent/agents/stateful-agent';
+} from '@/lib/orchestra/stateful-agent/agents/stateful-agent';
 
 // Execution Graph - DAG-based task execution with parallel support
 export {

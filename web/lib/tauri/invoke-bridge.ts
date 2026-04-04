@@ -282,67 +282,100 @@ export async function getSystemInfo(): Promise<SystemInfo | null> {
   }
 }
 
-// Note: Checkpoint commands (create_checkpoint, restore_checkpoint, list_checkpoints, delete_checkpoint)
-// are NOT implemented in the Rust backend. These functions will always fail with "unknown command" errors.
-// They're kept here for potential future implementation.
+// Checkpoint functions - now fully implemented in Rust backend
 
 /**
- * Create a checkpoint (NOT IMPLEMENTED IN RUST)
- * @deprecated This command is not yet implemented in the Rust backend
+ * Create a checkpoint (shadow commit) of workspace state
  */
 export async function createCheckpoint(
-  _sandboxId: string,
-  _name?: string
+  sandboxId: string,
+  name?: string
 ): Promise<CheckpointInfo | null> {
   if (!isTauriAvailable()) {
     return null;
   }
-  log.warn('create_checkpoint is not implemented in the Rust backend');
-  return null;
+
+  try {
+    const result = await invoke<CheckpointInfo>('create_checkpoint', {
+      workspacePath: sandboxId || undefined,
+      name,
+    });
+    return result;
+  } catch (error: any) {
+    log.error('create_checkpoint failed', error);
+    return null;
+  }
 }
 
 /**
- * Restore a checkpoint (NOT IMPLEMENTED IN RUST)
- * @deprecated This command is not yet implemented in the Rust backend
+ * Restore a checkpoint by reverting workspace to checkpoint state
  */
 export async function restoreCheckpoint(
-  _sandboxId: string,
-  _checkpointId: string
+  sandboxId: string,
+  checkpointId: string
 ): Promise<boolean> {
   if (!isTauriAvailable()) {
     return false;
   }
-  log.warn('restore_checkpoint is not implemented in the Rust backend');
-  return false;
+
+  try {
+    const result = await invoke<{ success: boolean; files_restored: number }>('restore_checkpoint', {
+      workspacePath: sandboxId,
+      checkpointId,
+    });
+    return result.success;
+  } catch (error: any) {
+    log.error('restore_checkpoint failed', error);
+    return false;
+  }
 }
 
 /**
- * List checkpoints (NOT IMPLEMENTED IN RUST)
- * @deprecated This command is not yet implemented in the Rust backend
+ * List all checkpoints for a workspace
  */
 export async function listCheckpoints(
-  _sandboxId: string
+  sandboxId: string
 ): Promise<{ success: boolean; checkpoints?: CheckpointInfo[]; error?: string }> {
   if (!isTauriAvailable()) {
     return { success: false, error: 'Tauri not available' };
   }
-  log.warn('list_checkpoints is not implemented in the Rust backend');
-  return { success: false, error: 'list_checkpoints is not implemented in the Rust backend' };
+
+  try {
+    const result = await invoke<{ success: boolean; checkpoints: CheckpointInfo[]; error?: string }>('list_checkpoints', {
+      workspacePath: sandboxId || undefined,
+    });
+    return {
+      success: result.success,
+      checkpoints: result.checkpoints,
+      error: result.error,
+    };
+  } catch (error: any) {
+    log.error('list_checkpoints failed', error);
+    return { success: false, error: error.message };
+  }
 }
 
 /**
- * Delete a checkpoint (NOT IMPLEMENTED IN RUST)
- * @deprecated This command is not yet implemented in the Rust backend
+ * Delete a checkpoint
  */
 export async function deleteCheckpoint(
-  _sandboxId: string,
-  _checkpointId: string
+  sandboxId: string,
+  checkpointId: string
 ): Promise<boolean> {
   if (!isTauriAvailable()) {
     return false;
   }
-  log.warn('delete_checkpoint is not implemented in the Rust backend');
-  return false;
+
+  try {
+    const result = await invoke<boolean>('delete_checkpoint', {
+      workspacePath: sandboxId,
+      checkpointId,
+    });
+    return result;
+  } catch (error: any) {
+    log.error('delete_checkpoint failed', error);
+    return false;
+  }
 }
 
 /**

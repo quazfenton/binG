@@ -17,7 +17,7 @@
  * - memory-wipe: Context cleanup and state reset
  */
 
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 import { mastraWorkflowIntegration } from './mastra-workflow-integration';
 import type { MastraWorkflowResult } from './mastra-workflow-integration';
 

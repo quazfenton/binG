@@ -14,7 +14,7 @@
 
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'crypto';
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 import type { ExecutionGraph, ExecutionNode } from './execution-graph';
 
 const logger = createLogger('Agent:EnhancedBackgroundJobs');

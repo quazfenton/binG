@@ -39,7 +39,7 @@
  * ```
  */
 
-import { sessionManager } from '../session/session-manager';
+import { sessionManager } from '@/lib/session/session-manager';
 import { executionGraphEngine } from './execution-graph';
 import { enhancedBackgroundJobsManager } from './enhanced-background-jobs';
 import { workforceManager } from './workforce-manager';
@@ -57,7 +57,7 @@ export {
   type Session,
   type SessionConfig,
   type SessionQuota,
-} from '../session/session-manager';
+} from '@/lib/session/session-manager';
 
 export {
   sessionStateBridge,
@@ -65,7 +65,7 @@ export {
   type StateStorageEntry,
   type PersistStateResult,
   type RestoreStateResult,
-} from '../session/state-bridge';
+} from '@/lib/session/state-bridge';
 
 // ============================================================================
 // Execution Graph
@@ -365,7 +365,7 @@ export {
   type CloudDeploymentConfig,
   type DeploymentResult,
   type CloudProvider,
-} from '../sandbox/cloud-deployment-service';
+} from '@/lib/sandbox/cloud-deployment-service';
 
 // ============================================================================
 // Workflow Templates
