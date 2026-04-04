@@ -235,7 +235,6 @@ export async function createDesktopPty(options: DesktopPtyOptions = {}): Promise
   // Track file state to detect changes
   const knownFiles = new Set<string>();
   let lastCheckTime = Date.now();
-  const workspaceRoot = getVfsWorkspaceRoot() || '.';
 
   // Detect file changes from shell commands in PTY output
   const detectFileChanges = (output: string) => {

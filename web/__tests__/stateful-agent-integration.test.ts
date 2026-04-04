@@ -28,7 +28,7 @@ vi.mock('@/lib/orchestra/reflection-engine', () => ({
   },
 }));
 
-vi.mock('../../packages/shared/agent/execution-graph', () => ({
+vi.mock('@bing/shared/agent/execution-graph', () => ({
   executionGraphEngine: {
     createGraph: vi.fn().mockReturnValue({ id: 'test-graph', nodes: new Map(), edges: new Map() }),
     addNode: vi.fn(),
@@ -206,7 +206,7 @@ describe('StatefulAgent', () => {
     });
 
     it('should create execution graph when task decomposition is enabled', async () => {
-      const { executionGraphEngine } = await import('../../packages/shared/agent/execution-graph');
+      const { executionGraphEngine } = await import('@bing/shared/agent/execution-graph');
       
       const graphAgent = new StatefulAgent({
         sessionId: 'graph-session',
@@ -363,7 +363,7 @@ describe('StatefulAgent Integration', () => {
       
       expect(result.success).toBe(true);
       // Execution graph should have been used
-      const { executionGraphEngine } = await import('../../packages/shared/agent/execution-graph');
+      const { executionGraphEngine } = await import('@bing/shared/agent/execution-graph');
       expect(executionGraphEngine.createGraph).toHaveBeenCalled();
     });
   });

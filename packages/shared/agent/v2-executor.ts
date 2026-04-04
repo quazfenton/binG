@@ -6,13 +6,13 @@
  * that would otherwise leak internal instruction formatting.
  */
 
-import { agentSessionManager } from '../session/agent/agent-session-manager';
+import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
 import { getToolManager } from '@/lib/tools';
-import { createLogger } from '../utils/logger';
-import { normalizeToolInvocation, type ToolInvocation } from '../types/tool-invocation';
-import type { ExecutionPolicy } from '../sandbox/types';
-import { determineExecutionPolicy } from '../sandbox/types';
-import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
+import { createLogger } from '@/lib/utils/logger';
+import { normalizeToolInvocation, type ToolInvocation } from '@/lib/types/tool-invocation';
+import type { ExecutionPolicy } from '@/lib/sandbox/types';
+import { determineExecutionPolicy } from '@/lib/sandbox/types';
+import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import type { PromptParameters } from './prompt-parameters';
 
 const logger = createLogger('Agent:V2Executor');
@@ -450,7 +450,7 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
         // --- Emit file diffs if available ------------------------------------
         let changedFiles: Array<{ path: string; diff: string; changeType: string }> = [];
         try {
-          const { diffTracker } = await import('../virtual-filesystem/filesystem-diffs');
+          const { diffTracker } = await import('@/lib/virtual-filesystem/filesystem-diffs');
           changedFiles = diffTracker.getChangedFilesForSync(options.userId, 50);
         } catch (diffError) {
           logger.warn('Failed to get diffs for sync:', diffError);

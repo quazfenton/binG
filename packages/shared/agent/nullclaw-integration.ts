@@ -48,7 +48,7 @@
  * - NULLCLAW_TIMEOUT: (DEPRECATED - use NULLCLAW_REQUEST_TIMEOUT_MS) Legacy timeout - values < 1000 treated as seconds, >= 1000 as milliseconds
  */
 
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 import { v4 as uuidv4 } from 'uuid';
 import { spawn } from 'child_process';
 

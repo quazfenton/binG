@@ -9,7 +9,7 @@
  * regardless of the underlying storage mechanism.
  */
 
-import { isDesktopMode, isTauriRuntime, getPlatform, getDefaultWorkspaceRoot } from '../platform/env';
+import { isDesktopMode, isTauriRuntime, getPlatform, getDefaultWorkspaceRoot } from '@bing/platform/env';
 import { randomUUID } from 'crypto';
 
 // ============================================================================
@@ -930,7 +930,7 @@ export class VirtualFileSystem implements IFileSystem {
   constructor() { this.id = `virtual-${randomUUID().slice(0, 8)}`; }
   
   async initialize(config: WorkspaceConfig): Promise<void> {
-    try { const { virtualFilesystem } = await import('../../web/lib/virtual-filesystem/virtual-filesystem-service'); this.vfs = virtualFilesystem; this.ownerId = config.userId; this.initialized = true; } catch { throw new Error('Virtual filesystem not available'); }
+    try { const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service'); this.vfs = virtualFilesystem; this.ownerId = config.userId; this.initialized = true; } catch { throw new Error('Virtual filesystem not available'); }
   }
   async readFile(path: string): Promise<FSFile> { if (!this.initialized) throw new Error('Not initialized'); const f = await this.vfs.readFile(this.ownerId, path); return { path: f.path, content: f.content, language: f.language, lastModified: f.lastModified, createdAt: f.createdAt, size: f.size }; }
   async writeFile(path: string, content: string, language?: string): Promise<FSFile> { if (!this.initialized) throw new Error('Not initialized'); const f = await this.vfs.writeFile(this.ownerId, path, content, language); return { path: f.path, content: f.content, language: f.language, lastModified: f.lastModified, createdAt: f.createdAt, size: f.size }; }

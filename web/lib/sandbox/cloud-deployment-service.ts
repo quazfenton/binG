@@ -22,8 +22,8 @@
 import { createLogger } from '../utils/logger';
 import { getSandboxProvider, type SandboxProviderType } from './providers';
 import type { SandboxHandle, SandboxCreateConfig } from './providers/sandbox-provider';
-import { enhancedBackgroundJobsManager } from '../../packages/shared/agent/enhanced-background-jobs';
-import { executionGraphEngine } from '../../packages/shared/agent/execution-graph';
+import { enhancedBackgroundJobsManager } from '@bing/shared/agent/enhanced-background-jobs';
+import { executionGraphEngine } from '@bing/shared/agent/execution-graph';
 
 const logger = createLogger('Cloud:Deployment');
 

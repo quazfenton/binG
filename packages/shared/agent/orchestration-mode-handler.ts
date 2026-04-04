@@ -108,19 +108,19 @@ export interface OrchestrationResult {
  */
 export function getOrchestrationModeFromRequest(req: NextRequest): OrchestrationMode {
   const modeHeader = req.headers.get('X-Orchestration-Mode');
-  
+
   if (!modeHeader) {
-    return 'task-router'; // Default
+    return 'unified-agent'; // Default — uses multi-factor task classifier + health routing
   }
-  
+
   const validModes: OrchestrationMode[] = ['task-router', 'unified-agent', 'stateful-agent', 'agent-kernel', 'agent-loop', 'execution-graph', 'nullclaw', 'opencode-sdk', 'mastra-workflow', 'crewai', 'v2-executor', 'agent-team'];
   const mode = modeHeader.toLowerCase() as OrchestrationMode;
-  
+
   if (!validModes.includes(mode)) {
-    logger.warn('Invalid orchestration mode, falling back to task-router', { mode: modeHeader });
-    return 'task-router';
+    logger.warn('Invalid orchestration mode, falling back to unified-agent', { mode: modeHeader });
+    return 'unified-agent';
   }
-  
+
   return mode;
 }
 
@@ -165,7 +165,7 @@ export async function executeWithOrchestrationMode(
       // TASK ROUTER (Default)
       // ========================================================================
       case 'task-router': {
-        const { taskRouter } = await import('../../task-router');
+        const { taskRouter } = await import('@bing/shared/agent/task-router');
 
         // ownerId and sessionId already validated at function entry
         const taskResult = await taskRouter.executeTask({
@@ -253,7 +253,7 @@ export async function executeWithOrchestrationMode(
       // AGENT KERNEL (OS-like Priority Scheduler)
       // ========================================================================
       case 'agent-kernel': {
-        const { getAgentKernel, startAgentKernel } = await import('../../agent-kernel');
+        const { getAgentKernel, startAgentKernel } = await import('@bing/shared/agent/agent-kernel');
 
         const kernel = getAgentKernel();
         if (!kernel.isRunning()) {
@@ -359,7 +359,7 @@ export async function executeWithOrchestrationMode(
       // EXECUTION GRAPH (DAG Dependency Engine)
       // ========================================================================
       case 'execution-graph': {
-        const { executionGraphEngine } = await import('../../execution-graph');
+        const { executionGraphEngine } = await import('@bing/shared/agent/execution-graph');
 
         const graph = executionGraphEngine.createGraph(request.sessionId);
 
@@ -486,7 +486,7 @@ export async function executeWithOrchestrationMode(
       // NULLCLAW (External Server - messaging, browsing, automation)
       // ========================================================================
       case 'nullclaw': {
-        const { nullclawIntegration, initializeNullclaw, isNullclawAvailable, executeNullclawTask, getNullclawMode } = await import('../../nullclaw-integration');
+        const { nullclawIntegration, initializeNullclaw, isNullclawAvailable, executeNullclawTask, getNullclawMode } = await import('@bing/shared/agent/nullclaw-integration');
 
         // Initialize nullclaw if not already initialized
         await initializeNullclaw();
@@ -569,7 +569,7 @@ export async function executeWithOrchestrationMode(
       // MASTRA WORKFLOW
       // ========================================================================
       case 'mastra-workflow': {
-        const { mastraWorkflowIntegration } = await import('../../mastra-workflow-integration');
+        const { mastraWorkflowIntegration } = await import('@bing/shared/agent/mastra-workflow-integration');
 
         const workflowId = 'code-agent'; // Default workflow
         // ownerId already validated at function entry
@@ -620,7 +620,7 @@ export async function executeWithOrchestrationMode(
       // V2 EXECUTOR (OpenCode Containerized)
       // ========================================================================
       case 'v2-executor': {
-        const { executeV2Task } = await import('../../v2-executor');
+        const { executeV2Task } = await import('@bing/shared/agent/v2-executor');
 
         // ownerId and sessionId already validated at function entry
         const v2Result = await executeV2Task({

@@ -10,10 +10,10 @@
  * - sandbox-heavy: For full-stack apps
  */
 
-import { createLogger } from '../utils/logger';
-import { agentSessionManager } from '../session/agent/agent-session-manager';
-import type { ExecutionPolicy } from '../sandbox/types';
-import { determineExecutionPolicy } from '../sandbox/types';
+import { createLogger } from '@/lib/utils/logger';
+import { agentSessionManager } from '@/lib/session/agent/agent-session-manager';
+import type { ExecutionPolicy } from '@/lib/sandbox/types';
+import { determineExecutionPolicy } from '@/lib/sandbox/types';
 import type { ToolIntegrationManager } from '@/lib/tools/tool-integration-system';
 import { applyPromptModifiers, type PromptParameters } from './prompt-parameters';
 
@@ -88,8 +88,8 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
   );
 
   // Use OpencodeV2Provider directly
-  const { OpencodeV2Provider } = await import('../sandbox/spawn/opencode-cli');
-  const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('../mcp');
+  const { OpencodeV2Provider } = await import('@/lib/sandbox/spawn/opencode-cli');
+  const { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } = await import('@/lib/mcp');
 
   const provider = new OpencodeV2Provider({
     session: {

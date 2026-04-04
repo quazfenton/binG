@@ -3,7 +3,7 @@
  */
 
 import { describe, it, expect, beforeEach } from 'vitest';
-import { createTaskClassifier, classifyTask } from '../task-classifier';
+import { createTaskClassifier, classifyTask } from '@bing/shared/agent/task-classifier';
 
 describe('TaskClassifier', () => {
   let classifier: ReturnType<typeof createTaskClassifier>;

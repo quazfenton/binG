@@ -20,6 +20,8 @@ import {
 import { Card, CardContent } from "../components/ui/card";
 import { Badge } from "../components/ui/badge";
 import { toast } from "sonner";
+import { FileMentionMenu } from "./file-mention-menu";
+import { useFileMentionAutocomplete } from "@/hooks/use-file-mention-autocomplete";
 import {
   Select,
   SelectContent,
@@ -1987,40 +1989,16 @@ export default function InteractionPanel({
                   className="flex flex-col gap-2 flex-1 min-h-0 overflow-visible"
                 >
                   <div className="relative flex-1 min-h-[60px] overflow-visible">
-                    <Textarea
-                      ref={textareaRef}
-                      value={input}
-                      onChange={(e) => setInput(e.target.value)}
-                      placeholder="Type your message..."
-                      className="min-h-[60px] max-h-[120px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20 rounded-2xl"
-                      rows={2}
-                      onKeyDown={(e) => {
-                        if (e.key === "Enter" && !e.shiftKey) {
-                          e.preventDefault();
-                          const trimmed = input.trim();
-                          if (!trimmed) return;
-                          // If processing and queuing allowed, queue instead of submitting
-                          if (isProcessing && allowInputWhileProcessing) {
-                            setPendingInput(trimmed);
-                            setInput("");
-                            return;
-                          }
-                          onSubmit(trimmed);
-                          setInput("");
-                        }
-                      }}
-                      onFocus={() => {
-                        // Scroll to input on mobile when focused
-                        if (window.innerWidth <= 768 && textareaRef.current) {
-                          setTimeout(() => {
-                            textareaRef.current?.scrollIntoView({
-                              behavior: "smooth",
-                              block: "center",
-                            });
-                          }, 300);
-                        }
-                      }}
-                      disabled={isInputDisabled}
+                    {/* @mention autocomplete menu */}
+                    <FileMentionAutocompleteIntegration
+                      input={input}
+                      setInput={setInput}
+                      onSubmit={onSubmit}
+                      isInputDisabled={isInputDisabled}
+                      isProcessing={isProcessing}
+                      allowInputWhileProcessing={allowInputWhileProcessing}
+                      setPendingInput={setPendingInput}
+                      textareaRef={textareaRef}
                     />
                     <div className="absolute right-3 top-3 flex gap-1" style={{ zIndex: 10 }}>
                       <button
@@ -2502,6 +2480,110 @@ export default function InteractionPanel({
           }}
         />
       </div>
+    </>
+  );
+}
+
+/**
+ * File Mention Autocomplete Integration Component
+ * 
+ * Wraps the Textarea with @mention autocomplete functionality.
+ * This component uses the useFileMentionAutocomplete hook to:
+ * - Detect @mentions in the input
+ * - Show autocomplete dropdown
+ * - Handle keyboard navigation
+ * - Insert selected files with @ syntax
+ */
+function FileMentionAutocompleteIntegration({
+  input,
+  setInput,
+  onSubmit,
+  isInputDisabled,
+  isProcessing,
+  allowInputWhileProcessing,
+  setPendingInput,
+  textareaRef,
+}: {
+  input: string;
+  setInput: (value: string) => void;
+  onSubmit: (content: string) => void;
+  isInputDisabled: boolean;
+  isProcessing: boolean;
+  allowInputWhileProcessing: boolean;
+  setPendingInput: (value: string | null) => void;
+  textareaRef: React.RefObject<HTMLTextAreaElement>;
+}) {
+  const {
+    showMenu,
+    query,
+    suggestions,
+    selectedIndex,
+    isLoading,
+    handleInputChange,
+    handleKeyDown,
+    handleSelect,
+  } = useFileMentionAutocomplete({
+    input,
+    setInput,
+    onFileSelect: (files) => {
+      // Files selected via @mention - they'll be sent with the message
+      // The backend will detect @mentions in the text and prioritize them
+    },
+  });
+
+  return (
+    <>
+      <Textarea
+        ref={textareaRef}
+        value={input}
+        onChange={(e) => handleInputChange(e.target.value)}
+        placeholder="Type your message... (use @ to mention files)"
+        className="min-h-[60px] max-h-[120px] bg-white/5 border border-white/20 pr-12 resize-none text-base sm:text-sm focus:border-white/40 focus:ring-1 focus:ring-white/20 rounded-2xl"
+        rows={2}
+        onKeyDown={(e) => {
+          // Let autocomplete handle navigation keys first
+          const handled = handleKeyDown(e);
+          if (handled) return;
+          
+          // Enter to submit
+          if (e.key === "Enter" && !e.shiftKey) {
+            e.preventDefault();
+            const trimmed = input.trim();
+            if (!trimmed) return;
+            // If processing and queuing allowed, queue instead of submitting
+            if (isProcessing && allowInputWhileProcessing) {
+              setPendingInput(trimmed);
+              setInput("");
+              return;
+            }
+            onSubmit(trimmed);
+            setInput("");
+          }
+        }}
+        onFocus={() => {
+          // Scroll to input on mobile when focused
+          if (window.innerWidth <= 768 && textareaRef.current) {
+            setTimeout(() => {
+              textareaRef.current?.scrollIntoView({
+                behavior: "smooth",
+                block: "center",
+              });
+            }, 300);
+          }
+        }}
+        disabled={isInputDisabled}
+      />
+      
+      {/* Autocomplete menu */}
+      <FileMentionMenu
+        visible={showMenu}
+        query={query}
+        suggestions={suggestions}
+        selectedIndex={selectedIndex}
+        isLoading={isLoading}
+        onSelect={handleSelect}
+        anchorEl={textareaRef.current}
+      />
     </>
   );
 }

@@ -18,7 +18,7 @@
  * - Event System: receives external events (signals) for agents
  */
 
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 import { EventEmitter } from 'node:events';
 import { randomUUID } from 'crypto';
 
@@ -788,7 +788,7 @@ export class AgentKernel extends EventEmitter {
    */
   private async runResearchAgent(agent: Agent, workPayload?: unknown): Promise<unknown> {
     try {
-      const { handleResearch } = await import('../events/trigger/handlers/research');
+      const { handleResearch } = await import('@/lib/events/trigger/handlers/research');
       
       const payload = workPayload as { query?: string; depth?: number; sources?: string[] } | undefined;
       const query = payload?.query || agent.config.goal;
