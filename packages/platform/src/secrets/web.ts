@@ -39,15 +39,16 @@ function getObfuscationKey(): string {
 }
 
 /**
- * Simple XOR obfuscation (not encryption, but prevents casual inspection)
+ * Simple XOR obfuscation (not encryption, but prevents casual inspection).
+ * Uses TextEncoder to safely produce Latin1-safe byte output before btoa.
  */
 function obfuscate(value: string): string {
   const key = getObfuscationKey();
-  let result = '';
-  for (let i = 0; i < value.length; i++) {
-    result += String.fromCharCode((value.charCodeAt(i) ^ key.charCodeAt(i % key.length)) & 0xFF);
-  }
-  return btoa(result);
+  const bytes = new TextEncoder().encode(value);
+  const keyBytes = new TextEncoder().encode(key);
+  const xored = bytes.map((b, i) => b ^ keyBytes[i % keyBytes.length]);
+  // Convert bytes to Latin1-safe string for btoa
+  return btoa(String.fromCharCode(...xored));
 }
 
 /**
@@ -57,11 +58,14 @@ function deobfuscate(encoded: string): string {
   try {
     const key = getObfuscationKey();
     const decoded = atob(encoded);
-    let result = '';
+    // Reconstruct byte array from decoded Latin1 string
+    const bytes = new Uint8Array(decoded.length);
     for (let i = 0; i < decoded.length; i++) {
-      result += String.fromCharCode(decoded.charCodeAt(i) ^ key.charCodeAt(i % key.length));
+      bytes[i] = decoded.charCodeAt(i) & 0xFF;
     }
-    return result;
+    const keyBytes = new TextEncoder().encode(key);
+    const xored = bytes.map((b, i) => b ^ keyBytes[i % keyBytes.length]);
+    return new TextDecoder().decode(xored);
   } catch {
     return '';
   }

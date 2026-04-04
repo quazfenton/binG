@@ -7,7 +7,7 @@
  */
 
 import { invoke } from '@tauri-apps/api/core';
-import { isDesktopMode, isTauriRuntime } from '@/lib/utils/desktop-env';
+import { isDesktopMode, isTauriRuntime } from '@bing/platform/env';
 import { createLogger } from '@/lib/utils/logger';
 
 const log = createLogger('TauriInvoke');

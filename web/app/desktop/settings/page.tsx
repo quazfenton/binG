@@ -70,11 +70,17 @@ export default function DesktopSettingsPage() {
           if (typeof parsed !== 'object' || parsed === null) {
             throw new Error('Invalid settings format');
           }
-          setSettings({ ...DEFAULT_SETTINGS, ...parsed });
+          // Merge with defaults, then backfill workspaceRoot if missing/empty
+          const merged = { ...DEFAULT_SETTINGS, ...parsed };
+          if (!merged.workspaceRoot) {
+            merged.workspaceRoot = getDesktopWorkspaceDir();
+          }
+          setSettings(merged);
         } catch (parseErr: any) {
           log.error('Malformed settings in localStorage', parseErr);
           setError('Failed to load settings: invalid format');
-          setSettings(DEFAULT_SETTINGS);
+          // Backfill workspaceRoot even for default settings
+          setSettings({ ...DEFAULT_SETTINGS, workspaceRoot: getDesktopWorkspaceDir() });
         }
       } else {
         // Use default workspace

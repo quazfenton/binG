@@ -595,7 +595,7 @@ class NullclawProvider implements CapabilityProvider {
   readonly capabilities = ['web.browse', 'web.search', 'automation.discord', 'automation.telegram', 'automation.workflow'];
 
   async isAvailable(): Promise<boolean> {
-    const { isNullclawAvailable } = await import('@bing/shared/agent/nullclaw-integration');
+    const { isNullclawAvailable } = await import('../../packages/shared/agent/nullclaw-integration');
     return isNullclawAvailable();
   }
 
@@ -609,7 +609,7 @@ class NullclawProvider implements CapabilityProvider {
       sendNullclawDiscordMessage,
       sendNullclawTelegramMessage,
       executeNullclawTask,
-    } = await import('@bing/shared/agent/nullclaw-integration');
+    } = await import('../../packages/shared/agent/nullclaw-integration');
 
     try {
       switch (capabilityId) {

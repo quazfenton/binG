@@ -48,7 +48,7 @@ import {
   executeNullclawTask,
   isNullclawAvailable,
   initializeNullclaw,
-} from '@bing/shared/agent/nullclaw-integration';
+} from '../../packages/shared/agent/nullclaw-integration';
 
 const logger = createLogger('MCP:NullclawBridge');
 

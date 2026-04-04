@@ -543,19 +543,34 @@ class TaskRouter {
         advancedType,
       });
 
-      // Also schedule the task for immediate execution
-      return await scheduleTask({
-        taskType: fallbackConfig.taskType,
-        schedule: fallbackConfig.schedule,
-        payload: { ...fallbackConfig.payload, prompt: fallbackConfig.payload.prompt || task },
-        metadata: {
-          ...fallbackConfig.metadata,
+      // FIX (Bug 11): Catch the scheduleTask promise to prevent unhandled rejections
+      try {
+        const scheduledTask = await scheduleTask({
+          taskType: fallbackConfig.taskType,
+          schedule: fallbackConfig.schedule,
+          payload: { ...fallbackConfig.payload, prompt: fallbackConfig.payload.prompt || task },
+          metadata: {
+            ...fallbackConfig.metadata,
+            eventId: eventResult.eventId,
+          },
+          userId,
+        });
+
+        return scheduledTask;
+      } catch (scheduleError: unknown) {
+        const scheduleMessage = scheduleError instanceof Error ? scheduleError.message : String(scheduleError);
+        logger.error(`[TaskRouter] scheduleTask failed: ${scheduleMessage}`);
+        // Return partial success — event was emitted even if scheduling failed
+        return {
+          success: false,
+          error: `Event emitted but scheduling failed: ${scheduleMessage}`,
           eventId: eventResult.eventId,
-        },
-        userId,
-      });
-    } catch (error: any) {
-      logger.error(`[TaskRouter] Fallback execution failed:`, error.message);
+          type: advancedType,
+        };
+      }
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error(`[TaskRouter] Fallback execution failed: ${message}`);
 
       // Emit failure event
       try {
@@ -566,16 +581,16 @@ class TaskRouter {
             sessionId: request.conversationId,
             userId: request.userId,
             phase: 'failed',
-            error: error.message,
+            error: message,
           },
           request.userId,
           request.conversationId
         );
-      } catch (emitError: any) {
-        logger.error(`[TaskRouter] Failed to emit failure event:`, emitError.message);
+      } catch {
+        // Non-fatal — don't mask the original error
       }
 
-      return { success: false, error: error.message, type: advancedType };
+      return { success: false, error: message, type: advancedType };
     }
   }
 
@@ -912,18 +927,30 @@ class TaskRouter {
       throw new Error('CLI agent requires cliCommand.command');
     }
 
+    // FIX: Guard against missing sandbox handle
+    if (!session.sandboxHandle) {
+      throw new Error('CLI agent requires an active sandbox session. Ensure sandbox provisioning succeeded before CLI dispatch.');
+    }
+
     const args = request.cliCommand?.args || [];
     const fullCommand = [command, ...args].join(' ');
-    const result = await session.sandboxHandle.executeCommand(fullCommand, session.workspacePath);
 
-    request.onToolExecution?.('cli_exec', { command: fullCommand }, result);
+    try {
+      const result = await session.sandboxHandle.executeCommand(fullCommand, session.workspacePath);
 
-    return {
-      success: result.success,
-      response: result.output,
-      agent: 'cli',
-      exitCode: result.exitCode,
-    };
+      request.onToolExecution?.('cli_exec', { command: fullCommand }, result);
+
+      return {
+        success: result.success,
+        response: result.output,
+        agent: 'cli',
+        exitCode: result.exitCode,
+      };
+    } catch (error: unknown) {
+      const message = error instanceof Error ? error.message : String(error);
+      logger.error('[TaskRouter] CLI execution failed:', message);
+      throw error;
+    }
   }
 
   private extractParams(task: string, taskType: TaskType): Record<string, any> {

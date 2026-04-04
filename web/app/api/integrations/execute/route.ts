@@ -1,6 +1,6 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
-import { actionRegistry } from '@/lib/integrations/action-registry';
+import { actionRegistry, type HandlerContext } from '@/lib/integrations/action-registry';
 import { initializeAuditTable, getUserAuditTrail, getUserExecutionStats } from '@/lib/integrations/execution-audit';
 import { createLogger } from '@/lib/utils/logger';
 import { getToolServiceForPlatform } from '@/lib/oauth/provider-map';
@@ -285,14 +285,14 @@ actionRegistry.registerProvider('composio', createComposioHandler(), []);
  * Create a local action handler
  */
 function createLocalHandler() {
-  return async (action: string, params: Record<string, unknown>, context: { userId: string }) => {
+  return async (action: string, params: Record<string, unknown>, context: HandlerContext) => {
     switch (action) {
       case 'bash':
       case 'command': {
         const command = typeof params.command === 'string' ? params.command : undefined;
         if (!command) return { success: false, error: 'command parameter is required (string)' };
         const cwd = typeof params.cwd === 'string' ? params.cwd : undefined;
-        return executeBashCommand(command, cwd);
+        return executeCommandDirect(command, cwd);
       }
       case 'file':
       case 'read_file': {
@@ -323,7 +323,7 @@ function createLocalHandler() {
  * Create a GitHub action handler
  */
 function createGitHubHandler() {
-  return async (action: string, params: Record<string, unknown>, context: { userId: string }) => {
+  return async (action: string, params: Record<string, unknown>, context: HandlerContext) => {
     const userId = Number(context.userId);
     if (!Number.isFinite(userId) || userId <= 0) {
       return { success: false, error: 'Authentication required', requiresAuth: true, provider: 'github' };
@@ -394,17 +394,44 @@ const DANGEROUS_COMMAND_PATTERNS = [
 ] as const;
 
 /**
- * Execute a bash command via Tauri (desktop) or sandbox (web).
- * Includes SSRF-style command injection protection.
+ * Create an Arcade.ai proxy handler for a specific provider.
+ * handler is self-contained and testable.
  */
-async function executeBashCommand(command: string, cwd?: string) {
-  // Security: block dangerous patterns
-  for (const pattern of DANGEROUS_COMMAND_PATTERNS) {
-    if (pattern.test(command)) {
-      return { success: false, error: 'Command blocked: contains potentially dangerous operation', blockedBy: 'security-policy' };
+function createArcadeHandler(provider: string, actionMap: Record<string, string>) {
+  return async (action: string, params: Record<string, unknown>, context: HandlerContext) => {
+    const toolName = actionMap[action];
+    if (!toolName) {
+      return { success: false, error: `Unknown action: ${action} for provider: ${provider}` };
     }
-  }
+    return executeViaArcade(toolName, params, provider, context.userId);
+  };
+}
 
+/**
+ * Create a Nango proxy handler for a specific provider.
+ */
+function createNangoHandler(provider: string, actions: string[]) {
+  return async (action: string, params: Record<string, unknown>, context: HandlerContext) => {
+    return executeViaNango(provider, action, params, context.userId);
+  };
+}
+
+/**
+ * Create a Composio handler
+ */
+function createComposioHandler() {
+  return async (action: string, params: Record<string, unknown>, context: HandlerContext) => {
+    const toolkit = typeof params.toolkit === 'string' ? params.toolkit : action.split('_')[0];
+    const actionName = typeof params.actionName === 'string' ? params.actionName : action;
+    return executeViaComposio(toolkit, actionName, params, context.userId);
+  };
+}
+
+/**
+ * Execute a shell command directly (bypasses action registry)
+ * Used for 'bash' and 'command' actions
+ */
+async function executeCommandDirect(command: string, cwd?: string): Promise<{ success: boolean; data?: { output: string; exitCode: number }; error?: string }> {
   try {
     // Desktop mode — use Tauri native execution
     if (process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true') {
@@ -752,7 +779,7 @@ async function executeViaNango(provider: string, action: string, params: Record<
     'send_message': '/messages', 'send_sms': '/messages',
     'play': '/playback', 'sms': '/messages', 'upload': '/files', 'upload_file': '/files',
     'deploy': '/deployments', 'deploy_service': '/services',
-    'events': '/events', 'meetings': '/meetings', 'meetings': '/meetings',
+    'events': '/events', 'meetings': '/meetings',
     'issues': '/issues', 'tasks': '/tasks', 'contacts': '/contacts',
     'leads': '/leads', 'records': '/records', 'channels': '/channels',
     'servers': '/servers', 'customers': '/customers', 'repos': '/repos',

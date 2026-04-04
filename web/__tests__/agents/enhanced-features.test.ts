@@ -12,7 +12,7 @@ describe('Agent Enhanced Features', () => {
   });
 
   describe('Multi-Agent Collaboration', () => {
-    const { MultiAgentCollaboration, createMultiAgentCollaboration, quickCollaborativeExecute } = require('@bing/shared/agent/multi-agent-collaboration');
+    const { MultiAgentCollaboration, createMultiAgentCollaboration, quickCollaborativeExecute } = require('../../packages/shared/agent/multi-agent-collaboration');
 
     let collaboration: typeof MultiAgentCollaboration;
 
@@ -186,7 +186,7 @@ describe('Agent Enhanced Features', () => {
   });
 
   describe('Agent Memory Manager', () => {
-    const { AgentMemoryManager, createAgentMemoryManager, quickAddMemory } = require('@bing/shared/agent/agent-memory');
+    const { AgentMemoryManager, createAgentMemoryManager, quickAddMemory } = require('../../packages/shared/agent/agent-memory');
 
     let memoryManager: typeof AgentMemoryManager;
 
@@ -358,8 +358,8 @@ describe('Agent Enhanced Features', () => {
 
   describe('Agent Integration: Collaboration + Memory', () => {
     it('should work together for context-aware collaboration', () => {
-      const { MultiAgentCollaboration } = require('@bing/shared/agent/multi-agent-collaboration');
-      const { AgentMemoryManager } = require('@bing/shared/agent/agent-memory');
+      const { MultiAgentCollaboration } = require('../../packages/shared/agent/multi-agent-collaboration');
+      const { AgentMemoryManager } = require('../../packages/shared/agent/agent-memory');
 
       const collaboration = new MultiAgentCollaboration();
       const memory = new AgentMemoryManager();
