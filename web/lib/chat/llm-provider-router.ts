@@ -417,18 +417,18 @@ export class LLMProviderRouter {
 
   private getDefaultModel(provider: LLMProviderType): string {
     const defaults: Record<LLMProviderType, string> = {
-      'openai': 'gpt-4o-mini',
+      'openai': 'gpt-5-mini',
       'openrouter': 'qwen/qwen3-30b-a3b:free',
       'anthropic': 'claude-3-haiku-20240307',
-      'google': 'gemini-2.0-flash',
-      'mistral': 'mistral-small-2402',
+      'google': 'gemini-3-flash-preview',
+      'mistral': 'mistral-small-latest',
       'cohere': 'command-r-plus',
       'together': 'meta-llama/Llama-3-8b-chat-hf',
       'chutes': 'meta-llama/Llama-3-8b-chat-hf',
       'groq': 'llama3-8b-8192',
       'deepseek': 'deepseek-chat',
     };
-    return defaults[provider] || 'gpt-4o-mini';
+    return defaults[provider] || 'mistral-small-latest';
   }
 }
 

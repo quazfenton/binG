@@ -125,6 +125,9 @@ export const OrchestrationProgressEvent = z.object({
 
   // Generic metadata for future extensibility
   metadata: z.record(z.any()).optional(),
+
+  // Timestamp for ordering and debugging
+  timestamp: z.number().optional(),
 });
 
 /**

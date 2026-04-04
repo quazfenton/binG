@@ -137,6 +137,8 @@ import Bell from "lucide-react/dist/esm/icons/bell";
 import { ImportDialog } from "./file-import/import-dialog";
 import { useVoiceInput } from "../hooks/use-voice-input";
 import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from "../lib/ads/ethical-ads-service";
+import { ResponseStyleSelector } from "./response-style-selector";
+import { ResponseStyleProvider, useResponseStyle } from "@/contexts/response-style-context";
 
 // Pop-out plugin windows for Plugins tab
 const popOutPlugins: Plugin[] = [
@@ -383,6 +385,15 @@ const ProviderSelector = React.memo(function ProviderSelector({
         </SelectContent>
       </Select>
     </div>
+  );
+});
+
+/** Compact wrapper that provides the ResponseStyleProvider context for the selector */
+const ResponseStyleSelectorCompact = React.memo(function ResponseStyleSelectorCompact() {
+  return (
+    <ResponseStyleProvider>
+      <ResponseStyleSelector compact className="mb-2" />
+    </ResponseStyleProvider>
   );
 });
 
@@ -1924,6 +1935,9 @@ export default function InteractionPanel({
                 availableProviders={availableProviders}
                 onValueChange={handleProviderSelect}
               />
+
+              {/* Response Style Selector */}
+              <ResponseStyleSelectorCompact />
 
               {/* Tab Content Sections */}
               <TabsContent value="chat" className={`m-0 flex-1 flex flex-col min-h-0 overflow-visible ${activeTab === 'chat' ? DEFAULT_TAB_HEIGHT : ''} ${activeTab && activeTab !== 'chat' && TALL_TABS.includes(activeTab) ? 'min-h-[200px]' : ''} ${EXPAND_TRANSITION}`}>

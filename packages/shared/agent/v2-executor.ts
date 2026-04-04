@@ -1,3 +1,11 @@
+/**
+ * Agent V2 Executor — Streaming and non-streaming task execution.
+ *
+ * Executes tasks via OpenCode (default), Nullclaw, or CLI agents.
+ * Sanitizes LLM response content to remove heredoc/command blocks
+ * that would otherwise leak internal instruction formatting.
+ */
+
 import { agentSessionManager } from '../session/agent/agent-session-manager';
 import { getToolManager } from '@/lib/tools';
 import { createLogger } from '../utils/logger';
@@ -5,8 +13,19 @@ import { normalizeToolInvocation, type ToolInvocation } from '../types/tool-invo
 import type { ExecutionPolicy } from '../sandbox/types';
 import { determineExecutionPolicy } from '../sandbox/types';
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
+import type { PromptParameters } from './prompt-parameters';
 
 const logger = createLogger('Agent:V2Executor');
+
+// ---------------------------------------------------------------------------
+// Constants
+// ---------------------------------------------------------------------------
+
+const MAX_HEREDOC_LINES = 5000;
+
+// ---------------------------------------------------------------------------
+// Response Sanitization
+// ---------------------------------------------------------------------------
 
 /**
  * Sanitize message content to remove heredoc command blocks.
@@ -24,10 +43,10 @@ function sanitizeV2ResponseContent(content: string): string {
   // Remove explicit command envelopes — these are safe because the sentinel
   // strings are unique enough that there's no backtracking risk.
   sanitized = sanitized.replace(/===\s*COMMANDS_START\s*===([\s\S]*?)===\s*COMMANDS_END\s*===/gi, '');
-  
+
   // Remove bash heredoc blocks (NEW - preferred syntax)
   sanitized = removeBashHeredocBlocks(sanitized);
-  
+
   // Remove old fs-actions blocks (deprecated)
   sanitized = sanitized.replace(/```fs-actions\s*[\s\S]*?```/gi, '');
   sanitized = sanitized.replace(/<file_edit\s+path=["'][^"']+["']\s*>[\s\S]*?<\/file_edit>/gi, '');
@@ -54,20 +73,19 @@ function removeBashHeredocBlocks(content: string): string {
   let insideHeredoc = false;
   let heredocDelimiter: string | null = null;
   let heredocLineCount = 0;
-  const MAX_HEREDOC_LINES = 5000;
 
   for (const line of lines) {
     if (!insideHeredoc) {
       const trimmed = line.trim();
       const heredocMatch = trimmed.match(/^cat\s*(?:>>?)\s*[^\s<>&|]+\s*<<\s*['"]?(\w+)['"]?\s*$/i);
-      
+
       if (heredocMatch) {
         insideHeredoc = true;
         heredocDelimiter = heredocMatch[1];
         heredocLineCount = 0;
         continue;
       }
-      
+
       output.push(line);
     } else {
       heredocLineCount++;
@@ -101,7 +119,6 @@ function removeHeredocBlocks(content: string): string {
   const output: string[] = [];
   let insideHeredoc = false;
   let heredocLineCount = 0;
-  const MAX_HEREDOC_LINES = 5000;
 
   for (const line of lines) {
     if (!insideHeredoc) {
@@ -161,23 +178,48 @@ export interface V2ExecuteOptions {
   preferredAgent?: 'opencode' | 'nullclaw' | 'cli' | 'advanced';
   executionPolicy?: ExecutionPolicy;
   cliCommand?: { command: string; args?: string[] };
+  /** Optional prompt parameters for response style modification */
+  promptParams?: PromptParameters;
+}
+
+/**
+ * Normalized result shape returned by all execution paths.
+ */
+export interface V2ExecutionResult {
+  success: boolean;
+  data?: unknown;
+  content: string;
+  rawContent: string;
+  sessionId?: string;
+  conversationId?: string;
+  workspacePath?: string;
+  executionPolicy?: ExecutionPolicy;
+  fallbackToV1?: boolean;
+  error?: string;
+  errorCode?: string;
 }
 
 /**
  * Execute V2 task (non-streaming)
+ *
+ * Routes to the appropriate agent backend based on preferredAgent option.
+ * All paths return a consistent V2ExecutionResult shape.
  */
-export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
+export async function executeV2Task(options: V2ExecuteOptions): Promise<V2ExecutionResult> {
   const taskWithContext = options.context
     ? `${options.context}\n\nTASK:\n${options.task}`
     : options.task;
 
   const executionPolicy = buildExecutionPolicy(taskWithContext, options.executionPolicy);
 
-  let result: any;
+  // Map preferred agent to session mode; default to 'opencode' for unknown values
+  const sessionMode = mapPreferredAgentToSessionMode(options.preferredAgent);
+
   try {
+    // --- Nullclaw path -------------------------------------------------------
     if (options.preferredAgent === 'nullclaw') {
       const { taskRouter } = await import('./task-router');
-      result = await taskRouter.executeTask({
+      const result = await taskRouter.executeTask({
         id: `task-${Date.now()}`,
         userId: options.userId,
         conversationId: options.conversationId,
@@ -185,75 +227,89 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
         stream: false,
         preferredAgent: 'nullclaw',
       });
-    } else if (options.preferredAgent === 'advanced') {
-      // Note: 'advanced' agent is not yet implemented
-      // For now, fall through to opencode path with a warning
-      console.warn('[V2Executor] preferredAgent "advanced" is not yet implemented, using opencode path');
-      const toolManager = getToolManager();
-      const session = await agentSessionManager.getOrCreateSession(
-        options.userId,
-        options.conversationId,
-        { enableMCP: true, mode: 'opencode', executionPolicy },
-      );
-      const { runOpenCodeDirect } = await import('./opencode-direct');
-      result = await runOpenCodeDirect({
-        userId: options.userId,
-        conversationId: options.conversationId,
-        task: taskWithContext,
-        executionPolicy,
-        toolManager,
-      });
-    } else {
-      const toolManager = getToolManager();
 
-      // FIX (Bug 8): await session creation here so it is guaranteed to be
-      // in the manager's cache before runOpenCodeDirect executes.
-      // Use the active agent when creating the session; hardcoding 'opencode'
-      // here can attach nullclaw executions to a session with the wrong mode.
-      const session = await agentSessionManager.getOrCreateSession(
-        options.userId,
-        options.conversationId,
-        { enableMCP: true, mode: options.preferredAgent || 'opencode', executionPolicy },
-      );
-
-      const { runOpenCodeDirect } = await import('./opencode-direct');
-      result = await runOpenCodeDirect({
-        userId: options.userId,
-        conversationId: options.conversationId,
-        task: taskWithContext,
-        executionPolicy,
-        toolManager,
-      });
-
-      // FIX (Bug 8): use the session we already have rather than a second
-      // non-async lookup that may miss an as-yet-uncached session.
-      const rawContent = result.response || result.content || '';
-      const sanitizedContent = sanitizeV2ResponseContent(rawContent);
-
-      return {
-        success: result.success ?? true,
-        data: result,
-        content: sanitizedContent,
-        rawContent,
-        sessionId: session.id,
-        conversationId: session.conversationId,
-        workspacePath: session.workspacePath,
-        executionPolicy: session.executionPolicy,
-      };
+      const session = agentSessionManager.getSession(options.userId, options.conversationId);
+      const rawContent = result?.response ?? result?.content ?? '';
+      return buildResult(result, rawContent, session);
     }
-  } catch (error: any) {
-    logger.error('[V2Executor] Task execution failed:', error.message);
-    throw error;
-  }
 
-  // Nullclaw path: session may not exist
-  const session = agentSessionManager.getSession(options.userId, options.conversationId);
-  const rawContent = result.response || result.content || '';
+    // --- Advanced path (not yet fully implemented) ---------------------------
+    if (options.preferredAgent === 'advanced') {
+      logger.warn('[V2Executor] preferredAgent "advanced" is not yet implemented, using opencode path');
+      // Fall through to opencode path below
+    }
+
+    // --- OpenCode / CLI path (default) ---------------------------------------
+    const toolManager = getToolManager();
+
+    // Await session creation to ensure it is in the manager's cache before
+    // runOpenCodeDirect executes. This prevents race conditions where the
+    // downstream code looks up a session that hasn't been created yet.
+    const session = await agentSessionManager.getOrCreateSession(
+      options.userId,
+      options.conversationId,
+      { enableMCP: true, mode: sessionMode, executionPolicy },
+    );
+
+    const { runOpenCodeDirect } = await import('./opencode-direct');
+    const result = await runOpenCodeDirect({
+      userId: options.userId,
+      conversationId: options.conversationId,
+      task: taskWithContext,
+      executionPolicy,
+      toolManager,
+      promptParams: options.promptParams,
+    });
+
+    const rawContent = result.response ?? result.content ?? '';
+    return buildResult(result, rawContent, session);
+  } catch (error: unknown) {
+    const message = error instanceof Error ? error.message : String(error);
+    logger.error('[V2Executor] Task execution failed:', message);
+    return {
+      success: false,
+      content: '',
+      rawContent: '',
+      error: message,
+      errorCode: 'EXECUTION_FAILED',
+    };
+  }
+}
+
+/**
+ * Map the preferred agent string to a valid session mode.
+ * Returns 'opencode' as the default for any unrecognized value.
+ */
+function mapPreferredAgentToSessionMode(
+  preferredAgent: V2ExecuteOptions['preferredAgent'],
+): 'opencode' | 'nullclaw' | 'cli' {
+  switch (preferredAgent) {
+    case 'nullclaw':
+      return 'nullclaw';
+    case 'cli':
+      return 'cli';
+    case 'opencode':
+    case 'advanced': // advanced falls back to opencode
+    case undefined:
+    default:
+      return 'opencode';
+  }
+}
+
+/**
+ * Build a normalized V2ExecutionResult from raw execution output.
+ */
+function buildResult(
+  result: unknown,
+  rawContent: string,
+  session: ReturnType<typeof agentSessionManager.getSession>,
+): V2ExecutionResult {
   const sanitizedContent = sanitizeV2ResponseContent(rawContent);
+  const record = result as Record<string, unknown> | undefined;
 
   return {
-    success: result.success ?? true,
-    data: result,
+    success: record?.success ?? true,
+    data: record,
     content: sanitizedContent,
     rawContent,
     sessionId: session?.id,
@@ -263,29 +319,56 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<any> {
   };
 }
 
+/**
+ * Execute V2 task with SSE streaming.
+ *
+ * Returns a ReadableStream that emits typed events (init, step, token,
+ * tool_invocation, diffs, filesystem, done, error). Properly handles
+ * client disconnect via the cancel callback.
+ */
 export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStream {
   const encoder = new TextEncoder();
+  // Track whether the stream has been cancelled by the client
+  let cancelled = false;
 
-  const formatEvent = (type: string, data: any) =>
+  const formatEvent = (type: string, data: unknown) =>
     `event: ${type}\ndata: ${JSON.stringify(data)}\n\n`;
+
+  const safeEnqueue = (controller: ReadableStreamDefaultController<Uint8Array>, data: Uint8Array) => {
+    if (!cancelled) {
+      try {
+        controller.enqueue(data);
+      } catch {
+        // Controller may already be closed — ignore
+      }
+    }
+  };
 
   return new ReadableStream({
     async start(controller) {
+      // Resource cleanup trackers
+      const cleanupFns: Array<() => void> = [];
+      let pingInterval: ReturnType<typeof setInterval> | null = null;
+
       try {
         const taskWithContext = options.context
           ? `${options.context}\n\nTASK:\n${options.task}`
           : options.task;
 
-        // FIX (Bug 10): compute executionPolicy once and reuse everywhere
-        // so the init event and the actual execution always agree.
         const executionPolicy = buildExecutionPolicy(taskWithContext, options.executionPolicy);
 
-        controller.enqueue(encoder.encode(formatEvent('init', {
+        safeEnqueue(controller, encoder.encode(formatEvent('init', {
           agent: 'v2',
           conversationId: options.conversationId,
-          executionPolicy, // consistent with what will actually run
+          executionPolicy,
           timestamp: Date.now(),
         })));
+
+        // --- Keep-alive ping for long-running streams ------------------------
+        pingInterval = setInterval(() => {
+          safeEnqueue(controller, encoder.encode(formatEvent('ping', { timestamp: Date.now() })));
+        }, 30_000);
+        cleanupFns.push(() => { if (pingInterval) clearInterval(pingInterval); });
 
         const processingSteps: Array<{
           step: string;
@@ -294,7 +377,7 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           stepIndex: number;
           toolName?: string;
           toolCallId?: string;
-          result?: any;
+          result?: unknown;
           detail?: string;
         }> = [];
 
@@ -305,10 +388,10 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
         ) => {
           const payload = { step, status, timestamp: Date.now(), stepIndex: processingSteps.length, ...detail };
           processingSteps.push(payload);
-          controller.enqueue(encoder.encode(formatEvent('step', payload)));
+          safeEnqueue(controller, encoder.encode(formatEvent('step', payload)));
         };
 
-        let result: any;
+        let result: unknown;
         let toolInvocations: ToolInvocation[] = [];
 
         if (options.preferredAgent === 'nullclaw') {
@@ -322,9 +405,7 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
             preferredAgent: 'nullclaw',
           });
         } else {
-          // FIX (Bug 8): ensure session exists before runOpenCodeDirect
-          // Use consistent session mode based on preferredAgent
-          const sessionMode: 'opencode' | 'nullclaw' | 'cli' = options.preferredAgent === 'cli' ? 'cli' : 'opencode';
+          const sessionMode = mapPreferredAgentToSessionMode(options.preferredAgent);
           await agentSessionManager.getOrCreateSession(
             options.userId,
             options.conversationId,
@@ -338,8 +419,9 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
             conversationId: options.conversationId,
             task: taskWithContext,
             executionPolicy,
+            promptParams: options.promptParams,
             onChunk: (chunk) => {
-              controller.enqueue(encoder.encode(formatEvent('token', { content: chunk, timestamp: Date.now() })));
+              safeEnqueue(controller, encoder.encode(formatEvent('token', { content: chunk, timestamp: Date.now() })));
             },
             onTool: (toolName, args, toolResult) => {
               const toolCallId = `${toolName}-${Date.now()}`;
@@ -356,14 +438,16 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
               emitStep(`Tool ${toolName}`, toolResult?.success === false ? 'failed' : 'completed', {
                 toolName, toolCallId, result: toolResult,
               });
-              controller.enqueue(encoder.encode(formatEvent('tool_invocation', invocation)));
+              safeEnqueue(controller, encoder.encode(formatEvent('tool_invocation', invocation)));
             },
           });
         }
 
-        // FIX (Bug 8): use getSession (sync) after we know it was created above
+        if (cancelled) return;
+
         const session = agentSessionManager.getSession(options.userId, options.conversationId);
 
+        // --- Emit file diffs if available ------------------------------------
         let changedFiles: Array<{ path: string; diff: string; changeType: string }> = [];
         try {
           const { diffTracker } = await import('../virtual-filesystem/filesystem-diffs');
@@ -373,20 +457,22 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
         }
 
         if (changedFiles.length > 0) {
-          controller.enqueue(encoder.encode(formatEvent('diffs', {
+          safeEnqueue(controller, encoder.encode(formatEvent('diffs', {
             requestId: `v2-${session?.id || 'unknown'}`,
             count: changedFiles.length,
             files: changedFiles.map(f => ({ path: f.path, diff: f.diff, changeType: f.changeType })),
           })));
         }
 
-        if (result.fileChanges && result.fileChanges.length > 0) {
-          controller.enqueue(encoder.encode(formatEvent('filesystem', {
+        // --- Emit filesystem changes from result -----------------------------
+        const resultRecord = result as Record<string, unknown> | undefined;
+        if (resultRecord?.fileChanges && (resultRecord.fileChanges as any[]).length > 0) {
+          safeEnqueue(controller, encoder.encode(formatEvent('filesystem', {
             requestId: `v2-${session?.id || 'unknown'}`,
             status: 'auto_applied',
-            applied: result.fileChanges.map((fc: any) => ({
+            applied: (resultRecord.fileChanges as any[]).map((fc: any) => ({
               path: fc.path,
-              operation: fc.operation || fc.action || 'write',
+              operation: fc.operation ?? fc.action ?? 'write',
             })),
             errors: [],
             requestedFiles: [],
@@ -394,32 +480,44 @@ export function executeV2TaskStreaming(options: V2ExecuteOptions): ReadableStrea
           })));
         }
 
-        const rawContent = result.response || result.content || '';
+        // --- Final done event ------------------------------------------------
+        const rawContent = (resultRecord?.response ?? resultRecord?.content ?? '') as string;
         const sanitizedContent = sanitizeV2ResponseContent(rawContent);
 
-        controller.enqueue(encoder.encode(formatEvent('done', {
-          success: result.success ?? true,
+        safeEnqueue(controller, encoder.encode(formatEvent('done', {
+          success: resultRecord?.success ?? true,
           content: sanitizedContent,
           rawContent,
           messageMetadata: {
-            agent: result.agent || 'opencode',
+            agent: (resultRecord?.agent as string) || 'opencode',
             sessionId: session?.id,
             conversationId: session?.conversationId,
             toolInvocations,
             processingSteps,
           },
-          data: result,
+          data: resultRecord,
         })));
-      } catch (error: any) {
-        logger.error('Streaming execution failed', error);
-        controller.enqueue(encoder.encode(formatEvent('error', {
-          message: error.message || 'Execution failed',
-          fallbackToV1: true,
-          errorCode: 'EXECUTION_FAILED',
-        })));
+      } catch (error: unknown) {
+        if (!cancelled) {
+          const message = error instanceof Error ? error.message : 'Execution failed';
+          logger.error('Streaming execution failed', error);
+          safeEnqueue(controller, encoder.encode(formatEvent('error', {
+            message,
+            fallbackToV1: true,
+            errorCode: 'EXECUTION_FAILED',
+          })));
+        }
       } finally {
+        // Cleanup all registered resources
+        for (const cleanup of cleanupFns) cleanup();
         controller.close();
       }
+    },
+
+    // FIX (Bug 2): Handle client disconnect / stream cancellation
+    cancel() {
+      cancelled = true;
+      logger.info('[V2Executor] Stream cancelled by client');
     },
   });
 }

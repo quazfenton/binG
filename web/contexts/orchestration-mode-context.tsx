@@ -151,10 +151,12 @@ export function OrchestrationModeProvider({ children }: { children: React.ReactN
     saveConfig({ ...config, mode });
 
     // Persist to server-side DB (fire-and-forget — doesn't block UI)
+    // Server resolves userId from session_id cookie (internal auth) or JWT
     if (typeof window !== 'undefined') {
       fetch('/api/chat/modes', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
+        credentials: 'include',  // Include session_id cookie for auth resolution
         body: JSON.stringify({
           mode,
           source: 'ui',
@@ -181,9 +183,9 @@ export function OrchestrationModeProvider({ children }: { children: React.ReactN
   const resetToDefault = useCallback(() => {
     saveConfig(DEFAULT_CONFIG);
 
-    // Reset server-side too
+    // Reset server-side too (server resolves userId from session_id cookie)
     if (typeof window !== 'undefined') {
-      fetch('/api/chat/modes?userId=default', { method: 'DELETE' }).catch(() => {});
+      fetch('/api/chat/modes', { method: 'DELETE', credentials: 'include' }).catch(() => {});
     }
   }, [saveConfig]);
 
@@ -215,16 +217,12 @@ export function useOrchestrationMode() {
 
 /**
  * Get HTTP headers for orchestration mode
- * Call this when making agent API requests
+ * Always includes X-Orchestration-Mode when the mode is set (even if it's the default).
+ * This ensures user selection is honored regardless of server-side default wiring.
  */
 export function getOrchestrationModeHeaders(config?: OrchestrationModeConfig): Record<string, string> {
   const modeConfig = config || DEFAULT_CONFIG;
-  
-  if (modeConfig.mode === 'task-router') {
-    // Default mode - no special headers needed
-    return {};
-  }
-  
+
   return {
     'X-Orchestration-Mode': modeConfig.mode,
     'X-Orchestration-Auto-Apply': String(modeConfig.autoApply),

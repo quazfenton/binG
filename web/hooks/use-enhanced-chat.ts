@@ -15,6 +15,8 @@ export interface UseChatOptions {
   onResponse?: (response: Response) => void | Promise<void>;
   onError?: (error: Error) => void;
   onFinish?: (message: Message) => void;
+  /** Orchestration mode override — always sends X-Orchestration-Mode when set. If omitted, server uses its default routing. */
+  orchestrationMode?: string;
 }
 
 export interface UseChatReturn {
@@ -44,6 +46,7 @@ export interface UseChatReturn {
  * Enhanced useChat hook that properly handles our Server-Sent Events format
  */
 export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
+  const { orchestrationMode } = options;
   const [messages, setMessages] = useState<Message[]>([]);
   const [input, setInput] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -127,8 +130,16 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   }, []);
 
   const buildRequestHeaders = useCallback((): HeadersInit => {
-    return buildApiHeaders();
-  }, []);
+    const headers = buildApiHeaders();
+    // Always send X-Orchestration-Mode when explicitly configured.
+    // We don't skip 'task-router' here — if the user explicitly selects it,
+    // the server should honor that even if the server default changes later.
+    // Absence of the header means "use server default" (whatever that is).
+    if (orchestrationMode) {
+      return { ...headers, 'X-Orchestration-Mode': orchestrationMode };
+    }
+    return headers;
+  }, [orchestrationMode]);
 
   const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
@@ -1300,6 +1311,40 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                 case 'softTimeout':
                   if (process.env.NODE_ENV === 'development') {
                     console.log(`Chat stream event (${eventType}):`, eventData);
+                  }
+                  break;
+
+                // Orchestration progress events from mode handlers
+                case 'orchestration_progress':
+                  // Update agent activity with orchestration progress
+                  setAgentActivity(prev => ({
+                    ...prev,
+                    status: eventData.phase === 'responding' ? 'completed' :
+                            eventData.phase === 'planning' ? 'thinking' : 'executing',
+                    currentAction: eventData.currentAction || prev?.currentAction || '',
+                    phase: eventData.phase,
+                    mode: eventData.mode,
+                    nodeId: eventData.nodeId,
+                    nodeRole: eventData.nodeRole,
+                    nodeModel: eventData.nodeModel,
+                    nodeProvider: eventData.nodeProvider,
+                    steps: eventData.steps,
+                    currentStepIndex: eventData.currentStepIndex,
+                    totalSteps: eventData.totalSteps,
+                    nodes: eventData.nodes,
+                    nodeCommunication: eventData.nodeCommunication,
+                    errors: eventData.errors,
+                    hitlRequests: eventData.hitlRequests,
+                    metadata: eventData.metadata,
+                  }));
+
+                  // Update agent status based on phase
+                  if (eventData.phase === 'planning') {
+                    setAgentStatus('thinking');
+                  } else if (eventData.phase === 'acting' || eventData.phase === 'verifying') {
+                    setAgentStatus('executing');
+                  } else if (eventData.phase === 'responding') {
+                    setAgentStatus('completed');
                   }
                   break;
 

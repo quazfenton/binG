@@ -709,23 +709,49 @@ export async function* streamWithVercelAI(
       (error.statusCode === 400 && error.message?.includes('Invalid'));
 
     if (isResponsesApiError && !useCompatibilityFallback && provider === 'openrouter') {
-      chatLogger.warn('Responses API failed, retrying with Chat Completions format', {
+      chatLogger.warn('Responses API failed, retrying with provider-agnostic fallback', {
         requestId,
         provider,
         model: modelName,
         error: error.message,
       });
-      
-      // Retry with compatibility mode forced
+
+      // Retry with provider-agnostic fallback — tries configured providers in order
       useCompatibilityFallback = true;
-      
-      // Create model for fallback
+
       const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
-      const { createOpenAI } = await import('@ai-sdk/openai');
-      const fallbackModel = createOpenAI({
-        apiKey: key || currentEnv.OPENROUTER_API_KEY,
-        baseURL: url || process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
-      });
+      const fallbackProviderName = currentEnv.DEFAULT_FALLBACK_PROVIDER || 'mistral';
+      const fallbackModelName = currentEnv.FAST_MODEL || currentEnv.DEFAULT_MODEL || 'mistral-small-latest';
+      chatLogger.info('Streaming fallback activated', { fallbackProvider: fallbackProviderName, fallbackModel: fallbackModelName });
+
+      let fallbackModel: any;
+      try {
+        const { createMistral } = await import('@ai-sdk/mistral');
+        const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
+        const { createAnthropic } = await import('@ai-sdk/anthropic');
+        const { createOpenAI } = await import('@ai-sdk/openai');
+
+        const providerFactories: Record<string, () => any> = {
+          mistral: () => createMistral({ apiKey: currentEnv.MISTRAL_API_KEY })(fallbackModelName),
+          google: () => createGoogleGenerativeAI({ apiKey: currentEnv.GOOGLE_API_KEY })(fallbackModelName),
+          anthropic: () => createAnthropic({ apiKey: currentEnv.ANTHROPIC_API_KEY })(fallbackModelName),
+          openai: () => createOpenAI({ apiKey: currentEnv.OPENAI_API_KEY })(fallbackModelName),
+        };
+
+        const factory = providerFactories[fallbackProviderName];
+        if (factory) {
+          fallbackModel = factory();
+        } else {
+          // Unknown provider — try OpenAI-compatible format
+          fallbackModel = createOpenAI({
+            apiKey: currentEnv.OPENAI_API_KEY,
+            baseURL: currentEnv.OPENAI_BASE_URL,
+          })(fallbackModelName);
+        }
+      } catch (fallbackInitError: any) {
+        chatLogger.error('All fallback provider initializations failed', { error: fallbackInitError.message });
+        throw error; // Re-throw original error — no viable fallback
+      }
 
       // Retry the stream with fallback model
       try {

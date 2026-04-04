@@ -1,17 +1,23 @@
 /**
  * GET /api/chat/modes
  * - Returns available orchestration modes with metadata
- * - With ?current=1&userId=X: returns current persisted mode for user
+ * - With ?current=1: returns current persisted mode for authenticated user
  *
  * POST /api/chat/modes
- * - Sets the orchestration mode for a user (persists to DB)
+ * - Sets the orchestration mode for authenticated user (persists to DB)
  * - Emits MODE_CHANGE event to event store
- * - Accepts: { mode, userId, sessionId?, source?, config? }
+ * - Accepts: { mode, sessionId?, source?, config? }
+ * - Auth: Uses session_id cookie (internal auth) or JWT Bearer token
+ *
+ * DELETE /api/chat/modes
+ * - Resets mode to default (task-router)
+ * - Auth: Uses session_id cookie (internal auth) or JWT Bearer token
  */
 
 import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
 import { createLogger } from '@/lib/utils/logger';
+import { resolveRequestAuth } from '@/lib/auth/request-auth';
 
 interface ModeMetadata {
   id: string;
@@ -425,14 +431,16 @@ const logger = createLogger('ModesEndpoint');
 export async function GET(request: NextRequest) {
   const url = new URL(request.url);
 
-  // Support ?current=1&userId=X to get the user's current persisted mode
+  // Support ?current=1 to get the user's current persisted mode
   if (url.searchParams.get('current') === '1') {
-    const userId = url.searchParams.get('userId');
+    // Resolve user identity from session_id cookie, JWT, or anonymous session
+    const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
+    const userId = authResult.success ? authResult.userId : authResult.anonymousId;
 
     if (!userId) {
       return NextResponse.json(
-        { success: false, error: 'userId query param required for current mode' },
-        { status: 400 }
+        { success: false, error: 'Unable to resolve user identity' },
+        { status: 401 }
       );
     }
 
@@ -483,7 +491,7 @@ export async function GET(request: NextRequest) {
         isDefault: row.mode === 'task-router',
         source: row.source,
         sessionId: row.session_id,
-        config: row.config ? JSON.parse(row.config) : null,
+        config: row.config ? (() => { try { return JSON.parse(row.config); } catch { return null; } })() : null,
         previousMode: row.previous_mode,
         changedAt: row.changed_at,
         catalog: catalogEntry ? {
@@ -567,10 +575,20 @@ export async function GET(request: NextRequest) {
 // ============================================================================
 export async function POST(request: NextRequest) {
   try {
+    // Resolve user identity from session_id cookie, JWT, or anonymous session
+    const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
+    const userId = authResult.success ? authResult.userId : authResult.anonymousId;
+
+    if (!userId) {
+      return NextResponse.json(
+        { success: false, error: 'Unable to resolve user identity' },
+        { status: 401 }
+      );
+    }
+
     const body = await request.json();
-    const { mode, userId, sessionId, source = 'api', config } = body as {
+    const { mode, sessionId, source = 'ui', config } = body as {
       mode: string;
-      userId?: string;
       sessionId?: string;
       source?: 'ui' | 'api' | 'header' | 'default';
       config?: Record<string, unknown>;
@@ -580,13 +598,6 @@ export async function POST(request: NextRequest) {
     if (!mode) {
       return NextResponse.json(
         { success: false, error: 'mode is required' },
-        { status: 400 }
-      );
-    }
-
-    if (!userId) {
-      return NextResponse.json(
-        { success: false, error: 'userId is required' },
         { status: 400 }
       );
     }
@@ -724,13 +735,14 @@ export async function POST(request: NextRequest) {
 // ============================================================================
 export async function DELETE(request: NextRequest) {
   try {
-    const url = new URL(request.url);
-    const userId = url.searchParams.get('userId');
+    // Resolve user identity from session_id cookie, JWT, or anonymous session
+    const authResult = await resolveRequestAuth(request, { allowAnonymous: true });
+    const userId = authResult.success ? authResult.userId : authResult.anonymousId;
 
     if (!userId) {
       return NextResponse.json(
-        { success: false, error: 'userId is required' },
-        { status: 400 }
+        { success: false, error: 'Unable to resolve user identity' },
+        { status: 401 }
       );
     }
 

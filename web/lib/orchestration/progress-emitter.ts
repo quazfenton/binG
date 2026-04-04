@@ -5,14 +5,32 @@
  * Supports both durable event storage (SQLite) and SSE streaming.
  * All fields except type/userId/sessionId are optional.
  *
+ * Features:
+ * - Lazy-loaded event bus import (cached after first call)
+ * - Graceful degradation: SSE emission failures don't block DB persistence
+ * - Event validation via Zod schema in emitEvent
+ *
  * @module orchestration/progress-emitter
  */
 
 import { createLogger } from '@/lib/utils/logger';
+import type { OrchestrationProgressEvent } from '@/lib/events/schema';
 
 const logger = createLogger('OrchestrationProgress');
 
+// Cache the emitEvent import after first resolution to avoid repeated dynamic imports
+let _emitEventPromise: Promise<typeof import('@/lib/events/bus').emitEvent> | null = null;
+
+function getEmitEvent(): Promise<typeof import('@/lib/events/bus').emitEvent> {
+  if (!_emitEventPromise) {
+    _emitEventPromise = import('@/lib/events/bus').then(mod => mod.emitEvent);
+  }
+  return _emitEventPromise;
+}
+
 export interface OrchestrationProgressUpdate {
+  /** Optional correlation ID for tracing related events across systems */
+  correlationId?: string;
   mode?: string;
   nodeId?: string;
   nodeRole?: string;
@@ -61,6 +79,9 @@ export interface OrchestrationProgressUpdate {
  * Emit an orchestration progress event to both the durable event store
  * and any active SSE stream (via the provided emitter callback).
  *
+ * SSE emission is fire-and-forget (UI updates shouldn't block execution).
+ * DB persistence errors are logged but don't throw (graceful degradation).
+ *
  * @param userId - User ID for event ownership
  * @param sessionId - Optional session ID for grouping
  * @param update - Progress update data (all fields optional except type context)
@@ -72,38 +93,39 @@ export async function emitOrchestrationProgress(
   update: OrchestrationProgressUpdate,
   sseEmit?: (eventType: string, payload: Record<string, unknown>) => void
 ): Promise<void> {
-  const payload = {
+  const timestamp = Date.now();
+  const payload: OrchestrationProgressEvent = {
+    type: 'ORCHESTRATION_PROGRESS',
+    userId,
+    sessionId,
     ...update,
-    timestamp: Date.now(),
+    timestamp,
   };
 
-  // Emit to SSE stream if available (real-time UI updates)
+  // Emit to SSE stream first (real-time UI updates — fire-and-forget)
   if (sseEmit) {
     try {
       sseEmit('orchestration_progress', payload);
     } catch (sseError: any) {
-      logger.warn('Failed to emit SSE orchestration_progress event', { error: sseError.message });
+      // SSE stream may be closed — log but don't fail
+      logger.debug('SSE emit skipped (stream likely closed)', { error: sseError.message });
     }
   }
 
-  // Persist to durable event store
+  // Persist to durable event store (graceful degradation on failure)
   try {
-    const { emitEvent } = await import('@/lib/events/bus');
-    await emitEvent(
-      {
-        type: 'ORCHESTRATION_PROGRESS',
-        userId,
-        sessionId,
-        ...payload,
-      },
-      userId,
-      sessionId
-    );
+    const emitEvent = await getEmitEvent();
+    await emitEvent(payload, userId, sessionId);
   } catch (storeError: any) {
-    // Non-fatal — don't break execution if event storage fails
-    logger.warn('Failed to persist ORCHESTRATION_PROGRESS event', { error: storeError.message });
+    // Non-fatal — don't break orchestration execution if event storage fails
+    logger.warn('Failed to persist ORCHESTRATION_PROGRESS event (non-fatal)', {
+      error: storeError.message,
+      mode: update.mode,
+      phase: update.phase,
+    });
   }
 
+  // Debug logging for observability
   logger.debug('Orchestration progress emitted', {
     userId,
     sessionId,
@@ -111,6 +133,7 @@ export async function emitOrchestrationProgress(
     phase: update.phase,
     nodeId: update.nodeId,
     currentAction: update.currentAction?.substring(0, 80),
+    correlationId: update.correlationId,
   });
 }
 
@@ -122,6 +145,7 @@ export async function emitStepProgress(
   sessionId: string | undefined,
   options: {
     mode?: string;
+    correlationId?: string;
     steps: OrchestrationProgressUpdate['steps'];
     currentStepIndex: number;
     currentAction?: string;
@@ -130,6 +154,7 @@ export async function emitStepProgress(
   }
 ): Promise<void> {
   await emitOrchestrationProgress(userId, sessionId, {
+    correlationId: options.correlationId,
     mode: options.mode,
     steps: options.steps,
     currentStepIndex: options.currentStepIndex,
@@ -147,6 +172,7 @@ export async function emitNodeStatus(
   sessionId: string | undefined,
   options: {
     mode?: string;
+    correlationId?: string;
     nodeId: string;
     nodeRole?: string;
     nodeModel?: string;
@@ -157,6 +183,7 @@ export async function emitNodeStatus(
   }
 ): Promise<void> {
   await emitOrchestrationProgress(userId, sessionId, {
+    correlationId: options.correlationId,
     mode: options.mode,
     nodeId: options.nodeId,
     nodeRole: options.nodeRole,
@@ -181,6 +208,7 @@ export async function emitRetryError(
   sessionId: string | undefined,
   options: {
     mode?: string;
+    correlationId?: string;
     nodeId?: string;
     message: string;
     retryCount?: number;
@@ -189,6 +217,7 @@ export async function emitRetryError(
   }
 ): Promise<void> {
   await emitOrchestrationProgress(userId, sessionId, {
+    correlationId: options.correlationId,
     mode: options.mode,
     nodeId: options.nodeId,
     errors: [{
@@ -208,6 +237,7 @@ export async function emitHITLRequest(
   sessionId: string | undefined,
   options: {
     mode?: string;
+    correlationId?: string;
     id?: string;
     action: string;
     reason?: string;
@@ -216,6 +246,7 @@ export async function emitHITLRequest(
   }
 ): Promise<void> {
   await emitOrchestrationProgress(userId, sessionId, {
+    correlationId: options.correlationId,
     mode: options.mode,
     hitlRequests: [{
       id: options.id,
@@ -224,5 +255,33 @@ export async function emitHITLRequest(
       status: 'pending',
       timeoutAt: options.timeoutAt,
     }],
+  }, options.sseEmit);
+}
+
+/**
+ * Convenience: emit inter-node communication event
+ */
+export async function emitNodeCommunication(
+  userId: string,
+  sessionId: string | undefined,
+  options: {
+    mode?: string;
+    correlationId?: string;
+    from: string;
+    to: string;
+    content: string;
+    type: 'delegation' | 'response' | 'review' | 'consensus' | 'relay';
+    sseEmit?: (eventType: string, payload: Record<string, unknown>) => void;
+  }
+): Promise<void> {
+  await emitOrchestrationProgress(userId, sessionId, {
+    correlationId: options.correlationId,
+    mode: options.mode,
+    nodeCommunication: {
+      from: options.from,
+      to: options.to,
+      content: options.content,
+      type: options.type,
+    },
   }, options.sseEmit);
 }

@@ -189,6 +189,52 @@ const nextConfig = {
       '.cjs': ['.cjs', '.cts'],
     };
 
+    // Resolve monorepo workspace packages (matches tsconfig paths)
+    const packagesRoot = resolve(projectRoot, '..', 'packages');
+    config.resolve.alias = {
+      ...config.resolve.alias,
+      '@bing/platform': resolve(packagesRoot, 'platform/src/env.ts'),
+      '@bing/shared/agent/v2-executor': resolve(packagesRoot, 'shared/agent/v2-executor.ts'),
+      '@bing/shared/agent/workforce-manager': resolve(packagesRoot, 'shared/agent/workforce-manager.ts'),
+      '@bing/shared/agent/workforce-state': resolve(packagesRoot, 'shared/agent/workforce-state.ts'),
+      '@bing/shared/agent/orchestration-mode-handler': resolve(packagesRoot, 'shared/agent/orchestration-mode-handler.ts'),
+      '@bing/shared/agent/prompt-parameters': resolve(packagesRoot, 'shared/agent/prompt-parameters.ts'),
+      '@bing/shared/agent/prompt-parameters.codec': resolve(packagesRoot, 'shared/agent/prompt-parameters.codec.ts'),
+      '@bing/shared/agent/nullclaw-integration': resolve(packagesRoot, 'shared/agent/nullclaw-integration.ts'),
+      '@bing/shared/agent/enhanced-background-jobs': resolve(packagesRoot, 'shared/agent/enhanced-background-jobs.ts'),
+      '@bing/shared/agent/background-jobs': resolve(packagesRoot, 'shared/agent/background-jobs.ts'),
+      '@bing/shared/agent/general-domain-prompts': resolve(packagesRoot, 'shared/agent/general-domain-prompts.ts'),
+      '@bing/shared/agent/general-domain-prompts-v2': resolve(packagesRoot, 'shared/agent/general-domain-prompts-v2.ts'),
+      '@bing/shared/agent/general-domain-prompts-v3': resolve(packagesRoot, 'shared/agent/general-domain-prompts-v3.ts'),
+      '@bing/shared/agent/general-domain-prompts-v4': resolve(packagesRoot, 'shared/agent/general-domain-prompts-v4.ts'),
+      '@bing/shared/agent/system-prompts': resolve(packagesRoot, 'shared/agent/system-prompts.ts'),
+      '@bing/shared/agent/system-prompts-supplementary': resolve(packagesRoot, 'shared/agent/system-prompts-supplementary.ts'),
+      '@bing/shared/agent/agent-kernel': resolve(packagesRoot, 'shared/agent/agent-kernel.ts'),
+      '@bing/shared/agent/agent-workspace': resolve(packagesRoot, 'shared/agent/agent-workspace.ts'),
+      '@bing/shared/agent/agent-fs-bridge': resolve(packagesRoot, 'shared/agent/agent-fs-bridge.ts'),
+      '@bing/shared/agent/cloud-agent-offload': resolve(packagesRoot, 'shared/agent/cloud-agent-offload.ts'),
+      '@bing/shared/agent/execution-graph': resolve(packagesRoot, 'shared/agent/execution-graph.ts'),
+      '@bing/shared/agent/unified-agent': resolve(packagesRoot, 'shared/agent/unified-agent.ts'),
+      '@bing/shared/agent/loop-detection': resolve(packagesRoot, 'shared/agent/loop-detection.ts'),
+      '@bing/shared/agent/timeout-escalation': resolve(packagesRoot, 'shared/agent/timeout-escalation.ts'),
+      '@bing/shared/agent/capability-chain': resolve(packagesRoot, 'shared/agent/capability-chain.ts'),
+      '@bing/shared/agent/bootstrapped-agency': resolve(packagesRoot, 'shared/agent/bootstrapped-agency.ts'),
+      '@bing/shared/agent/productive-scripts': resolve(packagesRoot, 'shared/agent/productive-scripts.ts'),
+      '@bing/shared/agent/task-router': resolve(packagesRoot, 'shared/agent/task-router.ts'),
+      '@bing/shared/agent/task-classifier': resolve(packagesRoot, 'shared/agent/task-classifier.ts'),
+      '@bing/shared/agent/multi-agent-collaboration': resolve(packagesRoot, 'shared/agent/multi-agent-collaboration.ts'),
+      '@bing/shared/agent/mastra-workflow-integration': resolve(packagesRoot, 'shared/agent/mastra-workflow-integration.ts'),
+      '@bing/shared/agent/opencode-direct': resolve(packagesRoot, 'shared/agent/opencode-direct.ts'),
+      '@bing/shared/agent/nullclaw-integration': resolve(packagesRoot, 'shared/agent/nullclaw-integration.ts'),
+      '@bing/shared/agent/git-manager': resolve(packagesRoot, 'shared/agent/git-manager.ts'),
+      '@bing/shared/agent/workflow-templates': resolve(packagesRoot, 'shared/agent/workflow-templates.ts'),
+      '@bing/shared/agent/simulated-orchestration': resolve(packagesRoot, 'shared/agent/simulated-orchestration.ts'),
+      '@bing/shared/agent/orchestration/agent-orchestrator': resolve(packagesRoot, 'shared/agent/orchestration/agent-orchestrator.ts'),
+      '@bing/shared/agent/services/agent-worker/src': resolve(packagesRoot, 'shared/agent/services/agent-worker/src/index.ts'),
+      '@bing/shared/agent/services/agent-gateway/src': resolve(packagesRoot, 'shared/agent/services/agent-gateway/src/index.ts'),
+      '@bing/shared/agent/tool-router/tool-router': resolve(packagesRoot, 'shared/agent/tool-router/tool-router.ts'),
+    };
+
     config.resolve.mainFields = ['module', 'main'];
 
     if (isServer) {

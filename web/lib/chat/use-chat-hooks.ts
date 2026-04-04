@@ -101,8 +101,8 @@ export interface ChatState {
  */
 export function useChatEnhanced(options: UseChatOptions = {}): ChatState {
   const {
-    provider = 'openai',
-    model = 'gpt-4o',
+    provider = '',
+    model = '',
     enableTokenTracking = true,
     enableReasoningDisplay = true,
     maxRetries = 3,
