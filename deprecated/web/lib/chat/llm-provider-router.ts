@@ -250,7 +250,7 @@ export class LLMProviderRouter {
     costSensitivity?: 'low' | 'medium' | 'high';
     latencySensitivity?: 'low' | 'medium' | 'high';
     excludedProviders?: LLMProviderType[];
-  }): ProviderSelectionResult {
+  }): ProviderSelectionResult | null {
     const {
       model,
       requireStreaming = true,
@@ -268,14 +268,10 @@ export class LLMProviderRouter {
     );
 
     if (availableProviders.length === 0) {
-      // Fallback to openrouter if no providers available
-      return {
-        provider: 'openrouter',
-        model: model || 'qwen/qwen3-30b-a3b:free',
-        reason: 'No providers available, using fallback',
-        estimatedLatencyMs: 2000,
-        costPer1kTokens: 0.001,
-      };
+      // No providers with latency data — return null and let the caller
+      // fall back through the configured provider chain (config file → env vars).
+      // Never silently inject a hardcoded provider here.
+      return null;
     }
 
     // Score providers
@@ -418,7 +414,7 @@ export class LLMProviderRouter {
   private getDefaultModel(provider: LLMProviderType): string {
     const defaults: Record<LLMProviderType, string> = {
       'openai': 'gpt-5-mini',
-      'openrouter': 'qwen/qwen3-30b-a3b:free',
+      'openrouter': 'qwen/qwen3-coder:free',
       'anthropic': 'claude-3-haiku-20240307',
       'google': 'gemini-3-flash-preview',
       'mistral': 'mistral-small-latest',

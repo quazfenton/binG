@@ -51,6 +51,8 @@ interface SettingsProps {
   onVoiceToggle?: (enabled: boolean) => void;
   livekitEnabled?: boolean;
   onLivekitToggle?: (enabled: boolean) => void;
+  showResponseStyle?: boolean;
+  onResponseStyleToggle?: (enabled: boolean) => void;
 }
 
 const CUSTOM_BG_MEDIA_KEY = "custom_bg_media_url";
@@ -120,6 +122,8 @@ export default function Settings({
   onVoiceToggle,
   livekitEnabled = false,
   onLivekitToggle,
+  showResponseStyle = true,
+  onResponseStyleToggle,
 }: SettingsProps) {
   const { isAuthenticated, user, login, logout, register, getApiKeys, setApiKeys, isLoading } = useAuth();
   const [textSize, setTextSize] = useState(100);
@@ -1293,6 +1297,22 @@ export default function Settings({
               </div>
             )}
 
+            {/* Response Style Selector Toggle */}
+            {onResponseStyleToggle && (
+              <div className="flex items-center justify-between">
+                <div className="flex items-center">
+                  <Palette className="h-4 w-4 mr-2 text-purple-400" />
+                  <Label htmlFor="response-style-enabled">Response Style Settings</Label>
+                </div>
+                <div
+                  className={`custom-toggle ${showResponseStyle ? 'active' : ''}`}
+                  onClick={() => onResponseStyleToggle && onResponseStyleToggle(!showResponseStyle)}
+                >
+                  <div className="custom-toggle-slider" />
+                </div>
+              </div>
+            )}
+
             <div className="space-y-3">
               <div className="flex items-center justify-between">
                 <div className="flex items-center">
@@ -1668,6 +1688,8 @@ export default function Settings({
                     { id: 'openai', name: 'OpenAI', placeholder: 'sk-...', env: 'OPENAI_API_KEY' },
                     { id: 'anthropic', name: 'Anthropic', placeholder: 'sk-ant-...', env: 'ANTHROPIC_API_KEY' },
                     { id: 'google', name: 'Google', placeholder: 'AIza...', env: 'GOOGLE_API_KEY' },
+                    { id: 'nvidia', name: 'NVIDIA NIM', placeholder: 'nvapi-...', env: 'NVIDIA_API_KEY' },
+                    { id: 'github', name: 'GitHub Models', placeholder: 'ghp_...', env: 'GITHUB_MODELS_API_KEY' },
                     { id: 'mistral', name: 'Mistral', placeholder: '...', env: 'MISTRAL_API_KEY' },
                     { id: 'openrouter', name: 'OpenRouter', placeholder: 'sk-or-...', env: 'OPENROUTER_API_KEY' },
                     { id: 'together', name: 'Together AI', placeholder: '...', env: 'TOGETHER_API_KEY' },
@@ -1675,9 +1697,12 @@ export default function Settings({
                     { id: 'chutes', name: 'Chutes', placeholder: '...', env: 'CHUTES_API_KEY' },
                     { id: 'cohere', name: 'Cohere', placeholder: '...', env: 'COHERE_API_KEY' },
                     { id: 'groq', name: 'Groq', placeholder: 'gsk_...', env: 'GROQ_API_KEY' },
+                    { id: 'zen', name: 'Zen', placeholder: '...', env: 'ZEN_API_KEY' },
                     { id: 'perplexity', name: 'Perplexity', placeholder: 'pplx-...', env: 'PERPLEXITY_API_KEY' },
-                    { id: 'anyscale', name: 'Anyscale', placeholder: '...', env: 'ANYSCALE_API_KEY' },
+                    { id: 'anyscale', name: 'Anyscale', placeholder: 'es_...', env: 'ANYSCALE_API_KEY' },
                     { id: 'deepinfra', name: 'DeepInfra', placeholder: '...', env: 'DEEPINFRA_API_KEY' },
+                    { id: 'fireworks', name: 'Fireworks AI', placeholder: 'fw_...', env: 'FIREWORKS_API_KEY' },
+                    { id: 'lepton', name: 'Lepton AI', placeholder: '...', env: 'LEPTON_API_KEY' },
                   ].map((provider) => {
                     const value = userApiKeys[provider.id] || '';
                     const isSet = !!value;

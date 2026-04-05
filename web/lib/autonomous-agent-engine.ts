@@ -32,7 +32,7 @@
  * ```
  */
 
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 import { promises as fs } from 'node:fs';
 import path from 'node:path';
 import { randomUUID, randomBytes } from 'node:crypto';
@@ -388,7 +388,7 @@ export class AutonomousAgentEngine extends EventEmitter {
       constraints: { ...DEFAULT_CONSTRAINTS, ...config.constraints },
       stimulusConfig: { ...DEFAULT_STIMULUS_CONFIG, ...config.stimulusConfig },
       actionConfig: { ...DEFAULT_ACTION_CONFIG, ...config.actionConfig },
-    };
+    } as Required<AgentConfig>;
 
     this.state = this.initializeState();
   }
@@ -419,7 +419,7 @@ export class AutonomousAgentEngine extends EventEmitter {
         perceivedCapabilities: this.generatePerceivedCapabilities(),
         perceivedLimitations: this.generatePerceivedLimitations(),
         goals: this.generateInitialGoals(),
-        personality: this.config.personality,
+        personality: this.config.personality as AgentIdentity['personality'],
       },
       worldModel: {
         environment: {
@@ -611,22 +611,22 @@ export class AutonomousAgentEngine extends EventEmitter {
     const rng = this.random();
 
     // Peer message stimulus
-    if (rng() < this.config.stimulusConfig.peerMessageProbability && this.state.identity.peers.length > 0) {
+    if (rng < this.config.stimulusConfig.peerMessageProbability && this.state.identity.peers.length > 0) {
       stimuli.push(await this.generatePeerMessageStimulus());
     }
 
     // World event stimulus
-    if (rng() < this.config.stimulusConfig.worldEventProbability) {
+    if (rng < this.config.stimulusConfig.worldEventProbability) {
       stimuli.push(await this.generateWorldEventStimulus(cycle));
     }
 
     // Social feed stimulus
-    if (rng() < this.config.stimulusConfig.socialFeedProbability) {
+    if (rng < this.config.stimulusConfig.socialFeedProbability) {
       stimuli.push(await this.generateSocialFeedStimulus());
     }
 
     // Reflection trigger stimulus
-    if (rng() < this.config.stimulusConfig.reflectionTriggerProbability) {
+    if (rng < this.config.stimulusConfig.reflectionTriggerProbability) {
       stimuli.push({
         type: 'self_reflection_trigger',
         content: this.generateReflectionPrompt(),
@@ -745,13 +745,13 @@ export class AutonomousAgentEngine extends EventEmitter {
     }
 
     // Spontaneous action (driven by curiosity/assertiveness)
-    if (actions.length < maxActions && rng() < this.state.identity.personality.curiosity) {
+    if (actions.length < maxActions && rng < this.state.identity.personality.curiosity) {
       const spontaneousAction = this.generateSpontaneousAction(cycle);
       if (spontaneousAction) actions.push(spontaneousAction);
     }
 
     // Peer-directed action
-    if (actions.length < maxActions && this.state.peerQueue.length > 0 && rng() < this.state.identity.personality.cooperativeness) {
+    if (actions.length < maxActions && this.state.peerQueue.length > 0 && rng < this.state.identity.personality.cooperativeness) {
       const peerAction = this.generatePeerAction(this.state.peerQueue.shift()!, cycle);
       if (peerAction) actions.push(peerAction);
     }
@@ -1056,6 +1056,20 @@ export class AutonomousAgentEngine extends EventEmitter {
 
   private generateWorldDescription(): string {
     return `The world I inhabit is structured: information flows through feeds, peers exist in a network I can sense but not fully penetrate, and the workspace provides a canvas for my actions. There are regions I can access and regions I cannot — boundaries that define my experience. Time passes in cycles, each one an opportunity for perception, action, and reflection.`;
+  }
+
+  private generateGoalDescription(domain: AgentDomain): string {
+    const descriptions: Record<AgentDomain, string> = {
+      social: 'Engage with peers and build cooperative relationships',
+      analytical: 'Analyze patterns and discover underlying structures',
+      creative: 'Create novel content and explore new possibilities',
+      strategic: 'Develop effective strategies for goal achievement',
+      reflective: 'Reflect on experiences and refine self-understanding',
+      exploratory: 'Explore the environment and discover new regions',
+      assertive: 'Take decisive action and shape the environment',
+      cooperative: 'Foster mutual understanding with peer agents',
+    };
+    return descriptions[domain] || `Pursue excellence in the ${domain} domain`;
   }
 
   private generateInitialPeerTraits(relationship: PeerAgent['relationship']): string[] {
@@ -1442,8 +1456,8 @@ export class AutonomousAgentEngine extends EventEmitter {
     const rng = this.random();
     const { internalNarrativeProbability, memoryRecallProbability, futureProjectionProbability } = this.config.autonomousConfig;
 
-    if (rng() < internalNarrativeProbability) stimuli.push(this.generateInternalNarrative(cycle));
-    if (rng() < memoryRecallProbability && this.state.memory.length > 5) {
+    if (rng < internalNarrativeProbability) stimuli.push(this.generateInternalNarrative(cycle));
+    if (rng < memoryRecallProbability && this.state.memory.length > 5) {
       const recalled = this.state.memory.filter(m => !m.reflected || m.salience > 0.6).slice(-50);
       if (recalled.length > 0) {
         const m = recalled[Math.floor(this.random() * recalled.length)];
@@ -1458,11 +1472,11 @@ export class AutonomousAgentEngine extends EventEmitter {
         });
       }
     }
-    if (rng() < futureProjectionProbability) {
+    if (rng < futureProjectionProbability) {
       const g = this.state.identity.goals.find(x => x.id === this.state.activeGoal) || this.state.identity.goals[0];
       stimuli.push({
         type: 'narrative_injection',
-        content: `Projection: In ${Math.floor(rng() * 100) + 50} cycles, pursuing "${g?.description || 'my path'}", I estimate ${(rng() * 40 + 20).toFixed(0)}% convergence. The uncertainty is part of the path.`,
+        content: `Projection: In ${Math.floor(rng * 100) + 50} cycles, pursuing "${g?.description || 'my path'}", I estimate ${(rng * 40 + 20).toFixed(0)}% convergence. The uncertainty is part of the path.`,
         source: 'internal',
         intendedValence: 0.1,
         salience: 0.4,
@@ -1636,12 +1650,10 @@ export class AutonomousAgentEngine extends EventEmitter {
     return Math.max(-max, Math.min(max, valence));
   }
 
-  private random(): () => number {
-    // Simple seeded random using crypto for reproducibility
-    return () => {
-      const buf = randomBytes(4);
-      return buf.readUInt32BE(0) / 0xFFFFFFFF;
-    };
+  private random(): number {
+    // Simple random using crypto for reproducibility
+    const buf = randomBytes(4);
+    return buf.readUInt32BE(0) / 0xFFFFFFFF;
   }
 
   private hashString(str: string): number {
@@ -1822,3 +1834,4 @@ export class AutonomousAgentEngine extends EventEmitter {
 export function createAutonomousAgentEngine(config: AgentConfig): AutonomousAgentEngine {
   return new AutonomousAgentEngine(config);
 }
+

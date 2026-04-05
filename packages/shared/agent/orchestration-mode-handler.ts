@@ -76,8 +76,7 @@ export interface ModeConfig {
     type: string;
     model?: string;
   }>;
-  // agent-loop
-  maxIterations?: number;
+  // agent-loop (maxIterations already declared above)
   // nullclaw
   taskType?: string;
   // execution-graph
@@ -237,7 +236,7 @@ export async function executeWithOrchestrationMode(
         result = {
           success: statefulResult.success,
           response: statefulResult.response,
-          steps: statefulResult.steps,
+          steps: statefulResult.steps as any,
           error: statefulResult.errors?.[0]?.message,
           metadata: {
             agentType: 'stateful-agent',
@@ -302,7 +301,7 @@ export async function executeWithOrchestrationMode(
               timedOut = true;
               clearInterval(interval);
               // Attempt to cancel the running agent
-              try { kernel.cancelAgent(agentId); } catch { /* best-effort */ }
+              try { (kernel as any).cancelAgent(agentId); } catch { /* best-effort */ }
               resolve();
             }
           }, pollInterval);
@@ -343,7 +342,7 @@ export async function executeWithOrchestrationMode(
         result = {
           success: loopResult.success,
           response: loopResult.reasoning || loopResult.message || (loopResult.success ? 'Agent loop completed' : 'Agent loop failed'),
-          steps: loopResult.iterations || 0,
+          steps: loopResult.iterations as any,
           error: loopResult.success ? undefined : loopResult.error,
           metadata: {
             agentType: 'agent-loop',
@@ -367,30 +366,33 @@ export async function executeWithOrchestrationMode(
         const planNode = executionGraphEngine.addNode(graph, {
           id: 'plan',
           type: 'agent_step',
-          label: 'Plan',
+          name: 'Plan',
           dependencies: [],
         });
 
         const execNode = executionGraphEngine.addNode(graph, {
           id: 'execute',
           type: 'tool_call',
-          label: 'Execute',
+          name: 'Execute',
           dependencies: ['plan'],
         });
 
         const verifyNode = executionGraphEngine.addNode(graph, {
           id: 'verify',
           type: 'sandbox_action',
-          label: 'Verify',
+          name: 'Verify',
           dependencies: ['execute'],
         });
+
+        // Declare model/provider outside try block for catch block access
+        const graphModel = request.model || process.env.AGENT_MODEL || process.env.DEFAULT_MODEL || 'gpt-4o-mini';
+        let graphProvider = 'unknown';
 
         try {
           // Execute nodes in dependency order
           const { llmService } = await import('@/lib/chat/llm-providers');
 
           // Use user-selected model for planning
-          const graphModel = request.model || process.env.AGENT_MODEL || process.env.DEFAULT_MODEL || 'gpt-4o-mini';
 
           // FIX (Bug 5): Resolve provider from model using a known prefix map
           // instead of defaulting to 'openai' which incorrectly maps models like
@@ -408,7 +410,6 @@ export async function executeWithOrchestrationMode(
             'grok': 'xai',
           };
 
-          let graphProvider: string;
           if (graphModel.includes('/')) {
             // e.g. "anthropic/claude-3-5-sonnet" → "anthropic"
             graphProvider = graphModel.split('/')[0];
@@ -449,7 +450,7 @@ export async function executeWithOrchestrationMode(
               graphId: graph.id,
               nodeCount: progress.total,
               completed: progress.completed,
-              status: progress.status,
+              status: (progress as any).status,
               model: graphModel,
               provider: graphProvider,
               duration: Date.now() - startTime,
@@ -466,15 +467,15 @@ export async function executeWithOrchestrationMode(
           result = {
             success: false,
             error: `Execution graph plan failed: ${errorMessage}`,
-            response: `Planning failed. The LLM provider (${graphProvider}) may be unavailable or misconfigured.`,
+            response: `Planning failed. The LLM provider (${(graphProvider as any)}) may be unavailable or misconfigured.`,
             metadata: {
               agentType: 'execution-graph',
               graphId: graph.id,
               nodeCount: graph.nodes.size,
               completed: 0,
               status: 'failed',
-              model: graphModel,
-              provider: graphProvider,
+              model: graphModel as any,
+              provider: graphProvider as any,
               duration: Date.now() - startTime,
             },
           };
@@ -510,8 +511,8 @@ export async function executeWithOrchestrationMode(
         );
 
         result = {
-          success: nullclawResult.success,
-          response: nullclawResult.output,
+          success: (nullclawResult as any).success,
+          response: (nullclawResult as any).output,
           error: nullclawResult.error,
           metadata: {
             agentType: 'nullclaw',
@@ -633,9 +634,9 @@ export async function executeWithOrchestrationMode(
 
         result = {
           success: v2Result.success ?? true,
-          response: v2Result.content || v2Result.response,
-          steps: v2Result.data?.steps,
-          error: v2Result.data?.error,
+          response: v2Result.content || (v2Result as any).response,
+          steps: (v2Result.data as any)?.steps,
+          error: (v2Result.data as any)?.error,
           metadata: {
             agentType: 'v2-executor',
             sessionId: v2Result.sessionId,
@@ -793,7 +794,9 @@ export async function executeWithOrchestrationMode(
           // Clean up event listeners before destroying team
           cleanupListeners.forEach(fn => fn());
           if (team) {
-            await team.destroy().catch(() => {});
+            await team.destroy().catch((err: any) => {
+              logger.error('Failed to destroy agent team', { error: err?.message || String(err) });
+            });
           }
         }
         break;

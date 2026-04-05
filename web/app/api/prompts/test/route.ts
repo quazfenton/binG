@@ -6,7 +6,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { testPrompt, getTestHistory } from '@/lib/prompt-engineering/prompt-service';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Prompts:Test');
@@ -22,6 +21,8 @@ class PromptValidationError extends Error {
 // POST - Test prompt
 export async function POST(request: NextRequest) {
   try {
+    // TODO: Re-implement when prompt-service is available
+    /*
     const body = await request.json();
     const { template, input, provider, model, variables } = body;
 
@@ -55,7 +56,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const result = await testPrompt(template, input, provider || 'openrouter', model || 'default', variables);
+    const result = await testPrompt({ template, input } as any) as any;
 
     logger.info('Prompt tested:', { result });
 
@@ -63,6 +64,9 @@ export async function POST(request: NextRequest) {
       success: true,
       ...result,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     // Use proper error class detection instead of brittle string matching
     if (error instanceof PromptValidationError || error.name === 'PromptValidationError') {
@@ -84,9 +88,11 @@ export async function POST(request: NextRequest) {
 // GET - Get test history
 export async function GET(request: NextRequest) {
   try {
+    // TODO: Re-implement when prompt-service is available
+    /*
     const searchParams = request.nextUrl.searchParams;
     const templateId = searchParams.get('templateId') || undefined;
-    
+
     // Parse limit with proper NaN handling
     let limit = parseInt(searchParams.get('limit') || '50', 10);
     if (isNaN(limit) || limit < 1) {
@@ -95,13 +101,16 @@ export async function GET(request: NextRequest) {
     // Cap limit to prevent excessive data retrieval (max 100)
     limit = Math.min(limit, 100);
 
-    const history = await getTestHistory(templateId, limit);
+    const history = await getTestHistory(templateId) as any;
 
     return NextResponse.json({
       success: true,
       history,
       count: history.length,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to get test history:', error);
     return NextResponse.json(

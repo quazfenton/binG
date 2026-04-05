@@ -484,19 +484,19 @@ class DesktopSecurityPolicy {
       const isMultiWord = blockedLower.includes(' ');
       const isBlocked = isMultiWord ? lowerTrimmed.includes(blockedLower) : commandTokens.includes(blockedLower);
       if (isBlocked) {
-        this.logAudit({ command: trimmed, riskLevel, allowed: false, requiresApproval: false, workingDirectory: workingDirectory || '' });
+        this.logAudit({ command: trimmed, riskLevel, allowed: false, requiresApproval: false, workingDirectory: workingDirectory || '' } as any);
         return { allowed: false, riskLevel, reason: `Command '${blocked}' is explicitly blocked`, requiresApproval: false, matchedRule: `blockedCommand:${blocked}` };
       }
     }
 
     for (const pattern of this.config.blockedPatterns) {
-      try { if (new RegExp(pattern, 'i').test(trimmed)) { this.logAudit({ command: trimmed, riskLevel, allowed: false, requiresApproval: false, workingDirectory: workingDirectory || '' }); return { allowed: false, riskLevel, reason: `Matches blocked pattern`, requiresApproval: false, matchedRule: `blockedPattern:${pattern}` }; } } catch { /* skip */ }
+      try { if (new RegExp(pattern, 'i').test(trimmed)) { this.logAudit({ command: trimmed, riskLevel, allowed: false, requiresApproval: false, workingDirectory: workingDirectory || '' } as any); return { allowed: false, riskLevel, reason: `Matches blocked pattern`, requiresApproval: false, matchedRule: `blockedPattern:${pattern}` }; } } catch { /* skip */ }
     }
 
     if (this.config.blockNetworkCommands) {
       const netCmds = ['curl', 'wget', 'ssh', 'scp', 'sftp', 'nc', 'netcat', 'telnet', 'ftp', 'nmap'];
       const blocked = commandTokens.find(t => netCmds.includes(t));
-      if (blocked) { this.logAudit({ command: trimmed, riskLevel: 'high', allowed: false, requiresApproval: false, workingDirectory: workingDirectory || '' }); return { allowed: false, riskLevel: 'high', reason: `Network command '${blocked}' blocked`, requiresApproval: false, matchedRule: `blockNetworkCommand:${blocked}` }; }
+      if (blocked) { this.logAudit({ command: trimmed, riskLevel: 'high', allowed: false, requiresApproval: false, workingDirectory: workingDirectory || '' } as any); return { allowed: false, riskLevel: 'high', reason: `Network command '${blocked}' blocked`, requiresApproval: false, matchedRule: `blockNetworkCommand:${blocked}` }; }
     }
 
     let requiresApproval = false;
@@ -505,7 +505,7 @@ class DesktopSecurityPolicy {
       try { if (new RegExp(pattern, 'i').test(trimmed)) { requiresApproval = true; matchedApprovalRule = pattern; break; } } catch { /* skip */ }
     }
 
-    this.logAudit({ command: trimmed, riskLevel, allowed: true, requiresApproval, workingDirectory: workingDirectory || '' });
+    this.logAudit({ command: trimmed, riskLevel, allowed: true, requiresApproval, workingDirectory: workingDirectory || '' } as any);
     return { allowed: true, riskLevel, requiresApproval, matchedRule: matchedApprovalRule };
   }
 

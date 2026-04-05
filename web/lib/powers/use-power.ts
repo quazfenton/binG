@@ -64,8 +64,8 @@ export function usePowers(): UsePowersResult {
         fetch('/api/powers').catch(() => ({ ok: false })),
       ]);
 
-      const marketPowers: PowerSummary[] = marketRes.ok ? await marketRes.json() : [];
-      const installedPowers: PowerSummary[] = installedRes.ok ? await installedRes.json() : [];
+      const marketPowers: PowerSummary[] = marketRes.ok ? await (marketRes as any).json() : [];
+      const installedPowers: PowerSummary[] = installedRes.ok ? await (installedRes as any).json() : [];
 
       // Merge: installed powers take precedence
       const merged = new Map<string, PowerSummary>();

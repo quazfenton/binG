@@ -323,10 +323,10 @@ export function ResponseStyleSelector({ className, compact = false }: ResponseSt
 
         <ParameterSelect
           label="Depth"
-          value={params.responseDepth || ''}
+          value={params.responseDepth || 'default'}
           onChange={(v) => updateParam('responseDepth', v as ResponseDepth)}
           options={[
-            { value: '', label: 'Default' },
+            { value: 'default', label: 'Default' },
             { value: ResponseDepth.Minimal, label: 'Minimal (1-3 sentences)' },
             { value: ResponseDepth.Brief, label: 'Brief (~1 paragraph)' },
             { value: ResponseDepth.Detailed, label: 'Detailed (~1 page)' },
@@ -337,10 +337,10 @@ export function ResponseStyleSelector({ className, compact = false }: ResponseSt
 
         <ParameterSelect
           label="Expertise"
-          value={params.expertiseLevel || ''}
+          value={params.expertiseLevel || 'default'}
           onChange={(v) => updateParam('expertiseLevel', v as ExpertiseLevel)}
           options={[
-            { value: '', label: 'Default' },
+            { value: 'default', label: 'Default' },
             { value: ExpertiseLevel.Layperson, label: 'Layperson (explain all terms)' },
             { value: ExpertiseLevel.Informed, label: 'Informed (general knowledge)' },
             { value: ExpertiseLevel.Practitioner, label: 'Practitioner (working knowledge)' },
@@ -351,10 +351,10 @@ export function ResponseStyleSelector({ className, compact = false }: ResponseSt
 
         <ParameterSelect
           label="Tone"
-          value={params.tone || ''}
+          value={params.tone || 'default'}
           onChange={(v) => updateParam('tone', v as Tone)}
           options={[
-            { value: '', label: 'Default' },
+            { value: 'default', label: 'Default' },
             { value: Tone.Formal, label: 'Formal (academic)' },
             { value: Tone.Professional, label: 'Professional (business)' },
             { value: Tone.Conversational, label: 'Conversational (natural)' },
@@ -366,10 +366,10 @@ export function ResponseStyleSelector({ className, compact = false }: ResponseSt
 
         <ParameterSelect
           label="Reasoning"
-          value={params.reasoningMode || ''}
+          value={params.reasoningMode || 'default'}
           onChange={(v) => updateParam('reasoningMode', v as ReasoningMode)}
           options={[
-            { value: '', label: 'Default' },
+            { value: 'default', label: 'Default' },
             { value: ReasoningMode.Direct, label: 'Direct (answer immediately)' },
             { value: ReasoningMode.Structured, label: 'Structured (clear sections)' },
             { value: ReasoningMode.Analytical, label: 'Analytical (break down components)' },
@@ -381,10 +381,10 @@ export function ResponseStyleSelector({ className, compact = false }: ResponseSt
 
         <ParameterSelect
           label="Creativity"
-          value={params.creativityLevel || ''}
+          value={params.creativityLevel || 'default'}
           onChange={(v) => updateParam('creativityLevel', v as CreativityLevel)}
           options={[
-            { value: '', label: 'Default' },
+            { value: 'default', label: 'Default' },
             { value: CreativityLevel.StrictlyFactual, label: 'Strictly factual' },
             { value: CreativityLevel.EvidenceBased, label: 'Evidence-based' },
             { value: CreativityLevel.Balanced, label: 'Balanced' },
@@ -395,10 +395,10 @@ export function ResponseStyleSelector({ className, compact = false }: ResponseSt
 
         <ParameterSelect
           label="Citations"
-          value={params.citationStrictness || ''}
+          value={params.citationStrictness || 'default'}
           onChange={(v) => updateParam('citationStrictness', v as CitationStrictness)}
           options={[
-            { value: '', label: 'Default' },
+            { value: 'default', label: 'Default' },
             { value: CitationStrictness.None, label: 'None' },
             { value: CitationStrictness.KeyClaims, label: 'Key claims only' },
             { value: CitationStrictness.AllClaims, label: 'All claims sourced' },
@@ -408,10 +408,10 @@ export function ResponseStyleSelector({ className, compact = false }: ResponseSt
 
         <ParameterSelect
           label="Self-Correction"
-          value={params.selfCorrection || ''}
+          value={params.selfCorrection || 'default'}
           onChange={(v) => updateParam('selfCorrection', v as SelfCorrection)}
           options={[
-            { value: '', label: 'Default' },
+            { value: 'default', label: 'Default' },
             { value: SelfCorrection.None, label: 'None' },
             { value: SelfCorrection.Light, label: 'Light sanity check' },
             { value: SelfCorrection.Thorough, label: 'Thorough review' },
@@ -421,10 +421,10 @@ export function ResponseStyleSelector({ className, compact = false }: ResponseSt
 
         <ParameterSelect
           label="Output Format"
-          value={params.outputFormat || ''}
+          value={params.outputFormat || 'default'}
           onChange={(v) => updateParam('outputFormat', v as OutputFormat)}
           options={[
-            { value: '', label: 'Default (mixed)' },
+            { value: 'default', label: 'Default (mixed)' },
             { value: OutputFormat.Prose, label: 'Prose only' },
             { value: OutputFormat.Bulleted, label: 'Bullet points' },
             { value: OutputFormat.Tabular, label: 'Tables' },
@@ -517,10 +517,10 @@ function CompactSettings({
       <div className="space-y-2">
         <ParameterSelect
           label="Depth"
-          value={params.responseDepth || ''}
+          value={params.responseDepth || 'default'}
           onChange={(v) => updateParam('responseDepth', v as ResponseDepth)}
           options={[
-            { value: '', label: 'Default' },
+            { value: 'default', label: 'Default' },
             { value: ResponseDepth.Minimal, label: 'Minimal' },
             { value: ResponseDepth.Detailed, label: 'Detailed' },
             { value: ResponseDepth.Comprehensive, label: 'Comprehensive' },
@@ -528,10 +528,10 @@ function CompactSettings({
         />
         <ParameterSelect
           label="Expertise"
-          value={params.expertiseLevel || ''}
+          value={params.expertiseLevel || 'default'}
           onChange={(v) => updateParam('expertiseLevel', v as ExpertiseLevel)}
           options={[
-            { value: '', label: 'Default' },
+            { value: 'default', label: 'Default' },
             { value: ExpertiseLevel.Layperson, label: 'Beginner' },
             { value: ExpertiseLevel.Expert, label: 'Expert' },
             { value: ExpertiseLevel.WorldClass, label: 'World-Class' },
@@ -539,10 +539,10 @@ function CompactSettings({
         />
         <ParameterSelect
           label="Tone"
-          value={params.tone || ''}
+          value={params.tone || 'default'}
           onChange={(v) => updateParam('tone', v as Tone)}
           options={[
-            { value: '', label: 'Default' },
+            { value: 'default', label: 'Default' },
             { value: Tone.Casual, label: 'Casual' },
             { value: Tone.Professional, label: 'Professional' },
             { value: Tone.Formal, label: 'Formal' },

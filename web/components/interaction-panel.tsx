@@ -340,6 +340,7 @@ interface InteractionPanelProps {
   userId?: string;
   onAttachedFilesChange?: (files: Record<string, AttachedVirtualFile>) => void;
   filesystemScopePath?: string;
+  showResponseStyle?: boolean; // Controlled by settings toggle
   // Note: useDiffsPoller removed - file changes synced via filesystem-updated events + SSE
 }
 
@@ -422,6 +423,7 @@ export default function InteractionPanel({
   onActiveTabChange,
   onAttachedFilesChange,
   filesystemScopePath,
+  showResponseStyle = false,
   // Note: useDiffsPoller removed - file changes synced via filesystem-updated events + SSE
 }: InteractionPanelProps) {
   const { togglePanel, isOpen: isPanelOpen } = usePanel();
@@ -1938,8 +1940,8 @@ export default function InteractionPanel({
                 onValueChange={handleProviderSelect}
               />
 
-              {/* Response Style Selector */}
-              <ResponseStyleSelectorCompact />
+              {/* Response Style Selector (hidden by default, toggle in Settings) */}
+              {showResponseStyle && <ResponseStyleSelectorCompact />}
 
               {/* Tab Content Sections */}
               <TabsContent value="chat" className={`m-0 flex-1 flex flex-col min-h-0 overflow-visible ${activeTab === 'chat' ? DEFAULT_TAB_HEIGHT : ''} ${activeTab && activeTab !== 'chat' && TALL_TABS.includes(activeTab) ? 'min-h-[200px]' : ''} ${EXPAND_TRANSITION}`}>

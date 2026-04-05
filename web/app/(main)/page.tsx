@@ -21,6 +21,11 @@ const ConversationInterface = dynamic(
   { ssr: false, loading: () => <FallbackUI message="Loading interface..." /> }
 )
 
+const ResponseStyleProvider = dynamic(
+  () => import("@/contexts/response-style-context").then(mod => mod.ResponseStyleProvider),
+  { ssr: false, loading: () => null }
+)
+
 const TopPanel = dynamic(
   () => import("@/components/top-panel"),
   { ssr: false, loading: () => null }
@@ -78,7 +83,9 @@ export default function ChatBox() {
   return (
     <TamboWrapper>
       <TopPanel />
-      <ConversationInterface />
+      <ResponseStyleProvider>
+        <ConversationInterface />
+      </ResponseStyleProvider>
       <PWAInstallPrompt />
     </TamboWrapper>
   )

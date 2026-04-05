@@ -15,7 +15,7 @@
 import { getCapabilityRouter } from '@/lib/tools/router';
 import { createSandboxRateLimiter } from '@/lib/sandbox/providers/rate-limiter';
 import { evaluateActiveWorkflow, type ApprovalContext } from '@/lib/orchestra/stateful-agent';
-import { validateCommand } from '@/lib/sandbox/security';
+import { validateCommand as validateBlockedCommand } from '@/lib/sandbox/security';
 import {
   validateToolInput,
   ExecShellSchema,
@@ -142,7 +142,7 @@ export class AgentLoopWrapper {
       const result = await router.execute(capabilityId, args, {
         userId: this.userId,
         sessionId: this.sandboxId,
-      });
+      } as any);
 
       // 5. Record successful rate limit
       await this.rateLimiter.record(rateLimitKey, rateBucket);
@@ -243,7 +243,7 @@ export class AgentLoopWrapper {
   private validateCommand(args: Record<string, any>): { valid: boolean; reason?: string } {
     try {
       const validated = validateToolInput(ExecShellSchema, args, 'exec_shell');
-      const commandValidation = validateShellCommand(validated.command, validateCommand);
+      const commandValidation = validateShellCommand(validated.command, validateBlockedCommand);
       if (!commandValidation.valid) {
         return { valid: false, reason: commandValidation.reason || 'Command validation failed' };
       }

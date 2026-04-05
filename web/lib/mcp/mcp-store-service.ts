@@ -385,10 +385,12 @@ export class MCPStoreService {
         enabled: true,
       };
 
-      // Register with MCP tool registry (server-only)
-      const registry = await getMcpToolRegistry();
-      if (registry) {
-        registry.registerServer(mcpConfig);
+      // Register with MCP tool registry (server-only — skip in browser)
+      if (typeof window === 'undefined') {
+        const registry = await getMcpToolRegistry();
+        if (registry) {
+          registry.registerServer(mcpConfig);
+        }
       }
 
       // Update server state
@@ -420,10 +422,12 @@ export class MCPStoreService {
     }
 
     try {
-      // Unregister from MCP tool registry (server-only)
-      const registry = await getMcpToolRegistry();
-      if (registry) {
-        await registry.unregisterServer(serverId);
+      // Unregister from MCP tool registry (server-only — skip in browser)
+      if (typeof window === 'undefined') {
+        const registry = await getMcpToolRegistry();
+        if (registry) {
+          await registry.unregisterServer(serverId);
+        }
       }
 
       // Update server state
@@ -595,6 +599,10 @@ export class MCPStoreService {
    * Connect all installed servers (server-only)
    */
   async connectAllServers(timeout?: number): Promise<void> {
+    if (typeof window !== 'undefined') {
+      logger.warn('connectAllServers is server-only, skipping in browser');
+      return;
+    }
     const registry = await getMcpToolRegistry();
     if (registry) {
       await registry.connectAll(timeout);
@@ -606,6 +614,10 @@ export class MCPStoreService {
    * Disconnect all servers (server-only)
    */
   async disconnectAllServers(): Promise<void> {
+    if (typeof window !== 'undefined') {
+      logger.warn('disconnectAllServers is server-only, skipping in browser');
+      return;
+    }
     const registry = await getMcpToolRegistry();
     if (registry) {
       await registry.disconnectAll();

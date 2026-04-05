@@ -130,7 +130,7 @@ export async function POST(
 
     switch (mode) {
       case 'shadow':
-        rollbackResult = await executeShadowRollback(scopedSessionId, ownerId, version, targetFiles);
+        rollbackResult = await executeShadowRollback(scopedSessionId, ownerId, version, targetFiles) as any;
         break;
 
       case 'vfs-snapshot':
@@ -198,10 +198,13 @@ export async function POST(
 
 /**
  * Execute rollback using shadow commit system
- * 
+ *
  * Shadow commits track all file changes with full history and diffs.
  * This is the recommended rollback mode.
- * 
+ *
+ * DESKTOP MODE: Shadow commits are metadata-only (no file content).
+ * Falls back to VFS diffTracker-based rollback which tracks content in-memory.
+ *
  * @param sessionId - Session ID (scoped as ownerId:sessionId)
  * @param ownerId - Owner ID for VFS operations
  * @param version - Version to rollback to
@@ -225,7 +228,30 @@ async function executeShadowRollback(sessionId: string, ownerId: string, version
       };
     }
 
-    // Parse commit transactions to get file contents
+    // DESKTOP MODE: Shadow commits are metadata-only (no content in transactions).
+    // Fall back to VFS diffTracker-based rollback which tracks content in-memory.
+    const isDesktopMode = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+    if (isDesktopMode) {
+      logger.info('[Git Rollback] Desktop mode detected, using VFS diffTracker rollback', {
+        sessionId,
+        version,
+      });
+      const result = await virtualFilesystem.rollbackToVersion(ownerId, version);
+      return {
+        success: result.success,
+        filesRestored: result.restoredFiles + result.deletedFiles,
+        error: result.errors.length > 0 ? result.errors.join('; ') : undefined,
+        details: {
+          commitId: targetCommit.commitId,
+          commitMessage: targetCommit.message,
+          commitDate: targetCommit.createdAt,
+          restoredFiles: result.restoredFiles,
+          deletedFiles: result.deletedFiles,
+        },
+      };
+    }
+
+    // Web mode: Parse commit transactions to get file contents
     let filesToRestore: Record<string, string> = {};
     
     // Use getCommit to reliably extract transactions from the full commit record

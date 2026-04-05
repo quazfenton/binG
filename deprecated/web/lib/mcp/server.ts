@@ -45,8 +45,8 @@ import {
   searchFilesTool,
   getWorkspaceStatsTool,
   toolContextStore,
-} from '../../web/lib/mcp/vfs-mcp-tools';
-import { virtualFilesystem } from '../../web/lib/virtual-filesystem/virtual-filesystem-service';
+} from '../../../../web/lib/mcp/vfs-mcp-tools';
+import { virtualFilesystem } from '../../../../web/lib/virtual-filesystem/virtual-filesystem-service';
 
 const allTools: Record<string, any> = {
   applyDiffTool,

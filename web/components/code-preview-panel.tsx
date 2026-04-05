@@ -361,7 +361,7 @@ export default function CodePreviewPanel({
   const [editingFileName, setEditingFileName] = useState("");
   
   // Clipboard state for cut/copy/paste
-  const [clipboard, setClipboard] = useState<{
+  const [codeClipboard, setClipboard] = useState<{
     path: string;
     operation: 'cut' | 'copy';
     sourcePath: string;
@@ -788,20 +788,20 @@ export default function CodePreviewPanel({
 
   // Handle paste operation
   const handlePasteFile = useCallback(async (targetPath: string, isDirectory: boolean) => {
-    if (!clipboard) {
-      toast.error('No file in clipboard');
+    if (!codeClipboard) {
+      toast.error('No file in codeClipboard');
       return;
     }
     
     const targetDir = isDirectory ? targetPath : targetPath.split('/').slice(0, -1).join('/');
-    const fileName = clipboard.path.split('/').pop() || '';
+    const fileName = codeClipboard.path.split('/').pop() || '';
     const newPath = `${targetDir.replace(/\/+$/, '')}/${fileName}`;
     
     try {
       // Check if target already exists
       const targetExists = await readFilesystemFile(newPath).then(() => true).catch(() => false);
       
-      if (targetExists && clipboard.path !== newPath) {
+      if (targetExists && codeClipboard.path !== newPath) {
         // Generate unique name
         const ext = fileName.includes('.') ? '.' + fileName.split('.').pop() : '';
         const baseName = fileName.replace(ext, '');
@@ -812,9 +812,9 @@ export default function CodePreviewPanel({
           counter++;
         }
         
-        await performPaste(clipboard.path, uniquePath, targetDir);
+        await performPaste(codeClipboard.path, uniquePath, targetDir);
       } else {
-        await performPaste(clipboard.path, newPath, targetDir);
+        await performPaste(codeClipboard.path, newPath, targetDir);
       }
     } catch (err: any) {
       toast.error('Failed to paste: ' + err.message);
@@ -832,12 +832,12 @@ export default function CodePreviewPanel({
         await writeFilesystemFile(destPath, file.content);
         
         // If cut, delete original
-        if (clipboard.operation === 'cut') {
+        if (codeClipboard.operation === 'cut') {
           await deleteFilesystemPath(sourcePath);
           setClipboard(null);
         }
         
-        toast.success(clipboard.operation === 'cut' ? 'File moved' : 'File copied');
+        toast.success(codeClipboard.operation === 'cut' ? 'File moved' : 'File copied');
         await debouncedListDirectory(filesystemCurrentPath);
         await debouncedListDirectory(targetDir);
         
@@ -852,7 +852,7 @@ export default function CodePreviewPanel({
         toast.error('Failed to paste: ' + err.message);
       }
     }
-  }, [clipboard, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, normalizedFilesystemPath, emitFilesystemUpdated]);
+  }, [codeClipboard, readFilesystemFile, writeFilesystemFile, deleteFilesystemPath, filesystemCurrentPath, listFilesystemDirectory, normalizedFilesystemPath, emitFilesystemUpdated]);
 
   // Handle drag start
   const handleDragStart = useCallback((e: React.DragEvent, node: { path: string; name: string }) => {
@@ -5962,7 +5962,7 @@ root.render(<App />);` };
                                 )}
                               </div>
                               <div className="flex items-center gap-1">
-                                {clipboard && node.type === 'directory' && (
+                                {codeClipboard && node.type === 'directory' && (
                                   <button
                                     className="opacity-0 group-hover:opacity-100 p-1 hover:text-blue-400 transition-all text-xs"
                                     onClick={(e) => {
@@ -6473,8 +6473,8 @@ root.render(<App />);` };
               e.stopPropagation();
             }}
           >
-            {/* Paste option if clipboard has content and it's a directory */}
-            {clipboard && contextMenu.type === 'directory' && (
+            {/* Paste option if codeClipboard has content and it's a directory */}
+            {codeClipboard && contextMenu.type === 'directory' && (
               <>
                 <button
                   className="w-full px-4 py-2 text-left text-sm text-blue-400 hover:bg-gray-800 flex items-center gap-2"
@@ -6482,7 +6482,7 @@ root.render(<App />);` };
                     handlePasteFile(contextMenu.path, true);
                   }}
                 >
-                  <span className="w-4">📋</span> Paste {clipboard.operation === 'cut' ? '(Move)' : '(Copy)'}
+                  <span className="w-4">📋</span> Paste {codeClipboard.operation === 'cut' ? '(Move)' : '(Copy)'}
                 </button>
                 <hr className="my-1 border-gray-700" />
               </>

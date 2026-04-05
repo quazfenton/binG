@@ -245,7 +245,8 @@ export async function registerBuiltInCapabilities(registry: ToolRegistry): Promi
   // ========================================================================
   try {
     if (process.env.COMPOSIO_API_KEY) {
-      const { searchTools, getUserTools, composioSessionManager } = await import('@/lib/integrations/composio/composio-adapter');
+      const composioModule = await import('@/lib/integrations/composio/composio-adapter') as any;
+      const { searchTools, getUserTools, composioSessionManager } = composioModule;
 
       // Register Composio tool search
       await registry.registerTool({

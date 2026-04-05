@@ -15,18 +15,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import {
-  getAgents,
-  startAgent,
-  stopAgent,
-  pauseAgent,
-  resumeAgent,
-  getAgentLogs,
-  getWorkflows,
-  executeWorkflow,
-  getStats,
-} from '@/lib/orchestration/agent-orchestrator';
-import { runStatefulAgentStreaming } from '@/lib/orchestra/stateful-agent';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { generateSecureId } from '@/lib/utils';
 import { createLogger } from '@/lib/utils/logger';
@@ -36,17 +24,21 @@ const logger = createLogger('API:Orchestration');
 // GET - List all agents
 export async function GET(request: NextRequest) {
   try {
-    // Check for streaming query param
+    // TODO: Re-implement when agent orchestrator is available
+    /*
     const { searchParams } = new URL(request.url);
     const stream = searchParams.get('stream') === 'true';
 
     const agents = await getAgents();
-    
+
     return NextResponse.json({
       success: true,
       agents,
       count: agents.length,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to get agents:', error);
     return NextResponse.json(
@@ -67,6 +59,8 @@ export async function POST(request: NextRequest) {
     );
   }
 
+  // TODO: Re-implement when agent orchestrator is available
+  /*
   const userId = authResult.userId;
   const requestId = generateSecureId('orch');
 
@@ -104,11 +98,11 @@ export async function POST(request: NextRequest) {
                 controller.enqueue(encoder.encode(data));
               },
               onToolExecution: (toolName, args, result) => {
-                const data = JSON.stringify({ 
-                  type: 'tool', 
-                  tool: toolName, 
-                  args, 
-                  result 
+                const data = JSON.stringify({
+                  type: 'tool',
+                  tool: toolName,
+                  args,
+                  result
                 }) + '\n';
                 controller.enqueue(encoder.encode(data));
               },
@@ -117,9 +111,9 @@ export async function POST(request: NextRequest) {
             }
             controller.close();
           } catch (error: any) {
-            const errorData = JSON.stringify({ 
-              type: 'error', 
-              error: error.message 
+            const errorData = JSON.stringify({
+              type: 'error',
+              error: error.message
             }) + '\n';
             controller.enqueue(encoder.encode(errorData));
             controller.close();
@@ -152,4 +146,7 @@ export async function POST(request: NextRequest) {
       { status: 500 }
     );
   }
+  */
+
+  return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
 }

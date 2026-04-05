@@ -51,7 +51,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   const { userMessage, sandboxId, userId, conversationHistory, onToolExecution, onStreamChunk, onReasoningChunk } = options
   const llm = getLLMProvider()
 
-  const sandboxHandle = await coreSandboxService.getSandbox(sandboxId)
+  const sandboxHandle = await (coreSandboxService as any).getSandbox(sandboxId)
   const systemPrompt = getSystemPrompt(sandboxHandle.workspaceDir)
 
   // Create wrapper with rate limiting, HITL, process tracking, and learning

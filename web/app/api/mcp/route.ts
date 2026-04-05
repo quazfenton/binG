@@ -75,7 +75,7 @@ function createMCPServer(): Server {
       // Execute the tool with the provided arguments
       // @ts-ignore - AI SDK tool execute signature
       const result = await tool.execute(args || {});
-      
+
       return {
         content: [
           {
@@ -83,7 +83,7 @@ function createMCPServer(): Server {
             text: JSON.stringify(result),
           },
         ],
-        isError: !result.success,
+        isError: !(result as any).success,
       };
     } catch (error: any) {
       logger.error('MCP tool execution failed', { tool: name, error: error.message });
@@ -135,11 +135,13 @@ export async function GET(request: NextRequest) {
     }
     
     const server = getMCPServer();
-    
+
     // Return server capabilities
     return NextResponse.json({
       schemaVersion: '1.0',
-      capabilities: server.serverCapabilities,
+      capabilities: {
+        tools: {},
+      },
       serverInfo: {
         name: 'bing-vfs',
         version: '1.0.0',
@@ -192,7 +194,9 @@ export async function POST(request: NextRequest) {
           jsonrpc: '2.0',
           result: {
             protocolVersion: '2024-11-05',
-            capabilities: server.serverCapabilities,
+            capabilities: {
+              tools: {},
+            },
             serverInfo: {
               name: 'bing-vfs',
               version: '1.0.0',
@@ -202,14 +206,17 @@ export async function POST(request: NextRequest) {
         });
 
       case 'tools/list':
-        // List available tools
-        const toolsResult = await server.requestHandler({
-          method: 'tools/list',
-          params: {},
-        });
+        // List available tools — use our own VFS tool definitions
+        const vfsToolDefs = getVFSToolDefinitions();
         return NextResponse.json({
           jsonrpc: '2.0',
-          result: toolsResult,
+          result: {
+            tools: vfsToolDefs.map(tool => ({
+              name: tool.function.name,
+              description: tool.function.description,
+              inputSchema: tool.function.parameters,
+            })),
+          },
           id,
         });
 
@@ -220,19 +227,46 @@ export async function POST(request: NextRequest) {
                        (params as any)?.userId ||
                        'default';
         const sessionId = request.headers.get('x-session-id') || undefined;
+        const toolName = (params as any)?.name;
+        const toolArgs = (params as any)?.arguments;
+
+        // Find the requested VFS tool
+        const targetTool = vfsTools[toolName as keyof typeof vfsTools];
+
+        if (!targetTool) {
+          return NextResponse.json({
+            jsonrpc: '2.0',
+            result: {
+              content: [{
+                type: 'text',
+                text: JSON.stringify({ error: `Unknown tool: ${toolName}` }),
+              }],
+              isError: true,
+            },
+            id,
+          });
+        }
 
         // Run tool call inside request-scoped AsyncLocalStorage context.
         // This isolates the context per-request, preventing cross-user data leaks.
+        // @ts-ignore - AI SDK tool execute takes different arg shapes
         const callResult = await toolContextStore.run(
           { userId, sessionId },
-          async () => server.requestHandler({
-            method: 'tools/call',
-            params: params || {},
+          async () => targetTool.execute(toolArgs || {}, {
+            messages: [],
+            toolCallId: String(id || crypto.randomUUID()),
           })
         );
+
         return NextResponse.json({
           jsonrpc: '2.0',
-          result: callResult,
+          result: {
+            content: [{
+              type: 'text',
+              text: JSON.stringify(callResult),
+            }],
+            isError: !(callResult as any)?.success,
+          },
           id,
         });
 

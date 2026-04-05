@@ -50,43 +50,20 @@ export async function checkMCPHealth(): Promise<MCPHealthStatus> {
 
   // Check registered MCP servers
   try {
-    const registeredServers = mcpToolRegistry.getAllServers();
-    
-    for (const server of registeredServers) {
-      const startTime = Date.now();
-      
-      try {
-        const tools = await Promise.race([
-          mcpToolRegistry.getServerTools(server.name),
-          new Promise((_, reject) => 
-            setTimeout(() => reject(new Error('Timeout')), 5000)
-          ),
-        ]);
-        
-        const latencyMs = Date.now() - startTime;
-        
-        servers.push({
-          name: server.name,
-          status: latencyMs < 100 ? 'healthy' : 'degraded',
-          url: server.url,
-          transport: server.transport || 'stdio',
-          latencyMs,
-          lastChecked: new Date().toISOString(),
-          toolCount: tools?.length || 0,
-        });
-        
-        healthyCount++;
-      } catch (error: any) {
-        servers.push({
-          name: server.name,
-          status: 'unhealthy',
-          url: server.url,
-          transport: server.transport || 'stdio',
-          error: error.message,
-          lastChecked: new Date().toISOString(),
-          toolCount: 0,
-        });
-      }
+    const serverStatuses = mcpToolRegistry.getAllServerStatuses();
+    const allTools = mcpToolRegistry.getAllTools();
+
+    for (const status of serverStatuses) {
+      servers.push({
+        name: status.name,
+        status: status.info.state === 'connected' ? 'healthy' : 'unhealthy',
+        transport: 'stdio', // stdio is the only transport for registry servers
+        latencyMs: undefined,
+        lastChecked: new Date().toISOString(),
+        toolCount: allTools.filter(t => t.serverId === status.id).length,
+      });
+
+      if (status.info.state === 'connected') healthyCount++;
     }
   } catch (error: any) {
     logger.warn('Failed to check registered servers', { error: error.message });

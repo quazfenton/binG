@@ -107,7 +107,7 @@ export class StimulusMatrix {
   private stimuli: Stimulus[] = [];
   private lastPulseAt = 0;
   private pulseTimer: ReturnType<typeof setInterval> | null = null;
-  private onStimulus: ((stimulus: Stimulus) => void) | null = null;
+  private _onStimulus: ((stimulus: Stimulus) => void) | null = null;
   private identityContext: { peers?: Array<{ name: string }>; subjects?: Array<{ id: string; name: string }> } = {};
 
   constructor(config: StimulusConfig = {}) {
@@ -125,7 +125,7 @@ export class StimulusMatrix {
    * Register callback for stimulus delivery
    */
   onStimulus(callback: (stimulus: Stimulus) => void): void {
-    this.onStimulus = callback;
+    this._onStimulus = callback;
   }
 
   /**
@@ -172,9 +172,9 @@ export class StimulusMatrix {
     }
 
     // Deliver
-    if (this.onStimulus) {
+    if (this._onStimulus) {
       stimulus.delivered = true;
-      this.onStimulus(stimulus);
+      this._onStimulus(stimulus);
     }
 
     logger.debug('Stimulus generated and delivered', {
@@ -200,7 +200,7 @@ export class StimulusMatrix {
 
     this.stimuli.push(stimulus);
     stimulus.delivered = true;
-    if (this.onStimulus) this.onStimulus(stimulus);
+    if (this._onStimulus) this._onStimulus(stimulus);
     return stimulus;
   }
 
