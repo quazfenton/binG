@@ -6,10 +6,15 @@
  * - Initialize a workspace folder for their projects
  * - Configure boundary limits for LLM file access
  * - Switch between local filesystem and sandbox modes
+ * 
+ * Per-user workspaces:
+ * - Each user gets their own isolated workspace directory
+ * - Workspace root: {defaultRoot}/users/{userId}/
+ * - Sessions are created as subdirectories within user's workspace
  */
 
-import { createFileSystem, type IFileSystem, type WorkspaceConfig, type FSStats } from './index';
-import { isDesktopMode, getDefaultWorkspaceRoot } from '@bing/platform/env';
+import { createFileSystem, type IFileSystem, type WorkspaceConfig, type FSStats, type FileWatcherCallback, type FileSystemWatchEvent } from './index';
+import { isDesktopMode, getDefaultWorkspaceRoot } from '../platform/env';
 import { randomUUID } from 'crypto';
 import { createLogger } from '@/lib/utils/logger';
 
@@ -22,6 +27,7 @@ const log = createLogger('WorkspaceManager');
 export interface WorkspaceInfo {
   id: string;
   root: string;
+  userId: string;
   boundaryPath: string | null;
   createdAt: string;
   lastAccessed: string;
@@ -55,6 +61,7 @@ class WorkspaceManager {
   private workspaces = new Map<string, WorkspaceInfo>();
   private activeWorkspace: WorkspaceInfo | null = null;
   private defaultRoot: string | null = null;
+  private fileChangeHandlers = new Set<DesktopFileChangeHandler>();
 
   /**
    * Initialize a new workspace
@@ -86,10 +93,17 @@ class WorkspaceManager {
 
     await fileSystem.initialize(config);
 
+    // Build per-user workspace path: {root}/users/{userId}/{sessionId}
+    const userWorkspaceRoot = `${root}/users/${options.userId}`;
+    const workspaceRoot = options.sessionId 
+      ? `${userWorkspaceRoot}/${options.sessionId}` 
+      : userWorkspaceRoot;
+
     const workspace: WorkspaceInfo = {
       id: workspaceId,
-      root,
-      boundaryPath: options.boundaryEnabled ? `${root}/${workspaceId}` : null,
+      root: workspaceRoot,
+      userId: options.userId,
+      boundaryPath: options.boundaryEnabled ? `${workspaceRoot}` : null,
       createdAt: new Date().toISOString(),
       lastAccessed: new Date().toISOString(),
       fileSystem,
@@ -100,9 +114,88 @@ class WorkspaceManager {
     // Set as active workspace
     this.activeWorkspace = workspace;
 
-    log.info('Workspace initialized successfully', { workspaceId, root: workspace.root });
+    // Register file watcher for external change detection and event emission
+    await this.registerFileWatcher(workspace, fileSystem);
+
+    log.info('Workspace initialized successfully', { workspaceId, root: workspace.root, userId: options.userId });
 
     return workspace;
+  }
+
+  /**
+   * Register file watcher to emit desktop filesystem change events
+   * This enables UI updates when files change externally
+   */
+  private async registerFileWatcher(workspace: WorkspaceInfo, fileSystem: IFileSystem): Promise<void> {
+    if (typeof fileSystem.startWatching !== 'function') {
+      log.debug('Filesystem does not support watching, skipping event registration');
+      return;
+    }
+
+    const watchCallback: FileWatcherCallback = (event: FileSystemWatchEvent) => {
+      const changeEvent: DesktopFileChangeEvent = {
+        type: event.type === 'create' ? 'create' : 
+              event.type === 'delete' ? 'delete' : 'update',
+        path: event.paths[0] || '',
+        paths: event.paths,
+        workspaceId: workspace.id,
+        userId: workspace.userId,
+        timestamp: Date.now(),
+      };
+
+      // Emit to all registered handlers
+      for (const handler of this.fileChangeHandlers) {
+        try {
+          handler(changeEvent);
+        } catch (err) {
+          log.error('File change handler error:', err);
+        }
+      }
+    };
+
+    await fileSystem.startWatching(watchCallback);
+    log.info('File watcher registered for workspace', { workspaceId: workspace.id });
+  }
+
+  /**
+   * Register a handler for desktop file change events
+   * Use this to receive real-time notifications of filesystem changes
+   */
+  onFileChange(handler: DesktopFileChangeHandler): () => void {
+    this.fileChangeHandlers.add(handler);
+    log.debug('Registered file change handler', { totalHandlers: this.fileChangeHandlers.size });
+    
+    // Return unsubscribe function
+    return () => {
+      this.fileChangeHandlers.delete(handler);
+      log.debug('Unregistered file change handler', { remainingHandlers: this.fileChangeHandlers.size });
+    };
+  }
+
+  /**
+   * Emit a file change event to all handlers
+   * Used by external systems to trigger UI updates
+   */
+  emitFileChange(event: Omit<DesktopFileChangeEvent, 'timestamp'>): void {
+    const fullEvent: DesktopFileChangeEvent = {
+      ...event,
+      timestamp: Date.now(),
+    };
+
+    for (const handler of this.fileChangeHandlers) {
+      try {
+        handler(fullEvent);
+      } catch (err) {
+        log.error('Error emitting file change:', err);
+      }
+    }
+  }
+
+  /**
+   * Get all registered file change handlers
+   */
+  getFileChangeHandlerCount(): number {
+    return this.fileChangeHandlers.size;
   }
 
   /**

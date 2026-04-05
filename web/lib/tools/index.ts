@@ -267,3 +267,4 @@ export {
   type ComposioToolRequest,
   type ComposioToolResponse,
 } from '../integrations/composio-service';
+export { initToolSystem, executeToolCapability, hasToolCapability, getToolRouter, isToolSystemReady } from './execute-capability';

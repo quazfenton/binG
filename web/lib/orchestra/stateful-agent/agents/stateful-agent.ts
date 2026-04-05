@@ -1,4 +1,5 @@
 import { openai } from '@ai-sdk/openai';
+import { streamText, type CoreTool } from 'ai';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 import type { ProjectServices } from '@/lib/project-context';
 import { ToolExecutor } from '../tools/tool-executor';
@@ -1075,4 +1076,113 @@ export async function runStatefulAgent(
 ): Promise<StatefulAgentResult> {
   const agent = new StatefulAgent(options);
   return agent.run(userMessage);
+}
+
+/**
+ * Streaming version of StatefulAgent using Vercel AI SDK
+ * Use this for real-time streaming responses to the client
+ */
+export interface StatefulAgentStreamingOptions extends StatefulAgentOptions {
+  /** Callback for each text chunk */
+  onChunk?: (chunk: string) => void;
+  /** Callback for tool execution */
+  onToolExecution?: (toolName: string, args: Record<string, any>, result: any) => void;
+  /** Maximum steps for streaming */
+  maxSteps?: number;
+}
+
+/**
+ * Run StatefulAgent with streaming using Vercel AI SDK
+ * Similar to Mastra's executeTaskStreaming pattern
+ */
+export async function* runStatefulAgentStreaming(
+  userMessage: string,
+  options?: StatefulAgentStreamingOptions
+): AsyncGenerator<string, StatefulAgentResult, unknown> {
+  const agent = new StatefulAgent(options);
+  const maxSteps = options?.maxSteps || 10;
+  let stepCount = 0;
+  const errors: Array<{ step: number; message: string; path?: string }> = [];
+  const vfs: Record<string, string> = {};
+
+  // Get the model
+  const modelString = (process.env.DEFAULT_MODEL || 'gpt-4o').replace('openai:', '');
+  const model = openai(modelString);
+
+  // Initialize tools from vercel-ai-tools
+  const { getAllTools } = await import('@/lib/chat/vercel-ai-tools');
+  const tools = await getAllTools({
+    userId: agent['userId'],
+    conversationId: agent['conversationId'],
+    sessionId: agent['sessionId'],
+  });
+
+  // Convert tools to Vercel AI SDK format
+  const toolDefs = Object.fromEntries(
+    Object.entries(tools).map(([name, tool]) => [name, tool as unknown as CoreTool<any, any>])
+  );
+
+  // Build initial messages
+  const messages = [
+    {
+      role: 'user' as const,
+      content: userMessage,
+    },
+  ];
+
+  // Run streaming using Vercel AI SDK
+  const result = streamText({
+    model,
+    messages,
+    tools: toolDefs,
+    maxSteps,
+    onChunk: ({ chunk }) => {
+      if (chunk.type === 'text-delta' && chunk.textDelta) {
+        options?.onChunk?.(chunk.textDelta);
+      }
+    },
+    onStepFinish: async ({ toolCalls, toolResults }) => {
+      stepCount++;
+      
+      // Execute tool calls via ToolExecutor
+      for (const toolCall of toolCalls || []) {
+        try {
+          const execResult = await agent['toolExecutor'].execute(toolCall.toolName, (toolCall as any).args || {});
+          
+          options?.onToolExecution?.(toolCall.toolName, (toolCall as any).args || {}, execResult);
+          
+          // Update VFS
+          const args = (toolCall as any).args || {};
+          if (execResult.success && args.path) {
+            vfs[args.path] = typeof execResult.content === 'string' ? execResult.content : '';
+          }
+        } catch (err: any) {
+          errors.push({
+            step: stepCount,
+            message: err.message,
+          });
+        }
+      }
+    },
+  });
+
+  // Yield text chunks
+  for await (const chunk of result.textStream) {
+    yield chunk;
+  }
+
+  // Return final result
+  const finalResult: StatefulAgentResult = {
+    success: errors.length === 0,
+    response: '', // Text already streamed
+    steps: stepCount,
+    errors,
+    vfs,
+    metrics: {
+      duration: 0,
+      executionMode: options?.executionMode || 'standard',
+    },
+  };
+
+  return finalResult;
 }
