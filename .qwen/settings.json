@@ -11,7 +11,13 @@
       "Bash(move *)",
       "Bash(d *)",
       "Bash(@echo *)",
-      "Bash(dir *)"
+      "Bash(dir *)",
+      "Bash(git diff *)",
+      "Bash(set *)",
+      "Bash(%path%)",
+      "Bash(cargo check *)",
+      "Bash(npx *)",
+      "Bash(findstr *)"
     ]
   },
   "$version": 3

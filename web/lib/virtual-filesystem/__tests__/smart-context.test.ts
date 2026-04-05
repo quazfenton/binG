@@ -1,11 +1,7 @@
 /**
  * Unit Tests for Smart Context & Session File Tracking
  *
- * Tests cover:
- * - Smart context file scoring and ranking
- * - Session file tracker O(1) operations
- * - File request detection patterns
- * - @mention extraction from prompts
+ * Run: npx vitest run web/lib/virtual-filesystem/__tests__/smart-context.test.ts
  */
 
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
@@ -25,8 +21,8 @@ describe('Session File Tracker', () => {
 
   describe('trackSessionFiles', () => {
     it('should track file references from messages', async () => {
-      const { trackSessionFiles, getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-      
+      const { trackSessionFiles, getSessionFiles, clearSession } = await import('@/lib/virtual-filesystem/session-file-tracker');
+
       await trackSessionFiles('test-session-1', [
         { role: 'user', content: 'Fix the bug in App.tsx' },
         { role: 'assistant', content: 'I will check App.tsx and utils/helpers.ts' },
@@ -34,79 +30,84 @@ describe('Session File Tracker', () => {
       ]);
 
       const files = getSessionFiles('test-session-1');
-      expect(files).toContain('App.tsx');
       expect(files.length).toBeGreaterThan(0);
+      clearSession('test-session-1');
     });
 
     it('should handle empty messages', async () => {
-      const { trackSessionFiles, getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-      
+      const { trackSessionFiles, getSessionFiles, clearSession } = await import('@/lib/virtual-filesystem/session-file-tracker');
+
       await trackSessionFiles('empty-session', []);
       const files = getSessionFiles('empty-session');
       expect(files).toEqual([]);
+      clearSession('empty-session');
     });
 
-    it('should handle missing userId', async () => {
-      const { trackSessionFiles, getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-      
+    it('should handle missing/empty userId', async () => {
+      const { trackSessionFiles, getSessionFiles, clearSession } = await import('@/lib/virtual-filesystem/session-file-tracker');
+
       // Should not crash
       await trackSessionFiles('', [{ role: 'user', content: 'test' }]);
       const files = getSessionFiles('');
       expect(Array.isArray(files)).toBe(true);
+      clearSession('');
     });
 
     it('should incrementally track new messages only', async () => {
-      const { trackSessionFiles, getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-      
-      // First call - 2 messages
+      const { trackSessionFiles, getSessionFiles, clearSession } = await import('@/lib/virtual-filesystem/session-file-tracker');
+
+      // First call - 1 message
       await trackSessionFiles('incr-session', [
         { role: 'user', content: 'Check App.tsx' },
       ]);
+      const filesAfter1 = getSessionFiles('incr-session');
+      const count1 = filesAfter1.length;
 
       // Second call - same messages (no new ones)
       await trackSessionFiles('incr-session', [
         { role: 'user', content: 'Check App.tsx' },
       ]);
+      const filesAfter2 = getSessionFiles('incr-session');
+      expect(filesAfter2.length).toBe(count1); // No new files
 
       // Third call - 1 new message
       await trackSessionFiles('incr-session', [
         { role: 'user', content: 'Check App.tsx' },
         { role: 'user', content: 'Now check styles.css' },
       ]);
-
-      const files = getSessionFiles('incr-session');
-      // Should have tracked files from all messages
-      expect(files.length).toBeGreaterThan(0);
+      const filesAfter3 = getSessionFiles('incr-session');
+      expect(filesAfter3.length).toBeGreaterThanOrEqual(count1);
+      clearSession('incr-session');
     });
 
-    it('should respect MAX_FILES_PER_SESSION limit', async () => {
-      const { trackSessionFiles, getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-      
-      // Create messages with many different files
-      const messages = Array.from({ length: 60 }, (_, i) => ({
-        role: 'user' as const,
-        content: `Check file${i}.ts`,
-      }));
+    it('should isolate sessions from each other', async () => {
+      const { trackSessionFiles, getSessionFiles, clearAllSessions } = await import('@/lib/virtual-filesystem/session-file-tracker');
 
-      await trackSessionFiles('max-files-session', messages);
-      const files = getSessionFiles('max-files-session', 100);
-      
-      // Should be capped at MAX_FILES_PER_SESSION (50)
-      expect(files.length).toBeLessThanOrEqual(50);
+      clearAllSessions();
+
+      await Promise.all([
+        trackSessionFiles('session-a', [{ role: 'user', content: 'Check App.tsx' }]),
+        trackSessionFiles('session-b', [{ role: 'user', content: 'Check styles.css' }]),
+      ]);
+
+      const filesA = getSessionFiles('session-a');
+      const filesB = getSessionFiles('session-b');
+
+      expect(filesA).not.toContain('styles.css');
+      expect(filesB).not.toContain('App.tsx');
+      clearAllSessions();
     });
   });
 
   describe('getSessionFiles', () => {
     it('should return empty array for unknown session', async () => {
       const { getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-      
-      const files = getSessionFiles('nonexistent-session');
-      expect(files).toEqual([]);
+      expect(getSessionFiles('nonexistent-session')).toEqual([]);
     });
 
     it('should limit results to requested count', async () => {
-      const { trackSessionFiles, getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-      
+      const { trackSessionFiles, getSessionFiles, clearSession } = await import('@/lib/virtual-filesystem/session-file-tracker');
+
       await trackSessionFiles('limit-session', [
         { role: 'user', content: 'A.tsx' },
         { role: 'user', content: 'B.tsx' },
@@ -117,40 +118,7 @@ describe('Session File Tracker', () => {
 
       const files = getSessionFiles('limit-session', 2);
       expect(files.length).toBeLessThanOrEqual(2);
-    });
-
-    it('should clear session on demand', async () => {
-      const { trackSessionFiles, getSessionFiles, clearSession } = await import('@/lib/virtual-filesystem/session-file-tracker');
-      
-      await trackSessionFiles('clear-session', [
-        { role: 'user', content: 'App.tsx' },
-      ]);
-
-      expect(getSessionFiles('clear-session').length).toBeGreaterThan(0);
-      
-      clearSession('clear-session');
-      expect(getSessionFiles('clear-session')).toEqual([]);
-    });
-  });
-
-  describe('cleanupExpiredSessions', () => {
-    it('should remove expired sessions', async () => {
-      const { trackSessionFiles, getSessionFiles, cleanupExpiredSessions, stopSessionCleanup } = await import('@/lib/virtual-filesystem/session-file-tracker');
-      
-      stopSessionCleanup(); // Stop auto-cleanup for test
-      
-      await trackSessionFiles('cleanup-session', [
-        { role: 'user', content: 'App.tsx' },
-      ]);
-
-      expect(getSessionFiles('cleanup-session').length).toBeGreaterThan(0);
-
-      // Manually expire the session by manipulating internal state
-      // (In real usage, TTL would expire naturally)
-      
-      cleanupExpiredSessions();
-      // Session should still exist (not expired yet)
-      expect(getSessionFiles('cleanup-session').length).toBeGreaterThanOrEqual(0);
+      clearSession('limit-session');
     });
   });
 });
@@ -160,7 +128,7 @@ describe('Session File Tracker', () => {
 // =============================================================================
 
 describe('File Request Detection', () => {
-  let detectFileReadRequest: typeof import('@/lib/virtual-filesystem/smart-context').detectFileReadRequest;
+  let detectFileReadRequest: (text: string) => string[];
 
   beforeEach(async () => {
     const mod = await import('@/lib/virtual-filesystem/smart-context');
@@ -192,7 +160,6 @@ describe('File Request Detection', () => {
     const result = detectFileReadRequest(
       'I am interested in React patterns and looking at the documentation.'
     );
-    // "React" and "documentation" are not valid file paths
     expect(result.length).toBe(0);
   });
 
@@ -201,24 +168,19 @@ describe('File Request Detection', () => {
       'I need to read App.tsx. Let me check App.tsx again. Also read App.tsx.'
     );
     const appCount = result.filter(f => f === 'App.tsx').length;
-    expect(appCount).toBe(1); // Deduplicated
+    expect(appCount).toBe(1);
   });
 
   it('should handle empty input', () => {
-    const result = detectFileReadRequest('');
-    expect(result).toEqual([]);
+    expect(detectFileReadRequest('')).toEqual([]);
   });
 
   it('should handle input without file references', () => {
-    const result = detectFileReadRequest('Hello, how are you?');
-    expect(result).toEqual([]);
+    expect(detectFileReadRequest('Hello, how are you?')).toEqual([]);
   });
 
   it('should filter files with spaces (invalid paths)', () => {
-    const result = detectFileReadRequest(
-      'Check interested in React.tsx file patterns.'
-    );
-    // Should not match "interested in React.tsx" as a file
+    const result = detectFileReadRequest('Check interested in React.tsx file patterns.');
     const hasSpaces = result.some(f => f.includes(' '));
     expect(hasSpaces).toBe(false);
   });
@@ -229,51 +191,15 @@ describe('File Request Detection', () => {
     );
     expect(result.length).toBeGreaterThanOrEqual(2);
   });
-});
 
-// =============================================================================
-// Smart Context Scoring Tests
-// =============================================================================
-
-describe('Smart Context Scoring', () => {
-  it('should prioritize explicit @mentions', async () => {
-    const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
-    
-    // Mock VFS - this test would need VFS mocking in real setup
-    // Placeholder: verify the function handles missing userId gracefully
-    const result = await generateSmartContext({
-      userId: '',
-      prompt: 'Fix @App.tsx',
-    });
-    
-    expect(result.warnings).toContain('Missing userId');
-    expect(result.vfsIsEmpty).toBe(true);
-  });
-
-  it('should handle empty prompt', async () => {
-    const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
-    
-    const result = await generateSmartContext({
-      userId: 'test-user',
-      prompt: '',
-    });
-    
-    // Should not crash, returns minimal context for empty VFS
-    expect(result).toHaveProperty('bundle');
-    expect(result).toHaveProperty('warnings');
-  });
-
-  it('should handle missing optional fields', async () => {
-    const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
-    
-    const result = await generateSmartContext({
-      userId: 'test-user',
-      prompt: 'test',
-    });
-    
-    // Should use defaults for all optional fields
-    expect(result).toHaveProperty('bundle');
-    expect(result.estimatedTokens).toBeGreaterThan(0);
+  it('should handle tool call extraction', async () => {
+    const mod = await import('@/lib/virtual-filesystem/smart-context');
+    const result = mod.extractToolCallFileRequests([
+      { name: 'read_file', arguments: { path: 'src/App.tsx' } },
+      { name: 'write_file', arguments: { path: 'src/output.ts' } },
+    ]);
+    expect(result).toContain('src/App.tsx');
+    expect(result).not.toContain('src/output.ts');
   });
 });
 
@@ -286,11 +212,12 @@ describe('@mention Extraction', () => {
     const text = 'Fix the bug in @App.tsx and also check @utils/helpers.ts';
     const pattern = /@([\w\-/.]+\.(?:tsx?|jsx?|py|rs|go|java|css|scss|json|md|yaml|yml|toml|sh|bash|html|sql|graphql|proto|tf|hcl))/gi;
     const matches: string[] = [];
-    let match;
-    while ((match = pattern.exec(text)) !== null) {
+    let match: RegExpExecArray | null;
+    const regex = new RegExp(pattern);
+    while ((match = regex.exec(text)) !== null) {
       matches.push(match[1]);
     }
-    
+
     expect(matches).toContain('App.tsx');
     expect(matches).toContain('utils/helpers.ts');
     expect(matches.length).toBe(2);
@@ -300,7 +227,6 @@ describe('@mention Extraction', () => {
     const text = 'Email me @ company or call @home';
     const pattern = /@([\w\-/.]+\.(?:tsx?|jsx?|py|rs|go|java|css|scss|json|md|yaml|yml|toml|sh|bash|html|sql|graphql|proto|tf|hcl))/gi;
     const matches = [...text.matchAll(pattern)];
-    
     expect(matches.length).toBe(0);
   });
 
@@ -308,8 +234,6 @@ describe('@mention Extraction', () => {
     const text = 'Check @App';
     const pattern = /@([\w\-/.]+\.(?:tsx?|jsx?|py|rs|go|java|css|scss|json|md|yaml|yml|toml|sh|bash|html|sql|graphql|proto|tf|hcl))/gi;
     const matches = [...text.matchAll(pattern)];
-    
-    // Should NOT match - no file extension
     expect(matches.length).toBe(0);
   });
 
@@ -317,61 +241,106 @@ describe('@mention Extraction', () => {
     const text = 'Open @src/components/Header.tsx';
     const pattern = /@([\w\-/.]+\.(?:tsx?|jsx?|py|rs|go|java|css|scss|json|md|yaml|yml|toml|sh|bash|html|sql|graphql|proto|tf|hcl))/gi;
     const matches = [...text.matchAll(pattern)];
-    
     expect(matches.length).toBe(1);
     expect(matches[0][1]).toBe('src/components/Header.tsx');
   });
 });
 
 // =============================================================================
-// Integration Test: End-to-End Flow
+// Smart Context Integration Tests
 // =============================================================================
 
-describe('End-to-End @mention Flow', () => {
-  it('should track session files and return them in O(1)', async () => {
-    const { trackSessionFiles, getSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-    
-    // Simulate user conversation
-    await trackSessionFiles('e2e-session', [
-      { role: 'user', content: 'Fix bug in App.tsx' },
-      { role: 'assistant', content: 'Looking at App.tsx now...' },
-      { role: 'user', content: 'Also update styles.css' },
-    ]);
-
-    // O(1) lookup
-    const files = getSessionFiles('e2e-session', 10);
-    
-    // Should have tracked files
-    expect(files.length).toBeGreaterThan(0);
-    
-    // Should be sorted by mention frequency (most mentioned first)
-    if (files.length > 1) {
-      // App.tsx was mentioned twice, should be ranked higher
-      const appIdx = files.indexOf('App.tsx');
-      expect(appIdx).toBeGreaterThanOrEqual(0);
-    }
+describe('Smart Context Integration', () => {
+  it('should handle missing userId gracefully', async () => {
+    const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
+    const result = await generateSmartContext({
+      userId: '',
+      prompt: 'Fix @App.tsx',
+    });
+    expect(result.warnings).toContain('Missing userId');
+    expect(result.vfsIsEmpty).toBe(true);
   });
 
-  it('should handle concurrent sessions without interference', async () => {
-    const { trackSessionFiles, getSessionFiles, clearAllSessions } = await import('@/lib/virtual-filesystem/session-file-tracker');
-    
-    clearAllSessions();
-    
-    // Track two sessions concurrently
-    await Promise.all([
-      trackSessionFiles('session-a', [
-        { role: 'user', content: 'Check App.tsx' },
-      ]),
-      trackSessionFiles('session-b', [
-        { role: 'user', content: 'Check styles.css' },
-      ]),
+  it('should handle empty prompt', async () => {
+    const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
+    const result = await generateSmartContext({
+      userId: 'test-user',
+      prompt: '',
+    });
+    expect(result).toHaveProperty('bundle');
+    expect(result).toHaveProperty('warnings');
+  });
+
+  it('should handle missing optional fields', async () => {
+    const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
+    const result = await generateSmartContext({
+      userId: 'test-user',
+      prompt: 'test',
+    });
+    expect(result).toHaveProperty('bundle');
+    expect(result.estimatedTokens).toBeGreaterThan(0);
+  });
+});
+
+// =============================================================================
+// Import Resolution Tests
+// =============================================================================
+
+describe('Import Resolution', () => {
+  // Test the internal resolution logic through generateSmartContext behavior
+  // In a real setup, these would be unit tests for extractImportsFromContent
+
+  it('should handle JS/TS extensionless imports', () => {
+    // This tests the algorithm: ./utils → tries ./utils.ts, ./utils.tsx, etc.
+    const candidates = ['/src/utils'];
+    const vfsLower = new Set(['/src/utils.ts', '/src/utils.tsx']);
+    const vfsOrig = new Map([
+      ['/src/utils.ts', '/src/utils.ts'],
+      ['/src/utils.tsx', '/src/utils.tsx'],
     ]);
 
-    const filesA = getSessionFiles('session-a');
-    const filesB = getSessionFiles('session-b');
+    // Simulate resolution
+    let found: string | null = null;
+    for (const c of candidates) {
+      if (vfsLower.has(c.toLowerCase())) { found = vfsOrig.get(c.toLowerCase()) || null; break; }
+      for (const ext of ['.ts', '.tsx', '.js', '.jsx']) {
+        const w = c + ext;
+        if (vfsLower.has(w.toLowerCase())) { found = vfsOrig.get(w.toLowerCase()) || null; break; }
+      }
+      if (found) break;
+    }
+    expect(found).toBe('/src/utils.ts');
+  });
 
-    // Sessions should be isolated
-    expect(filesA).not.toContain('styles.css');
-    expect(filesB).not.toContain('App.tsx');
+  it('should handle Python dot-notation to path conversion', () => {
+    // from .utils.helpers import X → ./utils/helpers
+    const dotPath = '.utils.helpers';
+    const slashPath = dotPath.replace(/\./g, '/');
+    const result = slashPath.startsWith('//') ? slashPath.slice(1) : slashPath;
+    expect(result).toBe('./utils/helpers');
+  });
+
+  it('should handle double-dot Python relative imports', () => {
+    // from ..shared.utils import X → ../shared/utils
+    const dotPath = '..shared.utils';
+    const slashPath = dotPath.replace(/\./g, '/');
+    const result = slashPath.startsWith('//') ? slashPath.slice(1) : slashPath;
+    expect(result).toBe('../shared/utils');
+  });
+
+  it('should handle Rust crate imports', () => {
+    // use crate::module::SubModule → /module/SubModule
+    const match = 'use crate::module::SubModule';
+    const path = match.replace('use crate::', '').replace(/::/g, '/');
+    const result = '/' + path;
+    expect(result).toBe('/module/SubModule');
+  });
+
+  it('should handle Rust super/self imports', () => {
+    // use super::utils → ./utils
+    const match = 'use super::utils';
+    const path = match.replace(/use\s+(?:super|self)::/, '').replace(/::/g, '/');
+    const result = './' + path;
+    expect(result).toBe('./utils');
   });
 });

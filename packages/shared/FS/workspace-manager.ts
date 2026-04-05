@@ -14,7 +14,7 @@
  */
 
 import { createFileSystem, type IFileSystem, type WorkspaceConfig, type FSStats, type FileWatcherCallback, type FileSystemWatchEvent } from './index';
-import { isDesktopMode, getDefaultWorkspaceRoot } from '../platform/env';
+import { isDesktopMode, getDefaultWorkspaceRoot } from '@bing/platform/env';
 import { randomUUID } from 'crypto';
 import { createLogger } from '@/lib/utils/logger';
 

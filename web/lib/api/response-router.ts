@@ -41,7 +41,6 @@ import {
 } from '@/lib/chat/file-edit-parser'
 
 // Import router services
-import { fastAgentService, type FastAgentRequest, type FastAgentResponse } from '@/lib/chat/fast-agent-service'
 import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from '@/lib/chat/n8n-agent-service'
 import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from '@/lib/chat/custom-fallback-service'
 import { enhancedLLMService, type EnhancedLLMRequest } from '@/lib/chat/enhanced-llm-service'
@@ -565,32 +564,8 @@ export class ResponseRouter {
     // Define endpoint priority chain
     const endpoints = [
       {
-        name: 'fast-agent',
-        priority: 0,
-        // DISABLED - Fast-agent has known issues with empty responses and routing
-        // Even if FAST_AGENT_ENABLED is set, skip this endpoint
-        enabled: false,
-        service: fastAgentService,
-        healthCheck: () => fastAgentService.healthCheck(),
-        // Use shouldHandle for proper provider support and complexity gating
-        canHandle: (req: RouterRequest) => false,  // Always skip fast-agent
-        processRequest: async (req: RouterRequest) => {
-          const response = await fastAgentService.processRequest({
-            messages: req.messages,
-            provider: req.provider,
-            model: req.model,
-            temperature: req.temperature,
-            maxTokens: req.maxTokens,
-            stream: req.stream,
-            userId: req.userId,
-            requestId: req.requestId,
-          } as FastAgentRequest)
-          return this.normalizeFastAgentResponse(response)
-        },
-      },
-      {
         name: 'original-system',
-        priority: 1,
+        priority: 0,
         enabled: true,
         service: enhancedLLMService,
         healthCheck: async () => true,
@@ -1338,7 +1313,6 @@ export class ResponseRouter {
    */
   private mapEndpointToProvider(endpointName: string): string | null {
     switch (endpointName) {
-      case 'fast-agent':
       case 'n8n-agents':
       case 'custom-fallback':
       case 'original-system':
@@ -1347,33 +1321,6 @@ export class ResponseRouter {
         return null;
       default:
         return null;
-    }
-  }
-
-  /**
-   * Normalize FastAgent response
-   * Ensures all FastAgent-specific fields are properly passed through
-   */
-  private normalizeFastAgentResponse(response: FastAgentResponse): RouterResponse {
-    return {
-      success: response.success,
-      content: response.content || '',  // Keep original content (may be empty if tools/files only)
-      data: {
-        ...(response as any).data,
-        // Ensure all FastAgent fields are preserved
-        toolCalls: (response as any).toolCalls,
-        files: (response as any).files,
-        chainedAgents: (response as any).chainedAgents,
-        processingSteps: (response as any).processingSteps,
-        reflectionResults: (response as any).reflectionResults,
-        multiModalContent: (response as any).multiModalContent,
-        qualityScore: (response as any).qualityScore,
-        estimatedDuration: (response as any).estimatedDuration,
-        iterationCount: (response as any).iterationCount,
-        fallbackToOriginal: (response as any).fallbackToOriginal,
-      },
-      source: 'fast-agent',
-      priority: 0,
     }
   }
 

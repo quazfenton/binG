@@ -1,6 +1,6 @@
 /**
  * Multi-Agent Orchestration System
- * 
+ *
  * Coordinates multiple AI agents to work together on complex tasks.
  * Supports:
  * - Hierarchical agent teams (Manager → Workers)
@@ -9,11 +9,11 @@
  * - Consensus-based decision making
  * - Conflict resolution
  * - Progress tracking
- * 
+ *
  * @example
  * ```typescript
  * import { createAgentTeam } from '@/lib/spawn/orchestration';
- * 
+ *
  * const team = await createAgentTeam({
  *   name: 'Refactoring Team',
  *   agents: [
@@ -23,12 +23,12 @@
  *   ],
  *   workspaceDir: '/workspace/my-project',
  * });
- * 
+ *
  * const result = await team.execute({
  *   task: 'Refactor the authentication module',
  *   strategy: 'hierarchical', // or 'collaborative' or 'consensus'
  * });
- * 
+ *
  * console.log(result.output);
  * console.log('Agent contributions:', result.contributions);
  * ```
@@ -36,11 +36,55 @@
 
 import { EventEmitter } from 'node:events';
 import { createLogger } from '../../utils/logger';
-import type { PromptResponse } from '../agent-service-manager';
 import type { PooledAgent as PoolAgent } from '../agent-pool';
 import { getAgentPool, type AgentPoolConfig, type PoolAgentType } from '../agent-pool';
+import { generateText } from 'ai';
+import { getVercelModel } from '@/lib/chat/vercel-ai-streaming';
 
 const logger = createLogger('Agents:Orchestration');
+
+// ============================================================================
+// Vercel AI SDK Helper
+// ============================================================================
+
+/**
+ * Run an LLM call using Vercel AI SDK generateText.
+ * Replaces the old (agent as any).prompt() pattern.
+ */
+async function runAgentLLM(options: {
+  provider: string;
+  model: string;
+  messages: Array<{ role: 'system' | 'user' | 'assistant'; content: string }>;
+  maxTokens?: number;
+  temperature?: number;
+}): Promise<{ response: string; filesModified?: Array<{ path: string; action: string }> }> {
+  let vercelModel: any;
+  try {
+    vercelModel = getVercelModel(options.provider, options.model);
+  } catch (modelError: any) {
+    logger.warn('Failed to create Vercel model, using fallback', {
+      provider: options.provider,
+      model: options.model,
+      error: modelError.message,
+    });
+    // Use OpenAI as universal fallback
+    const { createOpenAI } = await import('@ai-sdk/openai');
+    const openai = createOpenAI({});
+    vercelModel = openai('gpt-4o-mini');
+  }
+
+  const result = await generateText({
+    model: vercelModel,
+    messages: options.messages,
+    maxOutputTokens: options.maxTokens || 8192,
+    temperature: options.temperature ?? 0.7,
+  });
+
+  return {
+    response: result.text || '',
+    usage: result.usage,
+  } as any;
+}
 
 // ============================================================================
 // Types
@@ -185,6 +229,60 @@ export class AgentTeam extends EventEmitter {
   }
 
   /**
+   * Run an LLM call — tries agent pool prompt first, falls back to Vercel AI SDK.
+   * This provides a smooth migration path from agent pools to direct Vercel AI SDK calls.
+   */
+  private async runLLM(options: {
+    agent: any;
+    role: string;
+    message: string;
+    timeout?: number;
+  }): Promise<{ response: string; filesModified?: Array<{ path: string; action: string }> }> {
+    const agentConfig = this.config.agents.find(a => a.role === options.role);
+    const provider = agentConfig?.type || 'openai';
+    const model = agentConfig?.model || process.env.DEFAULT_MODEL || 'gpt-4o';
+
+    if (!agentConfig) {
+      logger.warn(`No agent config found for role '${options.role}', using defaults`, {
+        provider,
+        model,
+      });
+    }
+
+    // Try agent pool prompt first (if available)
+    if (options.agent && typeof options.agent.prompt === 'function') {
+      try {
+        return await options.agent.prompt({
+          message: options.message,
+          timeout: options.timeout,
+        });
+      } catch (error: any) {
+        logger.warn(`Agent pool prompt failed for ${options.role}, falling back to Vercel AI SDK`, {
+          error: error.message,
+        });
+      }
+    }
+
+    // Fallback to Vercel AI SDK
+    try {
+      return await runAgentLLM({
+        provider,
+        model,
+        messages: [{ role: 'user', content: options.message }],
+        maxTokens: options.timeout ? Math.floor(options.timeout / 100) : 8192,
+      });
+    } catch (vercelError: any) {
+      logger.error(`Vercel AI SDK fallback failed for ${options.role}`, {
+        error: vercelError.message,
+      });
+      // Return a graceful fallback response
+      return {
+        response: `[${options.role} could not process the request — LLM service unavailable]`,
+      };
+    }
+  }
+
+  /**
    * Initialize agent pools
    */
   async initialize(): Promise<void> {
@@ -305,10 +403,12 @@ export class AgentTeam extends EventEmitter {
 
     // Manager creates plan
     this.updateProgress('manager', 10, 'Creating execution plan');
-    
-    const planResult = await (manager as any).prompt({
+
+    const planResult = await this.runLLM({
+      agent: manager,
+      role: 'manager',
       message: `Create a detailed execution plan for this task:
-      
+
 Task: ${task.task}
 ${task.context ? 'Context:\n' + task.context.join('\n') : ''}
 ${task.constraints ? 'Constraints:\n' + task.constraints.join('\n') : ''}
@@ -337,9 +437,11 @@ Provide a step-by-step plan with clear assignments for each team member role.`,
       const progress = 10 + Math.floor((step / workers.length) * 80);
       this.updateProgress(role as AgentRole, progress, `Executing step ${step}/${workers.length}`);
 
-      const result = await (agent as any).prompt({
+      const result = await this.runLLM({
+        agent,
+        role,
         message: `Execute your assigned part of the plan:
-        
+
 Overall Task: ${task.task}
 Plan: ${planResult.response}
 Your Role: ${role}
@@ -364,10 +466,12 @@ Provide your implementation and any files you modify.`,
     const reviewer = this.activeAgents.get('reviewer');
     if (reviewer) {
       this.updateProgress('reviewer', 95, 'Reviewing results');
-      
-      const reviewResult = await (reviewer as any).prompt({
+
+      const reviewResult = await this.runLLM({
+        agent: reviewer,
+        role: 'reviewer',
         message: `Review the team's work:
-        
+
 Task: ${task.task}
 Contributions: ${contributions.map(c => c.content.substring(0, 500)).join('\n---\n')}
 
@@ -405,9 +509,11 @@ Provide feedback and final approval or request changes.`,
       const progress = Math.floor((index / agents.length) * 100);
       this.updateProgress(role as AgentRole, progress, `${role} contributing`);
 
-      const result = await (agent as any).prompt({
+      const result = await this.runLLM({
+        agent,
+        role,
         message: `Contribute to this task:
-        
+
 Task: ${task.task}
 ${task.context ? 'Context:\n' + task.context.join('\n') : ''}
 Your Role: ${role}
@@ -437,7 +543,9 @@ Provide your unique contribution based on your expertise.`,
     if (synthesizer) {
       this.updateProgress('manager', 90, 'Synthesizing contributions');
       
-      const synthesis = await (synthesizer as any).prompt({
+      const synthesis = await this.runLLM({
+        agent: synthesizer,
+        role: 'manager',
         message: `Synthesize these contributions into a cohesive final result:
         
 Task: ${task.task}
@@ -479,9 +587,11 @@ Create a unified final output that incorporates the best elements from all contr
       solutions.length = 0; // Clear array for new iteration
 
       for (const [role, agent] of agents) {
-        const result = await (agent as any).prompt({
+        const result = await this.runLLM({
+          agent,
+          role,
           message: `Provide your solution for:
-          
+
 Task: ${task.task}
 ${iteration > 1 ? 'Previous solutions:\n' + solutions.map(s => s.solution.substring(0, 300)).join('\n') : ''}
 
@@ -541,9 +651,11 @@ Provide your best solution.`,
       const progress = Math.floor(((i + 1) / agents.length) * 100);
       this.updateProgress(role as AgentRole, progress, `${role} processing`);
 
-      const result = await (agent as any).prompt({
+      const result = await this.runLLM({
+        agent,
+        role,
         message: `Process this input:
-        
+
 Input: ${currentInput}
 Your Role: ${role}
 
@@ -586,9 +698,11 @@ Enhance, improve, or transform the input based on your expertise.`,
     for (const [role, agent] of agents) {
       this.updateProgress(role as AgentRole, 30, `${role} creating solution`);
 
-      const result = await (agent as any).prompt({
+      const result = await this.runLLM({
+        agent,
+        role,
         message: `Create the best possible solution for:
-        
+
 Task: ${task.task}
 ${task.successCriteria ? 'Success Criteria:\n' + task.successCriteria.join('\n') : ''}
 
@@ -618,7 +732,9 @@ Create a comprehensive, high-quality solution.`,
     let judgingResponse = '';
 
     if (judge) {
-      const judging = await (judge as any).prompt({
+      const judging = await this.runLLM({
+        agent: judge,
+        role: 'reviewer',
         message: `Judge these solutions:
 
 Task: ${task.task}
@@ -697,9 +813,11 @@ Score each solution from 0-100 and explain which is best.`,
 
     // Each agent votes
     for (const [role, agent] of agents) {
-      const voting = await (agent as any).prompt({
+      const voting = await this.runLLM({
+        agent,
+        role,
         message: `Vote on the best solution:
-        
+
 Task: ${task.task}
 
 Solutions:
@@ -741,7 +859,7 @@ Respond with only the number of the best solution (1-${solutions.length}).`,
   /**
    * Calculate quality score for a result
    */
-  private calculateQualityScore(result: PromptResponse): number {
+  private calculateQualityScore(result: { usage?: any; filesModified?: any[]; toolCalls?: any[] }): number {
     let score = 0.5; // Base score
 
     // Token efficiency

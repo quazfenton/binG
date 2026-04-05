@@ -5,8 +5,8 @@
  * the X-Orchestration-Mode header.
  *
  * Supported modes:
- * - task-router (default): lib/agent/task-router.ts
- * - unified-agent: lib/orchestra/unified-agent-service.ts
+ * - unified-agent (default): lib/orchestra/unified-agent-service.ts
+ * - task-router: lib/agent/task-router.ts
  * - mastra-workflow: lib/agent/mastra-workflow-integration.ts
  * - crewai: lib/crewai/
  * - v2-executor: lib/agent/v2-executor.ts
@@ -707,7 +707,6 @@ export async function executeWithOrchestrationMode(
           });
 
           // Hook into team progress events and emit to event store
-          // Use synchronous wrapper to prevent unhandled promise rejections
           const onProgress = (progress: any) => {
             emitEvent({
               type: 'ORCHESTRATION_PROGRESS',

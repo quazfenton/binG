@@ -308,7 +308,15 @@ export function stopSessionCleanup(): void {
   }
 }
 
-// Auto-start cleanup on module import (Node.js environment check)
-if (typeof process !== 'undefined' && process.env.NODE_ENV !== 'test') {
+// ============================================================================
+// Auto-start cleanup on module import
+// Runs every 5 minutes to evict expired sessions (TTL: 1 hour)
+// Skipped in test environments to avoid interfering with test isolation
+// ============================================================================
+if (
+  typeof process !== 'undefined' &&
+  typeof process.env !== 'undefined' &&
+  process.env.NODE_ENV !== 'test'
+) {
   startSessionCleanup(5 * 60 * 1000); // Every 5 minutes
 }
