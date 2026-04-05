@@ -155,7 +155,7 @@ const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
  * FIX: Added better error handling and provider validation for ToolLoopAgent compatibility
  * Also validates that model name doesn't look like a provider name
  */
-function getVercelModel(
+export function getVercelModel(
   provider: VercelProvider | string,
   model: string,
   apiKey?: string,

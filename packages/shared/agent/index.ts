@@ -57,12 +57,23 @@ export {
   type OrchestrationResult,
 } from './orchestration-mode-handler';
 
-// Task Router
+// Task Router (LEGACY — keyword-based detection, superseded by unified router)
 export {
   taskRouter,
   type TaskRequest,
   type TaskRoutingResult,
 } from './task-router';
+
+// Unified Router (PRIMARY — replaces scattered routing logic)
+export {
+  routeChatRequest,
+  classifyTask,
+  checkProviderHealth,
+  type ChatRequest,
+  type ChatResponse,
+  type ProviderHealth,
+  type UnifiedAgentResult,
+} from './unified-router';
 
 // V2 Executor
 export {

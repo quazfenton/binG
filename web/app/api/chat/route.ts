@@ -21,6 +21,7 @@ import { executeV2Task, executeV2TaskStreaming } from '@bing/shared/agent/v2-exe
 import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orchestra/unified-agent-service';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@bing/shared/agent/workforce-manager';
+import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared/agent/task-classifier';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
@@ -133,6 +134,11 @@ async function classifyRequest(
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
   const content = typeof lastUser?.content === 'string' ? lastUser.content : JSON.stringify(lastUser?.content || '');
 
+  // Empty content — treat as simple query
+  if (!content || content.trim().length === 0) {
+    return { isCodeRequest: false, complexity: 'simple', confidence: 1, recommendedMode: 'v1-api' };
+  }
+
   try {
     const classifier = getTaskClassifier();
     const result = await classifier.classify(content, {
@@ -169,12 +175,9 @@ async function classifyRequest(
       }
     }
 
-    return { isCodeRequest, complexity: 'unknown', confidence: 0, recommendedMode: 'v1-api' };
+    return { isCodeRequest, complexity: 'simple', confidence: 0, recommendedMode: 'v1-api' };
   }
 }
-
-// Import task classifier from shared package
-import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared/agent/task-classifier';
 
 // FIX 3: Pre-compiled RegExp for shouldUseContextPack
 const CONTEXT_PACK_PATTERN = new RegExp(
@@ -501,7 +504,7 @@ export async function POST(request: NextRequest) {
     const ownerResolution = await resolveFilesystemOwner(request);
     const filesystemOwnerId = ownerResolution.ownerId;
     anonSessionIdToSet = ownerResolution.anonSessionId; // Set cookie if new anon session
-    
+
     // Calculate these BEFORE parallel execution since they're dependencies
     const enableFilesystemEdits = shouldHandleFilesystemEdits(
       messages,
@@ -509,7 +512,9 @@ export async function POST(request: NextRequest) {
       filesystemContext,
     );
     const useContextPack = shouldUseContextPack(messages);
-    const isCodeRequest = isCodeOrAgenticRequest(messages, attachedFilesystemFiles);
+    // Use multi-factor task classifier instead of regex-based detection
+    const classification = await classifyRequest(messages, attachedFilesystemFiles);
+    const isCodeRequest = classification.isCodeRequest;
     const useContextPackForAgentic = enableFilesystemEdits && isCodeRequest;
     const shouldUseContextPackFinal = useContextPack || useContextPackForAgentic;
     
@@ -576,8 +581,8 @@ export async function POST(request: NextRequest) {
       authResult.success && authResult.source !== 'anonymous' ? authResult.userId : undefined;
 
     // V2 Agent Mode: route to OpenCode/Nullclaw workflow
-    // Auto-detect V2 for code-intensive requests
-    const isCodeRequestAuto = isCodeOrAgenticRequest(messages, attachedFilesystemFiles);
+    // Use task classifier result instead of redundant regex detection
+    const isCodeRequestAuto = classification.isCodeRequest;
     const wantsV2 =
       agentMode === 'v2' ||
       (agentMode === 'auto' && (
@@ -3672,31 +3677,9 @@ function appendFilesystemContextMessages(
   return [filesystemContextMessage, ...messages];
 }
 
-function isCodeOrAgenticRequest(
-  messages: LLMMessage[],
-  attachedFiles: ChatFilesystemFileContext[],
-): boolean {
-  if (attachedFiles.length > 0) return true;
-
-  const lastUser = [...messages].reverse().find(m => m.role === 'user');
-  const content =
-    typeof lastUser?.content === 'string'
-      ? lastUser.content
-      : JSON.stringify(lastUser?.content || '');
-
-  if (STRONG_CODE_PATTERN.test(content)) return true;
-
-  let weakMatches = 0;
-  for (const re of WEAK_CODE_PATTERNS) {
-    if (re.test(content) && ++weakMatches >= 2) return true;
-  }
-
-  return false;
-}
-
 /**
  * Check if request specifically needs 3rd party OAuth integration (not just general coding)
- * This is separate from isCodeOrAgenticRequest - it returns true ONLY for actual integrations
+ * This returns true ONLY for actual integration requests requiring OAuth
  */
 function requiresThirdPartyOAuth(messages: LLMMessage[]): boolean {
   const lastUser = [...messages].reverse().find(m => m.role === 'user');

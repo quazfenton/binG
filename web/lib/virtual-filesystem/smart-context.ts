@@ -321,11 +321,16 @@ function extractRawImports(content: string, sourceExt: string): Set<string> {
   if (sourceExt === 'py') {
     // from .module import X, from ..package.module import X
     for (const match of content.matchAll(/from\s+(\.{1,3}[\w.]*)\s+import/g)) {
-      rawImports.add(match[1].replace(/\./g, '/'));
+      // Convert Python dot-notation to path: .utils.helpers → ./utils/helpers
+      const dotPath = match[1];
+      const slashPath = dotPath.replace(/\./g, '/');
+      rawImports.add(slashPath.startsWith('//') ? slashPath.slice(1) : slashPath);
     }
     // import .module, import ..package.module
     for (const match of content.matchAll(/^\s*import\s+(\.{1,3}[\w.]*)/gm)) {
-      rawImports.add(match[1].replace(/\./g, '/'));
+      const dotPath = match[1];
+      const slashPath = dotPath.replace(/\./g, '/');
+      rawImports.add(slashPath.startsWith('//') ? slashPath.slice(1) : slashPath);
     }
   }
 
@@ -333,17 +338,17 @@ function extractRawImports(content: string, sourceExt: string): Set<string> {
   // Rust
   // ========================================================================
   if (sourceExt === 'rs') {
-    // use crate::module::Item
+    // use crate::module::Item → /module/Item (absolute VFS path from crate root)
     for (const match of content.matchAll(/use\s+crate(?:::[\w]+)+/g)) {
-      const path = match[0].replace('use crate', '').replace(/::/g, '/');
+      const path = match[0].replace('use crate::', '').replace(/::/g, '/');
       rawImports.add('/' + path);
     }
-    // use super::module::Item, use self::module::Item
+    // use super::module::Item, use self::module::Item → ./module/Item (relative)
     for (const match of content.matchAll(/use\s+(?:super|self)(?:::[\w]+)+/g)) {
-      const path = match[0].replace(/use\s+(?:super|self)/, '').replace(/::/g, '/');
-      rawImports.add('.' + path);
+      const path = match[0].replace(/use\s+(?:super|self)::/, '').replace(/::/g, '/');
+      rawImports.add('./' + path);
     }
-    // mod module;
+    // mod module; → ./module (sibling module file)
     for (const match of content.matchAll(/^\s*mod\s+(\w+)\s*;/gm)) {
       rawImports.add('./' + match[1]);
     }
