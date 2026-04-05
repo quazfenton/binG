@@ -70,6 +70,13 @@ export interface PtyOutputEvent {
   data: string;
 }
 
+// Shell Completion Types
+export interface ShellCompletionResult {
+  success: boolean;
+  completions: string[];
+  error?: string;
+}
+
 export interface ResourceUsage {
   cpu_percent: number;
   memory_used_mb: number;
@@ -532,6 +539,30 @@ export async function closePtySession(sessionId: string): Promise<PtyInputResult
   }
 }
 
+/**
+ * Get shell completions for a given input
+ * Uses the shell's native completion mechanism (compgen for bash, etc.)
+ */
+export async function getShellCompletions(
+  input: string,
+  cwd?: string,
+  shell?: string
+): Promise<ShellCompletionResult> {
+  if (!isTauriAvailable()) {
+    return { success: false, completions: [], error: 'Tauri not available' };
+  }
+
+  try {
+    return await invoke<ShellCompletionResult>('get_shell_completions', {
+      input,
+      cwd,
+      shell,
+    });
+  } catch (error: any) {
+    return { success: false, completions: [], error: error.message };
+  }
+}
+
 export const tauriInvoke = {
   isAvailable: isTauriAvailable,
   executeCommand,
@@ -554,6 +585,7 @@ export const tauriInvoke = {
   writePtyInput,
   resizePty,
   closePtySession,
+  getShellCompletions,
   saveSecret: async (key: string, value: string) => {
     if (!isTauriAvailable()) {
       throw new Error('Tauri runtime not available');

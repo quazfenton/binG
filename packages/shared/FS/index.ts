@@ -106,6 +106,28 @@ export interface FSToolResult {
 export type FileWatcherCallback = (event: FileSystemWatchEvent) => void;
 
 // ============================================================================
+// Desktop Events
+// ============================================================================
+
+/**
+ * Desktop file change event emitted when files change externally
+ * Enables UI updates in desktop mode when files are modified outside the app
+ */
+export interface DesktopFileChangeEvent {
+  type: 'create' | 'update' | 'delete';
+  path: string;
+  paths: string[];
+  workspaceId: string;
+  userId: string;
+  timestamp: number;
+}
+
+/**
+ * Handler function for desktop file change events
+ */
+export type DesktopFileChangeHandler = (event: DesktopFileChangeEvent) => void;
+
+// ============================================================================
 // Abstract Filesystem Interface
 // ============================================================================
 

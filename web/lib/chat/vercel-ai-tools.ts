@@ -22,6 +22,61 @@ import { tool, type Tool } from 'ai';
 import { z } from 'zod';
 import { chatLogger } from './chat-logger';
 import type { ToolExecutionContext } from './vercel-ai-streaming';
+import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK, isMCPAvailable, vfsTools as mcpVFSTools, initializeVFSTools } from '@/lib/mcp';
+import { ALL_CAPABILITIES, getCapability, type CapabilityDefinition } from '@/lib/tools/capabilities';
+import { getCapabilityRouter, type CapabilityRouter } from '@/lib/tools/router';
+
+/**
+ * Tools that would collide with existing tools - capability versions should NOT replace these
+ */ const TOOL_NAME_BLACKLIST = new Set([
+  'read_file', 'write_file', 'delete_file', 'list_directory',
+  'execute_code', 'run_shell',
+  'browse_url', 'web_search', 'web_fetch',
+]);
+
+/**
+ * Create tools from capability definitions using the CapabilityRouter
+ * This wires capabilities into Vercel AI tools for intelligent provider selection
+ * 
+ * IMPORTANT: Filters out capability tools that would collide with existing tools
+ * to avoid confusion - existing tools take priority.
+ */
+function createCapabilityTools(context: ToolExecutionContext): Record<string, Tool> {
+  const tools: Record<string, Tool> = {};
+  const router = getCapabilityRouter();
+  
+  for (const capability of ALL_CAPABILITIES) {
+    const toolName = capability.id.replace('.', '_');
+    
+    // Skip capability tools that would collide with existing tools
+    if (TOOL_NAME_BLACKLIST.has(toolName)) {
+      continue;
+    }
+    
+    tools[toolName] = tool({
+      description: capability.description,
+      parameters: capability.inputSchema as any,
+      execute: async (args: any) => {
+        try {
+          const result = await router.execute(capability.id, args, {
+            userId: context.userId,
+            conversationId: context.conversationId,
+            sessionId: context.sessionId,
+          });
+          if (result.success) {
+            return result.output;
+          } else {
+            throw new Error(result.error || 'Capability execution failed');
+          }
+        } catch (error: any) {
+          chatLogger.error(`Capability ${capability.id} failed`, { error: error.message });
+          throw error;
+        }
+      },
+    }) as unknown as Tool;
+  }
+  return tools;
+}
 
 /**
  * Convert a capability definition to Vercel AI SDK tool
@@ -556,19 +611,107 @@ Returns cleaned article body text with navigation, ads, footers, and boilerplate
 }
 
 /**
- * Get all available tools for a given context
+ * Create VFS MCP tools (structured file operations via MCP)
+ * These tools use schema-enforced parameters instead of fragile tag parsing
+ * Initializes tools with user context from the execution context
+ */
+function createVFSTools(context: ToolExecutionContext): Record<string, Tool> {
+  // Initialize VFS tools with user context
+  const userId = context.userId || 'default';
+  initializeVFSTools(userId, context.sessionId);
+  
+  const tools: Record<string, Tool> = {};
+  
+  for (const [name, vfsTool] of Object.entries(mcpVFSTools)) {
+    // @ts-ignore - AI SDK tool compatibility
+    tools[name] = vfsTool;
+  }
+  
+  return tools;
+}
+
+/**
+ * MCP tool wrapper for Vercel AI SDK
+ * Wraps MCP tool definitions in Vercel's tool() format
+ */
+async function createMCPTools(context: ToolExecutionContext): Promise<Record<string, Tool>> {
+  const mcpTools: Record<string, Tool> = {};
+  
+  if (!isMCPAvailable()) {
+    return mcpTools;
+  }
+  
+  try {
+    const mcpToolDefs = await getMCPToolsForAI_SDK(context.userId);
+    
+    for (const toolDef of mcpToolDefs) {
+      const { name, description, parameters } = toolDef.function;
+      
+      mcpTools[name] = tool({
+        description: description || `MCP tool: ${name}`,
+        parameters: parameters || z.record(z.any()),
+        // @ts-ignore - Vercel AI SDK workaround
+        execute: async (args: any) => {
+          try {
+            const result = await callMCPToolFromAI_SDK(name, args, context.userId || '');
+            if (result.success) {
+              return { success: true, output: result.output };
+            } else {
+              return { success: false, error: result.error || 'Tool execution failed' };
+            }
+          } catch (error: any) {
+            chatLogger.error('MCP tool execution failed', { tool: name, error: error.message });
+            return { success: false, error: error.message };
+          }
+        },
+      }) as unknown as Tool;
+    }
+    
+    chatLogger.debug('Created MCP tools for Vercel AI SDK', { count: mcpToolDefs.length });
+  } catch (error: any) {
+    chatLogger.warn('Failed to create MCP tools', { error: error.message });
+  }
+  
+  return mcpTools;
+}
+
+/**
+ * Get all available tools for a given context (including MCP tools and VFS tools)
+ * 
+ * Tool Priority (fallback chain):
+ * 1. VFS MCP tools (structured, schema-enforced - PREFERRED for file operations)
+ * 2. Built-in file tools (same VFS, different format)
+ * 3. Sandbox tools
+ * 4. Web tools (search, fetch)
+ * 5. MCP server tools (remote servers)
+ * 
+ * The LLM can use either the MCP-structured tools (write_file, read_file, etc.)
+ * OR the traditional tag-parsing approach. The MCP tools are the modern,
+ * reliable approach - the old parser remains as fallback.
  */
 export async function getAllTools(context: ToolExecutionContext): Promise<Record<string, Tool>> {
   const fileTools = createFileSystemTools(context);
   const sandboxTools = createSandboxTools(context);
   const webTools = createWebTools(context);
   const searchTools = createSearchTools(context);
+  
+  // Get VFS MCP tools (structured, schema-enforced file operations)
+  const vfsTools = createVFSTools(context);
+  
+  // Get MCP server tools (remote MCP servers)
+  const mcpServerTools = await createMCPTools(context);
+
+  // Get capability-based tools (uses CapabilityRouter for intelligent provider selection)
+  const capabilityTools = createCapabilityTools(context);
 
   return {
-    ...fileTools,
+    ...vfsTools,         // MCP VFS tools first (preferred)
+    ...fileTools,        // Built-in file tools as fallback
     ...sandboxTools,
     ...webTools,
     ...searchTools,
+    ...mcpServerTools,
+    ...capabilityTools,  // Capability-based tools with smart routing
   };
 }
 
