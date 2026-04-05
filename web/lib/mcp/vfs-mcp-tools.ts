@@ -24,6 +24,7 @@ import { z } from 'zod';
 import { tool } from 'ai';
 import { AsyncLocalStorage } from 'node:async_hooks';
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
+import { emitFileEvent, emitBatchFileEvents } from '../virtual-filesystem/file-events';
 import { createLogger } from '../utils/logger';
 
 const logger = createLogger('VFS-MCP-Tools');
@@ -90,6 +91,15 @@ export const writeFileTool = tool({
       const context = getToolContext();
       logger.debug('writeFile', { path, contentLength: content.length, userId: context.userId });
       
+      // Check if file exists for event type
+      let existed = false;
+      try {
+        await virtualFilesystem.readFile(context.userId, path);
+        existed = true;
+      } catch {
+        // File doesn't exist, this is a create
+      }
+
       const result = await virtualFilesystem.writeFile(
         context.userId,
         path,
@@ -97,6 +107,16 @@ export const writeFileTool = tool({
         undefined, // language - auto-detected
         { failIfExists: false } // allow overwrite
       );
+
+      // Emit file event for UI updates and session tracking
+      await emitFileEvent({
+        userId: context.userId,
+        sessionId: context.sessionId,
+        path,
+        type: existed ? 'update' : 'create',
+        content,
+        source: 'mcp-tool',
+      });
 
       return {
         success: true,
@@ -151,6 +171,18 @@ export const applyDiffTool = tool({
         currentFile.language,
         { failIfExists: false }
       );
+
+      // Emit diff event for enhanced-diff-viewer
+      await emitFileEvent({
+        userId: context.userId,
+        sessionId: context.sessionId,
+        path,
+        type: 'update',
+        content: newContent,
+        previousContent: currentFile.content,
+        source: 'mcp-tool-diff',
+        metadata: { diff },
+      });
 
       return {
         success: true,
@@ -313,6 +345,18 @@ export const batchWriteTool = tool({
       const context = getToolContext();
       logger.debug('batchWrite', { fileCount: files.length, userId: context.userId });
       
+      // Track file existence for event type determination
+      const fileStates = await Promise.all(
+        files.map(async (file) => {
+          try {
+            await virtualFilesystem.readFile(context.userId, file.path);
+            return { path: file.path, existed: true };
+          } catch {
+            return { path: file.path, existed: false };
+          }
+        })
+      );
+
       const results = await Promise.all(
         files.map(async (file) => {
           try {
@@ -329,6 +373,23 @@ export const batchWriteTool = tool({
           }
         })
       );
+
+      // Emit batch file events
+      const filesWithContent = files.map(f => {
+        const state = fileStates.find(s => s.path === f.path);
+        return {
+          path: f.path,
+          type: (state?.existed ? 'update' : 'create') as 'create' | 'update',
+          content: f.content,
+        };
+      });
+
+      await emitBatchFileEvents({
+        userId: context.userId,
+        sessionId: context.sessionId,
+        files: filesWithContent,
+        source: 'mcp-tool',
+      });
 
       const successCount = results.filter(r => r.success).length;
       const failCount = results.filter(r => !r.success).length;
@@ -368,6 +429,15 @@ export const deleteFileTool = tool({
       
       const result = await virtualFilesystem.deletePath(context.userId, path);
 
+      // Emit delete event
+      await emitFileEvent({
+        userId: context.userId,
+        sessionId: context.sessionId,
+        path,
+        type: 'delete',
+        source: 'mcp-tool',
+      });
+
       return {
         success: true,
         path,
@@ -399,6 +469,15 @@ export const createDirectoryTool = tool({
       logger.debug('createDirectory', { path, userId: context.userId });
       
       const result = await virtualFilesystem.createDirectory(context.userId, path);
+
+      // Emit create event for directory (type: 'create' for consistency)
+      await emitFileEvent({
+        userId: context.userId,
+        sessionId: context.sessionId,
+        path,
+        type: 'create',
+        source: 'mcp-tool-directory',
+      });
 
       return {
         success: true,
