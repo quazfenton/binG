@@ -16,6 +16,7 @@ import path from 'node:path';
 import crypto from 'node:crypto';
 import { VirtualFilesystemService } from './virtual-filesystem-service';
 import type { VirtualFile } from './filesystem-types';
+import { emitFileEvent } from './file-events';
 import { createLogger } from '@/lib/utils/logger';
 
 const log = createLogger('DesktopVFS');
@@ -205,13 +206,24 @@ export class DesktopVFSService {
 
   /**
    * Write a file to VFS and optionally sync to local filesystem (with coalescing - IMPROVEMENT 3)
+   * @param sessionId Optional session ID for file tracking in smart-context
    */
   async writeFile(
     ownerId: string,
     filePath: string,
     content: string,
     language?: string,
+    sessionId?: string,
   ): Promise<VirtualFile> {
+    // Check if file exists to determine event type
+    let existed = false;
+    try {
+      await this.vfs.readFile(ownerId, filePath);
+      existed = true;
+    } catch {
+      // File doesn't exist, this is a create
+    }
+
     // Write to VFS (versioned, git-backed)
     const file = await this.vfs.writeFile(ownerId, filePath, content, language);
 
@@ -219,6 +231,16 @@ export class DesktopVFSService {
     if (this.autoSync) {
       this.queueFileChange(filePath, content);
     }
+
+    // Emit file event for UI updates and session tracking
+    await emitFileEvent({
+      userId: ownerId,
+      sessionId,
+      path: filePath,
+      type: existed ? 'update' : 'create',
+      content,
+      source: 'desktop-vfs',
+    });
 
     return file;
   }
@@ -235,8 +257,9 @@ export class DesktopVFSService {
 
   /**
    * Delete a file from VFS and local filesystem (with dedup - IMPROVEMENT 2)
+   * @param sessionId Optional session ID for file tracking in smart-context
    */
-  async deletePath(ownerId: string, targetPath: string): Promise<{ deletedCount: number }> {
+  async deletePath(ownerId: string, targetPath: string, sessionId?: string): Promise<{ deletedCount: number }> {
     // Check for duplicate delete
     if (this.shouldSkipDuplicateDelete(targetPath)) {
       log.debug('Skipping duplicate delete', { targetPath });
@@ -255,6 +278,15 @@ export class DesktopVFSService {
 
     // Track this deletion for dedup
     this.trackFileDeleted(targetPath);
+
+    // Emit delete event with session ID for tracking
+    await emitFileEvent({
+      userId: ownerId,
+      sessionId,
+      path: targetPath,
+      type: 'delete',
+      source: 'desktop-vfs',
+    });
     
     // Clean up hash cache for deleted path and its children
     const prefix = `${targetPath.replace(/\/+$/, '')}/`;
@@ -272,13 +304,24 @@ export class DesktopVFSService {
 
   /**
    * Create a directory in VFS and on local filesystem
+   * @param sessionId Optional session ID for file tracking in smart-context
    */
-  async createDirectory(ownerId: string, dirPath: string): Promise<{ path: string; createdAt: string }> {
+  async createDirectory(ownerId: string, dirPath: string, sessionId?: string): Promise<{ path: string; createdAt: string }> {
     const result = await this.vfs.createDirectory(ownerId, dirPath);
     if (this.autoSync) {
       const localPath = path.join(this.localRoot, dirPath);
       await fs.mkdir(localPath, { recursive: true });
     }
+
+    // Emit create event for directory with session ID for tracking
+    await emitFileEvent({
+      userId: ownerId,
+      sessionId,
+      path: dirPath,
+      type: 'create',
+      source: 'desktop-vfs-directory',
+    });
+
     return result;
   }
 

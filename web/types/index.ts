@@ -23,6 +23,7 @@ export interface Message {
     toolName?: string;
     provider?: string;
     reasoning?: string;
+    sessionId?: string; // For MCP/VFS file tracking in enhanced-diff-viewer
     reasoningChunks?: Array<{
       id: string;
       content: string;

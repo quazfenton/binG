@@ -16,11 +16,25 @@
 
 'use client';
 
-import React, { useMemo, useState, useCallback } from 'react';
+import React, { useMemo, useState, useCallback, useEffect } from 'react';
 import { useOPFS } from '@/hooks/use-opfs';
+import { onFilesystemUpdated, type FilesystemUpdatedDetail } from '@/lib/virtual-filesystem/sync/sync-events';
 import { Plus, Minus, FileDiff, AlertCircle, Cloud, HardDrive, GitBranch, ChevronDown } from 'lucide-react';
 import { Prism as SyntaxHighlighter } from 'react-syntax-highlighter';
 import { oneDark } from 'react-syntax-highlighter/dist/esm/styles/prism';
+
+/**
+ * File change event from MCP/VFS operations
+ * Matches the event emission from file-events.ts
+ */
+interface FileChangeEvent {
+  path: string;
+  type: 'create' | 'update' | 'delete';
+  content?: string;
+  previousContent?: string;
+  source: string;
+  timestamp?: number;
+}
 
 export interface DiffSection {
   type: 'context' | 'add' | 'remove';
@@ -69,6 +83,10 @@ export interface EnhancedDiffViewerProps {
   defaultExpanded?: boolean;
   /** Expand to show all content regardless of line count (overrides maxLines) */
   fullyExpanded?: boolean;
+  /** Session ID for tracking MCP/VFS file events */
+  sessionId?: string;
+  /** Callback when new file changes arrive from MCP/VFS */
+  onFileChange?: (event: FileChangeEvent) => void;
 }
 
 /**
@@ -254,13 +272,54 @@ export function EnhancedDiffViewer({
   maxHeight = 800, // Increased from 384px (max-h-96) to 800px
   defaultExpanded = true, // Start expanded by default for better UX
   fullyExpanded = false, // If true, always show all content (no truncation)
+  sessionId,
+  onFileChange,
 }: EnhancedDiffViewerProps) {
-  const [activeTab, setActiveTab] = useState<'server-local' | 'server-git' | 'local-git'>('server-local');
+  const [activeTab, setActiveTab] = useState<'server-local' | 'server-git' | 'local-git' | 'mcp-changes'>('server-local');
   const [isExpanded, setIsExpanded] = useState(defaultExpanded);
   const [isDragging, setIsDragging] = useState(false);
   const [dragStartY, setDragStartY] = useState(0);
   const [scrollStart, setScrollStart] = useState(0);
   const contentRef = React.useRef<HTMLDivElement>(null);
+  
+  // Track MCP/VFS file changes for this path
+  const [mcpFileChanges, setMcpFileChanges] = useState<FileChangeEvent[]>([]);
+
+  // Listen for filesystem-updated events from MCP/VFS operations
+  // Note: We intentionally don't depend on onFileChange to avoid recreating the listener
+  // Instead we use a ref to call the callback if provided
+  const onFileChangeRef = React.useRef(onFileChange);
+  onFileChangeRef.current = onFileChange;
+  
+  useEffect(() => {
+    // Capture path at effect setup time to avoid stale closures
+    const filePath = path;
+    const fileName = filePath.split('/').pop() || '';
+    
+    const unlisten = onFilesystemUpdated((event: CustomEvent<FilesystemUpdatedDetail>) => {
+      const change = event.detail;
+      // Filter to only changes for this path
+      if (change.path === filePath || (change.path && change.path.includes(fileName))) {
+        const fileChange: FileChangeEvent = {
+          path: change.path || '',
+          type: change.type || 'update',
+          content: change.applied?.content,
+          previousContent: (change as any).previousContent,
+          source: change.source || 'mcp-tool',
+          timestamp: change.emittedAt,
+        };
+        setMcpFileChanges(prev => {
+          // Keep only last 10 changes per file
+          const updated = [...prev, fileChange].slice(-10);
+          return updated;
+        });
+        // Call the callback via ref (stable across renders)
+        onFileChangeRef.current?.(fileChange);
+      }
+    });
+    
+    return unlisten;
+  }, [path]);
 
   const {
     readFile: readOPFSFile,
@@ -329,6 +388,25 @@ export function EnhancedDiffViewer({
   // Auto-detect if content is diff format
   const contentIsDiff = useMemo(() => !forceFullContent && isDiffFormat(serverContent), [serverContent, forceFullContent]);
 
+  // Compute diff between server content and latest MCP/VFS change
+  const mcpDiff = useMemo(() => {
+    if (!mcpFileChanges.length) return null;
+    const latestChange = mcpFileChanges[mcpFileChanges.length - 1];
+    if (!latestChange.content || latestChange.type === 'delete') return null;
+    
+    // If we have previous content, diff against that
+    const oldContent = latestChange.previousContent || serverContent || '';
+    const diff = generateDiff(oldContent, latestChange.content, path);
+    return parseUnifiedDiff(diff);
+  }, [mcpFileChanges, serverContent, path]);
+
+  // Check if there's a recent MCP change (within last 5 seconds)
+  const hasRecentMCPChange = useMemo(() => {
+    if (!mcpFileChanges.length) return false;
+    const latest = mcpFileChanges[mcpFileChanges.length - 1];
+    return latest.timestamp && (Date.now() - latest.timestamp < 5000);
+  }, [mcpFileChanges]);
+
   // Parse diffs
   const serverLocalDiff = useMemo(() => {
     if (!localContent || !compareWithLocal) return null;
@@ -363,10 +441,12 @@ export function EnhancedDiffViewer({
         return serverGitDiff;
       case 'local-git':
         return localGitDiff;
+      case 'mcp-changes':
+        return mcpDiff;
       default:
         return serverLocalDiff;
     }
-  }, [activeTab, serverLocalDiff, serverGitDiff, localGitDiff]);
+  }, [activeTab, serverLocalDiff, serverGitDiff, localGitDiff, mcpDiff]);
 
   // Calculate stats
   const stats = useMemo(() => {
@@ -456,60 +536,78 @@ export function EnhancedDiffViewer({
         </div>
 
         {/* Tab selection */}
-        {(compareWithLocal || compareWithGit) && (
-          <div className="flex gap-2">
-            {compareWithLocal && (
+        <div className="flex gap-2 flex-wrap">
+          {compareWithLocal && (
+            <button
+              onClick={() => setActiveTab('server-local')}
+              className={`
+                px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200
+                flex items-center gap-1.5
+                ${activeTab === 'server-local'
+                  ? 'bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 shadow-lg shadow-cyan-500/10'
+                  : 'text-gray-400 hover:bg-white/5 hover:text-gray-200 border border-transparent'
+                }
+              `}
+            >
+              <Cloud className="w-3.5 h-3.5" />
+              Server vs Local
+            </button>
+          )}
+          {compareWithGit && (
+            <>
               <button
-                onClick={() => setActiveTab('server-local')}
+                onClick={() => setActiveTab('server-git')}
                 className={`
                   px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200
                   flex items-center gap-1.5
-                  ${activeTab === 'server-local'
+                  ${activeTab === 'server-git'
                     ? 'bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 shadow-lg shadow-cyan-500/10'
                     : 'text-gray-400 hover:bg-white/5 hover:text-gray-200 border border-transparent'
                   }
                 `}
               >
                 <Cloud className="w-3.5 h-3.5" />
-                Server vs Local
+                Server vs Git
               </button>
-            )}
-            {compareWithGit && (
-              <>
+              {localContent && (
                 <button
-                  onClick={() => setActiveTab('server-git')}
+                  onClick={() => setActiveTab('local-git')}
                   className={`
                     px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200
                     flex items-center gap-1.5
-                    ${activeTab === 'server-git'
-                      ? 'bg-cyan-500/20 border border-cyan-500/30 text-cyan-300 shadow-lg shadow-cyan-500/10'
+                    ${activeTab === 'local-git'
+                      ? 'bg-violet-500/20 border border-violet-500/30 text-violet-300 shadow-lg shadow-violet-500/10'
                       : 'text-gray-400 hover:bg-white/5 hover:text-gray-200 border border-transparent'
                     }
                   `}
                 >
-                  <Cloud className="w-3.5 h-3.5" />
-                  Server vs Git
+                  <HardDrive className="w-3.5 h-3.5" />
+                  Local vs Git
                 </button>
-                {localContent && (
-                  <button
-                    onClick={() => setActiveTab('local-git')}
-                    className={`
-                      px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200
-                      flex items-center gap-1.5
-                      ${activeTab === 'local-git'
-                        ? 'bg-violet-500/20 border border-violet-500/30 text-violet-300 shadow-lg shadow-violet-500/10'
-                        : 'text-gray-400 hover:bg-white/5 hover:text-gray-200 border border-transparent'
-                      }
-                    `}
-                  >
-                    <HardDrive className="w-3.5 h-3.5" />
-                    Local vs Git
-                  </button>
-                )}
-              </>
-            )}
-          </div>
-        )}
+              )}
+            </>
+          )}
+          {/* MCP/VFS changes tab - shows recent file edits from MCP tools */}
+          {mcpFileChanges.length > 0 && (
+            <button
+              onClick={() => setActiveTab('mcp-changes')}
+              className={`
+                px-3 py-1.5 text-xs font-medium rounded-lg transition-all duration-200
+                flex items-center gap-1.5
+                ${activeTab === 'mcp-changes'
+                  ? 'bg-violet-500/20 border border-violet-500/30 text-violet-300 shadow-lg shadow-violet-500/10'
+                  : 'text-gray-400 hover:bg-white/5 hover:text-gray-200 border border-transparent'
+                }
+              `}
+            >
+              <FileDiff className="w-3.5 h-3.5" />
+              MCP Changes
+              {hasRecentMCPChange && (
+                <span className="w-2 h-2 bg-emerald-400 rounded-full animate-pulse" />
+              )}
+            </button>
+          )}
+        </div>
 
         {/* Stats */}
         {activeDiff && (

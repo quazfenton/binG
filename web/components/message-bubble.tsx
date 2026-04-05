@@ -1096,6 +1096,7 @@ export default function MessageBubble({
                         showUnsynced={false}
                         isFullContent={!hasUnifiedDiff} // Let EnhancedDiffViewer auto-detect if unsure
                         fullyExpanded={false} // Keep large diffs bounded but allow scrolling
+                        sessionId={message.metadata?.sessionId}
                       />
                     );
                   })}
