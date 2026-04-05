@@ -2,6 +2,7 @@
  * Agent Orchestration Module - Consolidated Index
  *
  * Unified exports for all agent orchestration components including:
+ * - Unified router (primary entry point for all LLM requests)
  * - Session management with background jobs
  * - Execution graph for task tracking
  * - Workforce management with YAML persistence
@@ -15,6 +16,9 @@
  * @example
  * ```typescript
  * import {
+ *   routeChatRequest,          // Primary router for all LLM requests
+ *   classifyTask,              // Multi-factor task classification
+ *   checkProviderHealth,       // Provider availability check
  *   sessionManager,
  *   executionGraphEngine,
  *   workforceManager,
@@ -23,6 +27,16 @@
  *   statefulAgent,
  *   hitlManager,
  * } from '@bing/shared/agent/orchestration';
+ *
+ * // Route a chat request (replaces scattered routing logic)
+ * const result = await routeChatRequest({
+ *   userMessage: 'Add authentication',
+ *   messages,
+ *   provider: 'openai',
+ *   model: 'gpt-4o',
+ *   stream: true,
+ *   userId: 'user_123',
+ * });
  *
  * // Start session with background jobs
  * const session = await sessionManager.getOrCreateSession(userId, conversationId);
@@ -142,7 +156,24 @@ export {
 } from './multi-agent-collaboration';
 
 // ============================================================================
-// Task Router
+// Unified Router (PRIMARY — replaces scattered routing logic)
+// ============================================================================
+
+export {
+  routeChatRequest,
+  classifyTask,
+  checkProviderHealth,
+  type ChatRequest,
+  type ChatResponse,
+  type ProviderHealth,
+  type UnifiedAgentResult,
+  type TaskClassification,
+  type ClassificationContext,
+} from './unified-router';
+
+// ============================================================================
+// Task Router (LEGACY — keyword-based detection, superseded by unified router)
+// Kept for backward compatibility and event system integration
 // ============================================================================
 
 export {

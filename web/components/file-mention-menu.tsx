@@ -9,7 +9,7 @@
 
 import React, { useRef, useEffect } from 'react';
 import type { FileMentionOption } from '@/hooks/use-file-mention-autocomplete';
-import { File, Folder, Loader2 } from 'lucide-react';
+import { File, Folder, Loader2, FolderOpen } from 'lucide-react';
 
 export interface FileMentionMenuProps {
   /** Whether menu is visible */
@@ -54,6 +54,21 @@ export const FileMentionMenu: React.FC<FileMentionMenuProps> = ({
   }, [selectedIndex]);
 
   if (!visible || !suggestions || suggestions.length === 0) {
+    // Show empty state when menu is visible but no files exist
+    if (visible && !isLoading) {
+      return (
+        <div className="absolute bottom-full left-0 mb-2 w-full max-w-md bg-gray-900/95 backdrop-blur-sm border border-white/20 rounded-xl shadow-2xl overflow-hidden z-50">
+          <div className="px-3 py-2 bg-white/5 border-b border-white/10 text-xs text-gray-400">
+            Files
+          </div>
+          <div className="flex flex-col items-center justify-center py-6 text-gray-500">
+            <FolderOpen className="w-8 h-8 mb-2 opacity-50" />
+            <p className="text-sm">No files in workspace yet</p>
+            <p className="text-xs mt-1 text-gray-600">Create or upload files, then use @ to mention them</p>
+          </div>
+        </div>
+      );
+    }
     return null;
   }
 

@@ -12,14 +12,29 @@
  * 4. Streaming: Native SSE event emission at every state transition.
  */
 
-import { llmService, type LLMRequest } from '@/lib/chat/llm-providers';
+import { generateText, type Tool } from 'ai';
 import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
 import { SelfHealingExecutor } from '@/lib/crewai/runtime/self-healing';
+import { getVercelModel } from '@/lib/chat/vercel-ai-streaming';
+import { createLogger } from '@/lib/utils/logger';
+
+const log = createLogger('AgentOrchestrator');
+
+// Message type — use local definition since AI SDK types vary by version
+type AgentMessage = {
+  role: 'system' | 'user' | 'assistant' | 'tool';
+  content: string;
+  toolCallId?: string;
+};
 
 export interface IterationConfig {
   maxIterations: number;
   maxTokens: number;
   maxDurationMs: number;
+  /** LLM provider name (openai, anthropic, google, mistral, openrouter, etc.) */
+  provider?: string;
+  /** Model name (gpt-4o, claude-sonnet-4-5, etc.) */
+  model?: string;
 }
 
 export class IterationController {
@@ -65,7 +80,7 @@ export interface OrchestratorConfig {
   executeTool: (name: string, args: any) => Promise<any>;
 }
 
-export type OrchestratorEvent = 
+export type OrchestratorEvent =
   | { type: 'phase_change'; phase: 'planning' | 'acting' | 'verifying' | 'responding' }
   | { type: 'plan_created'; plan: any }
   | { type: 'iteration_start'; iteration: number }
@@ -79,7 +94,34 @@ export type OrchestratorEvent =
   | { type: 'done'; response: string; stats: any };
 
 export class AgentOrchestrator {
-  constructor(private config: OrchestratorConfig) {}
+  /** Convert internal tools to Vercel AI SDK tool format */
+  private sdkTools: Record<string, Tool> = {};
+
+  constructor(private config: OrchestratorConfig) {
+    // Convert tools to Vercel AI SDK format
+    for (const tool of config.tools) {
+      const toolName = tool.name || tool.function?.name;
+      if (!toolName) continue;
+
+      const parameters = tool.parameters || tool.function?.parameters;
+      this.sdkTools[toolName] = {
+        description: tool.description || tool.function?.description || '',
+        // Vercel AI SDK Tool expects parameters as JSON schema
+        // @ts-expect-error - parameters shape varies by SDK version
+        parameters: parameters && typeof parameters === 'object' && 'type' in parameters
+          ? parameters
+          : { type: 'object', properties: {}, additionalProperties: false },
+        execute: async (args: any) => {
+          try {
+            return await config.executeTool(toolName, args);
+          } catch (error: any) {
+            log.error(`Tool ${toolName} execution failed`, { error: error.message });
+            throw error;
+          }
+        },
+      };
+    }
+  }
 
   /**
    * Executes a task using a Plan -> Act -> Verify -> Respond loop.
@@ -109,9 +151,9 @@ export class AgentOrchestrator {
       controller.recordStep();
       yield { type: 'iteration_start', iteration: controller.getStats().iterations };
 
-      // Call LLM for next action (Coder Agent)
+      // Call LLM for next action (Coder Agent) using Vercel AI SDK
       const llmResponse = await this.callLLM(task, conversationHistory);
-      controller.recordTokens(llmResponse.usage?.total_tokens || 0);
+      controller.recordTokens(llmResponse.usage?.totalTokens || 0);
 
       if (llmResponse.done || !llmResponse.toolCalls?.length) {
         conversationHistory.push({ role: 'assistant', content: llmResponse.text });
@@ -127,7 +169,7 @@ export class AgentOrchestrator {
         try {
           toolResult = await this.executeToolWithHealing(call.name, call.arguments);
           yield { type: 'tool_result', tool: call.name, result: toolResult };
-          
+
           if (call.name === 'writeFile' || call.name === 'applyDiff') {
             modifiedFiles.push(call.arguments.path || call.arguments.file);
           }
@@ -138,16 +180,16 @@ export class AgentOrchestrator {
 
         conversationHistory.push({
           role: 'tool',
-          name: call.name,
-          content: JSON.stringify(toolResult)
-        });
+          content: JSON.stringify(toolResult),
+          toolCallId: call.id,
+        } as AgentMessage);
       }
 
       // 3. VERIFICATION PHASE (Critic/Verifier Agent)
       if (modifiedFiles.length > 0) {
          yield { type: 'phase_change', phase: 'verifying' };
          const verificationResult = await this.runVerification(modifiedFiles);
-         
+
          if (!verificationResult.passed) {
            yield { type: 'verification_failed', errors: verificationResult.errors };
            // Feed errors back to the ACT loop for self-healing
@@ -155,7 +197,7 @@ export class AgentOrchestrator {
              role: 'system',
              content: `Verification failed. Please fix these errors in the next step: ${JSON.stringify(verificationResult.errors)}`
            });
-           continue; 
+           continue;
          }
          yield { type: 'verification_passed' };
       }
@@ -163,33 +205,33 @@ export class AgentOrchestrator {
 
     // 4. RESPOND PHASE (with budget check - do not exceed budgets even for summarization)
     yield { type: 'phase_change', phase: 'responding' };
-    
+
     // Check budgets before final summarization call to prevent budget bypass
     const finalCheck = controller.canContinue();
     if (!finalCheck.allowed) {
       // Budgets exhausted - return partial result without final summarization
-      yield { 
-        type: 'warning', 
-        message: `Final summarization skipped: ${finalCheck.reason}. Returning partial results.` 
+      yield {
+        type: 'warning',
+        message: `Final summarization skipped: ${finalCheck.reason}. Returning partial results.`
       };
-      yield { 
-        type: 'done', 
-        response: 'Execution completed with partial results due to budget constraints.', 
-        stats: controller.getStats() 
+      yield {
+        type: 'done',
+        response: 'Execution completed with partial results due to budget constraints.',
+        stats: controller.getStats()
       };
       return;
     }
-    
+
     const finalResponse = await this.callLLM("Summarize the final outcome based on the execution history.", conversationHistory);
-    controller.recordTokens(finalResponse.usage?.total_tokens || 0);
+    controller.recordTokens(finalResponse.usage?.totalTokens || 0);
     yield { type: 'done', response: finalResponse.text, stats: controller.getStats() };
   }
 
   // ==========================================
-  // Private Helper Methods (To be implemented)
+  // Private Helper Methods
   // ==========================================
 
-  private async generatePlan(task: string, history: any[]) {
+  private async generatePlan(task: string, history: AgentMessage[]) {
     const planPrompt = `You are a planning agent. Create a step-by-step execution plan for the following task.
 TASK: ${task}
 Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"}]`;
@@ -202,36 +244,61 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
     }
   }
 
-  private async callLLM(prompt: string, history: any[]) {
-    const request: LLMRequest = {
-      model: process.env.LLM_MODEL || 'gpt-4o',
-      temperature: 0.2,
-      maxTokens: 4000,
-      messages: [
+  /**
+   * Call LLM using Vercel AI SDK generateText.
+   * Replaces the old llmService.generateResponse() with unified provider support.
+   */
+  private async callLLM(prompt: string, history: AgentMessage[]) {
+    const provider = this.config.iterationConfig.provider || process.env.LLM_PROVIDER || 'openai';
+    const model = this.config.iterationConfig.model || process.env.LLM_MODEL || process.env.DEFAULT_MODEL || 'gpt-4o';
+
+    try {
+      let vercelModel: any;
+      try {
+        vercelModel = getVercelModel(provider, model);
+      } catch (modelError: any) {
+        log.error('Failed to create Vercel model', { provider, model, error: modelError.message });
+        throw new Error(`Cannot initialize LLM provider '${provider}' with model '${model}': ${modelError.message}`);
+      }
+
+      const messages: AgentMessage[] = [
         { role: 'system', content: 'You are an autonomous AI coding agent. You have tools available to interact with the system.' },
         ...history,
         { role: 'user', content: prompt }
-      ]
-    };
-    const response = await llmService.generateResponse(request);
-    const result = response as any;
+      ];
 
-    // FIX: Tool calls are stored on response.metadata.toolCalls, not response.toolCalls
-    const toolCalls = result.metadata?.toolCalls || result.toolCalls || [];
+      const result = await generateText({
+        model: vercelModel,
+        messages: messages as any, // AgentMessage is compatible with ModelMessage at runtime
+        tools: Object.keys(this.sdkTools).length > 0 ? this.sdkTools : undefined,
+        maxOutputTokens: 4000,
+        temperature: 0.2,
+      });
 
-    return {
-      text: result.content || '',
-      done: toolCalls.length === 0,
-      toolCalls: toolCalls,
-      usage: result.usage || { totalTokens: 0 }
-    };
+      // Extract tool calls from the result
+      const toolCalls = (result as any).toolCalls?.map((tc: any) => ({
+        id: tc.toolCallId,
+        name: tc.toolName,
+        arguments: tc.args || {},
+      })) || [];
+
+      return {
+        text: result.text || '',
+        done: toolCalls.length === 0,
+        toolCalls,
+        usage: result.usage || { totalTokens: 0 },
+      };
+    } catch (error: any) {
+      log.error('Vercel AI SDK callLLM failed', { provider, model, error: error.message });
+      throw error;
+    }
   }
 
   private async executeToolWithHealing(name: string, args: any) {
     // Basic self-healing wrapper
     const maxRetries = 2;
     let attempt = 0;
-    
+
     while (attempt <= maxRetries) {
       try {
         return await this.config.executeTool(name, args);
@@ -259,11 +326,11 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
         // Skip if we can't read it
       }
     }
-    
+
     if (Object.keys(modifiedFilesRecord).length === 0) {
       return { passed: true, errors: [] };
     }
-    
+
     const result = await verifyChanges(modifiedFilesRecord, { strict: false });
     return {
       passed: result.passed,

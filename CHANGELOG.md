@@ -204,3 +204,14 @@ pnpm test
 - Import map: All files → max 30 code files
 - Auto-cleanup: Manual → every 5 minutes with `.unref()`
 
+### 🔧 Iteration 2 Fixes
+
+- **Import resolution rewrite** — Complete rewrite from raw string matching to VFS-aware path resolution: handles relative paths (`./utils`, `../components`), extensionless imports, index file resolution (`index.ts`, `__init__.py`), cross-language support (JS/TS, Python, Rust, Go, CSS/SCSS, C/C++)
+- **Race condition fix** — `fetchAllFiles()` now uses Promise-based guard instead of boolean flag, preventing concurrent duplicate API calls
+- **Python dot-notation fix** — `.utils.helpers` → `./utils/helpers` (was producing `/utils/helpers`)
+- **Rust crate import fix** — `use crate::module::Item` → `/module/Item` (was producing `//module/Item` double-slash)
+- **Empty workspace state** — File mention menu now shows friendly "No files in workspace yet" message instead of blank dropdown
+- **Session cleanup robustness** — Added triple-guard for `typeof process`, `typeof process.env`, and `NODE_ENV !== 'test'`
+- **JSX nesting verification** — Verified `relative` div properly wraps Textarea + buttons + file selector without breaking form structure
+- **Comprehensive test suite** — 20+ tests covering session tracking, file detection, @mention extraction, import resolution, and edge cases
+

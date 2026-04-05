@@ -109,6 +109,9 @@ export function useFileMentionAutocomplete(
   const [allFiles, setAllFiles] = useState<FileMentionOption[]>([]);
   
   const abortRef = useRef<AbortController | null>(null);
+  // Promise-based guard to prevent concurrent fetch calls (race condition fix)
+  const fetchPromiseRef = useRef<Promise<void> | null>(null);
+  // Tracks whether a fetch has completed (for deciding whether to re-fetch)
   const hasFetchedFiles = useRef(false);
 
   /**
@@ -116,26 +119,31 @@ export function useFileMentionAutocomplete(
    * Uses the snapshot API which returns the complete file tree
    */
   const fetchAllFiles = useCallback(async () => {
-    if (hasFetchedFiles.current) return;
-    hasFetchedFiles.current = true;
+    // If already fetching, return the existing promise (prevents duplicate concurrent requests)
+    if (fetchPromiseRef.current) return fetchPromiseRef.current;
 
-    const sessionId = userId || getOrCreateAnonymousSessionId();
-    
-    try {
-      // Use the snapshot API which returns all files in the workspace
-      const response = await fetch(`/api/filesystem/snapshot`, {
-        method: 'GET',
-        headers: buildApiHeaders({ json: false }),
-        credentials: 'include',
-      });
+    const fetchPromise = (async () => {
+      const sessionId = userId || getOrCreateAnonymousSessionId();
+
+      try {
+        // Use the snapshot API which returns all files in the workspace
+        const response = await fetch(`/api/filesystem/snapshot`, {
+          method: 'GET',
+          headers: buildApiHeaders({ json: false }),
+          credentials: 'include',
+        });
 
       if (!response.ok) {
         // Snapshot may fail for new users - that's OK, start with empty list
+        fetchPromiseRef.current = null; // Clear guard so next @ triggers retry
         return;
       }
 
       const payload = await response.json();
-      if (!payload?.success || !payload?.data?.files) return;
+      if (!payload?.success || !payload?.data?.files) {
+        fetchPromiseRef.current = null;
+        return;
+      }
 
       // Flatten files from snapshot format
       const snapshotFiles = payload.data.files;
@@ -150,11 +158,19 @@ export function useFileMentionAutocomplete(
       // Extract unique filenames for recent files
       const uniqueFiles = [...new Set(files.map(f => f.name))];
       setRecentFiles(uniqueFiles.slice(0, 20));
+
+      hasFetchedFiles.current = true; // Mark as completed
     } catch (error) {
       console.error('[FileMention] Failed to fetch files:', error);
-      // On failure, start with empty list - user can still type @ to trigger retry
-      hasFetchedFiles.current = false; // Allow retry
+      fetchPromiseRef.current = null; // Allow retry on next @ trigger
+    } finally {
+      // Always clear the guard when fetch completes (success or failure)
+      fetchPromiseRef.current = null;
     }
+    })();
+
+    fetchPromiseRef.current = fetchPromise;
+    return fetchPromise;
   }, [userId]);
 
   /**
