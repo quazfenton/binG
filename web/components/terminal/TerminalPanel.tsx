@@ -22,7 +22,7 @@ import { clipboard } from '@bing/platform/clipboard';
 import { emitFilesystemUpdated, onFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { createRefreshScheduler } from '@/lib/virtual-filesystem/refresh-scheduler';
 import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from '@/lib/ads/ethical-ads-service';
-import { desktopPtyManager, shouldUseDesktopPty, type DesktopPtyInstance } from '@/lib/terminal/desktop-pty-provider';
+import { desktopPtyManager, shouldUseDesktopPty, type DesktopPtyInstance, requestShellCompletion } from '@/lib/terminal/desktop-pty-provider';
 import { isDesktopMode } from '@/lib/utils/desktop-env';
 
 const logger = createLogger('TerminalPanel');
@@ -523,6 +523,14 @@ export default function TerminalPanel({
   // Input batching to reduce HTTP overhead (ARCH 4)
   const inputBatchRef = useRef<Record<string, string>>({});
   const inputFlushRef = useRef<Record<string, NodeJS.Timeout>>({});
+  
+  // Completion state for keyboard navigation (per terminal)
+  const completionStateRef = useRef<Record<string, {
+    completions: string[];
+    selectedIndex: number;
+    currentLine: string;
+    prefix: string;
+  } | null>>({});
 
   useEffect(() => {
     if (isOpen && terminals.length === 0) {
@@ -1434,6 +1442,10 @@ export default function TerminalPanel({
         (termRef as any)._initializing = false;
       }
 
+      // Track current input line for tab completion
+      const inputLineRef = useRef('');
+      const lastTabTimeRef = useRef(0);
+
       terminal.onData((data: string) => {
         // Update idle timeout on any user input
         updateActivity();
@@ -1444,8 +1456,179 @@ export default function TerminalPanel({
         // GET HANDLERS FOR THIS TERMINAL
         const handlers = terminalHandlersRef.current[terminalId];
 
-        // Desktop PTY mode: forward raw bytes to local PTY
+        // Desktop PTY mode: handle Tab for shell completion
         if (term.mode === 'desktop-pty' && term.ptyInstance) {
+          // Handle Tab key for shell completion
+          if (data === '\t') {
+            // Debounce rapid Tab presses to prevent race conditions
+            const now = Date.now();
+            if (now - lastTabTimeRef.current < 300) {
+              term.ptyInstance?.writeInput(data);
+              return;
+            }
+            lastTabTimeRef.current = now;
+            
+            const currentLine = inputLineRef.current;
+            
+            if (!currentLine.trim()) {
+              // No input - send Tab directly to shell for default completion
+              term.ptyInstance.writeInput(data);
+              return;
+            }
+            
+            // Get completions from backend
+            const cwd = localShellCwdRef.current[terminalId] || 'project';
+            
+            requestShellCompletion(
+              term.ptyInstance.sessionId,
+              currentLine,
+              0,  // cursor position
+              cwd
+            ).then((completions) => {
+              if (completions.length === 0) {
+                // No completions - send Tab to shell for default behavior
+                term.ptyInstance?.writeInput(data);
+              } else if (completions.length === 1) {
+                // Single completion - auto-insert it
+                const completion = completions[0];
+                // Get the part after the prefix (what user has typed)
+                const prefix = currentLine.split(/\s+/).pop() || '';
+                const suffix = completion.slice(prefix.length);
+                
+                // Write the completion suffix to terminal
+                term.terminal?.write(suffix);
+                
+                // Update the input line ref
+                inputLineRef.current = currentLine + suffix;
+                
+                term.ptyInstance?.writeInput(suffix);
+              } else {
+                // Multiple completions - show them inline with selection
+                const displayCompletions = completions.slice(0, 10);
+                const prefix = currentLine.split(/\s+/).pop() || '';
+                
+                // Store completion state for keyboard navigation
+                completionStateRef.current[terminalId] = {
+                  completions: displayCompletions,
+                  selectedIndex: 0,
+                  currentLine,
+                  prefix,
+                };
+                
+                // Display completions with first one selected
+                term.terminal?.write('\r\n');
+                term.terminal?.writeln('\x1b[33mCompletions:\x1b[0m');
+                displayCompletions.forEach((comp, idx) => {
+                  const isSelected = idx === 0;
+                  const marker = isSelected ? '\x1b[36m▶\x1b[0m' : ` \x1b[32m${idx + 1}.\x1b[0m`;
+                  const highlight = isSelected ? '\x1b[1;37m' : '';
+                  const reset = isSelected ? '\x1b[0m' : '';
+                  term.terminal?.writeln(`  ${marker} ${highlight}${comp}${reset}`);
+                });
+                
+                if (completions.length > 10) {
+                  term.terminal?.writeln(`  \x1b[90m... and ${completions.length - 10} more\x1b[0m`);
+                }
+                
+                // Show keyboard hint
+                term.terminal?.writeln('\x1b[90m  ↑↓ navigate • Enter select • Esc cancel\x1b[0m');
+                
+                // Re-print prompt and current input
+                term.terminal?.write('\r' + getPrompt('desktop-pty', cwd) + currentLine);
+              }
+            }).catch(() => {
+              // Error getting completions - fall back to default Tab
+              term.ptyInstance?.writeInput(data);
+            });
+            
+            return;
+          }
+          
+          // Track input characters for completion
+          if (data === '\r' || data === '\n') {
+            // Enter - check if we're in completion mode
+            const enterState = completionStateRef.current[terminalId];
+            if (enterState) {
+              const selected = enterState.completions[enterState.selectedIndex];
+              
+              // Insert the selected completion
+              const suffix = selected.slice(enterState.prefix.length);
+              term.terminal?.write(suffix);
+              inputLineRef.current = enterState.currentLine + suffix;
+              term.ptyInstance?.writeInput(suffix);
+              
+              // Clear completion state
+              completionStateRef.current[terminalId] = null;
+              return;
+            }
+            
+            // Clear the input line
+            inputLineRef.current = '';
+            completionStateRef.current[terminalId] = null;
+          } else if (data === '\u007f') {
+            // Backspace - remove last character
+            inputLineRef.current = inputLineRef.current.slice(0, -1);
+            // Clear completion mode on backspace
+            completionStateRef.current[terminalId] = null;
+          } else if (data === '\u001b[A') {
+            // Up arrow - previous completion
+            if (completionStateRef.current[terminalId]) {
+              const state = completionStateRef.current[terminalId]!;
+              state.selectedIndex = (state.selectedIndex - 1 + state.completions.length) % state.completions.length;
+              
+              // Re-display completions with new selection
+              const cwd = localShellCwdRef.current[terminalId] || 'project';
+              term.terminal?.write('\r\n');
+              term.terminal?.writeln('\x1b[33mCompletions:\x1b[0m');
+              state.completions.forEach((comp, idx) => {
+                const isSelected = idx === state.selectedIndex;
+                const marker = isSelected ? '\x1b[36m▶\x1b[0m' : ` \x1b[32m${idx + 1}.\x1b[0m`;
+                const highlight = isSelected ? '\x1b[1;37m' : '';
+                const reset = isSelected ? '\x1b[0m' : '';
+                term.terminal?.writeln(`  ${marker} ${highlight}${comp}${reset}`);
+              });
+              term.terminal?.writeln('\x1b[90m  ↑↓ navigate • Enter select • Esc cancel\x1b[0m');
+              term.terminal?.write('\r' + getPrompt('desktop-pty', cwd) + state.currentLine);
+              return;
+            }
+          } else if (data === '\u001b[B') {
+            // Down arrow - next completion
+            if (completionStateRef.current[terminalId]) {
+              const state = completionStateRef.current[terminalId]!;
+              state.selectedIndex = (state.selectedIndex + 1) % state.completions.length;
+              
+              // Re-display completions with new selection
+              const cwd = localShellCwdRef.current[terminalId] || 'project';
+              term.terminal?.write('\r\n');
+              term.terminal?.writeln('\x1b[33mCompletions:\x1b[0m');
+              state.completions.forEach((comp, idx) => {
+                const isSelected = idx === state.selectedIndex;
+                const marker = isSelected ? '\x1b[36m▶\x1b[0m' : ` \x1b[32m${idx + 1}.\x1b[0m`;
+                const highlight = isSelected ? '\x1b[1;37m' : '';
+                const reset = isSelected ? '\x1b[0m' : '';
+                term.terminal?.writeln(`  ${marker} ${highlight}${comp}${reset}`);
+              });
+              term.terminal?.writeln('\x1b[90m  ↑↓ navigate • Enter select • Esc cancel\x1b[0m');
+              term.terminal?.write('\r' + getPrompt('desktop-pty', cwd) + state.currentLine);
+              return;
+            }
+          } else if (data === '\u001b') {
+            // Escape - cancel completion mode
+            if (completionStateRef.current[terminalId]) {
+              completionStateRef.current[terminalId] = null;
+              const cwd = localShellCwdRef.current[terminalId] || 'project';
+              term.terminal?.write('\r\n');
+              term.terminal?.writeln('\x1b[90mCompletion cancelled\x1b[0m');
+              term.terminal?.write('\r' + getPrompt('desktop-pty', cwd) + inputLineRef.current);
+              return;
+            }
+          } else if (data >= ' ') {
+            // Regular character - add to input line and clear completion mode
+            inputLineRef.current += data;
+            completionStateRef.current[terminalId] = null;
+          }
+          
+          // Forward raw bytes to local PTY
           term.ptyInstance.writeInput(data);
           return;
         }

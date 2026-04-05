@@ -495,6 +495,13 @@ pub struct PtyOutputEvent {
     pub data: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ShellCompletionResult {
+    pub success: bool,
+    pub completions: Vec<String>,
+    pub error: Option<String>,
+}
+
 #[tauri::command]
 pub async fn create_pty_session(
     app: AppHandle,
@@ -664,6 +671,196 @@ pub async fn close_pty_session(
         success: true,
         error: None,
     })
+}
+
+/// Get shell completions for a given input
+/// Uses the shell's native completion mechanism (compgen for bash, compctl for zsh)
+#[tauri::command]
+pub async fn get_shell_completions(
+    _sessions: State<'_, PtySessions>,
+    input: String,
+    cwd: Option<String>,
+    shell: Option<String>,
+) -> Result<ShellCompletionResult, String> {
+    let shell = shell.unwrap_or_else(|| {
+        if cfg!(target_os = "windows") {
+            "powershell".to_string()
+        } else {
+            "bash".to_string()
+        }
+    });
+
+    // Determine if we're completing a command, file, or variable
+    let completion_type = determine_completion_type(&input);
+    
+    let completions = match shell.as_str() {
+        "bash" => get_bash_completions(&input, completion_type, cwd.as_deref()),
+        "zsh" => get_zsh_completions(&input, completion_type, cwd.as_deref()),
+        "fish" => get_fish_completions(&input, cwd.as_deref()),
+        _ => get_bash_completions(&input, completion_type, cwd.as_deref()),
+    };
+
+    Ok(ShellCompletionResult {
+        success: true,
+        completions,
+        error: None,
+    })
+}
+
+/// Determine what type of completion the user wants (command, file, variable, etc.)
+fn determine_completion_type(input: &str) -> &str {
+    let trimmed = input.trim();
+    
+    if trimmed.is_empty() {
+        return "command";
+    }
+    
+    // Check for variable prefix ($)
+    if trimmed.contains('$') {
+        return "variable";
+    }
+    
+    // Check for path prefix (~, /, .)
+    if trimmed.starts_with('~') || trimmed.starts_with('/') || trimmed.starts_with('.') {
+        return "file";
+    }
+    
+    // Check if we're in the middle of a command (has spaces)
+    if trimmed.contains(' ') {
+        // If the last word starts with -, it's an option
+        let parts: Vec<&str> = trimmed.split_whitespace().collect();
+        if let Some(last) = parts.last() {
+            if last.starts_with('-') {
+                return "option";
+            }
+        }
+        // Otherwise it's likely a file/path argument
+        return "file";
+    }
+    
+    // Default to command completion
+    "command"
+}
+
+/// Get bash completions using compgen
+fn get_bash_completions(input: &str, completion_type: &str, cwd: Option<&str>) -> Vec<String> {
+    let working_dir = cwd.unwrap_or(".");
+    
+    let (compgen_type, prefix) = match completion_type {
+        "command" => ("complete", ""),
+        "file" => ("file", ""),
+        "directory" => ("dir", ""),
+        "variable" => ("variable", ""),
+        "option" => ("file", "-"),
+        _ => ("file", ""),
+    };
+    
+    // Get the word being completed
+    let word = input.split_whitespace().last().unwrap_or("");
+    
+    // Build compgen command
+    let compgen_cmd = if compgen_type == "complete" {
+        // For command completion, use compgen -c to list commands
+        format!("compgen -c -P '{}' -- {}", prefix, escape_for_shell(word))
+    } else if compgen_type == "variable" {
+        // For variable completion, use compgen -v
+        format!("compgen -v -P '$' -- {}", escape_for_shell(word.trim_start_matches('$')))
+    } else {
+        // For file/directory completion
+        format!("compgen -{} -P '{}' -- {}", compgen_type, prefix, escape_for_shell(word))
+    };
+    
+    // Run the compgen command
+    let output = Command::new("bash")
+        .args(["-c", &compgen_cmd])
+        .current_dir(working_dir)
+        .output();
+    
+    match output {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Get zsh completions using compctl
+fn get_zsh_completions(input: &str, completion_type: &str, cwd: Option<&str>) -> Vec<String> {
+    let working_dir = cwd.unwrap_or(".");
+    let word = input.split_whitespace().last().unwrap_or("");
+    
+    // Use zsh's _approximate completions for fuzzy matching
+    let compgen_cmd = match completion_type {
+        "command" => format!("zsh -c 'compctl -k commands {}'", escape_for_shell(word)),
+        "file" | "directory" => {
+            let suffix = if completion_type == "directory" { "/" } else { "" };
+            format!("zsh -c 'compctl -f -S \"{}\" {}'", suffix, escape_for_shell(word))
+        }
+        _ => format!("zsh -c 'compctl -f {}'", escape_for_shell(word)),
+    };
+    
+    let output = Command::new("bash")
+        .args(["-c", &compgen_cmd])
+        .current_dir(working_dir)
+        .output();
+    
+    match output {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Get fish completions
+fn get_fish_completions(input: &str, cwd: Option<&str>) -> Vec<String> {
+    let working_dir = cwd.unwrap_or(".");
+    let word = input.split_whitespace().last().unwrap_or("");
+    
+    // Use fish's complete command
+    let compgen_cmd = format!("fish -c 'complete -C {}'", escape_for_shell(word));
+    
+    let output = Command::new("bash")
+        .args(["-c", &compgen_cmd])
+        .current_dir(working_dir)
+        .output();
+    
+    match output {
+        Ok(o) if o.status.success() => {
+            String::from_utf8_lossy(&o.stdout)
+                .lines()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_string())
+                .collect()
+        }
+        _ => Vec::new(),
+    }
+}
+
+/// Validate input contains only safe characters for shell completion
+fn validate_completion_input(input: &str) -> bool {
+    // Only allow alphanumeric, dash, underscore, space, and common path chars
+    input.chars().all(|c| {
+        c.is_alphanumeric() || c == '-' || c == '_' || c == ' ' || c == '/' || 
+        c == '.' || c == '~' || c == '$' || c == '@'
+    })
+}
+
+/// Escape special characters for shell commands
+fn escape_for_shell(s: &str) -> String {
+    // First validate input
+    if !validate_completion_input(s) {
+        return String::new(); // Return empty on invalid input
+    }
+    s.replace('\'', "'\\''")
 }
 
 #[tauri::command]

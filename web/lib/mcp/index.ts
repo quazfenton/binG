@@ -58,6 +58,15 @@ export {
   handleMCPHealthCheck,
 } from './architecture-integration'
 
+// Desktop MCP Manager
+export {
+  initializeDesktopMCP,
+  shutdownDesktopMCP,
+  desktopMCPManager,
+  desktopMCPPresets,
+  createDesktopStdioTransport,
+} from './desktop-mcp-manager'
+
 // CLI Server (NEW)
 export {
   createMCPServerForCLI,
@@ -111,3 +120,44 @@ export type {
   MCPStoreConfig,
   MCPStoreStats,
 } from './mcp-store-service'
+
+// VFS MCP Tools (NEW - Web MCP Server)
+export {
+  vfsTools,
+  writeFileTool,
+  applyDiffTool,
+  readFileTool,
+  listFilesTool,
+  searchFilesTool,
+  batchWriteTool,
+  deleteFileTool,
+  createDirectoryTool,
+  getWorkspaceStatsTool,
+  getVFSToolDefinitions,
+  getVFSTool,
+  setToolContext,
+  initializeVFSTools,
+  ToolContext,
+} from './vfs-mcp-tools'
+
+// HTTP Transport for Remote MCP
+export {
+  HTTPTransport,
+  createHTTPTransport,
+  createHTTPTransports,
+  parseMCPURL,
+  isValidMCPURL,
+  type HTTPTransportConfig,
+} from './http-transport'
+
+// Health Check & Monitoring
+export {
+  checkMCPHealth,
+  isMCPHealthy,
+  getServerHealth,
+  startHealthMonitoring,
+  stopHealthMonitoring,
+  handleMCPHealthCheck,
+  type MCPServerHealth,
+  type MCPHealthStatus,
+} from './health-check'

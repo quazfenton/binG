@@ -10,6 +10,8 @@
 import { mcpToolRegistry } from './registry'
 import { parseMCPServerConfigs, initializeMCP, shutdownMCP, getMCPSettings, isMCPAvailable, getMCPToolCount } from './config'
 import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } from './mcporter-integration'
+import { createHTTPTransport, isValidMCPURL, parseMCPURL, HTTPTransport, registerHTTPTransport, getRemoteMCPTools, callRemoteMCPTool, hasRemoteMCPServers } from './http-transport'
+import { startHealthMonitoring } from './health-check'
 import { createLogger } from '../utils/logger'
 import { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
@@ -264,18 +266,65 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
       return
     }
 
+    // Separate HTTP (remote) from stdio (local) server configs
+    const httpServers: Array<{ name: string; url: string; apiKey?: string }> = []
+    const stdioConfigs: typeof configs = []
+    
     for (const config of configs) {
+      // Check if it's a remote HTTP server
+      if (config.url && isValidMCPURL(config.url)) {
+        const parsedUrl = parseMCPURL(config.url)
+        httpServers.push({
+          name: config.name,
+          url: parsedUrl,
+          apiKey: config.settings?.apiKey,
+        })
+        logger.info(`Remote MCP server detected: ${config.name} at ${parsedUrl}`)
+      } else {
+        // Local stdio server
+        stdioConfigs.push(config)
+      }
+    }
+
+    // Register and connect local stdio servers
+    for (const config of stdioConfigs) {
       mcpToolRegistry.registerServer(config)
     }
 
-    logger.info(`Connecting to ${configs.length} MCP server(s)...`)
-    await mcpToolRegistry.connectAll()
+    if (stdioConfigs.length > 0) {
+      logger.info(`Connecting to ${stdioConfigs.length} local MCP server(s)...`)
+      await mcpToolRegistry.connectAll()
+    }
+
+    // Connect to remote HTTP servers
+    if (httpServers.length > 0) {
+      logger.info(`Connecting to ${httpServers.length} remote MCP server(s) via HTTP...`)
+      for (const server of httpServers) {
+        try {
+          const transport = createHTTPTransport({
+            url: server.url,
+            apiKey: server.apiKey,
+            transportType: 'streamable-http',
+          })
+          // Test connection by listing tools
+          await transport.listTools()
+          // Register the transport for tool discovery and execution
+          registerHTTPTransport(server.name, transport)
+          logger.info(`Connected to remote MCP server: ${server.name}`)
+        } catch (error: any) {
+          logger.warn(`Failed to connect to remote MCP server ${server.name}:`, error.message)
+        }
+      }
+    }
 
     await refreshMCPorterToolsCache()
 
     const toolCount = getMCPToolCount()
     const mcporterTools = cachedMCPorterTools.length
     logger.info(`MCP initialized with ${toolCount} native tools and ${mcporterTools} mcporter tools available`)
+
+    // Start health monitoring
+    startHealthMonitoring(30000)
 
   } catch (error) {
     logger.error('Failed to initialize MCP for Architecture 1', error as Error)
@@ -536,7 +585,25 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
     },
   }))
 
-  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools]
+  // NEW: Include remote MCP tools (from HTTP-transport-connected servers)
+  // Use try/catch to avoid failing entire function if remote servers are unreachable
+  let remoteTools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = [];
+  if (hasRemoteMCPServers()) {
+    try {
+      remoteTools = await getRemoteMCPTools();
+    } catch (error: any) {
+      logger.warn('Failed to get remote MCP tools:', error.message);
+    }
+  }
+
+  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools, ...remoteTools]
 
   if (tools.length === 0) {
     logger.debug('MCP not available - no tools to return')
@@ -802,6 +869,17 @@ export async function callMCPToolFromAI_SDK(
     // NEW: Check if it's a Nullclaw tool
     if (toolName.startsWith('nullclaw_') && process.env.NULLCLAW_ENABLED === 'true') {
       return nullclawMCPBridge.executeTool(toolName, args, userId)
+    }
+
+    // NEW: Check if it's a remote MCP tool (from HTTP transport servers)
+    if (hasRemoteMCPServers()) {
+      // Check if tool name matches any remote server prefix
+      const remoteServerNames = (await import('./http-transport')).getHTTPTransportNames();
+      for (const serverName of remoteServerNames) {
+        if (toolName.startsWith(`${serverName}_`)) {
+          return callRemoteMCPTool(toolName, args);
+        }
+      }
     }
 
     const nativeResult = await mcpToolRegistry.callTool(toolName, args)
