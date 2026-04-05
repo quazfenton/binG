@@ -295,8 +295,45 @@ async function storeResearchResult(
 }
 
 async function storeSkill(userId: string, skill: any): Promise<string> {
-  // Placeholder - store in database
-  return `skill_${Date.now()}`;
+  const { SkillsManager } = await import('@/lib/skills/skills-manager');
+  const { skillStore } = await import('@/lib/services/skill-store');
+
+  // Build skill name from skill data
+  const skillName = skill.name
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, '-')
+    .replace(/^-|-$/g, '') || `skill-${Date.now()}`;
+
+  // 1. Store in filesystem via SkillsManager
+  const skillsManager = new SkillsManager('.agents/skills/user');
+  const fsSuccess = await skillsManager.addSkill({
+    name: skillName,
+    description: skill.description || 'Auto-extracted skill from successful execution',
+    systemPrompt: skill.implementation || '// Skill implementation',
+    workflows: skill.workflows || [],
+    subCapabilities: skill.subCapabilities || [],
+    tags: [...(skill.tags || []), 'auto-extracted', `user:${userId}`],
+  });
+
+  if (!fsSuccess) {
+    throw new Error(`Failed to store skill to filesystem: ${skillName}`);
+  }
+
+  // 2. Store in database via SkillStore
+  const dbSkill = await skillStore.create({
+    userId,
+    name: skillName,
+    description: skill.description || 'Auto-extracted skill from successful execution',
+    systemPrompt: skill.implementation || '// Skill implementation',
+    workflows: skill.workflows || [],
+    subCapabilities: skill.subCapabilities || [],
+    tags: [...(skill.tags || []), 'auto-extracted', `user:${userId}`],
+    location: `.agents/skills/user/${skillName}`,
+    source: 'auto-extracted',
+  });
+
+  logger.info('Skill stored (filesystem + DB)', { skillName, userId, dbId: dbSkill.id });
+  return skillName;
 }
 
 function parseSkillFromResponse(response: string): any {

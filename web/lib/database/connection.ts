@@ -26,6 +26,10 @@ function isEdgeRuntime(): boolean {
 // Database path - computed synchronously at runtime
 function getDBPath(): string {
   // Use require at runtime (safe in server code)
+  // Guard with typeof check so webpack doesn't try to bundle this for client
+  if (typeof process === 'undefined' || typeof require === 'undefined') {
+    return './data/binG.db';
+  }
   const path = require('path');
 
   if (process.env.DATABASE_PATH) {
@@ -58,7 +62,10 @@ let encryptionKey: Buffer | null = null;
 function getEncryptionKey(): Buffer {
   if (encryptionKey) return encryptionKey;
 
-  // Use require at runtime (safe in server code)
+  // Guard with runtime check so webpack doesn't bundle for client
+  if (typeof require === 'undefined') {
+    return Buffer.alloc(32, 'dummy-key-for-build');
+  }
   const crypto = require('crypto');
 
   const ENCRYPTION_KEY = process.env.ENCRYPTION_KEY;
@@ -204,9 +211,12 @@ export function getDatabase(): any {
  */
 async function initializeDatabase(): Promise<void> {
   if (db) return; // Already initialized
-  
+
   try {
-    // Dynamic import to avoid bundling Node.js modules in client/Edge
+    // Guard with runtime check so webpack doesn't bundle for client
+    if (typeof require === 'undefined') {
+      throw new Error('Database initialization requires Node.js runtime');
+    }
     const fsModule = require('fs');
     const pathModule = require('path');
     const mkdirSync = fsModule.mkdirSync;
@@ -296,12 +306,15 @@ export async function initializeDatabaseAsync(): Promise<any> {
 
 async function initializeSchemaSync(): Promise<void> {
   if (!db) return;
-  
+
   // Only run schema initialization in Node.js runtime
-  if (process.env.NEXT_RUNTIME !== 'nodejs') return;
+  if (typeof process === 'undefined' || process.env.NEXT_RUNTIME !== 'nodejs') return;
 
   try {
-    // Use require instead of dynamic import to avoid Edge Runtime analysis
+    // Guard with runtime check so webpack doesn't bundle for client
+    if (typeof require === 'undefined') {
+      throw new Error('Schema initialization requires Node.js runtime');
+    }
     const fsModule = require('fs');
     const pathModule = require('path');
     const readFileSync = fsModule.readFileSync;
@@ -420,6 +433,10 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
   let migrated = 0;
   let errors = 0;
 
+  // Guard with runtime check so webpack doesn't bundle for client
+  if (typeof require === 'undefined') {
+    return { migrated: 0, errors: 0 };
+  }
   // Load crypto module for encryption operations
   const crypto = require('crypto');
 

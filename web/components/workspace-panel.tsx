@@ -81,9 +81,11 @@ import {
   Command,
   StopCircle,
   Settings,
+  Puzzle,
 } from "lucide-react";
 import { toast } from "sonner";
 import { VersionHistoryPanel } from "@/components/version-history-panel";
+import { MCPServersTab } from "@/components/mcp/mcp-servers-tab";
 import { useVirtualFilesystem } from "@/hooks/use-virtual-filesystem";
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 import { useVoiceInput } from "@/hooks/use-voice-input";
@@ -366,6 +368,7 @@ const TAB_DEFS: TabDef[] = [
   { value: 'cronjobs', label: 'Cron', icon: Clock },
   { value: 'frontier-feed', label: 'Frontier', icon: Sparkles },
   { value: 'command-deck', label: 'Actions', icon: Command },
+  { value: 'mcp-servers', label: 'MCP', icon: Puzzle },
 ];
 
 // ---------------------------------------------------------------------------
@@ -4548,7 +4551,7 @@ export function WorkspacePanel() {
 
                 {/* Command Deck Tab */}
                 <TabsContent value="command-deck" className="flex-1 mt-0 overflow-hidden">
-                  <div 
+                  <div
                     className="h-full overflow-y-auto custom-scrollbar"
                     tabIndex={0}
                     role="region"
@@ -4563,6 +4566,13 @@ export function WorkspacePanel() {
                     }}
                   >
                     <CommandDeckPlugin />
+                  </div>
+                </TabsContent>
+
+                {/* MCP Servers Tab */}
+                <TabsContent value="mcp-servers" className="flex-1 mt-0 overflow-hidden">
+                  <div className="h-full overflow-y-auto custom-scrollbar">
+                    <MCPServersTab />
                   </div>
                 </TabsContent>
               </Tabs>

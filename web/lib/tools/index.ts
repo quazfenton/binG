@@ -142,10 +142,10 @@ let _toolManager: ToolIntegrationManager | null = null;
 /**
  * Get or create the singleton ToolIntegrationManager instance.
  * This is the recommended entry point for tool operations.
- * 
+ *
  * The ToolIntegrationManager consolidates:
  * - ToolProviderRegistry (provider management)
- * - ToolProviderRouter (fallback execution)
+ * - Provider fallback chain (retry + failover across Arcade/Nango/Composio/MCP/Smithery/Tambo)
  * - TOOL_REGISTRY (tool definitions)
  * - Tool discovery and search
  */

@@ -10,7 +10,24 @@
  */
 
 import { isDesktopMode, isTauriRuntime, getPlatform, getDefaultWorkspaceRoot } from '@bing/platform/env';
-import { randomUUID } from 'crypto';
+
+// Lazy crypto for generating UUIDs - avoids bundling Node.js 'crypto' in client
+let _cryptoRandomUUID: (() => string) | null = null;
+function generateId(): string {
+  if (!_cryptoRandomUUID) {
+    if (typeof require !== 'undefined') {
+      try {
+        const nodeCrypto = require('crypto');
+        _cryptoRandomUUID = () => nodeCrypto.randomUUID();
+      } catch {
+        _cryptoRandomUUID = () => crypto.randomUUID?.() || Math.random().toString(36).slice(2);
+      }
+    } else {
+      _cryptoRandomUUID = () => crypto.randomUUID?.() || Math.random().toString(36).slice(2);
+    }
+  }
+  return _cryptoRandomUUID().slice(0, 8);
+}
 
 // ============================================================================
 // Tauri FS API Types
@@ -178,7 +195,7 @@ export class DesktopFileSystem implements IFileSystem {
   private usePollFallback: boolean = false;
   
   constructor() {
-    this.id = `desktop-${randomUUID().slice(0, 8)}`;
+    this.id = `desktop-${generateId()}`;
   }
   
   /**
@@ -949,7 +966,7 @@ export class VirtualFileSystem implements IFileSystem {
   private isWatching: boolean = false;
   private watcherCallbacks: Set<FileWatcherCallback> = new Set();
   
-  constructor() { this.id = `virtual-${randomUUID().slice(0, 8)}`; }
+  constructor() { this.id = `virtual-${generateId()}`; }
   
   async initialize(config: WorkspaceConfig): Promise<void> {
     try { const { virtualFilesystem } = await import('@/lib/virtual-filesystem/virtual-filesystem-service'); this.vfs = virtualFilesystem; this.ownerId = config.userId; this.initialized = true; } catch { throw new Error('Virtual filesystem not available'); }

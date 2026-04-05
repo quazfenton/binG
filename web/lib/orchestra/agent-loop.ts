@@ -2,49 +2,15 @@ import { getLLMProvider } from '../sandbox/providers/llm-factory'
 import { getSandboxProvider } from '../sandbox/providers'
 import { coreSandboxService } from '../sandbox/core-sandbox-service'
 import { ENHANCED_SANDBOX_TOOLS, type ToolName } from '../sandbox/enhanced-sandbox-tools'
-import { validateCommand } from '../sandbox/security'
-import {
-  validateToolInput,
-  WriteFileSchema,
-  ReadFileSchema,
-  ListDirectorySchema,
-  ExecShellSchema,
-  validateShellCommand
-} from '../sandbox/validation-schemas'
-import { createSandboxRateLimiter } from '../sandbox/providers/rate-limiter'
-import { evaluateActiveWorkflow, type ApprovalContext } from '@/lib/orchestra/stateful-agent'
 import type { ToolResult } from '../sandbox/types'
 import type { SandboxHandle } from '../sandbox/providers/sandbox-provider'
 import { sandboxEvents } from '../sandbox/sandbox-events'
+import { createAgentLoopWrapper, getProcessesForSandbox, registerProcess, type TrackedProcess } from './agent-loop-wrapper'
+import { getCapabilityRouter } from '@/lib/tools/router'
+import { ALL_CAPABILITIES } from '@/lib/tools/capabilities'
 
-// Create rate limiter instance (singleton per process)
-const rateLimiter = createSandboxRateLimiter()
-
-/**
- * Background process registry
- * Tracks processes spawned by the agent loop per sandbox
- */
-interface TrackedProcess {
-  pid?: string;
-  command: string;
-  startedAt: Date;
-  sandboxId: string;
-  logFile?: string;
-}
-
-const processRegistry = new Map<string, TrackedProcess[]>()
-
-function registerProcess(sandboxId: string, process: TrackedProcess): void {
-  const existing = processRegistry.get(sandboxId) || [];
-  existing.push(process);
-  processRegistry.set(sandboxId, existing);
-}
-
-function getProcessesForSandbox(sandboxId: string): TrackedProcess[] {
-  return processRegistry.get(sandboxId) || [];
-}
-
-export { processRegistry, registerProcess, getProcessesForSandbox, type TrackedProcess }
+// Re-export process registry for external access
+export { processRegistry, getProcessesForSandbox, registerProcess, type TrackedProcess } from './agent-loop-wrapper'
 
 function getSystemPrompt(workspaceDir: string): string {
   const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
@@ -68,7 +34,7 @@ Report results clearly and concisely.`
 interface AgentLoopOptions {
   userMessage: string
   sandboxId: string
-  userId?: string  // Added for rate limiting
+  userId?: string
   conversationHistory?: any[]
   onToolExecution?: (toolName: string, args: Record<string, any>, result: ToolResult) => void
   onStreamChunk?: (chunk: string) => void
@@ -88,6 +54,12 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   const sandboxHandle = await coreSandboxService.getSandbox(sandboxId)
   const systemPrompt = getSystemPrompt(sandboxHandle.workspaceDir)
 
+  // Create wrapper with rate limiting, HITL, process tracking, and learning
+  const wrapper = createAgentLoopWrapper({ sandboxHandle, sandboxId, userId });
+
+  // Get learned capabilities from agency for adaptive tool selection
+  const learnedCapabilities = wrapper.getLearnedCapabilities(userMessage, 8);
+
   try {
     const result = await llm.runAgentLoop({
       userMessage,
@@ -106,7 +78,17 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       },
       async executeTool(name: string, args: Record<string, any>): Promise<ToolResult> {
         sandboxEvents.emit(sandboxId, 'agent:tool_start', { toolName: name, args })
-        return executeToolOnSandbox(sandboxHandle, name as ToolName, args, userId)
+        const capId = toolNameToCapability(name);
+        const wrapperResult = await wrapper.execute(capId, args);
+        // Record execution with agency for learning
+        wrapper.recordExecution(userMessage, wrapperResult.success, [capId]);
+        sandboxEvents.emit(sandboxId, 'agent:tool_result', { toolName: name, args, result: wrapperResult })
+        return {
+          success: wrapperResult.success,
+          output: wrapperResult.output,
+          exitCode: wrapperResult.exitCode,
+          error: wrapperResult.error,
+        };
       },
       onReasoningChunk(chunk: string, type?: 'thought' | 'reasoning' | 'plan' | 'reflection') {
         sandboxEvents.emit(sandboxId, 'agent:reasoning_chunk', { text: chunk, type })
@@ -115,6 +97,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       onReasoningComplete: () => {
         sandboxEvents.emit(sandboxId, 'agent:reasoning_complete', {})
       },
+      learnedCapabilities,
     } as any)
 
     sandboxEvents.emit(sandboxId, 'agent:complete', {
@@ -131,709 +114,33 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
   }
 }
 
-async function executeToolOnSandbox(
-  sandbox: SandboxHandle,
-  toolName: ToolName,
-  args: Record<string, any>,
-  userId?: string,
-): Promise<ToolResult> {
-  try {
-    // Check rate limit before executing tool
-    const rateLimitKey = userId || 'anonymous'
-    let rateLimitResult
-
-    switch (toolName) {
-      case 'exec_shell': {
-        // Check rate limit for commands
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'commands')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        // Validate command schema first
-        const validated = validateToolInput(ExecShellSchema, args, 'exec_shell')
-
-        // Then validate against blocked patterns
-        const commandValidation = validateShellCommand(validated.command, validateCommand)
-        if (!commandValidation.valid) {
-          return {
-            success: false,
-            output: commandValidation.reason || 'Command validation failed',
-            exitCode: 1,
-          }
-        }
-
-        // HITL Workflow: Evaluate if command requires approval
-        const approvalContext: ApprovalContext = {
-          riskLevel:
-            commandValidation.command?.includes('rm -rf') ||
-            commandValidation.command?.includes('sudo')
-              ? 'high'
-              : 'medium',
-          userId,
-        }
-        const execEval = evaluateActiveWorkflow('exec_shell', validated, approvalContext)
-
-        // HITL Enforcement: Block command if approval is required and enforcement is enabled
-        const enforceHitl = process.env.ENFORCE_HITL === 'true';
-        if (execEval.requiresApproval) {
-          if (enforceHitl) {
-            return {
-              success: false,
-              output: `Command blocked: requires approval (rule: ${execEval.matchedRule?.name || 'default'}). ${execEval.reason || ''}`,
-              error: 'HITL enforcement: command requires approval',
-              blocked: true,
-              requiresApproval: true,
-              approvalRule: execEval.matchedRule?.name,
-            };
-          }
-          // Log only if enforcement is disabled (default behavior)
-          console.log(
-            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${execEval.matchedRule?.name || 'default'}) - proceeding anyway (ENFORCE_HITL not set)`,
-          );
-        }
-
-        // Record successful validation for rate limiting
-        await rateLimiter.record(rateLimitKey, 'commands')
-
-        return sandbox.executeCommand(commandValidation.command!)
-      }
-
-      case 'write_file': {
-        // Check rate limit for file operations
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'fileOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const validated = validateToolInput(WriteFileSchema, args, 'write_file')
-
-        // HITL Workflow: Evaluate if file write requires approval
-        const approvalContext: ApprovalContext = {
-          filePath: validated.path,
-          riskLevel: validated.path?.includes('.env') || validated.path?.includes('secret') ? 'high' : 'low',
-          userId,
-        }
-        const writeEval = evaluateActiveWorkflow('write_file', validated, approvalContext)
-
-        // HITL Enforcement: Block file write if approval is required and enforcement is enabled
-        const enforceHitl = process.env.ENFORCE_HITL === 'true';
-        if (writeEval.requiresApproval) {
-          if (enforceHitl) {
-            return {
-              success: false,
-              output: `File write blocked: requires approval (rule: ${writeEval.matchedRule?.name || 'default'}). ${writeEval.reason || ''}`,
-              error: 'HITL enforcement: file write requires approval',
-              blocked: true,
-              requiresApproval: true,
-              approvalRule: writeEval.matchedRule?.name,
-            };
-          }
-          console.log(
-            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${writeEval.matchedRule?.name || 'default'}) - proceeding anyway (ENFORCE_HITL not set)`,
-          );
-        }
-
-        await rateLimiter.record(rateLimitKey, 'fileOps')
-        return sandbox.writeFile(validated.path, validated.content)
-      }
-
-      case 'read_file': {
-        const filePath = args.path as string;
-        const repoPath = filePath || '.';
-        // Check rate limit for file operations
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'fileOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const validated = validateToolInput(ReadFileSchema, args, 'read_file')
-        await rateLimiter.record(rateLimitKey, 'fileOps')
-        return sandbox.readFile(validated.path)
-      }
-
-      case 'list_dir': {
-        // Check rate limit for file operations
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'fileOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const validated = validateToolInput(ListDirectorySchema, args, 'list_dir')
-        await rateLimiter.record(rateLimitKey, 'fileOps')
-        return sandbox.listDirectory(validated.path)
-      }
-
-      // Enhanced tools - code execution
-      case 'run_code': {
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'codeExecution')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const { code, language, args: execArgs, stdin, timeout = 30 } = args
-
-        if (!code || !language) {
-          return {
-            success: false,
-            output: 'Code and language are required',
-            exitCode: 1,
-          }
-        }
-
-        await rateLimiter.record(rateLimitKey, 'codeExecution')
-
-        // Execute code using sandbox's code interpreter if available
-        if ('runCode' in sandbox) {
-          return (sandbox as unknown as { runCode(c: string, l: string): Promise<ToolResult> }).runCode(code, language)
-        }
-
-        // Otherwise, write to temp file and execute
-        const tempFile = `/tmp/code_${Date.now()}.${getCodeExtension(language)}`
-        await sandbox.writeFile(tempFile, code)
-
-        const cmd = getCodeCommand(language, tempFile, execArgs || [])
-        const result = await sandbox.executeCommand(cmd)
-
-        // Clean up temp file
-        try {
-          await sandbox.executeCommand(`rm -f ${tempFile}`)
-        } catch {
-          // Ignore cleanup errors
-        }
-
-        return result
-      }
-
-      // Enhanced tools - git operations
-      case 'git_clone': {
-        // Check rate limit for git operations
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'gitOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const { url, path, branch, depth, username, password } = args
-
-        if (!url) {
-          return { success: false, output: 'Repository URL is required', exitCode: 1 }
-        }
-
-        // FIX: URL validation was rejecting standard HTTPS repo URLs because regex disallowed path slashes
-        // Allow standard HTTPS URLs with optional path (e.g., user/repo or org/team/repo)
-        const urlPattern = /^https:\/\/[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?(?:\/[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?)*(?:\.git)?$/;
-        if (!urlPattern.test(url)) {
-          return { success: false, output: 'Invalid repository URL format - only HTTPS URLs allowed', exitCode: 1 }
-        }
-
-        const clonePath = path || getRepoNameFromUrl(url)
-
-        // Strict path validation - alphanumeric, dots, hyphens, underscores only
-        if (!/^[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?$/.test(clonePath)) {
-          return { success: false, output: 'Invalid path format - use alphanumeric, dots, hyphens, underscores only', exitCode: 1 }
-        }
-
-        // Branch validation if provided
-        if (branch && !/^[a-zA-Z0-9]([a-zA-Z0-9._\-]*[a-zA-Z0-9])?$/.test(branch)) {
-          return { success: false, output: 'Invalid branch name', exitCode: 1 }
-        }
-
-        // Depth validation if provided
-        if (depth !== undefined) {
-          const depthNum = parseInt(String(depth), 10)
-          if (isNaN(depthNum) || depthNum < 1 || depthNum > 100) {
-            return { success: false, output: 'Depth must be between 1 and 100', exitCode: 1 }
-          }
-        }
-
-        // Use git credential helper instead of embedding credentials in URL
-        // Build command using argument arrays when possible to avoid shell injection
-        let cloneCmd: string
-        if (username && password) {
-          // Sanitize username and password - reject if they contain shell metacharacters
-          if (/[;&|`$()]/.test(username) || /[;&|`$()]/.test(password)) {
-            return { success: false, output: 'Username/password contains invalid characters', exitCode: 1 }
-          }
-          // Use git's stdin credential input which is safer than echo
-          cloneCmd = `cd '${sandbox.workspaceDir}' && git config --local credential.helper store && printf '%s\n' 'username='"'${username}'" 'password='"'${password}'"' | git credential approve && git clone '${url}' '${clonePath}' && git config --local --unset credential.helper`
-        } else {
-          cloneCmd = `cd '${sandbox.workspaceDir}' && git clone '${url}' '${clonePath}'`
-        }
-
-        // Add branch if specified (append to existing command, don't overwrite)
-        // FIX: Branch handling was overwriting the credentialed clone command
-        if (branch) {
-          // Branch is already validated above - append branch flag
-          const branchArg = ` -b '${branch.replace(/'/g, "'\\''")}'`;
-          // Add branch to the existing cloneCmd without overwriting
-          cloneCmd = cloneCmd.replace(/git clone/, 'git clone' + branchArg);
-        }
-
-        // Add depth if specified
-        if (depth) {
-          cloneCmd += ` --depth ${parseInt(String(depth), 10)}`
-        }
-
-        await rateLimiter.record(rateLimitKey, 'gitOps')
-        return sandbox.executeCommand(cloneCmd)
-      }
-
-      case 'git_status': {
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'gitOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const repoPath = args.path || '.'
-        const safePath = String(repoPath).replace(/'/g, "'\\''")
-        await rateLimiter.record(rateLimitKey, 'gitOps')
-        return sandbox.executeCommand(`cd '${safePath}' && git status`)
-      }
-
-      case 'git_commit': {
-        // Check rate limit for git operations
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'gitOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const { message, all, path } = args
-        const repoPath = path || '.'
-
-        // Validate repo path
-        if (!/^[a-zA-Z0-9._\-/]+$/.test(repoPath)) {
-          return { success: false, output: 'Invalid repository path', exitCode: 1 }
-        }
-
-        if (!message) {
-          return { success: false, output: 'Commit message is required', exitCode: 1 }
-        }
-
-        // Use single quotes and escape any single quotes in the message
-        // This prevents command substitution via $() or backticks
-        const escapedMessage = String(message).replace(/'/g, "'\\''")
-        
-        let cmd = `cd ${repoPath} && `
-        if (all) {
-          cmd += 'git add -A && '
-        }
-        // Use single quotes to prevent command substitution
-        cmd += `git commit -m '${escapedMessage}'`
-
-        await rateLimiter.record(rateLimitKey, 'gitOps')
-        return sandbox.executeCommand(cmd)
-      }
-
-      case 'git_push': {
-        // Check rate limit for git operations
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'gitOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const { remote = 'origin', branch, force, repoPath } = args
-        const pathToUse = repoPath || '.'
-
-        // Validate inputs
-        if (!/^[a-zA-Z0-9._\-/]+$/.test(pathToUse)) {
-          return { success: false, output: 'Invalid repository path', exitCode: 1 }
-        }
-
-        if (!/^[a-zA-Z0-9._\-/]+$/.test(remote)) {
-          return { success: false, output: 'Invalid remote name', exitCode: 1 }
-        }
-
-        let cmd = `cd ${pathToUse} && git push ${remote}`
-        if (force) {
-          cmd += ' --force'
-        }
-        if (branch) {
-          const escapedBranch = String(branch).replace(/'/g, "'\\''")
-          cmd += ` ${escapedBranch}`
-        }
-
-        await rateLimiter.record(rateLimitKey, 'gitOps')
-        return sandbox.executeCommand(cmd)
-      }
-
-      // Enhanced tools - process management
-      case 'start_process': {
-        // Check rate limit for process operations
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'processOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const { command, background = true, captureOutput = true } = args
-        
-        // Validate command schema first
-        const validated = validateToolInput(ExecShellSchema, args, 'start_process')
-
-        // Then validate against blocked patterns
-        const commandValidation = validateShellCommand(String(command), validateCommand)
-        if (!commandValidation.valid) {
-          return {
-            success: false,
-            output: commandValidation.reason || 'Command validation failed',
-            exitCode: 1,
-          }
-        }
-
-        // HITL Workflow: Evaluate if command requires approval
-        const approvalContext: ApprovalContext = {
-          riskLevel:
-            commandValidation.command?.includes('rm -rf') ||
-            commandValidation.command?.includes('sudo')
-              ? 'high'
-              : 'medium',
-          userId,
-        }
-        const execEval = evaluateActiveWorkflow('start_process', validated, approvalContext)
-
-        // HITL Enforcement: Block command if approval is required and enforcement is enabled
-        const enforceHitl = process.env.ENFORCE_HITL === 'true';
-        if (execEval.requiresApproval) {
-          if (enforceHitl) {
-            return {
-              success: false,
-              output: `Command blocked: requires approval (rule: ${execEval.matchedRule?.name || 'default'}). ${execEval.reason || ''}`,
-              error: 'HITL enforcement: command requires approval',
-              blocked: true,
-              requiresApproval: true,
-              approvalRule: execEval.matchedRule?.name,
-            };
-          }
-          console.log(
-            `[AgentLoop] Tool '${toolName}' requires approval (rule: ${execEval.matchedRule?.name || 'default'}) - proceeding anyway (ENFORCE_HITL not set)`,
-          );
-        }
-
-        // Record successful validation for rate limiting
-        await rateLimiter.record(rateLimitKey, 'processOps')
-
-        // Validate and sanitize command
-        const safeCommand = String(command).replace(/'/g, "'\\''")
-
-        // For background processes, use nohup or &
-        const logFile = captureOutput ? `/tmp/agent_${Date.now()}.log` : null
-        const bgCmd = background
-          ? `nohup ${safeCommand} ${logFile ? `&> '${logFile}'` : '>/dev/null 2>&1'} & echo "PID: $!"`
-          : safeCommand
-
-        const result = await sandbox.executeCommand(bgCmd)
-
-        // Track the background process
-        if (background && result.success) {
-          // Extract PID from output if available
-          const pidMatch = typeof result.output === 'string' ? result.output.match(/PID:\s*(\d+)/) : null
-          const pid = pidMatch ? pidMatch[1] : undefined
-
-          registerProcess(sandbox.id, {
-            pid,
-            command: String(command),
-            startedAt: new Date(),
-            sandboxId: sandbox.id,
-            logFile: logFile || undefined,
-          })
-        }
-
-        return result
-      }
-
-      case 'stop_process': {
-        // Check rate limit for process operations
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'processOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const { pid, name, signal = 'SIGTERM' } = args
-
-        // Validate signal
-        const validSignals = ['SIGTERM', 'SIGKILL', 'SIGHUP', 'SIGINT', 'SIGUSR1', 'SIGUSR2', '9', '15', '1', '2']
-        if (!validSignals.includes(String(signal))) {
-          return { success: false, output: 'Invalid signal', exitCode: 1 }
-        }
-
-        if (pid) {
-          // Validate PID is a number
-          const pidNum = parseInt(pid, 10)
-          if (isNaN(pidNum) || pidNum <= 0) {
-            return { success: false, output: 'Invalid PID', exitCode: 1 }
-          }
-          await rateLimiter.record(rateLimitKey, 'processOps')
-          const result = await sandbox.executeCommand(`kill -${signal} ${pidNum}`)
-
-          // Remove from registry if tracked
-          const tracked = processRegistry.get(sandbox.id) || []
-          const filtered = tracked.filter(p => p.pid !== String(pidNum))
-          if (filtered.length !== tracked.length) {
-            processRegistry.set(sandbox.id, filtered)
-          }
-
-          return result
-        }
-
-        if (name) {
-          // Escape the process name to prevent command injection
-          const escapedName = String(name).replace(/'/g, "'\\''")
-          await rateLimiter.record(rateLimitKey, 'processOps')
-          const result = await sandbox.executeCommand(`pkill -${signal} -f '${escapedName}'`)
-
-          // Remove matching processes from registry
-          const tracked = processRegistry.get(sandbox.id) || []
-          const filtered = tracked.filter(p => !p.command.includes(String(name)))
-          if (filtered.length !== tracked.length) {
-            processRegistry.set(sandbox.id, filtered)
-          }
-
-          return result
-        }
-
-        return { success: false, output: 'PID or process name required', exitCode: 1 }
-      }
-
-      case 'list_processes': {
-        // Check rate limit for process operations
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'processOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const userFilter = args.user ? ` | grep '${String(args.user).replace(/'/g, "'\\''")}'` : ''
-        await rateLimiter.record(rateLimitKey, 'processOps')
-        const psResult = await sandbox.executeCommand(`ps aux${userFilter}`)
-
-        // Augment with tracked process info
-        const tracked = getProcessesForSandbox(sandbox.id)
-        if (tracked.length > 0 && psResult.success) {
-          const trackedInfo = tracked.map(p =>
-            `[Tracked] PID=${p.pid || 'unknown'} CMD="${p.command}" STARTED=${p.startedAt.toISOString()} LOG=${p.logFile || 'none'}`
-          ).join('\n')
-          return {
-            ...psResult,
-            output: `${psResult.output}\n\n--- Agent-Tracked Processes ---\n${trackedInfo}`,
-            metadata: { ...psResult.metadata, trackedProcesses: tracked.length },
-          }
-        }
-
-        return psResult
-      }
-
-      // Enhanced tools - preview management
-      case 'get_previews': {
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'processOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const { port } = args
-        if (port) {
-          await rateLimiter.record(rateLimitKey, 'processOps')
-          return sandbox.executeCommand(`lsof -i :${port} 2>/dev/null || echo "No process on port ${port}"`)
-        }
-        await rateLimiter.record(rateLimitKey, 'processOps')
-        return sandbox.executeCommand('netstat -tlnp 2>/dev/null || ss -tlnp')
-      }
-
-      case 'forward_port': {
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'processOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const { port, public: isPublic = true } = args
-        // This would integrate with sandbox provider's port forwarding
-        // For now, just verify the port is listening
-        await rateLimiter.record(rateLimitKey, 'processOps')
-        return sandbox.executeCommand(`lsof -i :${port} 2>/dev/null || echo "Port ${port} not in use"`)
-      }
-
-      // Enhanced tools - file operations
-      case 'search_files': {
-        // Check rate limit for file operations
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'fileOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const { pattern, path = '.', content, maxResults = 100 } = args
-
-        // Validate inputs
-        const safePath = String(path).replace(/'/g, "'\\''")
-        const safeMax = Math.min(parseInt(maxResults, 10) || 100, 1000)
-
-        if (content) {
-          // Escape content for grep (prevent command injection)
-          const escapedContent = String(content).replace(/'/g, "'\\''")
-          await rateLimiter.record(rateLimitKey, 'fileOps')
-          return sandbox.executeCommand(`grep -r '${escapedContent}' '${safePath}' | head -n ${safeMax}`)
-        }
-
-        // Escape pattern for find
-        const escapedPattern = String(pattern).replace(/'/g, "'\\''")
-        await rateLimiter.record(rateLimitKey, 'fileOps')
-        return sandbox.executeCommand(`find '${safePath}' -name '${escapedPattern}' | head -n ${safeMax}`)
-      }
-
-      case 'sync_files': {
-        // Check rate limit for file operations
-        rateLimitResult = await rateLimiter.check(rateLimitKey, 'fileOps')
-        if (!rateLimitResult.allowed) {
-          return {
-            success: false,
-            output: `Rate limit exceeded: ${rateLimitResult.message}`,
-            exitCode: 1,
-          }
-        }
-
-        const { direction, paths, deleteOrphans = false } = args
-        await rateLimiter.record(rateLimitKey, 'fileOps')
-        // Placeholder - would implement actual sync logic
-        return {
-          success: true,
-          output: `Sync ${direction} completed for paths: ${paths?.join(', ') || 'all'}`,
-          exitCode: 0,
-        }
-      }
-
-      // Enhanced tools - computer use (would integrate with desktop service)
-      case 'computer_use_click':
-      case 'computer_use_type':
-      case 'computer_use_screenshot':
-      case 'computer_use_scroll': {
-        return {
-          success: false,
-          output: 'Computer use tools require desktop integration. Not available in sandbox mode.',
-          exitCode: 1,
-        }
-      }
-
-      // Enhanced tools - MCP
-      case 'mcp_list_tools':
-      case 'mcp_call_tool': {
-        return {
-          success: false,
-          output: 'MCP tools require MCP server configuration. Not available in basic sandbox mode.',
-          exitCode: 1,
-        }
-      }
-
-      default:
-        return { success: false, output: `Unknown tool: ${toolName}`, exitCode: 1 }
-    }
-  } catch (error: any) {
-    // Log validation errors with context
-    console.error('[AgentLoop] Tool execution failed', {
-      tool: toolName,
-      error: error.message,
-    })
-
-    return {
-      success: false,
-      output: `Tool '${toolName}' failed: ${error.message}`,
-      exitCode: 1,
-    }
-  }
-}
-
-// Helper functions for code execution
-function getCodeExtension(language: string): string {
-  const extensions: Record<string, string> = {
-    python: 'py',
-    javascript: 'js',
-    typescript: 'ts',
-    go: 'go',
-    rust: 'rs',
-    java: 'java',
-    r: 'r',
-    cpp: 'cpp',
-  }
-  return extensions[language] || 'txt'
-}
-
-function getCodeCommand(language: string, filePath: string, args: unknown[]): string {
-  // FIX: Escape filePath and args to prevent command injection
-  // Use single quotes and escape any embedded single quotes
-  const safeFilePath = filePath.replace(/'/g, "'\\''");
-  // Ensure args are strings and wrap each in single quotes
-  const safeArgs = (args as string[]).map(a => `'${String(a).replace(/'/g, "'\\''")}'`).join(' ');
-  
-  const commands: Record<string, string> = {
-    python: `python3 '${safeFilePath}' ${safeArgs}`,
-    javascript: `node '${safeFilePath}' ${safeArgs}`,
-    typescript: `npx ts-node '${safeFilePath}' ${safeArgs}`,
-    // For go/java, use path utilities for directory extraction
-    go: `cd '${filePath.substring(0, filePath.lastIndexOf('/'))}' && go run '${filePath.substring(filePath.lastIndexOf('/') + 1)}' ${safeArgs}`,
-    rust: `rustc '${safeFilePath}' -o /tmp/rust_out && /tmp/rust_out ${safeArgs}`,
-    java: `javac '${safeFilePath}' && java -cp '${filePath.substring(0, filePath.lastIndexOf('/'))}' ${safeArgs}`,
-    r: `Rscript '${safeFilePath}' ${safeArgs}`,
-    cpp: `g++ '${safeFilePath}' -o /tmp/cpp_out && /tmp/cpp_out ${safeArgs}`,
-  }
-  return commands[language] || `echo "Unsupported language: ${language}"`
-}
-
-function getRepoNameFromUrl(url: string): string {
-  const match = url.match(/\/([^/]+)\.git$/)
-  return match ? match[1] : 'repo'
+/**
+ * Map legacy tool names to capability IDs
+ */
+function toolNameToCapability(toolName: string): string {
+  const mapping: Record<string, string> = {
+    exec_shell: 'sandbox.shell',
+    write_file: 'file.write',
+    read_file: 'file.read',
+    list_dir: 'file.list',
+    run_code: 'code.run',
+    git_clone: 'repo.clone',
+    git_status: 'repo.git',
+    git_commit: 'repo.commit',
+    git_push: 'repo.push',
+    start_process: 'process.start',
+    stop_process: 'process.stop',
+    list_processes: 'process.list',
+    search_files: 'file.search',
+    sync_files: 'file.sync',
+    mcp_list_tools: 'mcp.list',
+    mcp_call_tool: 'mcp.call',
+    computer_use_click: 'computer_use.click',
+    computer_use_type: 'computer_use.type',
+    computer_use_screenshot: 'computer_use.screenshot',
+    computer_use_scroll: 'computer_use.scroll',
+    get_previews: 'preview.get',
+    forward_port: 'preview.forward_port',
+  };
+  return mapping[toolName] || toolName;
 }

@@ -117,9 +117,22 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ✅ BUFFER ALL input for security validation
-    // We cannot distinguish between "PTY interactive" and "line-based" input reliably
-    // Attackers could bypass security by sending dangerous commands without newlines
+    // Interactive PTY sessions must receive raw bytes immediately.
+    // Only command-mode input is buffered for newline-based security validation.
+    if (terminalManager.hasPtyConnection(sessionId)) {
+      commandBuffers.delete(sessionId);
+      await terminalManager.sendInput(sessionId, data);
+
+      logger.debug('PTY terminal input sent immediately', {
+        sessionId,
+        userId: authResult.userId,
+        inputLength: data.length,
+      });
+
+      return NextResponse.json({ success: true, mode: 'pty' });
+    }
+
+    // ✅ BUFFER command-mode input for security validation
     const bufferEntry = commandBuffers.get(sessionId) || { buffer: '', lastActivity: Date.now() };
     bufferEntry.buffer += data;
     bufferEntry.lastActivity = Date.now();

@@ -15,7 +15,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
-import { vfsTools, getVFSToolDefinitions, setToolContext } from '@/lib/mcp/vfs-mcp-tools';
+import { vfsTools, getVFSToolDefinitions, setToolContext, toolContextStore } from '@/lib/mcp/vfs-mcp-tools';
 import { createHTTPTransport, isValidMCPURL } from '@/lib/mcp/http-transport';
 import { handleMCPHealthCheck } from '@/lib/mcp/health-check';
 import { createLogger } from '@/lib/utils/logger';
@@ -152,7 +152,7 @@ export async function GET(request: NextRequest) {
   } catch (error: any) {
     logger.error('MCP GET handler error', { error: error.message });
     return NextResponse.json(
-      { error: 'MCP server error', message: error.message },
+      { error: 'MCP server error' },
       { status: 500 }
     );
   }
@@ -216,19 +216,20 @@ export async function POST(request: NextRequest) {
       case 'tools/call':
         // Extract user context from request headers or params
         // In production, this would come from auth tokens or session
-        const userId = request.headers.get('x-user-id') || 
-                       (params as any)?.userId || 
+        const userId = request.headers.get('x-user-id') ||
+                       (params as any)?.userId ||
                        'default';
         const sessionId = request.headers.get('x-session-id') || undefined;
-        
-        // Set tool context before execution (for multi-user support)
-        setToolContext({ userId, sessionId });
-        
-        // Call a specific tool
-        const callResult = await server.requestHandler({
-          method: 'tools/call',
-          params: params || {},
-        });
+
+        // Run tool call inside request-scoped AsyncLocalStorage context.
+        // This isolates the context per-request, preventing cross-user data leaks.
+        const callResult = await toolContextStore.run(
+          { userId, sessionId },
+          async () => server.requestHandler({
+            method: 'tools/call',
+            params: params || {},
+          })
+        );
         return NextResponse.json({
           jsonrpc: '2.0',
           result: callResult,
@@ -261,13 +262,13 @@ export async function POST(request: NextRequest) {
     }
   } catch (error: any) {
     logger.error('MCP POST handler error', { error: error.message });
+    // Don't leak internal error details to clients
     return NextResponse.json(
       {
         jsonrpc: '2.0',
         error: {
           code: -32603,
-          message: 'Internal error',
-          data: error.message,
+          message: 'Internal server error',
         },
       },
       { status: 500 }

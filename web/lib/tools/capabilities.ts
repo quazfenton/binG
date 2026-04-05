@@ -1034,6 +1034,468 @@ export const TASK_CANCEL_CAPABILITY: CapabilityDefinition = {
 };
 
 // ============================================================================
+// Computer Use Capabilities (desktop/screen interaction)
+// ============================================================================
+
+export const COMPUTER_USE_CLICK_CAPABILITY: CapabilityDefinition = {
+  id: 'computer_use.click',
+  name: 'Click Element',
+  category: 'sandbox',
+  description: 'Click at a specific screen coordinate. Supports single and double clicks.',
+  inputSchema: z.object({
+    x: z.number().describe('X coordinate'),
+    y: z.number().describe('Y coordinate'),
+    button: z.enum(['left', 'right', 'middle']).optional().default('left'),
+    clicks: z.number().optional().default(1).describe('Number of clicks'),
+  }),
+  outputSchema: z.object({ success: z.boolean(), error: z.string().optional() }),
+  providerPriority: ['opencode-v2', 'daytona', 'e2b', 'codesandbox'],
+  tags: ['computer-use', 'click', 'desktop', 'gui'],
+};
+
+export const COMPUTER_USE_TYPE_CAPABILITY: CapabilityDefinition = {
+  id: 'computer_use.type',
+  name: 'Type Text',
+  category: 'sandbox',
+  description: 'Type text into the active input field. Supports typing, clearing, and Enter key.',
+  inputSchema: z.object({
+    text: z.string().optional().describe('Text to type'),
+    clear: z.boolean().optional().default(false).describe('Clear input first'),
+    enter: z.boolean().optional().default(false).describe('Press Enter after typing'),
+  }),
+  outputSchema: z.object({ success: z.boolean(), error: z.string().optional() }),
+  providerPriority: ['opencode-v2', 'daytona', 'e2b', 'codesandbox'],
+  tags: ['computer-use', 'type', 'keyboard', 'input'],
+};
+
+export const COMPUTER_USE_SCREENSHOT_CAPABILITY: CapabilityDefinition = {
+  id: 'computer_use.screenshot',
+  name: 'Take Screenshot',
+  category: 'sandbox',
+  description: 'Capture a screenshot of the screen or a specific region.',
+  inputSchema: z.object({
+    region: z.object({ x: z.number(), y: z.number(), width: z.number(), height: z.number() }).optional(),
+    quality: z.number().optional().default(80).describe('Image quality 0-100'),
+  }),
+  outputSchema: z.object({ success: z.boolean(), image: z.string().optional(), error: z.string().optional() }),
+  providerPriority: ['opencode-v2', 'daytona', 'e2b', 'codesandbox'],
+  tags: ['computer-use', 'screenshot', 'screen', 'image'],
+};
+
+export const COMPUTER_USE_SCROLL_CAPABILITY: CapabilityDefinition = {
+  id: 'computer_use.scroll',
+  name: 'Scroll Screen',
+  category: 'sandbox',
+  description: 'Scroll the screen horizontally and/or vertically.',
+  inputSchema: z.object({
+    deltaX: z.number().optional().default(0).describe('Horizontal scroll delta'),
+    deltaY: z.number().optional().default(0).describe('Vertical scroll delta'),
+  }),
+  outputSchema: z.object({ success: z.boolean(), error: z.string().optional() }),
+  providerPriority: ['opencode-v2', 'daytona', 'e2b', 'codesandbox'],
+  tags: ['computer-use', 'scroll', 'screen'],
+};
+
+// ============================================================================
+// MCP Capabilities
+// ============================================================================
+
+export const MCP_LIST_TOOLS_CAPABILITY: CapabilityDefinition = {
+  id: 'mcp.list',
+  name: 'List MCP Tools',
+  category: 'repo',
+  description: 'List all available tools from connected MCP servers.',
+  inputSchema: z.object({
+    serverId: z.string().optional().describe('Filter by server ID'),
+  }),
+  outputSchema: z.array(z.object({
+    name: z.string(),
+    description: z.string(),
+    parameters: z.record(z.any()),
+  })),
+  providerPriority: ['opencode-v2', 'local-mcp', 'remote-mcp'],
+  tags: ['mcp', 'list', 'discovery'],
+};
+
+export const MCP_CALL_TOOL_CAPABILITY: CapabilityDefinition = {
+  id: 'mcp.call',
+  name: 'Call MCP Tool',
+  category: 'repo',
+  description: 'Execute a tool from a connected MCP server.',
+  inputSchema: z.object({
+    serverId: z.string().describe('MCP server ID'),
+    toolName: z.string().describe('Tool name'),
+    arguments: z.record(z.any()).optional(),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    output: z.any().optional(),
+    error: z.string().optional(),
+  }),
+  providerPriority: ['opencode-v2', 'local-mcp', 'remote-mcp'],
+  tags: ['mcp', 'execute', 'tool'],
+};
+
+// ============================================================================
+// Process Management Capabilities
+// ============================================================================
+
+export const PROCESS_START_CAPABILITY: CapabilityDefinition = {
+  id: 'process.start',
+  name: 'Start Background Process',
+  category: 'sandbox',
+  description: 'Start a background process with optional output capture.',
+  inputSchema: z.object({
+    command: z.string().describe('Command to run'),
+    background: z.boolean().optional().default(true),
+    captureOutput: z.boolean().optional().default(true),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    pid: z.number().optional(),
+    logFile: z.string().optional(),
+    error: z.string().optional(),
+  }),
+  providerPriority: ['opencode-v2', 'daytona', 'local-fs'],
+  tags: ['process', 'start', 'background', 'daemon'],
+};
+
+export const PROCESS_STOP_CAPABILITY: CapabilityDefinition = {
+  id: 'process.stop',
+  name: 'Stop Process',
+  category: 'sandbox',
+  description: 'Stop a running process by PID or name.',
+  inputSchema: z.object({
+    pid: z.number().optional().describe('Process ID'),
+    name: z.string().optional().describe('Process name pattern'),
+    signal: z.enum(['SIGTERM', 'SIGKILL', 'SIGHUP', 'SIGINT']).optional().default('SIGTERM'),
+  }),
+  outputSchema: z.object({ success: z.boolean(), error: z.string().optional() }),
+  providerPriority: ['opencode-v2', 'daytona', 'local-fs'],
+  tags: ['process', 'stop', 'kill', 'signal'],
+};
+
+export const PROCESS_LIST_CAPABILITY: CapabilityDefinition = {
+  id: 'process.list',
+  name: 'List Processes',
+  category: 'sandbox',
+  description: 'List running processes with optional user filter.',
+  inputSchema: z.object({
+    user: z.string().optional().describe('Filter by user'),
+    tracked: z.boolean().optional().default(false).describe('Include agent-tracked processes'),
+  }),
+  outputSchema: z.array(z.object({
+    pid: z.number(),
+    command: z.string(),
+    user: z.string().optional(),
+    cpu: z.number().optional(),
+    memory: z.number().optional(),
+    tracked: z.boolean().optional(),
+  })),
+  providerPriority: ['opencode-v2', 'daytona', 'local-fs'],
+  tags: ['process', 'list', 'ps'],
+};
+
+// ============================================================================
+// Preview / Port Capabilities
+// ============================================================================
+
+export const PREVIEW_GET_CAPABILITY: CapabilityDefinition = {
+  id: 'preview.get',
+  name: 'Get Previews',
+  category: 'sandbox',
+  description: 'Get URLs for previewing sandbox services (web servers, APIs).',
+  inputSchema: z.object({
+    port: z.number().optional().describe('Specific port to get preview for'),
+  }),
+  outputSchema: z.array(z.object({
+    port: z.number(),
+    url: z.string(),
+    service: z.string().optional(),
+  })),
+  providerPriority: ['opencode-v2', 'daytona', 'codesandbox', 'webcontainer'],
+  tags: ['preview', 'port', 'url', 'web'],
+};
+
+export const PREVIEW_FORWARD_PORT_CAPABILITY: CapabilityDefinition = {
+  id: 'preview.forward_port',
+  name: 'Forward Port',
+  category: 'sandbox',
+  description: 'Forward a sandbox port to the external network for access.',
+  inputSchema: z.object({
+    port: z.number().describe('Port to forward'),
+    protocol: z.enum(['http', 'https', 'tcp']).optional().default('http'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    url: z.string().optional(),
+    error: z.string().optional(),
+  }),
+  providerPriority: ['opencode-v2', 'daytona', 'codesandbox'],
+  tags: ['preview', 'port', 'forward', 'network'],
+};
+
+// ============================================================================
+// File Sync Capability
+// ============================================================================
+
+export const FILE_SYNC_CAPABILITY: CapabilityDefinition = {
+  id: 'file.sync',
+  name: 'Sync Files',
+  category: 'file',
+  description: 'Synchronize files between sandbox and external filesystem. Supports directional and bidirectional sync.',
+  inputSchema: z.object({
+    direction: z.enum(['to-sandbox', 'from-sandbox', 'bidirectional']).describe('Sync direction'),
+    path: z.string().describe('Path to sync'),
+    deleteOrphans: z.boolean().optional().default(false).describe('Delete files not in source'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    synced: z.number(),
+    deleted: z.number().optional(),
+    error: z.string().optional(),
+  }),
+  providerPriority: ['opencode-v2', 'daytona', 'local-fs'],
+  tags: ['file', 'sync', 'transfer'],
+};
+
+// ============================================================================
+// Code Capabilities
+// ============================================================================
+
+export const CODE_RUN_CAPABILITY: CapabilityDefinition = {
+  id: 'code.run',
+  name: 'Run Code',
+  category: 'sandbox',
+  description: 'Execute code snippet with stdin support. Multi-language with temp file fallback.',
+  inputSchema: z.object({
+    code: z.string().describe('Code to execute'),
+    language: z.enum(['python', 'javascript', 'typescript', 'go', 'rust', 'java', 'r', 'cpp']).describe('Language'),
+    args: z.array(z.string()).optional().describe('Command-line arguments'),
+    stdin: z.string().optional().describe('Standard input'),
+    timeout: z.number().optional().default(30).describe('Timeout in seconds'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    stdout: z.string(),
+    stderr: z.string(),
+    exitCode: z.number(),
+  }),
+  providerPriority: ['opencode-v2', 'e2b', 'daytona', 'codesandbox'],
+  tags: ['code', 'run', 'execute', 'interpreter'],
+};
+
+export const CODE_AST_DIFF_CAPABILITY: CapabilityDefinition = {
+  id: 'code.ast_diff',
+  name: 'Apply AST-Aware Diff',
+  category: 'file',
+  description: 'Apply an AST-aware structural diff to TypeScript/JavaScript files. Preserves formatting while making targeted changes.',
+  inputSchema: z.object({
+    path: z.string().describe('File path (.ts, .tsx, .js, .jsx)'),
+    operation: z.enum(['insert', 'update', 'delete', 'replace']).describe('AST operation'),
+    nodeSelector: z.string().describe('AST node selector'),
+    newContent: z.string().optional().describe('New content for insert/update'),
+    metadata: z.record(z.any()).optional(),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    content: z.string(),
+    error: z.string().optional(),
+    fileType: z.string().optional(),
+  }),
+  providerPriority: ['local-fs'],
+  tags: ['code', 'ast', 'diff', 'refactor', 'typescript'],
+};
+
+export const CODE_SYNTAX_CHECK_CAPABILITY: CapabilityDefinition = {
+  id: 'code.syntax_check',
+  name: 'Syntax Check',
+  category: 'file',
+  description: 'Validate syntax of code files. Checks brace/paren balance, JSON validity, and language-specific syntax.',
+  inputSchema: z.object({
+    paths: z.array(z.string()).describe('File paths to check'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    files: z.array(z.object({
+      path: z.string(),
+      valid: z.boolean(),
+      errors: z.array(z.string()).optional(),
+    })),
+  }),
+  providerPriority: ['local-fs', 'opencode-v2'],
+  tags: ['code', 'syntax', 'validate', 'lint'],
+};
+
+// ============================================================================
+// File Batch Operations
+// ============================================================================
+
+export const FILE_BATCH_WRITE_CAPABILITY: CapabilityDefinition = {
+  id: 'file.batch_write',
+  name: 'Batch Write Files',
+  category: 'file',
+  description: 'Write multiple files atomically (up to 50 files). Returns per-file success/failure.',
+  inputSchema: z.object({
+    files: z.array(z.object({
+      path: z.string(),
+      content: z.string(),
+    })).max(50),
+    commitMessage: z.string().optional().describe('Commit message for audit'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    successCount: z.number(),
+    failCount: z.number(),
+    results: z.array(z.object({
+      path: z.string(),
+      success: z.boolean(),
+      error: z.string().optional(),
+      version: z.number().optional(),
+    })),
+  }),
+  providerPriority: ['mcp-filesystem', 'vfs', 'local-fs'],
+  tags: ['file', 'batch', 'write', 'atomic'],
+};
+
+// ============================================================================
+// Workspace Stats Capability
+// ============================================================================
+
+export const WORKSPACE_STATS_CAPABILITY: CapabilityDefinition = {
+  id: 'workspace.stats',
+  name: 'Workspace Stats',
+  category: 'memory',
+  description: 'Get workspace statistics: total size, file count, quota usage.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    totalSize: z.number(),
+    fileCount: z.number(),
+    quotaUsed: z.number().optional(),
+    quotaTotal: z.number().optional(),
+  }),
+  providerPriority: ['vfs', 'local-fs'],
+  tags: ['workspace', 'stats', 'quota', 'size'],
+};
+
+// ============================================================================
+// Workflow / Agent Planning Capabilities
+// ============================================================================
+
+export const WORKFLOW_DISCOVERY_CAPABILITY: CapabilityDefinition = {
+  id: 'workflow.discovery',
+  name: 'Discovery Analysis',
+  category: 'memory',
+  description: 'Analyze a task request and identify files that need to be read for context.',
+  inputSchema: z.object({
+    task: z.string().describe('Task description'),
+    filesToAnalyze: z.array(z.string()).optional().describe('Specific files to examine'),
+  }),
+  outputSchema: z.object({
+    suggestedFiles: z.array(z.string()),
+    taskSummary: z.string(),
+    confidence: z.number().optional(),
+  }),
+  providerPriority: ['opencode-v2', 'blaxel'],
+  tags: ['workflow', 'discovery', 'analysis', 'planning'],
+};
+
+export const WORKFLOW_PLAN_CAPABILITY: CapabilityDefinition = {
+  id: 'workflow.plan',
+  name: 'Create Plan',
+  category: 'memory',
+  description: 'Create a structured execution plan with file modifications, execution order, and rollback strategy.',
+  inputSchema: z.object({
+    task: z.string().describe('Task description'),
+    files: z.array(z.object({ path: z.string(), action: z.string(), reason: z.string() })).optional(),
+    executionOrder: z.array(z.string()).optional(),
+  }),
+  outputSchema: z.object({
+    task: z.string(),
+    files: z.array(z.any()),
+    executionOrder: z.array(z.string()),
+    rollbackPlan: z.string(),
+  }),
+  providerPriority: ['opencode-v2', 'blaxel'],
+  tags: ['workflow', 'plan', 'strategy', 'rollback'],
+};
+
+export const WORKFLOW_COMMIT_CAPABILITY: CapabilityDefinition = {
+  id: 'workflow.commit',
+  name: 'Commit Workspace Changes',
+  category: 'memory',
+  description: 'Commit current workspace state to shadow commits for rollback.',
+  inputSchema: z.object({
+    message: z.string().describe('Commit message'),
+    sessionId: z.string().describe('Session ID'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    commitId: z.string(),
+    error: z.string().optional(),
+  }),
+  providerPriority: ['vfs'],
+  tags: ['workflow', 'commit', 'snapshot', 'rollback'],
+};
+
+export const WORKFLOW_ROLLBACK_CAPABILITY: CapabilityDefinition = {
+  id: 'workflow.rollback',
+  name: 'Rollback to Commit',
+  category: 'memory',
+  description: 'Rollback workspace to a previous shadow commit.',
+  inputSchema: z.object({
+    commitId: z.string().describe('Commit ID to rollback to'),
+    sessionId: z.string().describe('Session ID'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    restoredFiles: z.array(z.string()),
+    error: z.string().optional(),
+  }),
+  providerPriority: ['vfs'],
+  tags: ['workflow', 'rollback', 'restore', 'undo'],
+};
+
+export const WORKFLOW_HISTORY_CAPABILITY: CapabilityDefinition = {
+  id: 'workflow.history',
+  name: 'Commit History',
+  category: 'memory',
+  description: 'Get shadow commit history for the current session.',
+  inputSchema: z.object({
+    sessionId: z.string().describe('Session ID'),
+    limit: z.number().optional().default(20),
+  }),
+  outputSchema: z.array(z.object({
+    id: z.string(),
+    message: z.string(),
+    timestamp: z.string(),
+    fileCount: z.number(),
+  })),
+  providerPriority: ['vfs'],
+  tags: ['workflow', 'history', 'commits', 'log'],
+};
+
+export const WORKFLOW_REQUEST_APPROVAL_CAPABILITY: CapabilityDefinition = {
+  id: 'workflow.request_approval',
+  name: 'Request Human Approval',
+  category: 'memory',
+  description: 'Create a human-in-the-loop approval request for a risky action.',
+  inputSchema: z.object({
+    action: z.string().describe('Action requiring approval'),
+    details: z.record(z.any()).describe('Action details'),
+    timeout: z.number().optional().default(300000).describe('Timeout in ms'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    approvalId: z.string(),
+    status: z.enum(['pending', 'approved', 'rejected', 'expired']),
+    timeoutAt: z.number().optional(),
+  }),
+  providerPriority: ['events', 'custom'],
+  tags: ['workflow', 'approval', 'hitl', 'human-in-loop'],
+};
+
+// ============================================================================
 // Export All Capabilities
 // ============================================================================
 
@@ -1045,11 +1507,26 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   FILE_DELETE_CAPABILITY,
   FILE_LIST_CAPABILITY,
   FILE_SEARCH_CAPABILITY,
+  FILE_SYNC_CAPABILITY,
+  FILE_BATCH_WRITE_CAPABILITY,
   // Sandbox
   SANDBOX_EXECUTE_CAPABILITY,
   SANDBOX_SHELL_CAPABILITY,
   SANDBOX_SESSION_CAPABILITY,
   BASH_CAPABILITY,
+  CODE_RUN_CAPABILITY,
+  // Computer Use
+  COMPUTER_USE_CLICK_CAPABILITY,
+  COMPUTER_USE_TYPE_CAPABILITY,
+  COMPUTER_USE_SCREENSHOT_CAPABILITY,
+  COMPUTER_USE_SCROLL_CAPABILITY,
+  // Process Management
+  PROCESS_START_CAPABILITY,
+  PROCESS_STOP_CAPABILITY,
+  PROCESS_LIST_CAPABILITY,
+  // Preview
+  PREVIEW_GET_CAPABILITY,
+  PREVIEW_FORWARD_PORT_CAPABILITY,
   // Web
   WEB_BROWSE_CAPABILITY,
   WEB_SEARCH_CAPABILITY,
@@ -1063,11 +1540,18 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   REPO_PULL_CAPABILITY,
   REPO_SEMANTIC_SEARCH_CAPABILITY,
   REPO_ANALYZE_CAPABILITY,
+  // MCP
+  MCP_LIST_TOOLS_CAPABILITY,
+  MCP_CALL_TOOL_CAPABILITY,
+  // Code
+  CODE_AST_DIFF_CAPABILITY,
+  CODE_SYNTAX_CHECK_CAPABILITY,
   // Memory
   MEMORY_STORE_CAPABILITY,
   MEMORY_RETRIEVE_CAPABILITY,
   PROJECT_BUNDLE_CAPABILITY,
   WORKSPACE_GET_CHANGES_CAPABILITY,
+  WORKSPACE_STATS_CAPABILITY,
   // Automation
   AUTOMATION_DISCORD_CAPABILITY,
   AUTOMATION_TELEGRAM_CAPABILITY,
@@ -1083,6 +1567,13 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   SCHEDULE_TASK_CAPABILITY,
   TASK_STATUS_CAPABILITY,
   TASK_CANCEL_CAPABILITY,
+  // Workflow / Agent Planning
+  WORKFLOW_DISCOVERY_CAPABILITY,
+  WORKFLOW_PLAN_CAPABILITY,
+  WORKFLOW_COMMIT_CAPABILITY,
+  WORKFLOW_ROLLBACK_CAPABILITY,
+  WORKFLOW_HISTORY_CAPABILITY,
+  WORKFLOW_REQUEST_APPROVAL_CAPABILITY,
 ];
 
 // ============================================================================

@@ -15,8 +15,20 @@
 
 import { createFileSystem, type IFileSystem, type WorkspaceConfig, type FSStats, type FileWatcherCallback, type FileSystemWatchEvent } from './index';
 import { isDesktopMode, getDefaultWorkspaceRoot } from '@bing/platform/env';
-import { randomUUID } from 'crypto';
 import { createLogger } from '@/lib/utils/logger';
+
+// Lazy crypto - avoids bundling Node.js 'crypto' in client bundle
+function generateShortId(): string {
+  if (typeof require !== 'undefined') {
+    try {
+      return require('crypto').randomUUID().slice(0, 8);
+    } catch { /* fall through */ }
+  }
+  if (typeof crypto !== 'undefined' && crypto.randomUUID) {
+    return crypto.randomUUID().slice(0, 8);
+  }
+  return Math.random().toString(36).slice(2, 10);
+}
 
 const log = createLogger('WorkspaceManager');
 
@@ -72,7 +84,7 @@ class WorkspaceManager {
       throw new Error('Workspace initialization only available in desktop mode');
     }
 
-    const workspaceId = options.sessionId || randomUUID().slice(0, 8);
+    const workspaceId = options.sessionId || generateShortId();
     const root = options.root || getDefaultWorkspaceRoot();
 
     if (!root) {

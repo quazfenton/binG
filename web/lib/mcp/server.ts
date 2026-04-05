@@ -1,28 +1,38 @@
 /**
  * MCP (Model Context Protocol) Tool Server
- * 
+ *
  * Exposes existing virtual filesystem tools via MCP standard.
  * Allows ANY LLM provider (Claude, GPT, Gemini) to use binG tools.
- * 
+ *
  * @see {@link https://modelcontextprotocol.io} MCP Specification
  */
 
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { StreamableHTTPServerTransport } from '@modelcontextprotocol/sdk/server/streamableHttp.js';
-// Using any type since @ path aliases don't work in isolated compiles
-type SandboxHandle = any;
+import {
+  readFileTool,
+  listFilesTool,
+  writeFileTool,
+  applyDiffTool,
+  batchWriteTool,
+  deleteFileTool,
+  createDirectoryTool,
+  searchFilesTool,
+  getWorkspaceStatsTool,
+  toolContextStore,
+} from './vfs-mcp-tools';
+import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
 
-// Stub for missing modules - tools and security will be disabled if these aren't available
-let SandboxSecurityManager: any;
-const allTools: any = {};
-try {
-  // SandboxSecurityManager = require('@/lib/sandbox/security-manager');
-  // allTools = require('@/lib/stateful-agent/tools/sandbox-tools');
-} catch {}
+const allTools: Record<string, any> = {
+  applyDiffTool,
+  readFileTool,
+  listFilesTool,
+  createFileTool: writeFileTool,
+};
 
 export interface MCPServerOptions {
   port?: number;
-  sandboxHandle?: SandboxHandle;
+  sandboxHandle?: any;
 }
 
 /**
@@ -75,18 +85,18 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     },
     async (params) => {
       try {
-        // SECURITY: Validate path and sanitize search/replace blocks
-        SandboxSecurityManager.resolvePath('/workspace', params.path);
-        
-        const result = await allTools.applyDiffTool.execute(params, {
-          messages: [],
-          toolCallId: crypto.randomUUID(),
-        });
-        
+        const result = await toolContextStore.run(
+          { userId: 'mcp-server', sessionId: undefined },
+          async () => applyDiffTool.execute(params, {
+            messages: [],
+            toolCallId: crypto.randomUUID(),
+          }) as any
+        );
+
         return {
           content: [{
             type: 'text',
-            text: result.success 
+            text: result.success
               ? `Successfully edited ${params.path}`
               : `Failed to edit ${params.path}: ${result.error}`,
           }],
@@ -115,11 +125,14 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     },
     async (params) => {
       try {
-        const result = await allTools.readFileTool.execute(params, {
-          messages: [],
-          toolCallId: crypto.randomUUID(),
-        });
-        
+        const result = await toolContextStore.run(
+          { userId: 'mcp-server', sessionId: undefined },
+          async () => readFileTool.execute(params, {
+            messages: [],
+            toolCallId: crypto.randomUUID(),
+          }) as any
+        );
+
         return {
           content: [{
             type: 'text',
@@ -156,11 +169,14 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     },
     async (params) => {
       try {
-        const result = await allTools.listFilesTool.execute(params, {
-          messages: [],
-          toolCallId: crypto.randomUUID(),
-        });
-        
+        const result = await toolContextStore.run(
+          { userId: 'mcp-server', sessionId: undefined },
+          async () => listFilesTool.execute(params, {
+            messages: [],
+            toolCallId: crypto.randomUUID(),
+          }) as any
+        );
+
         return {
           content: [{
             type: 'text',
@@ -195,11 +211,14 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     },
     async (params) => {
       try {
-        const result = await allTools.createFileTool.execute(params, {
-          messages: [],
-          toolCallId: crypto.randomUUID(),
-        });
-        
+        const result = await toolContextStore.run(
+          { userId: 'mcp-server', sessionId: undefined },
+          async () => writeFileTool.execute(params, {
+            messages: [],
+            toolCallId: crypto.randomUUID(),
+          })
+        );
+
         return {
           content: [{
             type: 'text',
@@ -218,10 +237,10 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     }
   );
 
-  // EXEC tool
+  // EXEC tool — shell execution requires a sandbox provider, not available in pure VFS mode
   (server as any).tool(
     'EXEC',
-    'Execute a shell command in the sandbox.',
+    'Execute a shell command in the sandbox. Note: requires sandbox provider, not available in pure VFS mode.',
     {
       command: {
         type: 'string',
@@ -233,35 +252,13 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
         optional: true,
       },
     },
-    async (params) => {
-      try {
-        // SECURITY: Sanitize shell command
-        const sanitized = SandboxSecurityManager.sanitizeCommand(params.command);
-        
-        const result = await allTools.execShellTool.execute({
-          ...params,
-          command: sanitized
-        }, {
-          messages: [],
-          toolCallId: crypto.randomUUID(),
-        });
-        
-        return {
-          content: [{
-            type: 'text',
-            text: result.output || result.content || 'Command executed',
-          }],
-        };
-      } catch (error) {
-        return {
-          content: [{
-            type: 'text',
-            text: `Error executing command: ${error instanceof Error ? error.message : 'Unknown error'}`,
-          }],
-          isError: true,
-        };
-      }
-    }
+    async () => ({
+      content: [{
+        type: 'text',
+        text: 'EXEC tool requires a sandbox provider (E2B, Blaxel, etc.) — not available in pure VFS mode',
+      }],
+      isError: true,
+    })
   );
 
   // LIST_RESOURCES tool
@@ -271,18 +268,21 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     {},
     async () => {
       try {
-        const result = await allTools.listFilesTool.execute({ path: '.' }, {
-          messages: [],
-          toolCallId: crypto.randomUUID(),
-        });
-        
+        const result = await toolContextStore.run(
+          { userId: 'mcp-server', sessionId: undefined },
+          async () => listFilesTool.execute({ path: '.' }, {
+            messages: [],
+            toolCallId: crypto.randomUUID(),
+          }) as any
+        );
+
         return {
           content: [{
             type: 'text',
             text: result.output || 'No resources available',
           }],
         };
-      } catch (error) {
+      } catch {
         return { content: [{ type: 'text', text: 'Error listing resources' }], isError: true };
       }
     }

@@ -1,5 +1,5 @@
 {
-  "name": "bing-monorepo",
+  "name": "bing",
   "private": true,
   "scripts": {
     "dev": "pnpm --filter web dev",

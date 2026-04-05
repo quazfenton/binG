@@ -22,6 +22,7 @@ import { processUnifiedAgentRequest, type UnifiedAgentConfig } from '@/lib/orche
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@bing/shared/agent/workforce-manager';
 import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared/agent/task-classifier';
+import { VFS_FILE_EDITING_TOOL_PROMPT } from '@bing/shared/agent/system-prompts';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
@@ -3578,82 +3579,92 @@ function appendFilesystemContextMessages(
     role: 'system',
     content: [
       allowFileEdits
-        ? 'Virtual filesystem is available for this request. You may propose edits and create full project folder structures.'
+        ? 'Virtual filesystem tools are available for this request. Use function calling to read, write, edit, and delete files.'
         : 'Attached filesystem context for this request:',
       '',
       ...chunks,
       '',
       allowFileEdits
         ? [
-            'For file changes, prefer one of these parseable schemas:',
-            '',
-            'CAPABILITY CHOICE:',
-            '- For modifying an existing file, use APPLY_DIFF first.',
-            '- For creating a brand-new file, use WRITE or <file_edit path="...">...</file_edit>.',
-            '- For deleting a file, use DELETE <path>.',
-            '- For reading or referring to existing workspace content, use <file_read path="..." /> when needed.',
-            '- For shell/runtime instructions meant for the user terminal, emit a single ```bash block.',
-            '',
-            'FOR EXISTING FILES, prefer surgical edits (APPLY_DIFF) over full rewrites:',
-            '  <apply_diff path="src/utils.ts">',
-            '    <search>function oldName() {',
-            '      return 1;',
-            '    }</search>',
-            '    <replace>function newName() {',
-            '      return 2;',
-            '    }</replace>',
-            '  </apply_diff>',
-            'Or in fs-actions blocks:',
-            '  APPLY_DIFF <path>',
-            '  <<<',
-            '  <exact code to find>',
-            '  ===',
-            '  <replacement code>',
-            '  >>>',
-            '',
-            'FOR NEW FILES, use full writes:',
-            '1) <file_edit path="...">...</file_edit>',
-            '2) COMMANDS write_diffs',
-            '3) ```fs-actions ...``` blocks with:',
-            '   WRITE <path>',
-            '   <<<',
-            '   <full file content>',
-            '   >>>',
-            '   PATCH <path>',
-            '   <<<',
-            '   <unified diff body>',
-            '   >>>',
-            '   DELETE <path>',
-            '',
-            'IMPORTANT: For edits to existing files, ALWAYS use APPLY_DIFF instead of WRITE.',
-            'APPLY_DIFF only replaces the exact block you specify, preventing context truncation.',
-            'Use WRITE only when creating new files or when a complete rewrite is explicitly needed.',
-            'Do not rewrite whole existing files unless the user explicitly wants a full rewrite.',
-            '',
-            'DIFF AUTHORING RULES:',
-            '- The <search> block or APPLY_DIFF search section must match the existing code exactly, including spacing and punctuation.',
-            '- Keep each diff surgical and minimal; prefer multiple small APPLY_DIFF operations over one large rewrite.',
-            '- Include enough surrounding context in the search block to uniquely identify the target.',
-            '- If multiple files are involved, emit one operation per file rather than mixing contents.',
-            '',
-            'DIFF-BASED SELF-HEALING:',
-            '- If an edit might fail because surrounding code may have drifted, first read/reference the latest file content and then emit a narrower APPLY_DIFF.',
-            '- If a search block is large, brittle, or repeated, reduce it to the smallest unique exact block.',
-            '- If an earlier attempted patch likely failed, do not repeat the same broad patch; emit a corrected APPLY_DIFF with fresher exact context.',
-            '- Prefer preserving user code and making the minimum viable edit rather than replacing entire functions or files.',
-            'Prefer concrete multi-file edits when user requests full project scaffolding.',
-            '',
-            'To read a file from the workspace, use: <file_read path="..." />',
-            '',
-            'When the user asks how to run code, include shell commands in ```bash blocks.',
-            'The user has a terminal that can execute these commands.',
-            'For multi-step setups, provide all commands in a single bash block so they can be run together.',
-            'Use bash blocks for user-facing commands only; use filesystem edit schemas for file mutations.',
-            'If a task is too large for a single response, end with the exact token: [CONTINUE_REQUESTED]',
-            'Example: ```bash',
-            'npm install',
-            'npm run dev',
-            '```',
+            /*
+             * ─────────────────────────────────────────────────────────────
+             * COMMENTED OUT — Old tag-based editing instructions.
+             * Re-enable this block (and replace VFS_FILE_EDITING_TOOL_PROMPT below)
+             * if you need to fall back to <file_edit> / APPLY_DIFF / WRITE <<<
+             * tag-based parsing instead of MCP tool calling.
+             *
+             * For file changes, prefer one of these parseable schemas:
+             *
+             * CAPABILITY CHOICE:
+             * - For modifying an existing file, use APPLY_DIFF first.
+             * - For creating a brand-new file, use WRITE or <file_edit path="...">...</file_edit>.
+             * - For deleting a file, use DELETE <path>.
+             * - For reading or referring to existing workspace content, use <file_read path="..." /> when needed.
+             * - For shell/runtime instructions meant for the user terminal, emit a single ```bash block.
+             *
+             * FOR EXISTING FILES, prefer surgical edits (APPLY_DIFF) over full rewrites:
+             *   <apply_diff path="src/utils.ts">
+             *     <search>function oldName() {
+             *       return 1;
+             *     }</search>
+             *     <replace>function newName() {
+             *       return 2;
+             *     }</replace>
+             *   </apply_diff>
+             * Or in fs-actions blocks:
+             *   APPLY_DIFF <path>
+             *   <<<
+             *   <exact code to find>
+             *   ===
+             *   <replacement code>
+             *   >>>
+             *
+             * FOR NEW FILES, use full writes:
+             * 1) <file_edit path="...">...</file_edit>
+             * 2) COMMANDS write_diffs
+             * 3) ```fs-actions ...``` blocks with:
+             *    WRITE <path>
+             *    <<<
+             *    <full file content>
+             *    >>>
+             *    PATCH <path>
+             *    <<<
+             *    <unified diff body>
+             *    >>>
+             *    DELETE <path>
+             *
+             * IMPORTANT: For edits to existing files, ALWAYS use APPLY_DIFF instead of WRITE.
+             * APPLY_DIFF only replaces the exact block you specify, preventing context truncation.
+             * Use WRITE only when creating new files or when a complete rewrite is explicitly needed.
+             * Do not rewrite whole existing files unless the user explicitly wants a full rewrite.
+             *
+             * DIFF AUTHORING RULES:
+             * - The <search> block or APPLY_DIFF search section must match the existing code exactly, including spacing and punctuation.
+             * - Keep each diff surgical and minimal; prefer multiple small APPLY_DIFF operations over one large rewrite.
+             * - Include enough surrounding context in the search block to uniquely identify the target.
+             * - If multiple files are involved, emit one operation per file rather than mixing contents.
+             *
+             * DIFF-BASED SELF-HEALING:
+             * - If an edit might fail because surrounding code may have drifted, first read/reference the latest file content and then emit a narrower APPLY_DIFF.
+             * - If a search block is large, brittle, or repeated, reduce it to the smallest unique exact block.
+             * - If an earlier attempted patch likely failed, do not repeat the same broad patch; emit a corrected APPLY_DIFF with fresher exact context.
+             * - Prefer preserving user code and making the minimum viable edit rather than replacing entire functions or files.
+             * Prefer concrete multi-file edits when user requests full project scaffolding.
+             *
+             * To read a file from the workspace, use: <file_read path="..." />
+             *
+             * When the user asks how to run code, include shell commands in ```bash blocks.
+             * The user has a terminal that can execute these commands.
+             * For multi-step setups, provide all commands in a single bash block so they can be run together.
+             * Use bash blocks for user-facing commands only; use filesystem edit schemas for file mutations.
+             * If a task is too large for a single response, end with the exact token: [CONTINUE_REQUESTED]
+             * Example: ```bash
+             * npm install
+             * npm run dev
+             * ```
+             * ─────────────────────────────────────────────────────────────
+             */
+            VFS_FILE_EDITING_TOOL_PROMPT,
           ].join('\n')
         : '',
       workspaceContext ? `Current workspace session context:\n${workspaceContext}` : '',
@@ -4343,15 +4354,20 @@ export async function applyFilesystemEditsFromResponse(input: {
         });
 
         const vfs: Record<string, string> = {};
-        for (const op of result.applied) {
-          if (op.operation !== 'delete') {
-            try {
-              const file = await virtualFilesystem.readFile(input.ownerId, op.path);
-              vfs[op.path] = file.content;
-              const txn = transactions.find(t => t.path === op.path);
-              if (txn) txn.newContent = file.content;
-            } catch (readError) {
-              void readError;
+
+        // DESKTOP MODE: Skip reading files — content is stripped by ShadowCommitManager.
+        const desktopMode = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+        if (!desktopMode) {
+          for (const op of result.applied) {
+            if (op.operation !== 'delete') {
+              try {
+                const file = await virtualFilesystem.readFile(input.ownerId, op.path);
+                vfs[op.path] = file.content;
+                const txn = transactions.find(t => t.path === op.path);
+                if (txn) txn.newContent = file.content;
+              } catch (readError) {
+                void readError;
+              }
             }
           }
         }

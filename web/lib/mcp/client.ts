@@ -7,6 +7,7 @@
 
 import { spawn, ChildProcess } from 'node:child_process'
 import { EventEmitter } from 'node:events'
+import WebSocket from 'ws'
 import * as MCPTypes from './types'
 import { createNDJSONParser, type NDJSONParser } from '@/lib/utils/ndjson-parser';
 
