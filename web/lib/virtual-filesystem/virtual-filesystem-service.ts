@@ -30,8 +30,8 @@ const DEFAULT_STORAGE_DIR = process.env.VIRTUAL_FILESYSTEM_STORAGE_DIR
     ? path.join(process.env.LOCALAPPDATA || process.env.APPDATA || 'C:\\temp', 'vfs-storage')
     : '/tmp/vfs-storage');
 const MAX_PATH_LENGTH = 1024;
-const MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
-const MAX_TOTAL_WORKSPACE_SIZE = 100 * 1024 * 1024; // 100MB
+const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per file
+const MAX_TOTAL_WORKSPACE_SIZE = 500 * 1024 * 1024; // 500MB total workspace
 const MAX_FILES_PER_WORKSPACE = 10000;
 const MAX_SEARCH_LIMIT = 100;
 

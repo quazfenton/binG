@@ -3392,3 +3392,148 @@ export const ROLE_COMPATIBILITY: Record<AgentRole, AgentRole[]> = {
   releaseManager: ['projectManager', 'devopsEngineer', 'sre', 'planner'],
   codeArchaeologist: ['reverseEngineer', 'documenter', 'mentor', 'knowledgeCurator'],
 };
+
+// ============================================================================
+// VFS File Editing System Prompt (Tool-Calling)
+// ============================================================================
+// Centralized prompt for instructing the LLM to use structured MCP/VFS tools
+// for file operations instead of XML tag-based parsing.
+//
+// Used by:
+// - web/app/api/chat/route.ts (buildFileEditContextMessages)
+// - Any route that enables VFS tool calling
+//
+// To fall back to the old tag-based editing (<file_edit>, WRITE <<<, etc.),
+// replace VFS_FILE_EDITING_TOOL_PROMPT with the commented-out block in
+// web/app/api/chat/route.ts around line 3589.
+// ============================================================================
+
+export const VFS_FILE_EDITING_TOOL_PROMPT = [
+  'You have access to structured filesystem tools. Use function calling (tool_use) to read, write, edit, and delete files. Do NOT use XML tags or heredoc blocks for file edits — use the tools provided.',
+  '',
+  'AVAILABLE FILE TOOLS:',
+  '• write_file(path, content, commitMessage?) — Create a new file or completely overwrite an existing file.',
+  '• read_file(path) — Read the full content of a file. Use this to check existing content before editing.',
+  '• apply_diff(path, diff, commitMessage?) — Apply a surgical unified diff patch to an existing file. PREFERRED for modifying existing code.',
+  '• delete_file(path, reason?) — Delete a file or directory.',
+  '• list_files(path?, recursive?) — List files and directories in a folder.',
+  '• search_files(query, path?, limit?) — Search across all files for a text pattern.',
+  '• batch_write(files, commitMessage?) — Write multiple files at once. Each entry: {path, content}.',
+  '• create_directory(path) — Create a directory (parent dirs created automatically).',
+  '',
+  'WORKFLOW — MODIFYING EXISTING FILES:',
+  '1. Call read_file(path) to see the current content.',
+  '2. Call apply_diff(path, diff) with a unified diff patch. Keep diffs surgical — only include the lines you need to change.',
+  '3. Use multiple small apply_diff calls rather than one large rewrite.',
+  '4. Use write_file(path, content) ONLY for new files or when the user explicitly wants a full rewrite.',
+  '',
+  'UNIFIED DIFF FORMAT (for apply_diff):',
+  '--- a/src/file.ts',
+  '+++ b/src/file.ts',
+  '   unchanged line',
+  '  -removed line',
+  '  +added line',
+  '   unchanged line',
+  '',
+  'WORKFLOW — CREATING NEW FILES:',
+  '• For a single new file: call write_file(path, content).',
+  '• For multiple new files: call batch_write([{path, content}, ...]).',
+  '',
+  'RULES:',
+  '- Always read a file before editing it (apply_diff needs exact context).',
+  '- Keep edits minimal and surgical. Replace only what needs to change.',
+  '- For multi-file edits, call tools for each file individually or use batch_write for new files.',
+  '- Never rewrite entire existing files just to change a few lines — use apply_diff instead.',
+  '- If an apply_diff might fail due to code drift, read the file first and make the diff narrower.',
+  '',
+  'TERMINAL COMMANDS:',
+  '- When the user needs to run shell commands, emit a single ```bash block.',
+  '- The user has a terminal that can execute these commands.',
+  '- Use bash blocks for user-facing commands only; use the file tools above for file mutations.',
+  '',
+  'CONTINUATION:',
+  '- If a task is too large for a single response, end with the exact token: [CONTINUE_REQUESTED]',
+].join('\n');
+
+// ============================================================================
+// Powers Integration — Inject user-installed powers into system prompts
+// ============================================================================
+
+/**
+ * Powers block injected into system prompts when powers are active.
+ * This complements the TOOL_CAPABILITIES block above with user-installable,
+ * WASM-sandboxed skill capabilities.
+ *
+ * Usage:
+ * ```ts
+ * import { composePromptWithPowers } from '@bing/shared/agent/system-prompts';
+ *
+ * const prompt = composePromptWithPowers('coder', { activePowers: ['react-component-gen'] });
+ * ```
+ */
+export interface PowersContext {
+  activePowers: Array<{
+    id: string;
+    name: string;
+    description: string;
+    version: string;
+    actions: string[];
+    triggers: string[];
+  }>;
+  /** If true, only include powers matching the current task */
+  matchByTask?: boolean;
+  currentTask?: string;
+}
+
+/**
+ * Generate the powers block for system prompt injection.
+ * Returns empty string if no active powers.
+ */
+export function generatePowersBlock(context: PowersContext): string {
+  if (!context.activePowers.length) return '';
+
+  const matchedPowers = context.matchByTask && context.currentTask
+    ? context.activePowers.filter(p =>
+        p.triggers.some(t => context.currentTask!.toLowerCase().includes(t.toLowerCase()))
+      )
+    : context.activePowers;
+
+  if (!matchedPowers.length) return '';
+
+  const blocks = matchedPowers.map(power => {
+    const isMatched = context.matchByTask ? '⚡ ACTIVE (matches task)' : '📦 AVAILABLE';
+    return `## Power: ${power.name} ${isMatched}
+**ID**: ${power.id} | **v${power.version}**
+${power.description}
+Actions: ${power.actions.join(', ')}`;
+  });
+
+  return `
+============================================
+# USER-INSTALLED POWERS
+============================================
+
+You have access to these user-installed powers — specialized, sandboxed capabilities:
+
+${blocks.join('\n\n---\n')}
+
+## Rules
+1. Powers are sandboxed (WASM) with restricted permissions
+2. Use a power when its description or triggers match the task
+3. Powers marked ⚡ ACTIVE are most relevant to the current task
+4. Prefer built-in capabilities over powers when both apply
+`;
+}
+
+/**
+ * Compose a role prompt with powers block injected.
+ */
+export function composePromptWithPowers(
+  role: AgentRole,
+  powersContext: PowersContext
+): string {
+  const basePrompt = SYSTEM_PROMPTS[role];
+  if (!basePrompt) return '';
+  const powersBlock = generatePowersBlock(powersContext);
+  return basePrompt + powersBlock;
+}

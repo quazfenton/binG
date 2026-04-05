@@ -27,7 +27,24 @@ import { isDesktopMode, getDefaultWorkspaceRoot } from '@bing/platform/env';
 import { createLogger } from '@/lib/utils/logger';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { getDefaultWorkspaceRoot as getVfsWorkspaceRoot } from '@bing/platform/env';
-import { fsBridge, isUsingLocalFS } from '../../../packages/shared/FS/fs-bridge';
+
+// Lazy-loaded Tauri FS for file content sync in desktop mode only
+// Uses Tauri's FS API directly (not fs-bridge) to avoid pulling server modules into client bundle
+type TauriFsModule = {
+  readTextFile(path: string, options?: { baseDir?: number }): Promise<string>;
+};
+let _tauriFsPromise: Promise<TauriFsModule> | null = null;
+function getTauriFs(): Promise<TauriFsModule> {
+  if (!_tauriFsPromise) {
+    _tauriFsPromise = import('@tauri-apps/plugin-fs').then(
+      m => m as unknown as TauriFsModule
+    );
+  }
+  return _tauriFsPromise;
+}
+
+// Base directory for Tauri FS operations (0 = home directory)
+const TAURI_BASE_DIR = 0;
 
 const logger = createLogger('DesktopPTY');
 
@@ -213,6 +230,7 @@ async function processPendingSyncs(workspaceRoot: string): Promise<void> {
  * This ensures the UI reflects actual file content when files are created/modified in the real shell
  */
 async function syncFileFromLocalFs(filePath: string, workspaceRoot: string): Promise<void> {
+  const { fsBridge, isUsingLocalFS } = await getFsBridge();
   if (!isDesktopMode() || !isUsingLocalFS()) {
     return; // Only sync in desktop mode with local FS
   }

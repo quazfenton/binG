@@ -22,6 +22,7 @@
 
 import { z } from 'zod';
 import { tool } from 'ai';
+import { AsyncLocalStorage } from 'node:async_hooks';
 import { virtualFilesystem } from '../virtual-filesystem/virtual-filesystem-service';
 import { createLogger } from '../utils/logger';
 
@@ -35,32 +36,35 @@ export interface ToolContext {
   sessionId?: string;
 }
 
-// Global context storage for MCP tool execution
-// Can be set by the MCP server or passed via tool parameters
-let currentToolContext: ToolContext = {
-  userId: 'default',
-  sessionId: undefined,
-};
+// Request-scoped context storage using AsyncLocalStorage.
+// This is SAFE for concurrent requests — each async execution chain gets
+// its own isolated context, preventing cross-user data leaks.
+export const toolContextStore = new AsyncLocalStorage<ToolContext>();
 
 /**
- * Set the tool execution context
- * Called by the MCP server before executing tools to pass user context
+ * Set the tool execution context for the current async scope.
+ * Unlike the old global mutable approach, this is request-scoped and
+ * cannot be corrupted by concurrent requests.
  */
 export function setToolContext(context: ToolContext): void {
-  currentToolContext = context;
+  toolContextStore.enterWith(context);
 }
 
 /**
- * Get the current tool execution context
- * Used by tools to get the user ID for VFS operations
+ * Get the current tool execution context.
+ * Returns the request-scoped context or a safe fallback.
  */
 function getToolContext(): ToolContext {
-  return currentToolContext;
+  return toolContextStore.getStore() || {
+    userId: 'default',
+    sessionId: undefined,
+  };
 }
 
 /**
  * Initialize VFS tools with user context
- * Called from getAllTools to pass user context to VFS tools
+ * Called from getAllTools to pass user context to VFS tools.
+ * Uses AsyncLocalStorage for request-scoped isolation.
  */
 export function initializeVFSTools(userId: string, sessionId?: string): void {
   setToolContext({ userId, sessionId });
@@ -301,7 +305,7 @@ export const batchWriteTool = tool({
     files: z.array(z.object({
       path: z.string().describe('File path'),
       content: z.string().describe('File content'),
-    })).describe('Array of {path, content} objects'),
+    })).max(50, 'Cannot write more than 50 files in a single batch').describe('Array of {path, content} objects'),
     commitMessage: z.string().optional().describe('Optional description for all files'),
   }),
   execute: async ({ files, commitMessage = 'Batch write via MCP tool' }) => {

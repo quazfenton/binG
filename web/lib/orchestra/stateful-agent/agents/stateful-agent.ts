@@ -59,6 +59,7 @@ async function acquireSessionLock(sessionId: string): Promise<() => void> {
 
 export interface StatefulAgentOptions {
   sessionId?: string;
+  userId?: string;
   sandboxHandle?: SandboxHandle;
   maxSelfHealAttempts?: number;
   enforcePlanActVerify?: boolean;
@@ -189,14 +190,16 @@ export class StatefulAgent {
 
   constructor(options: StatefulAgentOptions = {}) {
     this.sessionId = options.sessionId || crypto.randomUUID();
+    this.userId = options.userId || 'anonymous';
+    this.conversationId = options.sessionId || crypto.randomUUID();
     this.sandboxHandle = options.sandboxHandle;
     this.projectServices = options.projectServices;
     this.maxSelfHealAttempts = options.maxSelfHealAttempts || 3;
     this.enforcePlanActVerify = options.enforcePlanActVerify ?? true;
     this.enableReflection = options.enableReflection ?? true;
     this.enableTaskDecomposition = options.enableTaskDecomposition ?? true;
-    this.enableCapabilityChaining = options.enableCapabilityChaining ?? false;
-    this.enableBootstrappedAgency = options.enableBootstrappedAgency ?? false;
+    this.enableCapabilityChaining = options.enableCapabilityChaining ?? true;
+    this.enableBootstrappedAgency = options.enableBootstrappedAgency ?? true;
 
     this.toolExecutor = new ToolExecutor({
       sandboxHandle: this.sandboxHandle,
@@ -398,8 +401,9 @@ export class StatefulAgent {
         this.status = 'completed';
 
         const duration = Date.now() - startTime;
+        const success = this.errors.length === 0;
         const result: StatefulAgentResult = {
-          success: this.errors.length === 0,
+          success,
           response: `Completed ${this.steps} steps in ${Math.round(duration / 1000)}s. Modified ${this.transactionLog.length} files.`,
           steps: this.steps,
           errors: this.errors,
@@ -413,6 +417,28 @@ export class StatefulAgent {
           },
         };
 
+        // Record execution with bootstrapped agency for learning
+        if (this.enableBootstrappedAgency && this.agency) {
+          await this.recordAgencyExecution(userMessage, {
+            success,
+            duration,
+            steps: this.steps,
+            errors: this.errors.map(e => e.message),
+            transactionLog: this.transactionLog,
+            toolMetrics: this.toolExecutor.getMetrics(),
+          });
+        }
+
+        // Trigger skill bootstrap after successful execution
+        if (success && this.transactionLog.length > 0) {
+          await this.triggerSkillBootstrap(userMessage, {
+            duration,
+            steps: this.steps,
+            transactionLog: this.transactionLog,
+            toolMetrics: this.toolExecutor.getMetrics(),
+          });
+        }
+
         // Log completion metrics
         log.info('StatefulAgent execution completed', {
           sessionId: this.sessionId,
@@ -425,6 +451,8 @@ export class StatefulAgent {
           reflectionEnabled: this.enableReflection,
           taskDecompositionEnabled: this.enableTaskDecomposition,
           executionGraphId: this.executionGraphId,
+          agencyLearningApplied: this.enableBootstrappedAgency,
+          skillBootstrapTriggered: success && this.transactionLog.length > 0,
         });
 
         return result;
@@ -770,6 +798,59 @@ Use 'createFile' for new files.`;
     try {
       const { generateText } = await import('ai');
       const { allTools } = await import('../tools/sandbox-tools');
+      const { getCapabilityRouter } = await import('@/lib/tools/router');
+      const { ALL_CAPABILITIES } = await import('@/lib/tools/capabilities');
+
+      const router = getCapabilityRouter();
+      const availableCapabilities = ALL_CAPABILITIES.map(c => c.id);
+
+      // Build capability chain tool if enabled
+      const additionalTools: Record<string, any> = {};
+      if (this.enableCapabilityChaining) {
+        additionalTools.runCapabilityChain = {
+          description: `Execute a chain of capabilities in sequence. Use for multi-step workflows. Available: ${availableCapabilities.join(', ')}`,
+          parameters: z.object({
+            name: z.string().describe('Chain name'),
+            steps: z.array(z.object({
+              capability: z.string().describe('Capability ID (e.g., file.read, sandbox.shell, web.browse)'),
+              args: z.record(z.any()).describe('Arguments for this capability'),
+            })).describe('Sequence of capabilities to execute'),
+            stopOnFailure: z.boolean().optional().default(false).describe('Whether to stop the chain if a step fails'),
+          }),
+          execute: async (args: any) => {
+            try {
+              const chain = createCapabilityChain({
+                name: args.name,
+                enableParallel: false,
+                stopOnFailure: args.stopOnFailure ?? false,
+              });
+
+              for (const step of args.steps) {
+                chain.addStep(step.capability, step.args);
+              }
+
+              const result = await chain.execute({
+                execute: async (capName: string, config: any, _chainCtx: any) => {
+                  return router.execute(capName, config, {
+                    userId: this.userId,
+                    sessionId: this.sessionId,
+                  });
+                },
+              });
+
+              const serializedResults = Object.fromEntries(result.results.entries());
+              return {
+                success: result.success,
+                results: serializedResults,
+                errors: result.errors,
+                steps: result.steps,
+              };
+            } catch (err: any) {
+              return { success: false, error: err.message };
+            }
+          },
+        };
+      }
 
       const result = await generateText({
         model: this.getModel(),
@@ -778,6 +859,7 @@ Use 'createFile' for new files.`;
           applyDiff: allTools.applyDiff,
           createFile: allTools.createFile,
           execShell: allTools.execShell,
+          ...additionalTools,
         },
         onStepFinish: async ({ toolCalls, toolResults }) => {
           // Execute tool calls via ToolExecutor
@@ -1052,6 +1134,127 @@ Provide only the corrected code, no explanation.`;
     await this.runEditingPhase(`Fix the runtime error: ${error.message}`);
   }
 
+  /**
+   * Record execution with bootstrapped agency for learning
+   */
+  private async recordAgencyExecution(
+    task: string,
+    execution: {
+      success: boolean;
+      duration: number;
+      steps: number;
+      errors: string[];
+      transactionLog: Array<{ path: string; type: string; timestamp: number; originalContent?: string }>;
+      toolMetrics: any;
+    }
+  ): Promise<void> {
+    if (!this.agency) return;
+
+    try {
+      // Determine capabilities used from transaction log
+      const capabilities = this.deriveCapabilitiesFromExecution(execution);
+
+      // Record with agency for pattern learning
+      await this.agency.execute({
+        task,
+        capabilities,
+        chain: capabilities.length > 1,
+      });
+
+      log.debug('Agency execution recorded for learning', {
+        task: task.substring(0, 50),
+        success: execution.success,
+        capabilities,
+        duration: `${Math.round(execution.duration / 1000)}s`,
+      });
+    } catch (error: any) {
+      log.warn('Failed to record agency execution', { error: error.message });
+    }
+  }
+
+  /**
+   * Derive capabilities used from transaction log
+   */
+  private deriveCapabilitiesFromExecution(execution: {
+    transactionLog: Array<{ path: string; type: string; timestamp: number; originalContent?: string }>;
+    toolMetrics: any;
+  }): string[] {
+    const caps = new Set<string>();
+
+    // File operations from transaction log
+    const fileOps = execution.transactionLog.filter(t => t.type === 'CREATE' || t.type === 'UPDATE');
+    if (fileOps.length > 0) {
+      caps.add('file.read');
+      caps.add('file.write');
+    }
+
+    // If tool metrics show shell executions
+    if (execution.toolMetrics?.byTool?.execShell?.count > 0) {
+      caps.add('sandbox.shell');
+    }
+
+    // If syntax checks were run
+    if (execution.toolMetrics?.byTool?.syntaxCheck?.count > 0) {
+      caps.add('repo.analyze');
+    }
+
+    // Default fallback
+    if (caps.size === 0) {
+      caps.add('file.read');
+      caps.add('file.write');
+    }
+
+    return Array.from(caps);
+  }
+
+  /**
+   * Trigger skill bootstrap after successful execution
+   */
+  private async triggerSkillBootstrap(
+    task: string,
+    execution: {
+      duration: number;
+      steps: number;
+      transactionLog: Array<{ path: string; type: string; timestamp: number; originalContent?: string }>;
+      toolMetrics: any;
+    }
+  ): Promise<void> {
+    try {
+      const { emitEvent } = await import('@/lib/events/bus');
+
+      // Build successful run payload for skill extraction
+      const steps = execution.transactionLog.map(t => ({
+        action: t.type.toLowerCase(),
+        result: { path: t.path, type: t.type },
+        success: true,
+      }));
+
+      await emitEvent({
+        type: 'SKILL_BOOTSTRAP',
+        userId: this.userId || 'system',
+        sessionId: this.sessionId,
+        payload: {
+          successfulRun: {
+            steps,
+            totalDuration: execution.duration,
+            userId: this.userId || 'system',
+            taskDescription: task,
+            filesModified: execution.transactionLog.map(t => t.path),
+          },
+          model: process.env.DEFAULT_MODEL || 'gpt-4o',
+          storeSkill: true,
+        },
+      }, this.userId || 'system', this.sessionId);
+
+      log.info('Skill bootstrap event emitted', {
+        sessionId: this.sessionId,
+        filesModified: execution.transactionLog.length,
+      });
+    } catch (error: any) {
+      log.warn('Failed to emit skill bootstrap event', { error: error.message });
+    }
+  }
+
   getState() {
     return {
       sessionId: this.sessionId,
@@ -1063,6 +1266,32 @@ Provide only the corrected code, no explanation.`;
       status: this.status,
       metrics: this.toolExecutor.getMetrics(),
     };
+  }
+
+  /**
+   * Get learned capabilities from bootstrapped agency for a task
+   * Returns capabilities ranked by past success rate for similar tasks
+   */
+  getLearnedCapabilities(task: string, limit: number = 5): string[] {
+    if (!this.enableBootstrappedAgency || !this.agency) {
+      return ['file.read', 'file.write', 'sandbox.shell'];
+    }
+    return this.agency.getLearnedCapabilities(task, limit);
+  }
+
+  /**
+   * Get agency learning summary
+   */
+  getAgencyLearningSummary(): {
+    totalExecutions: number;
+    successRate: number;
+    topCapabilities: Array<{ capability: string; successRate: number; executions: number }>;
+    improvementTrend: 'improving' | 'stable' | 'declining';
+  } | null {
+    if (!this.enableBootstrappedAgency || !this.agency) {
+      return null;
+    }
+    return this.agency.getLearningSummary();
   }
 }
 

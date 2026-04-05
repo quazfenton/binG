@@ -69,8 +69,8 @@ export class MastraMCPClient {
 
   constructor(config: MCPClientConfig = {}) {
     this.config = {
-      serverPath: 'node',
-      serverArgs: ['lib/mastra/mcp/server.ts'],
+      serverPath: 'npx',
+      serverArgs: ['tsx', 'lib/orchestra/mastra/mcp/server.ts'],
       timeout: 30000,
       ...config,
     };

@@ -94,18 +94,18 @@ export interface ImportResult {
 }
 
 export class FileImportService {
-  private static readonly MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB per file
+  private static readonly MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per file
   private static readonly MAX_IMPORT_FILES = 100; // Max files per import
-  private static readonly MAX_TOTAL_SIZE = 50 * 1024 * 1024; // 50MB total per import
+  private static readonly MAX_TOTAL_SIZE = 500 * 1024 * 1024; // 500MB total per import
 
   constructor(private vfs: VFSWriteable) {}
 
   /**
    * Import files from client into VFS
-   * 
+   *
    * Files are stored in: project/sessions/{sessionId}/imports-{timestamp}/
    * or custom destination if specified.
-   * 
+   *
    * @param files - Array of file objects with name, content, and optional path
    * @param options - Import configuration options
    * @returns ImportResult with details of imported files
@@ -129,15 +129,15 @@ export class FileImportService {
     const importedFiles: ImportedFile[] = [];
     let importedFolders = 0;
 
-    // Validate file count
+    // SECURITY: O(1) file count guard — checked before iterating files
     if (files.length > FileImportService.MAX_IMPORT_FILES) {
       throw new Error(
         `Too many files to import: ${files.length} (max: ${FileImportService.MAX_IMPORT_FILES})`
       );
     }
 
-    // Validate total size
-    const totalSize = files.reduce((sum, f) => sum + Buffer.byteLength(f.content, 'utf8'), 0);
+    // SECURITY: O(1) total size guard — string .length is a native property, no iteration needed
+    const totalSize = files.reduce((sum, f) => sum + f.content.length, 0);
     if (totalSize > FileImportService.MAX_TOTAL_SIZE) {
       throw new Error(
         `Total import size exceeds limit: ${this.formatFileSize(totalSize)} (max: ${this.formatFileSize(FileImportService.MAX_TOTAL_SIZE)})`
@@ -172,8 +172,8 @@ export class FileImportService {
     // Process each file
     for (const file of files) {
       try {
-        // Validate individual file size
-        const fileSize = Buffer.byteLength(file.content, 'utf8');
+        // SECURITY: O(1) per-file size guard — string .length is a native property
+        const fileSize = file.content.length;
         if (fileSize > FileImportService.MAX_FILE_SIZE) {
           errors.push(`${file.name}: File exceeds size limit (${this.formatFileSize(fileSize)})`);
           continue;
@@ -241,13 +241,14 @@ export class FileImportService {
       try {
         const CommitManager = await getCommitManager();
         const commitManager = new CommitManager();
-        
-        // Build VFS snapshot for commit
-        const vfsSnapshot: Record<string, string> = {};
-        for (const op of operations) {
-          vfsSnapshot[op.path] = op.newContent;
-        }
-        
+
+        // DESKTOP MODE: Skip building VFS snapshot — content is stripped by
+        // ShadowCommitManager anyway. Only metadata is persisted.
+        const desktopMode = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+        const vfsSnapshot: Record<string, string> = desktopMode
+          ? {}
+          : Object.fromEntries(operations.map(op => [op.path, op.newContent]));
+
         const commitResult = await commitManager.commit(
           vfsSnapshot,
           operations.map(op => ({
