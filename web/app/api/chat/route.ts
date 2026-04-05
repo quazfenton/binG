@@ -23,9 +23,9 @@ import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { workforceManager } from '@bing/shared/agent/workforce-manager';
 import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared/agent/task-classifier';
 import { VFS_FILE_EDITING_TOOL_PROMPT } from '@bing/shared/agent/system-prompts';
+import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
-import { llmProviderRouter, type LLMProviderType } from '@/lib/chat/llm-provider-router';
 import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/orchestration-mode-handler';
 import {
   sanitizeAssistantDisplayContent,
@@ -521,7 +521,7 @@ export async function POST(request: NextRequest) {
     
     // PARALLEL EXECUTION: Run independent async operations concurrently
     // This reduces latency by 40-60% by not waiting for each operation sequentially
-    const [denialContext, workspaceSessionContext] = await Promise.all([
+    const [denialContext, workspaceSessionContext, mem0Result] = await Promise.all([
       // Get recent filesystem edit denials
       filesystemEditSessionService.getRecentDenials(
         `${filesystemOwnerId}:${resolvedConversationId}`,
@@ -533,8 +533,26 @@ export async function POST(request: NextRequest) {
             useContextPack: shouldUseContextPackFinal,
             maxTokens: body.maxTokens,
           })
-        : Promise.resolve('')
+        : Promise.resolve(''),
+      // Search mem0 for relevant memories (runs in parallel)
+      isMem0Configured() && typeof lastUserMessage?.content === 'string'
+        ? mem0Search({
+            query: lastUserMessage.content,
+            userId: filesystemOwnerId,
+            limit: 5,
+          }).catch((memError: any) => {
+            chatLogger.warn('Mem0 search failed (non-critical)', { error: memError.message });
+            return { success: false, results: [] };
+          })
+        : Promise.resolve({ success: false, results: [] })
     ]);
+
+    // Build memory context from mem0 results
+    let memoryContext = '';
+    if (mem0Result && mem0Result.success && mem0Result.results && mem0Result.results.length > 0) {
+      memoryContext = buildMem0SystemPrompt(mem0Result.results);
+      chatLogger.debug('Retrieved relevant memories from mem0', { requestId, memoryCount: mem0Result.results.length });
+    }
     
     const contextualMessages = appendFilesystemContextMessages(
       messages,
@@ -542,20 +560,21 @@ export async function POST(request: NextRequest) {
       enableFilesystemEdits,
       denialContext,
       workspaceSessionContext,
+      memoryContext,
     );
 
     // V1 / Regular LLM: Apply response style modifiers to messages
     // This injects prompt parameters (depth, expertise, tone, etc.) into the V1 path
     // by appending a system message suffix to the message array
     const v1PromptParams: PromptParameters = {
-      responseDepth: body.responseDepth,
-      expertiseLevel: body.expertiseLevel,
-      reasoningMode: body.reasoningMode,
-      tone: body.tone,
-      creativityLevel: body.creativityLevel,
-      citationStrictness: body.citationStrictness,
-      outputFormat: body.outputFormat,
-      selfCorrection: body.selfCorrection,
+      responseDepth: body.responseDepth as any,
+      expertiseLevel: body.expertiseLevel as any,
+      reasoningMode: body.reasoningMode as any,
+      tone: body.tone as any,
+      creativityLevel: body.creativityLevel as any,
+      citationStrictness: body.citationStrictness as any,
+      outputFormat: body.outputFormat as any,
+      selfCorrection: body.selfCorrection as any,
     };
     let v1PromptSuffix = '';
     if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
@@ -734,14 +753,14 @@ export async function POST(request: NextRequest) {
       // Build system prompt with optional response style modifiers
       const baseSystemPrompt = process.env.OPENCODE_SYSTEM_PROMPT || '';
       const promptParams: PromptParameters = {
-        responseDepth: body.responseDepth,
-        expertiseLevel: body.expertiseLevel,
-        reasoningMode: body.reasoningMode,
-        tone: body.tone,
-        creativityLevel: body.creativityLevel,
-        citationStrictness: body.citationStrictness,
-        outputFormat: body.outputFormat,
-        selfCorrection: body.selfCorrection,
+        responseDepth: body.responseDepth as any,
+        expertiseLevel: body.expertiseLevel as any,
+        reasoningMode: body.reasoningMode as any,
+        tone: body.tone as any,
+        creativityLevel: body.creativityLevel as any,
+        citationStrictness: body.citationStrictness as any,
+        outputFormat: body.outputFormat as any,
+        selfCorrection: body.selfCorrection as any,
       };
       let promptSuffix = '';
       if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
@@ -1575,17 +1594,15 @@ export async function POST(request: NextRequest) {
       // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
       if (agentToolResults && !clientResponse?.metadata?.specAmplificationRun) {
         const hasFileEdits = filesystemEdits && filesystemEdits.applied.length > 0;
-        const hasCodeContent = rawResponseContent && (
-          ['```', '<file_edit', 'WRITE ', 'import ', 'export ', 'function ', 'const ', 'interface '].some(m => rawResponseContent.includes(m))
-        );
+        // Only trigger spec amplification when there are ACTUAL filesystem edits,
+        // not just because the response contains code snippets (const, function, etc.)
         // Spec amplification runs in 'enhanced' or 'max' mode
         const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
-        const shouldRunSpecAmplification = (hasFileEdits || hasCodeContent) && isSpecAmplificationMode;
+        const shouldRunSpecAmplification = hasFileEdits && isSpecAmplificationMode;
 
         chatLogger.info('Spec amplification check (non-streaming)', {
           requestId,
           hasFileEdits,
-          hasCodeContent,
           mode: routerRequest.mode,
           isSpecAmplificationMode,
           specAmplificationRun: clientResponse?.metadata?.specAmplificationRun,
@@ -2090,6 +2107,13 @@ export async function POST(request: NextRequest) {
                     emitBufferedTokens();
 
                     realEmit('done', doneEventData);
+
+                    // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
+                    // Use streamingContentBuffer which has the full response
+                    if (isMem0Configured()) {
+                      storeConversationInMem0(messages, streamingContentBuffer, filesystemOwnerId, streamRequestId).catch(() => {});
+                    }
+
                     break; // Exit loop when complete
                   }
                 }
@@ -2104,11 +2128,10 @@ export async function POST(request: NextRequest) {
                 // If loop completed normally, allEdits should be set. Otherwise fall back to streamedEdits/filesystemEdits.
                 const effectiveEdits = allEdits || streamedEdits || filesystemEdits;
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
-                const hasCodeContent = streamingContentBuffer && (
-                  ['```', '<file_edit', 'WRITE ', 'import ', 'export ', 'function ', 'const ', 'interface '].some(m => streamingContentBuffer.includes(m))
-                );
                 const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
-                const shouldRunSpecAmplification = (hasFileEdits || hasCodeContent) &&
+                // Only trigger spec amplification when there are ACTUAL filesystem edits,
+                // not just because the response contains code snippets (const, function, etc.)
+                const shouldRunSpecAmplification = hasFileEdits &&
                   isSpecAmplificationMode &&
                   !clientResponse.metadata?.specAmplificationRun;
 
@@ -2488,17 +2511,21 @@ export async function POST(request: NextRequest) {
                   latencyMs: streamDuration,
                 });
 
+                // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
+                if (isMem0Configured()) {
+                  storeConversationInMem0(messages, finalContent, filesystemOwnerId, streamRequestId).catch(() => {});
+                }
+
                 // SPEC AMPLIFICATION: Trigger after ToolLoopAgent streaming completes
                 // Runs AFTER final parse (inside stream callback) and FILE_EDIT events
                 // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
                 // Note: allEdits is set by final parse inside stream callback (line ~2165)
                 const effectiveEdits = allEdits || filesystemEdits;
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
-                const hasCodeContent = finalContent && (
-                  ['```', '<file_edit', 'WRITE ', 'import ', 'export ', 'function ', 'const ', 'interface '].some(m => finalContent.includes(m))
-                );
                 const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
-                const shouldRunSpecAmplification = (hasFileEdits || hasCodeContent) &&
+                // Only trigger spec amplification when there are ACTUAL filesystem edits,
+                // not just because the response contains code snippets (const, function, etc.)
+                const shouldRunSpecAmplification = hasFileEdits &&
                   isSpecAmplificationMode &&
                   !clientResponse.metadata?.specAmplificationRun;
 
@@ -2876,15 +2903,18 @@ export async function POST(request: NextRequest) {
                 tokenCount: tokenEvents.length,
               });
 
-              // Record latency for provider router (use actual provider after fallbacks)
-              try {
-                llmProviderRouter.recordRequest(actualProvider as LLMProviderType, streamDuration, true);
-              } catch (error) {
-                chatLogger.warn('Failed to record provider metrics', {
-                  provider: actualProvider,
-                  error: error instanceof Error ? error.message : String(error)
-                });
+              // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
+              // Use clientResponse.content for the fallback streaming path
+              if (isMem0Configured() && clientResponse.content) {
+                storeConversationInMem0(messages, clientResponse.content, filesystemOwnerId, streamRequestId).catch(() => {});
               }
+
+              // Log provider latency for observability
+              chatLogger.debug(`Provider ${actualProvider} streaming complete`, {
+                latencyMs: streamDuration,
+                success: true,
+                model: actualModel,
+              });
 
               if (!SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED) {
                 streamClosed = true;
@@ -2917,17 +2947,8 @@ export async function POST(request: NextRequest) {
                 error: error instanceof Error ? error.message : String(error),
                 chunkCount,
                 latencyMs: streamDuration,
+                success: false,
               });
-
-              // Record error latency for provider router
-              try {
-                llmProviderRouter.recordRequest(actualProvider as LLMProviderType, streamDuration, false);
-              } catch (recordError) {
-                chatLogger.warn('Failed to record provider error metrics', {
-                  provider: actualProvider,
-                  error: recordError instanceof Error ? recordError.message : String(recordError)
-                });
-              }
 
               // Only send error event if client hasn't disconnected
               if (!request.signal?.aborted) {
@@ -2984,14 +3005,11 @@ export async function POST(request: NextRequest) {
         success: clientResponse.success,
       });
 
-      // Record latency for provider router (use actual provider after fallbacks)
-      try {
-        llmProviderRouter.recordRequest(actualProvider as LLMProviderType, responseLatency, clientResponse.success !== false);
-      } catch (error) {
-        chatLogger.warn('Failed to record provider metrics', { 
-          provider: actualProvider, 
-          error: error instanceof Error ? error.message : String(error) 
-        });
+      // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
+      // This runs after the response is sent to not delay the client
+      const responseContentForMemory = clientResponse.content || '';
+      if (isMem0Configured()) {
+        storeConversationInMem0(messages, responseContentForMemory, filesystemOwnerId, requestId).catch(() => {});
       }
 
       const responseStatus = clientResponse.success ? 200 : 500;
@@ -3057,33 +3075,15 @@ export async function POST(request: NextRequest) {
       chatLogger.error('Critical chat API error', { requestId, provider: actualProvider, model: actualModel }, {
         error: errorMessage,
         latencyMs: errorLatency,
+        success: false,
         stack: error instanceof Error ? error.stack : undefined,
       });
-
-      // Record error latency for provider router (use actual provider)
-      try {
-        llmProviderRouter.recordRequest(actualProvider as LLMProviderType, errorLatency, false);
-      } catch (recordError) {
-        chatLogger.warn('Failed to record provider error metrics', { 
-          provider: actualProvider, 
-          error: recordError instanceof Error ? recordError.message : String(recordError) 
-        });
-      }
     } else {
       chatLogger.warn('Provider not available', { requestId, provider: actualProvider, model: actualModel }, {
         error: errorMessage,
         latencyMs: errorLatency,
+        success: false,
       });
-
-      // Record error latency for provider router (use actual provider)
-      try {
-        llmProviderRouter.recordRequest(actualProvider as LLMProviderType, errorLatency, false);
-      } catch (recordError) {
-        chatLogger.warn('Failed to record provider error metrics', { 
-          provider: actualProvider, 
-          error: recordError instanceof Error ? recordError.message : String(recordError) 
-        });
-      }
     }
 
     // Process error with enhanced error handler for logging
@@ -3538,6 +3538,7 @@ function appendFilesystemContextMessages(
   allowFileEdits: boolean,
   denialContext: Array<{ reason: string; paths: string[]; timestamp: string }> = [],
   workspaceContext: string = '',
+  memoryContext: string = '',
 ): LLMMessage[] {
   if (!attachedFiles.length && !allowFileEdits) {
     return messages;
@@ -3668,6 +3669,7 @@ function appendFilesystemContextMessages(
           ].join('\n')
         : '',
       workspaceContext ? `Current workspace session context:\n${workspaceContext}` : '',
+      memoryContext ? `User memory context:\n${memoryContext}` : '',
       denialContext.length > 0
         ? `Recent denied edits (avoid repeating without adjustment):\n${denialContext
             .map((entry) => `- ${entry.timestamp}: ${entry.reason}; files: ${entry.paths.join(', ')}`)
@@ -3710,6 +3712,59 @@ function buildAgenticContext(messages: LLMMessage[]): string {
     ...recent.map(m => `${m.role.toUpperCase()}: ${typeof m.content === 'string' ? m.content : JSON.stringify(m.content)}`),
   ];
   return parts.join('\n\n');
+}
+
+/**
+ * Store conversation in mem0 for persistent memory
+ * This runs after each chat response to build persistent context
+ */
+async function storeConversationInMem0(
+  messages: LLMMessage[],
+  responseContent: string,
+  userId: string,
+  requestId: string
+): Promise<void> {
+  if (!isMem0Configured()) {
+    return;
+  }
+
+  try {
+    // Extract user and assistant messages from the conversation
+    const conversationMessages: Array<{ role: 'user' | 'assistant' | 'system'; content: string }> = [];
+    
+    for (const msg of messages) {
+      if (msg.role === 'user' && typeof msg.content === 'string') {
+        conversationMessages.push({ role: 'user', content: msg.content });
+      } else if (msg.role === 'assistant' && typeof msg.content === 'string') {
+        conversationMessages.push({ role: 'assistant', content: msg.content });
+      }
+    }
+
+    // Add the final response if we have one
+    if (responseContent && responseContent.trim().length > 0) {
+      conversationMessages.push({ role: 'assistant', content: responseContent });
+    }
+
+    // Only store if we have meaningful conversation (at least user message + response)
+    if (conversationMessages.length < 2) {
+      return;
+    }
+
+    // Call mem0 to store the conversation
+    const result = await mem0Add({
+      messages: conversationMessages,
+      userId,
+    });
+
+    if (result.success) {
+      chatLogger.debug('Stored conversation in mem0', { requestId, userId, messageCount: conversationMessages.length });
+    } else {
+      chatLogger.warn('Failed to store conversation in mem0', { requestId, error: result.error });
+    }
+  } catch (err: any) {
+    // Non-critical - don't fail the response if memory storage fails
+    chatLogger.warn('Mem0 storage failed (non-critical)', { requestId, error: err.message });
+  }
 }
 
 /**

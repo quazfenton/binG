@@ -858,7 +858,7 @@ export default function TerminalPanel({
       updateTerminalState: updateTerminalState,
       sendInput: sendInput,
       sendResize: sendResize,
-      getAuthToken: getAuthToken,
+      getAuthToken: getAuthToken as any,
       getAuthHeaders: getAuthHeaders,
       getAnonymousSessionId: getAnonymousSessionId,
       toSandboxScopedPath: toSandboxScopedPath,

@@ -69,6 +69,7 @@ export async function GET(
         filesChanged: h.filesChanged || 0,
         createdAt: new Date(h.createdAt).getTime(),
         sessionId: h.sessionId,
+        paths: h.paths || [],
       }));
 
       const response = NextResponse.json({
@@ -79,32 +80,18 @@ export async function GET(
       return withAnonSessionCookie(response, authResolution);
     }
 
-    // Default: Return VFS snapshots for this session
-    const snapshots = db.prepare(`
-      SELECT
-        id as version,
-        id as commitId,
-        created_at as createdAt,
-        file_count as filesChanged,
-        'Auto-saved snapshot' as message
-      FROM vfs_snapshots
-      WHERE session_id = ?
-      ORDER BY created_at DESC
-      LIMIT ?
-    `).all(scopedSessionId, limit) as Array<{
-      version: number;
-      commitId: number;
-      createdAt: string;
-      filesChanged: number;
-      message: string;
-    }>;
+    // Default: Return shadow commit history for this session
+    // (Previously queried vfs_snapshots table which was unused/empty)
+    const shadowCommitManager = new ShadowCommitManager();
+    const history = await shadowCommitManager.getCommitHistory(scopedSessionId, limit);
 
-    const versions = snapshots.map(s => ({
-      version: s.version,
-      commitId: `commit_${s.commitId}`,
-      message: s.message,
-      filesChanged: s.filesChanged || 0,
-      createdAt: new Date(s.createdAt).getTime(),
+    const versions = history.map(h => ({
+      version: h.workspaceVersion || 0,
+      commitId: h.commitId,
+      message: h.message,
+      filesChanged: h.filesChanged || 0,
+      createdAt: new Date(h.createdAt).getTime(),
+      paths: h.paths || [],
     }));
 
     const response = NextResponse.json({ versions, by: 'session' });

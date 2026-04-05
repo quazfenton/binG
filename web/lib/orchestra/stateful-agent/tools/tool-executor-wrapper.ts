@@ -81,13 +81,13 @@ export class ToolExecutorWrapper {
     'default': 60000,
   };
 
-  // Blocked command patterns
+  // Blocked command patterns (checked before every shell execution)
   private readonly blockedPatterns = [
-    /^rm\s+-rf\s+\/$/,
-    /^mkfs/,
-    /^dd\s+if=/,
-    /:\(\)\{\s*:\|\:&\s*\};:/,
-    /\/dev\/(sd|hd)[a-z]/,
+    /^rm\s+-rf\s+\/$/,                  // rm -rf /
+    /^mkfs/,                             // Format filesystem
+    /^dd\s+if=/,                         // Raw disk write
+    /:\(\)\s*\{\s*:\s*\|\s*:?\s*&\s*\}\s*;/, // Fork bomb (various spacing)
+    /\/dev\/(sd|hd)[a-z]/,              // Raw disk device
   ];
 
   constructor(config: ToolExecutorWrapperConfig) {
@@ -175,26 +175,24 @@ export class ToolExecutorWrapper {
   }
 
   /**
-   * Execute a capability through the CapabilityRouter
+   * Execute a capability through the CapabilityRouter.
+   * Re-throws errors to maintain proper error propagation contract —
+   * callers should handle failures explicitly.
    */
   private async executeCapability(capabilityId: string, args: Record<string, any>): Promise<any> {
     const router = getCapabilityRouter();
 
-    try {
-      const result = await router.execute(capabilityId, args, {
-        userId: this.userId,
-        sessionId: this.sessionId,
-      });
+    const result = await router.execute(capabilityId, args, {
+      userId: this.userId,
+      sessionId: this.sessionId,
+    } as any);
 
-      // Log file mutations to transaction log
-      if (result.success && args.path) {
-        this.logTransaction(capabilityId, args, result);
-      }
-
-      return result;
-    } catch (error: any) {
-      return { success: false, error: error.message };
+    // Log file mutations to transaction log
+    if (result.success && args.path) {
+      this.logTransaction(capabilityId, args, result);
     }
+
+    return result;
   }
 
   /**
@@ -377,7 +375,7 @@ export class ToolExecutorWrapper {
 
     try {
       const { checkSandboxHealth: checkHealth } = await import('@/lib/management/sandbox-health');
-      const result = await checkHealth(this.sandboxHandle);
+      const result = await checkHealth(this.sandboxHandle as any);
       const healthResult = { healthy: result.healthy, error: result.error };
       this.healthCheckCache.set(sandboxId, { ...healthResult, timestamp: Date.now() });
       return healthResult;
@@ -406,8 +404,12 @@ export class ToolExecutorWrapper {
   private async getFileContent(path: string): Promise<{ success: boolean; content?: string; error?: string }> {
     if (this.sandboxHandle) {
       const readResult = await this.sandboxHandle.readFile(path);
-      if (!readResult.success || !readResult.content) {
+      if (!readResult.success) {
         return { success: false, error: readResult.error || `Failed to read file: ${path}` };
+      }
+      // Allow empty string content (empty files are valid)
+      if (readResult.content === undefined || readResult.content === null) {
+        return { success: false, error: `File not found or unreadable: ${path}` };
       }
       return { success: true, content: readResult.content };
     }
@@ -433,34 +435,37 @@ export class ToolExecutorWrapper {
       metadata?: any;
     }
   ): Promise<any> {
-    // Update VFS
-    if (this.vfs) {
-      this.vfs[path] = content;
-    }
-
-    // Update sandbox if available
+    // Update sandbox first — only update VFS if sandbox write succeeds
     if (this.sandboxHandle) {
       const result = await this.sandboxHandle.writeFile(path, content);
-      if (result.success) {
-        this.transactionLog.push({
-          path,
-          type: 'UPDATE',
-          timestamp: Date.now(),
-          originalContent: options?.originalContent,
-          newContent: options?.newContent || content,
-          search: options?.search,
-          replace: options?.replace,
-        });
+      if (!result.success) {
+        return { success: false, error: result.error || 'Sandbox write failed' };
       }
+      // Sandbox succeeded — now update VFS and transaction log
+      if (this.vfs) {
+        this.vfs[path] = content;
+      }
+      this.transactionLog.push({
+        path,
+        type: 'UPDATE',
+        timestamp: Date.now(),
+        originalContent: options?.originalContent,
+        newContent: options?.newContent || content,
+        search: options?.search,
+        replace: options?.replace,
+      });
       return {
-        success: result.success,
+        success: true,
         output: `Applied diff to ${path}${options?.metadata ? ` via ${options.metadata.strategy} strategy (confidence: ${(options.metadata.confidence * 100).toFixed(0)}%)` : ''}`,
         content,
         metadata: options?.metadata,
       };
     }
 
-    // VFS only
+    // VFS only fallback
+    if (this.vfs) {
+      this.vfs[path] = content;
+    }
     this.transactionLog.push({
       path,
       type: 'UPDATE',

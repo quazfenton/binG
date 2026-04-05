@@ -99,7 +99,7 @@ export interface WorldOpportunity {
 export class WorldSimulation {
   private worldState: WorldState;
   private actionHistory: SimulatedAction[] = [];
-  private onWorldChange: ((state: WorldState) => void) | null = null;
+  private _onWorldChange: ((state: WorldState) => void) | null = null;
 
   constructor(initialState?: Partial<WorldState>) {
     this.worldState = {
@@ -127,7 +127,7 @@ export class WorldSimulation {
   }
 
   onWorldChange(callback: (state: WorldState) => void): void {
-    this.onWorldChange = callback;
+    this._onWorldChange = callback;
   }
 
   /**
@@ -344,8 +344,8 @@ export class WorldSimulation {
   }
 
   private notifyWorldChange(): void {
-    if (this.onWorldChange) {
-      this.onWorldChange({ ...this.worldState });
+    if (this._onWorldChange) {
+      this._onWorldChange({ ...this.worldState });
     }
   }
 }

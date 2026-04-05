@@ -16,7 +16,7 @@ const logger = createLogger('AgentCatalyst:SessionBridge');
 export type SessionState = 'disconnected' | 'connecting' | 'connected' | 'awaiting-response' | 'error';
 
 export interface SessionConfig {
-  sessionId: string;
+  sessionId?: string;
   maxPulseInterval?: number;     // ms — max time between pulses
   minPulseInterval?: number;     // ms — min time between pulses
   contextWindowSize?: number;     // How much context to include per pulse
@@ -48,19 +48,19 @@ export class SessionBridge {
   private state: SessionState = 'disconnected';
   private pulses: SessionPulse[] = [];
   private lastPulseAt = 0;
-  private onPulse: ((pulse: SessionPulse) => void) | null = null;
-  private onStateChange: ((state: SessionState) => void) | null = null;
+  private _onPulse: ((pulse: SessionPulse) => void) | null = null;
+  private _onStateChange: ((state: SessionState) => void) | null = null;
 
   constructor(config: SessionConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
   onPulse(callback: (pulse: SessionPulse) => void): void {
-    this.onPulse = callback;
+    this._onPulse = callback;
   }
 
   onStateChange(callback: (state: SessionState) => void): void {
-    this.onStateChange = callback;
+    this._onStateChange = callback;
   }
 
   /**
@@ -140,7 +140,7 @@ export class SessionBridge {
     this.state = 'awaiting-response';
     this.notifyStateChange();
 
-    if (this.onPulse) this.onPulse(pulse);
+    if (this._onPulse) this._onPulse(pulse);
     logger.debug('Pulse sent to agent', { pulseId: pulse.id, contentLength: content.length });
 
     return pulse;
@@ -166,7 +166,7 @@ export class SessionBridge {
     this.state = 'connected';
     this.notifyStateChange();
 
-    if (this.onPulse) this.onPulse(pulse);
+    if (this._onPulse) this._onPulse(pulse);
     logger.debug('Pulse received from agent', {
       pulseId: pulse.id,
       contentLength: content.length,
@@ -243,8 +243,8 @@ export class SessionBridge {
   }
 
   private notifyStateChange(): void {
-    if (this.onStateChange) {
-      this.onStateChange(this.state);
+    if (this._onStateChange) {
+      this._onStateChange(this.state);
     }
   }
 }

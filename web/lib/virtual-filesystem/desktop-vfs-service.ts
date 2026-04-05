@@ -12,6 +12,7 @@
  */
 
 import { promises as fs } from 'node:fs';
+import type { Dirent, Stats } from 'fs';
 import path from 'node:path';
 import crypto from 'node:crypto';
 import { VirtualFilesystemService } from './virtual-filesystem-service';
@@ -523,7 +524,7 @@ export class DesktopVFSService {
     let imported = 0;
 
     const walk = async (currentDir: string): Promise<void> => {
-      let entries: fs.Dirent[];
+      let entries: Dirent[];
       try {
         entries = await fs.readdir(currentDir, { withFileTypes: true });
       } catch (err: any) {
@@ -540,7 +541,7 @@ export class DesktopVFSService {
         if (entry.name.startsWith('.') || entry.name === 'node_modules') continue;
 
         // Use lstat to detect symlinks - isDirectory() returns false for symlinks to dirs
-        let fileStats: fs.Stats;
+        let fileStats: Stats;
         try {
           fileStats = await fs.lstat(fullPath);
         } catch (err: any) {

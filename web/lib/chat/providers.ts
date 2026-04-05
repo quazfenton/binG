@@ -37,7 +37,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'openrouter',
     name: 'OpenRouter',
     models: [
-      'qwen/qwen3-30b-a3b:free',
       'qwen/qwen3-coder:free',
       'openai/gpt-oss-120b:free',
       'z-ai/glm-4.5-air:free',
@@ -138,7 +137,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'portkey',
     name: 'Portkey AI Gateway',
     models: ['openrouter/auto',
-      'qwen/qwen3-30b-a3b:free',
       'chutes/gemini-1.5-flash:free',
       'chutes/openrouter-auto:free',
       'chutes/grok-beta:free',

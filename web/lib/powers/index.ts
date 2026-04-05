@@ -94,6 +94,7 @@ export function jsonSchemaToZod(schema?: Record<string, any>): z.ZodTypeAny {
 
   if (schema.enum) {
     const values = schema.enum as string[];
+    if (values.length === 0) return z.any();
     return z.enum(values as [string, ...string[]]);
   }
 
@@ -337,9 +338,8 @@ export async function executePower(
   const wasmPath = powersRegistry.getWasmHandler(powerId);
   if (wasmPath) {
     try {
-      const { WasmRunner } = await import('./wasm/runner');
-      const runner = new WasmRunner();
-      const result = await runner.call(wasmPath, {
+      const { globalRunner } = await import('./wasm/runner');
+      const result = await globalRunner.call(wasmPath, {
         action: actionName,
         params,
         ctx: {
@@ -385,9 +385,9 @@ export async function executePower(
  * Build Vercel AI tools from all registered powers.
  * Each action becomes a typed tool via jsonSchemaToZod.
  */
-export function buildPowerTools(context: { userId?: string; conversationId?: string; sessionId?: string }): Record<string, any> {
+export async function buildPowerTools(context: { userId?: string; conversationId?: string; sessionId?: string }): Promise<Record<string, any>> {
   const tools: Record<string, any> = {};
-  const { tool } = require('ai');
+  const { tool } = await import('ai');
 
   for (const power of powersRegistry.getActive()) {
     for (const action of power.actions) {
@@ -397,12 +397,12 @@ export function buildPowerTools(context: { userId?: string; conversationId?: str
         : z.object({}).optional();
 
       tools[toolName] = tool({
-        description: `${power.name} › ${action.name} — ${action.description}`,
+        description: `${power.name} > ${action.name} - ${action.description}`,
         parameters: paramsZod,
         execute: async (args: any) => {
           return executePower(power.id, action.name, args || {}, context);
         },
-      });
+      } as any);
     }
   }
 
@@ -411,7 +411,7 @@ export function buildPowerTools(context: { userId?: string; conversationId?: str
     description: 'List all installed powers',
     parameters: z.object({}).optional(),
     execute: async () => ({ powers: powersRegistry.getSummary() }),
-  });
+  } as any);
 
   tools['power_read'] = tool({
     description: 'Read SKILL.md for a given power id',
@@ -420,7 +420,7 @@ export function buildPowerTools(context: { userId?: string; conversationId?: str
       const p = powersRegistry.getById(powerId);
       return p ? { content: p.rawMarkdown, id: p.id, name: p.name } : { error: 'not found' };
     },
-  });
+  } as any);
 
   return tools;
 }
@@ -477,10 +477,5 @@ ${power.actions.map(a => `- **${a.name}**: ${a.description}`).join('\n')}
   return sections.join('\n');
 }
 
-// ============================================================================
-// Exports
-// ============================================================================
-
-export { jsonSchemaToZod };
-export { powersRegistry, PowersRegistry };
-export { executePower, buildPowerTools, buildPowersSystemPrompt };
+// Re-exports from mem0-power
+export { mem0PowerManifest, buildMem0Tools, buildMem0SystemPrompt, getMem0Client, isMem0Configured, mem0Search } from './mem0-power';

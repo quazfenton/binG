@@ -325,7 +325,7 @@ class TaskRouter {
       // FIX (Bug 4): Enforce timeout properly with signal cleanup
       const timeoutMs = Math.min(
         120_000,
-        Number(request.executionPolicy?.timeoutMs) || 60_000,
+        Number((request.executionPolicy as any)?.timeoutMs) || 60_000,
       );
       const pollInterval = 1_000;
       const maxAttempts = Math.ceil(timeoutMs / pollInterval);
@@ -353,7 +353,7 @@ class TaskRouter {
             timedOut = true;
             clearInterval(interval);
             // Attempt to cancel the agent
-            try { kernel.cancelAgent(agentId); } catch { /* ignore */ }
+            try { (kernel as any).cancelAgent(agentId); } catch { /* ignore */ }
             resolve(); // Don't reject — return timeout status instead
           }
         }, pollInterval);

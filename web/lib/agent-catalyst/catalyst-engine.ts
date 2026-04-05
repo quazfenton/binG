@@ -95,9 +95,9 @@ export class CatalystEngine {
   private pulseTimer: ReturnType<typeof setInterval> | null = null;
 
   // Callbacks
-  private onPrompt: ((prompt: CatalystPrompt) => void) | null = null;
-  private onStimulus: ((stimulus: Stimulus) => void) | null = null;
-  private onStateChange: ((state: CatalystState) => void) | null = null;
+  private _onPrompt: ((prompt: CatalystPrompt) => void) | null = null;
+  private _onStimulus: ((stimulus: Stimulus) => void) | null = null;
+  private _onStateChange: ((state: CatalystState) => void) | null = null;
 
   constructor(config: CatalystConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -121,21 +121,21 @@ export class CatalystEngine {
    * Register callback for prompt generation
    */
   onPrompt(callback: (prompt: CatalystPrompt) => void): void {
-    this.onPrompt = callback;
+    this._onPrompt = callback;
   }
 
   /**
    * Register callback for stimulus delivery
    */
   onStimulus(callback: (stimulus: Stimulus) => void): void {
-    this.onStimulus = callback;
+    this._onStimulus = callback;
   }
 
   /**
    * Register callback for state changes
    */
   onStateChange(callback: (state: CatalystState) => void): void {
-    this.onStateChange = callback;
+    this._onStateChange = callback;
   }
 
   /**
@@ -390,8 +390,8 @@ export class CatalystEngine {
   }
 
   private handleStimulus(stimulus: Stimulus): void {
-    if (this.onStimulus) {
-      this.onStimulus(stimulus);
+    if (this._onStimulus) {
+      this._onStimulus(stimulus);
     }
     this.generateAndEmitPrompt();
   }
@@ -401,14 +401,14 @@ export class CatalystEngine {
 
     const prompt = this.generatePrompt();
 
-    if (this.onPrompt) {
-      this.onPrompt(prompt);
+    if (this._onPrompt) {
+      this._onPrompt(prompt);
     }
   }
 
   private notifyStateChange(): void {
-    if (this.onStateChange) {
-      this.onStateChange(this.getState());
+    if (this._onStateChange) {
+      this._onStateChange(this.getState());
     }
   }
 }

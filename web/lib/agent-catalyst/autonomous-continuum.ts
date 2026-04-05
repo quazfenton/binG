@@ -158,8 +158,8 @@ export class AutonomousContinuum {
   private socialPostsWritten = 0;
 
   // Callbacks
-  private onActivity: ((activity: ContinuumActivity) => void) | null = null;
-  private onStateChange: ((state: ContinuumState) => void) | null = null;
+  private _onActivity: ((activity: ContinuumActivity) => void) | null = null;
+  private _onStateChange: ((state: ContinuumState) => void) | null = null;
 
   constructor(config: ContinuumConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
@@ -183,14 +183,14 @@ export class AutonomousContinuum {
    * Register activity callback
    */
   onActivity(callback: (activity: ContinuumActivity) => void): void {
-    this.onActivity = callback;
+    this._onActivity = callback;
   }
 
   /**
    * Register state change callback
    */
   onStateChange(callback: (state: ContinuumState) => void): void {
-    this.onStateChange = callback;
+    this._onStateChange = callback;
   }
 
   /**
@@ -559,16 +559,16 @@ export class AutonomousContinuum {
       this.activities = this.activities.slice(-250);
     }
 
-    if (this.onActivity) {
-      this.onActivity(activity);
+    if (this._onActivity) {
+      this._onActivity(activity);
     }
   }
 
   private setState(state: ContinuumState): void {
     if (this.state === state) return;
     this.state = state;
-    if (this.onStateChange) {
-      this.onStateChange(state);
+    if (this._onStateChange) {
+      this._onStateChange(state);
     }
   }
 

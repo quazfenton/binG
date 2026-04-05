@@ -474,20 +474,20 @@ export class GitBackedVFS {
       }
 
       // Full rollback - use standard ShadowCommitManager.rollback
-      const result = await this.shadowCommitManager.rollback(this.options.sessionId, targetCommit.commitId);
-      if (!result.success) {
-        logger.error(`[GitVFS] Rollback to version ${targetVersion} failed: ${result.error}`);
+      const rollbackResult = await this.shadowCommitManager.rollback(this.options.sessionId, targetCommit.commitId) as any;
+      if (!rollbackResult?.success) {
+        logger.error(`[GitVFS] Rollback to version ${targetVersion} failed: ${rollbackResult?.error}`);
         return {
           success: false,
-          filesRestored: result.restoredFiles ?? 0,
+          filesRestored: rollbackResult?.restoredFiles ?? 0,
           version: targetVersion,
-          error: result.error,
+          error: rollbackResult?.error,
         };
       }
       logger.info(`[GitVFS] Rolled back to version ${targetVersion}`);
       return {
         success: true,
-        filesRestored: result.restoredFiles ?? 0,
+        filesRestored: rollbackResult?.restoredFiles ?? 0,
         version: targetVersion,
       };
     } catch (error: any) {

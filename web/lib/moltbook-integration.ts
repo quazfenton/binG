@@ -27,7 +27,7 @@
  * ```
  */
 
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 import { randomUUID, randomBytes } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type { AutonomousAgentEngine, StimulusEntry } from './autonomous-agent-engine';
@@ -495,13 +495,13 @@ export class MoltbookIntegration extends EventEmitter {
     let stimulusType: Parameters<typeof this.config.agentEngine.injectStimulus>[0]['type'];
 
     switch (post.type) {
-      case 'peer_message':
+      case 'peer_message' as any:
       case 'question':
         stimulusType = 'peer_message';
         break;
       case 'declaration':
       case 'creation':
-        stimulusType = 'world_event';
+        stimulusType = 'world_event' as any;
         break;
       case 'reflection':
         stimulusType = 'self_reflection_trigger';

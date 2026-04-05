@@ -182,7 +182,7 @@ class DesktopSecurityPolicy {
           allowed: false,
           requiresApproval: false,
           workingDirectory: workingDirectory || '',
-        });
+        } as any);
         return {
           allowed: false,
           riskLevel,
@@ -205,7 +205,7 @@ class DesktopSecurityPolicy {
             allowed: false,
             requiresApproval: false,
             workingDirectory: workingDirectory || '',
-          });
+          } as any);
           return {
             allowed: false,
             riskLevel,
@@ -247,7 +247,7 @@ class DesktopSecurityPolicy {
           allowed: false,
           requiresApproval: false,
           workingDirectory: workingDirectory || '',
-        });
+        } as any);
         return {
           allowed: false,
           riskLevel: 'high',
@@ -282,7 +282,7 @@ class DesktopSecurityPolicy {
       allowed: true,
       requiresApproval,
       workingDirectory: workingDirectory || '',
-    });
+    } as any);
 
     return {
       allowed: true,

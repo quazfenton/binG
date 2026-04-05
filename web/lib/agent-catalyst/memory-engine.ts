@@ -55,14 +55,14 @@ const DEFAULT_CONFIG: Required<MemoryConfig> = {
 export class MemoryEngine {
   private memories: Map<string, MemoryEntry> = new Map();
   private config: Required<MemoryConfig>;
-  private onChange: ((memory: MemoryEntry) => void) | null = null;
+  private _onChange: ((memory: MemoryEntry) => void) | null = null;
 
   constructor(config: MemoryConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
   onChange(callback: (memory: MemoryEntry) => void): void {
-    this.onChange = callback;
+    this._onChange = callback;
   }
 
   /**
@@ -85,7 +85,7 @@ export class MemoryEngine {
       this.pruneLowestSignificance();
     }
 
-    if (this.onChange) this.onChange(memory);
+    if (this._onChange) this._onChange(memory);
     logger.debug('Memory stored', { id: memory.id, type: memory.type, significance: memory.significance });
     return memory;
   }

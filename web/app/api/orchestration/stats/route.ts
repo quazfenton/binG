@@ -5,19 +5,23 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { getStats } from '@/lib/orchestration/agent-orchestrator';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Orchestration:Stats');
 
 export async function GET() {
   try {
+    // TODO: Re-implement when agent orchestrator is available
+    /*
     const stats = await getStats();
-    
+
     return NextResponse.json({
       success: true,
       stats,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     logger.error('Failed to get stats:', error);
     return NextResponse.json(

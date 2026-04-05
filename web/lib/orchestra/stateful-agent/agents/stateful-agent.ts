@@ -1,11 +1,10 @@
 import { openai } from '@ai-sdk/openai';
-import { streamText, type CoreTool } from 'ai';
+import { streamText, generateObject } from 'ai';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 import type { ProjectServices } from '@/lib/project-context';
 import { ToolExecutor } from '../tools/tool-executor';
 import { reflectionEngine } from '@/lib/orchestra/reflection-engine';
 import { executionGraphEngine } from '@bing/shared/agent/execution-graph';
-import { generateObject } from 'ai';
 import { z } from 'zod';
 import { createLogger } from '@/lib/utils/logger';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
@@ -418,25 +417,35 @@ export class StatefulAgent {
         };
 
         // Record execution with bootstrapped agency for learning
+        // Isolated in its own try/catch so failures don't fail the main execution
         if (this.enableBootstrappedAgency && this.agency) {
-          await this.recordAgencyExecution(userMessage, {
-            success,
-            duration,
-            steps: this.steps,
-            errors: this.errors.map(e => e.message),
-            transactionLog: this.transactionLog,
-            toolMetrics: this.toolExecutor.getMetrics(),
-          });
+          try {
+            await this.recordAgencyExecution(userMessage, {
+              success,
+              duration,
+              steps: this.steps,
+              errors: this.errors.map(e => e.message),
+              transactionLog: this.transactionLog,
+              toolMetrics: this.toolExecutor.getMetrics(),
+            });
+          } catch (err: any) {
+            log.warn('Agency execution recording failed (non-fatal)', { error: err.message });
+          }
         }
 
         // Trigger skill bootstrap after successful execution
+        // Isolated so bootstrap failures don't fail the main execution
         if (success && this.transactionLog.length > 0) {
-          await this.triggerSkillBootstrap(userMessage, {
-            duration,
-            steps: this.steps,
-            transactionLog: this.transactionLog,
-            toolMetrics: this.toolExecutor.getMetrics(),
-          });
+          try {
+            await this.triggerSkillBootstrap(userMessage, {
+              duration,
+              steps: this.steps,
+              transactionLog: this.transactionLog,
+              toolMetrics: this.toolExecutor.getMetrics(),
+            });
+          } catch (err: any) {
+            log.warn('Skill bootstrap event emission failed (non-fatal)', { error: err.message });
+          }
         }
 
         // Log completion metrics
@@ -807,7 +816,9 @@ Use 'createFile' for new files.`;
       // Build capability chain tool if enabled
       const additionalTools: Record<string, any> = {};
       if (this.enableCapabilityChaining) {
-        additionalTools.runCapabilityChain = {
+        const { tool } = await import('ai');
+
+        additionalTools.run_capability_chain = tool({
           description: `Execute a chain of capabilities in sequence. Use for multi-step workflows. Available: ${availableCapabilities.join(', ')}`,
           parameters: z.object({
             name: z.string().describe('Chain name'),
@@ -834,7 +845,7 @@ Use 'createFile' for new files.`;
                   return router.execute(capName, config, {
                     userId: this.userId,
                     sessionId: this.sessionId,
-                  });
+                  } as any);
                 },
               });
 
@@ -849,7 +860,7 @@ Use 'createFile' for new files.`;
               return { success: false, error: err.message };
             }
           },
-        };
+        } as any);
       }
 
       const result = await generateText({
@@ -1366,20 +1377,20 @@ export async function* runStatefulAgentStreaming(
     tools: toolDefs,
     maxSteps,
     onChunk: ({ chunk }) => {
-      if (chunk.type === 'text-delta' && chunk.textDelta) {
-        options?.onChunk?.(chunk.textDelta);
+      if (chunk.type === 'text-delta' && (chunk as any).textDelta) {
+        options?.onChunk?.((chunk as any).textDelta);
       }
     },
     onStepFinish: async ({ toolCalls, toolResults }) => {
       stepCount++;
-      
+
       // Execute tool calls via ToolExecutor
       for (const toolCall of toolCalls || []) {
         try {
           const execResult = await agent['toolExecutor'].execute(toolCall.toolName, (toolCall as any).args || {});
-          
+
           options?.onToolExecution?.(toolCall.toolName, (toolCall as any).args || {}, execResult);
-          
+
           // Update VFS
           const args = (toolCall as any).args || {};
           if (execResult.success && args.path) {
@@ -1393,7 +1404,7 @@ export async function* runStatefulAgentStreaming(
         }
       }
     },
-  });
+  } as any);
 
   // Yield text chunks
   for await (const chunk of result.textStream) {

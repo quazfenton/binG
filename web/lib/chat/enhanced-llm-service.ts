@@ -196,8 +196,8 @@ export class EnhancedLLMService {
         
         const pack = await generateSmartContext({
           userId,
-          prompt: (llmRequest.messages && llmRequest.messages.length > 0 && typeof llmRequest.messages[llmRequest.messages.length - 1]?.content === 'string') 
-            ? llmRequest.messages[llmRequest.messages.length - 1].content 
+          prompt: (llmRequest.messages && llmRequest.messages.length > 0 && typeof llmRequest.messages[llmRequest.messages.length - 1]?.content === 'string')
+            ? (llmRequest.messages[llmRequest.messages.length - 1].content as any)
             : '',
           conversationId,
           explicitFiles: contextPack.includePatterns || [],
@@ -504,8 +504,8 @@ export class EnhancedLLMService {
         
         const pack = await generateSmartContext({
           userId: request.userId,
-          prompt: (llmRequest.messages && llmRequest.messages.length > 0 && typeof llmRequest.messages[llmRequest.messages.length - 1]?.content === 'string') 
-            ? llmRequest.messages[llmRequest.messages.length - 1].content 
+          prompt: (llmRequest.messages && llmRequest.messages.length > 0 && typeof llmRequest.messages[llmRequest.messages.length - 1]?.content === 'string')
+            ? (llmRequest.messages[llmRequest.messages.length - 1].content as any)
             : '',
           conversationId: request.conversationId,
           explicitFiles: contextPack.includePatterns || [],
@@ -546,16 +546,16 @@ export class EnhancedLLMService {
       }
     }
 
-    chatLogger.debug('Starting streaming request', { requestId, provider: primaryProvider, model: llmRequest.model }, {
-      hasContextPack: !!contextPackBundle,
-    });
-
     try {
       // NEW: Use Vercel AI SDK for unified streaming across all providers
       const { streamWithVercelAI } = await import('./vercel-ai-streaming');
 
-      // Map provider names to Vercel AI SDK providers
-      // Supports both direct Vercel providers and OpenAI-compatible providers
+      // Map provider names to Vercel AI SDK identifiers.
+      // - Direct Vercel AI SDK providers use their own name.
+      // - OpenAI-compatible providers keep their own name — getVercelModel() resolves
+      //   the correct apiKey/baseURL via OPENAI_COMPATIBLE_PROVIDERS config.
+      // - Mapping them all to 'openai' caused the wrong API key (OPENAI_API_KEY)
+      //   and wrong baseURL to be used.
       const vercelProviderMap: Record<string, import('./vercel-ai-streaming').VercelProvider | string> = {
         // Direct Vercel AI SDK providers
         'openai': 'openai',
@@ -563,28 +563,24 @@ export class EnhancedLLMService {
         'google': 'google',
         'mistral': 'mistral',
         'openrouter': 'openrouter',
-        // OpenAI-compatible providers (via createOpenAI)
-        'chutes': 'openai', // Chutes AI
-        'github': 'openai', // GitHub Models (Azure OpenAI)
-        'zen': 'openai', // Zen AI
-        'nvidia': 'openai', // NVIDIA NIM (OpenAI-compatible API)
-        'together': 'openai', // Together AI (OpenAI-compatible)
-        'groq': 'openai', // Groq (OpenAI-compatible)
-        'fireworks': 'openai', // Fireworks AI (OpenAI-compatible)
-        'anyscale': 'openai', // Anyscale (OpenAI-compatible)
-        'deepinfra': 'openai', // DeepInfra (OpenAI-compatible)
-        'lepton': 'openai', // Lepton AI (OpenAI-compatible)
+        // OpenAI-compatible providers — keep original name for correct key/baseURL resolution
+        'chutes': 'chutes',
+        'github': 'github',
+        'zen': 'zen',
+        'nvidia': 'nvidia',
+        'together': 'together',
+        'groq': 'groq',
+        'fireworks': 'fireworks',
+        'anyscale': 'anyscale',
+        'deepinfra': 'deepinfra',
+        'lepton': 'lepton',
         // Custom providers (via compatibility wrapper)
-        'zo': 'zo', // Zo AI (requires custom wrapper)
+        'zo': 'zo',
       };
 
       const vercelProvider = vercelProviderMap[primaryProvider];
 
       if (vercelProvider) {
-        // Use Vercel AI SDK for streaming
-        // maxRetries=0: let the fallback system handle retries, not the SDK
-        chatLogger.info('Using Vercel AI SDK for streaming', { requestId, provider: primaryProvider, model: llmRequest.model });
-
         // Build tools if enabled — Vercel AI SDK handles tool calling natively
         let vercelTools: Record<string, any> | undefined;
         if (request.enableTools && request.userId) {
@@ -595,6 +591,51 @@ export class EnhancedLLMService {
               conversationId: request.conversationId,
               requestId,
             });
+
+            // FIX: Merge VFS MCP tools (write_file, read_file, apply_diff, etc.)
+            // into the Vercel AI SDK tool set so the LLM can call them during streaming.
+            try {
+              const { getVFSToolDefinitions, getVFSTool, toolContextStore } = await import('../mcp/vfs-mcp-tools');
+              const vfsToolDefs = getVFSToolDefinitions();
+              for (const toolDef of vfsToolDefs) {
+                const toolName = toolDef.function.name;
+                // Don't overwrite existing tools
+                if (!vercelTools![toolName]) {
+                  vercelTools![toolName] = {
+                    description: toolDef.function.description,
+                    parameters: toolDef.function.parameters,
+                    execute: async (args: Record<string, any>) => {
+                      const vfsTool = getVFSTool(toolName);
+                      if (!vfsTool) {
+                        throw new Error(`Unknown VFS tool: ${toolName}`);
+                      }
+                      const result = await toolContextStore.run(
+                        { userId: request.userId || 'anonymous', sessionId: request.conversationId },
+                        async () => vfsTool.execute(args || {}, {
+                          messages: [],
+                          toolCallId: `vfs-${toolName}-${Date.now()}`,
+                        })
+                      ) as any;
+                      if (result?.success) {
+                        // Return just the output for Vercel AI SDK format
+                        return typeof result === 'object' && 'message' in result
+                          ? result.message
+                          : JSON.stringify(result);
+                      } else {
+                        throw new Error(result?.error || `VFS tool ${toolName} execution failed`);
+                      }
+                    },
+                  };
+                }
+              }
+              chatLogger.debug('VFS tools merged into Vercel AI SDK tool set', {
+                requestId,
+                vfsToolCount: vfsToolDefs.length,
+                totalToolCount: Object.keys(vercelTools!).length,
+              });
+            } catch (vfsErr: any) {
+              chatLogger.warn('Failed to merge VFS tools into Vercel AI SDK', { requestId, error: vfsErr.message });
+            }
 
             // Pre-detect URLs in the last user message and inject a hint
             const lastUserMsg = [...llmRequest.messages].reverse().find(m => m.role === 'user');
@@ -617,7 +658,7 @@ export class EnhancedLLMService {
           }
         }
 
-        // Wrap with auto-continue support
+      // Wrap with auto-continue support
         const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
         const baseStream = streamWithVercelAI({
           provider: vercelProvider,
@@ -671,6 +712,8 @@ export class EnhancedLLMService {
         error: error instanceof Error ? error.message : String(error),
       });
 
+      // FIX: Loop through ALL available fallback providers (not just the first one)
+      // This mirrors the behavior of generateResponse() which tries every fallback in the chain
       const fallbacks = fallbackProviders || this.fallbackChains.get(primaryProvider) || [];
       const availableFallbacks = fallbacks.filter(fallbackProvider =>
         this.endpointConfigs.has(fallbackProvider) &&
@@ -686,41 +729,89 @@ export class EnhancedLLMService {
         );
       }
 
-      const fallbackProvider = availableFallbacks[0];
-      const fallbackConfig = this.endpointConfigs.get(fallbackProvider)!;
-      const supportedModel = this.findCompatibleModel(llmRequest.model, fallbackConfig.models);
+      const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
+      let lastFallbackError: Error = error as Error;
 
-      if (supportedModel) {
-        chatLogger.info('Falling back to streaming provider', { requestId, provider: fallbackProvider, model: supportedModel });
-        const fallbackRequest = {
-          ...llmRequest,
-          messages: processedMessages,
-          model: supportedModel,
-          provider: fallbackProvider,
-          // Pass user API key to fallback provider
-          apiKey: userApiKey,
-        };
+      for (let attemptIndex = 0; attemptIndex < availableFallbacks.length; attemptIndex++) {
+        const fallbackProvider = availableFallbacks[attemptIndex];
+        const fallbackConfig = this.endpointConfigs.get(fallbackProvider)!;
+        const supportedModel = this.findCompatibleModel(llmRequest.model, fallbackConfig.models);
 
-        // Wrap with auto-continue support
-        const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
-        const baseStream = llmService.generateStreamingResponse(fallbackRequest);
-        yield* streamWithAutoContinue(baseStream, {
-          userId: request.userId || 'anonymous',
-          conversationId: request.conversationId,
-          enableAutoContinue: true,
-        });
-        
-        const fallbackLatency = Date.now() - streamStartTime;
-        chatLogger.info('Streaming fallback completed', { requestId, provider: fallbackProvider, model: supportedModel }, {
-          latencyMs: fallbackLatency,
-        });
-      } else {
-        throw this.createEnhancedError(
-          `No compatible model found for streaming fallback`,
-          'NO_COMPATIBLE_MODEL',
-          error as Error
-        );
+        if (!supportedModel) {
+          chatLogger.debug('Streaming fallback skipped — model not supported', {
+            requestId,
+            provider: fallbackProvider,
+            model: llmRequest.model,
+          });
+          continue;
+        }
+
+        try {
+          chatLogger.info('Falling back to streaming provider', {
+            requestId,
+            provider: fallbackProvider,
+            model: supportedModel,
+            attempt: attemptIndex + 1,
+            totalAvailable: availableFallbacks.length,
+          });
+
+          const fallbackRequest = {
+            ...llmRequest,
+            messages: processedMessages,
+            model: supportedModel,
+            provider: fallbackProvider,
+            // Pass user API key to fallback provider
+            apiKey: userApiKey,
+          };
+
+          const baseStream = llmService.generateStreamingResponse(fallbackRequest);
+          yield* streamWithAutoContinue(baseStream, {
+            userId: request.userId || 'anonymous',
+            conversationId: request.conversationId,
+            enableAutoContinue: true,
+          });
+
+          const fallbackLatency = Date.now() - streamStartTime;
+          chatLogger.info('Streaming fallback completed successfully', {
+            requestId,
+            provider: fallbackProvider,
+            model: supportedModel,
+            attempt: attemptIndex + 1,
+            latencyMs: fallbackLatency,
+          });
+          return; // Success — exit the generator
+        } catch (fallbackError) {
+          const fallbackLatency = Date.now() - streamStartTime;
+          const errorMsg = fallbackError instanceof Error ? fallbackError.message : String(fallbackError);
+          chatLogger.warn('Streaming fallback provider failed', {
+            requestId,
+            provider: fallbackProvider,
+            model: supportedModel,
+            attempt: attemptIndex + 1,
+            latencyMs: fallbackLatency,
+            error: errorMsg,
+          });
+          lastFallbackError = fallbackError instanceof Error ? fallbackError : new Error(errorMsg);
+          // Continue to next fallback in chain
+        }
       }
+
+      // All fallbacks exhausted — yield sassy message before throwing
+      yield {
+        content: 'Stfu!',
+        isComplete: true,
+        finishReason: 'error',
+        timestamp: new Date(),
+        metadata: {
+          error: `All streaming providers failed (primary: ${primaryProvider}, ${availableFallbacks.length} fallbacks attempted)`,
+        },
+      };
+
+      throw this.createEnhancedError(
+        `All streaming providers failed (primary: ${primaryProvider}, ${availableFallbacks.length} fallbacks attempted)`,
+        'ALL_STREAMING_PROVIDERS_FAILED',
+        lastFallbackError
+      );
     }
   }
 

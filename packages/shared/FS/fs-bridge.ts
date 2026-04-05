@@ -376,8 +376,8 @@ class FSBridge {
    * Check if file watcher is active
    */
   isWatching(): boolean {
-    if (this.fs && typeof this.fs.isWatchingEnabled === 'function') {
-      return this.fs.isWatchingEnabled();
+    if (this.fs && typeof (this.fs as any).isWatchingEnabled === 'function') {
+      return (this.fs as any).isWatchingEnabled();
     }
     return false;
   }

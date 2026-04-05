@@ -41,8 +41,8 @@ export interface Storyline {
 
 export class StorylineEngine {
   private storylines: Map<string, Storyline> = new Map();
-  private onUpdate: ((storyline: Storyline) => void) | null = null;
-  private onResolution: ((storyline: Storyline) => void) | null = null;
+  private _onUpdate: ((storyline: Storyline) => void) | null = null;
+  private _onResolution: ((storyline: Storyline) => void) | null = null;
 
   /**
    * Create a new storyline
@@ -68,7 +68,7 @@ export class StorylineEngine {
         significance: 1 / options.plotPoints.length,
       })),
       currentPointIndex: 0,
-      theme: options.theme || this.generateTheme(options.type),
+      theme: options.theme || this.generate_theme(options.type),
       origin: options.origin || 'explicitly crafted',
       createdAt: Date.now(),
       lastAdvanced: Date.now(),
@@ -77,7 +77,7 @@ export class StorylineEngine {
 
     this.storylines.set(storyline.id, storyline);
 
-    if (this.onUpdate) this.onUpdate(storyline);
+    if (this._onUpdate) this._onUpdate(storyline);
     logger.info('Storyline created', {
       id: storyline.id,
       title: storyline.title,
@@ -108,12 +108,12 @@ export class StorylineEngine {
     if (storyline.currentPointIndex >= storyline.plotPoints.length) {
       storyline.status = 'resolution';
       storyline.resolution = `All ${storyline.plotPoints.length} plot points completed. The storyline "${storyline.title}" has reached its natural conclusion.`;
-      if (this.onResolution) this.onResolution(storyline);
+      if (this._onResolution) this._onResolution(storyline);
     } else if (storyline.currentPointIndex >= storyline.plotPoints.length * 0.8) {
       storyline.status = 'climax';
     }
 
-    if (this.onUpdate) this.onUpdate(storyline);
+    if (this._onUpdate) this._onUpdate(storyline);
     return storyline.plotPoints[storyline.currentPointIndex] || null;
   }
 
@@ -164,7 +164,7 @@ export class StorylineEngine {
     const storyline = this.storylines.get(storylineId);
     if (!storyline) return;
     storyline.status = 'abandoned';
-    if (this.onUpdate) this.onUpdate(storyline);
+    if (this._onUpdate) this._onUpdate(storyline);
   }
 
   /**
@@ -206,11 +206,11 @@ export class StorylineEngine {
   }
 
   onUpdate(callback: (storyline: Storyline) => void): void {
-    this.onUpdate = callback;
+    this._onUpdate = callback;
   }
 
   onResolution(callback: (storyline: Storyline) => void): void {
-    this.onResolution = callback;
+    this._onResolution = callback;
   }
 
   private generate_theme(type: PlotType): string {
