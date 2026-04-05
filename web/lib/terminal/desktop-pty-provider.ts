@@ -27,24 +27,7 @@ import { isDesktopMode, getDefaultWorkspaceRoot } from '@bing/platform/env';
 import { createLogger } from '@/lib/utils/logger';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { getDefaultWorkspaceRoot as getVfsWorkspaceRoot } from '@bing/platform/env';
-
-// Lazy-loaded Tauri FS for file content sync in desktop mode only
-// Uses Tauri's FS API directly (not fs-bridge) to avoid pulling server modules into client bundle
-type TauriFsModule = {
-  readTextFile(path: string, options?: { baseDir?: number }): Promise<string>;
-};
-let _tauriFsPromise: Promise<TauriFsModule> | null = null;
-function getTauriFs(): Promise<TauriFsModule> {
-  if (!_tauriFsPromise) {
-    _tauriFsPromise = import('@tauri-apps/plugin-fs').then(
-      m => m as unknown as TauriFsModule
-    );
-  }
-  return _tauriFsPromise;
-}
-
-// Base directory for Tauri FS operations (0 = home directory)
-const TAURI_BASE_DIR = 0;
+import { invoke } from '@tauri-apps/api/core';
 
 const logger = createLogger('DesktopPTY');
 
@@ -226,41 +209,50 @@ async function processPendingSyncs(workspaceRoot: string): Promise<void> {
 }
 
 /**
- * Read file content from local filesystem and update fsBridge state
- * This ensures the UI reflects actual file content when files are created/modified in the real shell
+ * Read file content from local filesystem via Tauri invoke API and emit events.
+ * This ensures the UI reflects actual file content when files are created/modified in the real shell.
+ * Uses Tauri invoke directly (not fs-bridge) to avoid pulling server modules into the client bundle.
  */
 async function syncFileFromLocalFs(filePath: string, workspaceRoot: string): Promise<void> {
-  const { fsBridge, isUsingLocalFS } = await getFsBridge();
-  if (!isDesktopMode() || !isUsingLocalFS()) {
-    return; // Only sync in desktop mode with local FS
+  if (!isDesktopMode()) {
+    return; // Only sync in desktop mode
   }
 
   try {
-    // Convert VFS path to local path (strip workspace root prefix)
+    // Strip workspace root prefix to get path relative to workspace
     let relativePath = filePath;
     if (filePath.startsWith(workspaceRoot + '/')) {
       relativePath = filePath.slice(workspaceRoot.length + 1);
     }
-    
-    // Read actual file content from local filesystem via fsBridge
-    // This triggers fsBridge's internal cache update and emits watch events for UI refresh
-    const localFile = await fsBridge.readFile('desktop-user', relativePath);
-    
-    if (localFile && localFile.content !== undefined) {
-      // Skip syncing very large files to avoid performance issues
-      const maxFileSize = 5 * 1024 * 1024; // 5MB
-      if (localFile.content.length > maxFileSize) {
-        logger.debug('Skipped sync for large file', { path: filePath, size: localFile.content.length });
-        return;
-      }
-      
-      // Touch the file to ensure fsBridge state is current (triggers internal version bump)
-      // Note: emitFilesystemUpdated is called in detection code, not here to avoid duplicates
-      await fsBridge.writeFile('desktop-user', relativePath, localFile.content, localFile.language);
-      logger.info('Synced file content from local FS', { path: filePath, size: localFile.content.length });
+
+    // Read file content directly via Tauri Rust backend
+    const content = await invoke<string>('read_file', {
+      sandboxId: 'desktop-user',
+      filePath,
+    });
+
+    // Skip very large files to avoid performance issues
+    const maxFileSize = 5 * 1024 * 1024; // 5MB
+    if (content.length > maxFileSize) {
+      logger.debug('Skipped sync for large file', { path: filePath, size: content.length });
+      return;
     }
+
+    // Emit event with content payload so VFS service can update its state.
+    // The content is carried in the `applied` field for VFS to consume.
+    emitFilesystemUpdated({
+      path: filePath,
+      paths: [filePath],
+      type: 'update',
+      source: 'desktop-pty-file-sync',
+      sessionId: 'desktop-user',
+      workspaceVersion: Date.now(),
+      applied: { content, relativePath },
+    });
+
+    logger.debug('Synced file content from local FS via Tauri', { path: filePath, size: content.length });
   } catch (error) {
-    // File might not exist yet or other error - that's OK for detection
+    // File might not exist yet, be binary, or other error — that's OK for detection
     logger.debug('Could not sync file from local FS', { path: filePath, error: String(error) });
   }
 }

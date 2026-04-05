@@ -79,7 +79,7 @@ export function initializeVFSTools(userId: string, sessionId?: string): void {
  * write_file - Create or overwrite a file in the VFS
  * Use for new files or complete rewrites
  */
-export const writeFileTool = tool({
+export const writeFileTool = (tool as any)({
   description: 'Create a new file or completely overwrite an existing file in the Virtual File System. Use this when the entire content is known or for new files.',
   parameters: z.object({
     path: z.string().describe('Full virtual path, e.g. "/src/components/Button.tsx" or "/app/page.tsx"'),
@@ -120,10 +120,10 @@ export const writeFileTool = tool({
 
       return {
         success: true,
-        path: result.path,
+        path: (result as any).path || path,
         size: content.length,
-        message: result.message || `File written successfully`,
-        version: result.version,
+        message: (result as any).message || `File written successfully`,
+        version: (result as any).version ?? 1,
       };
     } catch (error: any) {
       logger.error('writeFile failed', { path, error: error.message });
@@ -140,7 +140,7 @@ export const writeFileTool = tool({
  * apply_diff - Apply a unified diff patch to an existing file
  * Preferred for targeted edits - much more reliable than full rewrite
  */
-export const applyDiffTool = tool({
+export const applyDiffTool = (tool as any)({
   description: 'Apply a unified diff patch to an existing file. Preferred for targeted edits to avoid overwriting unrelated code. Use standard git diff format (--- +++ @@ ...).',
   parameters: z.object({
     path: z.string().describe('Target file path'),
@@ -205,7 +205,7 @@ export const applyDiffTool = tool({
  * read_file - Read the current content of a file
  * Critical for the agent to see what exists before editing
  */
-export const readFileTool = tool({
+export const readFileTool = (tool as any)({
   description: 'Read the full content of a file from the Virtual File System. Essential for viewing existing code before making edits.',
   parameters: z.object({
     path: z.string().describe('Full path to the file'),
@@ -216,14 +216,15 @@ export const readFileTool = tool({
       logger.debug('readFile', { path, userId: context.userId });
       
       const file = await virtualFilesystem.readFile(context.userId, path);
-      
+      const f = file as any;
+
       return {
         success: true,
-        path: file.path,
-        content: file.content,
-        language: file.language,
-        size: file.size,
-        lastModified: file.lastModified,
+        path: f.path,
+        content: f.content,
+        language: f.language,
+        size: f.size,
+        lastModified: f.lastModified,
         exists: true,
       };
     } catch (error: any) {
@@ -242,7 +243,7 @@ export const readFileTool = tool({
  * list_files - List files and directories in the VFS
  * Use for navigation and exploration
  */
-export const listFilesTool = tool({
+export const listFilesTool = (tool as any)({
   description: 'List files and directories in the Virtual File System. Use to explore project structure and find files.',
   parameters: z.object({
     path: z.string().default('/').describe('Directory path to list (default: root)'),
@@ -284,7 +285,7 @@ export const listFilesTool = tool({
  * search_files - Search across the VFS
  * Helps the agent find where to make changes
  */
-export const searchFilesTool = tool({
+export const searchFilesTool = (tool as any)({
   description: 'Search across the Virtual File System for files containing specific text. Returns matching files and code snippets.',
   parameters: z.object({
     query: z.string().describe('Search term or natural language description'),
@@ -302,10 +303,13 @@ export const searchFilesTool = tool({
         { path, limit }
       );
 
+      // Normalize: proxy may return array or { files: [...] }
+      const files = Array.isArray(results) ? results : (results as any).files || [];
+
       return {
         success: true,
         query,
-        files: results.files.map(file => ({
+        files: files.map((file: any) => ({
           path: file.path,
           name: file.name,
           language: file.language,
@@ -313,7 +317,7 @@ export const searchFilesTool = tool({
           snippet: file.snippet,
           lastModified: file.lastModified,
         })),
-        total: results.files.length,
+        total: files.length,
       };
     } catch (error: any) {
       logger.error('searchFiles failed', { query, error: error.message });
@@ -331,7 +335,7 @@ export const searchFilesTool = tool({
  * batch_write - Write multiple files in one operation
  * Efficient for creating several related files at once
  */
-export const batchWriteTool = tool({
+export const batchWriteTool = (tool as any)({
   description: 'Write multiple files in one operation. Efficient for creating several related files at once (e.g., component files, config files).',
   parameters: z.object({
     files: z.array(z.object({
@@ -416,7 +420,7 @@ export const batchWriteTool = tool({
 /**
  * delete_file - Delete a file or directory from the VFS
  */
-export const deleteFileTool = tool({
+export const deleteFileTool = (tool as any)({
   description: 'Delete a file or directory from the Virtual File System. Use with caution - this operation cannot be undone.',
   parameters: z.object({
     path: z.string().describe('Path to delete'),
@@ -458,7 +462,7 @@ export const deleteFileTool = tool({
 /**
  * create_directory - Create a directory in the VFS
  */
-export const createDirectoryTool = tool({
+export const createDirectoryTool = (tool as any)({
   description: 'Create a directory in the Virtual File System. Creates parent directories as needed.',
   parameters: z.object({
     path: z.string().describe('Directory path to create'),
@@ -500,7 +504,7 @@ export const createDirectoryTool = tool({
  * get_workspace_stats - Get workspace statistics
  * Useful for understanding workspace usage and limits
  */
-export const getWorkspaceStatsTool = tool({
+export const getWorkspaceStatsTool = (tool as any)({
   description: 'Get statistics about the Virtual File System workspace, including total size, file count, and quota usage.',
   parameters: z.object({}),
   execute: async () => {
@@ -529,31 +533,115 @@ export const getWorkspaceStatsTool = tool({
 // ============================================================================
 
 /**
- * All VFS MCP tools grouped together
+ * Extended VFS tool definition with explicit metadata for MCP registry
+ */
+export interface VFSExtendedTool {
+  name: string;
+  description: string;
+  parameters: z.ZodType;
+  execute: (...args: any[]) => Promise<unknown>;
+}
+
+/**
+ * All VFS MCP tools grouped together with explicit metadata
  * Can be registered with MCP server or used directly with AI SDK
  */
 export const vfsTools = {
-  write_file: writeFileTool,
-  apply_diff: applyDiffTool,
-  read_file: readFileTool,
-  list_files: listFilesTool,
-  search_files: searchFilesTool,
-  batch_write: batchWriteTool,
-  delete_file: deleteFileTool,
-  create_directory: createDirectoryTool,
-  get_workspace_stats: getWorkspaceStatsTool,
+  write_file: writeFileTool as any as VFSExtendedTool,
+  apply_diff: applyDiffTool as any as VFSExtendedTool,
+  read_file: readFileTool as any as VFSExtendedTool,
+  list_files: listFilesTool as any as VFSExtendedTool,
+  search_files: searchFilesTool as any as VFSExtendedTool,
+  batch_write: batchWriteTool as any as VFSExtendedTool,
+  delete_file: deleteFileTool as any as VFSExtendedTool,
+  create_directory: createDirectoryTool as any as VFSExtendedTool,
+  get_workspace_stats: getWorkspaceStatsTool as any as VFSExtendedTool,
 };
 
 /**
- * Get tool definitions in OpenAI format for tool registry
+ * Tool metadata map — source of truth for MCP tool definitions.
+ * This decouples our MCP protocol layer from the AI SDK's internal tool type,
+ * which changes frequently between versions.
+ */
+const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> = {
+  write_file: {
+    description: writeFileTool.description,
+    parameters: z.object({
+      path: z.string().describe('Full virtual path'),
+      content: z.string().describe('Complete file content'),
+      commitMessage: z.string().optional(),
+    }),
+  },
+  apply_diff: {
+    description: applyDiffTool.description,
+    parameters: z.object({
+      path: z.string().describe('Target file path'),
+      diff: z.string().describe('Unified diff format'),
+      commitMessage: z.string().optional(),
+    }),
+  },
+  read_file: {
+    description: readFileTool.description,
+    parameters: z.object({
+      path: z.string().describe('Full path to the file'),
+    }),
+  },
+  list_files: {
+    description: listFilesTool.description,
+    parameters: z.object({
+      path: z.string().default('/'),
+      recursive: z.boolean().optional().default(false),
+    }),
+  },
+  search_files: {
+    description: searchFilesTool.description,
+    parameters: z.object({
+      query: z.string().describe('Search term'),
+      path: z.string().optional(),
+      limit: z.number().optional().default(10),
+    }),
+  },
+  batch_write: {
+    description: batchWriteTool.description,
+    parameters: z.object({
+      files: z.array(z.object({
+        path: z.string(),
+        content: z.string(),
+      })),
+      commitMessage: z.string().optional(),
+    }),
+  },
+  delete_file: {
+    description: deleteFileTool.description,
+    parameters: z.object({
+      path: z.string(),
+      reason: z.string().optional(),
+    }),
+  },
+  create_directory: {
+    description: createDirectoryTool.description,
+    parameters: z.object({
+      path: z.string(),
+    }),
+  },
+  get_workspace_stats: {
+    description: getWorkspaceStatsTool.description,
+    parameters: z.object({}),
+  },
+};
+
+/**
+ * Get tool definitions in OpenAI format for tool registry.
+ * Uses the explicit TOOL_META map instead of relying on the AI SDK's
+ * internal Tool type (which has no stable name/parameters/public shape).
  */
 export function getVFSToolDefinitions() {
-  return Object.values(vfsTools).map(tool => ({
+  return Object.entries(TOOL_META).map(([name, meta]) => ({
     type: 'function' as const,
     function: {
-      name: tool.name,
-      description: tool.description,
-      parameters: tool.parameters,
+      name,
+      description: meta.description,
+      parameters: meta.parameters,
     },
   }));
 }

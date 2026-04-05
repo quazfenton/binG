@@ -14,11 +14,11 @@
  * const result = await executeToolCapability('file.read', { path: 'src/index.ts' }, { userId: 'user123' });
  */
 
-import { 
-  executeCapability, 
-  getToolSystem, 
+import {
+  executeCapability,
+  initToolSystem,
   bootstrapToolSystem,
-  hasCapability,
+  hasToolCapability,
 } from '@/lib/tools';
 import { createLogger } from '@/lib/utils/logger';
 
@@ -63,9 +63,9 @@ export async function executeToolCapability(
   }
   
   try {
-    const result = await executeCapability(capabilityName, params, context);
-    return result.success 
-      ? { success: true, output: result.data, exitCode: 0 }
+    const result = await executeCapability(capabilityName, params, context as any);
+    return result.success
+      ? { success: true, output: (result as any).data, exitCode: 0 }
       : { success: false, error: result.error, exitCode: 1 };
   } catch (err) {
     const msg = err instanceof Error ? err.message : String(err);
@@ -78,16 +78,16 @@ export async function executeToolCapability(
  * Check if a capability is available
  */
 export function isCapabilityAvailable(capabilityName: string): boolean {
-  return hasCapability(capabilityName);
+  return hasToolCapability(capabilityName);
 }
 
 /**
  * Get tool definitions for LLM function calling
  */
-export function getCapabilityTools(): Array<{ name: string; description: string; parameters: Record<string, unknown> }> {
+export async function getCapabilityTools(): Promise<Array<{ name: string; description: string; parameters: Record<string, unknown> }>> {
   if (!initialized) return [];
-  const system = getToolSystem();
-  return Array.from(system.registry.capabilities.entries()).map(([id, cap]) => ({
+  const system = await initToolSystem();
+  return Array.from((system.registry as any).capabilities.entries()).map(([id, cap]) => ({
     name: id,
     description: cap.description || `Execute ${id}`,
     parameters: (cap as any).inputSchema || {},

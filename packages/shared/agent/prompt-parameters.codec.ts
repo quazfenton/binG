@@ -245,7 +245,7 @@ export function derivePreset(
   overrides: Partial<PromptParameters>,
   name?: string,
 ): PromptParameters {
-  return { ...parent, ...overrides, name: name || 'Custom' };
+  return { ...parent, ...overrides, ...(name ? { name: name } : {}) } as PromptParameters;
 }
 
 // ============================================================================

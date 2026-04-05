@@ -28,6 +28,8 @@ import { useOrchestrationMode, getOrchestrationModeHeaders } from "@/contexts/or
 import type { OrchestrationMode } from "@/contexts/orchestration-mode-context";
 import { useResponseStyle } from "@/contexts/response-style-context";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
+
+type AttachedVirtualFile = any;
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 import {
   parseFilesystemResponse,
@@ -165,6 +167,9 @@ export default function ConversationInterface() {
     return () => window.removeEventListener('message', handler);
   }, []);
   const [showAccessibility, setShowAccessibility] = useState(false);
+  const [showResponseStyle, setShowResponseStyle] = useState(
+    () => typeof window !== 'undefined' && localStorage.getItem('show_response_style') === 'true'
+  );
   const [showHistory, setShowHistory] = useState(false);
   const [showCodePreview, setShowCodePreview] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
@@ -197,6 +202,7 @@ export default function ConversationInterface() {
     return "nvidia/nemotron-3-nano-30b-a3b:free";
   });
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
+  const [livekitEnabled, setLivekitEnabled] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<
     string | null
@@ -335,23 +341,23 @@ export default function ConversationInterface() {
   useEffect(() => {
     const handleKeysChanged = async () => {
       const newKeys = await reloadUserApiKeys();
-      // Re-fetch providers from server to merge with user keys
-      try {
-        const res = await fetch("/api/providers", { credentials: 'include' });
-        const data = await res.json();
-        if (data.success) {
-          let providers: LLMProvider[] = data.data.providers || [];
-          providers = refreshProviderAvailability(providers, newKeys);
-          setAvailableProviders(providers);
-        }
-      } catch (e) {
-        console.error('[ConversationInterface] Failed to refresh providers after key change:', e);
-      }
+
+      // Update providers directly in state — skip server re-fetch to avoid 5-min cache staleness.
+      // Mark any provider where the user has a key as available, regardless of server env vars.
+      setAvailableProviders((prev) => {
+        if (Object.keys(newKeys).length === 0 || prev.length === 0) return prev;
+        return prev.map((p) => {
+          if (newKeys[p.id]) {
+            return { ...p, isAvailable: true };
+          }
+          return p;
+        });
+      });
     };
 
     window.addEventListener('user-api-keys-changed', handleKeysChanged);
     return () => window.removeEventListener('user-api-keys-changed', handleKeysChanged);
-  }, [reloadUserApiKeys, refreshProviderAvailability]);
+  }, [reloadUserApiKeys]);
   
   // Persist currentConversationId to sessionStorage
   useEffect(() => {
@@ -1917,6 +1923,10 @@ export default function ConversationInterface() {
 
   // Memoized callbacks for InteractionPanel to prevent unnecessary re-renders
   const toggleAccessibility = useCallback(() => setShowAccessibility(prev => !prev), []);
+  const toggleResponseStyle = useCallback((enabled: boolean) => {
+    setShowResponseStyle(enabled);
+    localStorage.setItem('show_response_style', String(enabled));
+  }, []);
   const toggleHistory = useCallback(() => setShowHistory(prev => !prev), []);
   const toggleCodePreview = useCallback(() => {
     handleToggleCodePreview();
@@ -2106,6 +2116,7 @@ export default function ConversationInterface() {
         userId={user?.id?.toString() || getStableSessionId()}
         onAttachedFilesChange={handleAttachedFilesChange}
         filesystemScopePath={filesystemScopePath}
+        showResponseStyle={showResponseStyle}
         // Note: useDiffsPoller removed - file changes synced via filesystem-updated events + SSE
       />
 
@@ -2128,6 +2139,10 @@ export default function ConversationInterface() {
           isProcessing={isLoading}
           voiceEnabled={isVoiceEnabled}
           onVoiceToggle={handleVoiceToggle}
+          livekitEnabled={livekitEnabled}
+          onLivekitToggle={(enabled) => setLivekitEnabled(enabled)}
+          showResponseStyle={showResponseStyle}
+          onResponseStyleToggle={toggleResponseStyle}
         />
       )}
 

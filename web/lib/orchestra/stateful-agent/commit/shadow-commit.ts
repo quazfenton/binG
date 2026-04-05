@@ -58,6 +58,7 @@ export interface CommitHistoryEntry {
   filesChanged: number;
   workspaceVersion?: number | null;
   diff?: string;
+  paths?: string[];  // File paths changed in this commit
   createdAt: string;
 }
 
@@ -283,6 +284,7 @@ export class ShadowCommitManager {
           filesChanged: transactions.length,
           workspaceVersion: row.workspace_version ?? null,
           diff: row.diff,
+          paths: transactions.map((t: TransactionEntry) => t.path),
         };
       });
     } catch (error: any) {
@@ -335,6 +337,7 @@ export class ShadowCommitManager {
           filesChanged: transactions.length,
           workspaceVersion: row.workspace_version ?? null,
           diff: row.diff,
+          paths: transactions.map((t: TransactionEntry) => t.path),
         };
       });
     } catch (error: any) {

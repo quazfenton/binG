@@ -15,7 +15,7 @@ import {
   List, Eye, ChevronRight, ChevronDown, ChevronUp, Settings,
   Plus, Trash2, Copy, Star, Heart, Bookmark, Hash, AtSign,
   Video, Image, MapPin, Mic, Smartphone, Layers, Box,
-  Workflow, Timer, BarChart3, PieChart, TrendingUp, X,
+  Workflow, Timer, BarChart3, PieChart, TrendingUp, X, Users,
 } from "lucide-react";
 import { toast } from "sonner";
 

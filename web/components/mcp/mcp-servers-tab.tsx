@@ -438,17 +438,22 @@ export function MCPServersTab() {
         }
       }
 
-      if (isDesktop && server.npxArgs) {
-        // Desktop: spawn npx via /api/mcp/init which triggers desktop MCP manager
-        // We pass the server config with env vars
-        await fetch("/api/mcp/init", {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ serverId: server.id, envVars }),
-        });
-      } else {
-        // Web mode: call init API which handles server-side
-        await fetch("/api/mcp/init", { method: "POST" });
+      // Call the connect API with full server config
+      const res = await fetch("/api/mcp/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serverId: server.id,
+          serverName: server.name,
+          npxArgs: server.npxArgs,
+          remoteUrl: server.remoteUrl,
+          envVars,
+        }),
+      });
+
+      if (!res.ok) {
+        const err = await res.json();
+        throw new Error(err.error || "Failed to connect");
       }
 
       setConnectedServers(prev => new Set(prev).add(server.id));
@@ -461,12 +466,34 @@ export function MCPServersTab() {
         return next;
       });
     }
-  }, [isDesktop]);
+  }, []);
 
   const handleConnectAll = async () => {
     setIsInitializing(true);
     try {
-      await fetch("/api/mcp/init", { method: "POST" });
+      // Collect all keys for all servers
+      const envVars: Record<string, string> = {};
+      for (const server of MCP_SERVERS) {
+        if (server.keyFields) {
+          for (const field of server.keyFields) {
+            const val = await secrets.get(secretKeyForServer(server.id, field.envVar));
+            if (val) envVars[field.envVar] = val;
+          }
+        }
+      }
+
+      const res = await fetch("/api/mcp/connect", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          serverId: "all",
+          serverName: "All Servers",
+          envVars,
+        }),
+      });
+
+      if (!res.ok) throw new Error("Failed to connect all servers");
+
       const connected = new Set<string>();
       for (const s of MCP_SERVERS) {
         if (s.autoIncluded) connected.add(s.id);

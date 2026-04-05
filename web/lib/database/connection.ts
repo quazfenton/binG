@@ -106,8 +106,12 @@ function getEncryptionKey(): Buffer {
 /**
  * Create a mock database object for use during build or while migrations are pending
  */
+// Singleton mock — always the same instance so identity checks work
+let _mockDatabase: any = null;
 function getMockDatabase() {
-  const mockDb: any = {
+  if (!_mockDatabase) {
+    _mockDatabase = (() => {
+      const mockDb: any = {
     prepare: () => {
       return {
         run: () => ({ lastInsertRowid: 1, changes: 1 }),
@@ -139,6 +143,9 @@ function getMockDatabase() {
   };
 
   return mockDb;
+    })();
+  }
+  return _mockDatabase;
 }
 
 // Initialize database
@@ -162,146 +169,117 @@ function getDatabaseConstructor(): any {
 }
 
 /**
- * Get database instance - SYNCHRONOUS after first initialization
- * 
+ * Get database instance — SYNCHRONOUS initialization
+ *
  * Returns:
  * - Cached db instance if already initialized
  * - Mock database during build/Edge runtime
- * - null on first call if db is still initializing (caller should handle this)
- * 
- * @example
- * const db = getDatabase();
- * if (!db) {
- *   // Database not ready yet - use fallback or retry
- *   return;
- * }
- * db.prepare('SELECT * FROM users').all();
+ * - Synchronously initialized real DB on first call (Node.js runtime)
  */
 export function getDatabase(): any {
   // Return cached instance (most common case after first init)
   if (db) return db;
-  
+
   // Skip database initialization during build process or Edge Runtime
   if (shouldSkipDbInit() || isEdgeRuntime()) {
-    // Return a mock database object during build time
-    // This allows the build to proceed without requiring the native module
-    console.log('[DB] Skipping database initialization during build/Edge');
     return getMockDatabase();
   }
-  
-  // First call - trigger async initialization in background
+
+  // Synchronous initialization — better-sqlite3 is inherently synchronous
+  // No reason to defer init when there's no network or I/O blocking
   if (!dbInitializing) {
     dbInitializing = true;
-    // Use setImmediate to avoid blocking the current request (Node.js only)
-    if (typeof setImmediate !== 'undefined') {
-      setImmediate(() => initializeDatabase().catch(console.error));
-    } else {
-      // Fallback for environments without setImmediate
-      setTimeout(() => initializeDatabase().catch(console.error), 0);
+    try {
+      initializeDatabaseSync();
+    } catch (err) {
+      console.error('[DB] Synchronous database initialization failed:', err);
+      dbInitializing = false;
+      return getMockDatabase();
     }
   }
 
-  // Return null on first call - caller should handle this case
-  // Most callers already have fallback logic for this scenario
-  return null;
+  // Return null if still initializing (should not happen with sync init)
+  return db;
 }
 
 /**
- * Initialize database asynchronously (called once in background)
+ * Synchronous database initialization
  */
-async function initializeDatabase(): Promise<void> {
+function initializeDatabaseSync(): void {
   if (db) return; // Already initialized
 
-  try {
-    // Guard with runtime check so webpack doesn't bundle for client
-    if (typeof require === 'undefined') {
-      throw new Error('Database initialization requires Node.js runtime');
-    }
-    const fsModule = require('fs');
-    const pathModule = require('path');
-    const mkdirSync = fsModule.mkdirSync;
-    const join = pathModule.join;
-    const dirname = pathModule.dirname;
+  const fsModule = require('fs');
+  const pathModule = require('path');
+  const mkdirSync = fsModule.mkdirSync;
+  const join = pathModule.join;
+  const dirname = pathModule.dirname;
 
-    const dbPath = getDBPath();
+  const dbPath = getDBPath();
 
-    // Create data directory if it doesn't exist
-    mkdirSync(dirname(dbPath), { recursive: true });
+  // Create data directory if it doesn't exist
+  mkdirSync(dirname(dbPath), { recursive: true });
 
-    const DBConstructor = getDatabaseConstructor();
-    db = new DBConstructor(dbPath);
+  const DBConstructor = getDatabaseConstructor();
+  db = new DBConstructor(dbPath);
 
-    // Enable WAL mode for better performance
-    db.pragma('journal_mode = WAL');
-    db.pragma('synchronous = NORMAL');
-    db.pragma('cache_size = 1000');
-    db.pragma('temp_store = memory');
+  // Enable WAL mode for better performance
+  db.pragma('journal_mode = WAL');
+  db.pragma('synchronous = NORMAL');
+  db.pragma('cache_size = 1000');
+  db.pragma('temp_store = memory');
+  db.pragma('foreign_keys = ON');
 
-    // SECURITY: Enable foreign key enforcement
-    // Without this, ON DELETE CASCADE and foreign key constraints are silently ignored
-    db.pragma('foreign_keys = ON');
+  // Initialize schema synchronously
+  if (!dbInitialized) {
+    initializeSchemaSync();
 
-    // Initialize schema synchronously first time
-    if (!dbInitialized) {
-      initializeSchemaSync();
+    // Run migrations synchronously
+    try {
+      if (process.env.AUTO_RUN_MIGRATIONS !== 'false') {
+        // Dynamic import for migration runner
+        const migrationModule = require('./migration-runner');
+        const migrationRunner = migrationModule?.migrationRunner;
+        if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
+          migrationRunner.runMigrationsSync();
+          console.log('[database] Migrations completed successfully');
 
-      // SECURITY: Run migrations SYNCHRONOUSLY first time to prevent race conditions
-      // Without this, requests can execute before migrations complete, causing
-      // "no such column" errors for migration-added columns like email_verification_token
-      try {
-        // Respect AUTO_RUN_MIGRATIONS environment variable
-        if (process.env.AUTO_RUN_MIGRATIONS !== 'false') {
-          // Dynamic import to avoid circular import at module load time
-          const { migrationRunner } = await import('./migration-runner');
-          if (migrationRunner && typeof migrationRunner.runMigrationsSync === 'function') {
-            // Use synchronous migration runner
-            migrationRunner.runMigrationsSync();
-            console.log('[database] Migrations completed successfully');
-
-            // Also run performance index migration
-            try {
-              const { addPerformanceIndexesSync } = await import('./performance-indexes');
-              addPerformanceIndexesSync(db);
-              console.log('[database] Performance indexes added successfully');
-            } catch (indexError) {
-              // Performance indexes may already exist from base schema - this is OK
-              if (!indexError.message?.includes('already exists')) {
-                console.warn('[database] Performance index migration failed (indexes may already exist):', indexError);
-              }
+          // Also run performance index migration
+          try {
+            const { addPerformanceIndexesSync } = require('./performance-indexes');
+            addPerformanceIndexesSync(db);
+            console.log('[database] Performance indexes added successfully');
+          } catch (indexError: any) {
+            if (!indexError.message?.includes('already exists')) {
+              console.warn('[database] Performance index migration failed (indexes may already exist):', indexError);
             }
-          } else {
-            console.log('[database] Migration runner not ready; migrations handled by run-migrations.js script.');
           }
-        } else {
-          console.log('[database] Auto-run migrations disabled via environment variable');
-        }
-      } catch (error: any) {
-        // Only log if it's a real error, not module loading issues after successful migrations
-        if (!error.message?.includes('Cannot find module')) {
-          console.warn('[database] Migrations failed (continuing with base schema):', error);
         }
       }
-
-      dbInitialized = true;
+    } catch (migrationError) {
+      if (!migrationError.message?.includes('Cannot find module')) {
+        console.warn('[database] Migrations failed (continuing with base schema):', migrationError);
+      }
     }
 
-    console.log('[DB] Database initialized successfully');
-  } catch (error: any) {
-    console.error('[DB] Database initialization failed:', error);
-    dbInitializing = false;
-    throw error;
-  }
-}
-
-export async function initializeDatabaseAsync(): Promise<any> {
-  const database = getDatabase();
-
-  if (!dbInitialized) {
-    await initializeSchema();
     dbInitialized = true;
   }
 
-  return database;
+  console.log('[DB] Database initialized successfully (synchronous)');
+}
+
+/**
+ * Initialize database asynchronously (kept for backwards compatibility)
+ * Delegates to synchronous init since better-sqlite3 is inherently sync
+ */
+async function initializeDatabase(): Promise<void> {
+  if (db) return;
+  // Delegate to sync initialization
+  getDatabase();
+}
+
+export async function initializeDatabaseAsync(): Promise<any> {
+  // Sync init is now done automatically by getDatabase()
+  return getDatabase();
 }
 
 async function initializeSchemaSync(): Promise<void> {
@@ -505,12 +483,43 @@ export class DatabaseOperations {
   private preparedStatements: Map<string, any> = new Map();
   private preparedStatementsInitialized = false;
   
+  // Private backing field — accessed via ensureDb() to ensure real DB is always used
+  private _db: any;
+  private dbReady: Promise<void>;
+
+  // Ensures we always have a valid database instance.
+  // Upgrades from mock to real DB as soon as initialization completes.
+  private ensureDb(): any {
+    // First try the real database
+    const realDb = getDatabase();
+    if (realDb) {
+      // If we were using the mock, switch to the real DB and reset prepared statements
+      if (this._db !== realDb) {
+        this._db = realDb;
+        this.preparedStatementsInitialized = false;
+        this.preparedStatements.clear();
+      }
+      return realDb;
+    }
+    // Real DB not ready yet — use the singleton mock as fallback
+    if (!this._db) {
+      this._db = getMockDatabase();
+    }
+    return this._db;
+  }
+
+  // Expose db as a property-like accessor for existing code that uses this.db
+  private get db(): any { return this.ensureDb(); }
+  private set db(v: any) { this._db = v; }
+
   private getPrepared(name: string, sql: string): any {
+    // Always ensure we're using the real DB before accessing prepared statements
+    this.ensureDb();
     // Check if statement exists and database is still valid
     if (!this.preparedStatementsInitialized || !this.db) {
       this.initializePreparedStatements();
     }
-    
+
     if (!this.preparedStatements.has(name)) {
       this.preparedStatements.set(name, this.db.prepare(sql));
     }
@@ -518,20 +527,28 @@ export class DatabaseOperations {
   }
 
   constructor() {
-    // Use mock database initially to avoid blocking on database initialization
-    this.db = getMockDatabase();
-    
-    // Get real database synchronously (may be null on first call)
+    // Use mock database initially as fallback — will be resolved lazily on first use
+    this._db = getMockDatabase();
+
+    // Synchronously get real database — this triggers async init in background
     const realDb = getDatabase();
-    
+
     if (realDb) {
-      // Database already initialized
-      this.db = realDb;
+      // Database already initialized (subsequent requests)
+      this._db = realDb;
       this.initializePreparedStatements();
     } else {
-      // Database not ready yet - will use mock database until it's ready
-      // The next request will get the real database
-      console.warn('[DatabaseOperations] Database not ready, using mock database for this request');
+      // DB not ready yet — spin briefly to see if init completes
+      const spinStart = Date.now();
+      while (Date.now() - spinStart < 500) {
+        const check = getDatabase();
+        if (check) {
+          this._db = check;
+          this.initializePreparedStatements();
+          return;
+        }
+      }
+      // Will resolve lazily on first real use via the db getter
     }
   }
   
@@ -601,6 +618,7 @@ export class DatabaseOperations {
 
   /**
    * Get the underlying database instance (for advanced operations).
+   * Always resolves to the real DB if available.
    */
   getDb(): any {
     return this.db;

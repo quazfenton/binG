@@ -164,19 +164,32 @@ export function parseMCPServerConfigs(): MCPServerConfig[] {
 
 /**
  * Initialize MCP with configurations from environment
+ *
+ * SAFETY: In web mode, stdio (npx) servers are skipped.
+ * Only remote HTTP servers are connected in web mode.
  */
 export async function initializeMCP(): Promise<MCPToolRegistry> {
+  const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
   const configs = parseMCPServerConfigs()
-  
-  for (const config of configs) {
+
+  // Filter out stdio servers in web mode
+  const filteredConfigs = configs.filter(config => {
+    if (config.transport?.type === 'stdio' && !isDesktop) {
+      console.log(`[MCP] Skipping stdio server in web mode: ${config.name}`)
+      return false
+    }
+    return true
+  })
+
+  for (const config of filteredConfigs) {
     mcpToolRegistry.registerServer(config)
   }
-  
-  if (configs.length > 0) {
-    console.log(`[MCP] Connecting to ${configs.length} server(s)...`)
+
+  if (filteredConfigs.length > 0) {
+    console.log(`[MCP] Connecting to ${filteredConfigs.length} server(s)...`)
     await mcpToolRegistry.connectAll()
   }
-  
+
   return mcpToolRegistry
 }
 

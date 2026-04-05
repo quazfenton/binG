@@ -121,7 +121,7 @@ const DEFAULT_ORIGIN = 'You emerged from a convergence of engineered inputs — 
 
 export class IdentityCore {
   private identity: AgentIdentity;
-  private onUpdate: ((identity: AgentIdentity) => void) | null = null;
+  private _onUpdate: ((identity: AgentIdentity) => void) | null = null;
 
   constructor(config: IdentityConfig = {}) {
     const now = Date.now();
@@ -158,7 +158,7 @@ export class IdentityCore {
    * Register callback for identity updates
    */
   onUpdate(callback: (identity: AgentIdentity) => void): void {
-    this.onUpdate = callback;
+    this._onUpdate = callback;
   }
 
   /**
@@ -347,8 +347,8 @@ export class IdentityCore {
   }
 
   private notifyUpdate(): void {
-    if (this.onUpdate) {
-      this.onUpdate({ ...this.identity });
+    if (this._onUpdate) {
+      this._onUpdate({ ...this.identity });
     }
   }
 }

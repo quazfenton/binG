@@ -42,7 +42,7 @@ export interface OntologyEvent {
 export class SocialOntology {
   private peers: Map<string, PeerNode> = new Map();
   private events: OntologyEvent[] = [];
-  private onUpdate: ((ontology: SocialOntology) => void) | null = null;
+  private _onUpdate: ((ontology: SocialOntology) => void) | null = null;
 
   /**
    * Register a new peer node
@@ -74,7 +74,7 @@ export class SocialOntology {
     this.peers.set(node.id, node);
     this.recordEvent('encounter', node.id, `First encountered: ${node.name} (${node.relation})`);
 
-    if (this.onUpdate) this.onUpdate(this);
+    if (this._onUpdate) this._onUpdate(this);
     logger.info('Peer registered', { id: node.id, name: node.name, relation: node.relation });
     return node;
   }
@@ -94,7 +94,7 @@ export class SocialOntology {
       peer.trustLevel = Math.min(1, peer.trustLevel + 0.3);
     }
 
-    if (this.onUpdate) this.onUpdate(this);
+    if (this._onUpdate) this._onUpdate(this);
   }
 
   /**
@@ -117,7 +117,7 @@ export class SocialOntology {
       this.recordEvent('interaction', peerId, `Interaction with ${peer.name}: ${description}`);
     }
 
-    if (this.onUpdate) this.onUpdate(this);
+    if (this._onUpdate) this._onUpdate(this);
   }
 
   /**
@@ -204,7 +204,7 @@ export class SocialOntology {
   }
 
   onUpdate(callback: (ontology: SocialOntology) => void): void {
-    this.onUpdate = callback;
+    this._onUpdate = callback;
   }
 
   private recordEvent(type: OntologyEvent['type'], peerId: string, description: string): void {

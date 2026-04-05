@@ -2,6 +2,7 @@
  * Image generation helper for Puter. Prefers SDK; falls back to proxy call to your API route.
  */
 
+// @ts-ignore - Module path resolution issue
 import { PUTER_PROXY_BASE } from '../src/config'
 
 export async function generateImage(prompt: string, testMode = true): Promise<HTMLImageElement | string> {

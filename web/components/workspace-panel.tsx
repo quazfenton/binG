@@ -713,6 +713,25 @@ const automationData: AutomationItem[] = [
 
 export function WorkspacePanel() {
   const { isOpen, activeTab, closePanel, setTab, openMonacoEditor } = usePanel();
+  const explorerScrollRef = useRef<HTMLDivElement>(null);
+  const integrationsScrollRef = useRef<HTMLDivElement>(null);
+  const commandDeckScrollRef = useRef<HTMLDivElement>(null);
+  const mcpScrollRef = useRef<HTMLDivElement>(null);
+
+  // Focus scroll container when tab becomes active
+  useEffect(() => {
+    const refs: Record<string, React.RefObject<HTMLDivElement>> = {
+      'explorer': explorerScrollRef,
+      'integrations': integrationsScrollRef,
+      'command-deck': commandDeckScrollRef,
+      'mcp-servers': mcpScrollRef,
+    };
+    const ref = refs[activeTab];
+    if (ref?.current) {
+      ref.current.focus();
+    }
+  }, [activeTab]);
+
   const [selectedFile, setSelectedFile] = useState<FileNode | null>(null);
   const [expandedFolders, setExpandedFolders] = useState<Set<string>>(new Set());
   
@@ -1208,7 +1227,7 @@ export function WorkspacePanel() {
   const [creatingParentPath, setCreatingParentPath] = useState("/");
 
   // File operations state (cut/copy/paste, rename, drag-drop)
-  const [clipboard, setClipboard] = useState<{ sourcePath: string; operation: 'cut' | 'copy' } | null>(null);
+  const [fileClipboard, setFileClipboard] = useState<{ sourcePath: string; operation: 'cut' | 'copy' } | null>(null);
   const [renamingFile, setRenamingFile] = useState<string | null>(null);
   const [renameValue, setRenameValue] = useState("");
   const [draggedFile, setDraggedFile] = useState<string | null>(null);
@@ -2035,17 +2054,17 @@ export function WorkspacePanel() {
 
   // File operation handlers
   const handleCutFile = useCallback((path: string) => {
-    setClipboard({ sourcePath: path, operation: 'cut' });
+    setFileClipboard({ sourcePath: path, operation: 'cut' });
     toast.info('File cut - click paste in a folder');
   }, []);
 
   const handleCopyFile = useCallback((path: string) => {
-    setClipboard({ sourcePath: path, operation: 'copy' });
+    setFileClipboard({ sourcePath: path, operation: 'copy' });
     toast.info('File copied - click paste in a folder');
   }, []);
 
-  const handlePasteToFolder = useCallback(async (targetFolderPath: string, currentClipboard?: typeof clipboard) => {
-    const activeClipboard = currentClipboard || clipboard;
+  const handlePasteToFolder = useCallback(async (targetFolderPath: string, currentClipboard?: typeof fileClipboard) => {
+    const activeClipboard = currentClipboard || fileClipboard;
     if (!activeClipboard) return;
 
     const sourceName = activeClipboard.sourcePath.split('/').pop() || '';
@@ -2077,10 +2096,10 @@ export function WorkspacePanel() {
     }
 
     await performPaste(targetPath, activeClipboard);
-  }, [clipboard, vfsSnapshot?.files]);
+  }, [fileClipboard, vfsSnapshot?.files]);
 
-  const performPaste = useCallback(async (targetPath: string, currentClipboard?: typeof clipboard) => {
-    const activeClipboard = currentClipboard || clipboard;
+  const performPaste = useCallback(async (targetPath: string, currentClipboard?: typeof fileClipboard) => {
+    const activeClipboard = currentClipboard || fileClipboard;
     if (!activeClipboard) return;
 
     try {
@@ -2125,11 +2144,11 @@ export function WorkspacePanel() {
         sessionId: filesystem?.sessionId,
       });
 
-      setClipboard(null);
+      setFileClipboard(null);
     } catch (err: any) {
       toast.error(`Operation failed: ${err.message}`);
     }
-  }, [emitFilesystemUpdated, filesystem?.sessionId, vfs?.currentPath, listDirectory, writeFile, buildApiHeaders, resolveScopedPath, clipboard]);
+  }, [emitFilesystemUpdated, filesystem?.sessionId, vfs?.currentPath, listDirectory, writeFile, buildApiHeaders, resolveScopedPath, fileClipboard]);
 
   const handleRenameFile = useCallback((path: string, currentName: string) => {
     setRenamingFile(path);
@@ -2473,8 +2492,8 @@ export function WorkspacePanel() {
                 <span className="text-white/80 truncate flex-1 min-w-0">{node.name}</span>
               )}
             </button>
-            {/* Paste button when clipboard has content */}
-            {clipboard && (
+            {/* Paste button when file clipboard has content */}
+            {fileClipboard && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
@@ -2591,7 +2610,7 @@ export function WorkspacePanel() {
         </div>
       </div>
     );
-  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile, handleRenameFile, renamingFile, renameValue, confirmRename, cancelRename, clipboard, handlePasteToFolder, dragOverFolder, handleDragOver, handleDragLeave, handleDrop, handleDragStart, handleCutFile, handleCopyFile, openMonacoEditor]);
+  }, [expandedFolders, selectedFile, toggleFolder, handleFileSelect, handleCreateFile, handleRenameFile, renamingFile, renameValue, confirmRename, cancelRename, fileClipboard, handlePasteToFolder, dragOverFolder, handleDragOver, handleDragLeave, handleDrop, handleDragStart, handleCutFile, handleCopyFile, openMonacoEditor]);
 
   // Check GitHub auth status and fetch repos when modal opens
   useEffect(() => {
@@ -2710,7 +2729,7 @@ export function WorkspacePanel() {
               animate={{ x: 0, opacity: 1 }}
               exit={{ x: "-100%", opacity: 0 }}
               transition={{ type: "spring", damping: 25, stiffness: 200 }}
-              className="fixed inset-y-0 left-0 z-[60] pointer-events-auto flex flex-col"
+              className="fixed inset-y-0 left-0 z-[60] pointer-events-auto flex flex-col overflow-hidden"
               style={{
                 top: "60px",
                 bottom: 0,
@@ -2877,7 +2896,7 @@ export function WorkspacePanel() {
               </AnimatePresence>
 
               {/* Tabs - scrollable pill design with arrows */}
-              <Tabs value={activeTab} onValueChange={(v) => setTab(v as PanelTab)} className="flex-1 flex flex-col">
+              <Tabs value={activeTab} onValueChange={(v) => setTab(v as PanelTab)} className="flex-1 flex flex-col overflow-hidden">
                 <div className="px-4 mt-3">
                   <ScrollableTabBar
                     tabs={TAB_DEFS}
@@ -2890,105 +2909,61 @@ export function WorkspacePanel() {
                   />
                 </div>
 
-                 {/* Explorer Tab */}
+                {/* Explorer Tab */}
                   <TabsContent 
                     value="explorer" 
-                    className="flex-1 mt-0 h-full overflow-visible" 
+                    className="flex-1 mt-0 overflow-y-auto" 
                     data-file-tree
-                    onWheel={(e) => {
-                      if (process.env.NODE_ENV !== 'production') {
-                        console.log('[Explorer TabsContent] Wheel event:', { deltaY: e.deltaY, target: (e.target as HTMLElement)?.tagName });
-                      }
-                    }}
-                    onPointerDown={(e) => {
-                      if (process.env.NODE_ENV !== 'production') {
-                        console.log('[Explorer TabsContent] Pointer down:', { target: (e.target as HTMLElement)?.tagName, pointerType: e.pointerType });
-                      }
-                    }}
                   >
                     <div 
-                      className="h-full overflow-y-auto custom-scrollbar" 
-                      style={{ overflowAnchor: 'auto', pointerEvents: 'auto', touchAction: 'pan-y' }}
-                      onWheel={(e) => {
-                        if (process.env.NODE_ENV !== 'production') {
-                          console.log('[Files Tab] Wheel event detected:', { deltaY: e.deltaY, target: (e.target as HTMLElement)?.tagName, currentTarget: (e.currentTarget as HTMLElement)?.tagName });
-                        }
+                      className="h-full overflow-y-auto custom-scrollbar"
+                      ref={(el) => {
+                        explorerScrollRef.current = el;
                       }}
-                      onScroll={(e) => {
-                        if (process.env.NODE_ENV !== 'production') {
-                          console.log('[Files Tab] Scroll event detected:', { scrollTop: e.currentTarget.scrollTop, scrollHeight: e.currentTarget.scrollHeight, clientHeight: e.currentTarget.clientHeight });
-                        }
-                      }}
-                      onPointerDown={(e) => {
-                        if (process.env.NODE_ENV !== 'production') {
-                          console.log('[Files Tab] Pointer down:', { target: (e.target as HTMLElement)?.tagName, pointerType: e.pointerType });
-                        }
-                      }}
+                      tabIndex={0}
+                      role="region"
+                      aria-label="File Explorer"
                       onKeyDown={(e) => {
-                        // Arrow key navigation for accessibility - ONLY when container is focused
-                        // Don't intercept arrow keys when child inputs/components are focused
-                        if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && e.target === e.currentTarget) {
+                        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
                           e.preventDefault();
                           const scrollAmount = 40;
                           const container = e.currentTarget;
-                          if (e.key === 'ArrowDown') {
-                            container.scrollTop += scrollAmount;
-                          } else {
-                            container.scrollTop -= scrollAmount;
-                          }
-                          if (process.env.NODE_ENV !== 'production') {
-                            console.log('[Files Tab] Arrow key scroll:', { key: e.key, newScrollTop: container.scrollTop });
-                          }
+                          container.scrollTop += e.key === 'ArrowDown' ? scrollAmount : -scrollAmount;
                         }
                       }}
-                      // Drag-to-scroll for mobile
                       onTouchStart={(e) => {
                         const container = e.currentTarget;
                         (container as any)._dragStartY = e.touches[0].clientY;
                         (container as any)._dragStartScrollTop = container.scrollTop;
-                        if (process.env.NODE_ENV !== 'production') {
-                          console.log('[Files Tab] Touch start:', { startY: (container as any)._dragStartY });
-                        }
                       }}
                       onTouchMove={(e) => {
                         const container = e.currentTarget;
                         if ((container as any)._dragStartY !== undefined) {
                           const deltaY = (container as any)._dragStartY - e.touches[0].clientY;
                           container.scrollTop = (container as any)._dragStartScrollTop + deltaY;
-                          if (process.env.NODE_ENV !== 'production') {
-                            console.log('[Files Tab] Touch drag:', { deltaY, scrollTop: container.scrollTop });
-                          }
                         }
                       }}
-                      onTouchEnd={() => {
-                        const container = document.querySelector('[data-file-tree] .overflow-y-auto') as HTMLElement;
-                        if (container) {
-                          (container as any)._dragStartY = undefined;
-                          (container as any)._dragStartScrollTop = undefined;
-                          if (process.env.NODE_ENV !== 'production') {
-                            console.log('[Files Tab] Touch end');
-                          }
-                        }
+                      onTouchEnd={(e) => {
+                        const container = e.currentTarget as HTMLElement;
+                        (container as any)._dragStartY = undefined;
+                        (container as any)._dragStartScrollTop = undefined;
                       }}
-                      tabIndex={0}  // Make focusable for keyboard navigation
-                      role="region"
-                      aria-label="File Explorer"
                     >
-                      <div className="p-4 space-y-2 max-w-full">
+                    <div className="p-4 space-y-2 max-w-full">
                        <div className="flex items-center justify-between mb-4">
                          <span className="text-xs text-white/60">File Explorer</span>
                          <div className="flex gap-1">
                            <Badge variant="secondary" className="text-[10px] bg-white/10">
                             {filesystem?.files?.length || 0} files
                           </Badge>
-                          {/* Paste button when clipboard has content */}
-                          {clipboard && (
+                          {/* Paste button when file clipboard has content */}
+                          {fileClipboard && (
                             <Button
                               variant="ghost"
                               size="icon"
                               onClick={() => handlePasteToFolder("/")}
                               className="h-6 w-6 hover:bg-white/10 text-green-400"
-                              title={`Paste ${clipboard.sourcePath.split('/').pop()}`}
+                              title={`Paste ${fileClipboard.sourcePath.split('/').pop()}`}
                             >
                               <Plus className="h-3 w-3" />
                             </Button>
@@ -3115,13 +3090,13 @@ export function WorkspacePanel() {
                       )}
 
                       {/* Clipboard indicator */}
-                      {clipboard && (
+                      {fileClipboard && (
                         <div className="mb-2 p-2 bg-yellow-500/10 border border-yellow-500/30 rounded flex items-center justify-between">
                           <span className="text-xs text-yellow-300">
-                            {clipboard.operation === 'cut' ? '✂️ Cut' : '📋 Copied'}: {clipboard.sourcePath.split('/').pop()}
+                            {fileClipboard.operation === 'cut' ? '✂️ Cut' : '📋 Copied'}: {fileClipboard.sourcePath.split('/').pop()}
                           </span>
                           <button
-                            onClick={() => setClipboard(null)}
+                            onClick={() => setFileClipboard(null)}
                             className="text-white/60 hover:text-white"
                           >
                             <X className="h-3 w-3" />
@@ -4461,8 +4436,44 @@ export function WorkspacePanel() {
                 </TabsContent>
 
                 {/* Integrations Tab - OAuth Connections */}
-                <TabsContent value="integrations" className="flex-1 mt-0 overflow-hidden">
-                  <div className="h-full overflow-y-auto custom-scrollbar">
+                <TabsContent 
+                  value="integrations" 
+                  className="flex-1 mt-0 overflow-y-auto"
+                >
+                  <div 
+                    className="h-full overflow-y-auto custom-scrollbar"
+                    ref={(el) => {
+                      integrationsScrollRef.current = el;
+                    }}
+                    tabIndex={0}
+                    role="region"
+                    aria-label="Integrations"
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const scrollAmount = 40;
+                        const container = e.currentTarget;
+                        container.scrollTop += e.key === 'ArrowDown' ? scrollAmount : -scrollAmount;
+                      }
+                    }}
+                    onTouchStart={(e) => {
+                      const container = e.currentTarget;
+                      (container as any)._dragStartY = e.touches[0].clientY;
+                      (container as any)._dragStartScrollTop = container.scrollTop;
+                    }}
+                    onTouchMove={(e) => {
+                      const container = e.currentTarget;
+                      if ((container as any)._dragStartY !== undefined) {
+                        const deltaY = (container as any)._dragStartY - e.touches[0].clientY;
+                        container.scrollTop = (container as any)._dragStartScrollTop + deltaY;
+                      }
+                    }}
+                    onTouchEnd={(e) => {
+                      const container = e.currentTarget as HTMLElement;
+                      (container as any)._dragStartY = undefined;
+                      (container as any)._dragStartScrollTop = undefined;
+                    }}
+                  >
                     <div className="p-4">
                       <IntegrationPanel
                         userId={getOrCreateAnonymousSessionId()}
@@ -4550,9 +4561,15 @@ export function WorkspacePanel() {
                 </TabsContent>
 
                 {/* Command Deck Tab */}
-                <TabsContent value="command-deck" className="flex-1 mt-0 overflow-hidden">
+                <TabsContent 
+                  value="command-deck" 
+                  className="flex-1 mt-0 overflow-y-auto"
+                >
                   <div
                     className="h-full overflow-y-auto custom-scrollbar"
+                    ref={(el) => {
+                      commandDeckScrollRef.current = el;
+                    }}
                     tabIndex={0}
                     role="region"
                     aria-label="Command Deck"
@@ -4564,14 +4581,72 @@ export function WorkspacePanel() {
                         container.scrollTop += e.key === 'ArrowDown' ? scrollAmount : -scrollAmount;
                       }
                     }}
+                    onTouchStart={(e) => {
+                      const container = e.currentTarget;
+                      (container as any)._dragStartY = e.touches[0].clientY;
+                      (container as any)._dragStartScrollTop = container.scrollTop;
+                    }}
+                    onTouchMove={(e) => {
+                      const container = e.currentTarget;
+                      if ((container as any)._dragStartY !== undefined) {
+                        const deltaY = (container as any)._dragStartY - e.touches[0].clientY;
+                        container.scrollTop = (container as any)._dragStartScrollTop + deltaY;
+                      }
+                    }}
+                    onTouchEnd={(e) => {
+                      const container = e.currentTarget as HTMLElement;
+                      (container as any)._dragStartY = undefined;
+                      (container as any)._dragStartScrollTop = undefined;
+                    }}
                   >
                     <CommandDeckPlugin />
                   </div>
                 </TabsContent>
 
                 {/* MCP Servers Tab */}
-                <TabsContent value="mcp-servers" className="flex-1 mt-0 overflow-hidden">
-                  <div className="h-full overflow-y-auto custom-scrollbar">
+                <TabsContent 
+                  value="mcp-servers" 
+                  className="flex-1 mt-0 overflow-y-auto"
+                >
+                  <div 
+                    className="h-full overflow-y-auto custom-scrollbar"
+                    ref={(el) => {
+                      mcpScrollRef.current = el;
+                    }}
+                    tabIndex={0}
+                    role="region"
+                    aria-label="MCP Servers"
+                    onWheel={(e) => {
+                      const container = e.currentTarget;
+                      e.stopPropagation();
+                      container.scrollTop += e.deltaY;
+                    }}
+                    onKeyDown={(e) => {
+                      if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        e.preventDefault();
+                        const scrollAmount = 40;
+                        const container = e.currentTarget;
+                        container.scrollTop += e.key === 'ArrowDown' ? scrollAmount : -scrollAmount;
+                      }
+                    }}
+                    onTouchStart={(e) => {
+                      const container = e.currentTarget;
+                      (container as any)._dragStartY = e.touches[0].clientY;
+                      (container as any)._dragStartScrollTop = container.scrollTop;
+                    }}
+                    onTouchMove={(e) => {
+                      const container = e.currentTarget;
+                      if ((container as any)._dragStartY !== undefined) {
+                        const deltaY = (container as any)._dragStartY - e.touches[0].clientY;
+                        container.scrollTop = (container as any)._dragStartScrollTop + deltaY;
+                      }
+                    }}
+                    onTouchEnd={(e) => {
+                      const container = e.currentTarget as HTMLElement;
+                      (container as any)._dragStartY = undefined;
+                      (container as any)._dragStartScrollTop = undefined;
+                    }}
+                  >
                     <MCPServersTab />
                   </div>
                 </TabsContent>

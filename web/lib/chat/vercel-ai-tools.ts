@@ -38,16 +38,17 @@ function createCapabilityTools(context: ToolExecutionContext): Record<string, To
   for (const capability of ALL_CAPABILITIES) {
     const toolName = capability.id.replace('.', '_');
 
-    tools[toolName] = tool({
+    tools[toolName] = (tool as any)({
       description: capability.description,
       parameters: capability.inputSchema as any,
-      execute: async (args: any) => {
+      execute: async (args: any, execOptions: any) => {
         try {
           const result = await router.execute(capability.id, args, {
             userId: context.userId,
             conversationId: context.conversationId,
-            sessionId: context.sessionId,
-          });
+            sessionId: (context as any).sessionId,
+            ...(execOptions || {}),
+          } as any);
           if (result.success) {
             return result.output;
           } else {
@@ -71,7 +72,7 @@ function createCapabilityChainTool(context: ToolExecutionContext): Record<string
   const router = getCapabilityRouter();
 
   return {
-    run_capability_chain: tool({
+    run_capability_chain: (tool as any)({
       description: `Execute a chain of capabilities in sequence for multi-step workflows. Available capabilities: ${ALL_CAPABILITIES.map(c => c.id).join(', ')}`,
       parameters: z.object({
         name: z.string().describe('Chain name/description'),
@@ -81,7 +82,6 @@ function createCapabilityChainTool(context: ToolExecutionContext): Record<string
         })).describe('Ordered sequence of capabilities to execute'),
         stop_on_failure: z.boolean().optional().default(false).describe('Stop chain if a step fails'),
       }),
-      // @ts-ignore - Vercel AI SDK workaround
       execute: async (args: any) => {
         try {
           const { createCapabilityChain } = await import('@bing/shared/agent/capability-chain');
@@ -101,8 +101,8 @@ function createCapabilityChainTool(context: ToolExecutionContext): Record<string
               return router.execute(capName, config, {
                 userId: context.userId,
                 conversationId: context.conversationId,
-                sessionId: context.sessionId,
-              });
+                sessionId: (context as any).sessionId,
+              } as any);
             },
           });
 
@@ -139,10 +139,9 @@ export function createToolFromCapability(
     parameters?: z.ZodSchema;
   }
 ): Tool {
-  return tool({
+  return (tool as any)({
     description: options?.description || `Execute ${capabilityId} capability`,
     parameters: options?.parameters || z.record(z.any()),
-    // @ts-ignore - Workaround for Vercel AI SDK tool() overload matching issue
     execute: async (args: any) => {
       const context: ToolExecutionContext = {};
 
@@ -204,8 +203,7 @@ function createVFSTools(context: ToolExecutionContext): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
   
   for (const [name, vfsTool] of Object.entries(mcpVFSTools)) {
-    // @ts-ignore - AI SDK tool compatibility
-    tools[name] = vfsTool;
+    tools[name] = vfsTool as any;
   }
   
   return tools;
@@ -228,10 +226,9 @@ async function createMCPTools(context: ToolExecutionContext): Promise<Record<str
     for (const toolDef of mcpToolDefs) {
       const { name, description, parameters } = toolDef.function;
       
-      mcpTools[name] = tool({
+      mcpTools[name] = (tool as any)({
         description: description || `MCP tool: ${name}`,
         parameters: parameters || z.record(z.any()),
-        // @ts-ignore - Vercel AI SDK workaround
         execute: async (args: any) => {
           try {
             const result = await callMCPToolFromAI_SDK(name, args, context.userId || '');

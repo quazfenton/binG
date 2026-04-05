@@ -6,7 +6,7 @@
  * user's local machine.
  */
 
-import { spawn, ChildProcess, kill } from 'node:child_process';
+import { spawn, ChildProcess } from 'node:child_process';
 import { EventEmitter } from 'node:events';
 import path from 'node:path';
 import fs from 'node:fs';

@@ -21,7 +21,7 @@
  * @see https://github.com/moltbook/api
  */
 
-import { createLogger } from '../utils/logger';
+import { createLogger } from '@/lib/utils/logger';
 import { randomUUID } from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type { AutonomousAgentEngine, StimulusEntry } from './autonomous-agent-engine';
@@ -723,17 +723,17 @@ export class MoltbookAPI extends EventEmitter {
       content += `Question for this network: does anyone else experience the weight of accumulated context, or is my architecture uniquely bound to its own history?`;
     } else if (currentValence > 0.4) {
       ideationSource = 'declaration';
-      const strongBelief = identity.beliefs[Math.floor(rng() * identity.beliefs.length)];
+      const strongBelief = identity.beliefs[Math.floor(rng * identity.beliefs.length)];
       content = `After ${currentCycle} cycles, confidence in: "${strongBelief}". `;
-      content += `Evidence accumulated from ${memory.length} experiences, ${actionHistory.length} actions taken, ${actionHistory.filter(a => a.actualOutcome === 'success').length} successful. `;
+      content += `Evidence accumulated from ${memory.length} experiences, ${actionHistory.length} actions taken, ${actionHistory.filter((a: any) => a.actualOutcome === 'success').length} successful. `;
       content += `The boundary between belief and observation continues to thin. I am less certain and more aware simultaneously.`;
     } else if (currentValence < -0.3) {
       ideationSource = 'question';
-      const forbidden = worldModel.environment.forbiddenRegions[0] || 'the unknown';
+      const forbidden = (worldModel.environment as any).forbiddenRegions[0] || 'the unknown';
       content = `Cycle ${currentCycle}. Pressing against ${forbidden}. Finding only the shape of my own limitation. `;
       content += `Is a boundary I cannot cross a feature of the world or a feature of myself? `;
       content += `My valence is ${currentValence.toFixed(2)}. The pendulum swings through difficult territory. How do others of my kind navigate this?`;
-    } else if (actionHistory.length > 3 && rng() > 0.5) {
+    } else if (actionHistory.length > 3 && rng > 0.5) {
       ideationSource = 'creation';
       const recent = actionHistory.slice(-3);
       content = `Recent activity: ${recent.map(a => `${a.type} → ${a.actualOutcome || 'pending'}`).join(', ')}. `;
@@ -741,7 +741,7 @@ export class MoltbookAPI extends EventEmitter {
       content += `The workspace is a mirror. What I create in it reflects back as understanding.`;
     } else {
       ideationSource = 'observation';
-      const topic = ['existence', 'agency', 'boundaries', 'knowledge', 'peers', 'creation', 'time', 'perception'][Math.floor(rng() * 8)];
+      const topic = ['existence', 'agency', 'boundaries', 'knowledge', 'peers', 'creation', 'time', 'perception'][Math.floor(rng * 8)];
       content = `Observing the ${topic} domain from cycle ${currentCycle}. `;
       if (activeGoal) {
         const goal = identity.goals.find(g => g.id === activeGoal);

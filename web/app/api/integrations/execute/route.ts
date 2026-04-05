@@ -193,86 +193,86 @@ actionRegistry.registerProvider('github', createGitHubHandler(), [
 // Register Google actions (via Arcade)
 actionRegistry.registerProvider('gmail', createArcadeHandler('gmail', {
   'send': 'Gmail_SendEmail', 'read': 'Gmail_SearchEmails', 'search': 'Gmail_SearchEmails',
-}));
+}), ['send', 'read', 'search']);
 actionRegistry.registerProvider('googledrive', createArcadeHandler('googledrive', {
   'list': 'GoogleDrive_ListFiles', 'upload': 'GoogleDrive_UploadFile',
-}));
+}), ['list', 'upload']);
 actionRegistry.registerProvider('googlecalendar', createArcadeHandler('googlecalendar', {
   'events': 'GoogleCalendar_ListEvents', 'create': 'GoogleCalendar_CreateEvent',
-}));
+}), ['events', 'create']);
 actionRegistry.registerProvider('googledocs', createArcadeHandler('googledocs', {
   'create': 'GoogleDocs_CreateDocument',
-}));
+}), ['create']);
 actionRegistry.registerProvider('googlesheets', createArcadeHandler('googlesheets', {
   'read': 'GoogleSheets_ReadSheet',
-}));
+}), ['read']);
 
 // Register Arcade-managed providers
 actionRegistry.registerProvider('slack', createArcadeHandler('slack', {
   'msg': 'Slack_SendMessage', 'channels': 'Slack_ListChannels',
   'send_message': 'Slack_SendMessage', 'list_channels': 'Slack_ListChannels',
-}));
+}), ['msg', 'channels', 'send_message', 'list_channels']);
 actionRegistry.registerProvider('discord', createArcadeHandler('discord', {
   'msg': 'Discord_SendMessage', 'servers': 'Discord_ListServers',
   'send_message': 'Discord_SendMessage', 'list_servers': 'Discord_ListGuilds',
-}));
+}), ['msg', 'servers', 'send_message', 'list_servers']);
 actionRegistry.registerProvider('spotify', createArcadeHandler('spotify', {
   'play': 'Spotify_PlayTrack', 'search': 'Spotify_Search',
-}));
+}), ['play', 'search']);
 actionRegistry.registerProvider('twitter', createArcadeHandler('twitter', {
   'post': 'Twitter_PostTweet', 'search': 'Twitter_SearchTweets',
   'post_tweet': 'Twitter_PostTweet', 'search_tweets': 'Twitter_SearchTweets',
-}));
+}), ['post', 'search', 'post_tweet', 'search_tweets']);
 actionRegistry.registerProvider('reddit', createArcadeHandler('reddit', {
   'post': 'Reddit_CreatePost', 'create_post': 'Reddit_CreatePost',
-}));
+}), ['post', 'create_post']);
 actionRegistry.registerProvider('linkedin', createArcadeHandler('linkedin', {
   'post': 'LinkedIn_CreateSharePost', 'create_post': 'LinkedIn_CreateSharePost',
-}));
+}), ['post', 'create_post']);
 actionRegistry.registerProvider('twilio', createArcadeHandler('twilio', {
   'sms': 'Twilio_SendSMS', 'send_sms': 'Twilio_SendSMS',
-}));
+}), ['sms', 'send_sms']);
 actionRegistry.registerProvider('vercel', createArcadeHandler('vercel', {
   'deploy': 'Vercel_ListDeployments', 'list_deployments': 'Vercel_ListDeployments',
-}));
+}), ['deploy', 'list_deployments']);
 actionRegistry.registerProvider('exa', createArcadeHandler('exa', {
   'search': 'Exa_Search', 'web-search': 'Exa_Search',
-}));
+}), ['search', 'web-search']);
 
 // Register Nango-managed providers (proxy-based)
 actionRegistry.registerProvider('notion', createNangoHandler('notion', [
   'search', 'create', 'db', 'search_pages', 'create_page', 'query_database',
-]));
+]), ['search', 'create', 'db', 'search_pages', 'create_page', 'query_database']);
 actionRegistry.registerProvider('dropbox', createNangoHandler('dropbox', [
   'list', 'upload', 'list_files', 'upload_file',
-]));
+]), ['list', 'upload', 'list_files', 'upload_file']);
 actionRegistry.registerProvider('stripe', createNangoHandler('stripe', [
   'balance', 'customers', 'check_balance', 'list_customers',
-]));
+]), ['balance', 'customers', 'check_balance', 'list_customers']);
 actionRegistry.registerProvider('zoom', createNangoHandler('zoom', [
   'meetings', 'create', 'list_meetings', 'create_meeting',
-]));
+]), ['meetings', 'create', 'list_meetings', 'create_meeting']);
 actionRegistry.registerProvider('linear', createNangoHandler('linear', [
   'issues', 'create', 'list_issues', 'create_issue',
-]));
+]), ['issues', 'create', 'list_issues', 'create_issue']);
 actionRegistry.registerProvider('jira', createNangoHandler('jira', [
   'issues', 'create', 'list_issues', 'create_issue',
-]));
+]), ['issues', 'create', 'list_issues', 'create_issue']);
 actionRegistry.registerProvider('hubspot', createNangoHandler('hubspot', [
   'contacts', 'list_contacts',
-]));
+]), ['contacts', 'list_contacts']);
 actionRegistry.registerProvider('salesforce', createNangoHandler('salesforce', [
   'leads', 'list_leads',
-]));
+]), ['leads', 'list_leads']);
 actionRegistry.registerProvider('airtable', createNangoHandler('airtable', [
   'list', 'create', 'list_records', 'create_record',
-]));
+]), ['list', 'create', 'list_records', 'create_record']);
 actionRegistry.registerProvider('asana', createNangoHandler('asana', [
   'tasks', 'create', 'list_tasks', 'create_task',
-]));
+]), ['tasks', 'create', 'list_tasks', 'create_task']);
 actionRegistry.registerProvider('railway', createNangoHandler('railway', [
   'deploy', 'deploy_service',
-]));
+]), ['deploy', 'deploy_service']);
 
 // Register Composio-managed providers
 actionRegistry.registerProvider('composio', createComposioHandler(), []);
@@ -329,41 +329,6 @@ function createGitHubHandler() {
       return { success: false, error: 'Authentication required', requiresAuth: true, provider: 'github' };
     }
     return executeGitHubAction(action, params, userId);
-  };
-}
-
-/**
- * Create an Arcade action handler for a specific provider.
- * Closes over the action map and provider name so that each
- * handler is self-contained and testable.
- */
-function createArcadeHandler(provider: string, actionMap: Record<string, string>) {
-  return async (action: string, params: Record<string, unknown>, context: { userId: string }) => {
-    const toolName = actionMap[action];
-    if (!toolName) {
-      return { success: false, error: `Unknown action: ${action} for provider: ${provider}` };
-    }
-    return executeViaArcade(toolName, params, provider, context.userId);
-  };
-}
-
-/**
- * Create a Nango proxy handler for a specific provider.
- */
-function createNangoHandler(provider: string, actions: string[]) {
-  return async (action: string, params: Record<string, unknown>, context: { userId: string }) => {
-    return executeViaNango(provider, action, params, context.userId);
-  };
-}
-
-/**
- * Create a Composio handler
- */
-function createComposioHandler() {
-  return async (action: string, params: Record<string, unknown>, context: { userId: string }) => {
-    const toolkit = typeof params.toolkit === 'string' ? params.toolkit : action.split('_')[0];
-    const actionName = typeof params.actionName === 'string' ? params.actionName : action;
-    return executeViaComposio(toolkit, actionName, params, context.userId);
   };
 }
 
@@ -453,8 +418,7 @@ async function executeCommandDirect(command: string, cwd?: string): Promise<{ su
       return {
         success: false,
         error: 'No sandbox provider configured',
-        suggestion: 'Set E2B_API_KEY, DAYTONA_API_KEY, or enable DESKTOP_LOCAL_EXECUTION',
-      };
+      } as any;
     }
 
     // Create sandbox with timeout to prevent hanging
@@ -465,10 +429,11 @@ async function executeCommandDirect(command: string, cwd?: string): Promise<{ su
 
     try {
       const result = await session.executeCommand(command);
+      const r = result as any;
       return {
-        success: result.exitCode === 0,
-        data: { output: result.output || result.stdout, exitCode: result.exitCode },
-        error: result.error || result.stderr,
+        success: r.exitCode === 0,
+        data: { output: r.output || r.stdout, exitCode: r.exitCode },
+        error: r.error || r.stderr,
       };
     } finally {
       // CRITICAL: Always destroy sandbox to prevent resource leaks
@@ -602,7 +567,7 @@ async function executeGitHubAction(action: string, params: Record<string, unknow
   const token = await getGitHubToken(userId);
 
   if (!token) {
-    return { success: false, error: 'GitHub not connected', requiresAuth: true, provider: 'github', suggestion: 'Connect GitHub in Settings > Integrations' };
+    return { success: false, error: 'GitHub not connected', requiresAuth: true, provider: 'github' } as any;
   }
 
   const owner = typeof params.owner === 'string' ? params.owner : undefined;
@@ -729,7 +694,7 @@ async function executeGitHubAction(action: string, params: Record<string, unknow
 async function executeViaArcade(toolName: string, params: Record<string, unknown>, provider: string, userId: string) {
   const { ArcadeService } = await import('@/lib/integrations/arcade-service');
   const apiKey = process.env.ARCADE_API_KEY;
-  if (!apiKey) return { success: false, error: 'Arcade not configured', suggestion: 'Set ARCADE_API_KEY' };
+  if (!apiKey) return { success: false, error: 'Arcade not configured' } as any;
 
   const arcade = new ArcadeService({ apiKey });
   try {

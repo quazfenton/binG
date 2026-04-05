@@ -27,7 +27,7 @@ let secretsPromise: Promise<SecretsAdapter> | null = null;
 
 function getSecrets(): Promise<SecretsAdapter> {
   if (!secretsPromise) {
-    secretsPromise = isDesktopMode
+    secretsPromise = isDesktopMode()
       ? import('./desktop').then(m => m.secrets)
       : import('./web').then(m => m.secrets);
   }

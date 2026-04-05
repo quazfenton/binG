@@ -1271,12 +1271,12 @@ class GitBackedVFSProxy {
     if (isDesktopMode() && isUsingLocalFS()) {
       try {
         const result = await fsBridge.deletePath(ownerId, targetPath);
-        
+
         // Emit filesystem change event for UI updates
         const version = await fsBridge.getVersion(ownerId);
-        this.emitFileChange(ownerId, targetPath, 'delete', version);
-        this.emitSnapshotChange(ownerId, version);
-        
+        (this as any).emitFileChange(ownerId, targetPath, 'delete', version);
+        (this as any).emitSnapshotChange(ownerId, version);
+
         return result;
       } catch (error: any) {
         throw new Error(`Failed to delete from local filesystem: ${error.message}`);

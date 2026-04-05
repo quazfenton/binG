@@ -58,14 +58,23 @@ export class MCPToolRegistry {
 
   /**
    * Register a server configuration
+   *
+   * SAFETY: Rejects stdio transport in web mode to prevent server-side npx spawning.
    */
   async registerServer(config: MCPServerConfig): Promise<void> {
     if (config.enabled === false) {
       return
     }
 
+    // Defense-in-depth: reject stdio transport in web mode
+    const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+    if (config.transport?.type === 'stdio' && !isDesktop) {
+      console.error(`[MCPRegistry] REJECTED stdio server in web mode: ${config.name} (${config.id})`)
+      return
+    }
+
     this.serverConfigs.set(config.id, config)
-    
+
     const ClientClass = await getMcpClient();
     const client = new ClientClass(config.transport)
     this.clients.set(config.id, client)
@@ -107,6 +116,49 @@ export class MCPToolRegistry {
       serverId,
       timestamp: new Date(),
     })
+  }
+
+  /**
+   * Connect to a specific server by ID
+   */
+  async connectServer(serverId: string, timeout: number = 30000): Promise<void> {
+    const client = this.clients.get(serverId);
+    if (!client) {
+      console.error(`[MCPRegistry] Server not found: ${serverId}`);
+      return;
+    }
+
+    try {
+      await client.connect(timeout);
+
+      // Load tools from this specific server
+      const tools = await client.listTools();
+      for (const tool of tools) {
+        const config = this.serverConfigs.get(serverId);
+        if (config) {
+          this.tools.set(`${serverId}:${tool.name}`, {
+            tool,
+            serverId,
+            serverName: config.name,
+            enabled: true,
+          });
+        }
+      }
+
+      this.emitEvent({
+        type: 'server_connected',
+        serverId,
+        timestamp: new Date(),
+      });
+    } catch (error: any) {
+      console.error(`[MCPRegistry] Failed to connect to server ${serverId}:`, error.message);
+      this.emitEvent({
+        type: 'server_error',
+        serverId,
+        error: error.message,
+        timestamp: new Date(),
+      });
+    }
   }
 
   /**

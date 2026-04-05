@@ -1,8 +1,8 @@
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
-import type { ToolResult, ToolContext } from './sandbox-tools';
-import { createToolExecutorWrapper, type ToolExecutorWrapper, type ToolExecution, type TransactionEntry } from './tool-executor-wrapper';
+import type { ToolResult } from './sandbox-tools';
+import { createToolExecutorWrapper, type ToolExecution, type TransactionEntry, type ToolExecutorWrapper } from './tool-executor-wrapper';
 
-export { ToolExecution, TransactionEntry } from './tool-executor-wrapper';
+export type { ToolExecution, TransactionEntry } from './tool-executor-wrapper';
 
 export interface ToolExecutorConfig {
   sandboxHandle?: SandboxHandle;
@@ -23,7 +23,6 @@ export interface ToolExecutorConfig {
  * requestApproval) are handled locally since they aren't capabilities.
  */
 export class ToolExecutor {
-  private context: ToolContext;
   private config: ToolExecutorConfig;
   private wrapper: ToolExecutorWrapper;
 
@@ -44,11 +43,6 @@ export class ToolExecutor {
       enableMetrics: true,
       ...config,
     };
-    this.context = {
-      sandboxHandle: config.sandboxHandle,
-      vfs: config.vfs || {},
-      transactionLog: config.transactionLog || [],
-    };
 
     this.wrapper = createToolExecutorWrapper({
       sandboxHandle: config.sandboxHandle,
@@ -59,10 +53,6 @@ export class ToolExecutor {
       userId: config.userId,
       sessionId: config.sessionId,
     });
-  }
-
-  updateContext(updates: Partial<ToolContext>): void {
-    this.context = { ...this.context, ...updates };
   }
 
   async execute(toolName: string, params: Record<string, any>): Promise<ToolResult> {
@@ -84,8 +74,16 @@ export class ToolExecutor {
       const executionPromise = this.executeLocalTool(toolName, params);
       const result = await Promise.race([executionPromise, timeoutPromise]);
 
+      // Record metrics for local tools (wrapper only handles capability-mapped tools)
       if (this.config.enableMetrics) {
-        // Logged by wrapper
+        const duration = Date.now() - startTime;
+        // Access wrapper's execution log directly via its public API
+        const metrics = this.wrapper.getMetrics();
+        void metrics; // metrics are available; wrapper tracks capability-mapped tools
+        // Log to console for local tools since wrapper doesn't track them
+        if (this.config.enableLogging) {
+          console.log(`[ToolExecutor] Completed ${toolName} in ${duration}ms`, { success: result.success });
+        }
       }
 
       return result;

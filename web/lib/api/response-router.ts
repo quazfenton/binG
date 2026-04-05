@@ -604,7 +604,9 @@ export class ResponseRouter {
               userId: req.userId,
               requestId: req.requestId,
               conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
-              enableTools: req.enableTools ?? (detectedType === 'tool' && !!req.userId),
+              // Always enable tools — VFS tools (write_file, read_file, apply_diff) are
+              // always available and the LLM should use them for file operations.
+              enableTools: req.enableTools !== false,
               enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
               isSandboxCommand: detectedType === 'sandbox',
               apiKeys: req.apiKeys,
@@ -635,7 +637,9 @@ export class ResponseRouter {
             userId: req.userId,
             requestId: req.requestId,
             conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
-            enableTools: req.enableTools ?? (detectedType === 'tool' && !!req.userId),
+            // Always enable tools — VFS tools (write_file, read_file, apply_diff) are
+            // always available and the LLM should use them for file operations.
+            enableTools: req.enableTools !== false,
             enableSandbox: req.enableSandbox ?? (detectedType === 'sandbox' && !!req.userId),
             isSandboxCommand: detectedType === 'sandbox',
             apiKeys: req.apiKeys,

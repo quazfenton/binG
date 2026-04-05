@@ -165,7 +165,7 @@ export async function initializeEventSystem(): Promise<void> {
 
   // Register handlers
   registerSampleHandlers();
-  registerbinGHandlers();
+  await registerbinGHandlers();
 
   console.log('[Events] Event system initialized');
 }

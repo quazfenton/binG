@@ -41,11 +41,6 @@ function log(level: 'info' | 'warn' | 'error', msg: string, meta?: any) {
   console.log(`${prefix} ${tag}: ${msg}`, meta ?? '');
 }
 
-// Configuration from environment
-const PORT = parseInt(process.env.MCP_PORT || '8888', 10);
-const WORKSPACE_ROOT = process.env.WORKSPACE_ROOT || '/workspace';
-const VFS_ROOT = process.env.VFS_ROOT || '/workspace/vfs';
-
 class MCPServerService {
   private tools: any[] = [];
   private initialized = false;
@@ -215,7 +210,7 @@ async function main() {
     await mcpServerService.initialize();
 
     server.listen(PORT, () => {
-      logger.info(`MCP server listening on port ${PORT}`);
+      log('info', `MCP server listening on port ${PORT}`);
     });
 
     // Graceful shutdown

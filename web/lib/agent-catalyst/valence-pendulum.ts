@@ -43,7 +43,7 @@ const DEFAULT_CONFIG: Required<ValenceConfig> = {
 export class ValencePendulum {
   private config: Required<ValenceConfig>;
   private state: ValenceState;
-  private onChange: ((state: ValenceState) => void) | null = null;
+  private _onChange: ((state: ValenceState) => void) | null = null;
   private lastTick = Date.now();
 
   constructor(config: ValenceConfig = {}) {
@@ -59,7 +59,7 @@ export class ValencePendulum {
   }
 
   onChange(callback: (state: ValenceState) => void): void {
-    this.onChange = callback;
+    this._onChange = callback;
   }
 
   /**
@@ -167,8 +167,8 @@ export class ValencePendulum {
     this.state.arousal = Math.max(0, Math.min(1, this.state.arousal));
     this.state.momentum = Math.max(-1, Math.min(1, this.state.momentum));
 
-    if (this.onChange) {
-      this.onChange({ ...this.state });
+    if (this._onChange) {
+      this._onChange({ ...this.state });
     }
   }
 

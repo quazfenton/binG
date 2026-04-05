@@ -215,3 +215,169 @@ pnpm test
 - **JSX nesting verification** — Verified `relative` div properly wraps Textarea + buttons + file selector without breaking form structure
 - **Comprehensive test suite** — 20+ tests covering session tracking, file detection, @mention extraction, import resolution, and edge cases
 
+---
+
+## [Unreleased] — VFS Size Limits, MCP Tool Calling, and Security Hardening
+
+### 🔴 Critical Security Fixes
+
+- **OOM vulnerability on file uploads** — All API routes that accept file content now have O(1) `Content-Length` guards BEFORE buffering via `req.json()` or `req.formData()`. Prevents server crash from arbitrarily large payloads.
+  - `/api/filesystem/write` — 110MB body limit
+  - `/api/filesystem/import` — 120MB body + 100MB per-file via `File.size`
+  - `/api/sandbox/sync` — 120MB body + 100MB per-file
+  - `/api/sandbox/devbox` — 120MB body + 100MB per-file
+  - `/api/sandbox/webcontainer` — 120MB body + 100MB per-file
+  - GitHub import `fetchFileContent` — `Content-Length` check before `response.text()`
+
+- **Cross-user data leak in MCP tools** — Replaced global mutable `setToolContext()` with `AsyncLocalStorage` request-scoped isolation. Each async execution chain gets its own isolated context; concurrent requests cannot corrupt each other's userId.
+
+- **Error detail leakage to clients** — `/api/mcp` route and `/api/sandbox/webcontainer` no longer expose `error.message` (stack traces, internal paths) in responses. Returns generic "Internal server error" to clients; logs details server-side.
+
+### 🏗 Architecture
+
+- **VFS size limits raised to 100MB** — `MAX_FILE_SIZE` 10→100MB, `MAX_TOTAL_WORKSPACE_SIZE` 100→500MB, `fileContentSchema` Zod max 100MB. All limits consistent across 15+ files.
+- **MCP tool calling wired into LLM chat** — `getMCPToolsForAI_SDK()` now includes `vfsTools` (write_file, read_file, apply_diff, delete_file, list_files, search_files, batch_write, create_directory). `callMCPToolFromAI_SDK()` routes `vfs_*` tool calls with proper `AsyncLocalStorage` userId context.
+- **System prompt → tool calling** — Replaced XML tag-based editing instructions (`<file_edit>`, `WRITE <<<`, `<apply_diff>`) with function-calling instructions. Centralized in `packages/shared/agent/system-prompts.ts` as `VFS_FILE_EDITING_TOOL_PROMPT`. Old prompt preserved as comment for fallback.
+- **Desktop shadow commit protection** — `ShadowCommitManager.commit()` strips file content from transactions in desktop mode (files already on disk). Only metadata (paths, types, timestamps) persisted as audit trail. Automatic pruning after each commit (keep last 20 per session).
+- **Dead code cleanup** — `web/lib/mcp/server.ts` (standalone `StreamableHTTPServerTransport` server) moved to `deprecated/`. Zero callers; incompatible with Next.js architecture.
+
+### 🐛 Bug Fixes
+
+- **`ToolContext` type export crash** — Changed `ToolContext` from value export to `type` export in `web/lib/mcp/index.ts`. Was causing Next.js build failure ("Export ToolContext doesn't exist in target module").
+- **Architecture integration re-exports** — Added `getMCPToolsForAI_SDK`, `callMCPToolFromAI_SDK`, and other architecture-integration exports to `web/lib/mcp/index.ts` barrel. `chat/route.ts` import was failing at build time.
+- **Sandbox sync file size mismatch** — `sandbox-filesystem-sync.ts` hardcoded 5MB `MAX_FILE_SIZE_BYTES` silently dropped files that passed all other 100MB checks. Made configurable via `SANDBOX_SYNC_MAX_FILE_BYTES` env var with clear documentation.
+- **VFS sync-back default mismatch** — `vfs-sync-back.ts` `maxFileSize` default was 10MB; aligned to 100MB.
+- **pnpm workspace gap** — Added `packages/*` to `pnpm-workspace.yaml` to resolve `@bing/platform@workspace:*` dependency not found error.
+- **Desktop `git-tools` shadow commit skip** — `if (Object.keys(vfsState).length > 0)` guard in `git_commit` tool was skipping commits entirely in desktop mode (since `vfsState` was `{}`). Changed to `if (transactions.length > 0)`.
+
+### 📝 Files Changed
+
+| File | Change |
+|------|--------|
+| `web/lib/virtual-filesystem/virtual-filesystem-service.ts` | `MAX_FILE_SIZE` 10→100MB, `MAX_TOTAL_WORKSPACE_SIZE` 100→500MB |
+| `web/lib/validation/schemas.ts` | `fileContentSchema.max` 10→100MB |
+| `web/app/api/filesystem/write/route.ts` | O(1) `Content-Length` guard, desktop mode vfs skip |
+| `web/app/api/filesystem/import/route.ts` | O(1) `Content-Length` + `File.size` check |
+| `web/app/api/sandbox/sync/route.ts` | O(1) `Content-Length` + per-file guard |
+| `web/app/api/sandbox/devbox/route.ts` | O(1) `Content-Length` + per-file guard |
+| `web/app/api/sandbox/webcontainer/route.ts` | O(1) `Content-Length` + per-file guard, error leak fix |
+| `web/app/api/integrations/github/route.ts` | O(1) `Content-Length` in `fetchFileContent` |
+| `web/lib/virtual-filesystem/import-service.ts` | Desktop mode skip vfs snapshot, `.length` size check |
+| `web/lib/virtual-filesystem/git-backed-vfs.ts` | Desktop mode skip vfs snapshot build |
+| `web/lib/virtual-filesystem/sync/vfs-sync-back.ts` | `maxFileSize` default 10→100MB |
+| `web/lib/virtual-filesystem/sync/sandbox-filesystem-sync.ts` | Made `MAX_FILE_SIZE_BYTES` configurable via env var |
+| `web/lib/sandbox/security-manager.ts` | `MAX_FILE_SIZE` 10→1GB (sandbox provider limit, not VFS) |
+| `web/lib/middleware/filesystem-security.ts` | `maxFileSize` default 10→100MB |
+| `web/lib/orchestra/stateful-agent/commit/shadow-commit.ts` | Desktop mode content strip, auto-prune (`void` fire-and-forget) |
+| `web/app/api/chat/route.ts` | Desktop mode skip readFile loop, system prompt → tool-calling |
+| `web/app/api/filesystem/rollback/route.ts` | Desktop mode skip readFile loop |
+| `web/app/api/mcp/route.ts` | `AsyncLocalStorage` request-scoped context, error leak fix |
+| `web/lib/mcp/vfs-mcp-tools.ts` | `AsyncLocalStorage` context, `batch_write` max(50) |
+| `web/lib/mcp/index.ts` | Re-export architecture integration, `type ToolContext` fix |
+| `web/lib/mcp/architecture-integration.ts` | VFS tools registered in tool list, execution routing |
+| `packages/shared/agent/system-prompts.ts` | New `VFS_FILE_EDITING_TOOL_PROMPT` |
+| `pnpm-workspace.yaml` | Added `packages/*` workspace glob |
+| `web/lib/tools/git-tools.ts` | Desktop mode vfs skip, `transactions.length > 0` guard |
+| `deprecated/web/lib/mcp/server.ts` | Moved from `web/lib/mcp/server.ts` (dead code) |
+
+### ✅ How to Verify
+
+```bash
+# 1. Verify VFS tool registration (LLM sees file tools)
+curl -X POST http://localhost:3000/api/mcp \
+  -H "Content-Type: application/json" \
+  -d '{"jsonrpc":"2.0","method":"tools/list","id":1}'
+# Response should include: write_file, read_file, apply_diff, delete_file, etc.
+
+# 2. Verify O(1) body size guard
+curl -X POST http://localhost:3000/api/filesystem/write \
+  -H "Content-Type: application/json" \
+  -H "Content-Length: 999999999" \
+  -d '{}'
+# Should return 413 "Request body too large"
+
+# 3. Verify desktop mode shadow commits strip content
+# Set DESKTOP_MODE=true and check SQLite shadow_commits table:
+# The `transactions` column should contain only {path, type} without content fields
+
+# 4. Verify no cross-user data leak
+# Make two concurrent requests with different x-user-id headers
+# Each tool execution should use the correct userId via AsyncLocalStorage
+```
+
+### ⚠️ Breaking Changes
+
+- **MCP system prompt change** — LLM is now instructed to use function calling (`write_file()`, `apply_diff()`) instead of XML tags (`<file_edit>`, `WRITE <<<`). Models that don't support tool calling may need the old tag-based prompt re-enabled (see commented block in `chat/route.ts`).
+- **`setToolContext()` no longer global** — MCP tool context now uses `AsyncLocalStorage`. Any code calling `setToolContext()` outside of `toolContextStore.run()` will not affect tool execution. Use `toolContextStore.run({ userId, sessionId }, async () => ...)` instead.
+
+### 🔮 Future Work
+
+- **Streaming file import** — Replace `req.formData()` buffering with streaming multipart parser for imports >120MB
+- **Desktop git repo integration** — Use actual git commits (not shadow commits) for desktop mode version tracking
+- **Sandbox disk quota enforcement** — Add proactive disk usage monitoring per sandbox container
+- **MCP tool response compression** — Large `read_file` results should be chunked/paginated
+
+---
+
+## [Unreleased] — Capability Consolidation & Powers System
+
+### 🔴 Critical Bug Fixes
+
+- **Naming collision in command validation** (`agent-loop-wrapper.ts`) — `validateShellCommand(validated.command, validateCommand)` was passing the method itself as the validation config. Fixed by importing `validateCommand` from security as `validateBlockedCommand`.
+- **Tool routing silently failing** (`agent-loop.ts`) — `toolNameToCapability` mapped snake_case names (`exec_shell`) but LLM providers call tools by camelCase (`execShell`). Routing now falls through to original name on no match.
+- **Capability chain tool was plain object, not Vercel `Tool`** (`stateful-agent.ts`) — `additionalTools.runCapabilityChain` was a raw `{ description, parameters, execute }` object passed to `generateText`. Wrapped in `tool()` factory.
+- **Empty files treated as read failures** (`tool-executor-wrapper.ts`) — `!readResult.content` returned `true` for empty strings. Fixed to check `=== undefined || === null`.
+- **VFS updated before sandbox write, creating inconsistency** (`tool-executor-wrapper.ts`) — `writeFile()` updated VFS first, then sandbox. If sandbox write failed, VFS had stale data. Reversed order: sandbox first, VFS only on success.
+- **`require()` in ES modules** (`bing-handlers.ts`) — `require('../router')` replaced with `await import('../router')`. `registerbinGHandlers()` now async.
+- **`require('ai')` in ES modules** (`powers/index.ts`) — Replaced with `await import('ai')`. `buildPowerTools()` now async.
+- **WASM runner instance per call** (`powers/index.ts`, `invoke.ts`) — `new WasmRunner()` on every invocation wasted module cache. Now uses exported `globalRunner` singleton.
+- **Empty enum crashes zod** (`powers/index.ts`) — `z.enum([] as [string, ...string[]])` throws. Added guard: empty arrays return `z.any()`.
+- **`executeCapability` swallowed all errors** (`tool-executor-wrapper.ts`) — Catch block returned `{ success: false }` silently. Removed catch; errors now propagate so callers can handle them explicitly.
+- **Consensus check broken — string equality impossible** (`bing-handlers.ts`) — `checkConsensus` compared full LLM response strings which never match character-for-character. Replaced with keyword-overlap 2/3 threshold algorithm.
+- **Majority vote returned first item, not majority** (`bing-handlers.ts`) — Fixed to return median-length response as proxy for "most reasoned".
+- **Hardcoded `openrouter` provider** (`bing-handlers.ts`) — `handleAgentLoop` now derives provider from model name prefix (gpt→openai, claude→anthropic, gemini→google).
+- **Post-execution hooks could fail main execution** (`stateful-agent.ts`) — `recordAgencyExecution` and `triggerSkillBootstrap` now wrapped in try/catch with warning logs. Failures are non-fatal.
+- **Fork bomb regex incomplete** (`tool-executor-wrapper.ts`) — Fixed pattern to match spacing variations: `:(){ :|:& };:` → `:\(\)\s*\{\s*:\s*\|\s*:?\s*&\s*\}\s*;`.
+- **`CAPABILITIES_BY_CATEGORY` hardcoded category list** (`capabilities.ts`) — Now derives categories dynamically from `ALL_CAPABILITIES` using `Set`. New categories auto-appear.
+- **Placeholder research functions returned fake data** (`bing-handlers.ts`) — `performSearch`, `analyzeSource`, `synthesizeResearch` now return empty/results with TODO markers instead of fabricated search results.
+
+### 🏗 Architecture
+
+- **Powers System** (`web/lib/powers/`) — User-installable, WASM-sandboxed skill capabilities. Less formal than native capabilities, customizable via SKILL.md + optional WASM handlers. Includes:
+  - `index.ts` — PowersRegistry, executePower, buildPowerTools, buildPowersSystemPrompt, jsonSchemaToZod
+  - `market.ts` — Marketplace index, install/search, parseSkillMd
+  - `invoke.ts` — InvokeSkill orchestration (policy → WASM → artifacts)
+  - `powers-cli.ts` — CLI: list, show, install, uninstall, search, add
+  - `use-power.ts` — React hook for marketplace UI
+  - `wasm/` — Wasmtime WASI runner with host_read/write/fetch/poll/log/getrandom, AsyncFetchQueue, SimpleVFS, Rust example handler
+- **System prompt integration** (`packages/shared/agent/system-prompts.ts`) — Added `generatePowersBlock()` and `composePromptWithPowers()` for injecting user-installed powers into role system prompts.
+- **Skill store service** (`web/lib/services/skill-store.ts`) — DB-backed CRUD with reinforcement tracking, tag search, top skills by success rate.
+- **Skill bootstrap event** (`web/lib/events/schema.ts`) — Added `SkillBootstrapEvent` to Zod union and EventTypes enum. `scheduleSkillBootstrap()` now emits via event bus.
+- **24 new capabilities added to ALL_CAPABILITIES** — `computer_use.*` (4), `mcp.*` (2), `process.*` (3), `preview.*` (2), `file.sync`, `file.batch_write`, `code.run`, `code.ast_diff`, `code.syntax_check`, `workspace.stats`, `workflow.*` (6).
+- **BootstrappedAgency wired into StatefulAgent.run()** — Records executions for pattern learning, triggers skill bootstrap on success.
+- **Capability chain tool in editing phase** — StatefulAgent now exposes `run_capability_chain` tool to LLM for multi-step workflows.
+- **Bootstrapped agency in agent-loop** — Agent loop now uses Agency for adaptive capability selection.
+
+### 🔒 Security
+
+- **Fork bomb pattern improved** — Regex now catches spacing variations
+- **WASM sandbox enforced** — Powers run in Wasmtime with memory caps (8 MB), timeouts (30s), host allowlists, VFS path prefixes
+- **Artifact path normalization** — Prevents double-slash path injection in WASM artifact persistence
+
+### 🗑️ Deleted
+
+- `packages/shared/agent/tool-router/` — Dead code, never imported anywhere
+- `web/lib/tools/tool-integration/router.ts` — Inlined into `tool-integration-system.ts` (ToolProviderRouter → private methods)
+- `web/lib/powers/powers-registry.ts` — Merged into `index.ts` with tag indexing, capability indexing, override protection
+- `web/lib/powers/powers-manager.ts` — Identical to existing `skills-manager.ts`
+- `web/lib/powers/prompt-engineering.ts` — Identical to existing prompt engineering in `skills/`
+- `web/lib/powers/readme.txt` — Chat log, not documentation
+- `web/lib/powers/SKILL.md` — Example skill, not needed as code
+
+### 📝 Environment Variables
+
+- `STATEFUL_AGENT_ENABLE_CAPABILITY_CHAINING` — Defaults to `true` (was `false`)
+- `STATEFUL_AGENT_ENABLE_BOOTSTRAPPED_AGENCY` — Defaults to `true` (was `false`)
+- `USE_STATEFUL_AGENT` — Defaults to `!== 'false'` (was `=== 'true'`)
+- `AI_SDK_MAX_STEPS` — Default changed from `10` to `15`
+

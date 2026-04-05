@@ -121,7 +121,36 @@ export class SkillStore {
 
     logger.info('Skill created', { id, name: input.name, userId: input.userId, source: input.source });
 
-    return this.getById(id)!;
+    const skill = this.getById(id);
+    if (!skill) {
+      // Fallback: construct from input if DB read fails (WAL mode edge case)
+      return {
+        id,
+        userId: input.userId,
+        name: input.name,
+        description: input.description,
+        version: input.version || '1.0.0',
+        systemPrompt: input.systemPrompt,
+        tags: input.tags || [],
+        workflows: input.workflows || [],
+        subCapabilities: input.subCapabilities || [],
+        reinforcement: {
+          totalExecutions: 0,
+          successfulExecutions: 0,
+          failedExecutions: 0,
+          avgSuccessRate: 0,
+          weights: {},
+          ...input.reinforcement,
+        },
+        location: input.location,
+        enabled: true,
+        source: input.source || 'manual',
+        extractedFromEvent: input.extractedFromEvent,
+        createdAt: now,
+        updatedAt: now,
+      };
+    }
+    return skill;
   }
 
   /**
@@ -363,9 +392,15 @@ export class SkillStore {
       version: row.version || '1.0.0',
       systemPrompt: row.system_prompt,
       tags: this.safeJsonParse(row.tags, []),
-      workflows: this.safeJsonParse(row.workflows),
-      subCapabilities: this.safeJsonParse(row.sub_capabilities),
-      reinforcement: this.safeJsonParse(row.reinforcement),
+      workflows: this.safeJsonParse(row.workflows, []),
+      subCapabilities: this.safeJsonParse(row.sub_capabilities, []),
+      reinforcement: this.safeJsonParse(row.reinforcement, {
+        totalExecutions: 0,
+        successfulExecutions: 0,
+        failedExecutions: 0,
+        avgSuccessRate: 0,
+        weights: {},
+      }),
       location: row.location,
       enabled: Boolean(row.enabled),
       source: row.source || 'manual',

@@ -115,7 +115,7 @@ export default function DesktopSettingsPage() {
 
       // Also save to Tauri store if available
       try {
-        const tauriResult = await tauriInvoke.saveSettings(settings);
+        const tauriResult = await tauriInvoke.saveSettings(settings as any);
         if (!tauriResult.success) {
           log.warn('Tauri store save failed', tauriResult.error);
           setWarning('Settings saved locally, but failed to sync with desktop store.');

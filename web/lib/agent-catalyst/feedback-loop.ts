@@ -56,19 +56,19 @@ export class FeedbackLoop {
   private patterns: ReinforcementPattern[] = [];
   private currentValence = 0;
   private valenceTrend: 'ascending' | 'stable' | 'descending' = 'stable';
-  private onFeedback: ((entry: FeedbackEntry) => void) | null = null;
-  private onPatternLearned: ((pattern: ReinforcementPattern) => void) | null = null;
+  private _onFeedback: ((entry: FeedbackEntry) => void) | null = null;
+  private _onPatternLearned: ((pattern: ReinforcementPattern) => void) | null = null;
 
   constructor(config: FeedbackLoopConfig = {}) {
     this.config = { ...DEFAULT_CONFIG, ...config };
   }
 
   onFeedback(callback: (entry: FeedbackEntry) => void): void {
-    this.onFeedback = callback;
+    this._onFeedback = callback;
   }
 
   onPatternLearned(callback: (pattern: ReinforcementPattern) => void): void {
-    this.onPatternLearned = callback;
+    this._onPatternLearned = callback;
   }
 
   /**
@@ -105,7 +105,7 @@ export class FeedbackLoop {
     this.detectPatterns(entry);
 
     // Notify
-    if (this.onFeedback) this.onFeedback(entry);
+    if (this._onFeedback) this._onFeedback(entry);
 
     logger.debug('Feedback recorded', {
       type: entry.type,
@@ -242,10 +242,10 @@ export class FeedbackLoop {
     pattern.confidence = Math.min(1, totalCount / this.config.patternWindowSize);
 
     // Notify if pattern just crossed confidence threshold
-    if (pattern.confidence >= this.config.minPatternConfidence && this.onPatternLearned) {
+    if (pattern.confidence >= this.config.minPatternConfidence && this._onPatternLearned) {
       const previousConfidence = pattern.confidence - (1 / this.config.patternWindowSize);
       if (previousConfidence < this.config.minPatternConfidence) {
-        this.onPatternLearned(pattern);
+        this._onPatternLearned(pattern);
       }
     }
   }

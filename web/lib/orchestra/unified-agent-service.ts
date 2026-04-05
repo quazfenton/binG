@@ -697,7 +697,7 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
 
   // Ensure tool system is initialized before using capabilities
   if (!isToolSystemReady()) {
-    await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
+    await initToolSystem({ userId: (config as any).userId || 'system', enableMCP: true, enableSandbox: true });
   }
 
   // Check if provider supports tools
@@ -838,7 +838,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
       
       return {
         success: result.success,
-        output: result.output || result.error,
+        output: (result.output as string) || result.error,
         exitCode: result.exitCode,
       };
     }
@@ -872,7 +872,7 @@ async function runV1ApiWithTools(
 ): Promise<UnifiedAgentResult> {
   // Ensure tool system is initialized for capability-based execution
   if (!isToolSystemReady()) {
-    await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
+    await initToolSystem({ userId: (config as any).userId || 'system', enableMCP: true, enableSandbox: true });
   }
 
   // Use the shared capability-based tool executor (avoids code duplication)
@@ -918,7 +918,7 @@ async function runV1Orchestrated(
 ): Promise<UnifiedAgentResult> {
   // Ensure tool system is initialized
   if (!isToolSystemReady()) {
-    await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
+    await initToolSystem({ userId: (config as any).userId || 'system', enableMCP: true, enableSandbox: true });
   }
 
   // Use shared capability-based tool executor (avoids code duplication)

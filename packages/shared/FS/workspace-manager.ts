@@ -13,7 +13,7 @@
  * - Sessions are created as subdirectories within user's workspace
  */
 
-import { createFileSystem, type IFileSystem, type WorkspaceConfig, type FSStats, type FileWatcherCallback, type FileSystemWatchEvent } from './index';
+import { createFileSystem, type IFileSystem, type WorkspaceConfig, type FSStats, type FileWatcherCallback, type FileSystemWatchEvent, type DesktopFileChangeEvent, type DesktopFileChangeHandler } from './index';
 import { isDesktopMode, getDefaultWorkspaceRoot } from '@bing/platform/env';
 import { createLogger } from '@/lib/utils/logger';
 

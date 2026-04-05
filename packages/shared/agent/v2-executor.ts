@@ -261,7 +261,7 @@ export async function executeV2Task(options: V2ExecuteOptions): Promise<V2Execut
       promptParams: options.promptParams,
     });
 
-    const rawContent = result.response ?? result.content ?? '';
+    const rawContent = result.response ?? (result as any).content ?? '';
     return buildResult(result, rawContent, session);
   } catch (error: unknown) {
     const message = error instanceof Error ? error.message : String(error);
@@ -308,7 +308,7 @@ function buildResult(
   const record = result as Record<string, unknown> | undefined;
 
   return {
-    success: record?.success ?? true,
+    success: (record?.success as boolean) ?? true,
     data: record,
     content: sanitizedContent,
     rawContent,

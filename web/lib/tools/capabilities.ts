@@ -1585,7 +1585,7 @@ export const CAPABILITY_BY_ID = new Map<string, CapabilityDefinition>(
 );
 
 export const CAPABILITIES_BY_CATEGORY = new Map<CapabilityCategory, CapabilityDefinition[]>(
-  (['file', 'sandbox', 'web', 'repo', 'memory', 'automation'] as CapabilityCategory[]).map(
+  (Array.from(new Set(ALL_CAPABILITIES.map(c => c.category))) as CapabilityCategory[]).map(
     cat => [cat, ALL_CAPABILITIES.filter(c => c.category === cat)]
   )
 );

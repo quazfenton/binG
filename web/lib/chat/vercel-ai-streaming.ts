@@ -76,71 +76,68 @@ export interface VercelStreamOptions {
 interface OpenAICompatibleConfig {
   baseURL: string;
   apiKeyEnv: string;
-  compatibility?: 'compatible' | 'strict';  // 'compatible' for Chat Completions API
+  /** Use Chat Completions API (.chat) instead of Responses API (default) */
+  useChatEndpoint?: boolean;
 }
 
 /**
- * Configuration for all OpenAI-compatible providers
- * 
- * Compatibility modes:
- * - 'compatible': Use Chat Completions API format (legacy, widely supported)
- * - 'strict': Use Responses API format (new, not all models support it)
+ * Configuration for all OpenAI-compatible providers.
+ * Providers with `useChatEndpoint: true` use the Chat Completions API
+ * via `provider.chat(model)` instead of the Responses API `provider(model)`.
  */
 const OPENAI_COMPATIBLE_PROVIDERS: Record<string, OpenAICompatibleConfig> = {
   chutes: {
     baseURL: process.env.CHUTES_BASE_URL || 'https://llm.chutes.ai/v1',
     apiKeyEnv: 'CHUTES_API_KEY',
-    compatibility: 'compatible',  // Chutes uses Chat Completions format
   },
   github: {
     baseURL: process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com',
     apiKeyEnv: 'GITHUB_MODELS_API_KEY',
-    compatibility: 'compatible',
   },
   zen: {
     baseURL: process.env.ZEN_BASE_URL || 'https://api.zen.ai/v1',
     apiKeyEnv: 'ZEN_API_KEY',
-    compatibility: 'compatible',
   },
   nvidia: {
     baseURL: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
     apiKeyEnv: 'NVIDIA_API_KEY',
-    compatibility: 'compatible',  // NVIDIA requires Chat Completions format
+    // NVIDIA only supports Chat Completions API — use .chat(model) instead of (model)
+    useChatEndpoint: true,
   },
   together: {
     baseURL: process.env.TOGETHER_BASE_URL || 'https://api.together.xyz/v1',
     apiKeyEnv: 'TOGETHER_API_KEY',
-    compatibility: 'compatible',
+    useChatEndpoint: true,
   },
   groq: {
     baseURL: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
     apiKeyEnv: 'GROQ_API_KEY',
-    compatibility: 'compatible',
+    useChatEndpoint: true,
   },
   fireworks: {
     baseURL: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/inference/v1',
     apiKeyEnv: 'FIREWORKS_API_KEY',
-    compatibility: 'compatible',
+    useChatEndpoint: true,
   },
   anyscale: {
     baseURL: process.env.ANYSCALE_BASE_URL || 'https://api.endpoints.anyscale.com/v1',
     apiKeyEnv: 'ANYSCALE_API_KEY',
-    compatibility: 'compatible',
+    useChatEndpoint: true,
   },
   deepinfra: {
     baseURL: process.env.DEEPINFRA_BASE_URL || 'https://api.deepinfra.com/v1/openai',
     apiKeyEnv: 'DEEPINFRA_API_KEY',
-    compatibility: 'compatible',
+    useChatEndpoint: true,
   },
   lepton: {
     baseURL: process.env.LEPTON_BASE_URL || 'https://models.lepton.ai/v1',
     apiKeyEnv: 'LEPTON_API_KEY',
-    compatibility: 'compatible',
+    useChatEndpoint: true,
   },
   openrouter: {
     baseURL: process.env.OPENROUTER_BASE_URL || 'https://openrouter.ai/api/v1',
     apiKeyEnv: 'OPENROUTER_API_KEY',
-    compatibility: 'compatible',  // CRITICAL: OpenRouter needs Chat Completions format for some models
+    useChatEndpoint: true,  // OpenRouter needs Chat Completions format for most models
   },
 };
 
@@ -219,8 +216,8 @@ export function getVercelModel(
         apiKey: apiKey || currentEnv[config.apiKeyEnv],
         baseURL: baseURL || config.baseURL,
       });
-      chatLogger.debug('Created OpenAI-compatible provider', { provider, baseURL: openai['baseURL'] });
-      return openai(model);
+      // Some providers (NVIDIA, etc.) only support Chat Completions API, not Responses API
+      return config.useChatEndpoint ? openai.chat(model) : openai(model);
     }
 
     // Unknown provider, try OpenAI as fallback
@@ -239,7 +236,6 @@ export function getVercelModel(
         apiKey: apiKey || currentEnv.OPENAI_API_KEY,
         baseURL: baseURL || currentEnv.OPENAI_BASE_URL,
       });
-      chatLogger.debug('Created OpenAI provider', { baseURL: openai['baseURL'] });
       return openai(model);
     }
 
@@ -248,7 +244,6 @@ export function getVercelModel(
         apiKey: apiKey || currentEnv.ANTHROPIC_API_KEY,
         baseURL: baseURL || currentEnv.ANTHROPIC_BASE_URL,
       });
-      chatLogger.debug('Created Anthropic provider');
       return anthropic(model);
     }
 
@@ -256,7 +251,6 @@ export function getVercelModel(
       const google = createGoogleGenerativeAI({
         apiKey: apiKey || currentEnv.GOOGLE_API_KEY,
       });
-      chatLogger.debug('Created Google provider');
       return google(model);
     }
 
@@ -265,7 +259,6 @@ export function getVercelModel(
         apiKey: apiKey || currentEnv.MISTRAL_API_KEY,
         baseURL: baseURL || currentEnv.MISTRAL_BASE_URL,
       });
-      chatLogger.debug('Created Mistral provider');
       return mistral(model);
     }
 
@@ -403,8 +396,6 @@ export async function* streamWithVercelAI(
   try {
     const vercelModel = getVercelModel(provider, modelName, key, url);
     const { chatMessages, systemPrompt } = convertMessages(msgs);
-
-    chatLogger.debug('Vercel AI SDK streaming started', { requestId, provider, model: modelName });
 
     // Custom provider handling (Zo, etc.)
     const isCustomProvider = provider === 'zo';
@@ -686,13 +677,6 @@ export async function* streamWithVercelAI(
         steps: steps?.length || 0,
       },
     };
-
-    chatLogger.info('Vercel AI SDK streaming completed', { requestId, provider, model: modelName }, {
-      latencyMs: Date.now() - startTime,
-      tokensUsed: usage?.totalTokens || 0,
-      toolCallsCount: allToolCalls.length,
-      steps: steps?.length || 0,
-    });
 
   } catch (error: any) {
     if (error.name === 'AbortError') {

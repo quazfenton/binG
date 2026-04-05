@@ -336,6 +336,7 @@ export default function OrchestrationTab() {
   // Fetch agents from API
   const loadAgents = useCallback(async () => {
     try {
+      // @ts-ignore
       const data = await fetchAgents();
       setAgents(data);
     } catch (err: any) {
@@ -381,6 +382,21 @@ export default function OrchestrationTab() {
       console.error('[OrchestrationTab] Failed to fetch workflows:', err);
     }
   }, []);  // Load data on mount
+
+  // Load initial events
+  const loadEvents = useCallback(async () => {
+    try {
+      const evtList = await fetchEvents(50);
+      // Client-side filter
+      const filtered = filterType === "all" ? evtList : evtList.filter(e => e.type === filterType);
+      setEvents(filtered);
+      setEventsError(null);
+    } catch (err: any) {
+      console.error('[OrchestrationTab] Failed to load events:', err);
+      setEventsError(err.message || 'Failed to load events');
+    }
+  }, [filterType]);
+
   useEffect(() => {
     const loadData = async () => {
       setLoading(true);
@@ -675,20 +691,6 @@ export default function OrchestrationTab() {
       eventsEndRef.current.scrollIntoView({ behavior: "smooth" });
     }
   }, [events, autoScroll]);
-
-  // Load initial events
-  const loadEvents = useCallback(async () => {
-    try {
-      const evtList = await fetchEvents(50);
-      // Client-side filter
-      const filtered = filterType === "all" ? evtList : evtList.filter(e => e.type === filterType);
-      setEvents(filtered);
-      setEventsError(null);
-    } catch (err: any) {
-      console.error('[OrchestrationTab] Failed to load events:', err);
-      setEventsError(err.message || 'Failed to load events');
-    }
-  }, [filterType]);
 
   // SSE event streaming connection
   useEffect(() => {

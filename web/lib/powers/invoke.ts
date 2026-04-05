@@ -11,7 +11,6 @@
  */
 
 import { powersRegistry } from './index';
-import { WasmRunner } from './wasm/runner';
 import { globalVFS } from './wasm/simpleVfs';
 import crypto from 'crypto';
 
@@ -62,7 +61,7 @@ export async function invokeSkill(
   }
 
   // ── Policy: verify action is declared ─────────────────────────────────
-  const actionDef = skill.actions?.find((a: any) => a.name === actionName);
+  const actionDef = skill.actions.find(a => a.name === actionName);
   if (!actionDef) {
     return { ok: false, error: `unknown_action:${actionName} in skill:${skillId}`, durationMs: 0 };
   }
@@ -73,8 +72,8 @@ export async function invokeSkill(
   const artifactRoot = `conversations/${convId}/artifacts/${skillId}/`;
 
   // ── Run ────────────────────────────────────────────────────────────────
-  const runner = new WasmRunner();
-  const runResult = await runner.call(
+  const { globalRunner } = await import('./wasm/runner');
+  const runResult = await globalRunner.call(
     handlerMeta,
     { action: actionName, params, ctx: { conversationId: convId, userId: ctx.userId ?? 'anon', traceId } },
     {
@@ -91,7 +90,9 @@ export async function invokeSkill(
   if (runResult.artifacts?.length) {
     for (const a of runResult.artifacts) {
       const bytes = Buffer.from(a.content as string, 'base64');
-      const vfsPath = `${artifactRoot}${a.path}`;
+      // Normalize path to prevent double slashes
+      const safePath = (a.path as string).replace(/^\/+/, '');
+      const vfsPath = `${artifactRoot}${safePath}`;
       await globalVFS.write(vfsPath, bytes);
       persistedRefs.push({
         vfsPath,

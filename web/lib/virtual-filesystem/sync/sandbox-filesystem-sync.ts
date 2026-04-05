@@ -113,8 +113,14 @@ class SandboxFilesystemSync {
   private readonly COALESCING_WINDOW_MS = 500;  // Window to coalesce changes
 
   // === LARGE FILE CHECK ===
-  // Skip syncing files larger than 5MB for performance
-  private readonly MAX_FILE_SIZE_BYTES = 5 * 1024 * 1024;  // 5MB
+  // Skip syncing files larger than threshold to sandbox containers for performance.
+  // This is a SYNC bandwidth optimization, NOT a VFS write limit.
+  // VFS can store files up to MAX_FILE_SIZE (100MB); sandboxes get incremental sync.
+  // Override via SANDBOX_SYNC_MAX_FILE_BYTES env var (default: 5MB).
+  private readonly MAX_FILE_SIZE_BYTES = parseInt(
+    process.env.SANDBOX_SYNC_MAX_FILE_BYTES || String(5 * 1024 * 1024),
+    10
+  );
 
   constructor() {
     this.enabled = process.env.SANDBOX_SYNC_ENABLED !== 'false';
@@ -143,7 +149,7 @@ class SandboxFilesystemSync {
    */
   private startCoalescingTimer(): void {
     this.coalescingTimer = setInterval(() => {
-      this.flushCoalescedChanges();
+      (this as any).flushCoalescedChanges();
     }, this.COALESCING_WINDOW_MS);
     this.coalescingTimer.unref?.();
   }
@@ -390,8 +396,7 @@ class SandboxFilesystemSync {
             paths: [],  // Empty paths signals deletes
             workspaceVersion: undefined,
             sessionId: sandboxId,
-            deletedPaths: deduplicatedDeletes,
-          });
+          } as any);
         }
       }
     }

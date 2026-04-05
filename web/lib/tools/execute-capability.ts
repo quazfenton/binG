@@ -37,13 +37,12 @@ let capabilityCount = 0;
  */
 export async function initToolSystem(config?: BootstrapConfig): Promise<BootstrapResult> {
   if (initialized && routerInstance) {
-    return { 
-      registry: {} as any, 
-      router: routerInstance, 
-      toolCount, 
-      capabilityCount, 
+    return {
+      registry: {} as any,
+      router: routerInstance,
+      toolCount,
+      capabilityCount,
       errors: [],
-      initialized: true 
     };
   }
   
@@ -95,7 +94,7 @@ export async function executeToolCapability(
   }
   
   try {
-    const result = await routerInstance.execute(capabilityId, params, context);
+    const result = await routerInstance.execute(capabilityId, params, context as any);
     
     return {
       success: true,
@@ -118,7 +117,7 @@ export async function executeToolCapability(
  */
 export function hasToolCapability(capabilityId: string): boolean {
   if (!routerInstance) return false;
-  return routerInstance.hasCapability(capabilityId);
+  return (routerInstance as any).hasCapability(capabilityId);
 }
 
 /**

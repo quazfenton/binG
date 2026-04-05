@@ -220,6 +220,9 @@ const getBlaxelCodegenToolDefinitions = (): Array<{
 
 const logger = createLogger('MCP:Integration')
 
+// Guard to prevent redundant reinitialization on every /api/mcp/connect click
+let mcpArch1Initialized = false;
+
 let cachedMCPorterTools: Array<{
   type: 'function'
   function: {
@@ -250,6 +253,13 @@ async function refreshMCPorterToolsCache(): Promise<void> {
  */
 export async function initializeMCPForArchitecture1(): Promise<void> {
   try {
+    // Guard: Don't reinitialize if already done (prevents mcporter restart on every connect click)
+    if (mcpArch1Initialized) {
+      logger.debug('MCP for Architecture 1 already initialized — skipping redundant initialization');
+      return;
+    }
+    mcpArch1Initialized = true;
+
     logger.info('Initializing MCP for Architecture 1 (AI SDK)...')
 
     // Initialize Nullclaw first (URL or container pool)
@@ -261,6 +271,11 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
       logger.info(`Nullclaw initialized: mode=${mode}, available=${available}`);
     }
 
+    // CRITICAL: stdio (npx) MCP servers must ONLY be spawned in desktop mode.
+    // In web mode, the Next.js server should NEVER spawn child processes for MCP.
+    // Remote HTTP servers are fine in both modes.
+    const isDesktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+
     const configs = parseMCPServerConfigs()
 
     if (configs.length === 0) {
@@ -271,34 +286,40 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
     // Separate HTTP (remote) from stdio (local) server configs
     const httpServers: Array<{ name: string; url: string; apiKey?: string }> = []
     const stdioConfigs: typeof configs = []
-    
+
     for (const config of configs) {
-      // Check if it's a remote HTTP server
-      if (config.url && isValidMCPURL(config.url)) {
-        const parsedUrl = parseMCPURL(config.url)
+      // Check if it's a remote HTTP server (url lives inside transport config)
+      const transportUrl = config.transport?.url;
+      if (transportUrl && isValidMCPURL(transportUrl)) {
+        const parsedUrl = parseMCPURL(transportUrl)
         httpServers.push({
           name: config.name,
           url: parsedUrl,
-          apiKey: config.settings?.apiKey,
         })
         logger.info(`Remote MCP server detected: ${config.name} at ${parsedUrl}`)
       } else {
-        // Local stdio server
-        stdioConfigs.push(config)
+        // Local stdio server — ONLY register in desktop mode
+        if (isDesktop) {
+          stdioConfigs.push(config)
+        } else {
+          logger.debug(`Skipping stdio MCP server in web mode: ${config.name}`)
+        }
       }
     }
 
-    // Register and connect local stdio servers
-    for (const config of stdioConfigs) {
-      mcpToolRegistry.registerServer(config)
-    }
-
+    // Register and connect local stdio servers (desktop mode ONLY)
     if (stdioConfigs.length > 0) {
+      for (const config of stdioConfigs) {
+        mcpToolRegistry.registerServer(config)
+      }
+
       logger.info(`Connecting to ${stdioConfigs.length} local MCP server(s)...`)
       await mcpToolRegistry.connectAll()
+    } else if (!isDesktop) {
+      logger.info('Web mode — local stdio MCP servers skipped (use remote HTTP servers instead)')
     }
 
-    // Connect to remote HTTP servers
+    // Connect to remote HTTP servers (both desktop and web mode)
     if (httpServers.length > 0) {
       logger.info(`Connecting to ${httpServers.length} remote MCP server(s) via HTTP...`)
       for (const server of httpServers) {
@@ -907,12 +928,15 @@ export async function callMCPToolFromAI_SDK(
       // Run inside request-scoped context so the tool gets the right userId
       const result = await toolContextStore.run(
         { userId, sessionId: args.sessionId },
-        async () => vfsTool.execute(args || {})
-      );
+        async () => vfsTool.execute(args || {}, {
+          messages: [],
+          toolCallId: crypto.randomUUID(),
+        })
+      ) as any;
       return {
-        success: result.success ?? false,
+        success: result?.success ?? false,
         output: JSON.stringify(result),
-        error: result.success ? undefined : result.error,
+        error: result?.success ? undefined : result?.error,
       };
     }
 

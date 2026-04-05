@@ -453,11 +453,12 @@ class PriorityRequestRouter {
           // Convert request with all required fields including tool/sandbox flags
           const requestType = detectRequestType(req.messages);
           const enhancedRequest = this.convertToEnhancedLLMRequest(req);
-          // Ensure tool/sandbox flags are passed through
-          enhancedRequest.enableTools = req.enableTools ?? requestType === 'tool';
-          enhancedRequest.enableSandbox = req.enableSandbox ?? requestType === 'sandbox';
+          // Always enable tools — VFS tools (write_file, read_file, apply_diff) are
+          // always available and the LLM should use them for file operations.
+          enhancedRequest.enableTools = req.enableTools !== false;
+          enhancedRequest.enableSandbox = req.enableSandbox ?? (requestType === 'sandbox' && !!req.userId);
           enhancedRequest.isSandboxCommand = requestType === 'sandbox';
-          
+
           const response = await enhancedLLMService.generateResponse(enhancedRequest);
           return this.normalizeOriginalResponse(response);
         }

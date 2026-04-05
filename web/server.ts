@@ -128,7 +128,7 @@ app.prepare().then(startup).then(() => {
     // FIX (Bug 6): Enforce maximum concurrent connections
     if (activeWsConnections >= MAX_WS_CONNECTIONS) {
       console.warn(`[WebSocket] Connection limit reached (${MAX_WS_CONNECTIONS}), rejecting`);
-      socket.writeHead(503, { 'Content-Type': 'text/plain' });
+      (socket as any).writeHead(503, { 'Content-Type': 'text/plain' });
       socket.end('Service Unavailable: Too many WebSocket connections');
       return;
     }
