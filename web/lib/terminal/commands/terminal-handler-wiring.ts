@@ -108,43 +108,80 @@ export function wireTerminalHandlers(config: TerminalHandlerWiringConfig): Termi
     setFileSystem: config.setLocalFileSystem,
   })
 
+  const connection = createSandboxConnectionManager({
+    terminalId: config.terminalId,
+    write: config.write,
+    writeLine: config.writeLine,
+    updateTerminalState: (updates) => config.updateTerminalState(config.terminalId, updates),
+    sendResize: config.sendResize,
+    sendInput: config.sendInput,
+    getPrompt: config.getPrompt,
+    getCwd: () => config.getCwd(config.terminalId),
+    setCwd: (cwd) => config.setCwd(config.terminalId, cwd),
+    getAuthToken: config.getAuthToken,
+    getAuthHeaders: config.getAuthHeaders,
+    toSandboxScopedPath: config.toSandboxScopedPath,
+    filesystemScopePath: config.filesystemScopePath,
+    getAnonymousSessionId: config.getAnonymousSessionId,
+  })
+
+  const batcher = createTerminalInputBatcher({
+    terminalId: config.terminalId,
+    sendInput: config.sendInput,
+    sendResize: config.sendResize,
+  })
+
+  const localFS = createTerminalLocalFSHandler({
+    terminalId: config.terminalId,
+    filesystemScopePath: config.filesystemScopePath,
+    syncToVFS: config.syncFileToVFS,
+    getLocalFileSystem: config.getLocalFileSystem,
+    setLocalFileSystem: config.setLocalFileSystem,
+    getCwd: config.getCwd ? (() => config.getCwd(config.terminalId)) : undefined,
+    setCwd: config.setCwd ? ((cwd: string) => {
+      const fn = config.setCwd as ((cwd: string) => void) | ((terminalId: string, cwd: string) => void)
+      if (fn.length >= 2) {
+        (fn as (terminalId: string, cwd: string) => void)(config.terminalId, cwd)
+      } else {
+        (fn as (cwd: string) => void)(cwd)
+      }
+    }) : undefined,
+    onWrite: config.write,
+    onWriteLine: config.writeLine,
+    onWriteError: config.writeLine,
+    onOpenEditor: (filePath, editorType) => {
+      editorHandler.openFile(filePath, editorType)
+    },
+    onFileChanged: (path, type) => {
+      if (typeof window !== 'undefined') {
+        const { emitFilesystemUpdated } = require('@/lib/virtual-filesystem/sync/sync-events');
+        emitFilesystemUpdated({
+          path,
+          type,
+          source: 'terminal-local',
+          scopePath: config.filesystemScopePath,
+        });
+      }
+    },
+    onConnect: async () => {
+      config.setSandboxStatus('connecting')
+      try {
+        await connection.connect()
+      } catch (error) {
+        config.setSandboxStatus('disconnected')
+        throw error
+      }
+    },
+    onDisconnect: async () => {
+      await connection.disconnect()
+      config.setSandboxStatus('disconnected')
+    },
+    getSandboxStatus: () => config.getSandboxStatus() as 'disconnected' | 'connecting' | 'connected',
+  })
+
   return {
     // Local filesystem handler - uses the SAME editor handler
-    localFS: createTerminalLocalFSHandler({
-      terminalId: config.terminalId,
-      filesystemScopePath: config.filesystemScopePath,
-      syncToVFS: config.syncFileToVFS,
-      getLocalFileSystem: config.getLocalFileSystem,
-      setLocalFileSystem: config.setLocalFileSystem,
-      getCwd: config.getCwd ? (() => config.getCwd(config.terminalId)) : undefined,
-      setCwd: config.setCwd ? ((cwd: string) => {
-        const fn = config.setCwd as ((cwd: string) => void) | ((terminalId: string, cwd: string) => void)
-        if (fn.length >= 2) {
-          (fn as (terminalId: string, cwd: string) => void)(config.terminalId, cwd)
-        } else {
-          (fn as (cwd: string) => void)(cwd)
-        }
-      }) : undefined,
-      onWrite: config.write,
-      onWriteLine: config.writeLine,
-      onWriteError: config.writeLine,
-      onOpenEditor: (filePath, editorType) => {
-        // Open file in the SHARED editor handler
-        editorHandler.openFile(filePath, editorType)
-      },
-      onFileChanged: (path, type) => {
-        // Emit filesystem event for UI update
-        if (typeof window !== 'undefined') {
-          const { emitFilesystemUpdated } = require('@/lib/virtual-filesystem/sync/sync-events');
-          emitFilesystemUpdated({
-            path,
-            type,
-            source: 'terminal-local',
-            scopePath: config.filesystemScopePath,
-          });
-        }
-      },
-    }),
+    localFS,
 
     // Input handler
     input: createTerminalInputHandler({
@@ -165,29 +202,10 @@ export function wireTerminalHandlers(config: TerminalHandlerWiringConfig): Termi
     editor: editorHandler,
 
     // Connection manager
-    connection: createSandboxConnectionManager({
-      terminalId: config.terminalId,
-      write: config.write,
-      writeLine: config.writeLine,
-      updateTerminalState: (updates) => config.updateTerminalState(config.terminalId, updates),
-      sendResize: config.sendResize,
-      sendInput: config.sendInput,
-      getPrompt: config.getPrompt,
-      getCwd: () => config.getCwd(config.terminalId),
-      setCwd: (cwd) => config.setCwd(config.terminalId, cwd),
-      getAuthToken: config.getAuthToken,
-      getAuthHeaders: config.getAuthHeaders,
-      toSandboxScopedPath: config.toSandboxScopedPath,
-      filesystemScopePath: config.filesystemScopePath,
-      getAnonymousSessionId: config.getAnonymousSessionId,
-    }),
+    connection,
 
     // Input batcher
-    batcher: createTerminalInputBatcher({
-      terminalId: config.terminalId,
-      sendInput: config.sendInput,
-      sendResize: config.sendResize,
-    }),
+    batcher,
 
     // Health monitor
     health: createTerminalHealthMonitor({

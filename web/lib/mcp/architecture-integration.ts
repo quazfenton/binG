@@ -13,11 +13,13 @@ import { callMCPorterTool, getMCPorterToolDefinitions, mcporterIntegration } fro
 import { createHTTPTransport, isValidMCPURL, parseMCPURL, HTTPTransport, registerHTTPTransport, getRemoteMCPTools, callRemoteMCPTool, hasRemoteMCPServers } from './http-transport'
 import { startHealthMonitoring } from './health-check'
 import { createLogger } from '../utils/logger'
-import { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
+// Dynamically imported to avoid pulling Node.js-only deps (database/fs) into client bundle
+import type { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
 import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
 import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '@bing/shared/agent/nullclaw-integration'
-import { standaloneGitTools } from '../tools/git-tools'
+// Dynamically imported to avoid pulling Node.js-only deps (fs, database) into client bundle
+// import { standaloneGitTools } from '../tools/git-tools'
 
 // Blaxel codegen tool definitions for LLM tool calling
 const getBlaxelCodegenToolDefinitions = (): Array<{
@@ -569,6 +571,7 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
   }> = process.env.COMPOSIO_API_KEY && userId ? await getComposioMCPTools(userId) : []
 
   // NEW: Include Git tools (shadow commits, VFS sync)
+  const { standaloneGitTools } = await import('../tools/git-tools')
   const gitTools: Array<{
     type: 'function'
     function: {
@@ -582,6 +585,19 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
       name: `git_${name}`,
       description: toolDef.description || `Git operation: ${name}`,
       parameters: (toolDef as any).parameters || (toolDef as any).inputSchema || {} as any,
+    },
+  }))
+
+  // NEW: Include VFS filesystem tools (write_file, read_file, apply_diff, etc.)
+  // These let the LLM use function calling instead of tag-based parsing.
+  // When the LLM calls these tools, they execute directly against the VFS.
+  const { getVFSToolDefinitions } = await import('./vfs-mcp-tools')
+  const vfsTools = getVFSToolDefinitions().map(t => ({
+    type: 'function' as const,
+    function: {
+      name: t.function.name,
+      description: t.function.description,
+      parameters: t.function.parameters,
     },
   }))
 
@@ -603,7 +619,7 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
     }
   }
 
-  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools, ...remoteTools]
+  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools, ...vfsTools, ...remoteTools]
 
   if (tools.length === 0) {
     logger.debug('MCP not available - no tools to return')
@@ -620,8 +636,9 @@ let cachedBlaxelProvider: BlaxelProvider | null = null
 // Cached Arcade service instance
 let cachedArcadeService: ArcadeService | null = null
 
-function getBlaxelProviderInstance(): BlaxelProvider {
+async function getBlaxelProviderInstance(): Promise<BlaxelProvider> {
   if (!cachedBlaxelProvider) {
+    const { BlaxelProvider } = await import('../sandbox/providers/blaxel-provider')
     cachedBlaxelProvider = new BlaxelProvider()
   }
   return cachedBlaxelProvider
@@ -682,7 +699,7 @@ async function executeBlaxelCodegenTool(
   args: Record<string, any>
 ): Promise<{ success: boolean; output: string; error?: string }> {
   try {
-    const blaxel = getBlaxelProviderInstance()
+    const blaxel = await getBlaxelProviderInstance()
 
     // Map tool name to method
     const methodName = toolName.replace(/^blaxel_/, '')
@@ -880,6 +897,23 @@ export async function callMCPToolFromAI_SDK(
           return callRemoteMCPTool(toolName, args);
         }
       }
+    }
+
+    // NEW: Check if it's a VFS filesystem tool (write_file, read_file, apply_diff, etc.)
+    // These are defined in vfs-mcp-tools.ts and execute directly against the VFS.
+    const { vfsTools, toolContextStore, getVFSTool } = await import('./vfs-mcp-tools');
+    const vfsTool = getVFSTool(toolName);
+    if (vfsTool) {
+      // Run inside request-scoped context so the tool gets the right userId
+      const result = await toolContextStore.run(
+        { userId, sessionId: args.sessionId },
+        async () => vfsTool.execute(args || {})
+      );
+      return {
+        success: result.success ?? false,
+        output: JSON.stringify(result),
+        error: result.success ? undefined : result.error,
+      };
     }
 
     const nativeResult = await mcpToolRegistry.callTool(toolName, args)

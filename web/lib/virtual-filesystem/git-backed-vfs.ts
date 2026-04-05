@@ -293,6 +293,10 @@ export class GitBackedVFS {
 
   /**
    * Commit buffered changes to shadow commit
+   *
+   * DESKTOP MODE: Skips building the full VFS snapshot since content is
+   * stripped by ShadowCommitManager anyway. Only transaction metadata
+   * (paths, types) are persisted as an audit trail.
    */
   async commitChanges(
     ownerId: string,
@@ -302,9 +306,9 @@ export class GitBackedVFS {
     // Get transactions - use transactionId for batch operations, ownerId for single ops
     const key = transactionId || ownerId;
     const transactions = this.transactionLog.get(key) || [];
-    
+
     // Also include any changes from changeBuffer that aren't in transactions
-    const bufferedChanges = this.changeBuffer.filter(change => 
+    const bufferedChanges = this.changeBuffer.filter(change =>
       !transactions.some(tx => tx.path === change.path)
     );
 
@@ -313,13 +317,16 @@ export class GitBackedVFS {
     }
 
     try {
-      // Build VFS state from transactions
-      const vfs: Record<string, string> = {};
-      for (const tx of transactions) {
-        if (tx.type !== 'DELETE' && tx.newContent) {
-          vfs[tx.path] = tx.newContent;
-        }
-      }
+      // DESKTOP MODE: Skip building full VFS snapshot — content is stripped by
+      // ShadowCommitManager anyway. Just pass empty vfs to save memory.
+      const desktopMode = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+      const vfs: Record<string, string> = desktopMode
+        ? {} // Content not stored in desktop mode — only metadata persisted
+        : Object.fromEntries(
+            transactions
+              .filter(tx => tx.type !== 'DELETE' && tx.newContent)
+              .map(tx => [tx.path, tx.newContent])
+          );
 
       // Create shadow commit with all changes
       const result = await this.shadowCommitManager.commit(vfs, transactions, {

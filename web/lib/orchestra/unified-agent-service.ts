@@ -547,6 +547,8 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
       enforcePlanActVerify: true,
       enableReflection: process.env.STATEFUL_AGENT_ENABLE_REFLECTION !== 'false',
       enableTaskDecomposition: process.env.STATEFUL_AGENT_ENABLE_TASK_DECOMPOSITION !== 'false',
+      enableCapabilityChaining: process.env.STATEFUL_AGENT_ENABLE_CAPABILITY_CHAINING !== 'false',
+      enableBootstrappedAgency: process.env.STATEFUL_AGENT_ENABLE_BOOTSTRAPPED_AGENCY !== 'false',
       // Pass project-scoped retrieval for project-isolated memory access
       projectServices: projectServices || undefined,
     };

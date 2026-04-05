@@ -177,6 +177,8 @@ export default function TerminalPanel({
 
   const terminalsRef = useRef<TerminalInstance[]>([]);
   terminalsRef.current = terminals;
+  const activeTerminalIdRef = useRef<string | null>(null);
+  activeTerminalIdRef.current = activeTerminalId;
   const resizeStartY = useRef<number>(0);
   const resizeStartHeight = useRef<number>(0);
 
@@ -531,6 +533,8 @@ export default function TerminalPanel({
     currentLine: string;
     prefix: string;
   } | null>>({});
+  const desktopPtyInputLineRef = useRef<Record<string, string>>({});
+  const desktopPtyLastTabTimeRef = useRef<Record<string, number>>({});
 
   useEffect(() => {
     if (isOpen && terminals.length === 0) {
@@ -571,19 +575,12 @@ export default function TerminalPanel({
 
   // Phase 2: Toggle sandbox connection
   const toggleSandboxConnection = useCallback(async () => {
+    const handlers = activeTerminalId ? terminalHandlersRef.current[activeTerminalId] : undefined;
+
     if (sandboxStatus === 'connected') {
-      // Disconnect - kill sandbox session
-      const term = terminalsRef.current.find(t => t.id === activeTerminalId);
-      if (term?.sandboxInfo.sessionId) {
+      if (handlers) {
         try {
-          await fetch('/api/sandbox/terminal', {
-            method: 'DELETE',
-            headers: {
-              'Content-Type': 'application/json',
-              ...getAuthHeaders(),
-            },
-            body: JSON.stringify({ sessionId: term.sandboxInfo.sessionId }),
-          });
+          await handlers.connection.disconnect();
           setSandboxStatus('disconnected');
           toast.success('Sandbox disconnected');
         } catch (error) {
@@ -591,31 +588,14 @@ export default function TerminalPanel({
         }
       }
     } else if (sandboxStatus === 'disconnected') {
-      // Connect - create new sandbox session
       setSandboxStatus('connecting');
       try {
-        const res = await fetch('/api/sandbox/terminal', {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            ...getAuthHeaders(),
-          },
-        });
-        if (res.ok) {
-          const data = await res.json();
-          toast.success('Sandbox connected: ' + data.sandboxId.slice(0, 12) + '...');
-          setSandboxStatus('connected');
-          // Reconnect terminal to sandbox
-          if (activeTerminalId) {
-            connectTerminal(activeTerminalId);
+        if (activeTerminalId) {
+          await connectTerminal(activeTerminalId);
+          const activeTerm = terminalsRef.current.find(t => t.id === activeTerminalId);
+          if (activeTerm?.sandboxInfo.sandboxId) {
+            toast.success('Sandbox session created: ' + activeTerm.sandboxInfo.sandboxId.slice(0, 12) + '...');
           }
-        } else if (res.status === 401) {
-          const errData = await res.json().catch(() => null);
-          toast.error(errData?.error || 'Sign in required to use sandbox terminal');
-          setSandboxStatus('disconnected');
-        } else {
-          toast.error('Failed to connect sandbox');
-          setSandboxStatus('disconnected');
         }
       } catch (error) {
         toast.error('Failed to connect sandbox');
@@ -853,6 +833,8 @@ export default function TerminalPanel({
     lineBufferRef.current[id] = '';
     cursorPosRef.current[id] = 0;
     editorSessionRef.current[id] = null;
+    desktopPtyInputLineRef.current[id] = '';
+    desktopPtyLastTabTimeRef.current[id] = 0;
 
     // WIRE UP ALL HANDLERS
     terminalHandlersRef.current[id] = wireTerminalHandlers({
@@ -990,6 +972,8 @@ export default function TerminalPanel({
     delete lineBufferRef.current[terminalId];
     delete editorSessionRef.current[terminalId];
     delete cursorPosRef.current[terminalId];
+    delete desktopPtyInputLineRef.current[terminalId];
+    delete desktopPtyLastTabTimeRef.current[terminalId];
     delete terminalHandlersRef.current[terminalId];
 
     setTerminals(prev => {
@@ -1014,6 +998,26 @@ export default function TerminalPanel({
     const termRef = terminalsRef.current.find(t => t.id === terminalId);
     if (termRef) {
       Object.assign(termRef, updates);
+    }
+
+    const handlers = terminalHandlersRef.current[terminalId];
+    const sessionId = updates.sandboxInfo?.sessionId;
+    if (handlers && typeof sessionId === 'string' && sessionId.length > 0) {
+      handlers.batcher.setSessionId(sessionId);
+    }
+
+    if (handlers && (updates.mode === 'local' || updates.mode === 'sandbox-cmd') && !sessionId) {
+      handlers.batcher.clearSession();
+    }
+
+    if (terminalId === activeTerminalIdRef.current) {
+      if (updates.mode === 'connecting') {
+        setSandboxStatus('connecting');
+      } else if (updates.isConnected && updates.mode === 'pty') {
+        setSandboxStatus('connected');
+      } else if (updates.mode === 'local' || updates.mode === 'sandbox-cmd') {
+        setSandboxStatus('disconnected');
+      }
     }
   }, []);
 
@@ -1442,10 +1446,6 @@ export default function TerminalPanel({
         (termRef as any)._initializing = false;
       }
 
-      // Track current input line for tab completion
-      const inputLineRef = useRef('');
-      const lastTabTimeRef = useRef(0);
-
       terminal.onData((data: string) => {
         // Update idle timeout on any user input
         updateActivity();
@@ -1462,13 +1462,14 @@ export default function TerminalPanel({
           if (data === '\t') {
             // Debounce rapid Tab presses to prevent race conditions
             const now = Date.now();
-            if (now - lastTabTimeRef.current < 300) {
+            const lastTabTime = desktopPtyLastTabTimeRef.current[terminalId] || 0;
+            if (now - lastTabTime < 300) {
               term.ptyInstance?.writeInput(data);
               return;
             }
-            lastTabTimeRef.current = now;
+            desktopPtyLastTabTimeRef.current[terminalId] = now;
             
-            const currentLine = inputLineRef.current;
+            const currentLine = desktopPtyInputLineRef.current[terminalId] || '';
             
             if (!currentLine.trim()) {
               // No input - send Tab directly to shell for default completion
@@ -1480,7 +1481,7 @@ export default function TerminalPanel({
             const cwd = localShellCwdRef.current[terminalId] || 'project';
             
             requestShellCompletion(
-              term.ptyInstance.sessionId,
+              term.ptyInstance!.sessionId,
               currentLine,
               0,  // cursor position
               cwd
@@ -1499,7 +1500,7 @@ export default function TerminalPanel({
                 term.terminal?.write(suffix);
                 
                 // Update the input line ref
-                inputLineRef.current = currentLine + suffix;
+                desktopPtyInputLineRef.current[terminalId] = currentLine + suffix;
                 
                 term.ptyInstance?.writeInput(suffix);
               } else {
@@ -1554,7 +1555,7 @@ export default function TerminalPanel({
               // Insert the selected completion
               const suffix = selected.slice(enterState.prefix.length);
               term.terminal?.write(suffix);
-              inputLineRef.current = enterState.currentLine + suffix;
+              desktopPtyInputLineRef.current[terminalId] = enterState.currentLine + suffix;
               term.ptyInstance?.writeInput(suffix);
               
               // Clear completion state
@@ -1563,11 +1564,12 @@ export default function TerminalPanel({
             }
             
             // Clear the input line
-            inputLineRef.current = '';
+            desktopPtyInputLineRef.current[terminalId] = '';
             completionStateRef.current[terminalId] = null;
           } else if (data === '\u007f') {
             // Backspace - remove last character
-            inputLineRef.current = inputLineRef.current.slice(0, -1);
+            const currentLine = desktopPtyInputLineRef.current[terminalId] || '';
+            desktopPtyInputLineRef.current[terminalId] = currentLine.slice(0, -1);
             // Clear completion mode on backspace
             completionStateRef.current[terminalId] = null;
           } else if (data === '\u001b[A') {
@@ -1619,12 +1621,12 @@ export default function TerminalPanel({
               const cwd = localShellCwdRef.current[terminalId] || 'project';
               term.terminal?.write('\r\n');
               term.terminal?.writeln('\x1b[90mCompletion cancelled\x1b[0m');
-              term.terminal?.write('\r' + getPrompt('desktop-pty', cwd) + inputLineRef.current);
+              term.terminal?.write('\r' + getPrompt('desktop-pty', cwd) + (desktopPtyInputLineRef.current[terminalId] || ''));
               return;
             }
           } else if (data >= ' ') {
             // Regular character - add to input line and clear completion mode
-            inputLineRef.current += data;
+            desktopPtyInputLineRef.current[terminalId] = (desktopPtyInputLineRef.current[terminalId] || '') + data;
             completionStateRef.current[terminalId] = null;
           }
           

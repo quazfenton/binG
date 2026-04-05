@@ -80,6 +80,11 @@ const nextConfig = {
   poweredByHeader: false,
   generateEtags: true,
   experimental: {
+    // SECURITY: Limit request body size for API routes.
+    // O(1) enforcement — rejected at the framework parser level.
+    serverActions: {
+      bodySizeLimit: '120mb',
+    },
     optimizeCss: true,
     optimizePackageImports: [
       'lucide-react',

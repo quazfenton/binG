@@ -1,6 +1,26 @@
 import { tool } from 'ai';
 import { z } from 'zod';
-import { getDatabase } from '@/lib/database/connection';
+
+// Lazy import to avoid pulling Node.js-only modules (fs, better-sqlite3) into client bundle
+let _getDb: typeof import('@/lib/database/connection').getDatabase | null = null;
+async function getDb() {
+  if (!_getDb) {
+    const { getDatabase } = await import('@/lib/database/connection');
+    _getDb = getDatabase;
+  }
+  return _getDb();
+}
+
+/**
+ * Detect desktop mode from environment — mirrors isDesktopMode() from @bing/platform/env
+ * without creating a circular workspace dependency.
+ */
+function isDesktopMode(): boolean {
+  return process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+}
+
+// Prune threshold: keep this many shadow commits per session
+const DEFAULT_PRUNE_KEEP = 20;
 
 export interface TransactionEntry {
   path: string;
@@ -85,18 +105,22 @@ export class ShadowCommitManager {
   /**
    * Create a commit stored in the database (not filesystem)
    * Handles schema changes - uses correct column names based on schema detection
+   *
+   * DESKTOP MODE: Strips file content from transactions to avoid duplicating
+   * data that already exists on the user's local disk. Only metadata (paths,
+   * types, timestamps) is stored as an audit trail.
    */
   async commit(
     vfs: Record<string, string>,
     transactions: TransactionEntry[],
     options: ShadowCommitOptions
   ): Promise<CommitResult> {
-    console.log('[ShadowCommit] Starting commit', { 
-      sessionId: options.sessionId, 
+    console.log('[ShadowCommit] Starting commit', {
+      sessionId: options.sessionId,
       transactionCount: transactions.length,
-      message: options.message 
+      message: options.message
     });
-    
+
     if (transactions.length === 0) {
       console.log('[ShadowCommit] No transactions, returning early');
       return { success: true, committedFiles: 0 };
@@ -107,29 +131,39 @@ export class ShadowCommitManager {
 
     try {
       // Get database instance
-      const db = getDatabase();
-      
+      const db = await getDb();
+
       // Handle case where database is not yet initialized
       if (!db) {
         console.warn('[ShadowCommit] Database not ready, using mock database');
         return { success: true, commitId, committedFiles: transactions.filter(t => t.type !== 'DELETE').length };
       }
 
+      // DESKTOP MODE: Strip file content from transactions.
+      // Files already exist on disk — storing them in SQLite is redundant duplication.
+      // We keep only metadata for audit/rollback tracking.
+      const desktopMode = isDesktopMode();
+
       console.log('[ShadowCommit] Generating diffs for', transactions.length, 'transactions');
-      const diff = transactions
-        .map(t => generateUnifiedDiff(
-          t.originalContent,
-          vfs[t.path],
-          t.path
-        ))
-        .join('\n');
+      const diff = desktopMode
+        ? `[desktop mode - content not stored]`
+        : transactions
+            .map(t => generateUnifiedDiff(
+              t.originalContent,
+              vfs[t.path],
+              t.path
+            ))
+            .join('\n');
 
       console.log('[ShadowCommit] Serializing transactions');
       const serializedTransactions = transactions.map(t => ({
         path: t.path,
         type: t.type,
-        originalContent: t.originalContent,
-        newContent: vfs[t.path] ?? t.newContent,
+        // DESKTOP MODE: Omit content to avoid duplicating local disk data
+        ...(desktopMode ? {} : {
+          originalContent: t.originalContent,
+          newContent: vfs[t.path] ?? t.newContent,
+        }),
       }));
 
       // Extract owner_id from sessionId
@@ -174,6 +208,11 @@ export class ShadowCommitManager {
 
       console.log('[ShadowCommit] Commit saved to database:', commitId);
 
+      // AUTOMATIC CLEANUP: Prune old shadow commits to prevent unbounded DB growth.
+      // Fire-and-forget — pruning runs in background, does not block the commit.
+      // Has its own try/catch so failures are silently swallowed.
+      void this.pruneOldCommits(options.sessionId, DEFAULT_PRUNE_KEEP);
+
       return {
         success: true,
         commitId,
@@ -192,7 +231,7 @@ export class ShadowCommitManager {
    */
   async getCommitHistory(sessionId: string, limit = 10): Promise<CommitHistoryEntry[]> {
     try {
-      const db = getDatabase();
+      const db = await getDb();
       
       // Handle case where database is not yet initialized
       if (!db) {
@@ -257,7 +296,7 @@ export class ShadowCommitManager {
    */
   async getCommitHistoryByUser(ownerId: string, limit = 50): Promise<CommitHistoryEntry[]> {
     try {
-      const db = getDatabase();
+      const db = await getDb();
       
       // Handle case where database is not yet initialized
       if (!db) {
@@ -309,7 +348,7 @@ export class ShadowCommitManager {
    */
   async getCommit(sessionId: string, commitId: string): Promise<CommitHistoryEntry & { transactions?: TransactionEntry[] } | null> {
     try {
-      const db = getDatabase();
+      const db = await getDb();
       
       // Handle case where database is not yet initialized
       if (!db) {
@@ -374,7 +413,7 @@ export class ShadowCommitManager {
     }
 
     try {
-      const db = getDatabase();
+      const db = await getDb();
 
       // Handle case where database is not yet initialized
       if (!db) {
@@ -461,7 +500,7 @@ export class ShadowCommitManager {
     filesCount: number;
   }>> {
     try {
-      const db = getDatabase();
+      const db = await getDb();
       
       // Handle case where database is not yet initialized
       if (!db) {
@@ -501,7 +540,7 @@ export class ShadowCommitManager {
    */
   async pruneOldCommits(sessionId: string, keepCount: number = 50): Promise<number> {
     try {
-      const db = getDatabase();
+      const db = await getDb();
       
       // Handle case where database is not yet initialized
       if (!db) {

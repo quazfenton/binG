@@ -171,7 +171,7 @@ export const directoryNameSchema = z.string()
  * File content validation
  */
 export const fileContentSchema = z.string()
-  .max(10 * 1024 * 1024, 'File content too large (max 10MB)');
+  .max(100 * 1024 * 1024, 'File content too large (max 100MB)');
 
 /**
  * Language identifier validation

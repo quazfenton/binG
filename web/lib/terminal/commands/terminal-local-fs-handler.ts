@@ -34,6 +34,9 @@ export interface TerminalLocalFSConfig {
   getCwd?: () => string
   setCwd?: (terminalId: string, cwd: string) => void
   onFileChanged?: (path: string, type: 'create' | 'update' | 'delete') => void
+  onConnect?: () => Promise<void> | void
+  onDisconnect?: () => Promise<void> | void
+  getSandboxStatus?: () => 'disconnected' | 'connecting' | 'connected'
 }
 
 /**
@@ -83,6 +86,9 @@ export class TerminalLocalFSHandler {
         }
       }) : undefined,
       onFileChanged: config.onFileChanged,
+      onConnect: config.onConnect,
+      onDisconnect: config.onDisconnect,
+      getSandboxStatus: config.getSandboxStatus,
     })
   }
 

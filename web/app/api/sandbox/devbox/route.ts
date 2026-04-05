@@ -15,10 +15,15 @@ import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
 import { createLogger } from '@/lib/utils/logger';
+import { SandboxSecurityManager } from '@/lib/sandbox/security-manager';
 
 const logger = createLogger('DevBoxAPI');
 
 export const runtime = 'nodejs';
+
+// SECURITY: O(1) body size guard — checked BEFORE req.json() buffers into memory
+const MAX_DEVBOX_BODY_BYTES = 120 * 1024 * 1024; // 120MB
+const MAX_DEVBOX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per file
 
 // Rate limiting: track sandbox creations per user (simple in-memory, use Redis for production)
 const userSandboxCreations = new Map<string, { count: number; resetAt: number }>();
@@ -75,15 +80,24 @@ export async function POST(req: NextRequest) {
       );
     }
 
+    // SECURITY: O(1) body size check BEFORE buffering into memory via req.json()
+    const contentLength = req.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > MAX_DEVBOX_BODY_BYTES) {
+      return NextResponse.json(
+        { error: `Request body too large (max ${MAX_DEVBOX_BODY_BYTES / (1024 * 1024)}MB)` },
+        { status: 413 },
+      );
+    }
+
     const body = await req.json();
     const { files } = body;
-    
+
     // Handle template with explicit default (don't use destructuring default)
     let templateFromBody = body.template;
     if (typeof templateFromBody !== 'string' || !templateFromBody.trim()) {
       templateFromBody = 'node';
     }
-    
+
     // Assign to outer-scoped template variable (don't shadow)
     template = templateFromBody;
 
@@ -92,6 +106,16 @@ export async function POST(req: NextRequest) {
         { error: 'Files must be a non-empty object with string values' },
         { status: 400 }
       );
+    }
+
+    // SECURITY: Per-file content size validation BEFORE buffering to sandbox
+    for (const [filePath, content] of Object.entries(files)) {
+      if (typeof content === 'string' && content.length > MAX_DEVBOX_FILE_SIZE) {
+        return NextResponse.json(
+          { error: `File '${filePath}' exceeds size limit (${(content.length / (1024 * 1024)).toFixed(1)}MB > ${MAX_DEVBOX_FILE_SIZE / (1024 * 1024)}MB)` },
+          { status: 400 },
+        );
+      }
     }
 
     logger.info('Creating DevBox', { userId, template, fileCount: Object.keys(files).length, rateLimitRemaining: rateLimit.remaining });

@@ -519,40 +519,49 @@ export class BlaxelMcpServer {
    * ```
    */
   async start(): Promise<void> {
-    try {
-      const { Server: McpServer } = await import('@modelcontextprotocol/sdk/server/index.js')
-      const { StdioServerTransport } = await import(
-        '@modelcontextprotocol/sdk/server/stdio.js'
-      )
+    let McpServer: any;
+    let StdioServerTransport: any;
 
+    try {
+      const sdk = await import('@modelcontextprotocol/sdk/server/index.js');
+      const stdio = await import('@modelcontextprotocol/sdk/server/stdio.js');
+      McpServer = sdk.Server;
+      StdioServerTransport = stdio.StdioServerTransport;
+    } catch (error: any) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error('[BlaxelMCP] Failed to import MCP SDK:', msg);
+      console.error('[BlaxelMCP] Install with: npm install @modelcontextprotocol/sdk');
+      throw new Error(`MCP SDK not available: ${msg}`);
+    }
+
+    try {
       this.server = new McpServer({
         name: 'blaxel-sandbox',
         version: '1.0.0',
-      } as any as any)
+      } as any);
 
-      this.registerTools()
+      this.registerTools();
 
-      const transport = new StdioServerTransport()
-      await this.server.connect(transport)
+      const transport = new StdioServerTransport();
+      await this.server.connect(transport);
 
-      this.connected = true
-      console.error('[BlaxelMCP] Server running on stdio')
-      console.error('[BlaxelMCP] Available tools:')
-      console.error('[BlaxelMCP]   - execute_command')
-      console.error('[BlaxelMCP]   - write_file')
-      console.error('[BlaxelMCP]   - read_file')
-      console.error('[BlaxelMCP]   - list_directory')
-      console.error('[BlaxelMCP]   - get_sandbox_info')
+      this.connected = true;
+      console.error('[BlaxelMCP] Server running on stdio');
+      console.error('[BlaxelMCP] Available tools:');
+      console.error('[BlaxelMCP]   - execute_command');
+      console.error('[BlaxelMCP]   - write_file');
+      console.error('[BlaxelMCP]   - read_file');
+      console.error('[BlaxelMCP]   - list_directory');
+      console.error('[BlaxelMCP]   - get_sandbox_info');
       if (this.sandboxHandle.runBatchJob) {
-        console.error('[BlaxelMCP]   - run_batch_job')
+        console.error('[BlaxelMCP]   - run_batch_job');
       }
       if (this.sandboxHandle.executeAsync) {
-        console.error('[BlaxelMCP]   - execute_async')
+        console.error('[BlaxelMCP]   - execute_async');
       }
     } catch (error: any) {
-      console.error('[BlaxelMCP] Failed to start server:', error.message)
-      console.error('[BlaxelMCP] Install MCP SDK: npm install @modelcontextprotocol/sdk')
-      throw error
+      console.error('[BlaxelMCP] Failed to start server:', error.message);
+      throw error;
     }
   }
 
@@ -571,34 +580,44 @@ export class BlaxelMcpServer {
    * ```
    */
   async deployHttpMcp(port: number = 3000): Promise<string> {
-    try {
-      const { Server: McpServer } = await import('@modelcontextprotocol/sdk/server/index.js')
-      const { StreamableHTTPServerTransport } = await import(
-        '@modelcontextprotocol/sdk/server/streamableHttp.js'
-      )
+    let McpServer: any;
+    let StreamableHTTPServerTransport: any;
 
+    try {
+      const sdk = await import('@modelcontextprotocol/sdk/server/index.js');
+      const http = await import('@modelcontextprotocol/sdk/server/streamableHttp.js');
+      McpServer = sdk.Server;
+      StreamableHTTPServerTransport = http.StreamableHTTPServerTransport;
+    } catch (error: any) {
+      const msg = error instanceof Error ? error.message : String(error);
+      console.error('[BlaxelMCP] Failed to import MCP SDK:', msg);
+      console.error('[BlaxelMCP] Install with: npm install @modelcontextprotocol/sdk');
+      throw new Error(`MCP SDK not available: ${msg}`);
+    }
+
+    try {
       this.server = new McpServer({
         name: 'blaxel-sandbox',
         version: '1.0.0',
-      } as any as any)
+      } as any);
 
-      this.registerTools()
+      this.registerTools();
 
       const transport = new StreamableHTTPServerTransport({
         port: port as unknown as number,
         endpoint: '/mcp',
-      } as any)
+      } as any);
 
-      await this.server.connect(transport)
+      await this.server.connect(transport);
 
-      this.connected = true
-      const url = `http://localhost:${port}/mcp`
-      console.error(`[BlaxelMCP] HTTP server running on ${url}`)
+      this.connected = true;
+      const url = `http://localhost:${port}/mcp`;
+      console.error(`[BlaxelMCP] HTTP server running on ${url}`);
 
-      return url
+      return url;
     } catch (error: any) {
-      console.error('[BlaxelMCP] Failed to start HTTP server:', error.message)
-      throw error
+      console.error('[BlaxelMCP] Failed to start HTTP server:', error.message);
+      throw error;
     }
   }
 

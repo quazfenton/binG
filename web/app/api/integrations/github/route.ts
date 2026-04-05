@@ -172,13 +172,22 @@ async function fetchRepoContents(
   return response.json();
 }
 
+// SECURITY: Max file size for GitHub import (matches VFS MAX_FILE_SIZE)
+const MAX_GITHUB_IMPORT_FILE_SIZE = 100 * 1024 * 1024; // 100MB
+
 async function fetchFileContent(url: string, token?: string): Promise<string> {
   const response = await fetchGitHubApi(url, token);
-  
+
   if (!response.ok) {
     throw new Error(`Failed to fetch file: ${response.status}`);
   }
-  
+
+  // SECURITY: O(1) content-length check BEFORE buffering into memory
+  const contentLength = response.headers.get('content-length');
+  if (contentLength && parseInt(contentLength, 10) > MAX_GITHUB_IMPORT_FILE_SIZE) {
+    throw new Error(`File too large: ${(parseInt(contentLength, 10) / (1024 * 1024)).toFixed(1)}MB exceeds ${(MAX_GITHUB_IMPORT_FILE_SIZE / (1024 * 1024))}MB limit`);
+  }
+
   return response.text();
 }
 

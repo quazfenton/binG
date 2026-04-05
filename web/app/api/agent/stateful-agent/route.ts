@@ -10,7 +10,7 @@ import { generateSecureId } from '@/lib/utils';
 import type { SandboxProviderType } from '@/lib/sandbox/providers';
 import { getAllTools } from '@/lib/chat/vercel-ai-tools';
 
-const USE_STATEFUL_AGENT = process.env.USE_STATEFUL_AGENT === 'true';
+const USE_STATEFUL_AGENT = process.env.USE_STATEFUL_AGENT !== 'false';
 const USE_CREWAI = process.env.USE_CREWAI === 'true';
 const DEFAULT_SANDBOX_PROVIDER = (process.env.SANDBOX_PROVIDER || 'daytona') as SandboxProviderType;
 const MAX_SANDBOX_IDLE = parseInt(process.env.MAX_SANDBOX_IDLE || '300000');
@@ -42,7 +42,7 @@ export async function POST(request: NextRequest) {
     
     // Parse and validate maxSteps with upper bound to prevent excessive API calls
     // Default from env, clamped to reasonable maximum (50 steps)
-    const envMaxSteps = parseInt(process.env.AI_SDK_MAX_STEPS || '10', 10);
+    const envMaxSteps = parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10);
     const userMaxSteps = typeof body.maxSteps === 'number' ? body.maxSteps : envMaxSteps;
     const maxSteps = Math.max(1, Math.min(userMaxSteps, 50)); // Clamp between 1 and 50
     
@@ -238,7 +238,9 @@ export async function POST(request: NextRequest) {
         sessionId,
         sandboxHandle,
         enforcePlanActVerify,
-        maxSelfHealAttempts: parseInt(process.env.MAX_SELF_HEAL_ATTEMPTS || '3'),
+        maxSelfHealAttempts: parseInt(
+          process.env.STATEFUL_AGENT_MAX_SELF_HEAL_ATTEMPTS || process.env.MAX_SELF_HEAL_ATTEMPTS || '3'
+        ),
       });
 
       return NextResponse.json({

@@ -228,6 +228,32 @@ export const IntegrationEvent = z.object({
 });
 
 /**
+ * Skill bootstrap events (extract reusable skills from successful executions)
+ */
+export const SkillBootstrapEvent = z.object({
+  type: z.literal('SKILL_BOOTSTRAP'),
+  userId: z.string(),
+  sessionId: z.string().optional(),
+  payload: z.object({
+    successfulRun: z.object({
+      steps: z.array(z.object({
+        action: z.string(),
+        result: z.any(),
+        success: z.boolean(),
+      })),
+      totalDuration: z.number(),
+      userId: z.string(),
+      taskDescription: z.string().optional(),
+      filesModified: z.array(z.string()).optional(),
+    }),
+    model: z.string().optional(),
+    storeSkill: z.boolean().optional().default(true),
+    scheduled: z.boolean().optional().default(false),
+    sourceEventId: z.string().optional(),
+  }),
+});
+
+/**
  * Any event - discriminated union of all event types
  */
 export const AnyEvent = z.discriminatedUnion('type', [
@@ -243,6 +269,7 @@ export const AnyEvent = z.discriminatedUnion('type', [
   SelfHealingEvent,
   NotificationEvent,
   IntegrationEvent,
+  SkillBootstrapEvent,
 ]);
 
 // Export types
@@ -258,6 +285,7 @@ export type HumanApprovalEvent = z.infer<typeof HumanApprovalEvent>;
 export type SelfHealingEvent = z.infer<typeof SelfHealingEvent>;
 export type NotificationEvent = z.infer<typeof NotificationEvent>;
 export type IntegrationEvent = z.infer<typeof IntegrationEvent>;
+export type SkillBootstrapEvent = z.infer<typeof SkillBootstrapEvent>;
 export type AnyEvent = z.infer<typeof AnyEvent>;
 
 // Export event type enum
@@ -274,6 +302,7 @@ export const EventTypes = {
   SELF_HEALING: 'SELF_HEALING',
   NOTIFICATION: 'NOTIFICATION',
   INTEGRATION: 'INTEGRATION',
+  SKILL_BOOTSTRAP: 'SKILL_BOOTSTRAP',
 } as const;
 
 export type EventType = typeof EventTypes[keyof typeof EventTypes];

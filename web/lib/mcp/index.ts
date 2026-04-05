@@ -45,7 +45,9 @@ export {
   getMCPSettings,
 } from './config'
 
-// Architecture Integration (NEW)
+// Architecture Integration (server-only)
+// Re-exported here for server consumers (chat/route.ts, etc.)
+// Client bundles should use dynamic imports to avoid pulling Node.js deps.
 export {
   initializeMCPForArchitecture1,
   getMCPToolsForAI_SDK,
@@ -54,18 +56,10 @@ export {
   getMCPServerURL,
   generateOpenCodeCLIConfig,
   shutdownMCPConnections,
-  checkMCPHealth,
-  handleMCPHealthCheck,
 } from './architecture-integration'
 
-// Desktop MCP Manager
-export {
-  initializeDesktopMCP,
-  shutdownDesktopMCP,
-  desktopMCPManager,
-  desktopMCPPresets,
-  createDesktopStdioTransport,
-} from './desktop-mcp-manager'
+// Desktop MCP Manager - server-only, import directly from './desktop-mcp-manager'
+// Do NOT re-export here to avoid pulling Node.js deps into client bundles.
 
 // CLI Server (NEW)
 export {
@@ -137,7 +131,7 @@ export {
   getVFSTool,
   setToolContext,
   initializeVFSTools,
-  ToolContext,
+  type ToolContext,
 } from './vfs-mcp-tools'
 
 // HTTP Transport for Remote MCP

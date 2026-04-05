@@ -10,7 +10,6 @@ import { isDesktopMode, getPlatform, getDefaultWorkspaceRoot } from '@bing/platf
 import { workspaceManager } from './workspace-manager';
 import { createFileSystem, type IFileSystem, type FSFile, type FSDirectoryListing, type FSSearchResult, type FSStats, type FileWatcherCallback, type FileSystemWatchEvent } from './index';
 import { createLogger } from '@/lib/utils/logger';
-import { randomUUID } from 'crypto';
 
 // Import Tauri event listening for Rust file change events
 let tauriListen: typeof import('@tauri-apps/api/event').listen | null = null;

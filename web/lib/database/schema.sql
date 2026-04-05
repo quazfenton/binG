@@ -228,6 +228,33 @@ CREATE INDEX IF NOT EXISTS idx_shadow_commits_owner_id ON shadow_commits(owner_i
 CREATE INDEX IF NOT EXISTS idx_shadow_commits_timestamp ON shadow_commits(timestamp);
 CREATE INDEX IF NOT EXISTS idx_shadow_commits_created_at ON shadow_commits(created_at);
 
+-- Skills table (DB-backed skill persistence complementing filesystem SkillsManager)
+CREATE TABLE IF NOT EXISTS skills (
+    id TEXT PRIMARY KEY,
+    user_id TEXT NOT NULL,
+    name TEXT NOT NULL,
+    description TEXT,
+    version TEXT DEFAULT '1.0.0',
+    system_prompt TEXT,
+    tags TEXT,
+    workflows TEXT,
+    sub_capabilities TEXT,
+    reinforcement TEXT,
+    location TEXT,
+    enabled BOOLEAN DEFAULT TRUE,
+    source TEXT DEFAULT 'manual',
+    extracted_from_event TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    UNIQUE(user_id, name)
+);
+
+CREATE INDEX IF NOT EXISTS idx_skills_user_id ON skills(user_id);
+CREATE INDEX IF NOT EXISTS idx_skills_name ON skills(name);
+CREATE INDEX IF NOT EXISTS idx_skills_enabled ON skills(enabled);
+CREATE INDEX IF NOT EXISTS idx_skills_source ON skills(source);
+CREATE INDEX IF NOT EXISTS idx_skills_created_at ON skills(created_at);
+
 -- Views for common queries
 CREATE VIEW IF NOT EXISTS user_stats AS
 SELECT 

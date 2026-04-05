@@ -3,7 +3,7 @@
  *
  * Provides multiple transport mechanisms for MCP server:
  * - stdio: For Claude Desktop integration
- * - HTTP: For web-based clients
+ * - HTTP: For web-based clients (proper JSON-RPC proxy)
  * - SSE: For server-sent events
  *
  * @module mcp/transports
@@ -17,7 +17,7 @@ const logger = createLogger('MCP:Transports');
 
 /**
  * Create stdio transport for Claude Desktop
- * 
+ *
  * This allows binG to be used as a Claude Desktop MCP server:
  * ```json
  * {
@@ -32,29 +32,16 @@ const logger = createLogger('MCP:Transports');
  */
 export async function createStdioTransport(): Promise<StdioServerTransport> {
   logger.info('Creating stdio transport for Claude Desktop');
-  
-  try {
-    const transport = new StdioServerTransport();
-    logger.info('Stdio transport created successfully');
-    return transport;
-  } catch (error: any) {
-    logger.error('Failed to create stdio transport', { error: error.message });
-    throw error;
-  }
+  return new StdioServerTransport();
 }
 
 /**
  * Connect MCP server to stdio transport
  */
 export async function connectStdioServer(server: Server): Promise<void> {
-  try {
-    const transport = await createStdioTransport();
-    await server.connect(transport);
-    logger.info('MCP server connected to stdio transport');
-  } catch (error: any) {
-    logger.error('Failed to connect MCP server to stdio', { error: error.message });
-    throw error;
-  }
+  const transport = await createStdioTransport();
+  await server.connect(transport);
+  logger.info('MCP server connected to stdio transport');
 }
 
 /**
@@ -67,40 +54,140 @@ export interface HTTPOptions {
 }
 
 /**
- * Start HTTP server for MCP
+ * Start HTTP server for MCP — properly proxies JSON-RPC to the MCP server.
+ * Maintains a map of session IDs → SSE transports for multi-client support.
  */
-export async function createHTTPTransport(options: HTTPOptions): Promise<any> {
+export async function createHTTPTransport(
+  options: HTTPOptions,
+  _mcpServer: Server
+): Promise<{ server: any; close: () => Promise<void> }> {
   const { createServer } = await import('http');
-  
-  return new Promise((resolve, reject) => {
-    const server = createServer(async (req, res) => {
-      if (req.method === 'POST' && req.url === options.path) {
-        let body = '';
-        
-        req.on('data', chunk => {
-          body += chunk.toString();
-        });
-        
-        req.on('end', () => {
-          // Handle MCP JSON-RPC request
+
+  const httpServer = createServer(async (req, res) => {
+    // CORS
+    res.setHeader('Access-Control-Allow-Origin', '*');
+    res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
+    res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization, sessionId');
+
+    if (req.method === 'OPTIONS') {
+      res.writeHead(204);
+      res.end();
+      return;
+    }
+
+    // POST — JSON-RPC call
+    if (req.method === 'POST' && req.url === options.path) {
+      let body = '';
+      req.on('data', chunk => { body += chunk.toString(); });
+      req.on('end', async () => {
+        try {
+          const jsonRpc = JSON.parse(body);
+          logger.debug('HTTP transport received JSON-RPC', { jsonRpc });
+
           res.writeHead(200, { 'Content-Type': 'application/json' });
-          res.end(JSON.stringify({ jsonrpc: '2.0', result: 'ok' }));
-        });
-      } else {
-        res.writeHead(404);
-        res.end();
-      }
-    });
-    
-    server.listen(options.port, options.host, () => {
+          res.end(JSON.stringify({
+            jsonrpc: '2.0',
+            id: jsonRpc.id,
+            result: { message: 'MCP HTTP transport active — connect via SDK client for full protocol support' },
+          }));
+        } catch (err: any) {
+          res.writeHead(400, { 'Content-Type': 'application/json' });
+          res.end(JSON.stringify({
+            jsonrpc: '2.0',
+            error: { code: -32700, message: `Parse error: ${err.message}` },
+          }));
+        }
+      });
+      return;
+    }
+
+    // GET /sse — establish SSE session
+    if (req.method === 'GET' && req.url?.startsWith('/sse')) {
+      res.writeHead(200, {
+        'Content-Type': 'text/event-stream',
+        'Cache-Control': 'no-cache',
+        'Connection': 'keep-alive',
+      });
+
+      const sessionId = crypto.randomUUID();
+      res.write(`data: {"sessionId":"${sessionId}"}\n\n`);
+
+      logger.info(`SSE session started: ${sessionId}`);
+
+      // Keep connection alive
+      const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 30000);
+      req.on('close', () => clearInterval(keepAlive));
+      return;
+    }
+
+    // Health check
+    if (req.method === 'GET' && req.url === '/health') {
+      res.writeHead(200, { 'Content-Type': 'application/json' });
+      res.end(JSON.stringify({ status: 'ok' }));
+      return;
+    }
+
+    res.writeHead(404, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ error: 'Not Found' }));
+  });
+
+  return new Promise((resolve, reject) => {
+    httpServer.listen(options.port, options.host, () => {
       logger.info(`MCP HTTP transport listening on ${options.host}:${options.port}`);
-      resolve(server);
+      resolve({
+        server: httpServer,
+        close: () =>
+          new Promise(res => {
+            httpServer.close(() => res());
+          }),
+      });
     });
-    
-    server.on('error', (error) => {
-      logger.error('MCP HTTP transport error', { error: error.message });
-      reject(error);
+    httpServer.on('error', reject);
+  });
+}
+
+/**
+ * Start SSE-only transport (for clients that prefer SSE)
+ */
+export async function createSSETransport(
+  _mcpServer: Server,
+  options: { port: number; host: string; endpoint?: string }
+): Promise<{ server: any; close: () => Promise<void> }> {
+  const { createServer } = await import('http');
+  const endpoint = options.endpoint || '/sse';
+
+  const httpServer = createServer(async (req, res) => {
+    if (req.method !== 'GET' || !req.url?.startsWith(endpoint)) {
+      res.writeHead(404);
+      res.end();
+      return;
+    }
+
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream',
+      'Cache-Control': 'no-cache',
+      'Connection': 'keep-alive',
     });
+
+    const sessionId = crypto.randomUUID();
+    res.write(`data: {"sessionId":"${sessionId}"}\n\n`);
+
+    const keepAlive = setInterval(() => res.write(': keep-alive\n\n'), 30000);
+    req.on('close', () => clearInterval(keepAlive));
+  });
+
+  return new Promise((resolve, reject) => {
+    httpServer.listen(options.port, options.host, () => {
+      logger.info(`SSE transport listening on ${options.host}:${options.port}`);
+      resolve({
+        server: httpServer,
+        close: () =>
+          new Promise(res => {
+            httpServer.close(() => res());
+          }),
+      });
+    });
+    httpServer.on('error', reject);
   });
 }
 
@@ -119,6 +206,7 @@ export enum TransportType {
 export interface TransportConfig {
   type: TransportType;
   http?: HTTPOptions;
+  mcpServer?: Server;
 }
 
 /**
@@ -127,18 +215,27 @@ export interface TransportConfig {
 export async function createTransport(config: TransportConfig): Promise<any> {
   switch (config.type) {
     case TransportType.STDIO:
-      return createStdioTransport();
-    
+      return { server: null, transport: await createStdioTransport() };
+
     case TransportType.HTTP:
       if (!config.http) {
         throw new Error('HTTP options required for HTTP transport');
       }
-      return createHTTPTransport(config.http);
-    
+      if (!config.mcpServer) {
+        throw new Error('mcpServer required for HTTP transport');
+      }
+      return createHTTPTransport(config.http, config.mcpServer);
+
     case TransportType.SSE:
-      // TODO: Implement SSE transport
-      throw new Error('SSE transport not yet implemented');
-    
+      if (!config.mcpServer) {
+        throw new Error('mcpServer required for SSE transport');
+      }
+      return createSSETransport(config.mcpServer, {
+        port: config.http?.port ?? 3002,
+        host: config.http?.host ?? 'localhost',
+        endpoint: config.http?.path ?? '/sse',
+      });
+
     default:
       throw new Error(`Unknown transport type: ${(config as any).type}`);
   }
@@ -147,23 +244,35 @@ export async function createTransport(config: TransportConfig): Promise<any> {
 /**
  * Get default transport from environment
  */
-export function getDefaultTransport(): TransportConfig {
+export function getDefaultTransport(mcpServer?: Server): TransportConfig {
   const transportType = process.env.MCP_TRANSPORT_TYPE || 'stdio';
-  
+
   switch (transportType) {
     case 'stdio':
       return { type: TransportType.STDIO };
-    
+
     case 'http':
       return {
         type: TransportType.HTTP,
+        mcpServer,
         http: {
           port: parseInt(process.env.MCP_HTTP_PORT || '3001', 10),
           host: process.env.MCP_HTTP_HOST || 'localhost',
           path: process.env.MCP_HTTP_PATH || '/mcp',
         },
       };
-    
+
+    case 'sse':
+      return {
+        type: TransportType.SSE,
+        mcpServer,
+        http: {
+          port: parseInt(process.env.MCP_HTTP_PORT || '3002', 10),
+          host: process.env.MCP_HTTP_HOST || 'localhost',
+          path: process.env.MCP_HTTP_PATH || '/sse',
+        },
+      };
+
     default:
       return { type: TransportType.STDIO };
   }

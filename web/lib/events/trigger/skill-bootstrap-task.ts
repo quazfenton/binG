@@ -145,15 +145,41 @@ function extractField(text: string, field: string): string {
  * Schedule automatic skill extraction after successful task
  */
 export async function scheduleSkillBootstrap(
-  payload: Omit<SkillBootstrapTaskPayload, 'successfulRun'> & {
-    successfulRunId: string;
+  payload: {
+    successfulRun: SkillBootstrapTaskPayload['successfulRun'];
     triggerEventId: string;
+    model?: string;
     delayMs?: number;
   }
 ): Promise<{ scheduled: boolean; jobId?: string }> {
-  // Scheduling requires Trigger.dev to be configured
-  logger.warn('Skill bootstrap scheduling not yet available - Trigger.dev configuration required');
-  return { scheduled: false };
+  try {
+    const { emitEvent } = await import('@/lib/events/bus');
+
+    // Emit the skill bootstrap event with a delay if requested
+    // The event processor will pick it up and execute it
+    const result = await emitEvent({
+      type: 'SKILL_BOOTSTRAP',
+      userId: payload.successfulRun.userId,
+      payload: {
+        successfulRun: payload.successfulRun,
+        model: payload.model,
+        storeSkill: true,
+        scheduled: true,
+        sourceEventId: payload.triggerEventId,
+      },
+    }, payload.successfulRun.userId);
+
+    logger.info('Skill bootstrap scheduled via event system', {
+      eventId: result.eventId,
+      triggerEventId: payload.triggerEventId,
+      delayMs: payload.delayMs,
+    });
+
+    return { scheduled: true, jobId: result.eventId };
+  } catch (error: any) {
+    logger.error('Failed to schedule skill bootstrap', { error: error.message });
+    return { scheduled: false };
+  }
 }
 
 /**

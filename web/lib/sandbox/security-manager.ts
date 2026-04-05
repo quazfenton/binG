@@ -47,7 +47,7 @@ export class SandboxSecurityManager {
   // Input size limits
   private static readonly MAX_PATH_LENGTH = 500;
   private static readonly MAX_COMMAND_LENGTH = 10000;
-  private static readonly MAX_FILE_SIZE = 10 * 1024 * 1024; // 10MB
+  private static readonly MAX_FILE_SIZE = 1024 * 1024 * 1024; // 1GB
 
   /**
    * Resolve and validate a path within the workspace

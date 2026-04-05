@@ -20,6 +20,10 @@ const logger = createLogger('WebContainerAPI');
 
 export const runtime = 'nodejs';
 
+// SECURITY: O(1) body size guard — checked BEFORE req.json() buffers into memory
+const MAX_WEBCONTAINER_BODY_BYTES = 120 * 1024 * 1024; // 120MB
+const MAX_WEBCONTAINER_FILE_SIZE = 100 * 1024 * 1024; // 100MB per file
+
 export async function POST(req: NextRequest) {
   try {
     // SECURITY: Use resolveFilesystemOwnerWithFallback to properly handle anonymous identity
@@ -30,6 +34,15 @@ export async function POST(req: NextRequest) {
     });
     const userId = ownerResolution.ownerId;
 
+    // SECURITY: O(1) body size check BEFORE buffering into memory via req.json()
+    const contentLength = req.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > MAX_WEBCONTAINER_BODY_BYTES) {
+      return NextResponse.json(
+        { error: `Request body too large (max ${MAX_WEBCONTAINER_BODY_BYTES / (1024 * 1024)}MB)` },
+        { status: 413 },
+      );
+    }
+
     const body = await req.json();
     const { files, startCommand, waitForPort } = body;
 
@@ -38,6 +51,16 @@ export async function POST(req: NextRequest) {
         { error: 'Files are required' },
         { status: 400 }
       );
+    }
+
+    // SECURITY: Per-file content size validation BEFORE buffering to response
+    for (const [filePath, content] of Object.entries(files)) {
+      if (typeof content === 'string' && content.length > MAX_WEBCONTAINER_FILE_SIZE) {
+        return NextResponse.json(
+          { error: `File '${filePath}' exceeds size limit (${(content.length / (1024 * 1024)).toFixed(1)}MB > ${MAX_WEBCONTAINER_FILE_SIZE / (1024 * 1024)}MB)` },
+          { status: 400 },
+        );
+      }
     }
 
     logger.info('WebContainer config requested', { userId, fileCount: Object.keys(files).length });
@@ -79,11 +102,10 @@ export async function POST(req: NextRequest) {
     return withAnonSessionCookie(response, ownerResolution);
   } catch (error: any) {
     logger.error('Failed to generate WebContainer config:', error);
-    
+
     const errorResponse = NextResponse.json(
-      { 
+      {
         error: 'Failed to create WebContainer environment',
-        details: error.message,
       },
       { status: 500 }
     );

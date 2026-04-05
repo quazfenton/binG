@@ -16,7 +16,7 @@ import {
 } from '@/lib/backend';
 import { quotaManager } from '@/lib/management/quota';
 import { snapshotManager } from '@/lib/virtual-filesystem/sync/snapshot-manager';
-import { initializeMCPForArchitecture2 } from '@/lib/mcp';
+import { initializeMCPForArchitecture2 } from '@/lib/mcp/architecture-integration';
 
 const logger = createLogger('Backend:Init');
 

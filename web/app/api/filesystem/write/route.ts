@@ -41,6 +41,9 @@ const writeRequestSchema = z.object({
   integration: z.string().min(1).max(100).optional(),
 });
 
+// SECURITY: O(1) body size guard — checked BEFORE req.json() buffers into memory
+const MAX_WRITE_BODY_BYTES = 110 * 1024 * 1024; // 110MB (slightly above 100MB fileContentSchema max)
+
 export async function POST(req: NextRequest) {
   let filesystemOwnerResolution: FilesystemOwnerResolution | undefined;
   let authResult: AuthResult | undefined;
@@ -66,6 +69,20 @@ export async function POST(req: NextRequest) {
       ownerId = filesystemOwnerResolution.ownerId;
     } else {
       ownerId = String(authResult.user?.id);
+    }
+
+    // SECURITY: O(1) body size check BEFORE buffering into memory via req.json()
+    const contentLength = req.headers.get('content-length');
+    if (contentLength && parseInt(contentLength, 10) > MAX_WRITE_BODY_BYTES) {
+      const errorResponse = NextResponse.json(
+        { success: false, error: `Request body too large (max ${MAX_WRITE_BODY_BYTES / (1024 * 1024)}MB)` },
+        { status: 413 },
+      );
+      return withAnonSessionCookie(errorResponse, filesystemOwnerResolution || {
+        ownerId,
+        source: (authResult.source as any) || 'jwt',
+        isAuthenticated: true,
+      });
     }
 
     // Parse JSON body with error handling
@@ -161,8 +178,13 @@ export async function POST(req: NextRequest) {
 
     if (resolvedSessionId) {
       const commitManager = new ShadowCommitManager();
+
+      // DESKTOP MODE: Skip passing content — stripped by ShadowCommitManager anyway.
+      const desktopMode = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+      const vfs: Record<string, string> = desktopMode ? {} : { [file.path]: file.content };
+
       const commitResult = await commitManager.commit(
-        { [file.path]: file.content },
+        vfs,
         [{
           path: file.path,
           type: existedBefore ? 'UPDATE' : 'CREATE',

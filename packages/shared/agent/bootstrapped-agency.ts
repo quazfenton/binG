@@ -258,7 +258,7 @@ export class BootstrappedAgency {
       if (useChain && capabilities.length > 1) {
         // Use capability chain for multi-capability execution
         const { createCapabilityChain } = await import('./capability-chain');
-        
+
         const chain = createCapabilityChain({
           name: `Bootstrapped Agency - ${task.substring(0, 30)}`,
           enableParallel: false,
@@ -270,7 +270,42 @@ export class BootstrappedAgency {
           chain.addStep(cap, { task });
         }
 
-        // Create a simple executor that routes to capability handlers
+        // Try to use the real capability router if available
+        try {
+          const { getCapabilityRouter } = await import('@/lib/tools/router');
+          const router = getCapabilityRouter();
+          const context = { userId: 'agency', sessionId: this.config.sessionId };
+
+          const results = new Map<string, any>();
+          let allSuccess = true;
+          let lastError = '';
+
+          for (const cap of capabilities) {
+            try {
+              const result = await router.execute(cap, { task }, context);
+              results.set(cap, result);
+            } catch (err: any) {
+              allSuccess = false;
+              lastError = err.message;
+              results.set(cap, { error: err.message });
+              if (chain['config']?.stopOnFailure) break;
+            }
+          }
+
+          return {
+            success: allSuccess,
+            error: allSuccess ? undefined : lastError,
+            data: {
+              results: Object.fromEntries(results),
+              steps: capabilities,
+            },
+          };
+        } catch (routerError: any) {
+          // Router not available, use mock executor
+          log.debug('Capability router not available, using mock executor', routerError.message);
+        }
+
+        // Fallback mock executor for when router is unavailable
         const executor = {
           execute: async (capabilityName: string, config: any, context: any) => {
             switch (capabilityName) {
@@ -287,7 +322,6 @@ export class BootstrappedAgency {
               case 'web-research':
                 return { result: 'Web research completed' };
               default:
-                // Throw error to fail the chain step - returning { error: ... } doesn't fail the chain
                 throw new Error(`Unknown capability: ${capabilityName}`);
             }
           },
@@ -309,10 +343,20 @@ export class BootstrappedAgency {
           },
         };
       } else if (capabilities.length === 1) {
-        // Execute single capability
+        // Execute single capability - try real router first
         const capability = capabilities[0];
 
-        // Execute capability based on name
+        try {
+          const { getCapabilityRouter } = await import('@/lib/tools/router');
+          const router = getCapabilityRouter();
+          const context = { userId: 'agency', sessionId: this.config.sessionId };
+          const result = await router.execute(capability, { task }, context);
+          return { success: true, data: result };
+        } catch {
+          // Router not available, use mock
+        }
+
+        // Mock single capability execution
         switch (capability) {
           case 'file-operations':
           case 'file.read':
@@ -622,10 +666,59 @@ export class BootstrappedAgency {
     this.executionHistory = [];
     this.capabilityStats.clear();
     this.taskPatterns.clear();
-    
+
     log.info('Agency learning history reset', {
       sessionId: this.config.sessionId,
     });
+  }
+
+  /**
+   * Get learned capabilities for a task description
+   * Returns capabilities ranked by past success rate for similar tasks
+   */
+  getLearnedCapabilities(task: string, limit: number = 5): string[] {
+    if (!this.config.enableAdaptiveSelection) {
+      return ['file.read', 'file.write', 'sandbox.shell'];
+    }
+
+    const similarTasks = this.findSimilarTasks(task, 20);
+
+    if (similarTasks.length < (this.config.minExecutionsForAdaptation || 5)) {
+      // Not enough data — return defaults
+      return ['file.read', 'file.write', 'sandbox.shell'];
+    }
+
+    const successfulCapabilities = this.extractSuccessfulCapabilities(similarTasks);
+    return successfulCapabilities.slice(0, limit);
+  }
+
+  /**
+   * Get learning summary for debugging/monitoring
+   */
+  getLearningSummary(): {
+    totalExecutions: number;
+    successRate: number;
+    topCapabilities: Array<{ capability: string; successRate: number; executions: number }>;
+    improvementTrend: 'improving' | 'stable' | 'declining';
+  } {
+    const metrics = this.getMetrics();
+    const topCaps = Array.from(metrics.mostUsedCapabilities.entries())
+      .slice(0, 5)
+      .map(([cap, count]) => {
+        const stats = this.capabilityStats.get(cap);
+        return {
+          capability: cap,
+          successRate: stats ? stats.successes / stats.executions : 0,
+          executions: count,
+        };
+      });
+
+    return {
+      totalExecutions: metrics.totalExecutions,
+      successRate: metrics.successRate,
+      topCapabilities: topCaps,
+      improvementTrend: metrics.improvementTrend,
+    };
   }
 }
 

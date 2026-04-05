@@ -31,6 +31,30 @@ async function getMcpToolRegistry() {
   return mcpToolRegistry;
 }
 
+// Dynamic import for desktop-only modules
+let desktopMCPManagerModule: any = null;
+async function getDesktopMCPManager() {
+  if (!desktopMCPManagerModule) {
+    desktopMCPManagerModule = await import('./desktop-mcp-manager');
+  }
+  return desktopMCPManagerModule;
+}
+
+// Re-initialize MCP after store changes (desktop only)
+async function reconnectMCPAfterStoreChange(): Promise<void> {
+  if (typeof window === 'undefined') return;
+  try {
+    const { isDesktopMode } = await import('@bing/platform/env');
+    if (!isDesktopMode()) return; // Only reconnect on desktop clients
+
+    const { initializeMCPForArchitecture1 } = await import('./architecture-integration');
+    await initializeMCPForArchitecture1();
+    logger.info('Reconnected MCP after store change (desktop mode)');
+  } catch (error: any) {
+    logger.warn('Failed to reconnect MCP after store change:', error.message);
+  }
+}
+
 const logger = createLogger('MCP:Store');
 
 /**
@@ -374,6 +398,10 @@ export class MCPStoreService {
       this.saveToStorage();
 
       logger.info(`Installed MCP server: ${serverId}`);
+
+      // Desktop: reconnect MCP to pick up the newly registered server
+      await reconnectMCPAfterStoreChange();
+
       return { success: true };
     } catch (error: any) {
       logger.error(`Failed to install server ${serverId}:`, error);
@@ -405,6 +433,10 @@ export class MCPStoreService {
       this.saveToStorage();
 
       logger.info(`Uninstalled MCP server: ${serverId}`);
+
+      // Desktop: reconnect MCP to reflect the uninstalled server
+      await reconnectMCPAfterStoreChange();
+
       return { success: true };
     } catch (error: any) {
       logger.error(`Failed to uninstall server ${serverId}:`, error);
@@ -415,7 +447,7 @@ export class MCPStoreService {
   /**
    * Enable/disable a server
    */
-  setServerEnabled(serverId: string, enabled: boolean): boolean {
+  async setServerEnabled(serverId: string, enabled: boolean): Promise<boolean> {
     const server = this.servers.get(serverId);
     if (!server) {
       logger.error(`Server not found: ${serverId}`);
@@ -427,6 +459,10 @@ export class MCPStoreService {
     this.saveToStorage();
 
     logger.info(`${enabled ? 'Enabled' : 'Disabled'} MCP server: ${serverId}`);
+
+    // Desktop: reconnect MCP to reflect the enable/disable change
+    await reconnectMCPAfterStoreChange();
+
     return true;
   }
 
