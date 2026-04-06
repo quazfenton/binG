@@ -41,17 +41,13 @@
 
 import fs from 'fs/promises'
 import crypto from 'crypto'
-// NOTE: Wasmtime's Node bindings are imported here. The actual package name
-// on npm is `wasmtime`; adjust if you use @nicolo-ribaudo/wasmtime or similar.
-// For the demo we gracefully stub the import when the package is absent so
-// unit tests can import this module without crashing.
-import { globalVFS } from './simpleVfs.js';
+import { globalVFS } from './simpleVfs';
 import {
   AsyncFetchQueue,
   STATUS_PENDING,
   STATUS_READY,
   STATUS_ERROR,
-} from './fetchQueue.js'
+} from './fetchQueue'
 
 // ── Wasmtime import shim ───────────────────────────────────────────────────
 // We wrap the import so the file is still loadable in environments where the
