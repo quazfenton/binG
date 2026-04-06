@@ -15,6 +15,7 @@ import { normalizeToolInvocation, type ToolInvocation } from '@/lib/types/tool-i
 import { createLogger } from '@/lib/utils/logger';
 import { getProviderForTask, getModelForTask } from '@/lib/config/task-providers';
 import { streamWithVercelAI, type VercelStreamOptions } from '@/lib/chat/vercel-ai-streaming';
+import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { LLMMessage } from '@/lib/chat/llm-providers';
 import { generateId, generateText } from 'ai';
 import type { Tool } from 'ai';
@@ -228,6 +229,50 @@ export class AgentLoop {
       // Wait for final result
       const finalResult = await result.consumeStream();
 
+      // FALLBACK: If no tool invocations, try parsing text-based tool calls from response
+      if (toolInvocations.length === 0 && finalResult.text) {
+        const textToolCalls = this.parseTextToolCalls(finalResult.text);
+        if (textToolCalls.length > 0) {
+          log.info(`ToolLoopAgent: No function calls, found ${textToolCalls.length} text-based tool calls, executing fallback`);
+          
+          for (const tc of textToolCalls) {
+            const tool = this.tools.find(t => t.name === tc.name);
+            if (tool) {
+              try {
+                const result2 = await tool.execute(tc.arguments);
+                toolInvocations.push({
+                  toolInvocation: {
+                    toolCallId: generateId(),
+                    toolName: tc.name,
+                    args: tc.arguments,
+                    result: result2,
+                    state: 'completed',
+                  },
+                });
+                results.push({
+                  iteration: results.length + 1,
+                  tool: tc.name,
+                  arguments: tc.arguments,
+                  result: result2,
+                });
+                
+                // Emit filesystem update after write_file so UI refreshes
+                if (tc.name === 'write_file' && result2.success) {
+                  emitFilesystemUpdated({
+                    path: tc.arguments.path,
+                    paths: [tc.arguments.path],
+                    type: 'create',
+                    source: 'fallback-tool',
+                  });
+                }
+              } catch (err: any) {
+                log.error(`Fallback tool execution failed: ${tc.name}`, err.message);
+              }
+            }
+          }
+        }
+      }
+
       return {
         success: true,
         results,
@@ -240,7 +285,7 @@ export class AgentLoop {
           args: inv.toolInvocation.args,
           result: inv.toolInvocation.result,
           sourceSystem: 'mastra',
-          sourceAgent: 'tool-loop-agent',
+          sourceAgent: results.some(r => r.tool === inv.toolInvocation.toolName) ? 'tool-loop-agent-fallback' : 'tool-loop-agent',
         })),
         reasoning: reasoningChunks.join('\n\n'),
       };
@@ -306,6 +351,48 @@ export class AgentLoop {
 
       log.info(`Task completed with ToolLoopAgent: ${toolInvocations.length} tool calls`);
 
+      // FALLBACK: If no tool invocations, try parsing text-based tool calls from response
+      if (toolInvocations.length === 0 && result.text) {
+        const textToolCalls = this.parseTextToolCalls(result.text);
+        if (textToolCalls.length > 0) {
+          log.info(`ToolLoopAgent (non-streaming): No function calls, found ${textToolCalls.length} text-based tool calls, executing fallback`);
+          
+          for (const tc of textToolCalls) {
+            const tool = this.tools.find(t => t.name === tc.name);
+            if (tool) {
+              try {
+                const result2 = await tool.execute(tc.arguments);
+                toolInvocations.push({
+                  toolCallId: generateId(),
+                  toolName: tc.name,
+                  args: tc.arguments,
+                  result: result2,
+                  state: 'completed',
+                });
+                results.push({
+                  iteration: results.length + 1,
+                  tool: tc.name,
+                  arguments: tc.arguments,
+                  result: result2,
+                });
+                
+                // Emit filesystem update after write_file so UI refreshes
+                if (tc.name === 'write_file' && result2.success) {
+                  emitFilesystemUpdated({
+                    path: tc.arguments.path,
+                    paths: [tc.arguments.path],
+                    type: 'create',
+                    source: 'fallback-tool',
+                  });
+                }
+              } catch (err: any) {
+                log.error(`Fallback tool execution failed: ${tc.name}`, err.message);
+              }
+            }
+          }
+        }
+      }
+
       return {
         success: true,
         results,
@@ -318,7 +405,7 @@ export class AgentLoop {
           args: inv.args,
           result: inv.result,
           sourceSystem: 'mastra',
-          sourceAgent: 'tool-loop-agent',
+          sourceAgent: results.some(r => r.tool === inv.toolName) ? 'tool-loop-agent-fallback' : 'tool-loop-agent',
         })),
         reasoning: result.reasoning,
       };
@@ -468,8 +555,34 @@ export class AgentLoop {
         
         // Check if complete
         if (chunk.isComplete) {
+          const fullText = allText.join('');
+          
+          // FALLBACK: If no function calls were made, try parsing text-based tool calls
+          // This handles models that don't support function calling
+          if (allToolCalls.length === 0 && fullText.length > 0) {
+            const textToolCalls = this.parseTextToolCalls(fullText);
+            if (textToolCalls.length > 0) {
+              log.info(`No function calls detected, found ${textToolCalls.length} text-based tool calls, executing fallback`);
+              
+              const executedAny = await this.executeFallbackToolCalls(
+                textToolCalls,
+                allText,
+                allToolCalls,
+                results
+              );
+              
+              if (executedAny) {
+                // Continue the conversation with tool results to get final response
+                const continuationResult = await this.continueWithToolResults(allToolCalls, fullText);
+                if (continuationResult) {
+                  allText.push(continuationResult);
+                }
+              }
+            }
+          }
+          
           log.info(`Task completed with Vercel AI SDK`, {
-            textLength: allText.join('').length,
+            textLength: fullText.length,
             toolCalls: allToolCalls.length,
             finishReason: chunk.finishReason,
           });
@@ -477,7 +590,7 @@ export class AgentLoop {
           return {
             success: true,
             results,
-            iterations: 1,
+            iterations: allToolCalls.length > 0 ? allToolCalls.length : 1,
             message: allText.join(''),
             toolInvocations: allToolCalls.map(tc => normalizeToolInvocation({
               toolCallId: tc.toolCallId,
@@ -486,7 +599,7 @@ export class AgentLoop {
               args: tc.args,
               result: tc.result,
               sourceSystem: 'mastra',
-              sourceAgent: 'vercel-ai-sdk',
+              sourceAgent: tc.isFallback ? 'vercel-ai-sdk-fallback' : 'vercel-ai-sdk',
             })),
           };
         }
@@ -601,18 +714,14 @@ Best Practices:
 4. After creating files, suggest or run validation commands when available
 5. Prefer minimal edits and preserve user-authored code outside the target change
 
-Response Format:
-- Use structured tool calls: [Tool: tool_name] { "arg": "value" }
-- When task is complete, respond with { "done": true, "message": "..." }
-- Provide clear explanations of what you're doing
+IMPORTANT - Use AI SDK Function Calling:
+- When you need to use a tool, make a function call - do NOT describe the tool call in text
+- The tools are available as functions: read_file(), write_file(), list_directory(), create_directory(), delete_file(), search_files(), file_exists(), context_pack(), execute_bash()
+- Call them directly with proper arguments - the system will execute them and return results
+- Do NOT output JSON or text like "[Tool: write_file]" - use actual function calls
 
-Example:
-User: "Create a todo app"
-Assistant:
-[Tool: create_directory] { "path": "src" }
-[Tool: write_file] { "path": "package.json", "content": "{\\n  \\"name\\": \\"todo-app\\",\\n  \\"version\\": \\"1.0.0\\"\\n}" }
-[Tool: write_file] { "path": "src/index.js", "content": "// Todo app code\\nconsole.log('Hello from todo app');" }
-Assistant: { "done": true, "message": "Created a todo app with package.json and src/index.js" }`;
+When task is complete, just respond naturally with your final answer.
+`;
   }
 
   /**
@@ -788,6 +897,208 @@ Assistant: { "done": true, "message": "Created a todo app with package.json and 
       role: m.role,
       content: m.content,
     }));
+  }
+
+  /**
+   * Parse text-based tool calls from LLM response
+   * Fallback for models that don't support function calling
+   * Supports patterns like:
+   * - write_file({ "path": "...", "content": "..." })
+   * - [Tool: write_file] { "path": "...", "content": "..." }
+   * - { "tool": "write_file", "path": "...", "content": "..." }
+   */
+  private parseTextToolCalls(text: string): Array<{ name: string; arguments: Record<string, any> }> {
+    const toolCalls: Array<{ name: string; arguments: Record<string, any> }> = [];
+    const toolNames = this.tools.map(t => t.name).join('|');
+    
+    // Pattern 1: write_file({ "path": "...", "content": "..." })
+    const pattern1 = new RegExp(`(${toolNames})\\s*\\(\\s*(\{[^}]+\})\\s*\\)`, 'gi');
+    let match;
+    while ((match = pattern1.exec(text)) !== null) {
+      try {
+        const args = JSON.parse(match[2]);
+        toolCalls.push({ name: match[1], arguments: args });
+      } catch (e) {
+        // Try to parse as JS object if JSON fails
+        try {
+          const args = eval('({' + match[2] + '})');
+          toolCalls.push({ name: match[1], arguments: args });
+        } catch (e2) {
+          // Skip invalid arguments
+        }
+      }
+    }
+    
+    // Pattern 2: [Tool: write_file] { "path": "..." }
+    const pattern2 = new RegExp(`\\[\\s*Tool:\\s*(${toolNames})\\s*\\]\\s*(\{[^}]+\})`, 'gi');
+    while ((match = pattern2.exec(text)) !== null) {
+      try {
+        const args = JSON.parse(match[2]);
+        toolCalls.push({ name: match[1], arguments: args });
+      } catch (e) {
+        // Skip invalid JSON
+      }
+    }
+    
+    // Pattern 3: { "tool": "write_file", "path": "..." } or { "name": "write_file", ... }
+    const pattern3 = /\{[^{}]*"(?:tool|name)"\\s*:\\s*"(${toolNames})"[^{}]*\}/gi;
+    while ((match = pattern3.exec(text)) !== null) {
+      try {
+        const parsed = JSON.parse(match[0]);
+        const args = { ...parsed };
+        delete args.tool;
+        delete args.name;
+        toolCalls.push({ name: parsed.tool || parsed.name, arguments: args });
+      } catch (e) {
+        // Skip invalid JSON
+      }
+    }
+    
+    if (toolCalls.length > 0) {
+      log.debug(`Parsed ${toolCalls.length} text-based tool calls from LLM response`);
+    }
+    
+    return toolCalls;
+  }
+
+  /**
+   * Execute fallback text-based tool calls (for models without function calling support)
+   */
+  private async executeFallbackToolCalls(
+    toolCalls: Array<{ name: string; arguments: Record<string, any> }>,
+    allText: string[],
+    allToolCalls: any[],
+    results: AgentIterationResult[]
+  ): Promise<boolean> {
+    let executedAny = false;
+    
+    for (const tc of toolCalls) {
+      const tool = this.tools.find(t => t.name === tc.name);
+      if (!tool) {
+        log.warn(`Unknown tool in fallback: ${tc.name}`);
+        continue;
+      }
+      
+      try {
+        log.info(`Executing fallback tool call: ${tc.name}`);
+        const result = await tool.execute(tc.arguments);
+        
+        const toolCallId = generateId();
+        allToolCalls.push({
+          toolName: tc.name,
+          toolCallId,
+          args: tc.arguments,
+          result,
+          isFallback: true,
+        });
+        
+        results.push({
+          iteration: results.length + 1,
+          tool: tc.name,
+          arguments: tc.arguments,
+          result,
+        });
+        
+        // Add tool response to conversation
+        this.context.conversationHistory.push({
+          role: 'tool',
+          content: JSON.stringify(result),
+          toolCallId,
+          toolName: tc.name,
+        });
+        
+        // Remove the tool call text from the response
+        // This is optional - the LLM will see the tool result and continue
+        executedAny = true;
+        
+      } catch (toolError: any) {
+        log.error(`Fallback tool execution failed: ${tc.name}`, toolError.message);
+        allToolCalls.push({
+          toolName: tc.name,
+          toolCallId: generateId(),
+          args: tc.arguments,
+          result: { success: false, error: toolError.message },
+          isFallback: true,
+        });
+      }
+    }
+    
+    return executedAny;
+  }
+
+  /**
+   * Continue conversation after fallback tool execution to get final response
+   */
+  private async continueWithToolResults(
+    allToolCalls: any[],
+    originalText: string
+  ): Promise<string | null> {
+    try {
+      log.info('Continuing conversation after fallback tool execution');
+      
+      // Build messages with tool results
+      const messages: CoreMessage[] = [
+        { role: 'system', content: this.buildSystemPrompt() },
+        ...this.context.conversationHistory.map(m => ({
+          role: m.role,
+          content: m.content,
+        })),
+        { role: 'assistant', content: originalText },
+      ];
+      
+      // Add tool result messages
+      for (const tc of allToolCalls) {
+        if (tc.isFallback) {
+          messages.push({
+            role: 'tool',
+            content: JSON.stringify(tc.result),
+            toolCallId: tc.toolCallId,
+          });
+        }
+      }
+      
+      // Ask for final response
+      messages.push({
+        role: 'user',
+        content: 'The tool execution is complete. Please provide your final response to the user.',
+      });
+      
+      // Convert tools
+      const vercelTools: Record<string, Tool> = {};
+      for (const tool of this.tools) {
+        vercelTools[tool.name] = {
+          description: tool.description,
+          // @ts-ignore - parameters may not be in Tool type but is needed for AI SDK
+          parameters: tool.parameters as any,
+          execute: async (args: any) => {
+            const result = await tool.execute(args);
+            if (!result.success) {
+              throw new Error(result.error || 'Tool execution failed');
+            }
+            return result;
+          },
+        };
+      }
+      
+      // Stream the continuation
+      let continuationText = '';
+      for await (const chunk of this.executeLLMStreaming(
+        messages.map(m => ({ role: m.role as any, content: m.content })),
+        vercelTools
+      )) {
+        if (chunk.content) {
+          continuationText += chunk.content;
+        }
+        if (chunk.isComplete) {
+          break;
+        }
+      }
+      
+      return continuationText || null;
+    } catch (error: any) {
+      log.error('Failed to continue with tool results', error.message);
+      return null;
+    }
   }
 
   /**

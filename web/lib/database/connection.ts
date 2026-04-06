@@ -483,39 +483,18 @@ export class DatabaseOperations {
   private preparedStatements: Map<string, any> = new Map();
   private preparedStatementsInitialized = false;
   
-  // Private backing field — accessed via ensureDb() to ensure real DB is always used
-  private _db: any;
-  private dbReady: Promise<void>;
-
-  // Ensures we always have a valid database instance.
-  // Upgrades from mock to real DB as soon as initialization completes.
-  private ensureDb(): any {
-    // First try the real database
-    const realDb = getDatabase();
-    if (realDb) {
-      // If we were using the mock, switch to the real DB and reset prepared statements
-      if (this._db !== realDb) {
-        this._db = realDb;
-        this.preparedStatementsInitialized = false;
-        this.preparedStatements.clear();
-      }
-      return realDb;
-    }
-    // Real DB not ready yet — use the singleton mock as fallback
-    if (!this._db) {
-      this._db = getMockDatabase();
-    }
-    return this._db;
-  }
-
-  // Expose db as a property-like accessor for existing code that uses this.db
-  private get db(): any { return this.ensureDb(); }
-  private set db(v: any) { this._db = v; }
+  // Database instance — resolved synchronously in constructor via getDatabase()
+  db: any;
 
   private getPrepared(name: string, sql: string): any {
-    // Always ensure we're using the real DB before accessing prepared statements
-    this.ensureDb();
-    // Check if statement exists and database is still valid
+    // Resolve real DB if available (handles late initialization)
+    const realDb = getDatabase();
+    if (realDb && this.db !== realDb) {
+      this.db = realDb;
+      this.preparedStatementsInitialized = false;
+      this.preparedStatements.clear();
+    }
+
     if (!this.preparedStatementsInitialized || !this.db) {
       this.initializePreparedStatements();
     }
@@ -527,37 +506,33 @@ export class DatabaseOperations {
   }
 
   constructor() {
-    // Use mock database initially as fallback — will be resolved lazily on first use
-    this._db = getMockDatabase();
+    // Trigger sync DB init — this is now fully synchronous
+    this.db = getDatabase();
 
-    // Synchronously get real database — this triggers async init in background
-    const realDb = getDatabase();
-
-    if (realDb) {
-      // Database already initialized (subsequent requests)
-      this._db = realDb;
+    if (this.db) {
       this.initializePreparedStatements();
     } else {
-      // DB not ready yet — spin briefly to see if init completes
-      const spinStart = Date.now();
-      while (Date.now() - spinStart < 500) {
-        const check = getDatabase();
-        if (check) {
-          this._db = check;
-          this.initializePreparedStatements();
-          return;
-        }
-      }
-      // Will resolve lazily on first real use via the db getter
+      // Fallback: DB truly failed to init (shouldn't happen with sync init)
+      this.db = getMockDatabase();
+      console.error('[DatabaseOperations] Real DB unavailable, using mock');
     }
   }
-  
+
   private initializePreparedStatements(): void {
     if (this.preparedStatementsInitialized) {
-      return; // Already initialized
+      return;
     }
-    
-    // Clear existing statements in case of reconnection
+
+    // Ensure we have the real DB before initializing
+    const realDb = getDatabase();
+    if (realDb && this.db !== realDb) {
+      this.db = realDb;
+    }
+
+    if (!this.db) {
+      console.error('[DatabaseOperations] Cannot init prepared statements: db is null');
+      return;
+    }
     this.preparedStatements.clear();
     
     // User operations
@@ -606,13 +581,27 @@ export class DatabaseOperations {
   }
   
   /**
+   * Get the underlying database instance (for advanced operations).
+   * Always resolves to the real DB if available.
+   */
+  getDb(): any {
+    const realDb = getDatabase();
+    if (realDb && this.db !== realDb) {
+      this.db = realDb;
+      this.preparedStatementsInitialized = false;
+      this.preparedStatements.clear();
+    }
+    return this.db;
+  }
+
+  /**
    * Reinitialize prepared statements after database reconnection
    * Call this if the database connection is lost and re-established
    */
   async reinitializeAfterReconnection(): Promise<void> {
     this.preparedStatementsInitialized = false;
     this.preparedStatements.clear();
-    this.db = await getDatabase();
+    this.db = getDatabase();
     this.initializePreparedStatements();
   }
 
