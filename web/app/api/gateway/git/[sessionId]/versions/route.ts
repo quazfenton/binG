@@ -2,15 +2,18 @@ import { NextRequest, NextResponse } from 'next/server';
 import { getDatabase } from '@/lib/database/connection';
 import { resolveFilesystemOwnerWithFallback } from '@/app/api/filesystem/utils';
 import { withAnonSessionCookie } from '@/lib/virtual-filesystem/index.server';
-import { ShadowCommitManager } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
 
 /**
  * GET /api/gateway/git/[sessionId]/versions
- * Returns version history for a session's VFS snapshots
+ * Returns version history for a session's VFS shadow commits.
  *
  * Query params:
  * - limit: Maximum number of versions to return (default: 20)
- * - by: 'session' | 'user' - Get versions for session or entire user account (default: session)
+ * - by: 'session' | 'user' — session-scoped or user-scoped (default: session)
+ *
+ * Scoping: Shadow commits store owner_id (unique per user, e.g. "anon:abc")
+ * and session_id (conversation ID, e.g. "001"). This endpoint queries by
+ * owner_id to guarantee per-user isolation regardless of the generic folder name.
  */
 export async function GET(
   request: NextRequest,
@@ -22,77 +25,111 @@ export async function GET(
     const rawLimit = searchParams.get('limit');
     const limitValue = rawLimit ? Number.parseInt(rawLimit, 10) : 20;
     if (!Number.isFinite(limitValue) || limitValue < 1 || limitValue > 100) {
-      return NextResponse.json({ error: 'limit must be an integer between 1 and 100' }, { status: 400 });
+      return NextResponse.json({ error: 'limit must be between 1 and 100' }, { status: 400 });
     }
     const limit = limitValue;
-
-    // New: Support getting commits by user account
     const byUser = searchParams.get('by') === 'user';
 
-    // Resolve auth with fallback (allows anonymous users)
+    // Resolve authenticated owner (supports anonymous users with session cookie)
     const authResolution = await resolveFilesystemOwnerWithFallback(request, {
       route: 'versions',
       requestId: Math.random().toString(36).slice(2, 8),
     });
     const ownerId = authResolution.ownerId;
 
+    // Shadow commits store:
+    //   owner_id   = full owner string (e.g. "anon:abc:xyz" or "user:123")
+    //   session_id = raw conversation/folder ID (e.g. "001")
+    //
+    // The sessionId from the URL may be:
+    //   "001"            → raw conversation ID → use as-is
+    //   "session-xxx"    → generated client ID → strip prefix
+    //   "owner:001"      → scoped format → extract last part
+    let conversationId = sessionId;
+    if (conversationId.includes(':')) {
+      const parts = conversationId.split(':');
+      conversationId = parts[parts.length - 1];
+    } else if (conversationId.startsWith('session-')) {
+      conversationId = conversationId.replace(/^session-/, '');
+    }
+
     const db = getDatabase();
+    const fullOwnerId = typeof ownerId === 'string' ? ownerId : `user:${ownerId}`;
 
-    // Session IDs are scoped to owner
-    const scopedSessionId = `${ownerId}:${sessionId}`;
-
-    const session = db.prepare(`
-      SELECT user_id FROM user_sessions WHERE session_id = ? AND is_active = TRUE
-    `).get(scopedSessionId) as { user_id: number } | undefined;
-
-    if (!session) {
-      return NextResponse.json({ error: 'Session not found' }, { status: 404 });
-    }
-
-    const ownerIdFromSession = session.user_id;
-
-    // Verify ownership
-    if (ownerIdFromSession !== Number(ownerId)) {
-      return NextResponse.json({ error: 'Access denied' }, { status: 403 });
-    }
-
-    // If by=user, return commits from shadow_commits table for the entire user account
     if (byUser) {
-      const shadowCommitManager = new ShadowCommitManager();
-      const userOwnerId = `user:${ownerId}`;
-      const history = await shadowCommitManager.getCommitHistoryByUser(userOwnerId, limit);
+      // User-scoped: return all commits for this owner (cross-session)
+      const rows = db.prepare(`
+        SELECT id, session_id, message, files_changed, workspace_version, created_at, paths
+        FROM shadow_commits
+        WHERE owner_id = ?
+        ORDER BY created_at DESC
+        LIMIT ?
+      `).all(fullOwnerId, limit) as Array<{
+        id: string;
+        session_id: string;
+        message: string;
+        files_changed: number;
+        workspace_version: number;
+        created_at: string;
+        paths: string | null;
+      }>;
 
-      const versions = history.map(h => ({
-        version: h.workspaceVersion || 0,
-        commitId: h.commitId,
-        message: h.message,
-        filesChanged: h.filesChanged || 0,
-        createdAt: new Date(h.createdAt).getTime(),
-        sessionId: h.sessionId,
-        paths: h.paths || [],
-      }));
-
-      const response = NextResponse.json({
-        versions,
-        by: 'user',
-        ownerId: userOwnerId,
+      const versions = rows.map(row => {
+        let paths: string[] = [];
+        if (row.paths) {
+          try { paths = JSON.parse(row.paths); } catch { paths = []; }
+        }
+        return {
+          version: row.workspace_version || 0,
+          commitId: row.id,
+          message: row.message,
+          filesChanged: row.files_changed || 0,
+          createdAt: new Date(row.created_at).getTime(),
+          sessionId: row.session_id,
+          paths,
+        };
       });
+
+      const response = NextResponse.json({ versions, by: 'user' });
       return withAnonSessionCookie(response, authResolution);
     }
 
-    // Default: Return shadow commit history for this session
-    // (Previously queried vfs_snapshots table which was unused/empty)
-    const shadowCommitManager = new ShadowCommitManager();
-    const history = await shadowCommitManager.getCommitHistory(scopedSessionId, limit);
+    // Session-scoped: commits matching owner_id + session_id
+    const rows = db.prepare(`
+      SELECT id, session_id, message, files_changed, workspace_version, created_at, paths
+      FROM shadow_commits
+      WHERE owner_id = ? AND session_id = ?
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).all(fullOwnerId, conversationId, limit) as Array<{
+      id: string;
+      session_id: string;
+      message: string;
+      files_changed: number;
+      workspace_version: number;
+      created_at: string;
+      paths: string | null;
+    }>;
 
-    const versions = history.map(h => ({
-      version: h.workspaceVersion || 0,
-      commitId: h.commitId,
-      message: h.message,
-      filesChanged: h.filesChanged || 0,
-      createdAt: new Date(h.createdAt).getTime(),
-      paths: h.paths || [],
-    }));
+    const versions = rows.map(row => {
+      let paths: string[] = [];
+      if (row.paths) {
+        try {
+          paths = JSON.parse(row.paths);
+        } catch {
+          // Malformed JSON — treat as no paths
+          paths = [];
+        }
+      }
+      return {
+        version: row.workspace_version || 0,
+        commitId: row.id,
+        message: row.message,
+        filesChanged: row.files_changed || 0,
+        createdAt: new Date(row.created_at).getTime(),
+        paths,
+      };
+    });
 
     const response = NextResponse.json({ versions, by: 'session' });
     return withAnonSessionCookie(response, authResolution);

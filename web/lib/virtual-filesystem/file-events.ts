@@ -29,6 +29,77 @@ import { createLogger } from '@/lib/utils/logger';
 const logger = createLogger('FileEvents');
 
 /**
+ * Request-scoped tracker for file edits from MCP tool execution.
+ * Used by spec amplification to detect when files were modified via
+ * function calling (not text-based file edit markers).
+ *
+ * Auto-cleanup: entries are removed after 5 minutes to prevent memory leaks
+ * from orphaned sessions that never hit the spec amplification check.
+ */
+const recentMcpFileEdits = new Map<string, { paths: Set<string>; timestamp: number }>();
+const MCP_EDIT_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Prune expired entries from the tracker.
+ * Called lazily on each write to avoid dedicated timer overhead.
+ */
+function pruneExpired(): void {
+  const now = Date.now();
+  for (const [key, val] of recentMcpFileEdits.entries()) {
+    if (now - val.timestamp > MCP_EDIT_TTL_MS) {
+      recentMcpFileEdits.delete(key);
+    }
+  }
+}
+
+/**
+ * Track a file edit from MCP tool execution for a given session.
+ */
+export function trackMcpFileEdit(sessionId: string, path: string): void {
+  if (!sessionId) return;
+  // Lazy cleanup of expired entries (throttled — only on writes)
+  if (recentMcpFileEdits.size > 50) {
+    pruneExpired();
+  }
+  const entry = recentMcpFileEdits.get(sessionId);
+  if (entry) {
+    entry.paths.add(path);
+    entry.timestamp = Date.now(); // refresh TTL
+  } else {
+    recentMcpFileEdits.set(sessionId, { paths: new Set([path]), timestamp: Date.now() });
+  }
+}
+
+/**
+ * Get recent file edits from MCP tool execution for a session.
+ * Returns an array of { path } objects compatible with the spec
+ * amplification file edits format.
+ */
+export function getRecentMcpFileEdits(sessionId?: string): Array<{ path: string; content?: string }> {
+  if (!sessionId) return [];
+  const entry = recentMcpFileEdits.get(sessionId);
+  if (!entry) return [];
+  // Check TTL expiry
+  if (Date.now() - entry.timestamp > MCP_EDIT_TTL_MS) {
+    recentMcpFileEdits.delete(sessionId);
+    return [];
+  }
+  return Array.from(entry.paths).map(path => ({ path }));
+}
+
+/**
+ * Clear recent MCP file edits tracker for a session.
+ * Call after spec amplification check to prevent stale data.
+ */
+export function clearRecentMcpFileEdits(sessionId?: string): void {
+  if (sessionId) {
+    recentMcpFileEdits.delete(sessionId);
+  } else {
+    recentMcpFileEdits.clear();
+  }
+}
+
+/**
  * File event types - consistent across MCP, VFS, and desktop
  */
 export type FileEventType = 'create' | 'update' | 'delete';
@@ -76,6 +147,13 @@ export async function emitFileEvent(options: EmitFileEventOptions): Promise<void
   } = options;
 
   try {
+    // Track file edits from MCP tool execution for spec amplification.
+    // When files are modified via function calling (not text-based file edit markers),
+    // the spec amplification system needs to know about these changes.
+    if (source?.startsWith('mcp-tool') && sessionId) {
+      trackMcpFileEdit(sessionId, path);
+    }
+
     // 1. Emit filesystem event for UI updates (cross-tab, cross-session)
     const eventDetail: FilesystemUpdatedDetail = {
       path,
