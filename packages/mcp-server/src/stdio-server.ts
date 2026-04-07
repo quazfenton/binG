@@ -3,105 +3,430 @@
  *
  * Runs as a standalone process via `bing-mcp` CLI.
  * Connects to MCP clients (Claude Desktop, Cursor, etc.) via stdin/stdout.
+ *
+ * This server provides wired-up tools that interact with the local filesystem
+ * and execute commands with proper error handling and path validation.
  */
 
 import { McpServer } from '@modelcontextprotocol/sdk/server/mcp.js';
 import { StdioServerTransport } from '@modelcontextprotocol/sdk/server/stdio.js';
 import { z } from 'zod';
+import { promises as fs } from 'fs';
+import { exec } from 'child_process';
+import { promisify } from 'util';
+import { join, resolve, isAbsolute, normalize, sep } from 'path';
 
-// ─── Tool registry ───────────────────────────────────────────────
-// In a full deployment, these would call sandboxed execution engines.
-// For now they provide the MCP protocol surface with descriptive schemas.
+const execAsync = promisify(exec);
+
+// ─── Configuration ───────────────────────────────────────────────
+
+interface ServerConfig {
+  /** Root workspace directory for file operations */
+  workspaceRoot: string;
+  /** Maximum command execution timeout in ms */
+  maxCommandTimeout: number;
+  /** Maximum file size for read operations (bytes) */
+  maxReadFileSize: number;
+  /** Enable command execution (disable for read-only mode) */
+  enableCommandExecution: boolean;
+}
+
+const DEFAULT_WORKSPACE_ROOT = process.env.BING_WORKSPACE_ROOT || process.cwd();
+const MAX_COMMAND_TIMEOUT = parseInt(process.env.BING_MAX_COMMAND_TIMEOUT || '30000', 10);
+const MAX_READ_FILE_SIZE = parseInt(process.env.BING_MAX_READ_FILE_SIZE || '1048576', 10); // 1MB default
+const ENABLE_COMMAND_EXECUTION = process.env.BING_ENABLE_COMMAND_EXECUTION !== 'false';
+
+const config: ServerConfig = {
+  workspaceRoot: resolve(DEFAULT_WORKSPACE_ROOT),
+  maxCommandTimeout: MAX_COMMAND_TIMEOUT,
+  maxReadFileSize: MAX_READ_FILE_SIZE,
+  enableCommandExecution: ENABLE_COMMAND_EXECUTION,
+};
+
+// ─── Utilities ───────────────────────────────────────────────────
+
+/**
+ * Validate and resolve a file path to prevent directory traversal attacks.
+ * Ensures the resolved path is within the workspace root.
+ */
+function validatePath(requestedPath: string): string {
+  // Resolve the path (handles . and ..)
+  const resolvedPath = isAbsolute(requestedPath)
+    ? resolve(requestedPath)
+    : join(config.workspaceRoot, requestedPath);
+
+  // Normalize to consistent format
+  const normalized = normalize(resolvedPath);
+
+  // Check for directory traversal
+  if (!normalized.startsWith(config.workspaceRoot)) {
+    throw new Error(
+      `Path traversal detected: "${requestedPath}" resolves outside workspace "${config.workspaceRoot}"`
+    );
+  }
+
+  return normalized;
+}
+
+/**
+ * Format file size in human-readable format
+ */
+function formatFileSize(bytes: number): string {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${(bytes / 1024).toFixed(1)} KB`;
+  if (bytes < 1024 * 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  return `${(bytes / (1024 * 1024 * 1024)).toFixed(1)} GB`;
+}
+
+/**
+ * Detect language from file extension
+ */
+function detectLanguage(filePath: string): string {
+  const ext = filePath.split('.').pop()?.toLowerCase();
+  const languageMap: Record<string, string> = {
+    ts: 'typescript',
+    tsx: 'typescriptreact',
+    js: 'javascript',
+    jsx: 'javascriptreact',
+    py: 'python',
+    rb: 'ruby',
+    java: 'java',
+    go: 'go',
+    rs: 'rust',
+    c: 'c',
+    cpp: 'cpp',
+    h: 'c',
+    hpp: 'cpp',
+    cs: 'csharp',
+    php: 'php',
+    swift: 'swift',
+    kt: 'kotlin',
+    md: 'markdown',
+    json: 'json',
+    yaml: 'yaml',
+    yml: 'yaml',
+    xml: 'xml',
+    html: 'html',
+    css: 'css',
+    scss: 'scss',
+    sql: 'sql',
+    sh: 'shell',
+    bash: 'shell',
+    zsh: 'shell',
+    txt: 'text',
+  };
+  return ext ? languageMap[ext] || 'text' : 'text';
+}
+
+// ─── Server setup ────────────────────────────────────────────────
 
 const server = new McpServer({
   name: 'binG',
   version: '1.0.0',
 });
 
-// execute_command
+// ─── File Operation Tools ────────────────────────────────────────
+
+/**
+ * read_file — Read file content from the workspace
+ */
 server.tool(
-  'execute_command',
-  'Execute shell commands in isolated sandbox with self-healing and VFS persistence',
+  'read_file',
+  'Read files from sandbox workspace with size limits and path validation',
   {
-    command: z.string().describe('Bash command to execute'),
-    workingDir: z.string().optional().describe('Working directory'),
-    timeout: z.number().optional().describe('Timeout in ms'),
+    path: z.string().describe('File path (relative to workspace root)'),
   },
-  async ({ command, workingDir, timeout }) => {
-    // Placeholder — wire to actual sandbox executor in production
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `[binG] Command executed: ${command}${workingDir ? ` (cwd: ${workingDir})` : ''}${timeout ? ` (timeout: ${timeout}ms)` : ''}`,
-        },
-      ],
-    };
+  async ({ path }) => {
+    try {
+      const validatedPath = validatePath(path);
+
+      // Check if file exists
+      const stat = await fs.stat(validatedPath);
+      if (!stat.isFile()) {
+        return {
+          content: [{ type: 'text' as const, text: `Error: "${path}" is not a file` }],
+          isError: true,
+        };
+      }
+
+      // Check file size limit
+      if (stat.size > config.maxReadFileSize) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error: File too large (${formatFileSize(stat.size)}). Maximum allowed: ${formatFileSize(config.maxReadFileSize)}`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Read file content
+      const content = await fs.readFile(validatedPath, 'utf-8');
+      const language = detectLanguage(path);
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: content,
+          },
+        ],
+      };
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        return {
+          content: [{ type: 'text' as const, text: `Error: File not found: ${path}` }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text' as const, text: `Error reading file: ${error.message}` }],
+        isError: true,
+      };
+    }
   }
 );
 
-// write_file
+/**
+ * write_file — Write content to a file in the workspace
+ */
 server.tool(
   'write_file',
-  'Write files to sandbox workspace with VFS integration',
+  'Write files to sandbox workspace with automatic directory creation',
   {
-    path: z.string().describe('File path'),
+    path: z.string().describe('File path (relative to workspace root)'),
     content: z.string().describe('File content'),
   },
   async ({ path, content }) => {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `[binG] File written: ${path} (${content.length} bytes)`,
-        },
-      ],
-    };
+    try {
+      const validatedPath = validatePath(path);
+
+      // Ensure parent directory exists
+      const parentDir = validatedPath.substring(0, validatedPath.lastIndexOf(sep));
+      if (parentDir) {
+        await fs.mkdir(parentDir, { recursive: true });
+      }
+
+      // Write file
+      await fs.writeFile(validatedPath, content, 'utf-8');
+
+      const language = detectLanguage(path);
+      const size = Buffer.byteLength(content, 'utf-8');
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: `Successfully wrote ${path} (${formatFileSize(size)}, ${language})`,
+          },
+        ],
+      };
+    } catch (error: any) {
+      if (error.code === 'EACCES') {
+        return {
+          content: [{ type: 'text' as const, text: `Error: Permission denied: ${path}` }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text' as const, text: `Error writing file: ${error.message}` }],
+        isError: true,
+      };
+    }
   }
 );
 
-// read_file
-server.tool(
-  'read_file',
-  'Read files from sandbox workspace',
-  {
-    path: z.string().describe('File path'),
-  },
-  async ({ path }) => {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `[binG] File read requested: ${path} — placeholder, wire to VFS in production`,
-        },
-      ],
-    };
-  }
-);
-
-// list_directory
+/**
+ * list_directory — List directory contents with metadata
+ */
 server.tool(
   'list_directory',
-  'List directory contents',
+  'List directory contents with file metadata (type, size)',
   {
-    path: z.string().describe('Directory path'),
+    path: z.string().default('.').describe('Directory path (relative to workspace root)'),
   },
   async ({ path }) => {
-    return {
-      content: [
-        {
-          type: 'text',
-          text: `[binG] Directory listing requested: ${path} — placeholder, wire to VFS in production`,
-        },
-      ],
-    };
+    try {
+      const validatedPath = validatePath(path);
+
+      // Check if path exists and is a directory
+      const stat = await fs.stat(validatedPath);
+      if (!stat.isDirectory()) {
+        return {
+          content: [{ type: 'text' as const, text: `Error: "${path}" is not a directory` }],
+          isError: true,
+        };
+      }
+
+      // Read directory
+      const entries = await fs.readdir(validatedPath, { withFileTypes: true });
+
+      // Get metadata for each entry
+      const lines: string[] = [];
+      for (const entry of entries) {
+        // Skip hidden files/directories
+        if (entry.name.startsWith('.')) continue;
+
+        const entryPath = join(validatedPath, entry.name);
+        try {
+          const entryStat = await fs.stat(entryPath);
+          const type = entry.isDirectory() ? 'dir' : 'file';
+          const size = entry.isFile() ? formatFileSize(entryStat.size) : '-';
+          const modified = entryStat.mtime.toISOString().split('T')[0];
+          lines.push(`${type.padEnd(4)} ${size.padStart(8)} ${modified} ${entry.name}`);
+        } catch {
+          // Skip entries we can't stat
+          lines.push(`     -        - ${entry.name}`);
+        }
+      }
+
+      if (lines.length === 0) {
+        return {
+          content: [{ type: 'text' as const, text: `Directory ${path} is empty or contains only hidden files` }],
+        };
+      }
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: lines.join('\n'),
+          },
+        ],
+      };
+    } catch (error: any) {
+      if (error.code === 'ENOENT') {
+        return {
+          content: [{ type: 'text' as const, text: `Error: Directory not found: ${path}` }],
+          isError: true,
+        };
+      }
+      return {
+        content: [{ type: 'text' as const, text: `Error listing directory: ${error.message}` }],
+        isError: true,
+      };
+    }
   }
 );
 
-// create_agent
+// ─── Command Execution Tool ──────────────────────────────────────
+
+/**
+ * execute_command — Execute shell commands with timeout and working directory
+ */
+server.tool(
+  'execute_command',
+  'Execute shell commands in workspace with timeout protection',
+  {
+    command: z.string().describe('Shell command to execute'),
+    workingDir: z.string().optional().describe('Working directory (relative to workspace root)'),
+    timeout: z.number().optional().describe('Timeout in milliseconds (default: 30000)'),
+  },
+  async ({ command, workingDir, timeout }) => {
+    // Check if command execution is enabled
+    if (!config.enableCommandExecution) {
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: 'Error: Command execution is disabled. Set BING_ENABLE_COMMAND_EXECUTION=true to enable.',
+          },
+        ],
+        isError: true,
+      };
+    }
+
+    try {
+      // Validate working directory if provided
+      let cwd = config.workspaceRoot;
+      if (workingDir) {
+        cwd = validatePath(workingDir);
+
+        // Verify directory exists
+        const stat = await fs.stat(cwd);
+        if (!stat.isDirectory()) {
+          return {
+            content: [{ type: 'text' as const, text: `Error: "${workingDir}" is not a directory` }],
+            isError: true,
+          };
+        }
+      }
+
+      // Clamp timeout to configured maximum
+      const effectiveTimeout = Math.min(timeout || config.maxCommandTimeout, config.maxCommandTimeout);
+
+      // Execute command
+      const { stdout, stderr } = await execAsync(command, {
+        cwd,
+        timeout: effectiveTimeout,
+        maxBuffer: 1024 * 1024 * 10, // 10MB buffer
+        killSignal: 'SIGTERM',
+      });
+
+      // Return output
+      const output: string[] = [];
+      if (stdout) output.push(stdout.trim());
+      if (stderr) output.push(`stderr:\n${stderr.trim()}`);
+
+      return {
+        content: [
+          {
+            type: 'text' as const,
+            text: output.join('\n\n') || '(command completed with no output)',
+          },
+        ],
+      };
+    } catch (error: any) {
+      // Handle timeout errors
+      if (error.killed || error.signal === 'SIGTERM') {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error: Command timed out after ${timeout || config.maxCommandTimeout}ms`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Handle execution errors
+      if (error.code !== undefined) {
+        const output: string[] = [];
+        if (error.stdout) output.push(error.stdout.trim());
+        if (error.stderr) output.push(`stderr:\n${error.stderr.trim()}`);
+        if (output.length === 0) output.push(`Exit code: ${error.code}`);
+
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: output.join('\n\n'),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Generic error
+      return {
+        content: [{ type: 'text' as const, text: `Command execution failed: ${error.message}` }],
+        isError: true,
+      };
+    }
+  }
+);
+
+// ─── Agent Management Tools (Stubs) ──────────────────────────────
+
+/**
+ * create_agent — Stub for AI agent creation
+ */
 server.tool(
   'create_agent',
-  'Create and spawn AI agent for task execution with execution policy control',
+  'Create and spawn AI agent for task execution with execution policy control (stub)',
   {
     task: z.string().describe('Task description'),
     model: z.string().optional().describe('LLM model'),
@@ -111,18 +436,20 @@ server.tool(
     return {
       content: [
         {
-          type: 'text',
-          text: `[binG] Agent created for task: "${task}"${model ? ` (model: ${model})` : ''}`,
+          type: 'text' as const,
+          text: `[binG] Agent created for task: "${task}"${model ? ` (model: ${model})` : ''}${executionPolicy ? ` (policy: ${executionPolicy})` : ''}\n\nNote: Agent orchestration requires full binG web server. This is a standalone MCP server.`,
         },
       ],
     };
   }
 );
 
-// get_agent_status
+/**
+ * get_agent_status — Stub for agent status
+ */
 server.tool(
   'get_agent_status',
-  'Get status of running agent',
+  'Get status of running agent (stub)',
   {
     agentId: z.string().describe('Agent ID'),
   },
@@ -130,18 +457,20 @@ server.tool(
     return {
       content: [
         {
-          type: 'text',
-          text: `[binG] Agent ${agentId} status: idle (placeholder)`,
+          type: 'text' as const,
+          text: `[binG] Agent ${agentId} status: unavailable\n\nAgent management requires the full binG web server with agent orchestration infrastructure.`,
         },
       ],
     };
   }
 );
 
-// stop_agent
+/**
+ * stop_agent — Stub for agent termination
+ */
 server.tool(
   'stop_agent',
-  'Stop running agent',
+  'Stop running agent (stub)',
   {
     agentId: z.string().describe('Agent ID'),
   },
@@ -149,18 +478,20 @@ server.tool(
     return {
       content: [
         {
-          type: 'text',
-          text: `[binG] Agent ${agentId} stopped`,
+          type: 'text' as const,
+          text: `[binG] Agent ${agentId} stop requested\n\nNote: Agent lifecycle management requires the full binG web server.`,
         },
       ],
     };
   }
 );
 
-// spawn_agent_session
+/**
+ * spawn_agent_session — Stub for persistent agent sessions
+ */
 server.tool(
   'spawn_agent_session',
-  'Spawn persistent agent session for complex workflows',
+  'Spawn persistent agent session for complex workflows (stub)',
   {
     goal: z.string().describe('Session goal'),
     mode: z.string().optional().describe('Agent mode'),
@@ -169,18 +500,22 @@ server.tool(
     return {
       content: [
         {
-          type: 'text',
-          text: `[binG] Agent session spawned for: "${goal}"${mode ? ` (mode: ${mode})` : ''}`,
+          type: 'text' as const,
+          text: `[binG] Agent session spawned for: "${goal}"${mode ? ` (mode: ${mode})` : ''}\n\nNote: Session management requires the full binG web server.`,
         },
       ],
     };
   }
 );
 
-// voice_speech
+// ─── Media Tools (Stubs) ─────────────────────────────────────────
+
+/**
+ * voice_speech — Stub for TTS synthesis
+ */
 server.tool(
   'voice_speech',
-  'Generate speech from text using neural TTS',
+  'Generate speech from text using neural TTS (stub)',
   {
     text: z.string().describe('Text to synthesize'),
     voice: z.string().optional().describe('Voice ID'),
@@ -190,18 +525,20 @@ server.tool(
     return {
       content: [
         {
-          type: 'text',
-          text: `[binG] TTS synthesized: "${text.slice(0, 50)}..."${voice ? ` (voice: ${voice})` : ''}`,
+          type: 'text' as const,
+          text: `[binG] TTS synthesis requested: "${text.slice(0, 50)}..."${voice ? ` (voice: ${voice})` : ''}${model ? ` (model: ${model})` : ''}\n\nNote: Voice generation requires external TTS provider integration (ElevenLabs, Cartesia, etc.).`,
         },
       ],
     };
   }
 );
 
-// generate_image
+/**
+ * generate_image — Stub for image generation
+ */
 server.tool(
   'generate_image',
-  'Generate images using FLUX, SDXL, or other providers',
+  'Generate images using FLUX, SDXL, or other providers (stub)',
   {
     prompt: z.string().describe('Image prompt'),
     model: z.string().optional().describe('Image model'),
@@ -211,8 +548,8 @@ server.tool(
     return {
       content: [
         {
-          type: 'text',
-          text: `[binG] Image generation requested: "${prompt.slice(0, 50)}..."${model ? ` (model: ${model})` : ''}`,
+          type: 'text' as const,
+          text: `[binG] Image generation requested: "${prompt.slice(0, 50)}..."${model ? ` (model: ${model})` : ''}${size ? ` (size: ${size})` : ''}\n\nNote: Image generation requires external provider integration (FLUX, SDXL, etc.).`,
         },
       ],
     };
@@ -220,10 +557,35 @@ server.tool(
 );
 
 // ─── Start server ────────────────────────────────────────────────
+
 async function main() {
+  // Log configuration
+  console.error(`[binG MCP Server] Starting with configuration:`);
+  console.error(`[binG MCP Server]   Workspace: ${config.workspaceRoot}`);
+  console.error(`[binG MCP Server]   Max command timeout: ${config.maxCommandTimeout}ms`);
+  console.error(`[binG MCP Server]   Max read file size: ${formatFileSize(config.maxReadFileSize)}`);
+  console.error(`[binG MCP Server]   Command execution: ${config.enableCommandExecution ? 'enabled' : 'disabled'}`);
+
+  // Verify workspace directory exists
+  try {
+    const stat = await fs.stat(config.workspaceRoot);
+    if (!stat.isDirectory()) {
+      console.error(`[binG MCP Server] Error: Workspace path is not a directory: ${config.workspaceRoot}`);
+      process.exit(1);
+    }
+  } catch (error: any) {
+    if (error.code === 'ENOENT') {
+      console.error(`[binG MCP Server] Error: Workspace directory does not exist: ${config.workspaceRoot}`);
+      console.error(`[binG MCP Server] Create it or set BING_WORKSPACE_ROOT to an existing directory.`);
+      process.exit(1);
+    }
+  }
+
   const transport = new StdioServerTransport();
   await server.connect(transport);
+
   console.error('[binG MCP Server] Connected via stdio transport');
+  console.error('[binG MCP Server] Ready to accept tool calls');
 }
 
 main().catch((err) => {
@@ -231,4 +593,4 @@ main().catch((err) => {
   process.exit(1);
 });
 
-export { server };
+export { server, config };

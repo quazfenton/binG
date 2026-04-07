@@ -215,24 +215,46 @@ function createVFSTools(context: ToolExecutionContext): Record<string, Tool> {
  */
 async function createMCPTools(context: ToolExecutionContext): Promise<Record<string, Tool>> {
   const mcpTools: Record<string, Tool> = {};
-  
+
   if (!isMCPAvailable()) {
     return mcpTools;
   }
-  
+
   try {
     const mcpToolDefs = await getMCPToolsForAI_SDK(context.userId);
-    
+
     for (const toolDef of mcpToolDefs) {
       const { name, description, parameters } = toolDef.function;
-      
+
       mcpTools[name] = (tool as any)({
         description: description || `MCP tool: ${name}`,
         parameters: parameters || z.record(z.any()),
         execute: async (args: any) => {
           try {
+            // Explicit logging for VFS MCP tools
+            if (name.startsWith('write_') || name.startsWith('read_') || name.startsWith('list_') ||
+                name.startsWith('search_') || name.startsWith('apply_') || name.startsWith('batch_') ||
+                name.startsWith('delete_') || name.startsWith('create_') || name.startsWith('get_workspace')) {
+              chatLogger.info('[VFS MCP] Tool invoked', {
+                tool: name,
+                userId: context.userId,
+                args: Object.keys(args || {}),
+                path: args?.path || args?.files?.map((f: any) => f.path)?.join(', ') || undefined,
+              });
+            }
+
             const result = await callMCPToolFromAI_SDK(name, args, context.userId || '');
             if (result.success) {
+              // Log VFS MCP tool result summary
+              if (name.startsWith('write_') || name.startsWith('read_') || name.startsWith('list_') ||
+                  name.startsWith('search_') || name.startsWith('apply_') || name.startsWith('batch_') ||
+                  name.startsWith('delete_') || name.startsWith('create_') || name.startsWith('get_workspace')) {
+                chatLogger.info('[VFS MCP] Tool completed', {
+                  tool: name,
+                  success: true,
+                  userId: context.userId,
+                });
+              }
               return { success: true, output: result.output };
             } else {
               return { success: false, error: result.error || 'Tool execution failed' };
@@ -244,12 +266,12 @@ async function createMCPTools(context: ToolExecutionContext): Promise<Record<str
         },
       }) as unknown as Tool;
     }
-    
+
     chatLogger.debug('Created MCP tools for Vercel AI SDK', { count: mcpToolDefs.length });
   } catch (error: any) {
     chatLogger.warn('Failed to create MCP tools', { error: error.message });
   }
-  
+
   return mcpTools;
 }
 

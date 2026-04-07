@@ -125,6 +125,13 @@ export class EnhancedLLMService {
         apiKey: process.env.ZEN_API_KEY || '',
         models: PROVIDERS.zen.models,
         priority: 8
+      },
+      {
+        provider: 'nvidia',
+        baseUrl: process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
+        apiKey: process.env.NVIDIA_API_KEY || '',
+        models: PROVIDERS.nvidia.models,
+        priority: 9
       }
     ];
 
@@ -133,6 +140,58 @@ export class EnhancedLLMService {
         this.endpointConfigs.set(config.provider, config);
       }
     });
+  }
+
+  /**
+   * Dynamically register a provider config using a user-provided API key.
+   * This allows users to use any provider defined in PROVIDERS without
+   * requiring server-side env vars for each one.
+   */
+  private registerUserProviderConfig(provider: string, userApiKey: string): void {
+    const providerDef = PROVIDERS[provider];
+    if (!providerDef) {
+      chatLogger.warn('Unknown provider, cannot register config', { provider });
+      return;
+    }
+
+    // Get base URL from env var or use default based on provider
+    const baseUrl = this.getDefaultBaseUrlForProvider(provider);
+
+    const config: LLMEndpointConfig = {
+      provider,
+      baseUrl,
+      apiKey: userApiKey,
+      models: providerDef.models || [],
+      priority: 99 // Low priority for user-provided configs
+    };
+
+    this.endpointConfigs.set(provider, config);
+    chatLogger.debug('Registered user provider config', { provider, baseUrl });
+  }
+
+  /**
+   * Get default base URL for a provider
+   */
+  private getDefaultBaseUrlForProvider(provider: string): string {
+    const baseUrlMap: Record<string, string> = {
+      'openai': process.env.OPENAI_BASE_URL || 'https://api.openai.com/v1',
+      'anthropic': 'https://api.anthropic.com/v1',
+      'google': 'https://generativelanguage.googleapis.com/v1beta',
+      'mistral': process.env.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1',
+      'nvidia': process.env.NVIDIA_BASE_URL || 'https://integrate.api.nvidia.com/v1',
+      'openrouter': process.env.OPENROUTER_BASE_URL || process.env.OPENAI_BASE_URL || 'https://openrouter.ai/api/v1',
+      'github': process.env.GITHUB_MODELS_BASE_URL || 'https://models.inference.ai.azure.com',
+      'groq': 'https://api.groq.com/openai/v1',
+      'together': 'https://api.together.xyz/v1',
+      'deepinfra': 'https://api.deepinfra.com/v1/openai',
+      'fireworks': 'https://api.fireworks.ai/inference/v1',
+      'anyscale': 'https://api.endpoints.anyscale.com/v1',
+      'lepton': 'https://<your-workspace>.lepton.run/api/v1',
+      'chutes': 'https://llm.chutes.ai/v1',
+      'portkey': 'https://api.portkey.ai/v1',
+      'zen': process.env.ZEN_BASE_URL || 'https://api.zen.ai/v1',
+    };
+    return baseUrlMap[provider] || `https://api.${provider}.com/v1`;
   }
 
   private setupFallbackChains(): void {
@@ -171,6 +230,17 @@ export class EnhancedLLMService {
     const actualModel = task
       ? getModelForTask(task, llmRequest.model)
       : llmRequest.model || 'default';  // Default model if none specified
+
+    // CRITICAL FIX: Dynamically register provider if user provided API key but provider isn't in endpointConfigs.
+    // This allows user-provided keys to work for any provider defined in PROVIDERS,
+    // without requiring server-side env vars for every provider.
+    if (!this.endpointConfigs.has(actualProvider)) {
+      const userApiKey = apiKeys?.[actualProvider];
+      if (userApiKey && PROVIDERS[actualProvider]) {
+        this.registerUserProviderConfig(actualProvider, userApiKey);
+        chatLogger.debug('Dynamically registered user-provided provider config', { requestId, provider: actualProvider });
+      }
+    }
 
     // Override API key with user-provided key if available for this provider
     const userApiKey = apiKeys?.[actualProvider];
@@ -480,6 +550,15 @@ export class EnhancedLLMService {
     const primaryProvider = provider || getProviderForTask('chat');
     const streamStartTime = Date.now();
 
+    // CRITICAL FIX: Dynamically register provider if user provided API key but provider isn't in endpointConfigs.
+    if (!this.endpointConfigs.has(primaryProvider)) {
+      const userApiKey = apiKeys?.[primaryProvider];
+      if (userApiKey && PROVIDERS[primaryProvider]) {
+        this.registerUserProviderConfig(primaryProvider, userApiKey);
+        chatLogger.debug('Dynamically registered user-provided provider config (streaming)', { requestId, provider: primaryProvider });
+      }
+    }
+
     // Use user-provided API key if available for this provider
     const userApiKey = apiKeys?.[primaryProvider];
     if (userApiKey) {
@@ -609,6 +688,16 @@ export class EnhancedLLMService {
                       if (!vfsTool) {
                         throw new Error(`Unknown VFS tool: ${toolName}`);
                       }
+
+                      // Explicit logging when VFS MCP tools are invoked
+                      chatLogger.info('[VFS MCP] Tool invoked (streaming path)', {
+                        tool: toolName,
+                        userId: request.userId,
+                        requestId,
+                        args: Object.keys(args || {}),
+                        path: args?.path || args?.files?.map((f: any) => f.path)?.join(', ') || undefined,
+                      });
+
                       const result = await toolContextStore.run(
                         { userId: request.userId || 'anonymous', sessionId: request.conversationId },
                         async () => vfsTool.execute(args || {}, {
@@ -616,12 +705,27 @@ export class EnhancedLLMService {
                           toolCallId: `vfs-${toolName}-${Date.now()}`,
                         })
                       ) as any;
+
+                      // Log completion
                       if (result?.success) {
+                        chatLogger.info('[VFS MCP] Tool completed (streaming path)', {
+                          tool: toolName,
+                          success: true,
+                          userId: request.userId,
+                          requestId,
+                        });
                         // Return just the output for Vercel AI SDK format
                         return typeof result === 'object' && 'message' in result
                           ? result.message
                           : JSON.stringify(result);
                       } else {
+                        chatLogger.warn('[VFS MCP] Tool failed (streaming path)', {
+                          tool: toolName,
+                          success: false,
+                          error: result?.error,
+                          userId: request.userId,
+                          requestId,
+                        });
                         throw new Error(result?.error || `VFS tool ${toolName} execution failed`);
                       }
                     },
@@ -674,6 +778,18 @@ export class EnhancedLLMService {
           smoothStreaming: true,
         });
 
+        // Emit metadata chunk with actual provider/model for telemetry tracking
+        yield {
+          content: '',
+          isComplete: false,
+          timestamp: new Date(),
+          metadata: {
+            actualProvider: primaryProvider,
+            actualModel: llmRequest.model,
+            streamingStarted: true,
+          }
+        };
+
         yield* streamWithAutoContinue(baseStream, {
           userId: request.userId || 'anonymous',
           conversationId: request.conversationId,
@@ -691,7 +807,19 @@ export class EnhancedLLMService {
       chatLogger.warn('Provider not supported by Vercel AI SDK, using legacy streaming', { provider: primaryProvider });
 
       const fullRequest = { ...llmRequest, messages: processedMessages, provider: primaryProvider, apiKey: userApiKey || llmRequest.apiKey };
-      
+
+      // Emit metadata chunk with actual provider/model for telemetry tracking
+      yield {
+        content: '',
+        isComplete: false,
+        timestamp: new Date(),
+        metadata: {
+          actualProvider: primaryProvider,
+          actualModel: llmRequest.model,
+          streamingStarted: true,
+        }
+      };
+
       // Wrap with auto-continue support
       const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
       const baseStream = llmService.generateStreamingResponse(fullRequest);
@@ -700,7 +828,7 @@ export class EnhancedLLMService {
         conversationId: request.conversationId,
         enableAutoContinue: true,
       });
-      
+
       const streamLatency = Date.now() - streamStartTime;
       chatLogger.info('Legacy streaming completed successfully', { requestId, provider: primaryProvider, model: llmRequest.model }, {
         latencyMs: streamLatency,
@@ -765,6 +893,20 @@ export class EnhancedLLMService {
           };
 
           const baseStream = llmService.generateStreamingResponse(fallbackRequest);
+          
+          // Emit metadata chunk with actual fallback provider/model for telemetry tracking
+          yield {
+            content: '',
+            isComplete: false,
+            timestamp: new Date(),
+            metadata: {
+              actualProvider: fallbackProvider,
+              actualModel: supportedModel,
+              fallbackOccurred: true,
+              fallbackChain: fallbackChainLog,
+            }
+          };
+          
           yield* streamWithAutoContinue(baseStream, {
             userId: request.userId || 'anonymous',
             conversationId: request.conversationId,

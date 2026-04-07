@@ -1299,7 +1299,10 @@ export async function POST(request: NextRequest) {
       conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
       // Keep these tri-state so router-level detection can still route specialized endpoints.
       // `false` means "explicitly disable", `undefined` means "auto-detect".
-      enableTools: requestType === 'tool' ? !!authenticatedUserId : undefined,
+      // CRITICAL FIX: Enable tools by default for all authenticated requests.
+      // This allows VFS MCP tools (write_file, read_file, apply_diff, etc.) to be
+      // available to the LLM for any request that might need filesystem access.
+      enableTools: !!authenticatedUserId,
       enableSandbox: requestType === 'sandbox' ? !!authenticatedUserId : undefined,
       enableComposio: requestType === 'tool' ? !!authenticatedUserId : undefined,
       mode: body.mode || 'enhanced', // Add mode from request
@@ -1836,6 +1839,28 @@ export async function POST(request: NextRequest) {
 
                 for await (const streamChunk of unifiedResponse.stream as AsyncGenerator<StreamingResponse>) {
                   if (request.signal?.aborted) break;
+
+                  // CRITICAL: Track actualProvider/actualModel from streaming metadata chunks
+                  // This captures fallback events where the provider/model changes during streaming
+                  if (streamChunk.metadata?.actualProvider || streamChunk.metadata?.actualModel) {
+                    const newProvider = streamChunk.metadata.actualProvider;
+                    const newModel = streamChunk.metadata.actualModel;
+                    
+                    if (newProvider && newProvider !== actualProvider) {
+                      chatLogger.info('Streaming provider changed (fallback occurred)', {
+                        requestId: streamRequestId,
+                        oldProvider: actualProvider,
+                        newProvider,
+                        oldModel: actualModel,
+                        newModel,
+                      });
+                      actualProvider = newProvider;
+                    }
+                    
+                    if (newModel && newModel !== actualModel) {
+                      actualModel = newModel;
+                    }
+                  }
 
                   // Accumulate token content
                   if (streamChunk.content) {

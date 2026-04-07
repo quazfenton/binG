@@ -70,3 +70,11 @@ desktop/src-tauri/target/*
 # Temporary database files
 *.tmp
 *.temp
+
+# ===========================================
+# BUILD OUTPUTS
+# ===========================================
+**/dist/
+**/dist/*
+dist/
+build/

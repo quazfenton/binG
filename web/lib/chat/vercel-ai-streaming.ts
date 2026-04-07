@@ -500,6 +500,29 @@ export async function* streamWithVercelAI(
       streamOptions.tools = tools;
     }
 
+    // FIX: Detect if model supports function calling (Vercel AI SDK v6+).
+    // If tools are passed but the model doesn't support function calling,
+    // the LLM will output tool-like JSON as raw text instead of using native tool calls.
+    // We detect this, warn the user, and strip tools to avoid confusing the model.
+    if (streamOptions.tools) {
+      const supportsFC = (vercelModel as any)?.supports?.functionCalling;
+      if (supportsFC === false) {
+        chatLogger.warn('Model does not support function calling — stripping tools', {
+          provider,
+          model: modelName,
+          hint: `The LLM outputs tool-like JSON as text. Use gpt-4o, claude-sonnet-4-5, or another model that supports function calling.`,
+        });
+        delete streamOptions.tools;
+      } else if (supportsFC === undefined) {
+        // Model doesn't report this capability — could be unknown provider.
+        // Most OpenAI-compatible providers support FC, so proceed but log.
+        chatLogger.debug('Model does not report function calling capability — attempting anyway', {
+          provider,
+          model: modelName,
+        });
+      }
+    }
+
     // Provider-specific options (e.g., Anthropic cache control)
     if (providerOptions) {
       streamOptions.providerOptions = providerOptions;
@@ -760,6 +783,18 @@ export async function* streamWithVercelAI(
 
         if (fallbackSystemPrompt) fallbackStreamOptions.system = fallbackSystemPrompt;
         if (tools && Object.keys(tools).length > 0) fallbackStreamOptions.tools = tools;
+
+        // Same function calling support check for fallback path
+        if (fallbackStreamOptions.tools) {
+          const supportsFC = (fallbackModel as any)?.supports?.functionCalling;
+          if (supportsFC === false) {
+            chatLogger.warn('Fallback model does not support function calling — stripping tools', {
+              fallbackProvider: fallbackProviderName,
+              fallbackModel: fallbackModelName,
+            });
+            delete fallbackStreamOptions.tools;
+          }
+        }
         
         const fallbackResult = streamText(fallbackStreamOptions);
         

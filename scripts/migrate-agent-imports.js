@@ -7,11 +7,14 @@ function findFiles(dir) {
     fs.readdirSync(dir).forEach(f => {
       const fp = path.join(dir, f);
       try {
-        findFiles(fp);
-      } catch (e) {
-        if (/\.(ts|tsx|js|jsx)$/.test(f)) {
+        const stat = fs.statSync(fp);
+        if (stat.isDirectory()) {
+          results = results.concat(findFiles(fp));
+        } else if (/\.(ts|tsx|js|jsx)$/.test(f)) {
           results.push(fp);
         }
+      } catch (e) {
+        // Skip files we can't stat
       }
     });
   } catch (e) {}

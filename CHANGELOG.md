@@ -2,6 +2,29 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] — VFS MCP Tool Fallback + Function Calling Detection
+
+### 🔴 Critical Bug Fixes
+
+- **LLM function calling fallback** — When the model doesn't support native function calling (or ignores tools), it outputs tool calls as raw JSON text. Added `extractJsonToolCalls()` parser that catches `{ "tool": "batch_write", "arguments": { "files": [...] } }` format and converts to structured `FileEdit` objects for execution through the existing file-edit pipeline.
+- **Function calling support detection** — Added `model.supports?.functionCalling` check in `vercel-ai-streaming.ts`. If `false`, tools are stripped and a warning is logged, preventing confusing the model with tools it can't use. Applied to both main and fallback streaming paths.
+- **CSS value false positives in path validation** — `looksLikeCssValueSegment()` regex `\d*[a-z%]+` didn't match decimal values like `0.3s`. Fixed to `\d+(?:\.\d+)?[a-z%]+|\d+(?:\.\d+)?` which correctly catches `0.3s`, `1.5rem`, `10px`, `50%`.
+- **rm -rf regex bypass** — Original `/\brm\s+-rf\s+\s/i` required `\s+\s` (two+ whitespace chars), so `rm -rf /home` with single space passed through. Fixed to `/\brm\s+-rf\s+\//i` which blocks `rm -rf` on any absolute path.
+- **SSRF IPv6 bypass** — Added `::ffff:` to `SSRF_BLOCKED_HOSTS` blocklist to prevent IPv4-mapped IPv6 address bypasses (e.g., `[::ffff:127.0.0.1]`, `[::ffff:169.254.169.254]`).
+- **Directory traversal broken in migration script** — `findFiles()` in `migrate-agent-imports.js` ignored recursive results. Fixed with `fs.statSync` + `results.concat()` for proper recursive traversal.
+- **Double promise resolution in file dialog** — Added `settled` guard flag and unified `settle()` function in `openFileDialog` to prevent race between `onchange` and `onfocus` handlers.
+- **Incomplete error reporting in job error handling** — Changed `error.message` to `error?.message || String(error)` in `jobs.ts` catch block to handle non-Error throws.
+- **Silent error in secrets get()** — Added conditional error logging in `secrets/desktop.ts` `get()` method; logs unexpected errors but silences expected "not found" errors.
+
+### 🏗 Architecture
+
+- **Raw JSON tool call sanitization** — `sanitizeFileEditTags()` now strips raw JSON tool call objects from display using balanced brace counting (O(n), no regex backtracking), preventing leaking tool call JSON into the UI.
+- **Incremental JSON tool call tracking** — `detectUnclosedTags()` in the streaming parser now tracks unclosed JSON tool call objects, preventing incomplete edits from being emitted during streaming.
+
+### ✅ Tests
+
+- **25 unit tests** for `extractJsonToolCalls`, `extractFileEdits` integration, `sanitizeFileEditTags`, `sanitizeAssistantDisplayContent`, `extractIncrementalFileEdits`, and `isValidExtractedPath`.
+
 ## [Unreleased] — Integration Execution System v2.0
 
 ### 🔴 Critical Bug Fixes

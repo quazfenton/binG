@@ -2480,8 +2480,14 @@ export function WorkspacePanel() {
                   value={renameValue}
                   onChange={(e) => setRenameValue(e.target.value)}
                   onKeyDown={(e) => {
-                    if (e.key === 'Enter') confirmRename();
-                    if (e.key === 'Escape') cancelRename();
+                    if (e.key === 'Enter') {
+                      e.stopPropagation(); // Prevent opening Monaco editor
+                      confirmRename();
+                    }
+                    if (e.key === 'Escape') {
+                      e.stopPropagation(); // Prevent other side effects
+                      cancelRename();
+                    }
                   }}
                   onBlur={confirmRename}
                   className="h-5 text-xs bg-black/50 border-white/30 min-w-0 flex-1"
@@ -2562,8 +2568,14 @@ export function WorkspacePanel() {
             value={renameValue}
             onChange={(e) => setRenameValue(e.target.value)}
             onKeyDown={(e) => {
-              if (e.key === 'Enter') confirmRename();
-              if (e.key === 'Escape') cancelRename();
+              if (e.key === 'Enter') {
+                e.stopPropagation(); // Prevent opening Monaco editor
+                confirmRename();
+              }
+              if (e.key === 'Escape') {
+                e.stopPropagation(); // Prevent other side effects
+                cancelRename();
+              }
             }}
             onBlur={confirmRename}
             className="h-5 text-xs bg-black/50 border-white/30 flex-1 min-w-0"

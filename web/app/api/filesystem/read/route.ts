@@ -87,11 +87,41 @@ export async function POST(req: NextRequest) {
   const ownerId = authResolution.ownerId;
 
   try {
-    const body = await req.json();
+    let body;
+    try {
+      body = await req.json();
+    } catch (parseError) {
+      console.error('[VFS Read] Failed to parse request body:', parseError);
+      const errorResponse = NextResponse.json(
+        {
+          success: false,
+          error: 'Invalid request - malformed JSON',
+        },
+        { status: 400 },
+      );
+      return withAnonSessionCookie(errorResponse, authResolution);
+    }
+
+    // DEBUG: Log the raw request body
+    console.log('[VFS Read] Raw request body:', JSON.stringify(body, null, 2));
+    console.log('[VFS Read] Path field type:', typeof body?.path, '| Value:', body?.path, '| Length:', body?.path?.length);
 
     // Validate request body
     const validation = readRequestSchema.safeParse(body);
     if (!validation.success) {
+      console.error('[VFS Read] Zod validation failed:', {
+        errors: validation.error.errors.map(e => ({
+          field: e.path.join('.'),
+          code: e.code,
+          message: e.message,
+        })),
+        receivedPath: body?.path,
+        pathType: typeof body?.path,
+        pathIsNull: body?.path === null,
+        pathIsUndefined: body?.path === undefined,
+        pathLength: body?.path?.length,
+        hasPathField: 'path' in (body || {}),
+      });
       const errorResponse = NextResponse.json(
         {
           success: false,

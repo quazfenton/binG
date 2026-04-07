@@ -925,6 +925,14 @@ export async function callMCPToolFromAI_SDK(
     const { vfsTools, toolContextStore, getVFSTool } = await import('./vfs-mcp-tools');
     const vfsTool = getVFSTool(toolName);
     if (vfsTool) {
+      // Explicit logging for VFS MCP tool invocation
+      logger.info('[VFS MCP] Tool invoked (AI_SDK path)', {
+        tool: toolName,
+        userId,
+        args: Object.keys(args || {}),
+        path: args?.path || args?.files?.map((f: any) => f.path)?.join(', ') || undefined,
+      });
+
       // Run inside request-scoped context so the tool gets the right userId
       const result = await toolContextStore.run(
         { userId, sessionId: args.sessionId },
@@ -933,6 +941,23 @@ export async function callMCPToolFromAI_SDK(
           toolCallId: crypto.randomUUID(),
         })
       ) as any;
+
+      // Log completion
+      if (result?.success) {
+        logger.info('[VFS MCP] Tool completed (AI_SDK path)', {
+          tool: toolName,
+          success: true,
+          userId,
+        });
+      } else {
+        logger.warn('[VFS MCP] Tool failed (AI_SDK path)', {
+          tool: toolName,
+          success: false,
+          error: result?.error,
+          userId,
+        });
+      }
+
       return {
         success: result?.success ?? false,
         output: JSON.stringify(result),

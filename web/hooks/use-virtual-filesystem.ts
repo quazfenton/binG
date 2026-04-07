@@ -655,6 +655,15 @@ export function useVirtualFilesystem(
   }, [request]);
 
   const readFile = useCallback(async (filePath: string): Promise<VirtualFile> => {
+    // DEBUG: Log what path is being requested
+    console.log('[useVFS] readFile called with:', { 
+      filePath, 
+      type: typeof filePath,
+      length: filePath?.length,
+      isEmpty: !filePath,
+      useOPFS 
+    });
+    
     // OPFS-first strategy
     if (useOPFS) {
       try {
@@ -665,11 +674,15 @@ export function useVirtualFilesystem(
         logWarn(`readFile: OPFS cache miss for "${filePath}", fetching from server`);
       }
     }
+
+    // DEBUG: Log the request body we're about to send
+    const requestBody = { path: filePath };
+    console.log('[useVFS] Sending request body:', JSON.stringify(requestBody, null, 2));
     
     // Server fetch
     return request<VirtualFile>('/api/filesystem/read', {
       method: 'POST',
-      body: JSON.stringify({ path: filePath }),
+      body: JSON.stringify(requestBody),
     });
   }, [request, useOPFS, logWarn]);
 

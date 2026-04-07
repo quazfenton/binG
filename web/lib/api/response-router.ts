@@ -505,12 +505,17 @@ export class ResponseRouter {
           data: {
             ...routerResponse.data,
             streaming: true,
+            provider: (routerResponse.metadata as any)?.actualProvider || (routerResponse.data as any)?.provider,
+            model: (routerResponse.metadata as any)?.actualModel || (routerResponse.data as any)?.model,
           },
           source: routerResponse.source,
           priority: routerResponse.priority,
           metadata: {
             streaming: true,
             timestamp: new Date().toISOString(),
+            actualProvider: (routerResponse.metadata as any)?.actualProvider || (routerResponse.data as any)?.provider,
+            actualModel: (routerResponse.metadata as any)?.actualModel || (routerResponse.data as any)?.model,
+            fallbackChain: (routerResponse.metadata as any)?.fallbackChain,
           },
         }
       }
@@ -622,6 +627,14 @@ export class ResponseRouter {
                 source: 'original-system',
                 type: 'streaming',
                 streaming: true,
+                provider: req.provider,
+                model: req.model,
+              },
+              metadata: {
+                actualProvider: req.provider,
+                actualModel: req.model,
+                // Note: These may be updated if fallbacks occur during streaming
+                // The streaming generator will yield metadata chunks with updated provider/model
               },
             }
           }
@@ -764,9 +777,11 @@ export class ResponseRouter {
           return health.healthy
         },
         canHandle: (req: RouterRequest) => {
-          // V2 is best for code/agent tasks
+          // V2 is best for code/agent tasks — detect by request type, not enableTools flag.
+          // enableTools is now true for ALL authenticated requests, so it's no longer
+          // a useful discriminator for routing. Rely on content detection instead.
           const requestType = detectRequestType(req.messages)
-          return requestType === 'sandbox' || requestType === 'tool' || req.enableTools === true
+          return requestType === 'sandbox' || requestType === 'tool'
         },
         processRequest: async (req: RouterRequest) => this.processV2GatewayRequest(req),
       },
@@ -2029,7 +2044,11 @@ export class ResponseRouter {
         messages: buildSpecPrompt(userContent),
         maxTokens: 4000,
         stream: false,
-        requestId: specRequestId
+        requestId: specRequestId,
+        // CRITICAL FIX: Pass API keys and user context from original request
+        // so the spec amplification can authenticate with the same provider
+        apiKeys: request.apiKeys,
+        userId: request.userId,
       })
 
       // Wrap spec promise to match expected type for runBackgroundRefinement
