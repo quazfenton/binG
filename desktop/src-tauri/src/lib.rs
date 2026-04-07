@@ -3,7 +3,7 @@ use commands::{PtySessions, CheckpointManager};
 
 #[cfg_attr(mobile, tauri::mobile_entry_point)]
 pub fn run() {
-    tauri::Builder::default()
+    let result = tauri::Builder::default()
         .plugin(tauri_plugin_shell::init())
         .plugin(tauri_plugin_fs::init())
         .plugin(tauri_plugin_dialog::init())
@@ -27,6 +27,10 @@ pub fn run() {
             commands::list_checkpoints,
             commands::delete_checkpoint,
         ])
-        .run(tauri::generate_context!())
-        .expect("error while running tauri application");
+        .run(tauri::generate_context!());
+
+    if let Err(e) = result {
+        eprintln!("Failed to run tauri application: {}", e);
+        std::process::exit(1);
+    }
 }

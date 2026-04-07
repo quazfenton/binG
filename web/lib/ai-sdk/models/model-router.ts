@@ -26,6 +26,7 @@ export type ModelTier = 'fast' | 'reasoning' | 'coder' | 'auto';
 // Lazy-load optional @langchain/mistralai (may not be installed)
 async function getMistralAI(): Promise<any> {
   try {
+    // @ts-expect-error @langchain/mistralai is an optional dependency
     return (await import('@langchain/mistralai')).ChatMistralAI;
   } catch {
     return null;
@@ -57,7 +58,7 @@ function getModelMap(): Promise<ModelMap> {
           model: process.env.REASONING_MODEL || 'gemini-2.5-flash',
           temperature: 0.7,
           maxTokens: 4000,
-        }),
+        } as any),
         coder: new ChatAnthropic({
           model: process.env.CODER_MODEL || 'claude-sonnet-4-20250514',
           temperature: 0.2,
@@ -109,7 +110,7 @@ export async function routeLLM(
     if (tier !== 'reasoning') {
       console.warn(`Model ${tier} failed, falling back to reasoning model`);
       return await withRetry(
-        () => modelMap.reasoning.invoke(messages),
+        () => _modelMap!.reasoning.invoke(messages),
         {
           maxRetries: 1,
           baseDelay: 1000,

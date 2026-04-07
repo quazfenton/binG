@@ -211,6 +211,7 @@ function createVFSTools(context: ToolExecutionContext): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
 
   for (const [name, vfsTool] of Object.entries(mcpVFSTools)) {
+    // @ts-expect-error AI SDK v6 Tool type signature changed frequently
     tools[name] = {
       ...vfsTool,
       execute: async (args: any, execOptions: any) => {

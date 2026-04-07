@@ -944,6 +944,14 @@ export class LivePreviewOffloading {
     const hasAngularFiles = filePaths.some(p => p.includes('.component.') || p.includes('.module.'));
     const hasAngular = deps['@angular/core'] || hasAngularFiles;
 
+    // Detect vanilla HTML/CSS/JS projects (no framework, no package.json)
+    const hasHtml = filePaths.some(p => p.endsWith('.html'));
+    const hasJsFiles = filePaths.some(p => /\.(js|mjs|cjs)$/.test(p));
+    const hasCssFiles = filePaths.some(p => p.endsWith('.css'));
+    if (hasHtml && (hasJsFiles || hasCssFiles) && !packageJson) {
+      return 'vanilla';
+    }
+
     // Check for config files
     const hasNextConfig = filePaths.some(p => p.includes('next.config'));
     const hasNuxtConfig = filePaths.some(p => p.includes('nuxt.config'));
@@ -1470,63 +1478,105 @@ export class LivePreviewOffloading {
    * Migrated from preview-offloader.ts
    */
   detectPort(files: Record<string, string>): number {
-    const packageJson = this.parsePackageJson(files['package.json'] || files['/package.json']);
+    // Handle both Record and array formats for backward compatibility
+    const filesObj: Record<string, string> = Array.isArray(files)
+      ? (files as Array<{name: string; content: string}>).reduce((acc, f) => {
+          if (f.name && f.content !== undefined) acc[f.name] = f.content;
+          return acc;
+        }, {} as Record<string, string>)
+      : files as Record<string, string>;
+
+    const packageJson = this.parsePackageJson(filesObj['package.json'] || filesObj['/package.json']);
+
+    // 1. Check config files first (Vite, Webpack, etc.)
+    // Vite config pattern: server: { port: 5173 }
+    const viteConfig = filesObj['vite.config.js'] || filesObj['vite.config.ts'] || filesObj['vite.config.mjs'] || '';
+    if (viteConfig) {
+      const vitePortMatch = viteConfig.match(/server\s*:\s*\{[\s\S]*?port\s*:\s*(\d+)/);
+      if (vitePortMatch) {
+        return parseInt(vitePortMatch[1], 10);
+      }
+    }
+
+    // Webpack config pattern: devServer: { port: 8080 }
+    const webpackConfig = filesObj['webpack.config.js'] || filesObj['webpack.config.ts'] || '';
+    if (webpackConfig) {
+      const webpackPortMatch = webpackConfig.match(/devServer\s*:\s*\{[\s\S]*?port\s*:\s*(\d+)/);
+      if (webpackPortMatch) {
+        return parseInt(webpackPortMatch[1], 10);
+      }
+    }
+
+    // Next.js config pattern: const PORT = 3001 or env.PORT
+    const nextConfig = filesObj['next.config.js'] || filesObj['next.config.ts'] || filesObj['next.config.mjs'] || '';
+    if (nextConfig) {
+      const nextPortMatch = nextConfig.match(/(?:const\s+)?PORT\s*=\s*(\d+)|port\s*:\s*(\d+)/);
+      if (nextPortMatch) {
+        return parseInt(nextPortMatch[1] || nextPortMatch[2], 10);
+      }
+    }
+
+    // 2. Check package.json scripts for explicit port flags
     if (packageJson) {
       const scripts = packageJson.scripts || {};
-      const startScript = scripts.dev || scripts.start || '';
+      const startScript = scripts.dev || scripts.start || scripts.serve || '';
 
-      // Extract port from start script
+      // Extract port from start script: -p 3000, --port 3000, PORT=3000
       const portMatch = startScript.match(/-p\s+(\d+)|--port\s+(\d+)|PORT=(\d+)/);
       if (portMatch) {
         return parseInt(portMatch[1] || portMatch[2] || portMatch[3], 10);
       }
 
-      // Framework defaults from dependencies
+      // Framework defaults from dependencies (when no explicit port)
       const deps = { ...packageJson.dependencies, ...packageJson.devDependencies };
+      if (deps.vite || deps['vite']) return 5173;
+      if (deps.astro || deps['astro']) return 4321;
+      if (deps.gatsby || deps['gatsby']) return 8000;
       if (deps.next || deps['next']) return 3000;
-      if (deps.nuxt || deps['@nuxt/core']) return 3000;
-      if (deps.vite) return 5173;
-      if (deps.react) return 3000;
-      if (deps.vue) return 3000;
-      if (deps.svelte) return 3000;
-      if (deps.astro) return 4321;
-      if (deps.gatsby) return 8000;
-      if (deps.remix) return 3000;
+      if (deps.nuxt || deps['nuxt'] || deps['@nuxt/core']) return 3000;
+      if (deps.remix || deps['remix'] || deps['@remix-run/node']) return 3000;
+      if (deps.react || deps['react']) return 3000;
+      if (deps.vue || deps['vue']) return 3000;
+      if (deps.svelte || deps['svelte']) return 3000;
     }
 
-    // Check Python files for port
-    for (const [path, content] of Object.entries(files)) {
+    // 3. Check Python files for port
+    for (const [path, content] of Object.entries(filesObj)) {
       if (path.endsWith('.py')) {
-        // Flask/FastAPI pattern: app.run(port=8000) or uvicorn.run(port=8000)
-        const portMatch =
-          content.match(/\b(?:app|uvicorn)\.run\([\s\S]*?\bport\s*=\s*(\d+)\b/) ??
-          content.match(/\bport\s*=\s*(\d+)\b/);
-        if (portMatch) {
-          return parseInt(portMatch[1], 10);
+        // Flask pattern: app.run(port=5000) or app.run(host='0.0.0.0', port=5000)
+        const flaskPortMatch = content.match(/app\.run\([\s\S]*?port\s*=\s*(\d+)/);
+        if (flaskPortMatch) {
+          return parseInt(flaskPortMatch[1], 10);
         }
-        // Framework defaults
+
+        // FastAPI/Uvicorn pattern: uvicorn.run(app, port=8000)
+        const uvicornPortMatch = content.match(/uvicorn\.run\([\s\S]*?port\s*=\s*(\d+)/);
+        if (uvicornPortMatch) {
+          return parseInt(uvicornPortMatch[1], 10);
+        }
+
+        // Generic port= pattern
+        const genericPortMatch = content.match(/\bport\s*=\s*(\d+)\b/);
+        if (genericPortMatch) {
+          return parseInt(genericPortMatch[1], 10);
+        }
+
+        // Framework detection from imports
         if (content.includes('from flask import') || content.includes('Flask(')) return 5000;
         if (content.includes('from fastapi import') || content.includes('FastAPI(') || content.includes('uvicorn.')) return 8000;
         if (path.endsWith('manage.py') || content.includes('from django import')) return 8000;
-        // Streamlit default
         if (content.includes('import streamlit') || content.includes('st.')) return 8501;
-        // Gradio default
         if (content.includes('import gradio')) return 7860;
       }
     }
 
-    // Check JavaScript/TypeScript files for port
-    for (const [path, content] of Object.entries(files)) {
-      if (path.endsWith('.js') || path.endsWith('.ts') || path.endsWith('.jsx') || path.endsWith('.tsx')) {
+    // 4. Check JavaScript/TypeScript files for port
+    for (const [path, content] of Object.entries(filesObj)) {
+      if (/\.(js|ts|jsx|tsx|mjs|cjs)$/.test(path)) {
         // Express pattern: app.listen(3000) or app.listen({ port: 3000 })
-        const portMatch = content.match(/app\.listen\((\d+)|app\.listen\(\{.*port:\s*(\d+)/);
-        if (portMatch) {
-          return parseInt(portMatch[1] || portMatch[2], 10);
-        }
-        // HTTP server pattern: http.createServer().listen(3000)
-        const httpMatch = content.match(/\.listen\((\d+)/);
-        if (httpMatch) {
-          return parseInt(httpMatch[1], 10);
+        const expressPortMatch = content.match(/\.listen\(\s*(\d+)/) || content.match(/\.listen\(\{[^}]*port\s*:\s*(\d+)/);
+        if (expressPortMatch) {
+          return parseInt(expressPortMatch[1], 10);
         }
       }
     }
@@ -1586,7 +1636,10 @@ export class LivePreviewOffloading {
     const buildDirs = ['dist', 'build', '.next', '.nuxt', '.output', 'public'];
     const filteredFiles: Record<string, { code: string }> = {};
 
-    for (const [path, content] of Object.entries(detection.normalizedFiles)) {
+    // Guard: normalizedFiles may be undefined if not provided
+    const files = detection.normalizedFiles || {};
+
+    for (const [path, content] of Object.entries(files)) {
       // Skip build outputs
       if (buildDirs.some(dir => path.startsWith(dir + '/') || path.startsWith('/' + dir + '/'))) continue;
       // Skip node_modules
@@ -2126,8 +2179,38 @@ export const livePreviewOffloading = new LivePreviewOffloading();
 export const detectProject = (request: PreviewRequest) =>
   livePreviewOffloading.detectProject(request);
 
-export const getSandpackConfig = (detection: ProjectDetection) =>
-  livePreviewOffloading.getSandpackConfig(detection);
+export const getSandpackConfig = (filesOrDetection: Array<{name: string; content: string}> | Record<string, string> | ProjectDetection, framework?: AppFramework) => {
+  // Handle both old API (files, framework) and new API (detection)
+  if (framework) {
+    // Old API: files + framework
+    const files = Array.isArray(filesOrDetection)
+      ? (filesOrDetection as Array<{name: string; content: string}>).reduce((acc, f) => {
+          acc[f.name] = f.content;
+          return acc;
+        }, {} as Record<string, string>)
+      : filesOrDetection as Record<string, string>;
+
+    return livePreviewOffloading.getSandpackConfig({
+      framework: framework!,
+      bundler: 'unknown',
+      packageManager: 'npm',
+      entryPoint: null,
+      rootScores: new Map<string, number>(),
+      selectedRoot: '',
+      previewMode: 'sandpack',
+      hasBackend: false,
+      hasPython: false,
+      hasNodeServer: false,
+      hasNextJS: false,
+      hasHeavyComputation: false,
+      hasAPIKeys: false,
+      fileCount: Object.keys(files).length,
+      normalizedFiles: files,
+    });
+  }
+  // New API: detection object
+  return livePreviewOffloading.getSandpackConfig(filesOrDetection as ProjectDetection);
+};
 
 export const detectPreviewMode = (
   filePaths: string[],

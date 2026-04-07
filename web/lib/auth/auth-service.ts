@@ -488,7 +488,7 @@ export class AuthService {
       );
 
       // Update last login
-      this.dbOps.getDb().prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(userId);
+      this.dbOps.db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(userId);
 
       return {
         success: true,

@@ -45,63 +45,82 @@ export class WebSocketTerminalServer extends EventEmitter {
     if (port) {
       this.port = port;
     }
-    return new Promise((resolve, reject) => {
-      // Try up to 5 ports starting from the configured port
-      const tryListen = (attemptPort: number) => {
-        try {
-          this.wss = new WebSocketServer({
-            port: attemptPort,
-            path: '/sandboxes/:sandboxId/terminal',
-          });
 
-          this.wss.on('connection', (ws, req) => {
-            void this.handleConnection(ws, req);
-          });
+    const configuredPort = this.port;
+    const MAX_RETRIES = 5;
 
-          this.wss.on('error', (error: any) => {
-            if (error.code === 'EADDRINUSE') {
-              const nextPort = attemptPort + 1;
-              if (nextPort <= attemptPort + 4) {
-                logger.warn(`Port ${attemptPort} in use, trying ${nextPort}...`);
-                this.wss?.close();
-                this.wss = null;
-                tryListen(nextPort);
-              } else {
-                const errorMsg = `Ports ${attemptPort}-${nextPort - 1} all in use. Try: 1) lsof -i :${attemptPort} && kill -9 <PID>, or 2) Set WEBSOCKET_PORT to a different value`;
-                logger.error(errorMsg);
-                reject(new Error(errorMsg));
-              }
-            } else if (error.code === 'EACCES') {
-              const errorMsg = `Permission denied for port ${attemptPort}. Try using a port > 1024 or run with sudo`;
-              logger.error(errorMsg);
-              reject(new Error(errorMsg));
+    for (let attempt = 0; attempt < MAX_RETRIES; attempt++) {
+      const attemptPort = configuredPort + attempt;
+
+      try {
+        // Create HTTP server with manual port binding to handle EADDRINUSE gracefully
+        const server = require('http').createServer();
+
+        await new Promise<void>((resolve, reject) => {
+          server.once('error', (err: any) => {
+            if (err.code === 'EADDRINUSE') {
+              server.close();
+              resolve(); // Resolve so outer loop tries next port
+            } else if (err.code === 'EACCES') {
+              reject(new Error(`Permission denied for port ${attemptPort}. Try using a port > 1024 or run with sudo`));
             } else {
-              logger.error('WebSocket server error', error);
-              reject(error);
+              reject(err);
             }
           });
 
-          this.wss.on('listening', () => {
-            if (attemptPort !== this.port) {
-              logger.info(`WebSocket terminal server listening on port ${attemptPort} (configured: ${this.port})`);
+          server.once('listening', () => {
+            // Create WebSocket server in noServer mode — we handle upgrades manually
+            this.wss = new WebSocketServer({ noServer: true });
+
+            server.on('upgrade', (request: any, socket: any, head: any) => {
+              const url = new URL(request.url || '', `http://localhost:${attemptPort}`);
+              const pathname = url.pathname;
+
+              // Accept multiple path formats for PTY connections
+              if (pathname === '/pty' || pathname.startsWith('/sandboxes/') || pathname.startsWith('/ws')) {
+                this.wss!.handleUpgrade(request, socket, Buffer.alloc(0), (ws: any) => {
+                  this.wss!.emit('connection', ws, request);
+                });
+              } else {
+                socket.destroy();
+              }
+            });
+
+            this.wss!.on('connection', (ws, req) => {
+              void this.handleConnection(ws, req);
+            });
+
+            // Start idle session cleanup
+            this.startIdleCleanup();
+
+            this.port = attemptPort;
+            if (attemptPort !== configuredPort) {
+              logger.info(`WebSocket terminal server listening on port ${attemptPort} (configured: ${configuredPort})`);
             } else {
               logger.info(`WebSocket terminal server listening on port ${attemptPort}`);
             }
-            this.port = attemptPort;
             this.emit('started', { port: attemptPort });
             resolve();
           });
 
-          // Start idle session cleanup
-          this.startIdleCleanup();
-        } catch (error: any) {
-          logger.error('Failed to create WebSocket server', error);
-          reject(error);
-        }
-      };
+          server.listen(attemptPort);
+        });
 
-      tryListen(this.port);
-    });
+        // If we got here with a working server, we're done
+        if (this.wss) return;
+      } catch (error: any) {
+        if (attempt === MAX_RETRIES - 1) {
+          const errorMsg = `Ports ${configuredPort}-${configuredPort + MAX_RETRIES - 1} all in use. Try: 1) lsof -i :${configuredPort} && kill -9 <PID>, or 2) Set WEBSOCKET_PORT to a different value`;
+          logger.error(errorMsg);
+          throw new Error(errorMsg);
+        }
+        // Continue to next port
+      }
+    }
+
+    const errorMsg = `Ports ${configuredPort}-${configuredPort + MAX_RETRIES - 1} all in use. Try: 1) lsof -i :${configuredPort} && kill -9 <PID>, or 2) Set WEBSOCKET_PORT to a different value`;
+    logger.error(errorMsg);
+    throw new Error(errorMsg);
   }
 
   private async handleConnection(ws: WebSocket, req: any): Promise<void> {

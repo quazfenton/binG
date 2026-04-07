@@ -161,7 +161,9 @@ export function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 
     { pattern: /create\s+(a\s+)?google\s+(doc|sheet|slide)/i, weight: 3 },
   ];
 
-  // Sandbox intent patterns (code execution, file operations) - weighted scoring
+  // Sandbox intent patterns (code EXECUTION, not file creation) - weighted scoring
+  // NOTE: File creation (write/create a file) is handled by VFS MCP tools and should
+  // remain 'chat', NOT 'sandbox'. Only patterns with explicit execution intent belong here.
   const SANDBOX_PATTERNS = [
     { pattern: /\b(run|execute|compile)\s+(this|the|my)?\s*(code|script|program)/i, weight: 3 },
     { pattern: /\b(build|create|write)\s+(a\s+)?(server|api|app|script|program)\s+(and|then)\s+(run|execute|start)/i, weight: 3 },
@@ -170,7 +172,6 @@ export function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 
     { pattern: /\b(install|setup)\s+(packages?|dependencies)/i, weight: 2 },
     { pattern: /\brun\s+.*\.(py|js|ts|sh|rb)/i, weight: 3 },
     { pattern: /\b(open|start|launch)\s+(a\s+)?(terminal|shell|sandbox)/i, weight: 2 },
-    { pattern: /\b(write|create|edit)\s+(a\s+)?file\s+.*\.(py|js|ts|html|css|json)/i, weight: 2 },
   ];
 
   // Apply weighted scoring for tool patterns

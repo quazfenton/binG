@@ -670,12 +670,19 @@ export class EnhancedLLMService {
         if (request.enableTools && request.userId) {
           try {
             const { getAllTools, extractPublicUrls } = await import('./vercel-ai-tools');
+            // Compute session-aware scopePath for VFS tools
+            const sessionIdFromConv = request.conversationId?.includes(':') 
+              ? request.conversationId.split(':')[1] 
+              : request.conversationId;
+            const computedScopePath = (request as any).scopePath 
+              || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project');
+            
             vercelTools = await getAllTools({
               userId: request.userId,
               conversationId: request.conversationId,
-              sessionId: request.conversationId?.includes(':') ? request.conversationId.split(':')[1] : undefined,
+              sessionId: sessionIdFromConv,
               requestId,
-              scopePath: (request as any).scopePath,  // Pass scopePath for session-scoped file operations
+              scopePath: computedScopePath,  // Session-aware path for VFS tools
             });
 
             // FIX: Merge VFS MCP tools (write_file, read_file, apply_diff, etc.)
@@ -691,6 +698,7 @@ export class EnhancedLLMService {
                   vercelTools![toolName] = createTool({
                     description: toolDef.function.description,
                     parameters: toolDef.function.parameters,
+                    // @ts-expect-error AI SDK v6 tool execute signature changed frequently
                     execute: async (args: Record<string, any>) => {
                       const vfsTool = getVFSTool(toolName);
                       if (!vfsTool) {
@@ -710,8 +718,8 @@ export class EnhancedLLMService {
                       const result = await toolContextStore.run(
                         {
                           userId: request.userId || 'anonymous',
-                          sessionId: request.conversationId,
-                          scopePath: (request as any).scopePath || 'project',  // Pass the session scope to VFS tools
+                          sessionId: sessionIdFromConv,
+                          scopePath: computedScopePath,  // Use session-aware scope path
                         },
                         async () => vfsTool.execute(args || {}, {
                           messages: [],

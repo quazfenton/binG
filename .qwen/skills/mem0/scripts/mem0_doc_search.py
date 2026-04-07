@@ -102,8 +102,11 @@ def search_docs(query: str, section: str | None = None) -> dict:
                 section_paths = SECTION_MAP[section]
                 results = [r for r in results if any(r.get("url", "").startswith(p) for p in section_paths)]
             return {"source": "mintlify_search", "results": results}
-    except (json.JSONDecodeError, Exception):
-        pass
+    except json.JSONDecodeError:
+        pass  # Invalid JSON from search endpoint, fall back to index search
+    except (urllib.error.URLError, OSError) as e:
+        # Network/connection errors - log and fall back gracefully
+        print(f"[mem0_doc_search] Mintlify search failed: {type(e).__name__}: {e}", flush=True)
 
     # Fallback: search llms.txt index for matching URLs
     index_content = fetch_url(LLMS_INDEX)

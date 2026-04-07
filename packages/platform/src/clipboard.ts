@@ -95,6 +95,7 @@ class DesktopClipboard implements ClipboardAdapter {
 
   async readFiles(): Promise<string[]> {
     try {
+      // @ts-expect-error readFiles may not be available in all Tauri versions
       const { readFiles } = await import('@tauri-apps/plugin-clipboard-manager');
       return await readFiles();
     } catch (error) {
@@ -105,6 +106,7 @@ class DesktopClipboard implements ClipboardAdapter {
 
   async writeFiles(paths: string[]): Promise<void> {
     try {
+      // @ts-expect-error writeFiles may not be available in all Tauri versions
       const { writeFiles } = await import('@tauri-apps/plugin-clipboard-manager');
       await writeFiles(paths);
     } catch (error) {

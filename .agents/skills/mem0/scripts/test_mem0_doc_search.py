@@ -163,7 +163,7 @@ class TestSearchDocs:
         responses = iter(["bad-json", many_lines])
         with patch.object(m, "fetch_url", side_effect=lambda u: next(responses)):
             result = m.search_docs("keyword")
-        assert len(result["matching_urls"]) <= 20
+        assert len(result["matching_urls"]) == 20
 
     def test_no_section_returns_all_llms_txt_matches(self):
         responses = iter(["bad-json", FAKE_LLMS_TXT])

@@ -38,28 +38,19 @@ export async function GET(
     const ownerId = authResolution.ownerId;
 
     // Shadow commits store:
-    //   owner_id   = full owner string (e.g. "anon:abc:xyz" or "user:123")
-    //   session_id = raw conversation/folder ID (e.g. "001")
+    //   owner_id   = full owner string (e.g. "anon:timestamp_randomid")
+    //   session_id = same full owner string (currently stored identically)
     //
-    // The sessionId from the URL may be:
-    //   "001"            → raw conversation ID → use as-is
-    //   "session-xxx"    → generated client ID → strip prefix
-    //   "owner:001"      → scoped format → extract last part
-    let conversationId = sessionId;
-    if (conversationId.includes(':')) {
-      const parts = conversationId.split(':');
-      conversationId = parts[parts.length - 1];
-    } else if (conversationId.startsWith('session-')) {
-      conversationId = conversationId.replace(/^session-/, '');
-    }
-
+    // The sessionId from the URL is the conversation ID (e.g., "004"),
+    // but shadow_commits stores the full owner ID as session_id.
+    // Query by owner_id which uniquely identifies the session.
     const db = getDatabase();
     const fullOwnerId = typeof ownerId === 'string' ? ownerId : `user:${ownerId}`;
 
     if (byUser) {
       // User-scoped: return all commits for this owner (cross-session)
       const rows = db.prepare(`
-        SELECT id, session_id, message, files_changed, workspace_version, created_at, paths
+        SELECT id, session_id, message, workspace_version, created_at, transactions
         FROM shadow_commits
         WHERE owner_id = ?
         ORDER BY created_at DESC
@@ -68,22 +59,28 @@ export async function GET(
         id: string;
         session_id: string;
         message: string;
-        files_changed: number;
         workspace_version: number;
         created_at: string;
-        paths: string | null;
+        transactions: string | null;
       }>;
 
       const versions = rows.map(row => {
         let paths: string[] = [];
-        if (row.paths) {
-          try { paths = JSON.parse(row.paths); } catch { paths = []; }
+        let filesChanged = 0;
+        if (row.transactions) {
+          try {
+            const txs = JSON.parse(row.transactions);
+            if (Array.isArray(txs)) {
+              paths = txs.map((t: any) => t.path).filter(Boolean);
+              filesChanged = txs.length;
+            }
+          } catch { paths = []; }
         }
         return {
           version: row.workspace_version || 0,
           commitId: row.id,
           message: row.message,
-          filesChanged: row.files_changed || 0,
+          filesChanged,
           createdAt: new Date(row.created_at).getTime(),
           sessionId: row.session_id,
           paths,
@@ -94,38 +91,40 @@ export async function GET(
       return withAnonSessionCookie(response, authResolution);
     }
 
-    // Session-scoped: commits matching owner_id + session_id
+    // Session-scoped: query by owner_id since shadow_commits stores
+    // the full owner string as session_id (not the conversation ID).
     const rows = db.prepare(`
-      SELECT id, session_id, message, files_changed, workspace_version, created_at, paths
+      SELECT id, session_id, message, workspace_version, created_at, transactions
       FROM shadow_commits
-      WHERE owner_id = ? AND session_id = ?
+      WHERE owner_id = ?
       ORDER BY created_at DESC
       LIMIT ?
-    `).all(fullOwnerId, conversationId, limit) as Array<{
+    `).all(fullOwnerId, limit) as Array<{
       id: string;
       session_id: string;
       message: string;
-      files_changed: number;
       workspace_version: number;
       created_at: string;
-      paths: string | null;
+      transactions: string | null;
     }>;
 
     const versions = rows.map(row => {
       let paths: string[] = [];
-      if (row.paths) {
+      let filesChanged = 0;
+      if (row.transactions) {
         try {
-          paths = JSON.parse(row.paths);
-        } catch {
-          // Malformed JSON — treat as no paths
-          paths = [];
-        }
+          const txs = JSON.parse(row.transactions);
+          if (Array.isArray(txs)) {
+            paths = txs.map((t: any) => t.path).filter(Boolean);
+            filesChanged = txs.length;
+          }
+        } catch { paths = []; }
       }
       return {
         version: row.workspace_version || 0,
         commitId: row.id,
         message: row.message,
-        filesChanged: row.files_changed || 0,
+        filesChanged,
         createdAt: new Date(row.created_at).getTime(),
         paths,
       };
@@ -136,7 +135,7 @@ export async function GET(
   } catch (error) {
     console.error('[Git Versions] Error:', error);
     return NextResponse.json(
-      { error: 'Failed to fetch versions', versions: [] },
+      { error: 'Failed to fetch versions', versions: [], details: error instanceof Error ? error.message : String(error) },
       { status: 500 }
     );
   }
