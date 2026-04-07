@@ -46,59 +46,79 @@ export class WebSocketTerminalServer extends EventEmitter {
       this.port = port;
     }
     return new Promise((resolve, reject) => {
-      try {
-        this.wss = new WebSocketServer({
-          port: this.port,
-          path: '/sandboxes/:sandboxId/terminal',
-        });
+      // Try up to 5 ports starting from the configured port
+      const tryListen = (attemptPort: number) => {
+        try {
+          this.wss = new WebSocketServer({
+            port: attemptPort,
+            path: '/sandboxes/:sandboxId/terminal',
+          });
 
-        this.wss.on('connection', (ws, req) => {
-          void this.handleConnection(ws, req);
-        });
+          this.wss.on('connection', (ws, req) => {
+            void this.handleConnection(ws, req);
+          });
 
-        this.wss.on('error', (error: any) => {
-          // Handle specific error types
-          if (error.code === 'EADDRINUSE') {
-            const errorMsg = `Port ${this.port} is already in use. ` +
-              `Try: 1) lsof -i :${this.port} && kill -9 <PID>, or ` +
-              `2) Set WEBSOCKET_PORT to a different value`;
-            logger.error(errorMsg);
-            this.emit('error', { code: 'PORT_IN_USE', message: errorMsg, originalError: error });
-            reject(new Error(errorMsg));
-          } else if (error.code === 'EACCES') {
-            const errorMsg = `Permission denied for port ${this.port}. Try using a port > 1024 or run with sudo`;
-            logger.error(errorMsg);
-            this.emit('error', { code: 'PERMISSION_DENIED', message: errorMsg, originalError: error });
-            reject(new Error(errorMsg));
-          } else {
-            logger.error('WebSocket server error', error);
-            this.emit('error', error);
-            reject(error);
-          }
-        });
+          this.wss.on('error', (error: any) => {
+            if (error.code === 'EADDRINUSE') {
+              const nextPort = attemptPort + 1;
+              if (nextPort <= attemptPort + 4) {
+                logger.warn(`Port ${attemptPort} in use, trying ${nextPort}...`);
+                this.wss?.close();
+                this.wss = null;
+                tryListen(nextPort);
+              } else {
+                const errorMsg = `Ports ${attemptPort}-${nextPort - 1} all in use. Try: 1) lsof -i :${attemptPort} && kill -9 <PID>, or 2) Set WEBSOCKET_PORT to a different value`;
+                logger.error(errorMsg);
+                reject(new Error(errorMsg));
+              }
+            } else if (error.code === 'EACCES') {
+              const errorMsg = `Permission denied for port ${attemptPort}. Try using a port > 1024 or run with sudo`;
+              logger.error(errorMsg);
+              reject(new Error(errorMsg));
+            } else {
+              logger.error('WebSocket server error', error);
+              reject(error);
+            }
+          });
 
-        this.wss.on('listening', () => {
-          logger.info(`WebSocket terminal server listening on port ${this.port}`);
-          this.emit('started', { port: this.port });
-          resolve();
-        });
+          this.wss.on('listening', () => {
+            if (attemptPort !== this.port) {
+              logger.info(`WebSocket terminal server listening on port ${attemptPort} (configured: ${this.port})`);
+            } else {
+              logger.info(`WebSocket terminal server listening on port ${attemptPort}`);
+            }
+            this.port = attemptPort;
+            this.emit('started', { port: attemptPort });
+            resolve();
+          });
 
-        // Start idle session cleanup
-        this.startIdleCleanup();
-      } catch (error: any) {
-        logger.error('Failed to create WebSocket server', error);
-        reject(error);
-      }
+          // Start idle session cleanup
+          this.startIdleCleanup();
+        } catch (error: any) {
+          logger.error('Failed to create WebSocket server', error);
+          reject(error);
+        }
+      };
+
+      tryListen(this.port);
     });
   }
 
   private async handleConnection(ws: WebSocket, req: any): Promise<void> {
-    // Extract sandboxId from URL path
+    // Extract sandboxId from URL path or query params
     const url = new URL(req.url || '', `http://localhost:${this.port}`);
     const pathParts = url.pathname.split('/');
-    const sandboxId = pathParts[pathParts.indexOf('sandboxes') + 1];
+    let sandboxId = pathParts[pathParts.indexOf('sandboxes') + 1];
 
-    logger.debug(`WebSocket connection request for sandbox: ${sandboxId || 'unknown'}`)
+    // Also check query params for /pty?sessionId=...&sandboxId=...
+    const querySandboxId = url.searchParams.get('sandboxId');
+    if (querySandboxId) {
+      sandboxId = querySandboxId;
+    }
+
+    const sessionId = url.searchParams.get('sessionId') || undefined;
+
+    logger.debug(`WebSocket connection request for sandbox: ${sandboxId || 'unknown'}${sessionId ? `, session: ${sessionId}` : ''}`)
 
     if (!sandboxId) {
       logger.warn('WebSocket connection rejected: Sandbox ID required')
@@ -184,11 +204,11 @@ export class WebSocketTerminalServer extends EventEmitter {
     }
 
     logger.debug(`Creating terminal session for sandbox ${sandboxId}`)
-    this.createTerminalSession(ws, sandboxId);
+    this.createTerminalSession(ws, sandboxId, sessionId);
   }
 
-  private async createTerminalSession(ws: WebSocket, sandboxId: string): Promise<void> {
-    const sessionId = `term_${Date.now()}_${Math.random().toString(36).substring(7)}`;
+  private async createTerminalSession(ws: WebSocket, sandboxId: string, sessionId?: string): Promise<void> {
+    const sid = sessionId || `term_${Date.now()}_${Math.random().toString(36).substring(7)}`;
     
     // SECURITY FIX: Do NOT spawn shell on host - route through sandbox provider PTY
     // This prevents authenticated RCE on the host server
@@ -230,7 +250,7 @@ export class WebSocketTerminalServer extends EventEmitter {
       }
 
       const terminalSession: TerminalSession = {
-        sessionId,
+        sessionId: sid,
         sandboxId,
         workspace,
         process: pty as any, // PTY implements similar interface to ChildProcess
@@ -240,9 +260,9 @@ export class WebSocketTerminalServer extends EventEmitter {
         rows: pty.rows || 24,
       };
 
-      this.sessions.set(sessionId, terminalSession);
+      this.sessions.set(sid, terminalSession);
       this.emit('session_created', terminalSession);
-      logger.info(`Terminal session ${sessionId} established via provider PTY`);
+      logger.info(`Terminal session ${sid} established via provider PTY`);
 
       // Handle PTY output
       pty.onData?.((data: string) => {
@@ -254,29 +274,29 @@ export class WebSocketTerminalServer extends EventEmitter {
 
       // Handle PTY exit
       pty.onExit?.(() => {
-        logger.debug(`Terminal session ${sessionId} PTY exit`);
-        this.emit('session_exit', { sessionId, code: 0, signal: undefined });
-        this.closeSession(sessionId);
+        logger.debug(`Terminal session ${sid} PTY exit`);
+        this.emit('session_exit', { sessionId: sid, code: 0, signal: undefined });
+        this.closeSession(sid);
       });
 
       // Handle WebSocket messages - forward to PTY
       ws.on('message', (data: Buffer) => {
-        logger.debug(`WebSocket message received for session ${sessionId}: ${data.length} bytes`);
+        logger.debug(`WebSocket message received for session ${sid}: ${data.length} bytes`);
         this.handleMessage(terminalSession, data);
       });
 
       // Handle WebSocket close
       ws.on('close', (code, reason) => {
-        logger.info(`WebSocket connection closed for session ${sessionId}: code=${code}`);
-        this.emit('session_closed', { sessionId, code, reason });
-        this.closeSession(sessionId);
+        logger.info(`WebSocket connection closed for session ${sid}: code=${code}`);
+        this.emit('session_closed', { sessionId: sid, code, reason });
+        this.closeSession(sid);
       });
 
       // Handle WebSocket errors
       ws.on('error', (error) => {
-        logger.error(`WebSocket error for session ${sessionId}: ${error.message}`);
-        this.emit('session_error', { sessionId, error });
-        this.closeSession(sessionId);
+        logger.error(`WebSocket error for session ${sid}: ${error.message}`);
+        this.emit('session_error', { sessionId: sid, error });
+        this.closeSession(sid);
       });
 
       // Send initial prompt

@@ -428,42 +428,88 @@ export const batchWriteTool = (tool as any)({
   execute: async ({ files, commitMessage = 'Batch write via MCP tool' }) => {
     try {
       const context = getToolContext();
-      logger.debug('batchWrite', { fileCount: files.length, userId: context.userId });
       
+      // Validate context - if userId is 'default', the tool context wasn't set properly
+      if (context.userId === 'default') {
+        logger.error('batchWrite: tool context not set - ensure toolContextStore.run() is used', {
+          filesCount: files?.length,
+        });
+      }
+
+      // Validate input
+      if (!files || !Array.isArray(files) || files.length === 0) {
+        const errMsg = 'No files provided to batch_write';
+        logger.error('batchWrite: ' + errMsg, { filesType: typeof files, filesValue: JSON.stringify(files)?.slice(0, 200) });
+        return {
+          success: false,
+          error: errMsg,
+          results: [],
+        };
+      }
+
+      // Resolve all paths relative to session scope
+      const scopedFiles = files.map(file => ({
+        ...file,
+        scopedPath: resolveScopedPath(file.path),
+      }));
+
+      logger.debug('batchWrite', { fileCount: files.length, userId: context.userId, scopePath: context.scopePath });
+
       // Track file existence for event type determination
       const fileStates = await Promise.all(
-        files.map(async (file) => {
+        scopedFiles.map(async (file) => {
           try {
-            await virtualFilesystem.readFile(context.userId, file.path);
-            return { path: file.path, existed: true };
+            await virtualFilesystem.readFile(context.userId, file.scopedPath);
+            return { path: file.scopedPath, existed: true };
           } catch {
-            return { path: file.path, existed: false };
+            return { path: file.scopedPath, existed: false };
           }
         })
       );
 
       const results = await Promise.all(
-        files.map(async (file) => {
+        scopedFiles.map(async (file) => {
           try {
             const result = await virtualFilesystem.writeFile(
               context.userId,
-              file.path,
+              file.scopedPath,
               file.content,
               undefined,
               { failIfExists: false }
             );
-            return { path: file.path, success: true, version: result.version };
+            logger.debug('batchWrite: file written', {
+              scopedPath: file.scopedPath,
+              userId: context.userId,
+              version: result?.version,
+            });
+            return { path: file.scopedPath, success: true, version: result.version };
           } catch (error: any) {
-            return { path: file.path, success: false, error: error.message };
+            logger.error('batchWrite: single file failed', {
+              scopedPath: file.scopedPath,
+              error: error.message,
+              stack: error.stack,
+            });
+            return { path: file.scopedPath, success: false, error: error.message };
           }
         })
       );
 
+      const successCount = results.filter(r => r.success).length;
+      const failCount = results.filter(r => !r.success).length;
+      
+      logger.info('batchWrite: completed', {
+        userId: context.userId,
+        total: files.length,
+        successCount,
+        failCount,
+        scopedPaths: scopedFiles.map(f => f.scopedPath),
+      });
+
       // Emit batch file events
-      const filesWithContent = files.map(f => {
-        const state = fileStates.find(s => s.path === f.path);
+      const filesWithContent = scopedFiles.map(f => {
+        const state = fileStates.find(s => s.path === f.scopedPath);
         return {
-          path: f.path,
+          path: f.scopedPath,
           type: (state?.existed ? 'update' : 'create') as 'create' | 'update',
           content: f.content,
         };
@@ -476,9 +522,6 @@ export const batchWriteTool = (tool as any)({
         source: 'mcp-tool',
       });
 
-      const successCount = results.filter(r => r.success).length;
-      const failCount = results.filter(r => !r.success).length;
-
       return {
         success: failCount === 0,
         results,
@@ -488,7 +531,12 @@ export const batchWriteTool = (tool as any)({
         message: `Wrote ${successCount} of ${files.length} files`,
       };
     } catch (error: any) {
-      logger.error('batchWrite failed', { error: error.message });
+      logger.error('batchWrite failed', {
+        error: error.message,
+        stack: error.stack,
+        fileCount: files?.length,
+        userId: context?.userId,
+      });
       return {
         success: false,
         error: error.message,

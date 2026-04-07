@@ -135,6 +135,103 @@ export default function MessageBubble({
     }
   }, [message.metadata?.reasoningChunks]);
 
+  // Extract file edits from tool invocations (VFS MCP tools like write_file, apply_diff, batch_write)
+  const toolInvocationFileEdits = useMemo(() => {
+    const toolInvocations = normalizeToolInvocations((message.metadata as any)?.toolInvocations);
+    const edits: any[] = [];
+    
+    for (const tool of toolInvocations) {
+      if (tool.state !== 'result') continue;
+      const result = tool.result as any;
+      if (!result) continue;
+      
+      // Handle VFS write tools: write_file, batch_write
+      if (tool.toolName === 'write_file' || tool.toolName === 'batch_write') {
+        if (tool.toolName === 'write_file') {
+          // Single file write
+          if (result.success === false) {
+            // Tool failed - add as error entry
+            edits.push({
+              path: result.path,
+              operation: 'write',
+              version: 1,
+              error: result.error,
+              content: '',
+            });
+          } else if (result.path) {
+            // Tool succeeded - add with content if available
+            edits.push({
+              path: result.path,
+              operation: 'write',
+              version: result.version || 1,
+              content: result.content || '',
+            });
+          }
+        } else if (tool.toolName === 'batch_write' && result.results) {
+          // Batch write - process each result
+          for (const fileResult of result.results) {
+            if (fileResult.success === false) {
+              edits.push({
+                path: fileResult.path,
+                operation: 'write',
+                version: 1,
+                error: fileResult.error,
+                content: '',
+              });
+            } else if (fileResult.path) {
+              edits.push({
+                path: fileResult.path,
+                operation: 'write',
+                version: fileResult.version || 1,
+              });
+            }
+          }
+        }
+      }
+      
+      // Handle apply_diff tool
+      if (tool.toolName === 'apply_diff') {
+        if (result.success === false) {
+          // Diff failed - add as error entry
+          edits.push({
+            path: result.path,
+            operation: 'patch',
+            version: 1,
+            error: result.error,
+            diff: '',
+          });
+        } else if (result.path) {
+          // Diff applied successfully
+          edits.push({
+            path: result.path,
+            operation: 'patch',
+            version: result.version || 1,
+          });
+        }
+      }
+      
+      // Handle delete_file tool
+      if (tool.toolName === 'delete_file') {
+        if (result.success === false) {
+          edits.push({
+            path: result.path,
+            operation: 'delete',
+            version: 1,
+            error: result.error,
+          });
+        } else if (result.path) {
+          edits.push({
+            path: result.path,
+            operation: 'delete',
+            version: result.version || 1,
+          });
+        }
+      }
+    }
+    
+    return edits;
+  }, [message.metadata?.toolInvocations]);
+
   const fileEditInfo = useMemo(() => {
     // First check for filesystem transaction (standard chat flow)
     const metadataFilesystem = (message.metadata as any)?.filesystem;
@@ -182,8 +279,26 @@ export default function MessageBubble({
       };
     }
 
+    // NEW: Check for file edits from VFS MCP tool invocations
+    if (toolInvocationFileEdits.length > 0) {
+      // Check if any have errors
+      const errors = toolInvocationFileEdits.filter(e => e.error).map(e => ({
+        path: e.path,
+        message: e.error,
+      }));
+      
+      return {
+        transactionId: undefined,
+        applied: toolInvocationFileEdits,
+        errors,
+        status: errors.length > 0 ? 'error' : 'auto_applied',
+        isSpecEnhancement: false,
+        isToolInvocation: true, // Flag to indicate these came from tool invocations
+      };
+    }
+
     return null;
-  }, [message.metadata]);
+  }, [message.metadata, toolInvocationFileEdits]);
 
   useEffect(() => {
     if (fileEditInfo?.status) {
@@ -993,17 +1108,24 @@ export default function MessageBubble({
             <div className="flex items-center justify-between gap-2">
               <span className="text-white/80">
                 File edits: {fileEditInfo.applied.length} applied
+                {fileEditInfo.errors.length > 0 && (
+                  <span className="text-red-400 ml-1">({fileEditInfo.errors.length} failed)</span>
+                )}
               </span>
               <span className="text-white/60">
-                {fileEditInfo.isSpecEnhancement
-                  ? "Applied (spec enhancement)"
-                  : fileEditDecision === "reverted_with_conflicts"
-                    ? "Reverted with conflicts"
-                    : fileEditDecision === "denied"
-                      ? "Denied and reverted"
-                      : fileEditDecision === "accepted" || fileEditDecision === "auto_applied"
-                        ? "Auto accepted"
-                        : "Pending"}
+                {(fileEditInfo as any)?.isToolInvocation && fileEditInfo.errors.length > 0
+                  ? "Tool errors"
+                  : fileEditInfo.isSpecEnhancement
+                    ? "Applied (spec enhancement)"
+                    : fileEditDecision === "reverted_with_conflicts"
+                      ? "Reverted with conflicts"
+                      : fileEditDecision === "denied"
+                        ? "Denied and reverted"
+                        : fileEditDecision === "accepted" || fileEditDecision === "auto_applied"
+                          ? "Auto accepted"
+                          : fileEditInfo.errors.length > 0
+                            ? "Failed"
+                            : "Pending"}
               </span>
             </div>
             {fileEditInfo.applied.length > 0 && (

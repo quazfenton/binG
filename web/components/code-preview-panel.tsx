@@ -390,7 +390,14 @@ export default function CodePreviewPanel({
   const [newFileName, setNewFileName] = useState("");
 
   const filesystemNodes = useMemo(() => {
-    return [...filesystemRawNodes].sort((a, b) => {
+    // Deduplicate nodes by path to prevent React duplicate key warnings
+    const seen = new Set<string>();
+    const deduped = filesystemRawNodes.filter(node => {
+      if (seen.has(node.path)) return false;
+      seen.add(node.path);
+      return true;
+    });
+    return [...deduped].sort((a, b) => {
       if (a.type !== b.type) {
         return a.type === "directory" ? -1 : 1;
       }
@@ -2490,7 +2497,7 @@ Generated on: ${new Date().toLocaleString()}
       if (isBackendOnly) {
         setPreviewMode('codesandbox');
         toast.info(`Backend project detected — redirected to CodeSandbox for full Node.js support`);
-        previewLogger.debug('[Preview] Backend-only project redirected from Sandpack to CodeSandbox', { reasons });
+        previewLogger.log('[Preview] Backend-only project redirected from Sandpack to CodeSandbox', { reasons });
         return;
       }
     }
@@ -2534,7 +2541,7 @@ Generated on: ${new Date().toLocaleString()}
       try {
         const snapshot = getFilesystemSnapshot();
         if (snapshot && Object.keys(scopedPreviewFiles).length > 0) {
-          previewLogger.debug('[VFS] Files synced from VFS to preview panel', {
+          previewLogger.log('[VFS] Files synced from VFS to preview panel', {
             fileCount: Object.keys(scopedPreviewFiles).length,
             files: Object.keys(scopedPreviewFiles).slice(0, 10),
           });
@@ -5237,7 +5244,7 @@ root.render(<App />);` };
         // If Sandpack fails, it might be a backend project we missed — try CodeSandbox
         const errorMsg = (error as Error).message?.toLowerCase() || '';
         if (errorMsg.includes('express') || errorMsg.includes('sqlite') || errorMsg.includes('backend') || errorMsg.includes('node:')) {
-          previewLogger.warn('[Preview] Sandpack failed with backend error, redirecting to CodeSandbox', { error: errorMsg });
+          previewLogger.log('[Preview] Sandpack failed with backend error, redirecting to CodeSandbox', { error: errorMsg });
           setPreviewMode('codesandbox');
           toast.info(`Sandpack error — redirected to CodeSandbox for backend support`);
           return null; // Re-render will use CodeSandbox path
@@ -5290,6 +5297,25 @@ root.render(<App />);` };
       const tsFromStructure =
         normalizedFiles.find((file) => file.lowerPath.endsWith(".ts"))?.content || null;
 
+      // Build a map of all available files for inlining external references
+      const fileMap = new Map<string, string>();
+      if (useStructure) {
+        Object.entries(useStructure.files).forEach(([path, content]) => {
+          if (typeof content === "string") {
+            // Store by full path and by basename for flexible matching
+            fileMap.set(path, content);
+            fileMap.set(path.replace(/^\/+/, ''), content);
+            const baseName = path.split('/').pop() || '';
+            fileMap.set(baseName, content);
+          }
+        });
+      }
+      // Also add code block files
+      codeBlocks.forEach((block) => {
+        if (block.filename) fileMap.set(block.filename, block.code);
+        fileMap.set(`file-${block.index}.${block.language || 'txt'}`, block.code);
+      });
+
       const htmlFile = htmlFromStructure
         ? { code: htmlFromStructure, language: "html" }
         : codeBlocks.find((block) => block.language === "html");
@@ -5306,6 +5332,39 @@ root.render(<App />);` };
         : codeBlocks.find(
             (block) => block.language === "typescript" || block.language === "ts",
           );
+
+      // Inline external CSS/JS references in HTML so iframe srcdoc can resolve them
+      const inlineExternalReferences = (html: string, allFiles: Map<string, string>): string => {
+        let result = html;
+
+        // Inline <link href="*.css"> tags
+        result = result.replace(
+          /<link[^>]+href=["']([^"']+\.css)["'][^>]*\/?>/gi,
+          (match, href) => {
+            const fileName = href.replace(/^\.\//, '').replace(/^\//, '');
+            const cssContent = allFiles.get(fileName);
+            if (cssContent) {
+              return `<style>/* Inlined: ${href} */\n${cssContent}\n</style>`;
+            }
+            return match; // Keep original if not found
+          }
+        );
+
+        // Inline <script src="*.js"> tags (not inline scripts)
+        result = result.replace(
+          /<script[^>]+src=["']([^"']+\.(js|mjs))["'][^>]*>\s*<\/script>/gi,
+          (match, src) => {
+            const fileName = src.replace(/^\.\//, '').replace(/^\//, '');
+            const jsContent = allFiles.get(fileName);
+            if (jsContent) {
+              return `<script>/* Inlined: ${src} */\n${jsContent}\n<\/script>`;
+            }
+            return match; // Keep original if not found
+          }
+        );
+
+        return result;
+      };
 
       // Use Sandpack for HTML/CSS/JS bundling (preferred over iframe)
       const hasWebFiles = htmlFile || cssFile || jsFile || tsFile;
@@ -5523,6 +5582,8 @@ root.render(<App />);` };
       }
 
       // Enhanced HTML document with better error handling and console capture
+      // Inline external CSS/JS references so iframe srcdoc can resolve them
+      const inlinedHtml = htmlFile ? inlineExternalReferences(htmlFile.code, fileMap) : '';
       const combinedHtml = `
 <!DOCTYPE html>
 <html lang="en">
@@ -5552,7 +5613,7 @@ root.render(<App />);` };
   </style>
 </head>
 <body>
-  ${htmlFile.code}
+  ${inlinedHtml}
 
   <script>
     // Error handling and console capture

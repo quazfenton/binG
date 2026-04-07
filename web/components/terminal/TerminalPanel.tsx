@@ -355,34 +355,34 @@ export default function TerminalPanel({
   useEffect(() => {
     // Always sync VFS regardless of isOpen - needed for shell on-demand commands
     if (!isVfsSynced || terminals.length === 0) return;
-    
+
     // Update terminal display with loaded files
     terminals.forEach(term => {
       if (term.terminal && term.mode === 'local') {
-        // Clear terminal and show updated status
-        // Guard: xterm's RenderService may not be ready if terminal hasn't been fully opened
-        try {
-          term.terminal.clear();
-        } catch (error) {
-          console.warn('[TerminalPanel] Failed to clear terminal:', error);
-        }
-        term.terminal.writeln('');
-        term.terminal.writeln('\x1b[1;32m● Terminal Ready\x1b[0m');
-        
-        if (vfsFileCount > 0) {
-          term.terminal.writeln(`\x1b[90m  Loaded ${vfsFileCount} files from workspace.\x1b[0m`);
-          term.terminal.writeln('\x1b[90m  Type "ls" to list files.\x1b[0m');
-          
-          // Show file listing
-          const fs = localFileSystemRef.current;
-          const projectFiles = Object.keys(fs).filter(k => k.startsWith('project/') && k.split('/').length === 2);
-          if (projectFiles.length > 0) {
-            term.terminal.writeln('');
-            term.terminal.writeln('\x1b[1;34mWorkspace files:\x1b[0m');
-            projectFiles.forEach(f => {
-              const info = fs[f];
-              const icon = info?.type === 'directory' ? '\x1b[34m📁\x1b[0m' : '\x1b[37m📄\x1b[0m';
-              term.terminal.writeln(`  ${icon} ${f.replace('project/', '')}`);
+        // Guard: only clear if terminal is fully initialized (rows > 0 means RenderService is ready)
+        if (term.terminal.rows > 0) {
+          try {
+            term.terminal.clear();
+          } catch (error) {
+            console.warn('[TerminalPanel] Failed to clear terminal:', error);
+          }
+          term.terminal.writeln('');
+          term.terminal.writeln('\x1b[1;32m● Terminal Ready\x1b[0m');
+
+          if (vfsFileCount > 0) {
+            term.terminal.writeln(`\x1b[90m  Loaded ${vfsFileCount} files from workspace.\x1b[0m`);
+            term.terminal.writeln('\x1b[90m  Type "ls" to list files.\x1b[0m');
+
+            // Show file listing
+            const fs = localFileSystemRef.current;
+            const projectFiles = Object.keys(fs).filter(k => k.startsWith('project/') && k.split('/').length === 2);
+            if (projectFiles.length > 0) {
+              term.terminal.writeln('');
+              term.terminal.writeln('\x1b[1;34mWorkspace files:\x1b[0m');
+              projectFiles.forEach(f => {
+                const info = fs[f];
+                const icon = info?.type === 'directory' ? '\x1b[34m📁\x1b[0m' : '\x1b[37m📄\x1b[0m';
+                term.terminal.writeln(`  ${icon} ${f.replace('project/', '')}`);
             });
             term.terminal.writeln('');
           }
@@ -390,7 +390,8 @@ export default function TerminalPanel({
           term.terminal.writeln('\x1b[90m  No files in workspace yet.\x1b[0m');
           term.terminal.writeln('\x1b[90m  Files created here will sync with code preview.\x1b[0m');
         }
-        
+        }
+
         term.terminal.writeln('\x1b[90m  Type "connect" to connect to sandbox.\x1b[0m');
         term.terminal.writeln('');
         
@@ -993,11 +994,25 @@ export default function TerminalPanel({
     setTerminals(prev => prev.map(t =>
       t.id === terminalId ? { ...t, ...updates } : t
     ));
-    
+
     // Also update the ref for immediate synchronous access
     const termRef = terminalsRef.current.find(t => t.id === terminalId);
     if (termRef) {
+      const oldMode = termRef.mode;
+      const oldConnected = termRef.isConnected;
       Object.assign(termRef, updates);
+
+      // Log mode/connection transitions for debugging
+      const newMode = updates.mode ?? oldMode;
+      const newConnected = updates.isConnected ?? oldConnected;
+      if (oldMode !== newMode || oldConnected !== newConnected) {
+        logger.info(`[Terminal ${terminalId}] Mode transition: ${oldMode}→${newMode}, connected: ${oldConnected}→${newConnected}`, {
+          sandboxId: updates.sandboxInfo?.sessionId ?? termRef.sandboxInfo?.sessionId,
+          websocket: !!termRef.websocket,
+          wsState: termRef.websocket?.readyState,
+          eventSource: !!termRef.eventSource,
+        });
+      }
     }
 
     const handlers = terminalHandlersRef.current[terminalId];
@@ -1849,8 +1864,13 @@ export default function TerminalPanel({
     const ids = terminalId ? [terminalId] : terminals.map(t => t.id);
     ids.forEach(id => {
       const term = terminalsRef.current.find(t => t.id === id);
-      if (term?.terminal) {
-        term.terminal.clear();
+      // Guard: only clear if terminal is fully initialized
+      if (term?.terminal && term.terminal.rows > 0) {
+        try {
+          term.terminal.clear();
+        } catch (error) {
+          console.warn('[TerminalPanel] Failed to clear terminal:', error);
+        }
       }
     });
     toast.info('Terminal cleared');

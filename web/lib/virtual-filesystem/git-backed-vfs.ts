@@ -628,7 +628,13 @@ export function createGitBackedVFS(
 
 // Singleton instances per owner+session composite key
 // Key format: ownerId:sessionId for proper commit tracking
-const gitVFSInstances = new Map<string, GitBackedVFS>();
+// CRITICAL FIX: Use globalThis to survive Next.js hot-reloading in dev mode
+declare global {
+  // eslint-disable-next-line no-var
+  var __gitVFSInstances__: Map<string, GitBackedVFS> | undefined;
+}
+
+const gitVFSInstances = globalThis.__gitVFSInstances__ ?? (globalThis.__gitVFSInstances__ = new Map<string, GitBackedVFS>());
 
 /**
  * Get or create Git-backed VFS for owner

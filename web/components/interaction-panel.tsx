@@ -335,6 +335,8 @@ interface InteractionPanelProps {
   availableProviders: LLMProvider[];
   onProviderChange: (provider: string, model: string) => void;
   hasCodeBlocks?: boolean;
+  /** VFS MCP tool file edits (lights up code preview button even without markdown code blocks) */
+  hasMcpFileEdits?: boolean;
   activeTab?: "chat" | "extras" | "integrations" | "shell" | "images" | "vnc";
   onActiveTabChange?: (tab: "chat" | "extras" | "integrations" | "shell" | "images" | "vnc") => void;
   userId?: string;
@@ -419,6 +421,7 @@ export default function InteractionPanel({
   availableProviders,
   onProviderChange,
   hasCodeBlocks = false,
+  hasMcpFileEdits = false,
   activeTab = "chat",
   onActiveTabChange,
   onAttachedFilesChange,
@@ -1919,14 +1922,14 @@ export default function InteractionPanel({
                     onClick={toggleCodePreview}
                     title="Code Preview"
                     className={`h-9 w-full sm:w-10 sm:h-10 p-0 bg-black/40 border-white/20 hover:bg-white/10 ${
-                      hasCodeBlocks
+                      hasCodeBlocks || hasMcpFileEdits
                         ? "ring-2 ring-white/30 shadow-lg shadow-white/20 animate-pulse"
                         : ""
                     }`}
                   >
                     <Code
                       className={`h-3 w-3 sm:h-4 sm:w-4 ${
-                        hasCodeBlocks ? "text-white" : ""
+                        hasCodeBlocks || hasMcpFileEdits ? "text-white" : ""
                       }`}
                     />
                   </Button>

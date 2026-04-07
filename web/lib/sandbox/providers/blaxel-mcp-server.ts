@@ -19,6 +19,24 @@
 import type { SandboxHandle } from './sandbox-provider'
 import type { BatchTask, BatchJobConfig } from './sandbox-provider'
 
+function sanitizeSandboxPath(inputPath: string, basePath: string = '/workspace'): string {
+  if (!inputPath || typeof inputPath !== 'string') {
+    return basePath;
+  }
+  const normalizedPath = inputPath.replace(/\\/g, '/').replace(/\/+/g, '/').trim();
+  if (normalizedPath.includes('..')) {
+    throw new Error('Path traversal is not allowed');
+  }
+  if (normalizedPath.includes('\0')) {
+    throw new Error('Invalid path: null bytes are not allowed');
+  }
+  if (normalizedPath.startsWith('/') && !normalizedPath.startsWith(basePath)) {
+    throw new Error('Absolute paths outside workspace are not allowed');
+  }
+  const cleanPath = normalizedPath.startsWith('/') ? normalizedPath : `${basePath}/${normalizedPath}`.replace(/\/+/g, '/');
+  return cleanPath;
+}
+
 // MCP SDK types (simplified for dynamic import)
 interface McpServerOptions {
   name: string
@@ -132,14 +150,15 @@ export class BlaxelMcpServer {
       } as McpToolSchema,
       async (params: any): Promise<McpToolResult> => {
         try {
-          const result = await this.sandboxHandle.writeFile(params.path, params.content)
+          const sanitizedPath = sanitizeSandboxPath(params.path);
+          const result = await this.sandboxHandle.writeFile(sanitizedPath, params.content)
 
           return {
             content: [
               {
                 type: 'text',
                 text: result.success
-                  ? `File written successfully: ${params.path}`
+                  ? `File written successfully: ${sanitizedPath}`
                   : `Failed to write file: ${result.output}`,
               },
             ],
@@ -171,7 +190,8 @@ export class BlaxelMcpServer {
       } as McpToolSchema,
       async (params: any): Promise<McpToolResult> => {
         try {
-          const result = await this.sandboxHandle.readFile(params.path)
+          const sanitizedPath = sanitizeSandboxPath(params.path);
+          const result = await this.sandboxHandle.readFile(sanitizedPath)
 
           return {
             content: [
@@ -210,7 +230,8 @@ export class BlaxelMcpServer {
       } as McpToolSchema,
       async (params: any): Promise<McpToolResult> => {
         try {
-          const result = await this.sandboxHandle.listDirectory(params.path || '/workspace')
+          const sanitizedPath = sanitizeSandboxPath(params.path || '/workspace');
+          const result = await this.sandboxHandle.listDirectory(sanitizedPath)
 
           return {
             content: [

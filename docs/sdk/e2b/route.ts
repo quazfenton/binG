@@ -58,7 +58,7 @@ export async function POST(req: Request) {
   const model = 'gpt-4-turbo';
 
   // Convert messages to ModelMessage format
-  const modelMessages: ModelMessage[] = messages.map((msg: any) => ({
+  const modelMessages: ModelMessage[] = messages.map((msg: unknown) => ({
     role: msg.role,
     content: msg.content,
   }));

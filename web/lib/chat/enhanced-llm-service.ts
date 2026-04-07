@@ -37,6 +37,8 @@ export interface EnhancedLLMRequest extends LLMRequest {
   userId?: string;
   conversationId?: string;
   requestId?: string;
+  /** VFS scope path for session-scoped file operations (e.g., "project/sessions/001") */
+  scopePath?: string;
   task?: 'chat' | 'code' | 'embedding' | 'image' | 'tool' | 'agent' | 'ocr'; // Task-specific provider selection
   /** Request a bundled context pack (file tree + contents) for LLM */
   contextPack?: {
@@ -680,12 +682,13 @@ export class EnhancedLLMService {
             // into the Vercel AI SDK tool set so the LLM can call them during streaming.
             try {
               const { getVFSToolDefinitions, getVFSTool, toolContextStore } = await import('../mcp/vfs-mcp-tools');
+              const { tool: createTool } = await import('ai');
               const vfsToolDefs = getVFSToolDefinitions();
               for (const toolDef of vfsToolDefs) {
                 const toolName = toolDef.function.name;
                 // Don't overwrite existing tools
                 if (!vercelTools![toolName]) {
-                  vercelTools![toolName] = {
+                  vercelTools![toolName] = createTool({
                     description: toolDef.function.description,
                     parameters: toolDef.function.parameters,
                     execute: async (args: Record<string, any>) => {
@@ -694,11 +697,12 @@ export class EnhancedLLMService {
                         throw new Error(`Unknown VFS tool: ${toolName}`);
                       }
 
-                      // Explicit logging when VFS MCP tools are invoked
+                      // DEBUG: Log scopePath being passed to tool
                       chatLogger.info('[VFS MCP] Tool invoked (streaming path)', {
                         tool: toolName,
                         userId: request.userId,
                         requestId,
+                        scopePath: (request as any).scopePath,
                         args: Object.keys(args || {}),
                         path: args?.path || args?.files?.map((f: any) => f.path)?.join(', ') || undefined,
                       });
@@ -722,8 +726,9 @@ export class EnhancedLLMService {
                           success: true,
                           userId: request.userId,
                           requestId,
+                          resultKeys: Object.keys(result || {}),
                         });
-                        // Return just the output for Vercel AI SDK format
+                        // Return just the message - LLM needs concise tool feedback
                         return typeof result === 'object' && 'message' in result
                           ? result.message
                           : JSON.stringify(result);
@@ -738,7 +743,7 @@ export class EnhancedLLMService {
                         throw new Error(result?.error || `VFS tool ${toolName} execution failed`);
                       }
                     },
-                  };
+                  });
                 }
               }
               chatLogger.debug('VFS tools merged into Vercel AI SDK tool set', {
@@ -782,6 +787,7 @@ export class EnhancedLLMService {
           // Use user's API key if provided, otherwise the provider config's key
           apiKey: userApiKey || llmRequest.apiKey,
           maxRetries: 0,
+          maxSteps: 10,  // Allow up to 10 tool call iterations for multi-file operations
           tools: vercelTools,
           toolCallStreaming: !!vercelTools,
           smoothStreaming: true,
@@ -1745,4 +1751,11 @@ export function validateSandboxCommand(command: string): { isValid: boolean; com
     return { isValid: true, command: trimmedCommand };
   }
 
-export const enhancedLLMService = new EnhancedLLMService();
+// CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
+// Without this, dynamically registered user-provider configs are lost
+declare global {
+  // eslint-disable-next-line no-var
+  var __enhancedLLMService__: EnhancedLLMService | undefined;
+}
+
+export const enhancedLLMService = globalThis.__enhancedLLMService__ ?? (globalThis.__enhancedLLMService__ = new EnhancedLLMService());

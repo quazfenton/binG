@@ -111,6 +111,8 @@ export interface RouterRequest {
   enableSandbox?: boolean
   enableComposio?: boolean
   conversationId?: string
+  /** VFS scope path for session-scoped file operations (e.g., "project/sessions/001") */
+  scopePath?: string
   /** When true, the Vercel AI SDK handles tool calling natively — skip regex intent parsing */
   nativeToolCalling?: boolean
   /** Spec amplification mode: 'normal' (disabled), 'enhanced', or 'max' */
@@ -601,6 +603,8 @@ export class ResponseRouter {
           
           // NEW: Use streaming method when stream=true for real-time token streaming
           if (req.stream === true) {
+            // DEBUG: Log scopePath being passed
+            console.log('[response-router] Streaming request - scopePath:', req.scopePath);
             // For streaming, we return an async generator that yields tokens as they arrive
             // The caller (routeWithSpecAmplification or routeAndFormat) handles the streaming
             const streamGenerator = enhancedLLMService.generateStreamingResponse({
@@ -613,6 +617,8 @@ export class ResponseRouter {
               userId: req.userId,
               requestId: req.requestId,
               conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
+              // Pass scopePath for session-scoped file operations
+              scopePath: req.scopePath,
               // Always enable tools — VFS tools (write_file, read_file, apply_diff) are
               // always available and the LLM should use them for file operations.
               enableTools: req.enableTools !== false,
@@ -657,6 +663,8 @@ export class ResponseRouter {
             userId: req.userId,
             requestId: req.requestId,
             conversationId: req.conversationId || req.requestId || `conv_${Date.now()}`,
+            // Pass scopePath for session-scoped file operations
+            scopePath: req.scopePath,
             // Always enable tools — VFS tools (write_file, read_file, apply_diff) are
             // always available and the LLM should use them for file operations.
             enableTools: req.enableTools !== false,
@@ -2547,9 +2555,15 @@ function formatRefinementsAsList(spec: any, refinedOutput: string, chunks: any[]
 
 // ============================================================================
 // Singleton Instance
+// CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
+// Without this, circuit breaker states reset and failing providers resume receiving traffic
 // ============================================================================
+declare global {
+  // eslint-disable-next-line no-var
+  var __responseRouter__: ResponseRouter | undefined;
+}
 
-export const responseRouter = new ResponseRouter()
+export const responseRouter = globalThis.__responseRouter__ ?? (globalThis.__responseRouter__ = new ResponseRouter());
 
 // ============================================================================
 // Convenience Functions
