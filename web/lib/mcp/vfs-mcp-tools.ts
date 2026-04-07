@@ -30,11 +30,12 @@ import { createLogger } from '../utils/logger';
 const logger = createLogger('VFS-MCP-Tools');
 
 /**
- * Tool execution context - user ID extracted from request
+ * Tool execution context - user ID and scope path extracted from request
  */
 export interface ToolContext {
   userId: string;
   sessionId?: string;
+  scopePath: string;  // VFS scope path relative to workspace root (e.g., "project/sessions/001")
 }
 
 // Request-scoped context storage using AsyncLocalStorage.
@@ -54,21 +55,95 @@ export function setToolContext(context: ToolContext): void {
 /**
  * Get the current tool execution context.
  * Returns the request-scoped context or a safe fallback.
+ * FALLBACK: Uses "project" as the default scope if none is set.
  */
 function getToolContext(): ToolContext {
   return toolContextStore.getStore() || {
     userId: 'default',
     sessionId: undefined,
+    scopePath: 'project',  // Safe default: workspace root (VFS-relative path)
   };
 }
 
 /**
- * Initialize VFS tools with user context
+ * Resolve a file path relative to the session scope.
+ *
+ * The scopePath is always a VFS-relative path (e.g., "project/sessions/001"),
+ * never an absolute filesystem path. The VFS layer handles mapping to actual
+ * filesystem locations for both web and desktop modes.
+ *
+ * If the path is absolute (starts with /), strips the leading slash.
+ * If the path is relative, prepends the scopePath.
+ *
+ * Examples:
+ * - scopePath="project/sessions/001", path="src/app.ts" → "project/sessions/001/src/app.ts"
+ * - scopePath="project/sessions/001", path="/src/app.ts" → "project/sessions/001/src/app.ts"
+ * - scopePath="project", path="src/app.ts" → "project/src/app.ts"
+ */
+function resolveScopedPath(path: string): string {
+  // Strip leading slash if present and normalize backslashes
+  let cleanPath = path.startsWith('/') ? path.substring(1) : path;
+  cleanPath = cleanPath.replace(/\\/g, '/');  // Handle Windows paths
+  cleanPath = cleanPath.replace(/\/+/g, '/'); // Collapse double slashes
+  cleanPath = cleanPath.replace(/\/+$/, '');  // Strip trailing slashes
+
+  // Reject path traversal attempts in the path itself
+  if (cleanPath.includes('..')) {
+    logger.warn('Path traversal attempt detected in file path', { originalPath: path, cleanPath });
+    throw new Error('Path cannot contain directory traversal (..)');
+  }
+
+  // Reject empty paths
+  if (!cleanPath || cleanPath.trim() === '') {
+    throw new Error('Path cannot be empty');
+  }
+
+  const context = getToolContext();
+  const scopePath = context.scopePath || 'project';  // Ensure scopePath is always defined
+
+  // SECURITY: Validate scopePath itself doesn't contain traversal attempts
+  if (scopePath.includes('..')) {
+    logger.error('Invalid scopePath contains traversal', { scopePath });
+    throw new Error('Invalid scope path configuration');
+  }
+
+  // If path already starts with the scope + "/" or equals the scope exactly, use as-is
+  // This prevents "project/sessions/001" from matching "project/sessions/001-extended"
+  if (cleanPath === scopePath || cleanPath.startsWith(`${scopePath}/`)) {
+    return cleanPath;
+  }
+
+  // SECURITY: If path starts with "project/" but NOT our scopePath, log warning
+  // This catches attempts to escape session scope (e.g., writing to project/shared when scoped to project/sessions/001)
+  if (cleanPath.startsWith('project/')) {
+    logger.warn('Path outside session scope - will be written to workspace root instead of session', {
+      originalPath: path,
+      cleanPath,
+      scopePath,
+    });
+    // Still allow it for now (could be intentional for shared files), but log for visibility
+    return cleanPath;
+  }
+
+  // Prepend scope path to make it session-scoped
+  return `${scopePath}/${cleanPath}`;
+}
+
+/**
+ * Initialize VFS tools with user context and scope path.
  * Called from getAllTools to pass user context to VFS tools.
  * Uses AsyncLocalStorage for request-scoped isolation.
+ * 
+ * @param userId - The user/owner ID
+ * @param sessionId - Optional session ID
+ * @param scopePath - The VFS scope path relative to workspace root (e.g., "project/sessions/001")
  */
-export function initializeVFSTools(userId: string, sessionId?: string): void {
-  setToolContext({ userId, sessionId });
+export function initializeVFSTools(userId: string, sessionId?: string, scopePath?: string): void {
+  setToolContext({
+    userId,
+    sessionId,
+    scopePath: scopePath || 'project',  // Default to workspace root if not provided
+  });
 }
 
 // ============================================================================
@@ -89,12 +164,15 @@ export const writeFileTool = (tool as any)({
   execute: async ({ path, content, commitMessage = 'Write file via MCP tool' }) => {
     try {
       const context = getToolContext();
-      logger.debug('writeFile', { path, contentLength: content.length, userId: context.userId });
       
+      // Resolve path relative to session scope
+      const scopedPath = resolveScopedPath(path);
+      logger.debug('writeFile', { originalPath: path, scopedPath, contentLength: content.length, userId: context.userId });
+
       // Check if file exists for event type
       let existed = false;
       try {
-        await virtualFilesystem.readFile(context.userId, path);
+        await virtualFilesystem.readFile(context.userId, scopedPath);
         existed = true;
       } catch {
         // File doesn't exist, this is a create
@@ -102,7 +180,7 @@ export const writeFileTool = (tool as any)({
 
       const result = await virtualFilesystem.writeFile(
         context.userId,
-        path,
+        scopedPath,
         content,
         undefined, // language - auto-detected
         { failIfExists: false } // allow overwrite
@@ -112,7 +190,7 @@ export const writeFileTool = (tool as any)({
       await emitFileEvent({
         userId: context.userId,
         sessionId: context.sessionId,
-        path,
+        path: scopedPath,
         type: existed ? 'update' : 'create',
         content,
         source: 'mcp-tool',
@@ -150,10 +228,11 @@ export const applyDiffTool = (tool as any)({
   execute: async ({ path, diff, commitMessage = 'Applied diff via MCP tool' }) => {
     try {
       const context = getToolContext();
-      logger.debug('applyDiff', { path, diffLength: diff.length, userId: context.userId });
-      
+      const scopedPath = resolveScopedPath(path);
+      logger.debug('applyDiff', { originalPath: path, scopedPath, diffLength: diff.length, userId: context.userId });
+
       // First, read the current file to apply the diff
-      const currentFile = await virtualFilesystem.readFile(context.userId, path);
+      const currentFile = await virtualFilesystem.readFile(context.userId, scopedPath);
       
       // Parse and apply the unified diff using existing file-diff-utils
       const { applyDiffToContent } = await import('../chat/file-diff-utils');
@@ -166,7 +245,7 @@ export const applyDiffTool = (tool as any)({
       // Write the modified content back (file exists, so allow overwrite)
       const result = await virtualFilesystem.writeFile(
         context.userId,
-        path,
+        scopedPath,
         newContent,
         currentFile.language,
         { failIfExists: false }
@@ -176,7 +255,7 @@ export const applyDiffTool = (tool as any)({
       await emitFileEvent({
         userId: context.userId,
         sessionId: context.sessionId,
-        path,
+        path: scopedPath,
         type: 'update',
         content: newContent,
         previousContent: currentFile.content,
@@ -213,9 +292,10 @@ export const readFileTool = (tool as any)({
   execute: async ({ path }) => {
     try {
       const context = getToolContext();
-      logger.debug('readFile', { path, userId: context.userId });
-      
-      const file = await virtualFilesystem.readFile(context.userId, path);
+      const scopedPath = resolveScopedPath(path);
+      logger.debug('readFile', { originalPath: path, scopedPath, userId: context.userId });
+
+      const file = await virtualFilesystem.readFile(context.userId, scopedPath);
       const f = file as any;
 
       return {
@@ -252,9 +332,10 @@ export const listFilesTool = (tool as any)({
   execute: async ({ path, recursive = false }) => {
     try {
       const context = getToolContext();
-      logger.debug('listFiles', { path, recursive, userId: context.userId });
-      
-      const listing = await virtualFilesystem.listDirectory(context.userId, path);
+      const scopedPath = resolveScopedPath(path);
+      logger.debug('listFiles', { originalPath: path, scopedPath, recursive, userId: context.userId });
+
+      const listing = await virtualFilesystem.listDirectory(context.userId, scopedPath);
       
       return {
         success: true,
@@ -429,22 +510,23 @@ export const deleteFileTool = (tool as any)({
   execute: async ({ path, reason }) => {
     try {
       const context = getToolContext();
-      logger.debug('deleteFile', { path, reason, userId: context.userId });
-      
-      const result = await virtualFilesystem.deletePath(context.userId, path);
+      const scopedPath = resolveScopedPath(path);
+      logger.debug('deleteFile', { originalPath: path, scopedPath, reason, userId: context.userId });
+
+      const result = await virtualFilesystem.deletePath(context.userId, scopedPath);
 
       // Emit delete event
       await emitFileEvent({
         userId: context.userId,
         sessionId: context.sessionId,
-        path,
+        path: scopedPath,
         type: 'delete',
         source: 'mcp-tool',
       });
 
       return {
         success: true,
-        path,
+        path: scopedPath,
         deletedCount: result.deletedCount,
         message: `Deleted: ${reason || 'MCP tool request'}`,
       };
@@ -470,15 +552,18 @@ export const createDirectoryTool = (tool as any)({
   execute: async ({ path }) => {
     try {
       const context = getToolContext();
-      logger.debug('createDirectory', { path, userId: context.userId });
       
-      const result = await virtualFilesystem.createDirectory(context.userId, path);
+      // Resolve path relative to session scope
+      const scopedPath = resolveScopedPath(path);
+      logger.debug('createDirectory', { originalPath: path, scopedPath, userId: context.userId });
+
+      const result = await virtualFilesystem.createDirectory(context.userId, scopedPath);
 
       // Emit create event for directory (type: 'create' for consistency)
       await emitFileEvent({
         userId: context.userId,
         sessionId: context.sessionId,
-        path,
+        path: scopedPath,
         type: 'create',
         source: 'mcp-tool-directory',
       });

@@ -673,6 +673,7 @@ export class EnhancedLLMService {
               conversationId: request.conversationId,
               sessionId: request.conversationId?.includes(':') ? request.conversationId.split(':')[1] : undefined,
               requestId,
+              scopePath: (request as any).scopePath,  // Pass scopePath for session-scoped file operations
             });
 
             // FIX: Merge VFS MCP tools (write_file, read_file, apply_diff, etc.)
@@ -703,7 +704,11 @@ export class EnhancedLLMService {
                       });
 
                       const result = await toolContextStore.run(
-                        { userId: request.userId || 'anonymous', sessionId: request.conversationId },
+                        {
+                          userId: request.userId || 'anonymous',
+                          sessionId: request.conversationId,
+                          scopePath: (request as any).scopePath || 'project',  // Pass the session scope to VFS tools
+                        },
                         async () => vfsTool.execute(args || {}, {
                           messages: [],
                           toolCallId: `vfs-${toolName}-${Date.now()}`,
@@ -826,7 +831,9 @@ export class EnhancedLLMService {
       // FIX: Loop through ALL available fallback providers (not just the first one)
       // This mirrors the behavior of generateResponse() which tries every fallback in the chain
       const fallbacks = fallbackProviders || this.fallbackChains.get(primaryProvider) || [];
-      const availableFallbacks = fallbacks.filter(fallbackProvider => {
+      
+      // First pass: try healthy providers
+      let availableFallbacks = fallbacks.filter(fallbackProvider => {
         const hasConfig = this.endpointConfigs.has(fallbackProvider);
         const isHealthy = this.isProviderHealthy(fallbackProvider);
         const supportsStream = !!PROVIDERS[fallbackProvider]?.supportsStreaming;
@@ -841,7 +848,25 @@ export class EnhancedLLMService {
         }
         return hasConfig && isHealthy && supportsStream;
       });
-      
+
+      // SAFETY NET: If no healthy providers available, try ALL configured providers as a last resort
+      // This prevents total failure when health checks incorrectly marked providers as unhealthy
+      if (availableFallbacks.length === 0) {
+        chatLogger.warn('No healthy fallback providers available, trying all configured providers as last resort', {
+          requestId,
+          fallbacks,
+        });
+        availableFallbacks = fallbacks.filter(fallbackProvider => {
+          const hasConfig = this.endpointConfigs.has(fallbackProvider);
+          const supportsStream = !!PROVIDERS[fallbackProvider]?.supportsStreaming;
+          return hasConfig && supportsStream;
+        });
+        chatLogger.info('Last resort fallback providers', {
+          requestId,
+          availableFallbacks,
+        });
+      }
+
       chatLogger.debug('Streaming fallback candidates', {
         requestId,
         requestedFallbacks: fallbacks,
@@ -1121,6 +1146,9 @@ export class EnhancedLLMService {
     if (!config) return false;
 
     const health = enhancedAPIClient.getEndpointHealth(config.baseUrl) as any;
+    // Default to healthy if no health data exists (avoids excluding providers that were
+    // incorrectly marked unhealthy by the old bogus health check pings)
+    if (!health || health.lastCheck === 0) return true;
     return health.isHealthy !== false;
   }
 

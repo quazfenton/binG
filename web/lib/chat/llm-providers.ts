@@ -260,6 +260,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'openai',
     name: 'OpenAI',
     models: [
+      'gpt-5-mini',
       'gpt-4',
       'gpt-4-turbo',
       'gpt-4o',
@@ -275,13 +276,13 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'openrouter',
     name: 'OpenRouter',
     models: [
+      'minimax/minimax-m2.5:free',
       'qwen/qwen3-coder:free',
       'openai/gpt-oss-120b:free',
       'z-ai/glm-4.5-air:free',
       'nvidia/nemotron-3-nano-30b-a3b:free',
       'meta-llama/llama-3.3-70b-instruct:free',
       'nvidia/nemotron-nano-12b-v2-vl:free',
-      'minimax/minimax-m2.5:free', 
       'nvidia/nemotron-3-super-120b-a12b:free', 
       'stepfun/step-3.5-flash:free', 
       'openai/gpt-oss-20b:free',  
@@ -307,6 +308,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'anthropic',
     name: 'Anthropic',
     models: [
+      'claude-4.6-sonnet',
       'claude-3-5-sonnet-latest',
       'claude-3-5-sonnet-20240620',
       'claude-3-opus-latest',

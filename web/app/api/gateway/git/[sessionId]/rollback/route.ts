@@ -88,37 +88,25 @@ export async function POST(
       }
     }
 
-    const db = getDatabase();
-
-    // Session IDs are scoped to owner
-    const scopedSessionId = `${ownerId}:${sessionId}`;
-
-    // Step 2: Verify session exists AND ownership check
-    const session = db.prepare(`
-      SELECT user_id, workspace_id FROM user_sessions
-      WHERE session_id = ? AND is_active = TRUE
-    `).get(scopedSessionId) as { user_id: number; workspace_id?: string } | undefined;
-
-    if (!session) {
-      logger.warn('[Git Rollback] Unauthorized access attempt', {
-        sessionId,
-        ownerId,
-        version,
-      });
-      const errorResponse = NextResponse.json(
-        { success: false, error: 'Session not found or access denied' },
-        { status: 404 }
-      );
-      return withAnonSessionCookie(errorResponse, authResolution);
+    // Extract conversation ID from the URL sessionId
+    // Shadow commits store session_id as the raw conversation ID (e.g., "001"),
+    // and owner_id as the full owner string (e.g., "anon:abc").
+    // The sessionId from the URL may be:
+    // - "001" (raw conversation ID) → use as-is
+    // - "session-xxx" (generated client ID) → strip prefix
+    // - "ownerId:001" (scoped format) → extract conversation ID part
+    let conversationId = sessionId;
+    if (conversationId.includes(':')) {
+      const parts = conversationId.split(':');
+      conversationId = parts[parts.length - 1];
+    } else if (conversationId.startsWith('session-')) {
+      conversationId = conversationId.replace(/^session-/, '');
     }
 
-    logger.info('[Git Rollback] Rollback requested', {
-      sessionId,
-      ownerId,
-      version,
-      mode,
-      files: targetFiles?.length || 'all',
-    });
+    // For shadow commit operations, use the resolved owner and conversation ID.
+    // Shadow commits store session_id as the raw conversation ID (e.g., "001"),
+    // NOT the scoped "ownerId:001" format.
+    const fullOwnerId = typeof ownerId === 'string' ? ownerId : `user:${ownerId}`;
 
     // Step 3: Execute rollback based on mode
     let rollbackResult: {
@@ -130,15 +118,17 @@ export async function POST(
 
     switch (mode) {
       case 'shadow':
-        rollbackResult = await executeShadowRollback(scopedSessionId, ownerId, version, targetFiles) as any;
+        // Shadow commits store session_id as the raw conversation ID (e.g., "001")
+        // Pass conversationId, not scopedSessionId
+        rollbackResult = await executeShadowRollback(conversationId, fullOwnerId, version, targetFiles) as any;
         break;
 
       case 'vfs-snapshot':
-        rollbackResult = await executeVFSSnapshotRollback(db, scopedSessionId, version, ownerId, targetFiles);
+        rollbackResult = await executeVFSSnapshotRollback(db, conversationId, version, fullOwnerId, targetFiles);
         break;
 
       case 'git':
-        rollbackResult = await executeGitRollback(scopedSessionId, version, ownerId, targetFiles);
+        rollbackResult = await executeGitRollback(conversationId, version, fullOwnerId, targetFiles);
         break;
 
       default: {

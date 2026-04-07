@@ -1731,6 +1731,36 @@ export function parseFilesystemResponse(content: string, forceExtract: boolean =
 }
 
 /**
+ * Combined single-pass: extract edits AND sanitize for display.
+ *
+ * Replaces the redundant pattern of calling both parseFilesystemResponse()
+ * and sanitizeAssistantDisplayContent() on the same raw string.
+ *
+ * Returns:
+ *  - edits:    same shape as parseFilesystemResponse, with heredoc markers
+ *              stripped from content (exactly what route.ts applies to VFS)
+ *  - sanitized: display-safe string for the client
+ */
+export function extractAndSanitize(
+  content: string,
+  forceExtract: boolean = false,
+): { edits: ParsedFilesystemResponse; sanitized: string } {
+  // --- extraction (reuses existing extractors unchanged) ---
+  const edits = parseFilesystemResponse(content, forceExtract);
+
+  // Strip heredoc markers from write content — exactly what route.ts does
+  // at line 3967: content: stripHeredocMarkers(edit.content)
+  for (const w of edits.writes) {
+    w.content = stripHeredocMarkers(w.content);
+  }
+
+  // --- sanitization (reuses existing sanitizer unchanged) ---
+  const sanitized = sanitizeAssistantDisplayContent(content);
+
+  return { edits, sanitized };
+}
+
+/**
  * Extract apply_diff blocks
  * Format: <apply_diff>...</apply_diff>
  */

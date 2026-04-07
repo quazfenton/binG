@@ -125,6 +125,10 @@ export interface RouterRequest {
   }
   /** Auto-attach relevant files to subsequent LLM calls as agent discovers areas to edit */
   autoAttachFiles?: boolean
+  /** Abort signal for cancellation support (from Next.js request.signal) */
+  signal?: AbortSignal
+  /** Request timeout in milliseconds for time-to-first-token (default: 90s) */
+  timeoutMs?: number
 }
 
 export interface RouterResponse {
@@ -618,8 +622,8 @@ export class ResponseRouter {
               contextPack: req.contextPack,
               autoAttachFiles: req.autoAttachFiles,
               // Pass abort signal and timeout for cancellation support
-              signal: (req as any).signal,
-              timeoutMs: (req as any).timeoutMs,
+              signal: req.signal,
+              timeoutMs: req.timeoutMs,
             } as EnhancedLLMRequest)
             
             return {

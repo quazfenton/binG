@@ -933,9 +933,13 @@ export async function callMCPToolFromAI_SDK(
         path: args?.path || args?.files?.map((f: any) => f.path)?.join(', ') || undefined,
       });
 
-      // Run inside request-scoped context so the tool gets the right userId
+      // Run inside request-scoped context so the tool gets the right userId and scopePath
       const result = await toolContextStore.run(
-        { userId, sessionId: args.sessionId },
+        {
+          userId,
+          sessionId: args.sessionId,
+          scopePath: (args as any).scopePath || 'project',  // Pass scopePath if available
+        },
         async () => vfsTool.execute(args || {}, {
           messages: [],
           toolCallId: crypto.randomUUID(),

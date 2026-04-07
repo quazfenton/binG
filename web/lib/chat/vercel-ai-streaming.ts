@@ -39,6 +39,7 @@ export interface ToolExecutionContext {
   conversationId?: string;
   sessionId?: string;
   requestId?: string;
+  scopePath?: string;  // VFS scope path for session-scoped file operations (e.g., "project/sessions/001")
   [key: string]: any;
 }
 
@@ -895,15 +896,15 @@ export async function* streamWithVercelAI(
       } catch (fallbackError: any) {
         // Cleanup timeout
         if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
-        
+
         chatLogger.error('Fallback streaming also failed', {
           requestId,
           provider,
           model: modelName,
           error: fallbackError.message,
         });
-        // Throw original error
-        throw error;
+        // Throw the fallback error (more specific/recent) rather than the original
+        throw fallbackError instanceof Error ? fallbackError : new Error(String(fallbackError));
       }
     }
 

@@ -26,13 +26,15 @@ import { VFS_FILE_EDITING_TOOL_PROMPT } from '@bing/shared/agent/system-prompts'
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
+import { getRecentMcpFileEdits, clearRecentMcpFileEdits } from '@/lib/virtual-filesystem/file-events';
 import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/orchestration-mode-handler';
 import {
-  sanitizeAssistantDisplayContent,
   parseFilesystemResponse,
+  extractAndSanitize,
   createIncrementalParser,
   extractIncrementalFileEdits,
   stripHeredocMarkers,
+  type ParsedFilesystemResponse,
 } from '@/lib/chat/file-edit-parser';
 import { isValidFilePath } from '@/lib/chat/file-edit-parser';
 import { applyUnifiedDiffToContent } from '@/lib/chat/file-diff-utils';
@@ -1320,7 +1322,9 @@ export async function POST(request: NextRequest) {
       // Auto-attach relevant files as agent discovers areas to edit
       autoAttachFiles,
       // Pass abort signal for cancellation support
-      signal: request.signal,
+      // Note: request.signal may be undefined on older Node.js versions (< 20)
+      // In that case, only the server-side timeout will provide cancellation
+      signal: (request as any).signal,
       // Server-side timeout (90s) to prevent hanging on unresponsive providers
       timeoutMs: 90000,
     };
@@ -1349,6 +1353,7 @@ export async function POST(request: NextRequest) {
       timestamp: number;
     }
     const pendingEvents: PendingEvent[] = [];
+    let pendingEventsDropped = false;
     const placeholderEmit = (event: string, data: any) => {
       if (!acceptDeferredEvents) {
         return;
@@ -1357,6 +1362,13 @@ export async function POST(request: NextRequest) {
         emitRef.current(event, data);
       } else if (pendingEvents.length < MAX_PENDING_EVENTS) {
         pendingEvents.push({ event, data, timestamp: Date.now() });
+      } else if (!pendingEventsDropped) {
+        // Log warning only once to avoid spam
+        pendingEventsDropped = true;
+        chatLogger.warn('Pending event buffer full, events being dropped', {
+          requestId,
+          maxEvents: MAX_PENDING_EVENTS,
+        });
       }
     };
 
@@ -1385,8 +1397,16 @@ export async function POST(request: NextRequest) {
       }
 
       // Extract actual provider/model from response metadata (after fallbacks)
-      actualProvider = unifiedResponse.metadata?.actualProvider || unifiedResponse.source;
-      actualModel = unifiedResponse.metadata?.actualModel || routerRequest.model;
+      // CRITICAL: Use data.provider as fallback (set by response-router from metadata)
+      // instead of unifiedResponse.source (which is just the routing priority name like 'original-system')
+      actualProvider = unifiedResponse.metadata?.actualProvider ||
+                       unifiedResponse.data?.provider ||
+                       (unifiedResponse.source !== 'original-system' && unifiedResponse.source !== 'unknown'
+                         ? unifiedResponse.source
+                         : provider); // Fall back to the originally requested provider
+      actualModel = unifiedResponse.metadata?.actualModel ||
+                    unifiedResponse.data?.model ||
+                    routerRequest.model;
 
       // Note: Provider/model logging happens in streaming and non-streaming response paths
       // to show the actual LLM provider used (not 'original-system' which is just the router source)
@@ -1555,7 +1575,16 @@ export async function POST(request: NextRequest) {
       const { enableVFSBatchMode, flushVFSBatchMode, disableVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
       enableVFSBatchMode(filesystemOwnerId);
 
+      // Declare before try so it's accessible in the post-try sanitization step
+      let preSanitizedContent = rawResponseContent;
+
       try {
+        // Single-pass: extract edits AND sanitize (avoids two regex sweeps of the same string)
+        const { edits: parsedEdits, sanitized } = enableFilesystemEdits
+          ? extractAndSanitize(rawResponseContent, true)
+          : { edits: null as unknown as ParsedFilesystemResponse, sanitized: rawResponseContent };
+        preSanitizedContent = sanitized;
+
         filesystemEdits =
           !enableFilesystemEdits
             ? null
@@ -1573,6 +1602,7 @@ export async function POST(request: NextRequest) {
                 attachedPaths: attachedFilesystemFiles.map((file) => file.path),
                 responseContent: rawResponseContent,
                 commands: unifiedResponse.commands,
+                preParsedEdits: parsedEdits,
               });
         chatLogger.debug('Filesystem edits processed', { requestId, appliedCount: filesystemEdits?.applied?.length || 0 });
 
@@ -1600,17 +1630,22 @@ export async function POST(request: NextRequest) {
       // SPEC AMPLIFICATION: Trigger after ToolLoopAgent completes (non-streaming path)
       // Runs AFTER filesystem edits are applied (line ~1242)
       // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
+      // Also check for file edits from MCP tool execution (function calling path)
       if (agentToolResults && !clientResponse?.metadata?.specAmplificationRun) {
         const hasFileEdits = filesystemEdits && filesystemEdits.applied.length > 0;
+        const mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
+        const hasMcpFileEdits = mcpFileEdits.length > 0;
         // Only trigger spec amplification when there are ACTUAL filesystem edits,
         // not just because the response contains code snippets (const, function, etc.)
         // Spec amplification runs in 'enhanced' or 'max' mode
         const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
-        const shouldRunSpecAmplification = hasFileEdits && isSpecAmplificationMode;
+        const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) && isSpecAmplificationMode;
 
         chatLogger.info('Spec amplification check (non-streaming)', {
           requestId,
           hasFileEdits,
+          hasMcpFileEdits,
+          mcpFileEditCount: mcpFileEdits.length,
           mode: routerRequest.mode,
           isSpecAmplificationMode,
           specAmplificationRun: clientResponse?.metadata?.specAmplificationRun,
@@ -1639,14 +1674,16 @@ export async function POST(request: NextRequest) {
         } else {
           chatLogger.debug('Spec amplification NOT triggered (non-streaming)', {
             requestId,
-            reason: !hasFileEdits ? 'no filesystem edits' :
+            reason: !(hasFileEdits || hasMcpFileEdits) ? 'no filesystem edits' :
                     !isSpecAmplificationMode ? `mode is ${routerRequest.mode}` :
                     clientResponse?.metadata?.specAmplificationRun ? 'already run' : 'unknown',
           });
         }
+        // Clear tracker after check to prevent stale data on next request
+        clearRecentMcpFileEdits(resolvedConversationId);
       }
 
-      let sanitizedResponseContent = sanitizeAssistantDisplayContent(rawResponseContent);
+      let sanitizedResponseContent = preSanitizedContent;
       
       // CRITICAL: Add fallback message when content is empty but files were applied
       // This ensures users see feedback even when AI only makes file changes without explanation
@@ -2156,18 +2193,23 @@ export async function POST(request: NextRequest) {
                 // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
                 // Note: allEdits is assigned inside streamChunk.isComplete block (line ~1833)
                 // If loop completed normally, allEdits should be set. Otherwise fall back to streamedEdits/filesystemEdits.
+                // Also check for file edits from MCP tool execution (function calling path)
                 const effectiveEdits = allEdits || streamedEdits || filesystemEdits;
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
+                const mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
+                const hasMcpFileEdits = mcpFileEdits.length > 0;
                 const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
                 // Only trigger spec amplification when there are ACTUAL filesystem edits,
                 // not just because the response contains code snippets (const, function, etc.)
-                const shouldRunSpecAmplification = hasFileEdits &&
+                const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) &&
                   isSpecAmplificationMode &&
                   !clientResponse.metadata?.specAmplificationRun;
 
                 chatLogger.info('Spec amplification check (regular LLM stream)', {
                   requestId: streamRequestId,
                   hasFileEdits,
+                  hasMcpFileEdits,
+                  mcpFileEditCount: mcpFileEdits.length,
                   mode: routerRequest.mode,
                   isSpecAmplificationMode,
                   specAmplificationRun: clientResponse.metadata?.specAmplificationRun,
@@ -2179,6 +2221,7 @@ export async function POST(request: NextRequest) {
                     requestId: streamRequestId,
                     contentLength: streamingContentBuffer.length,
                     appliedEditsCount: effectiveEdits?.applied?.length || 0,
+                    mcpFileEdits: hasMcpFileEdits ? mcpFileEdits.map(e => e.path) : undefined,
                   });
 
                   // Build enhanced content including actual file edits
@@ -2195,6 +2238,15 @@ export async function POST(request: NextRequest) {
                         additionalContentLength: fileEditsContent.length,
                       });
                     }
+                  } else if (hasMcpFileEdits) {
+                    // MCP tool execution path: files were modified via function calling
+                    const fileEditsContent = mcpFileEdits
+                      .map(e => `\n\`\`\`fs-actions\nWRITE ${e.path} <<<\n[file created/modified via MCP tool]\n>>>\n\`\`\``)
+                      .join('\n\n');
+                    enhancedContent = streamingContentBuffer + '\n\n' + fileEditsContent;
+                    chatLogger.debug('Including MCP tool file edits in spec amplification', {
+                      fileCount: mcpFileEdits.length,
+                    });
                   }
 
                   // Trigger spec amplification in background - events stream via emitRef.current
@@ -2215,11 +2267,13 @@ export async function POST(request: NextRequest) {
                 } else {
                   chatLogger.debug('Spec amplification NOT triggered (regular LLM path)', {
                     requestId: streamRequestId,
-                    reason: !hasFileEdits ? 'no filesystem edits' :
+                    reason: !(hasFileEdits || hasMcpFileEdits) ? 'no filesystem edits' :
                             !isSpecAmplificationMode ? `mode is ${routerRequest.mode}` :
                             clientResponse.metadata?.specAmplificationRun ? 'already run' : 'unknown',
                   });
                 }
+                // Clear tracker after check to prevent stale data
+                clearRecentMcpFileEdits(resolvedConversationId);
 
                 cleanup();
               } catch (streamError) {
@@ -2550,18 +2604,23 @@ export async function POST(request: NextRequest) {
                 // Runs AFTER final parse (inside stream callback) and FILE_EDIT events
                 // OPTIMIZATION: Use O(1) hasFileEdits check instead of O(n×m) code marker search
                 // Note: allEdits is set by final parse inside stream callback (line ~2165)
+                // Also check for file edits from MCP tool execution (function calling path)
                 const effectiveEdits = allEdits || filesystemEdits;
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
+                const mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
+                const hasMcpFileEdits = mcpFileEdits.length > 0;
                 const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
                 // Only trigger spec amplification when there are ACTUAL filesystem edits,
                 // not just because the response contains code snippets (const, function, etc.)
-                const shouldRunSpecAmplification = hasFileEdits &&
+                const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) &&
                   isSpecAmplificationMode &&
                   !clientResponse.metadata?.specAmplificationRun;
 
                 chatLogger.info('Spec amplification check (ToolLoopAgent stream)', {
                   requestId: streamRequestId,
                   hasFileEdits,
+                  hasMcpFileEdits,
+                  mcpFileEditCount: mcpFileEdits.length,
                   mode: routerRequest.mode,
                   isSpecAmplificationMode,
                   specAmplificationRun: clientResponse.metadata?.specAmplificationRun,
@@ -2572,6 +2631,7 @@ export async function POST(request: NextRequest) {
                   chatLogger.info('Code/file edits detected, triggering spec amplification (ToolLoopAgent path)', {
                     requestId: streamRequestId,
                     finalContentLength: finalContent.length,
+                    mcpFileEdits: hasMcpFileEdits ? mcpFileEdits.map(e => e.path) : undefined,
                   });
 
                   // Trigger spec amplification in background - events stream via emitRef.current
@@ -2592,11 +2652,13 @@ export async function POST(request: NextRequest) {
                 } else {
                   chatLogger.debug('Spec amplification NOT triggered (ToolLoopAgent path)', {
                     requestId: streamRequestId,
-                    reason: !hasFileEdits ? 'no filesystem edits' :
+                    reason: !(hasFileEdits || hasMcpFileEdits) ? 'no filesystem edits' :
                             !isSpecAmplificationMode ? `mode is ${routerRequest.mode}` :
                             clientResponse.metadata?.specAmplificationRun ? 'already run' : 'unknown',
                   });
                 }
+                // Clear tracker after check to prevent stale data
+                clearRecentMcpFileEdits(resolvedConversationId);
 
                 controller.close();
               } catch (error) {
@@ -3916,10 +3978,14 @@ export async function applyFilesystemEditsFromResponse(input: {
   };
   /** Force extraction even if previously emitted (for final parse after stream completes) */
   forceExtract?: boolean;
+  /** Pre-parsed edits (from extractAndSanitize) to skip redundant re-parsing */
+  preParsedEdits?: ParsedFilesystemResponse;
 }): Promise<FilesystemEditResult> {
   // FIX: If forceExtract is true, bypass deduplication to catch all edits including those
   // that may have been skipped during incremental parsing (e.g., last file with unclosed heredoc)
-  const parsedResponse = parseFilesystemResponse(input.responseContent || '', input.forceExtract ?? false);
+  const parsedResponse = input.preParsedEdits
+    ? input.preParsedEdits
+    : parseFilesystemResponse(input.responseContent || '', input.forceExtract ?? false);
   const folderCreateOps = extractFolderCreateTags(input.responseContent || '');
 
   // Track invalid paths to detect when ALL paths are invalid (prevents infinite retry loops)

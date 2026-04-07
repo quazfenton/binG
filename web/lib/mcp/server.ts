@@ -86,7 +86,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     async (params) => {
       try {
         const result = await toolContextStore.run(
-          { userId: 'mcp-server', sessionId: undefined },
+          { userId: 'mcp-server', sessionId: undefined, scopePath: 'project' },
           async () => applyDiffTool.execute(params, {
             messages: [],
             toolCallId: crypto.randomUUID(),
@@ -126,7 +126,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     async (params) => {
       try {
         const result = await toolContextStore.run(
-          { userId: 'mcp-server', sessionId: undefined },
+          { userId: 'mcp-server', sessionId: undefined, scopePath: 'project' },
           async () => readFileTool.execute(params, {
             messages: [],
             toolCallId: crypto.randomUUID(),
@@ -170,7 +170,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     async (params) => {
       try {
         const result = await toolContextStore.run(
-          { userId: 'mcp-server', sessionId: undefined },
+          { userId: 'mcp-server', sessionId: undefined, scopePath: 'project' },
           async () => listFilesTool.execute(params, {
             messages: [],
             toolCallId: crypto.randomUUID(),
@@ -212,7 +212,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     async (params) => {
       try {
         const result = await toolContextStore.run(
-          { userId: 'mcp-server', sessionId: undefined },
+          { userId: 'mcp-server', sessionId: undefined, scopePath: 'project' },
           async () => writeFileTool.execute(params, {
             messages: [],
             toolCallId: crypto.randomUUID(),
@@ -269,7 +269,7 @@ export async function createMCPToolServer(options: MCPServerOptions = {}) {
     async () => {
       try {
         const result = await toolContextStore.run(
-          { userId: 'mcp-server', sessionId: undefined },
+          { userId: 'mcp-server', sessionId: undefined, scopePath: 'project' },
           async () => listFilesTool.execute({ path: '.' }, {
             messages: [],
             toolCallId: crypto.randomUUID(),

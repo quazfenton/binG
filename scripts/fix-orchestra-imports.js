@@ -12,7 +12,8 @@ try {
     console.log('Fixed imports:', uas);
   }
 } catch (e) {
-  console.log('Error:', uas, e.message);
+  console.error('Error:', uas, e.message);
+  process.exitCode = 1;
 }
 
 console.log('Done.');

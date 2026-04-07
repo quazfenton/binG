@@ -655,67 +655,59 @@ export function useVirtualFilesystem(
   }, [request]);
 
   const readFile = useCallback(async (filePath: string): Promise<VirtualFile> => {
-    // DEBUG: Log what path is being requested
-    console.log('[useVFS] readFile called with:', { 
-      filePath, 
-      type: typeof filePath,
-      length: filePath?.length,
-      isEmpty: !filePath,
-      useOPFS 
-    });
-    
+    // Normalize path: strip leading slash since VFS uses relative paths (e.g., "project/..." not "/project/...")
+    const normalizedPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
+
     // OPFS-first strategy
     if (useOPFS) {
       try {
-        const opfsFile = await opfsAdapter.readFile('current-user', filePath);
-        log(`readFile: OPFS cache hit for "${filePath}"`);
+        const opfsFile = await opfsAdapter.readFile('current-user', normalizedPath);
+        log(`readFile: OPFS cache hit for "${normalizedPath}"`);
         return opfsFile;
       } catch (err) {
-        logWarn(`readFile: OPFS cache miss for "${filePath}", fetching from server`);
+        logWarn(`readFile: OPFS cache miss for "${normalizedPath}", fetching from server`);
       }
     }
 
-    // DEBUG: Log the request body we're about to send
-    const requestBody = { path: filePath };
-    console.log('[useVFS] Sending request body:', JSON.stringify(requestBody, null, 2));
-    
     // Server fetch
     return request<VirtualFile>('/api/filesystem/read', {
       method: 'POST',
-      body: JSON.stringify(requestBody),
+      body: JSON.stringify({ path: normalizedPath }),
     });
   }, [request, useOPFS, logWarn]);
 
   const writeFile = useCallback(async (filePath: string, content: string) => {
-    log(`writeFile: writing "${filePath}" (contentLength=${content.length})`);
-    
+    // Normalize path: strip leading slash since VFS uses relative paths
+    const normalizedPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
+    log(`writeFile: writing "${normalizedPath}" (contentLength=${content.length})`);
+
     // Invalidate snapshot cache on write
-    invalidateSnapshotCache(filePath, getSessionId());
-    
+    invalidateSnapshotCache(normalizedPath, getSessionId());
+
     // OPFS write-through strategy: write to OPFS for instant local reads,
     // then also write to server so listDirectory (server-backed) stays in sync
     if (useOPFS && !offlineMode) {
       // Write to OPFS instantly for local cache
-      const opfsFile = await opfsAdapter.writeFile('current-user', filePath, content);
-      log(`writeFile: OPFS write complete for "${filePath}", version=${opfsFile.version}`);
-      
+      const opfsFile = await opfsAdapter.writeFile('current-user', normalizedPath, content);
+      log(`writeFile: OPFS write complete for "${normalizedPath}", version=${opfsFile.version}`);
+
       // Also write to server so list/snapshot APIs reflect the change
       try {
         await request<any>('/api/filesystem/write', {
           method: 'POST',
-          body: JSON.stringify({ path: filePath, content, source: 'use-virtual-filesystem-opfs' }),
+          body: JSON.stringify({ path: normalizedPath, content, source: 'use-virtual-filesystem-opfs' }),
         });
-        log(`writeFile: server write-through complete for "${filePath}"`);
+        log(`writeFile: server write-through complete for "${normalizedPath}"`);
       } catch (err) {
-        logWarn(`writeFile: server write-through failed for "${filePath}", OPFS has the data`, err);
+        logWarn(`writeFile: server write-through failed for "${normalizedPath}", OPFS has the data`, err);
       }
-      
+
       // Update local state immediately
       await listDirectory(currentPathRef.current);
-      
+
       return opfsFile;
     }
-    
+
     // Server-only or offline mode
     const data = await request<{
       path: string;
@@ -729,7 +721,7 @@ export function useVirtualFilesystem(
       lastModified: string;
     }>('/api/filesystem/write', {
       method: 'POST',
-      body: JSON.stringify({ path: filePath, content, source: 'use-virtual-filesystem' }),
+      body: JSON.stringify({ path: normalizedPath, content, source: 'use-virtual-filesystem' }),
     });
     log(`writeFile: server write complete for "${data.path}", version=${data.version}`);
     await listDirectory(currentPathRef.current);

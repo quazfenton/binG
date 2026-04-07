@@ -414,8 +414,8 @@ export class LLMProviderRouter {
   private getDefaultModel(provider: LLMProviderType): string {
     const defaults: Record<LLMProviderType, string> = {
       'openai': 'gpt-5-mini',
-      'openrouter': 'qwen/qwen3-coder:free',
-      'anthropic': 'claude-3-haiku-20240307',
+      'openrouter': 'minimax/minimax-m2.5:free',
+      'anthropic': 'claude-4.6-sonnet',
       'google': 'gemini-3-flash-preview',
       'mistral': 'mistral-small-latest',
       'cohere': 'command-r-plus',
