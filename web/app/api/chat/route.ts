@@ -1262,14 +1262,15 @@ export async function POST(request: NextRequest) {
       });
     }
 
-    // Tool/sandbox actions require authenticated user identity for authorization and ownership checks.
-    if ((requestType === 'tool' || requestType === 'sandbox') && !authenticatedUserId) {
+    // Sandbox actions require authenticated user identity for authorization and ownership checks.
+    // VFS MCP tools are handled inline via Vercel AI SDK tool calling and don't need this gate.
+    if (requestType === 'sandbox' && !authenticatedUserId) {
       return NextResponse.json({
         success: false,
         status: 'auth_required',
         error: {
           type: 'auth_required',
-          message: `${requestType === 'tool' ? 'Tool use' : 'Sandbox actions'} require authentication. Please log in first.`
+          message: 'Sandbox actions require authentication. Please log in first.'
         }
       }, { status: 401 });
     }
@@ -1291,7 +1292,7 @@ export async function POST(request: NextRequest) {
       stream,
       apiKeys,
       requestId,
-      userId: authenticatedUserId, // Include userId for tool and sandbox authorization
+      userId: authenticatedUserId || filesystemOwnerId, // Use filesystem owner for VFS tools when not authenticated
       // For filesystem operations (including spec enhancement background refinement),
       // use the resolved filesystem owner ID which handles anonymous users correctly
       filesystemOwnerId: filesystemOwnerId,
@@ -1299,15 +1300,15 @@ export async function POST(request: NextRequest) {
       conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
       // Keep these tri-state so router-level detection can still route specialized endpoints.
       // `false` means "explicitly disable", `undefined` means "auto-detect".
-      // CRITICAL FIX: Enable tools by default for all authenticated requests.
-      // This allows VFS MCP tools (write_file, read_file, apply_diff, etc.) to be
-      // available to the LLM for any request that might need filesystem access.
-      enableTools: !!authenticatedUserId,
-      enableSandbox: requestType === 'sandbox' ? !!authenticatedUserId : undefined,
-      enableComposio: requestType === 'tool' ? !!authenticatedUserId : undefined,
+      // CRITICAL FIX: Enable tools by default for ALL users (authenticated + anonymous).
+      // authenticatedUserId is only set for non-anonymous users, but filesystemOwnerId
+      // covers both. VFS MCP tools (write_file, read_file, apply_diff) need this enabled.
+      enableTools: !!(authenticatedUserId || filesystemOwnerId),
+      enableSandbox: requestType === 'sandbox' ? !!(authenticatedUserId || filesystemOwnerId) : undefined,
+      enableComposio: requestType === 'tool' ? !!(authenticatedUserId || filesystemOwnerId) : undefined,
       mode: body.mode || 'enhanced', // Add mode from request
       // When Vercel AI SDK handles tool calling natively, skip regex intent parsing
-      nativeToolCalling: VERCEL_AI_PROVIDERS.has(provider) && !!authenticatedUserId,
+      nativeToolCalling: VERCEL_AI_PROVIDERS.has(provider) && !!(authenticatedUserId || filesystemOwnerId),
       // Context pack: bundle workspace files into LLM-readable format
       contextPack: contextPack ? {
         ...contextPack,
@@ -1318,6 +1319,10 @@ export async function POST(request: NextRequest) {
       } : undefined,
       // Auto-attach relevant files as agent discovers areas to edit
       autoAttachFiles,
+      // Pass abort signal for cancellation support
+      signal: request.signal,
+      // Server-side timeout (90s) to prevent hanging on unresponsive providers
+      timeoutMs: 90000,
     };
 
     chatLogger.debug('Routing request through priority chain', { requestId, provider, model }, {
@@ -1366,7 +1371,7 @@ export async function POST(request: NextRequest) {
         unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
       } else if (stream && SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED) {
         // For streaming, use standard routing - spec amplification triggered post-stream if code detected
-        chatLogger.debug('V1 mode with streaming, using standard routing (post-stream spec amplification)', { requestId })
+        chatLogger.debug('V1 mode with streaming, using standard routing + later spec amplification)', { requestId })
         unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
 
         // Check if response has streaming generator (real-time LLM streaming)
