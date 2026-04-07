@@ -23,7 +23,7 @@ import { z } from 'zod';
 import { chatLogger } from './chat-logger';
 import type { ToolExecutionContext } from './vercel-ai-streaming';
 import { getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp/architecture-integration';
-import { isMCPAvailable, vfsTools as mcpVFSTools, initializeVFSTools } from '@/lib/mcp';
+import { isMCPAvailable, vfsTools as mcpVFSTools, toolContextStore } from '@/lib/mcp';
 import { ALL_CAPABILITIES, getCapability, type CapabilityDefinition } from '@/lib/tools/capabilities';
 import { getCapabilityRouter, type CapabilityRouter } from '@/lib/tools/router';
 
@@ -193,19 +193,33 @@ function sanitizeArgs(args: any): any {
 /**
  * Create VFS MCP tools (structured file operations via MCP)
  * These tools use schema-enforced parameters instead of fragile tag parsing
- * Initializes tools with user context from the execution context
+ *
+ * IMPORTANT: Each tool's execute is wrapped with toolContextStore.run() to ensure
+ * the userId/sessionId context propagates into Vercel AI SDK's internal tool
+ * execution. Using initializeVFSTools/enterWith() alone doesn't work because
+ * streamText creates its own async context for tool calling, which loses the
+ * enterWith scope. Without this wrap, getToolContext() falls back to 'default',
+ * causing files to be written to the wrong user's workspace.
  */
 function createVFSTools(context: ToolExecutionContext): Record<string, Tool> {
-  // Initialize VFS tools with user context
   const userId = context.userId || 'default';
-  initializeVFSTools(userId, context.sessionId);
-  
+  // Use sessionId from context if available, otherwise extract from conversationId
+  // The conversationId format is "ownerId:sessionId" so we can extract sessionId from it
+  const sessionId = context.sessionId || (context.conversationId?.includes(':') ? context.conversationId.split(':')[1] : undefined);
   const tools: Record<string, Tool> = {};
-  
+
   for (const [name, vfsTool] of Object.entries(mcpVFSTools)) {
-    tools[name] = vfsTool as any;
+    tools[name] = {
+      ...vfsTool,
+      execute: async (args: any, execOptions: any) => {
+        return toolContextStore.run(
+          { userId, sessionId },
+          async () => (vfsTool as any).execute(args, execOptions),
+        );
+      },
+    };
   }
-  
+
   return tools;
 }
 

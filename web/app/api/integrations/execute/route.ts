@@ -650,13 +650,7 @@ async function executeGitHubAction(action: string, params: Record<string, unknow
     case 'list_issues': {
       if (!owner || !repo) return { success: false, error: 'owner and repo are required' };
       try {
-        if (title) {
-          const result = await githubApi<any>(`/repos/${owner}/${repo}/issues`, token, {
-            method: 'POST', headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ title, body: bodyStr }),
-          });
-          return { success: true, data: { url: result.html_url, number: result.number } };
-        }
+        // Read-only: list existing open issues
         const issues = await githubApi<any[]>(`/repos/${owner}/${repo}/issues?per_page=20&state=open`, token);
         return {
           success: true,
@@ -664,6 +658,20 @@ async function executeGitHubAction(action: string, params: Record<string, unknow
         };
       } catch (e: any) {
         return { success: false, error: `Issues failed: ${e.message}` };
+      }
+    }
+
+    case 'create_issue': {
+      if (!owner || !repo) return { success: false, error: 'owner and repo are required' };
+      if (!title) return { success: false, error: 'title is required for creating an issue' };
+      try {
+        const result = await githubApi<any>(`/repos/${owner}/${repo}/issues`, token, {
+          method: 'POST', headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ title, body: bodyStr }),
+        });
+        return { success: true, data: { url: result.html_url, number: result.number } };
+      } catch (e: any) {
+        return { success: false, error: `Create issue failed: ${e.message}` };
       }
     }
 

@@ -617,6 +617,9 @@ export class ResponseRouter {
               apiKeys: req.apiKeys,
               contextPack: req.contextPack,
               autoAttachFiles: req.autoAttachFiles,
+              // Pass abort signal and timeout for cancellation support
+              signal: (req as any).signal,
+              timeoutMs: (req as any).timeoutMs,
             } as EnhancedLLMRequest)
             
             return {

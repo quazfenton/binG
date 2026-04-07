@@ -37,6 +37,7 @@ import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitE
 export interface ToolExecutionContext {
   userId?: string;
   conversationId?: string;
+  sessionId?: string;
   requestId?: string;
   [key: string]: any;
 }
@@ -63,6 +64,8 @@ export interface VercelStreamOptions {
   smoothStreaming?: boolean;
   maxRetries?: number;
   maxSteps?: number;
+  /** Request timeout in milliseconds (default: 120s) */
+  timeoutMs?: number;
   /** Provider-specific settings (e.g., Anthropic cache control) */
   providerOptions?: Record<string, any>;
 }
@@ -386,12 +389,51 @@ export async function* streamWithVercelAI(
     smoothStreaming = true,
     maxRetries = 0,
     maxSteps = 5,
+    timeoutMs = 120000, // Default 120s timeout
     providerOptions,
   } = opts;
 
   const startTime = Date.now();
   const requestId = `vercel-ai-${Date.now()}`;
   let useCompatibilityFallback = false;
+
+  // Time-to-first-token timeout: only cancels if NO content arrives within timeoutMs
+  // Once first token arrives, timeout is cleared to allow long legitimate streams
+  let ttftTimeoutId: NodeJS.Timeout | null = null;
+  let timeoutController: AbortController | null = null;
+  let firstTokenReceived = false;
+
+  if (timeoutMs > 0) {
+    timeoutController = new AbortController();
+    
+    // Chain with existing signal if present
+    if (signal) {
+      signal.addEventListener('abort', () => {
+        timeoutController?.abort(signal.reason);
+        if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+      }, { once: true });
+    }
+    
+    // Set time-to-first-token timeout
+    ttftTimeoutId = setTimeout(() => {
+      if (!firstTokenReceived) {
+        timeoutController?.abort(new Error(`No response within ${timeoutMs}ms (time-to-first-token timeout)`));
+      }
+    }, timeoutMs);
+  }
+
+  const effectiveSignal = timeoutController?.signal || signal;
+  
+  // Helper to clear TTFT timeout once first token arrives
+  const onFirstToken = () => {
+    if (!firstTokenReceived) {
+      firstTokenReceived = true;
+      if (ttftTimeoutId) {
+        clearTimeout(ttftTimeoutId);
+        ttftTimeoutId = null;
+      }
+    }
+  };
 
   try {
     const vercelModel = getVercelModel(provider, modelName, key, url);
@@ -411,9 +453,12 @@ export async function* streamWithVercelAI(
           maxTokens: maxT,
           apiKey: key,
         })) {
-          if (signal?.aborted) return;
+          if (effectiveSignal?.aborted) return;
 
           if (chunk.type === 'text-delta') {
+            // Clear time-to-first-token timeout once we receive content
+            onFirstToken();
+            
             yield {
               content: chunk.textDelta,
               isComplete: false,
@@ -450,11 +495,13 @@ export async function* streamWithVercelAI(
       }
     }
 
-    // Build middleware stack
+    // Build middleware stack — skip transforms for providers with known incompatibilities.
+    // Google (Gemini) throws "transform is not a function" with smoothStream in AI SDK v6.
+    const supportsTransforms = provider !== 'google';
     const transforms: any[] = [];
 
     // Smooth streaming for natural token flow
-    if (smoothStreaming && typeof smoothStream === 'function') {
+    if (supportsTransforms && smoothStreaming && typeof smoothStream === 'function') {
       try {
         transforms.push(smoothStream({ delayInMs: 15 }));
       } catch (smoothError) {
@@ -464,7 +511,7 @@ export async function* streamWithVercelAI(
 
     // Reasoning extraction for providers that support extended thinking
     const reasoningTag = getReasoningTag(provider);
-    if (reasoningTag && typeof extractReasoningMiddleware === 'function') {
+    if (supportsTransforms && reasoningTag && typeof extractReasoningMiddleware === 'function') {
       try {
         transforms.push(extractReasoningMiddleware(reasoningTag));
       } catch (reasoningError) {
@@ -480,7 +527,7 @@ export async function* streamWithVercelAI(
       maxOutputTokens: maxT,
       maxRetries,
       maxSteps,
-      abortSignal: signal,
+      abortSignal: effectiveSignal,
       toolCallStreaming,
       ...(transforms.length > 0 ? { experimental_transform: transforms } : {}),
       experimental_telemetry: {
@@ -534,10 +581,13 @@ export async function* streamWithVercelAI(
     let reasoningContent = '';
 
     for await (const chunk of result.fullStream) {
-      if (signal?.aborted) return;
+      if (effectiveSignal?.aborted) return;
 
       switch (chunk.type as string) {
         case 'text-delta': {
+          // Clear time-to-first-token timeout once we receive content
+          onFirstToken();
+          
           yield {
             content: (chunk as any).text,
             isComplete: false,
@@ -547,6 +597,9 @@ export async function* streamWithVercelAI(
         }
 
         case 'reasoning-start': {
+          // Clear time-to-first-token timeout once we receive any response
+          onFirstToken();
+          
           // reasoning-start contains reasoning content in text property for some providers
           const reasoningText = (chunk as any).text ?? '';
           reasoningContent += reasoningText;
@@ -598,6 +651,9 @@ export async function* streamWithVercelAI(
         }
 
         case 'tool-call': {
+          // Clear time-to-first-token timeout once we receive any response
+          onFirstToken();
+          
           yield {
             content: '',
             isComplete: false,
@@ -651,6 +707,9 @@ export async function* streamWithVercelAI(
     const finishReason = (await result.finishReason) || 'stop';
     const toolCalls = await result.toolCalls;
     const steps = await result.steps;
+
+    // Cleanup timeout
+    if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
 
     // Collect all tool calls from steps (multi-step support)
     const allToolCalls: Array<{ id: string; name: string; arguments: Record<string, any> }> = [];
@@ -772,7 +831,7 @@ export async function* streamWithVercelAI(
           maxOutputTokens: maxT,
           maxRetries: 0,
           maxSteps,
-          abortSignal: signal,
+          abortSignal: effectiveSignal,
           toolCallStreaming,
           experimental_telemetry: {
             isEnabled: false,
@@ -800,7 +859,7 @@ export async function* streamWithVercelAI(
         
         // Yield all chunks from fallback (simplified - same as main stream)
         for await (const chunk of fallbackResult.fullStream) {
-          if (signal?.aborted) return;
+          if (effectiveSignal?.aborted) return;
           
           if (chunk.type === 'text-delta') {
             yield { content: (chunk as any).text, isComplete: false, timestamp: new Date() };
@@ -834,6 +893,9 @@ export async function* streamWithVercelAI(
         }
         return;
       } catch (fallbackError: any) {
+        // Cleanup timeout
+        if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
+        
         chatLogger.error('Fallback streaming also failed', {
           requestId,
           provider,
@@ -850,6 +912,9 @@ export async function* streamWithVercelAI(
       statusCode: error.statusCode,
       latencyMs: Date.now() - startTime,
     });
+
+    // Cleanup timeout
+    if (ttftTimeoutId) clearTimeout(ttftTimeoutId);
 
     error.metadata = {
       ...error.metadata,

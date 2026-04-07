@@ -329,10 +329,71 @@ Task: ${message.substring(0, 500)}`,
       
       return score;
     } catch (error) {
-      log.warn('Semantic analysis failed, using neutral score', error);
-      reasoning.push('Semantic: skipped (error)');
-      return 0.5; // neutral fallback
+      log.warn('Semantic analysis failed, using fallback estimation', error);
+      
+      // Enhanced fallback: use message characteristics as complexity proxies
+      const fallbackScore = this.semanticFallback(message, reasoning);
+      reasoning.push(`Semantic: fallback analysis (score=${fallbackScore.toFixed(2)})`);
+      return fallbackScore;
     }
+  }
+
+  /**
+   * Fallback semantic analysis when LLM is unavailable
+   * Uses message structure and content as complexity proxies
+   */
+  private semanticFallback(message: string, reasoning: string[]): number {
+    let score = 0.5;
+    const factors: string[] = [];
+
+    // Message length as complexity proxy
+    const length = message.length;
+    if (length > 200) {
+      score += 0.15;
+      factors.push('detailed description');
+    } else if (length > 100) {
+      score += 0.05;
+      factors.push('moderate detail');
+    } else if (length < 30) {
+      score -= 0.1;
+      factors.push('very short task');
+    }
+
+    // Multi-sentence indicates multiple aspects
+    const sentenceCount = (message.match(/[.!?]+/g) || []).length;
+    if (sentenceCount > 3) {
+      score += 0.1;
+      factors.push(`${sentenceCount} sentences`);
+    }
+
+    // Question marks indicate uncertainty/complexity
+    const questionCount = (message.match(/\?/g) || []).length;
+    if (questionCount > 0) {
+      score += 0.05 * questionCount;
+      factors.push(`${questionCount} question(s)`);
+    }
+
+    // Lists/numbered items
+    if (message.match(/\d+\.\s/) || message.includes('- ') || message.includes('* ')) {
+      score += 0.1;
+      factors.push('has list/items');
+    }
+
+    // Technical terms density
+    const techTerms = message.match(/\b[A-Z][a-z]+[A-Z]\w*|\b[A-Z]{2,}\b/g);
+    if (techTerms && techTerms.length > 2) {
+      score += 0.1;
+      factors.push(`${techTerms.length} technical terms`);
+    }
+
+    // Clamp to 0-1
+    score = Math.max(0, Math.min(1, score));
+
+    if (factors.length > 0) {
+      reasoning.push(`Fallback: ${factors.join(', ')}`);
+    }
+
+    return score;
   }
 
   /**
@@ -426,16 +487,29 @@ Task: ${message.substring(0, 500)}`,
       factors.contextScore,
       factors.historicalScore,
     ];
-    
+
     // Calculate standard deviation
     const mean = scores.reduce((a, b) => a + b, 0) / scores.length;
     const variance = scores.reduce((sum, s) => sum + Math.pow(s - mean, 2), 0) / scores.length;
     const stdDev = Math.sqrt(variance);
-    
+
     // Low stdDev = high confidence (factors agree)
     // High stdDev = low confidence (factors disagree)
-    const confidence = Math.max(0.3, 1 - stdDev * 2);
-    
+    let confidence = Math.max(0.3, 1 - stdDev * 2);
+
+    // Reduce confidence when all factors are near-neutral (no signal)
+    const allNearNeutral = scores.every(s => s >= 0.4 && s <= 0.6);
+    if (allNearNeutral) {
+      confidence = Math.min(confidence, 0.5); // Cap confidence at 0.5 when no real signal
+    }
+
+    // Reduce confidence when semantic used fallback (detected by reasoning)
+    const semanticOnlyFallback = factors.semanticScore >= 0.45 && factors.semanticScore <= 0.55 &&
+                                  factors.keywordScore === 0;
+    if (semanticOnlyFallback) {
+      confidence = Math.min(confidence, 0.55); // Moderate cap for fallback scenarios
+    }
+
     return Math.round(confidence * 100) / 100;
   }
 

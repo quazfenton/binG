@@ -138,7 +138,7 @@ export function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 
   // Tool intent patterns (third-party service actions) - weighted scoring
   const TOOL_PATTERNS = [
     { pattern: /\b(use|using)\s+(a\s+)?tools?\b/i, weight: 3 },
-    { pattern: /\b(tool|function)\s*(call|use|execution)?\b/i, weight: 2 },
+    { pattern: /\b(tool|function)\s+(call|use|execution)\b/i, weight: 2 },
     { pattern: /\b(send|draft|compose)\s+(an?\s+)?email\b/i, weight: 3 },
     { pattern: /\bgmail\b/i, weight: 2 },
     { pattern: /\bemail\s+to\b/i, weight: 3 },

@@ -60,6 +60,7 @@ import {
   detectProject,
   getSandpackConfig,
   livePreviewOffloading,
+  isBackendOnlyProject,
   type ProjectDetection,
   type PreviewMode,
   type AppFramework,
@@ -2472,6 +2473,29 @@ Generated on: ${new Date().toLocaleString()}
     }
   }, [previewMode]);
 
+  // Auto-redirect backend-only projects to CodeSandbox/WebContainer (Sandpack can't run Node.js)
+  useEffect(() => {
+    if (previewMode !== 'sandpack') return;
+
+    // Check all possible file sources for backend patterns
+    const fileSources = [
+      scopedPreviewFiles, // VFS-synced files
+      projectDetection?.normalizedFiles || {}, // Manual preview normalized files
+      projectStructure?.files || {}, // Legacy parsed structure
+    ];
+
+    for (const files of fileSources) {
+      if (Object.keys(files).length === 0) continue;
+      const { isBackendOnly, reasons } = isBackendOnlyProject(files, []);
+      if (isBackendOnly) {
+        setPreviewMode('codesandbox');
+        toast.info(`Backend project detected — redirected to CodeSandbox for full Node.js support`);
+        previewLogger.debug('[Preview] Backend-only project redirected from Sandpack to CodeSandbox', { reasons });
+        return;
+      }
+    }
+  }, [scopedPreviewFiles, projectDetection, projectStructure, previewMode]);
+
   // Function to detect popular dependencies from code content (only used when package.json is missing)
   const getPopularDependencies = (
     codeContent: string,
@@ -2503,6 +2527,27 @@ Generated on: ${new Date().toLocaleString()}
     }
     return deps;
   };
+
+  // VFS MCP TOOLS LOGGING: Log when tools are registered/invoked
+  useEffect(() => {
+    const logVFSActivity = async () => {
+      try {
+        const snapshot = getFilesystemSnapshot();
+        if (snapshot && Object.keys(scopedPreviewFiles).length > 0) {
+          previewLogger.debug('[VFS] Files synced from VFS to preview panel', {
+            fileCount: Object.keys(scopedPreviewFiles).length,
+            files: Object.keys(scopedPreviewFiles).slice(0, 10),
+          });
+        }
+      } catch (err) {
+        previewLogger.warn('[VFS] Failed to log VFS activity', err);
+      }
+    };
+    logVFSActivity();
+  }, [scopedPreviewFiles, getFilesystemSnapshot]);
+
+  // Legacy markdown parsing DISABLED when VFS has files
+  // This prevents dual-source conflicts between VFS and JSON-parsed code blocks
 
   // Refs for preventing log spam in renderLivePreview
   const sandpackLogKeyRef = useRef<string>('');
@@ -5189,6 +5234,15 @@ root.render(<App />);` };
           </Suspense>
         );
       } catch (error) {
+        // If Sandpack fails, it might be a backend project we missed — try CodeSandbox
+        const errorMsg = (error as Error).message?.toLowerCase() || '';
+        if (errorMsg.includes('express') || errorMsg.includes('sqlite') || errorMsg.includes('backend') || errorMsg.includes('node:')) {
+          previewLogger.warn('[Preview] Sandpack failed with backend error, redirecting to CodeSandbox', { error: errorMsg });
+          setPreviewMode('codesandbox');
+          toast.info(`Sandpack error — redirected to CodeSandbox for backend support`);
+          return null; // Re-render will use CodeSandbox path
+        }
+
         return (
           <div className="flex items-center justify-center h-96 bg-gray-900 rounded-lg">
             <div className="text-center">
@@ -5201,10 +5255,10 @@ root.render(<App />);` };
                 Error: {(error as Error).message}
               </p>
               <button
-                onClick={() => window.location.reload()}
-                className="mt-2 px-3 py-1 bg-blue-600 text-white rounded text-sm hover:bg-blue-700"
+                onClick={() => { setPreviewMode('codesandbox'); }}
+                className="mt-2 px-3 py-1 bg-purple-600 text-white rounded text-sm hover:bg-purple-700"
               >
-                Retry
+                Try CodeSandbox
               </button>
             </div>
           </div>
@@ -5593,6 +5647,14 @@ root.render(<App />);` };
 
   useEffect(() => {
     if (isOpen && messages.length > 0) {
+      // CRITICAL FIX: Only parse project structure from JSON code blocks when VFS is empty.
+      // The JSON-parsed system is a LEGACY fallback — VFS files take priority.
+      // If VFS has files, skip this to prevent dual-source conflicts.
+      if (Object.keys(scopedPreviewFiles).length > 0) {
+        log('[ProjectStructure] Skipping JSON parsing — VFS has files, using VFS as source');
+        return;
+      }
+
       // Extract project structure from messages
       const projectMessages = messages
         .filter((msg) => msg.role === "assistant")
@@ -5613,6 +5675,9 @@ root.render(<App />);` };
           try {
             const projectData = JSON.parse(jsonMatch[1]);
             setProjectStructure(projectData);
+            log('[ProjectStructure] Parsed from JSON code block (VFS empty, legacy fallback)', {
+              fileCount: Object.keys(projectData.files || {}).length,
+            });
           } catch (error) {
             console.error("Error parsing project structure:", error);
           }
@@ -5620,7 +5685,7 @@ root.render(<App />);` };
       }
 
     }
-  }, [messages, projectStructure, isOpen]);
+  }, [messages, projectStructure, isOpen, scopedPreviewFiles]);
   // NOTE: Keep component mounted even when closed to allow VFS sync for on-demand shell commands
   // The component will render nothing when isOpen is false, but effects will still run
   return (

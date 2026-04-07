@@ -48,6 +48,10 @@ export interface EnhancedLLMRequest extends LLMRequest {
   };
   /** Auto-attach relevant files to subsequent LLM calls as agent discovers areas to edit */
   autoAttachFiles?: boolean;
+  /** Abort signal for cancelling streaming requests */
+  signal?: AbortSignal;
+  /** Request timeout in milliseconds (default: 90s) */
+  timeoutMs?: number;
 }
 
 export interface LLMEndpointConfig {
@@ -195,24 +199,23 @@ export class EnhancedLLMService {
   }
 
   private setupFallbackChains(): void {
+    // OpenRouter moved to last position in all chains (use as final fallback only)
     this.fallbackChains.set('openrouter', ['nvidia', 'mistral', 'google', 'github', 'groq', 'zen']);
-    this.fallbackChains.set('chutes', ['openrouter', 'anthropic', 'google', 'mistral', 'github', 'nvidia']);
-    this.fallbackChains.set('anthropic', ['nvidia', 'github','openrouter', 'mistral', 'google']);
-    this.fallbackChains.set('google', ['nvidia', 'mistral', 'openrouter', 'github', 'groq', 'zen']);
-    this.fallbackChains.set('mistral', ['openrouter', 'chutes', 'anthropic', 'google', 'github', 'nvidia']);
-    this.fallbackChains.set('github', ['nvidia', 'openrouter', 'mistral', 'google', 'groq', 'zen']);
-    this.fallbackChains.set('portkey', ['openrouter', 'google', 'mistral', 'github', 'nvidia']);
-    this.fallbackChains.set('zen', ['mistral', 'google', 'openrouter', 'github', 'nvidia', 'groq']);
-    this.fallbackChains.set('nvidia', ['openrouter', 'google', 'mistral', 'groq', 'together', 'deepinfra', 'fireworks']);
-    this.fallbackChains.set('groq', ['nvidia', 'openrouter', 'together', 'fireworks', 'deepinfra', 'mistral']);
-    this.fallbackChains.set('together', ['nvidia', 'groq', 'openrouter', 'fireworks', 'deepinfra', 'mistral']);
-    this.fallbackChains.set('fireworks', ['nvidia', 'groq', 'together', 'openrouter', 'deepinfra', 'mistral']);
-    this.fallbackChains.set('deepinfra', ['nvidia', 'groq', 'together', 'fireworks', 'openrouter', 'mistral']);
-    this.fallbackChains.set('anyscale', ['nvidia', 'groq', 'together', 'openrouter', 'mistral', 'google']);
-    this.fallbackChains.set('lepton', ['nvidia', 'groq', 'openrouter', 'together', 'mistral', 'google']);
-    this.fallbackChains.set('google', ['mistral', 'openrouter', 'openai', 'github', 'nvidia', 'groq']);
-    this.fallbackChains.set('mistral', ['google', 'openrouter', 'openai', 'github', 'nvidia', 'groq']);
-    this.fallbackChains.set('openai', ['google', 'mistral', 'openrouter', 'github', 'nvidia', 'groq']);
+    this.fallbackChains.set('chutes', ['anthropic', 'google', 'mistral', 'github', 'nvidia', 'openrouter']);
+    this.fallbackChains.set('anthropic', ['nvidia', 'github', 'mistral', 'google', 'openrouter']);
+    this.fallbackChains.set('google', ['mistral', 'openai', 'github', 'nvidia', 'groq', 'openrouter']);
+    this.fallbackChains.set('mistral', ['google', 'openai', 'github', 'nvidia', 'groq', 'openrouter']);
+    this.fallbackChains.set('github', ['nvidia', 'mistral', 'google', 'groq', 'zen', 'openrouter']);
+    this.fallbackChains.set('portkey', ['google', 'mistral', 'github', 'nvidia', 'openrouter']);
+    this.fallbackChains.set('zen', ['mistral', 'google', 'github', 'nvidia', 'groq', 'openrouter']);
+    this.fallbackChains.set('nvidia', ['google', 'mistral', 'groq', 'together', 'deepinfra', 'fireworks', 'openrouter']);
+    this.fallbackChains.set('groq', ['nvidia', 'together', 'fireworks', 'deepinfra', 'mistral', 'openrouter']);
+    this.fallbackChains.set('together', ['nvidia', 'groq', 'fireworks', 'deepinfra', 'mistral', 'openrouter']);
+    this.fallbackChains.set('fireworks', ['nvidia', 'groq', 'together', 'deepinfra', 'mistral', 'openrouter']);
+    this.fallbackChains.set('deepinfra', ['nvidia', 'groq', 'together', 'fireworks', 'mistral', 'openrouter']);
+    this.fallbackChains.set('anyscale', ['nvidia', 'groq', 'together', 'mistral', 'google', 'openrouter']);
+    this.fallbackChains.set('lepton', ['nvidia', 'groq', 'together', 'mistral', 'google', 'openrouter']);
+    this.fallbackChains.set('openai', ['google', 'mistral', 'github', 'nvidia', 'groq', 'openrouter']);
 
   }
 
@@ -668,6 +671,7 @@ export class EnhancedLLMService {
             vercelTools = await getAllTools({
               userId: request.userId,
               conversationId: request.conversationId,
+              sessionId: request.conversationId?.includes(':') ? request.conversationId.split(':')[1] : undefined,
               requestId,
             });
 
@@ -776,19 +780,10 @@ export class EnhancedLLMService {
           tools: vercelTools,
           toolCallStreaming: !!vercelTools,
           smoothStreaming: true,
+          // Pass abort signal and timeout for cancellation support
+          signal: request.signal,
+          timeoutMs: request.timeoutMs || 90000,
         });
-
-        // Emit metadata chunk with actual provider/model for telemetry tracking
-        yield {
-          content: '',
-          isComplete: false,
-          timestamp: new Date(),
-          metadata: {
-            actualProvider: primaryProvider,
-            actualModel: llmRequest.model,
-            streamingStarted: true,
-          }
-        };
 
         yield* streamWithAutoContinue(baseStream, {
           userId: request.userId || 'anonymous',
@@ -807,18 +802,6 @@ export class EnhancedLLMService {
       chatLogger.warn('Provider not supported by Vercel AI SDK, using legacy streaming', { provider: primaryProvider });
 
       const fullRequest = { ...llmRequest, messages: processedMessages, provider: primaryProvider, apiKey: userApiKey || llmRequest.apiKey };
-
-      // Emit metadata chunk with actual provider/model for telemetry tracking
-      yield {
-        content: '',
-        isComplete: false,
-        timestamp: new Date(),
-        metadata: {
-          actualProvider: primaryProvider,
-          actualModel: llmRequest.model,
-          streamingStarted: true,
-        }
-      };
 
       // Wrap with auto-continue support
       const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
@@ -843,11 +826,27 @@ export class EnhancedLLMService {
       // FIX: Loop through ALL available fallback providers (not just the first one)
       // This mirrors the behavior of generateResponse() which tries every fallback in the chain
       const fallbacks = fallbackProviders || this.fallbackChains.get(primaryProvider) || [];
-      const availableFallbacks = fallbacks.filter(fallbackProvider =>
-        this.endpointConfigs.has(fallbackProvider) &&
-        this.isProviderHealthy(fallbackProvider) &&
-        PROVIDERS[fallbackProvider]?.supportsStreaming
-      );
+      const availableFallbacks = fallbacks.filter(fallbackProvider => {
+        const hasConfig = this.endpointConfigs.has(fallbackProvider);
+        const isHealthy = this.isProviderHealthy(fallbackProvider);
+        const supportsStream = !!PROVIDERS[fallbackProvider]?.supportsStreaming;
+        if (!hasConfig || !isHealthy || !supportsStream) {
+          chatLogger.debug('Streaming fallback excluded provider', {
+            requestId,
+            provider: fallbackProvider,
+            hasConfig,
+            isHealthy,
+            supportsStreaming: supportsStream,
+          });
+        }
+        return hasConfig && isHealthy && supportsStream;
+      });
+      
+      chatLogger.debug('Streaming fallback candidates', {
+        requestId,
+        requestedFallbacks: fallbacks,
+        availableFallbacks: availableFallbacks,
+      });
 
       if (availableFallbacks.length === 0) {
         throw this.createEnhancedError(
@@ -859,6 +858,8 @@ export class EnhancedLLMService {
 
       const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
       let lastFallbackError: Error = error as Error;
+      const fallbackChainLog: string[] = [];
+      fallbackChainLog.push(`${primaryProvider}/${llmRequest.model} failed: ${error instanceof Error ? error.message : String(error)}`);
 
       for (let attemptIndex = 0; attemptIndex < availableFallbacks.length; attemptIndex++) {
         const fallbackProvider = availableFallbacks[attemptIndex];
@@ -871,6 +872,7 @@ export class EnhancedLLMService {
             provider: fallbackProvider,
             model: llmRequest.model,
           });
+          fallbackChainLog.push(`${fallbackProvider}/${llmRequest.model} skipped: model not supported`);
           continue;
         }
 
@@ -893,7 +895,7 @@ export class EnhancedLLMService {
           };
 
           const baseStream = llmService.generateStreamingResponse(fallbackRequest);
-          
+
           // Emit metadata chunk with actual fallback provider/model for telemetry tracking
           yield {
             content: '',
@@ -933,6 +935,7 @@ export class EnhancedLLMService {
             latencyMs: fallbackLatency,
             error: errorMsg,
           });
+          fallbackChainLog.push(`${fallbackProvider}/${supportedModel} failed: ${errorMsg}`);
           lastFallbackError = fallbackError instanceof Error ? fallbackError : new Error(errorMsg);
           // Continue to next fallback in chain
         }

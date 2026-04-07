@@ -130,6 +130,7 @@ export {
   getVFSToolDefinitions,
   getVFSTool,
   setToolContext,
+  toolContextStore,
   initializeVFSTools,
   type ToolContext,
 } from './vfs-mcp-tools'

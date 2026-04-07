@@ -364,6 +364,104 @@ const SERVER_FILES = [
 ];
 
 /**
+ * Backend-only dependency patterns. If a project has ONLY these deps (no frontend framework),
+ * it's a backend project that Sandpack cannot run.
+ */
+const BACKEND_ONLY_DEPS = new Set([
+  'express', 'fastify', 'koa', 'hapi',
+  'sqlite3', 'pg', 'mysql', 'mysql2', 'mongoose', 'sequelize', 'prisma', 'typeorm',
+  'cors', 'helmet', 'body-parser', 'morgan', 'dotenv', 'jsonwebtoken', 'bcrypt',
+  'socket.io', 'ws', 'nodemailer', 'stripe', 'firebase-admin',
+]);
+
+/**
+ * Frontend framework dependency patterns. If present, the project HAS a frontend
+ * even if it also has backend deps (like Next.js + Express).
+ */
+const FRONTEND_DEPS = new Set([
+  'react', 'react-dom', 'vue', 'angular', 'svelte', 'solid-js', 'preact',
+  '@angular/core', '@sveltejs/kit', 'next', 'nuxt', 'gatsby', 'remix', '@remix-run/node',
+]);
+
+/**
+ * Node.js code patterns that indicate backend-only code (not runnable in Sandpack)
+ */
+const NODE_BACKEND_PATTERNS = [
+  /require\(['"]express['"]\)/,
+  /from ['"]express['"]/,
+  /require\(['"]fastify['"]\)/,
+  /require\(['"]sqlite3['"]\)/,
+  /require\(['"]pg['"]\)/,
+  /require\(['"]mongoose['"]\)/,
+  /\.listen\(\d+\)/,
+  /app\.listen\(/,
+  /server\.listen\(/,
+  /process\.env\./,
+  /__dirname/,
+  /require\(['"]node:/,
+];
+
+/**
+ * File path patterns that indicate backend-only files (should be excluded from Sandpack)
+ */
+const BACKEND_FILE_PATTERNS = [
+  /\/server\//i,
+  /\/api\//i,
+  /\/routes\//i,
+  /\/middleware\//i,
+  /\/controllers?\//i,
+  /\/services?\//i,
+  /\/models?\//i,
+  /server\.(js|ts|mjs)$/,
+  /app\.(js|ts|mjs)$/,
+  /api\.(js|ts|mjs)$/,
+];
+
+/**
+ * Check if a project is backend-only (not runnable in Sandpack).
+ *
+ * A project is backend-only if:
+ * - It has backend deps but NO frontend framework deps
+ * - OR it has Node.js backend code patterns but no frontend files
+ *
+ * A project with BOTH frontend AND backend (e.g. Next.js + Express) is NOT backend-only
+ * — Sandpack can still render the frontend portion.
+ */
+export function isBackendOnlyProject(files: Record<string, string>, deps: string[]): { isBackendOnly: boolean; reasons: string[] } {
+  const reasons: string[] = [];
+  const depNames = deps.map(d => d.toLowerCase());
+  const filePaths = Object.keys(files);
+  const allContent = Object.values(files).join('\n').slice(0, 50000); // limit for perf
+
+  // Check: has backend deps
+  const backendDepsFound = depNames.filter(d => BACKEND_ONLY_DEPS.has(d));
+  const hasBackendDeps = backendDepsFound.length > 0;
+
+  // Check: has frontend framework deps
+  const frontendDepsFound = depNames.filter(d => FRONTEND_DEPS.has(d));
+  const hasFrontendDeps = frontendDepsFound.length > 0;
+
+  // Check: has frontend files (HTML, JSX, TSX, Vue, Svelte)
+  const hasFrontendFiles = filePaths.some(f =>
+    /\.(html|jsx|tsx|vue|svelte)$/i.test(f)
+  );
+
+  // Check: has backend code patterns
+  const backendPatternsFound = NODE_BACKEND_PATTERNS.filter(p => p.test(allContent));
+
+  // Decision: backend-only if has backend deps/patterns AND no frontend at all
+  if (hasBackendDeps && !hasFrontendDeps && !hasFrontendFiles) {
+    reasons.push(`Backend deps only: ${backendDepsFound.slice(0, 5).join(', ')}`);
+  }
+
+  if (backendPatternsFound.length >= 2 && !hasFrontendFiles && !hasFrontendDeps) {
+    reasons.push(`Backend code patterns: ${backendPatternsFound.map(p => p.source).slice(0, 3).join(', ')}`);
+  }
+
+  return { isBackendOnly: reasons.length > 0, reasons };
+}
+
+/**
  * Heavy computation patterns
  */
 const HEAVY_COMPUTATION_PATTERNS = ['tensorflow', 'pytorch', 'cuda', 'gpu', 'torch', 'keras'];
