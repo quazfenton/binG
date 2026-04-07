@@ -1300,6 +1300,8 @@ export async function POST(request: NextRequest) {
       filesystemOwnerId: filesystemOwnerId,
       // Include conversation ID for spec enhancement filesystem edits
       conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+      // Pass scopePath for session-scoped file operations
+      scopePath: requestedScopePath,
       // Keep these tri-state so router-level detection can still route specialized endpoints.
       // `false` means "explicitly disable", `undefined` means "auto-detect".
       // CRITICAL FIX: Enable tools by default for ALL users (authenticated + anonymous).

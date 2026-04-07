@@ -232,32 +232,44 @@ export class SandboxConnectionManager {
         logger.warn('Failed to get connection token', err)
       }
 
-      // Try provider-specific PTY first (if supported)
+      // Try SSE first — it uses standard HTTP/1.1 with no protocol upgrade,
+      // making it reliable behind Next.js proxies, load balancers, and reverse proxies.
+      logger.info('[Terminal] Attempting SSE connection (primary transport)')
+      await this.connectSSE(sessionId, sandboxId, connectionToken)
+      // SSE is event-based; connection success is confirmed via 'connected' message
+      // in handleSSEMessage which calls stopSpinner and updates state
+      logger.info('[Terminal] SSE connection established — using SSE transport')
+      return // SSE successful, exit early
+
+    } catch (sseError) {
+      // SSE failed — try provider-specific PTY WebSocket as fallback
+      logger.warn('[Terminal] SSE failed, trying provider PTY WebSocket', sseError)
+
       if (providerType && ['e2b', 'daytona', 'sprites', 'codesandbox', 'vercel-sandbox'].includes(providerType)) {
         try {
-          logger.debug(`Trying ${providerType} PTY connection first`)
+          logger.debug(`Trying ${providerType} PTY WebSocket connection`)
           const providerWs = await this.connectProviderPTY(providerType, sandboxId, sessionId)
           if (providerWs) {
-            logger.info(`${providerType} PTY connected successfully`)
+            logger.info(`${providerType} PTY connected via WebSocket fallback`)
             // Update state with provider WebSocket
             this.state.websocket = providerWs
             this.state.status = 'connected'
             this.state.mode = 'pty'
             this.stopSpinner()
             this.clearConnectionTimeout()
-            
+
             this.updateTerminalState({
               sandboxInfo: { sessionId, sandboxId, status: 'active' },
               websocket: providerWs,
               isConnected: true,
               mode: 'pty',
             })
-            
+
             this.writeLine('')
             this.writeLine(`\x1b[1;32m✓ Connected to ${providerType} sandbox!\x1b[0m`)
             this.writeLine('\x1b[90mYou now have full terminal access.\x1b[0m')
             this.writeLine('')
-            
+
             // Auto-cd to workspace
             if (this.filesystemScopePath) {
               const sandboxPath = this.toSandboxScopedPath(this.filesystemScopePath, sandboxId)
@@ -265,10 +277,10 @@ export class SandboxConnectionManager {
               this.writeLine(`\x1b[90m→ cd ${sandboxPath}\x1b[0m`)
               this.sendInput(sessionId, `cd ${sandboxPath}\n`)
             }
-            
+
             // Send initial resize
             this.sendResize(sessionId, 120, 30)
-            
+
             // Flush command queue
             for (const cmd of this.commandQueue) {
               this.sendInput(sessionId, cmd)
@@ -277,29 +289,26 @@ export class SandboxConnectionManager {
             return // Provider PTY successful, exit early
           }
         } catch (providerError) {
-          logger.warn(`${providerType} PTY failed, falling back to generic WebSocket`, providerError)
-          // Fall through to generic WebSocket
+          logger.warn(`${providerType} PTY WebSocket also failed`, providerError)
+          // Fall through to generic WebSocket or error
         }
       }
 
-      // Try generic WebSocket only when a real custom WS endpoint is configured.
+      // Try generic WebSocket only when a real custom WS endpoint is configured
       if (CUSTOM_WS_BASE_URL) {
         try {
+          logger.info('[Terminal] Attempting generic WebSocket as final fallback')
           await this.connectWebSocket(sessionId, sandboxId, connectionToken)
+          logger.info('[Terminal] WebSocket fallback successful — using WS transport')
           return // WebSocket successful, exit early
         } catch (wsError) {
-          logger.warn('WebSocket not available, using SSE fallback', wsError)
-          // Fall through to SSE
+          logger.warn('[Terminal] Generic WebSocket failed', wsError)
+          // Fall through to error handling
         }
-      } else {
-        logger.debug('Skipping generic WebSocket terminal transport; no custom WS endpoint configured')
       }
 
-      // SSE fallback
-      await this.connectSSE(sessionId, sandboxId, connectionToken)
-
-    } catch (error) {
-      this.handleConnectionError(error)
+      // All transports failed
+      this.handleConnectionError(sseError)
     }
   }
 
@@ -597,29 +606,70 @@ export class SandboxConnectionManager {
 
     const streamUrl = `/api/sandbox/terminal/stream?sessionId=${encodeURIComponent(sessionId)}&sandboxId=${encodeURIComponent(sandboxId)}${tokenParam}${anonymousParam}`
 
+    logger.info('[Terminal SSE] Connecting to', streamUrl)
+
     const eventSource = new EventSource(streamUrl)
     this.state.eventSource = eventSource
 
-    eventSource.onmessage = (event) => {
-      try {
-        const msg = JSON.parse(event.data)
-        this.handleSSEMessage(msg)
-      } catch (err) {
-        logger.error('Failed to parse SSE message', err)
-      }
-    }
+    // Wrap EventSource in a Promise so connect() waits for 'connected' or error
+    return new Promise<void>((resolve, reject) => {
+      let settled = false
 
-    eventSource.onerror = () => {
-      if (this.state.status === 'connected') {
-        this.writeLine('\x1b[31m⚠ Connection lost. Reconnecting...\x1b[0m')
-      }
-    }
+      // Set a connection timeout for SSE (shorter than overall timeout)
+      const sseTimeout = setTimeout(() => {
+        if (!settled) {
+          settled = true
+          eventSource.close()
+          this.state.eventSource = null
+          logger.warn('[Terminal SSE] Connection timeout — no response from server')
+          reject(new Error('SSE connection timed out — server did not respond'))
+        }
+      }, 15000) // 15s timeout for SSE
 
-    // Update state
-    this.updateTerminalState({
-      sandboxInfo: { sessionId, sandboxId, status: 'creating' },
-      eventSource,
-      isConnected: false,
+      eventSource.onopen = () => {
+        logger.info('[Terminal SSE] EventSource connection opened')
+      }
+
+      eventSource.onmessage = (event) => {
+        try {
+          const msg = JSON.parse(event.data)
+          logger.debug('[Terminal SSE] Received message:', msg.type)
+
+          // Check for 'connected' message to resolve the promise
+          if (msg.type === 'connected' && !settled) {
+            settled = true
+            clearTimeout(sseTimeout)
+            logger.info('[Terminal SSE] Connected — resolving promise')
+            resolve()
+          }
+
+          // Check for 'error' message to reject
+          if (msg.type === 'error' && !settled) {
+            settled = true
+            clearTimeout(sseTimeout)
+            eventSource.close()
+            this.state.eventSource = null
+            logger.error('[Terminal SSE] Server error:', msg.data)
+            reject(new Error(msg.data || 'SSE server error'))
+            return
+          }
+
+          // Handle all messages normally
+          this.handleSSEMessage(msg)
+        } catch (err) {
+          logger.error('[Terminal SSE] Failed to parse SSE message', err)
+        }
+      }
+
+      eventSource.onerror = (err) => {
+        if (settled) return
+        settled = true
+        clearTimeout(sseTimeout)
+        eventSource.close()
+        this.state.eventSource = null
+        logger.error('[Terminal SSE] Connection error', err)
+        reject(new Error('SSE connection failed — server unreachable or CORS blocked'))
+      }
     })
   }
 
@@ -1025,7 +1075,7 @@ export class SandboxConnectionManager {
    * Handle connection timeout
    */
   private handleConnectionTimeout(): void {
-    logger.warn('Connection timeout, falling back to local mode')
+    logger.warn('[Terminal] Connection timeout — falling back to local shell mode')
     this.stopSpinner()
     this.abortController?.abort()
 
@@ -1076,11 +1126,12 @@ export class SandboxConnectionManager {
 
     // Handle AbortError (timeout or cancellation)
     if (error?.name === 'AbortError') {
-      logger.debug('Connection aborted (timeout or cancellation)')
+      logger.debug('[Terminal] Connection aborted (timeout or cancellation)')
       return
     }
 
     const errMsg = error?.message || 'Unknown error'
+    logger.error(`[Terminal] Connection failed — falling back to command-mode: ${errMsg}`)
     this.updateTerminalState({
       sandboxInfo: { status: 'error' },
       isConnected: false,

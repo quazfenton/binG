@@ -22,6 +22,24 @@ import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 
 const log = createLogger('ToolExecutor:Wrapper');
 
+function sanitizeSandboxPath(inputPath: string, basePath: string = '/workspace'): string {
+  if (!inputPath || typeof inputPath !== 'string') {
+    return basePath;
+  }
+  const normalizedPath = inputPath.replace(/\\/g, '/').replace(/\/+/g, '/').trim();
+  if (normalizedPath.includes('..')) {
+    throw new Error('Path traversal is not allowed');
+  }
+  if (normalizedPath.includes('\0')) {
+    throw new Error('Invalid path: null bytes are not allowed');
+  }
+  if (normalizedPath.startsWith('/') && !normalizedPath.startsWith(basePath)) {
+    throw new Error('Absolute paths outside workspace are not allowed');
+  }
+  const cleanPath = normalizedPath.startsWith('/') ? normalizedPath : `${basePath}/${normalizedPath}`.replace(/\/+/g, '/');
+  return cleanPath;
+}
+
 export interface ToolExecution {
   toolName: string;
   parameters: Record<string, any>;
@@ -324,12 +342,17 @@ export class ToolExecutorWrapper {
 
         // Update sandbox if available
         if (this.sandboxHandle) {
-          await this.sandboxHandle.writeFile(path, result.updatedContent);
+          try {
+            const sanitizedPath = sanitizeSandboxPath(path);
+            await this.sandboxHandle.writeFile(sanitizedPath, result.updatedContent);
+          } catch (error: any) {
+            return { success: false, error: `Path validation failed: ${error.message}` };
+          }
         }
 
         // Log transaction
         this.transactionLog.push({
-          path,
+          path: sanitizeSandboxPath(path),
           type: 'UPDATE',
           timestamp: Date.now(),
           originalContent: currentContent.content!,
@@ -403,15 +426,19 @@ export class ToolExecutorWrapper {
    */
   private async getFileContent(path: string): Promise<{ success: boolean; content?: string; error?: string }> {
     if (this.sandboxHandle) {
-      const readResult = await this.sandboxHandle.readFile(path);
-      if (!readResult.success) {
-        return { success: false, error: readResult.error || `Failed to read file: ${path}` };
+      try {
+        const sanitizedPath = sanitizeSandboxPath(path);
+        const readResult = await this.sandboxHandle.readFile(sanitizedPath);
+        if (!readResult.success) {
+          return { success: false, error: readResult.error || `Failed to read file: ${sanitizedPath}` };
+        }
+        if (readResult.content === undefined || readResult.content === null) {
+          return { success: false, error: `File not found or unreadable: ${sanitizedPath}` };
+        }
+        return { success: true, content: readResult.content };
+      } catch (error: any) {
+        return { success: false, error: `Path validation failed: ${error.message}` };
       }
-      // Allow empty string content (empty files are valid)
-      if (readResult.content === undefined || readResult.content === null) {
-        return { success: false, error: `File not found or unreadable: ${path}` };
-      }
-      return { success: true, content: readResult.content };
     }
 
     const content = this.vfs?.[path];
@@ -437,29 +464,37 @@ export class ToolExecutorWrapper {
   ): Promise<any> {
     // Update sandbox first — only update VFS if sandbox write succeeds
     if (this.sandboxHandle) {
-      const result = await this.sandboxHandle.writeFile(path, content);
-      if (!result.success) {
-        return { success: false, error: result.error || 'Sandbox write failed' };
+      try {
+        const sanitizedPath = sanitizeSandboxPath(path);
+        const result = await this.sandboxHandle.writeFile(sanitizedPath, content);
+        if (!result.success) {
+          return { success: false, error: result.error || 'Sandbox write failed' };
+        }
+        // Sandbox succeeded — now update VFS and transaction log
+        if (this.vfs) {
+          this.vfs[path] = content;
+        }
+        this.transactionLog.push({
+          path: sanitizedPath,
+          type: 'UPDATE',
+          timestamp: Date.now(),
+          originalContent: options?.originalContent,
+          newContent: options?.newContent || content,
+          search: options?.search,
+          replace: options?.replace,
+        });
+        return {
+          success: true,
+          output: `Applied diff to ${sanitizedPath}${options?.metadata ? ` via ${options.metadata.strategy} strategy (confidence: ${(options.metadata.confidence * 100).toFixed(0)}%)` : ''}`,
+          content,
+          metadata: options?.metadata,
+        };
+      } catch (error: any) {
+        return {
+          success: false,
+          error: `Path validation failed: ${error.message}`,
+        };
       }
-      // Sandbox succeeded — now update VFS and transaction log
-      if (this.vfs) {
-        this.vfs[path] = content;
-      }
-      this.transactionLog.push({
-        path,
-        type: 'UPDATE',
-        timestamp: Date.now(),
-        originalContent: options?.originalContent,
-        newContent: options?.newContent || content,
-        search: options?.search,
-        replace: options?.replace,
-      });
-      return {
-        success: true,
-        output: `Applied diff to ${path}${options?.metadata ? ` via ${options.metadata.strategy} strategy (confidence: ${(options.metadata.confidence * 100).toFixed(0)}%)` : ''}`,
-        content,
-        metadata: options?.metadata,
-      };
     }
 
     // VFS only fallback

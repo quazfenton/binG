@@ -135,6 +135,9 @@ export class IndexedDBBackend {
         request.onerror = () => {
           reject(new IndexedDBError('Failed to read file', request.error));
         };
+        transaction.onerror = () => {
+          reject(new IndexedDBError('Transaction failed while reading file', transaction.error));
+        };
       } catch (error) {
         reject(new IndexedDBError('Read operation failed', error));
       }
@@ -218,9 +221,8 @@ export class IndexedDBBackend {
         resolve(files);
       };
 
-      request.onerror = () => {
-        reject(new IndexedDBError('Failed to list directory', request.error));
-      };
+      request.onerror = () => reject(new IndexedDBError('Failed to list directory', request.error));
+      transaction.onerror = () => reject(new IndexedDBError('Transaction failed while listing', transaction.error));
     });
   }
 
@@ -234,6 +236,7 @@ export class IndexedDBBackend {
 
       request.onsuccess = () => resolve();
       request.onerror = () => reject(new IndexedDBError('Failed to delete file', request.error));
+      transaction.onerror = () => reject(new IndexedDBError('Transaction failed while deleting', transaction.error));
     });
   }
 
@@ -281,27 +284,22 @@ export class IndexedDBBackend {
     await this.ensureInitialized();
 
     return new Promise((resolve, reject) => {
-      const transaction = this.db!.transaction(STORE_NAME, 'readwrite');
-      const store = transaction.objectStore(STORE_NAME);
+      const tx = this.db!.transaction(STORE_NAME, 'readwrite');
+      const store = tx.objectStore(STORE_NAME);
       const index = store.index('ownerId');
       const request = index.getAllKeys(IDBKeyRange.only(ownerId));
 
       request.onsuccess = () => {
         const keys = request.result as string[];
-        const deleteTransaction = this.db!.transaction(STORE_NAME, 'readwrite');
-        const deleteStore = deleteTransaction.objectStore(STORE_NAME);
-
-        keys.forEach((key) => {
-          deleteStore.delete(key);
-        });
-
-        deleteTransaction.oncomplete = () => resolve();
-        deleteTransaction.onerror = () => reject(new IndexedDBError('Failed to clear workspace', deleteTransaction.error));
+        // Delete all keys in the SAME transaction (atomic)
+        for (const key of keys) {
+          store.delete(key);
+        }
       };
 
-      request.onerror = () => {
-        reject(new IndexedDBError('Failed to get keys for clearing', request.error));
-      };
+      tx.oncomplete = () => resolve();
+      tx.onerror = () => reject(new IndexedDBError('Failed to clear workspace', tx.error));
+      request.onerror = () => reject(new IndexedDBError('Failed to get keys for clearing', request.error));
     });
   }
 

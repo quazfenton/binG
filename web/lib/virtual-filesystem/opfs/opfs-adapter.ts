@@ -598,6 +598,20 @@ export class OPFSAdapter {
 
       // Sync files from snapshot to OPFS
       for (const file of snapshot.files) {
+        // Bail out if adapter was disabled during sync (e.g., React cleanup)
+        if (!this.enabled || !this.core.isInitialized()) {
+          console.log('[OPFS] Sync cancelled: adapter no longer enabled');
+          return {
+            success: true,
+            filesSynced,
+            bytesTransferred,
+            conflicts,
+            errors,
+            duration: Date.now() - startTime,
+            cancelled: true,
+          };
+        }
+
         // Check for version conflicts
         const versions = this.fileVersions.get(file.path);
         if (versions && versions.opfs > (file.version || 1)) {

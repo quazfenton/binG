@@ -1,0 +1,33 @@
+diff --git a/docs/sdk/e2b/route.ts b/docs/sdk/e2b/route.ts
+--- a/docs/sdk/e2b/route.ts
++++ b/docs/sdk/e2b/route.ts
+@@ -61,1 +61,1 @@
+-  const modelMessages: ModelMessage[] = messages.map((msg: any) => ({
++  const modelMessages: ModelMessage[] = messages.map((msg: unknown) => ({
+diff --git a/scripts/generate-sri.ts b/scripts/generate-sri.ts
+--- a/scripts/generate-sri.ts
++++ b/scripts/generate-sri.ts
+@@ -97,1 +97,1 @@
+-): Promise<any> {
++): Promise<unknown> {
+@@ -138,1 +138,1 @@
+-  const results: any[] = [];
++  const results: unknown[] = [];
+diff --git a/scripts/puter-proxy.ts b/scripts/puter-proxy.ts
+--- a/scripts/puter-proxy.ts
++++ b/scripts/puter-proxy.ts
+@@ -56,1 +56,1 @@
+-      response.body.pipe(res as any)
++      response.body.pipe(res as unknown)
+diff --git a/scripts/export-model-telemetry.ts b/scripts/export-model-telemetry.ts
+--- a/scripts/export-model-telemetry.ts
++++ b/scripts/export-model-telemetry.ts
+@@ -65,1 +65,1 @@
+-exportTelemetry()
++void exportTelemetry()
+diff --git a/docs/sdk/codesandboxsdk.md b/docs/sdk/codesandboxsdk.md
+--- a/docs/sdk/codesandboxsdk.md
++++ b/docs/sdk/codesandboxsdk.md
+@@ -1369,1 +1369,1 @@
+-    const target = cmd.split(" ")[1]
++    const target = cmd.split[" "](1)

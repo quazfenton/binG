@@ -35,8 +35,15 @@ const logger = createLogger('FileEvents');
  *
  * Auto-cleanup: entries are removed after 5 minutes to prevent memory leaks
  * from orphaned sessions that never hit the spec amplification check.
+ *
+ * CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
  */
-const recentMcpFileEdits = new Map<string, { paths: Set<string>; timestamp: number }>();
+declare global {
+  // eslint-disable-next-line no-var
+  var __recentMcpFileEdits__: Map<string, { paths: Set<string>; timestamp: number }> | undefined;
+}
+
+const recentMcpFileEdits = globalThis.__recentMcpFileEdits__ ?? (globalThis.__recentMcpFileEdits__ = new Map<string, { paths: Set<string>; timestamp: number }>());
 const MCP_EDIT_TTL_MS = 5 * 60 * 1000; // 5 minutes
 
 /**
@@ -58,7 +65,7 @@ function pruneExpired(): void {
 export function trackMcpFileEdit(sessionId: string, path: string): void {
   if (!sessionId) return;
   // Lazy cleanup of expired entries (throttled — only on writes)
-  if (recentMcpFileEdits.size > 50) {
+  if (recentMcpFileEdits.size > 20) {
     pruneExpired();
   }
   const entry = recentMcpFileEdits.get(sessionId);

@@ -6,12 +6,23 @@ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve
 export const runtime = 'nodejs';
 
 // Server-side LRU cache for snapshots
-const snapshotCache = new Map<string, {
+// CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
+declare global {
+  // eslint-disable-next-line no-var
+  var __snapshotCache__: Map<string, {
+    data: any;
+    timestamp: number;
+    etag: string;
+    version: number;
+  }> | undefined;
+}
+
+const snapshotCache = globalThis.__snapshotCache__ ?? (globalThis.__snapshotCache__ = new Map<string, {
   data: any;
   timestamp: number;
   etag: string;
   version: number;
-}>();
+}>());
 const CACHE_TTL_MS = 30000; // 30 seconds server-side cache
 const MAX_CACHE_SIZE = 50; // Max entries before proactive cleanup
 
@@ -62,25 +73,43 @@ function startPeriodicCleanup() {
 // Start periodic cleanup
 startPeriodicCleanup();
 
-const latestSeenVersion = new Map<string, number>();
+// CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
+// Without this, latestSeenVersion resets on hot-reload and cache validation breaks
+declare global {
+  // eslint-disable-next-line no-var
+  var __snapshotLatestVersion__: Map<string, number> | undefined;
+  // eslint-disable-next-line no-var
+  var __snapshotListenerRegistered__: boolean | undefined;
+}
 
-virtualFilesystem.onSnapshotChange((ownerId: string, version: number) => {
-  const currentMax = latestSeenVersion.get(ownerId) || 0;
-  latestSeenVersion.set(ownerId, Math.max(currentMax, version));
+const latestSeenVersion = globalThis.__snapshotLatestVersion__ ?? (globalThis.__snapshotLatestVersion__ = new Map<string, number>());
 
-  for (const key of snapshotCache.keys()) {
-    if (key.startsWith(`${ownerId}:`)) {
-      const cached = snapshotCache.get(key);
-      if (cached && cached.version < version) {
-        snapshotCache.delete(key);
-        console.log('[VFS SNAPSHOT] Cache invalidated for owner:', ownerId, 'version:', version);
+// Only register the listener once, even across hot-reloads
+if (!globalThis.__snapshotListenerRegistered__) {
+  globalThis.__snapshotListenerRegistered__ = true;
+  virtualFilesystem.onSnapshotChange((ownerId: string, version: number) => {
+    const currentMax = latestSeenVersion.get(ownerId) || 0;
+    latestSeenVersion.set(ownerId, Math.max(currentMax, version));
+
+    for (const key of snapshotCache.keys()) {
+      if (key.startsWith(`${ownerId}:`)) {
+        const cached = snapshotCache.get(key);
+        if (cached && cached.version < version) {
+          snapshotCache.delete(key);
+          console.log('[VFS SNAPSHOT] Cache invalidated for owner:', ownerId, 'version:', version);
+        }
       }
     }
-  }
-});
+  });
+}
 
 // Request tracking for detecting polling loops
-const requestTracker = new Map<string, { count: number; lastRequest: number; firstRequest: number }>();
+declare global {
+  // eslint-disable-next-line no-var
+  var __snapshotRequestTracker__: Map<string, { count: number; lastRequest: number; firstRequest: number }> | undefined;
+}
+
+const requestTracker = globalThis.__snapshotRequestTracker__ ?? (globalThis.__snapshotRequestTracker__ = new Map<string, { count: number; lastRequest: number; firstRequest: number }>());
 const REQUEST_WINDOW_MS = 5000; // 5 second window for tracking
 const MAX_TRACKER_SIZE = 100; // Max entries before cleanup
 

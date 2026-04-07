@@ -57,14 +57,16 @@ function idbGet<T>(db: IDBDatabase, store: string, key: string): Promise<T | und
     const req = tx.objectStore(store).get(key);
     req.onsuccess = () => resolve(req.result);
     req.onerror = () => reject(req.error);
+    tx.onerror = () => reject(tx.error);
   });
 }
 
 function idbPut(db: IDBDatabase, store: string, key: string, value: unknown): Promise<void> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(store, 'readwrite');
-    tx.objectStore(store).put(value, key);
-    tx.oncomplete = () => resolve();
+    const req = tx.objectStore(store).put(value, key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
     tx.onerror = () => reject(tx.error);
   });
 }
@@ -72,8 +74,9 @@ function idbPut(db: IDBDatabase, store: string, key: string, value: unknown): Pr
 function idbDelete(db: IDBDatabase, store: string, key: string): Promise<void> {
   return new Promise((resolve, reject) => {
     const tx = db.transaction(store, 'readwrite');
-    tx.objectStore(store).delete(key);
-    tx.oncomplete = () => resolve();
+    const req = tx.objectStore(store).delete(key);
+    req.onsuccess = () => resolve();
+    req.onerror = () => reject(req.error);
     tx.onerror = () => reject(tx.error);
   });
 }

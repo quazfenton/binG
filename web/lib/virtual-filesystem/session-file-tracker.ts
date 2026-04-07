@@ -54,8 +54,16 @@ const CONFIG = {
 
 /**
  * In-memory session file tracker
+ * CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
  */
-const sessionStore = new Map<string, SessionEntry>();
+declare global {
+  // eslint-disable-next-line no-var
+  var __sessionFileTrackerStore__: Map<string, SessionEntry> | undefined;
+  // eslint-disable-next-line no-var
+  var __sessionFileTrackerCleanup__: boolean | undefined;
+}
+
+const sessionStore = globalThis.__sessionFileTrackerStore__ ?? (globalThis.__sessionFileTrackerStore__ = new Map<string, SessionEntry>());
 
 /**
  * Track file references in messages for a session (incremental, O(n) where n = message count)
@@ -312,11 +320,14 @@ export function stopSessionCleanup(): void {
 // Auto-start cleanup on module import
 // Runs every 5 minutes to evict expired sessions (TTL: 1 hour)
 // Skipped in test environments to avoid interfering with test isolation
+// CRITICAL FIX: Guarded by globalThis flag to prevent timer leaks on hot-reload
 // ============================================================================
 if (
   typeof process !== 'undefined' &&
   typeof process.env !== 'undefined' &&
-  process.env.NODE_ENV !== 'test'
+  process.env.NODE_ENV !== 'test' &&
+  !globalThis.__sessionFileTrackerCleanup__
 ) {
+  globalThis.__sessionFileTrackerCleanup__ = true;
   startSessionCleanup(5 * 60 * 1000); // Every 5 minutes
 }
