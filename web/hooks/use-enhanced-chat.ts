@@ -587,9 +587,58 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         }
                       : msg
                   ));
+                  
+                  // CRITICAL FIX: Detect empty responses and trigger re-request
+                  // Empty = no text content AND no tool invocations
+                  const hasToolInvocations = eventData.toolInvocations?.length > 0 || 
+                    eventData.toolCalls?.length > 0 ||
+                    (eventData.messageMetadata?.toolInvocations?.length > 0);
+                  const hasFileSystemEdits = eventData.filesystem?.applied?.length > 0 || 
+                    eventData.fileEdits?.length > 0;
+                  const isEmptyResponse = !doneContent.trim() && !hasToolInvocations && !hasFileSystemEdits;
+                  
+                  if (isEmptyResponse) {
+                    console.warn('[Chat] Empty response detected - content, tools, and filesystem edits all missing:', {
+                      messageId: assistantMessage.id,
+                      doneContentLength: doneContent?.length,
+                      hasToolInvocations,
+                      hasFileSystemEdits,
+                      provider: eventData.provider || doneMetadata.provider || 'unknown',
+                      model: eventData.model || doneMetadata.model || 'unknown',
+                      finishReason: eventData.finishReason,
+                    });
+                    
+                    // Mark message as needing retry
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id
+                        ? {
+                            ...msg,
+                            metadata: { 
+                              ...(msg.metadata || {}), 
+                              ...doneMetadata,
+                              isEmptyResponse: true,
+                              retryCount: (msg.metadata as any)?.retryCount || 0,
+                            },
+                            content: doneContent
+                          }
+                        : msg
+                    ));
+                  }
+                  
                   // Update version if provided
                   if (eventData.version) {
                     setCurrentVersion(eventData.version);
+                  }
+                  // CRITICAL FIX: Trigger filesystem refresh on stream done
+                  // This ensures file tree updates after MCP tool writes complete
+                  if (typeof window !== 'undefined' && (eventData.filesystem?.applied?.length > 0 || eventData.fileEdits?.length > 0)) {
+                    window.dispatchEvent(new CustomEvent('filesystem-updated', {
+                      detail: {
+                        source: 'stream-done',
+                        emittedAt: Date.now(),
+                        applied: eventData.filesystem?.applied,
+                      },
+                    }));
                   }
                   // Streaming complete (all background tasks finished)
                   clearTimeout(timeoutId);
@@ -602,6 +651,86 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       metadata: doneMetadata
                     });
                   }
+                  
+                  // CRITICAL FIX: Auto-retry empty responses
+                  // This handles cases where providers return empty content with no tools/filesystem edits
+                  if (isEmptyResponse) {
+                    const retryCount = (doneMetadata.retryCount || 0);
+                    const maxRetries = 2; // Prevent infinite loops
+                    
+                    if (retryCount < maxRetries) {
+                      console.warn(`[Chat] Auto-retrying empty response (attempt ${retryCount + 1}/${maxRetries})`);
+                      
+                      // Update retry count in message
+                      setMessages(prev => prev.map(msg =>
+                        msg.id === assistantMessage.id
+                          ? {
+                              ...msg,
+                              metadata: { 
+                                ...(msg.metadata || {}), 
+                                ...doneMetadata,
+                                retryCount: retryCount + 1,
+                                isEmptyResponse: false,
+                              },
+                              content: 'Retrying... Please wait.',
+                            }
+                          : msg
+                      ));
+                      
+                      // Re-trigger the send with the last user message
+                      // Find the last user message before this assistant message
+                      const lastUserMessage = messages.findLast(
+                        msg => msg.role === 'user' && msg.id !== assistantMessage.id
+                      );
+                      
+                      if (lastUserMessage) {
+                        setIsLoading(true);
+                        setAgentStatus('retrying');
+                        
+                        // Clear the empty assistant message
+                        setMessages(prev => prev.filter(msg => msg.id !== assistantMessage.id));
+                        
+                        // Re-send the request
+                        try {
+                          await handleSend(lastUserMessage.content);
+                        } catch (retryError) {
+                          console.error('[Chat] Retry failed:', retryError);
+                          setMessages(prev => prev.map(msg =>
+                            msg.id === assistantMessage.id
+                              ? {
+                                  ...msg,
+                                  content: 'Sorry, the response failed again. Please try sending your message again.',
+                                  metadata: { 
+                                    ...(msg.metadata || {}),
+                                    isEmptyResponse: false,
+                                    retryFailed: true,
+                                  },
+                                }
+                              : msg
+                          ));
+                          setIsLoading(false);
+                          setAgentStatus('error');
+                        }
+                        return; // Don't continue with normal flow
+                      }
+                    } else {
+                      // Max retries reached - show error
+                      setMessages(prev => prev.map(msg =>
+                        msg.id === assistantMessage.id
+                          ? {
+                              ...msg,
+                              content: 'Sorry, I could not generate a response. Please try asking your question differently.',
+                              metadata: { 
+                                ...(msg.metadata || {}),
+                                isEmptyResponse: false,
+                                maxRetriesReached: true,
+                              },
+                            }
+                          : msg
+                      ));
+                    }
+                  }
+                  
                   return;
 
                 case 'error': {
@@ -794,6 +923,20 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     }
                     return msg;
                   }));
+
+                  // CRITICAL FIX: Trigger filesystem refresh so file tree updates
+                  // MCP tool writes on the server can't emit browser events (window is undefined),
+                  // so we trigger the refresh from the client when we receive file_edit SSE events
+                  if (typeof window !== 'undefined') {
+                    window.dispatchEvent(new CustomEvent('filesystem-updated', {
+                      detail: {
+                        path: eventData.path,
+                        type: fileEditData.operation === 'write' ? 'create' : 'update',
+                        source: 'mcp-tool-sse',
+                        emittedAt: Date.now(),
+                      },
+                    }));
+                  }
 
                   // CRITICAL FIX #5: Handle isFinal edits - ensure stream completion logic waits
                   // When isFinal=true, this is from the post-stream parse, so we should NOT
@@ -1099,6 +1242,62 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       activeTasks: eventData.activeTasks,
                       timestamp: eventData.timestamp || Date.now(),
                     },
+                  }));
+                  break;
+
+                case 'tool_call':
+                  // Handle tool call events from Vercel AI SDK (tool execution starting)
+                  // This is similar to tool_invocation but emitted during streaming when
+                  // the model calls a tool before execution completes
+                  if (process.env.NODE_ENV === 'development') {
+                    console.log('[Chat] Tool call detected:', {
+                      toolCallId: eventData.toolCallId,
+                      toolName: eventData.toolName,
+                      args: eventData.args ? Object.keys(eventData.args) : 'none',
+                    });
+                  }
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id !== assistantMessage.id) return msg;
+                    const existing = Array.isArray((msg.metadata as any)?.toolInvocations)
+                      ? ([...(msg.metadata as any).toolInvocations] as any[])
+                      : [];
+
+                    // Check if this tool call already exists (from tool_invocation)
+                    const existingIndex = existing.findIndex(inv =>
+                      inv.toolCallId === eventData.toolCallId
+                    );
+
+                    if (existingIndex === -1) {
+                      // Add new tool call
+                      existing.push({
+                        toolCallId: eventData.toolCallId,
+                        toolName: eventData.toolName,
+                        state: 'call', // Tool is being called (execution starting)
+                        args: eventData.args || {},
+                      });
+                    }
+
+                    // Update agent activity to show tool is executing
+                    setAgentActivity(prev => ({
+                      ...prev,
+                      status: 'executing',
+                      currentAction: `Calling ${eventData.toolName}...`,
+                      toolInvocations: [...prev.toolInvocations.filter(t => t.toolCallId !== eventData.toolCallId), {
+                        toolCallId: eventData.toolCallId,
+                        toolName: eventData.toolName,
+                        state: 'call',
+                        args: eventData.args || {},
+                        timestamp: eventData.timestamp || Date.now(),
+                      }],
+                    }));
+
+                    return {
+                      ...msg,
+                      metadata: {
+                        ...(msg.metadata || {}),
+                        toolInvocations: existing,
+                      },
+                    };
                   }));
                   break;
 

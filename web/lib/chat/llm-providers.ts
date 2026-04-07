@@ -324,8 +324,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'gemini-3.1-flash-lite-preview',
       'gemini-3-flash-preview',
       'gemini-2.5-pro',
-      'gemini-3-flash-preview',
-      'gemini-3-flash-preview',
       'gemini-2.5-flash-lite',
       'gemini-2.5-flash-lite-preview-09-2025'
     ],
@@ -467,8 +465,8 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'nvidia/nemotron-4-340b-instruct',
       'nvidia/nemotron-4-340b-reward',
       'nvidia/nemotron-3-super-120b-a12b',
-      'nvidia/nemotron-3-nano-30b-a3b:free',
-      'nvidia/nemotron-nano-12b-v2-vl:free',
+      'nvidia/nemotron-3-nano-30b-a3b',
+      'nvidia/nemotron-nano-12b-v2-vl',
       // DeepSeek models
       'deepseek-ai/deepseek-v3.2',
       'deepseek-ai/deepseek-v3.1',

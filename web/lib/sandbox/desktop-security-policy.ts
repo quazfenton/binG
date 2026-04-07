@@ -112,7 +112,6 @@ class DesktopSecurityPolicy {
     // FIX: Validate regex patterns at config time and filter out invalid ones
     const validatedConfig = this.validateConfig(config);
     this.config = { ...DEFAULT_DESKTOP_POLICY, ...validatedConfig };
-    log.info('DesktopSecurityPolicy initialized', { config: this.config });
   }
 
   /**
