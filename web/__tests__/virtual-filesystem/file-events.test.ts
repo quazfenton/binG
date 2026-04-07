@@ -1,110 +1,100 @@
 /**
- * Integration Tests: File Events System
- * 
- * Tests that verify file events are emitted correctly for MCP tool operations
- * and integrate with session tracking, sync events, and the enhanced diff viewer.
+ * Tests for VFS file events and MCP edit tracking.
  */
 
-import { describe, it, expect, beforeEach, vi, afterEach } from 'vitest';
-import { trackSessionFiles, getSessionFiles, clearAllSessions } from '@/lib/virtual-filesystem/session-file-tracker';
+import { describe, it, expect, beforeEach } from 'vitest';
+import {
+  trackMcpFileEdit,
+  getRecentMcpFileEdits,
+  clearRecentMcpFileEdits,
+} from '../../lib/virtual-filesystem/file-events';
 
-describe('File Events Integration', () => {
+describe('File Events - MCP Edit Tracking', () => {
   beforeEach(() => {
-    clearAllSessions();
+    // Clear all tracked edits before each test
+    clearRecentMcpFileEdits();
   });
 
-  afterEach(() => {
-    clearAllSessions();
-  });
-
-  describe('Session File Tracking', () => {
-    it('should track files from MCP write operations', async () => {
-      // Direct call to trackSessionFiles with a message containing file path
-      const syntheticMessage = {
-        role: 'system' as const,
-        content: 'Completed create operation on /src/components/Button.tsx',
-      };
-      
-      await trackSessionFiles('conv-1', [syntheticMessage]);
-
-      // File should be tracked for session
-      const files = getSessionFiles('conv-1');
-      expect(files.some(f => f.includes('Button.tsx'))).toBe(true);
+  describe('trackMcpFileEdit', () => {
+    it('should track a file edit for a session', () => {
+      trackMcpFileEdit('session-1', 'project/index.html');
+      const edits = getRecentMcpFileEdits('session-1');
+      expect(edits).toHaveLength(1);
+      expect(edits[0].path).toBe('project/index.html');
     });
 
-    it('should track files from diff operations', async () => {
-      const syntheticMessage = {
-        role: 'system' as const,
-        content: 'Completed update operation on /src/utils/helpers.ts',
-      };
-      
-      await trackSessionFiles('conv-2', [syntheticMessage]);
+    it('should track multiple files for the same session', () => {
+      trackMcpFileEdit('session-1', 'project/index.html');
+      trackMcpFileEdit('session-1', 'project/styles.css');
+      trackMcpFileEdit('session-1', 'project/app.js');
 
-      const files = getSessionFiles('conv-2');
-      expect(files.some(f => f.includes('helpers.ts'))).toBe(true);
+      const edits = getRecentMcpFileEdits('session-1');
+      expect(edits).toHaveLength(3);
+      expect(edits.map(e => e.path)).toContain('project/index.html');
+      expect(edits.map(e => e.path)).toContain('project/styles.css');
+      expect(edits.map(e => e.path)).toContain('project/app.js');
     });
 
-    it('should track multiple files in session', async () => {
-      const messages = [
-        { role: 'system' as const, content: 'Completed create on /src/a.ts' },
-        { role: 'system' as const, content: 'Completed create on /src/b.tsx' },
-        { role: 'system' as const, content: 'Completed create on /src/c.py' },
-      ];
-      
-      await trackSessionFiles('session-multi', messages);
+    it('should not duplicate the same file path', () => {
+      trackMcpFileEdit('session-1', 'project/index.html');
+      trackMcpFileEdit('session-1', 'project/index.html');
 
-      const trackedFiles = getSessionFiles('session-multi', 10);
-      expect(trackedFiles.length).toBeGreaterThanOrEqual(1);
+      const edits = getRecentMcpFileEdits('session-1');
+      expect(edits).toHaveLength(1);
     });
 
-    it('should handle multiple operations on same file', async () => {
-      const sessionId = 'conv-3';
-      
-      // First write
-      const msg1 = { role: 'system' as const, content: 'Completed create on /src/App.tsx' };
-      await trackSessionFiles(sessionId, [msg1]);
+    it('should track files for different sessions independently', () => {
+      trackMcpFileEdit('session-1', 'project/a.html');
+      trackMcpFileEdit('session-2', 'project/b.html');
 
-      // Update
-      const msg2 = { role: 'system' as const, content: 'Completed update on /src/App.tsx' };
-      await trackSessionFiles(sessionId, [msg2]);
+      const edits1 = getRecentMcpFileEdits('session-1');
+      const edits2 = getRecentMcpFileEdits('session-2');
 
-      // File should be tracked
-      const files = getSessionFiles(sessionId);
-      expect(files.some(f => f.includes('App.tsx'))).toBe(true);
+      expect(edits1).toHaveLength(1);
+      expect(edits2).toHaveLength(1);
+      expect(edits1[0].path).toBe('project/a.html');
+      expect(edits2[0].path).toBe('project/b.html');
     });
 
-    it('should extract various file types', async () => {
-      const messages = [
-        { role: 'system' as const, content: 'Created /src/file.ts' },
-        { role: 'system' as const, content: 'Created /src/file.tsx' },
-        { role: 'system' as const, content: 'Created /src/file.js' },
-        { role: 'system' as const, content: 'Created /src/file.py' },
-        { role: 'system' as const, content: 'Created /src/file.rs' },
-      ];
-      
-      await trackSessionFiles('session-types', messages);
+    it('should return empty array for unknown session', () => {
+      const edits = getRecentMcpFileEdits('unknown-session');
+      expect(edits).toHaveLength(0);
+    });
 
-      const files = getSessionFiles('session-types');
-      expect(files.length).toBeGreaterThanOrEqual(1);
+    it('should return empty array for null sessionId', () => {
+      const edits = getRecentMcpFileEdits(undefined as any);
+      expect(edits).toHaveLength(0);
+    });
+
+    it('should refresh TTL on subsequent edits', () => {
+      // This test verifies that editing the same file again updates the timestamp
+      // We can't easily test TTL expiry in unit tests, but we verify the function doesn't crash
+      trackMcpFileEdit('session-1', 'project/file.ts');
+      trackMcpFileEdit('session-1', 'project/file.ts');
+      const edits = getRecentMcpFileEdits('session-1');
+      expect(edits).toHaveLength(1);
     });
   });
 
-  describe('File path extraction', () => {
-    it('should extract paths from natural language messages', async () => {
-      const testPaths = [
-        'Created file at /src/components/Button.tsx',
-        'Updated /src/utils/helpers.ts with new content',
-        'Deleted /src/old-file.js',
-        'Writing to /src/app.py',
-      ];
+  describe('clearRecentMcpFileEdits', () => {
+    it('should clear all edits when no sessionId provided', () => {
+      trackMcpFileEdit('session-1', 'project/a.html');
+      trackMcpFileEdit('session-2', 'project/b.html');
 
-      for (const content of testPaths) {
-        const msg = { role: 'system' as const, content };
-        await trackSessionFiles('test-extract', [msg]);
-      }
+      clearRecentMcpFileEdits();
 
-      const files = getSessionFiles('test-extract');
-      expect(files.length).toBeGreaterThanOrEqual(1);
+      expect(getRecentMcpFileEdits('session-1')).toHaveLength(0);
+      expect(getRecentMcpFileEdits('session-2')).toHaveLength(0);
+    });
+
+    it('should clear edits for specific session only', () => {
+      trackMcpFileEdit('session-1', 'project/a.html');
+      trackMcpFileEdit('session-2', 'project/b.html');
+
+      clearRecentMcpFileEdits('session-1');
+
+      expect(getRecentMcpFileEdits('session-1')).toHaveLength(0);
+      expect(getRecentMcpFileEdits('session-2')).toHaveLength(1);
     });
   });
 });

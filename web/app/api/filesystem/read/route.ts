@@ -32,7 +32,7 @@ const readRequestSchema = z.object({
   path: pathSchema.refine(
     (path) => {
       if (!path.startsWith('/')) return true;
-      return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/');
+      return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/') || path.startsWith('/project/');
     },
     'Invalid path format'
   ),

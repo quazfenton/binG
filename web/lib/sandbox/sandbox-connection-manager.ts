@@ -241,8 +241,14 @@ export class SandboxConnectionManager {
       logger.info('[Terminal] SSE connection established — using SSE transport')
       return // SSE successful, exit early
 
-    } catch (sseError) {
+    } catch (sseError: any) {
       // SSE failed — try provider-specific PTY WebSocket as fallback
+      // Extract variables from the try block scope before the catch
+      const sessionState = this.state
+      const { sessionId, sandboxId } = sessionState
+      const providerType = this.detectProviderType(sandboxId || '')
+      let connectionToken: string | undefined
+
       logger.warn('[Terminal] SSE failed, trying provider PTY WebSocket', sseError)
 
       if (providerType && ['e2b', 'daytona', 'sprites', 'codesandbox', 'vercel-sandbox'].includes(providerType)) {
@@ -654,7 +660,7 @@ export class SandboxConnectionManager {
             return
           }
 
-          // Handle all messages normally
+          // Handle all messages normally (including 'connected' which updates terminal state)
           this.handleSSEMessage(msg)
         } catch (err) {
           logger.error('[Terminal SSE] Failed to parse SSE message', err)

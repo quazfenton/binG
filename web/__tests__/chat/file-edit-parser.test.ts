@@ -6,6 +6,7 @@ import {
   extractIncrementalFileEdits,
   parseFilesystemResponse,
   sanitizeAssistantDisplayContent,
+  extractAndSanitize,
 } from '@/lib/chat/file-edit-parser';
 
 describe('file-edit-parser incremental parsing', () => {
@@ -102,5 +103,79 @@ describe('file-edit-parser incremental parsing', () => {
     expect(parsed.diffs.find(edit => edit.path === 'src/patch.txt')?.diff).toBe(largeChunk);
     expect(parsed.applyDiffs.find(edit => edit.path === 'src/edit.txt')?.search).toBe(largeChunk);
     expect(parsed.deletes).toContain('src/old.txt');
+  });
+});
+
+describe('extractAndSanitize', () => {
+  it('extracts file edits and sanitizes content in one pass', () => {
+    const content = [
+      'Here is the file.',
+      '<file_edit path="src/app.ts">',
+      "export const x = 1;",
+      '</file_edit>',
+    ].join('\n');
+
+    const result = extractAndSanitize(content);
+
+    expect(result.edits.writes).toHaveLength(1);
+    expect(result.edits.writes[0].path).toBe('src/app.ts');
+    expect(result.edits.writes[0].content).toBe("export const x = 1;");
+    // Sanitizer removes file_edit tags and trims
+    expect(result.sanitized).toBe('Here is the file.');
+  });
+
+  it('strips heredoc markers from extracted content', () => {
+    const content = [
+      'Writing file...',
+      '```fs-actions',
+      'WRITE src/test.py',
+      '<<<',
+      "print('hello')",
+      '>>>',
+      '```',
+    ].join('\n');
+
+    const result = extractAndSanitize(content);
+
+    // Content should be extracted with heredoc markers stripped
+    const writeEdit = result.edits.writes.find(e => e.path === 'src/test.py');
+    expect(writeEdit).toBeDefined();
+    expect(writeEdit?.content).toBe("print('hello')");
+    // Sanitized content should remove the entire fs-actions block
+    expect(result.sanitized).toBe('Writing file...');
+  });
+
+  it('handles empty content gracefully', () => {
+    const result = extractAndSanitize('');
+
+    expect(result.edits.writes).toEqual([]);
+    expect(result.edits.diffs).toEqual([]);
+    expect(result.edits.deletes).toEqual([]);
+    expect(result.sanitized).toBe('');
+  });
+
+  it('preserves prose while removing file edit tags', () => {
+    const content = [
+      'I created a new component for you.',
+      '<file_edit path="src/Button.tsx">',
+      'export const Button = () => <button>Click</button>;',
+      '</file_edit>',
+      'Let me know if you need changes.',
+    ].join('\n');
+
+    const result = extractAndSanitize(content);
+
+    expect(result.edits.writes).toHaveLength(1);
+    expect(result.sanitized).toContain('I created a new component for you.');
+    expect(result.sanitized).toContain('Let me know if you need changes.');
+    expect(result.sanitized).not.toContain('<file_edit');
+  });
+
+  it('respects forceExtract parameter for incremental parsing', () => {
+    const content = '<file_edit path="src/app.ts">const x = 1;</file_edit>';
+
+    // Without forceExtract, should still extract
+    const result = extractAndSanitize(content, true);
+    expect(result.edits.writes).toHaveLength(1);
   });
 });

@@ -31,6 +31,12 @@ DOCS_BASE = "https://docs.mem0.ai"
 SEARCH_ENDPOINT = f"{DOCS_BASE}/api/search"
 LLMS_INDEX = f"{DOCS_BASE}/llms.txt"
 
+# Allowed URL schemes for fetch operations
+ALLOWED_SCHEMES = {"http", "https"}
+
+# Allowed host for documentation fetches (prevents SSRF to internal services)
+ALLOWED_HOST = "docs.mem0.ai"
+
 # Known documentation sections for targeted retrieval
 SECTION_MAP = {
     "platform": [
@@ -102,8 +108,11 @@ def search_docs(query: str, section: str | None = None) -> dict:
                 section_paths = SECTION_MAP[section]
                 results = [r for r in results if any(r.get("url", "").startswith(p) for p in section_paths)]
             return {"source": "mintlify_search", "results": results}
-    except (json.JSONDecodeError, Exception):
-        pass
+    except json.JSONDecodeError:
+        pass  # Invalid JSON from search endpoint, fall back to index search
+    except (urllib.error.URLError, OSError) as e:
+        # Network/connection errors - log and fall back gracefully
+        print(f"[mem0_doc_search] Mintlify search failed: {type(e).__name__}: {e}", flush=True)
 
     # Fallback: search llms.txt index for matching URLs
     index_content = fetch_url(LLMS_INDEX)
@@ -131,7 +140,20 @@ def search_docs(query: str, section: str | None = None) -> dict:
 
 def fetch_page(page_path: str) -> dict:
     """Fetch a specific documentation page."""
-    url = f"{DOCS_BASE}{page_path}" if page_path.startswith("/") else page_path
+    # If it looks like an absolute URL, validate it's within docs.mem0.ai
+    if page_path.startswith("http://") or page_path.startswith("https://"):
+        parsed = urllib.parse.urlparse(page_path)
+        if parsed.hostname != ALLOWED_HOST:
+            return {"error": f"Access denied: host must be {ALLOWED_HOST}, got {parsed.hostname}"}
+        if parsed.scheme not in ALLOWED_SCHEMES:
+            return {"error": f"Access denied: scheme must be http or https, got {parsed.scheme}"}
+        url = page_path
+    else:
+        # Relative path: must start with /, reject file://, ftp://, etc.
+        if not page_path.startswith("/"):
+            return {"error": "Page path must start with '/' or be a docs.mem0.ai URL"}
+        url = f"{DOCS_BASE}{page_path}"
+
     content = fetch_url(url)
     return {"url": url, "content": content[:10000], "truncated": len(content) > 10000}
 

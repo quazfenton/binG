@@ -53,12 +53,29 @@ Subsequent calls to the tool will keep the state of the interpreter.`,
 ];
 
 export async function POST(req: Request) {
-  const { messages, sessionID } = await req.json();
+  const body = await req.json().catch(() => null);
+  if (!body || !Array.isArray(body.messages)) {
+    return new Response('Invalid request: messages must be an array', { status: 400 });
+  }
+
+  const { messages, sessionID } = body;
+
+  // Validate message structure
+  const validMessages = messages.every(
+    (msg: unknown) =>
+      typeof msg === 'object' &&
+      msg !== null &&
+      typeof (msg as any).role === 'string' &&
+      typeof (msg as any).content === 'string',
+  );
+  if (!validMessages) {
+    return new Response('Invalid request: each message must have role (string) and content (string)', { status: 400 });
+  }
 
   const model = 'gpt-4-turbo';
 
   // Convert messages to ModelMessage format
-  const modelMessages: ModelMessage[] = messages.map((msg: unknown) => ({
+  const modelMessages: ModelMessage[] = messages.map((msg: any) => ({
     role: msg.role,
     content: msg.content,
   }));

@@ -56,6 +56,7 @@ let WasmtimeEngine: any, WasmtimeStore: any, WasmtimeModule: any,
     WasmtimeInstance: any, WasmtimeMemory: any, WasmtimeWasi: any
 
 try {
+  // @ts-expect-error wasmtime is an optional dependency
   const wt = await import('wasmtime')
   WasmtimeEngine   = wt.Engine
   WasmtimeStore    = wt.Store

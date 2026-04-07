@@ -766,99 +766,48 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
   } catch (error: any) {
     log.error('Mastra workflow execution failed', { workflowId, error: error.message });
     throw error; // Re-throw to trigger fallback
+  }
+}
+
 /**
  * Create a capability-based tool executor that uses the centralized tool system
  * This enables all execution paths (v1, v2, streaming, non-Mastra) to use the same tool capabilities
- * 
+ *
  * Expanded capability map covers: file operations, bash/terminal, search/glob, MCP tools
  */
 function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
   return async (name: string, args: Record<string, any>): Promise<ToolResult> => {
-    // Map tool names to capability IDs - expanded to cover more tools
     const capabilityMap: Record<string, string> = {
-      // File operations
-      'file_operation': 'file.read',
-      'read_file': 'file.read',
-      'write_file': 'file.write',
-      'edit_file': 'file.write',
-      'delete_file': 'file.delete',
-      'list_directory': 'file.list',
-      'list_dir': 'file.list',
-      'ls': 'file.list',
-      
-      // Search operations
-      'search_files': 'file.search',
-      'grep': 'file.search',
-      'glob': 'file.search',
-      'find': 'file.search',
-      
-      // Bash/Terminal operations
-      'execute_bash': 'sandbox.execute',
-      'execute_command': 'sandbox.execute',
-      'execute': 'sandbox.execute',
-      'bash': 'sandbox.execute',
-      'shell': 'sandbox.execute',
-      'terminal': 'sandbox.execute',
-      'run': 'sandbox.execute',
-      
-      // Sandbox operations
-      'sandbox_execute': 'sandbox.execute',
-      'sandbox_shell': 'sandbox.shell',
-      'sandbox_session': 'sandbox.session',
-      
-      // MCP tools (fallback to MCP if capability not found)
-      'mcp_tool': 'mcp.execute',
-      'mcp_execute': 'mcp.execute',
-      
-      // Git operations
-      'git': 'repo.git',
-      'git_clone': 'repo.clone',
-      'git_search': 'repo.search',
-      
-      // Web operations
-      'web_search': 'web.search',
-      'web_fetch': 'web.fetch',
+      'file_operation': 'file.read', 'read_file': 'file.read', 'write_file': 'file.write',
+      'edit_file': 'file.write', 'delete_file': 'file.delete', 'list_directory': 'file.list',
+      'list_dir': 'file.list', 'ls': 'file.list',
+      'search_files': 'file.search', 'grep': 'file.search', 'glob': 'file.search', 'find': 'file.search',
+      'execute_bash': 'sandbox.execute', 'execute_command': 'sandbox.execute', 'execute': 'sandbox.execute',
+      'bash': 'sandbox.execute', 'shell': 'sandbox.execute', 'terminal': 'sandbox.execute', 'run': 'sandbox.execute',
+      'sandbox_execute': 'sandbox.execute', 'sandbox_shell': 'sandbox.shell', 'sandbox_session': 'sandbox.session',
+      'mcp_tool': 'mcp.execute', 'mcp_execute': 'mcp.execute',
+      'git': 'repo.git', 'git_clone': 'repo.clone', 'git_search': 'repo.search',
+      'web_search': 'web.search', 'web_fetch': 'web.fetch',
     };
-    
+
     const capabilityId = capabilityMap[name] || name;
-    
-    // Try capability-based execution first
+
     if (hasToolCapability(capabilityId)) {
       log.debug('Executing tool via capability', { tool: name, capability: capabilityId });
       const result = await executeToolCapability(capabilityId, args, {
-        userId: config.sandboxId || 'system',  // Use sandboxId as userId fallback
+        userId: config.sandboxId || 'system',
         workspaceId: config.projectContext?.id,
       });
-      
-      log.debug('Capability execution result', { 
-        tool: name, 
-        capability: capabilityId, 
-        success: result.success 
-      });
-      
-      return {
-        success: result.success,
-        output: (result.output as string) || result.error,
-        exitCode: result.exitCode,
-      };
+      return { success: result.success, output: (result.output as string) || result.error, exitCode: result.exitCode };
     }
-    
-    // Fallback to original executeTool if capability not available
-    log.debug('Capability not found, falling back to original executor', { 
-      tool: name, 
-      capability: capabilityId 
-    });
-    
+
+    log.debug('Capability not found, falling back to original executor', { tool: name, capability: capabilityId });
     if (config.executeTool) {
       return config.executeTool(name, args);
     }
-    
     log.warn('No tool executor available', { tool: name, capability: capabilityId });
     return { success: false, output: 'No tool executor available', exitCode: 1 };
   };
-}
-
-  }
 }
 
 /**

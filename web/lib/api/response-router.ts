@@ -2071,11 +2071,19 @@ export class ResponseRouter {
         success: true,
         data: response,
         error: null,
-      })).catch(err => ({
-        success: false,
-        data: null,
-        error: err,
-      }))
+      })).catch(err => {
+        // LLM provider unavailable - graceful degradation
+        logger.debug('Spec generation LLM call failed, continuing without refinement', {
+          error: err?.message,
+          provider: fastModel?.provider,
+          model: fastModel?.model,
+        })
+        return {
+          success: false,
+          data: null,
+          error: err,
+        }
+      })
 
       // Trigger background refinement (fire-and-forget)
       this.runBackgroundRefinement({
@@ -2085,12 +2093,10 @@ export class ResponseRouter {
         fastModel,
         startTime,
       }).catch(err => {
-        logger.error('Background refinement failed', {
+        // Background refinement failure - non-critical, log at debug level
+        logger.debug('Background refinement failed (non-critical)', {
           error: err?.message,
-          stack: err?.stack,
           requestId: request.requestId,
-          hasPrimaryContent: !!primaryContent,
-          primaryContentLength: primaryData?.content?.length,
         })
       })
 
@@ -2135,8 +2141,24 @@ export class ResponseRouter {
     startTime: number
   }): Promise<void> {
     const { primaryData, specGenerationPromise, request, fastModel, startTime } = params
-    const { safeParseSpec, chunkSpec, explodeChunks } = await import('@/lib/chat/spec-parser')
-    const { validateSpec, scoreSpec } = await import('@/lib/prompts/spec-generator')
+
+    // Import spec parsing utilities
+    let safeParseSpec: any, chunkSpec: any, explodeChunks: any
+    let validateSpec: any, scoreSpec: any
+    try {
+      const specParser = await import('@/lib/chat/spec-parser')
+      safeParseSpec = specParser.safeParseSpec
+      chunkSpec = specParser.chunkSpec
+      explodeChunks = specParser.explodeChunks
+      const specValidator = await import('@/lib/prompts/spec-generator')
+      validateSpec = specValidator.validateSpec
+      scoreSpec = specValidator.scoreSpec
+    } catch (importErr) {
+      logger.debug('Spec: Failed to import spec utilities, skipping refinement', {
+        error: importErr?.message,
+      })
+      return
+    }
 
     logger.info('Spec: runBackgroundRefinement started', {
       requestId: request.requestId,

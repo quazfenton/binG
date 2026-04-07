@@ -475,16 +475,15 @@ export async function migrateLegacyEncryptedKeys(): Promise<{ migrated: number; 
 
 // Database operations
 export class DatabaseOperations {
-  private db: any;
   private dbReady: Promise<void>;
   
   // PREPARED STATEMENTS CACHE - create once, reuse infinitely
   // This avoids recreating prepared statements on every call
   private preparedStatements: Map<string, any> = new Map();
   private preparedStatementsInitialized = false;
-  
+
   // Database instance — resolved synchronously in constructor via getDatabase()
-  db: any;
+  db: any = getDatabase();
 
   private getPrepared(name: string, sql: string): any {
     // Resolve real DB if available (handles late initialization)
@@ -605,14 +604,6 @@ export class DatabaseOperations {
     this.initializePreparedStatements();
   }
 
-  /**
-   * Get the underlying database instance (for advanced operations).
-   * Always resolves to the real DB if available.
-   */
-  getDb(): any {
-    return this.db;
-  }
-  
   // User operations
   createUser(email: string, username: string, passwordHash: string) {
     // Handle empty username - set to NULL to avoid unique constraint conflicts

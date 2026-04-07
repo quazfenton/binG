@@ -123,9 +123,11 @@ export async function POST(
         rollbackResult = await executeShadowRollback(conversationId, fullOwnerId, version, targetFiles) as any;
         break;
 
-      case 'vfs-snapshot':
+      case 'vfs-snapshot': {
+        const db = getDatabase();
         rollbackResult = await executeVFSSnapshotRollback(db, conversationId, version, fullOwnerId, targetFiles);
         break;
+      }
 
       case 'git':
         rollbackResult = await executeGitRollback(conversationId, version, fullOwnerId, targetFiles);

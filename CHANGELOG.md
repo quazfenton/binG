@@ -2,9 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] — VFS MCP Tool Fallback + Function Calling Detection
+## [Unreleased] — Hot-Reload State Preservation + Provider Tracking + Code Preview
 
 ### 🔴 Critical Bug Fixes
+
+- **Next.js hot-reload state loss (multiple singletons)** — Module-level Maps, Sets, and singletons were reset on every hot-reload, causing VFS workspace data loss, cache invalidation failure, rate limit bypass, circuit breaker reset, and duplicate event listeners. Fixed by storing all critical singletons on `globalThis`: `__vfsSingleton__`, `__gitVFSInstances__`, `__diffTracker__`, `__recentMcpFileEdits__`, `__sessionFileTrackerStore__`, `__rateLimitStore__`, `__responseRouter__`, `__enhancedLLMService__`, `__snapshotCache__`, `__snapshotLatestVersion__`, `__snapshotRequestTracker__`. Timer-based intervals are guarded with registration flags to prevent leaks.
+- **Provider tracking showed `'original-system'` instead of real LLM provider** — `metadata.actualProvider` was not propagated through the streaming response chain. Added `actualProvider`/`actualModel` to streaming response metadata in `response-router.ts`, `route.ts` now checks `data?.provider` before falling back to `source`, and `enhanced-llm-service.ts` emits metadata chunks during fallback events.
+- **Infinite retry loop on empty responses** — After a retry also returned empty, it triggered another retry. Fixed: `maxRetries = 1`, and after retry also returns empty, `isEmptyResponse: false` prevents further retries.
+- **Empty message bubble with VFS MCP tools** — Tool invocations were stored in React state but `messagesRef.current` hadn't synced when the `done` event fired. Added `streamingToolInvocations` local array populated synchronously during SSE event parsing.
+- **Code Preview button didn't light up for VFS MCP edits** — Button only glowed for markdown code blocks. Added `hasMcpFileEdits` state that listens to `filesystem-updated` events with `source: 'mcp-tool'`, combined with `hasCodeBlocks` for the glow condition.
+- **Stale closures in `onFinish` callbacks** — Multiple `onFinish` calls used `currentMessageRef.current` which could be stale after retries. All callbacks now use `assistantMessage` directly or read from `messagesRef.current`.
+- **Duplicate variable declarations in `vfs-mcp-tools.ts`** — `successCount` and `failCount` were declared twice in `batchWriteTool`, causing compile error. Removed duplicate.
+- **Missing input validation in MCP tools** — Added null checks for `content`, content size guards (5MB per file, 50MB for batch), and context validation warnings.
+- **Path traversal detection improved** — Changed from `includes('..')` to segment-level `some(seg => seg === '..')` to prevent edge case bypasses.
+
+### 🏗 Architecture
 
 - **LLM function calling fallback** — When the model doesn't support native function calling (or ignores tools), it outputs tool calls as raw JSON text. Added `extractJsonToolCalls()` parser that catches `{ "tool": "batch_write", "arguments": { "files": [...] } }` format and converts to structured `FileEdit` objects for execution through the existing file-edit pipeline.
 - **Function calling support detection** — Added `model.supports?.functionCalling` check in `vercel-ai-streaming.ts`. If `false`, tools are stripped and a warning is logged, preventing confusing the model with tools it can't use. Applied to both main and fallback streaming paths.
@@ -19,6 +31,8 @@ All notable changes to this project will be documented in this file.
 - **SSRF IPv6 bypass** — Added `::ffff:` to `SSRF_BLOCKED_HOSTS` blocklist to prevent IPv4-mapped IPv6 address bypasses (e.g., `[::ffff:127.0.0.1]`, `[::ffff:169.254.169.254]`).
 - **Directory traversal broken in migration script** — `findFiles()` in `migrate-agent-imports.js` ignored recursive results. Fixed with `fs.statSync` + `results.concat()` for proper recursive traversal.
 - **TerminalPanel.tsx TS syntax error** — Missing closing `}` for `if (term.terminal.rows > 0)` block, causing cascading parse error. Fixed.
+- **`getGeneralMinimalPromptV2/V3` truncates tool list** — Splitting on `/={20,}/` matched `====` separators inside `NON_TECHNICAL_TOOL_REFERENCE`, dropping the actual tool list from minimal prompts. Fixed: split only at `\n={20,}\n# PRIME DIRECTIVES` boundary to keep identity + tool reference intact.
+- **ToolLoopAgent stops after one iteration** — Two bugs: (1) `maxIterations` was never passed to the `ToolLoopAgent` constructor, defaulting to 1 iteration instead of the configured 10; (2) tools were mapped using array indices (`"0"`, `"1"`) instead of tool names (`"read_file"`, `"write_file"`), so the agent couldn't find its tools. Fixed: pass `maxIterations` and build proper `{ [name]: Tool }` map.
 - **VFS persistWorkspace partial-commit risk** — Metadata update and delete operations ran outside the transaction, leaving workspace inconsistent if upserts failed. Fixed: all operations (meta, deletes, upserts) now run in a single atomic transaction.
 - **VFS ensureWorkspace silent error swallowing** — All DB errors were caught and silently returned an empty workspace. Now distinguishes "table doesn't exist" (expected before migration) from real errors (logged as `console.error`).
 - **IndexedDB transaction error handling** — `idbGet/idbPut/idbDelete` in secrets/web.ts and `readFile/listDirectory/deleteFile/clear` in indexeddb-backend.ts were missing `tx.onerror` handlers, causing promises to hang forever if transactions failed. Added `tx.onerror` to all.

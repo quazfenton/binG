@@ -2,9 +2,65 @@ use portable_pty::{native_pty_system, CommandBuilder, MasterPty, PtySize};
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
 use std::io::{Read, Write};
+use std::path::{Path, PathBuf};
 use std::process::Command;
 use std::sync::Mutex;
 use tauri::{AppHandle, Emitter, Manager, State};
+
+/// Validates and canonicalizes a workspace-relative path.
+/// Returns the canonical path or an error if it escapes the workspace.
+fn validate_workspace_path(file_path: &str) -> Result<PathBuf, String> {
+    let base_dir = std::env::current_dir()
+        .map_err(|e| format!("Failed to resolve base directory: {}", e))?;
+    let requested = Path::new(file_path);
+
+    if requested.is_absolute() || requested.components().any(|c| c == std::path::Component::ParentDir) {
+        return Err("Access denied: path must stay within workspace".to_string());
+    }
+
+    let full_path = base_dir.join(requested);
+
+    // Ensure parent exists for operations that need it
+    // For read-only operations, we canonicalize after confirming existence
+    let canonical = if full_path.exists() {
+        std::fs::canonicalize(&full_path)
+            .map_err(|e| format!("Failed to canonicalize path: {}", e))?
+    } else {
+        // For paths that don't exist yet (e.g., write targets), canonicalize the base
+        // and verify the resolved path would stay within workspace
+        let canonical_base = std::fs::canonicalize(&base_dir)
+            .map_err(|e| format!("Failed to canonicalize base directory: {}", e))?;
+        
+        // Check if resolved path would escape workspace (before creation)
+        let resolved = base_dir.join(requested);
+        let canonical_resolved = if resolved.exists() {
+            std::fs::canonicalize(&resolved)
+                .map_err(|e| format!("Failed to canonicalize resolved path: {}", e))?
+        } else {
+            // Path doesn't exist yet - verify parent is within workspace
+            if let Some(parent) = resolved.parent() {
+                if parent.exists() {
+                    let canonical_parent = std::fs::canonicalize(parent)
+                        .map_err(|e| format!("Failed to canonicalize parent: {}", e))?;
+                    if !canonical_parent.starts_with(&canonical_base) {
+                        return Err("Access denied: resolved path escapes workspace".to_string());
+                    }
+                }
+            }
+            resolved
+        };
+        canonical_resolved
+    };
+
+    let canonical_base = std::fs::canonicalize(&base_dir)
+        .map_err(|e| format!("Failed to canonicalize base directory: {}", e))?;
+
+    if !canonical.starts_with(&canonical_base) {
+        return Err("Access denied: resolved path escapes workspace".to_string());
+    }
+
+    Ok(canonical)
+}
 
 #[derive(Debug, Serialize, Deserialize)]
 pub struct CommandResult {
@@ -36,6 +92,7 @@ pub struct CheckpointInfo {
     pub created_at: String,
     pub file_count: usize,
     pub workspace_path: String,
+    pub commit_hash: Option<String>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -126,17 +183,9 @@ pub async fn execute_command(command: String, cwd: Option<String>) -> Result<Com
 
 #[tauri::command]
 pub async fn read_file(file_path: String) -> Result<String, String> {
-    // Validate path to prevent directory traversal attacks
-    let base_dir = std::env::current_dir()
-        .map_err(|e| format!("Failed to resolve base directory: {}", e))?;
-    let requested = std::path::Path::new(&file_path);
-    
-    if requested.is_absolute() || requested.components().any(|c| c == std::path::Component::ParentDir) {
-        return Err("Access denied: path must stay within workspace".to_string());
-    }
-    
-    let full_path = base_dir.join(requested);
-    std::fs::read_to_string(&full_path).map_err(|e| format!("Failed to read file: {}", e))
+    // Validate and canonicalize path to prevent symlink escape
+    let safe_path = validate_workspace_path(&file_path)?;
+    std::fs::read_to_string(&safe_path).map_err(|e| format!("Failed to read file: {}", e))
 }
 
 #[tauri::command]
@@ -156,13 +205,25 @@ pub async fn write_file(
 
     let full_path = base_dir.join(requested);
 
-    // Determine if this is a create or update
-    let change_type = if full_path.exists() { "update" } else { "create" };
-
+    // Ensure parent exists before writing
     if let Some(parent) = full_path.parent() {
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
     }
+
+    // Canonicalize to prevent symlink escape attacks
+    let canonical = std::fs::canonicalize(&full_path)
+        .unwrap_or_else(|_| full_path.clone());
+    let canonical_base = std::fs::canonicalize(&base_dir)
+        .map_err(|e| format!("Failed to canonicalize base directory: {}", e))?;
+
+    if !canonical.starts_with(&canonical_base) {
+        return Err("Access denied: resolved path escapes workspace".to_string());
+    }
+
     std::fs::write(&full_path, content).map_err(|e| format!("Failed to write file: {}", e))?;
+
+    // Determine if this is a create or update (after write succeeds)
+    let change_type = if full_path.exists() { "update" } else { "create" };
 
     // Emit file change event to TypeScript layer for VFS shadow commit tracking
     let _ = app.emit("file-change", FileChangeEvent {
@@ -176,17 +237,9 @@ pub async fn write_file(
 
 #[tauri::command]
 pub async fn list_directory(dir_path: String) -> Result<Vec<FileEntry>, String> {
-    // Validate path to prevent directory traversal attacks
-    let base_dir = std::env::current_dir()
-        .map_err(|e| format!("Failed to resolve base directory: {}", e))?;
-    let requested = std::path::Path::new(&dir_path);
-    
-    if requested.is_absolute() || requested.components().any(|c| c == std::path::Component::ParentDir) {
-        return Err("Access denied: path must stay within workspace".to_string());
-    }
-    
-    let full_path = base_dir.join(requested);
-    let entries = std::fs::read_dir(&full_path).map_err(|e| format!("Failed to read directory: {}", e))?;
+    // Validate and canonicalize path to prevent symlink escape
+    let safe_path = validate_workspace_path(&dir_path)?;
+    let entries = std::fs::read_dir(&safe_path).map_err(|e| format!("Failed to read directory: {}", e))?;
 
     let mut result = Vec::new();
     for entry in entries {
@@ -225,11 +278,15 @@ pub async fn create_checkpoint(
     workspace_path: Option<String>,
     name: Option<String>,
 ) -> Result<CheckpointInfo, String> {
-    let workspace = workspace_path.unwrap_or_else(|| {
+    // Validate workspace path to prevent git operations on arbitrary directories
+    let workspace = if let Some(path) = workspace_path {
+        let validated = validate_workspace_path(&path)?;
+        validated.to_string_lossy().to_string()
+    } else {
         std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| ".".to_string())
-    });
+    };
 
     // Count files in workspace
     let file_count = count_files_in_dir(&workspace).map_err(|e| format!("Failed to count files: {}", e))?;
@@ -238,21 +295,24 @@ pub async fn create_checkpoint(
     let checkpoint_name = name.unwrap_or_else(|| format!("Checkpoint {}", checkpoint_id));
     let created_at = chrono::Utc::now().to_rfc3339();
 
+    // Create a git commit as the shadow commit backing store and capture the hash
+    let commit_hash = match create_git_commit(&workspace, &checkpoint_name) {
+        Ok(hash) => Some(hash),
+        Err(e) => {
+            // Log but don't fail - checkpoint is still tracked in memory
+            eprintln!("Warning: git commit failed: {}", e);
+            None
+        }
+    };
+
     let checkpoint = CheckpointInfo {
         id: checkpoint_id.clone(),
         name: checkpoint_name.clone(),
         created_at: created_at.clone(),
         file_count,
         workspace_path: workspace.clone(),
+        commit_hash,
     };
-
-    // Store checkpoint in state
-    {
-        let mut managers = checkpoints.0.lock().map_err(|e| e.to_string())?;
-        let state = managers.entry(workspace.clone()).or_insert_with(CheckpointState::default);
-        state.workspace_path = workspace.clone();
-        state.checkpoints.push(checkpoint.clone());
-    }
 
     // Create a git commit as the shadow commit backing store
     let git_result = create_git_commit(&workspace, &checkpoint_name);
@@ -272,16 +332,24 @@ pub async fn restore_checkpoint(
     workspace_path: String,
     checkpoint_id: String,
 ) -> Result<RollbackResult, String> {
+    // Validate workspace path to prevent git operations on arbitrary directories
+    let workspace = validate_workspace_path(&workspace_path)?;
+    let workspace_str = workspace.to_string_lossy().to_string();
+
     let managers = checkpoints.0.lock().map_err(|e| e.to_string())?;
-    let state = managers.get(&workspace_path)
+    let state = managers.get(&workspace_str)
         .ok_or_else(|| "No checkpoints found for workspace".to_string())?;
 
     let checkpoint = state.checkpoints.iter()
         .find(|c| c.id == checkpoint_id)
         .ok_or_else(|| "Checkpoint not found".to_string())?;
 
+    // Use the stored commit hash for git reset, not the friendly checkpoint ID
+    let commit_id = checkpoint.commit_hash.as_ref()
+        .ok_or_else(|| "No commit hash available for this checkpoint".to_string())?;
+
     // Use git reset to restore the workspace to the checkpoint commit
-    let git_result = restore_git_commit(&workspace_path, &checkpoint_id);
+    let git_result = restore_git_commit(&workspace_str, commit_id);
     match git_result {
         Ok(files_restored) => {
             Ok(RollbackResult {
@@ -306,11 +374,15 @@ pub async fn list_checkpoints(
     checkpoints: State<'_, CheckpointManager>,
     workspace_path: Option<String>,
 ) -> Result<CheckpointListResult, String> {
-    let workspace = workspace_path.unwrap_or_else(|| {
+    // Validate workspace path to prevent git operations on arbitrary directories
+    let workspace = if let Some(path) = workspace_path {
+        let validated = validate_workspace_path(&path)?;
+        validated.to_string_lossy().to_string()
+    } else {
         std::env::current_dir()
             .map(|p| p.to_string_lossy().to_string())
             .unwrap_or_else(|_| ".".to_string())
-    });
+    };
 
     let managers = checkpoints.0.lock().map_err(|e| e.to_string())?;
     let state = managers.get(&workspace);
@@ -342,9 +414,13 @@ pub async fn delete_checkpoint(
     workspace_path: String,
     checkpoint_id: String,
 ) -> Result<bool, String> {
+    // Validate workspace path to prevent git operations on arbitrary directories
+    let workspace = validate_workspace_path(&workspace_path)?;
+    let workspace_str = workspace.to_string_lossy().to_string();
+
     let mut managers = checkpoints.0.lock().map_err(|e| e.to_string())?;
 
-    if let Some(state) = managers.get_mut(&workspace_path) {
+    if let Some(state) = managers.get_mut(&workspace_str) {
         let initial_len = state.checkpoints.len();
         state.checkpoints.retain(|c| c.id != checkpoint_id);
         return Ok(state.checkpoints.len() < initial_len);
@@ -489,7 +565,7 @@ pub struct PtyInputResult {
     pub error: Option<String>,
 }
 
-#[derive(Debug, Serialize, Deserialize, Deserialize)]
+#[derive(Debug, Serialize, Deserialize)]
 pub struct PtyOutputEvent {
     pub session_id: String,
     pub data: String,

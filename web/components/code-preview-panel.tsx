@@ -5334,32 +5334,53 @@ root.render(<App />);` };
           );
 
       // Inline external CSS/JS references in HTML so iframe srcdoc can resolve them
+      // This replaces <link href="*.css"> and <script src="*.js"> with inlined content
       const inlineExternalReferences = (html: string, allFiles: Map<string, string>): string => {
         let result = html;
 
         // Inline <link href="*.css"> tags
         result = result.replace(
-          /<link[^>]+href=["']([^"']+\.css)["'][^>]*\/?>/gi,
+          /<link[^>]+href=["']([^"']+\.css(?:\?[^"']*)?)["'][^>]*\/?>/gi,
           (match, href) => {
-            const fileName = href.replace(/^\.\//, '').replace(/^\//, '');
-            const cssContent = allFiles.get(fileName);
+            // Strip query params and leading ./ or /
+            const cleanHref = href.replace(/\?.*$/, '').replace(/^\.\//, '').replace(/^\//, '');
+
+            // Try exact match first, then basename fallback
+            let cssContent = allFiles.get(cleanHref);
+            if (!cssContent) {
+              // Try basename match (e.g., "styles.css" from "css/styles.css")
+              const baseName = cleanHref.split('/').pop() || '';
+              cssContent = allFiles.get(baseName);
+            }
+
             if (cssContent) {
               return `<style>/* Inlined: ${href} */\n${cssContent}\n</style>`;
             }
-            return match; // Keep original if not found
+            // Keep original if not found — browser will attempt to load it
+            return match;
           }
         );
 
         // Inline <script src="*.js"> tags (not inline scripts)
         result = result.replace(
-          /<script[^>]+src=["']([^"']+\.(js|mjs))["'][^>]*>\s*<\/script>/gi,
+          /<script[^>]+src=["']([^"']+\.(?:js|mjs)(?:\?[^"']*)?)["'][^>]*>\s*<\/script>/gi,
           (match, src) => {
-            const fileName = src.replace(/^\.\//, '').replace(/^\//, '');
-            const jsContent = allFiles.get(fileName);
+            // Strip query params and leading ./ or /
+            const cleanSrc = src.replace(/\?.*$/, '').replace(/^\.\//, '').replace(/^\//, '');
+
+            // Try exact match first, then basename fallback
+            let jsContent = allFiles.get(cleanSrc);
+            if (!jsContent) {
+              // Try basename match
+              const baseName = cleanSrc.split('/').pop() || '';
+              jsContent = allFiles.get(baseName);
+            }
+
             if (jsContent) {
               return `<script>/* Inlined: ${src} */\n${jsContent}\n<\/script>`;
             }
-            return match; // Keep original if not found
+            // Keep original if not found
+            return match;
           }
         );
 

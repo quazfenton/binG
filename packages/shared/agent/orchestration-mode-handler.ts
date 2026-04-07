@@ -331,7 +331,7 @@ export async function executeWithOrchestrationMode(
       case 'agent-loop': {
         const { createAgentLoop } = await import('@/lib/orchestra/mastra/agent-loop');
 
-        const maxIterations = parseInt(String((request as any).maxIterations) || '10', 10);
+        const maxIterations = (request as any).maxIterations ?? 10;
         const modelOverride = request.model || process.env.AGENT_MODEL || process.env.DEFAULT_MODEL;
         // Default to user's cwd or project/sessions for VFS tools
         const workspacePath = request.workspacePath || process.cwd() || `project/sessions/${request.sessionId}`;
@@ -655,8 +655,8 @@ export async function executeWithOrchestrationMode(
 
         const workspacePath = request.workspacePath || process.cwd() || '/tmp/agent-team';
         const strategy = (request as any).strategy || 'hierarchical';
-        const maxIterations = parseInt(String((request as any).maxIterations) || '3', 10);
-        const timeoutMs = parseInt(String((request as any).timeoutMs) || '300000', 10);
+        const maxIterations = Number((request as any).maxIterations) || 3;
+        const timeoutMs = Number((request as any).timeoutMs) || 300000;
 
         // Default team composition if not provided
         const agents = (request as any).agents || [

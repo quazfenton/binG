@@ -17,7 +17,8 @@
       "Bash(%path%)",
       "Bash(cargo check *)",
       "Bash(npx *)",
-      "Bash(findstr *)"
+      "Bash(findstr *)",
+      "Bash(curl *)"
     ]
   },
   "$version": 3

@@ -82,6 +82,14 @@ export class GitBackedVFS {
   private handleFileChange(event: FilesystemChangeEvent): void {
     if (!this.options.autoCommit || this.isPersisting) return;
 
+    // Deduplicate: skip if this path is already buffered at same or newer version
+    const existingIdx = this.changeBuffer.findIndex(c => c.path === event.path);
+    if (existingIdx !== -1) {
+      const existing = this.changeBuffer[existingIdx];
+      if (event.version <= existing.version) return; // Already have same or newer
+      this.changeBuffer.splice(existingIdx, 1); // Replace stale entry
+    }
+
     const change: GitVFSChange = {
       path: event.path,
       type: event.type,
@@ -282,13 +290,21 @@ export class GitBackedVFS {
 
   /**
    * Track transaction entry (public method for proxy access)
+   * Deduplicates entries by path — only the latest transaction per path is kept.
    */
   trackTransaction(ownerId: string, entry: TransactionEntry, transactionId?: string): void {
     const key = transactionId || ownerId;
     if (!this.transactionLog.has(key)) {
       this.transactionLog.set(key, []);
     }
-    this.transactionLog.get(key)!.push(entry);
+    const txList = this.transactionLog.get(key)!;
+
+    // Deduplicate: remove existing entry for same path, keep the latest
+    const existingIdx = txList.findIndex(tx => tx.path === entry.path);
+    if (existingIdx !== -1) {
+      txList.splice(existingIdx, 1);
+    }
+    txList.push(entry);
   }
 
   /**
@@ -308,9 +324,9 @@ export class GitBackedVFS {
     const transactions = this.transactionLog.get(key) || [];
 
     // Also include any changes from changeBuffer that aren't in transactions
-    const bufferedChanges = this.changeBuffer.filter(change =>
-      !transactions.some(tx => tx.path === change.path)
-    );
+    // FIX: Deduplicate changeBuffer against transactions to prevent double-buffering
+    const seenPaths = new Set(transactions.map(tx => tx.path));
+    const bufferedChanges = this.changeBuffer.filter(change => !seenPaths.has(change.path));
 
     if (transactions.length === 0 && bufferedChanges.length === 0) {
       return { success: true, committedFiles: 0 };

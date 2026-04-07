@@ -40,6 +40,21 @@ export interface FilesystemToolOptions {
 }
 
 /**
+ * Resolve a file path relative to the workspace path.
+ * If the path already starts with the workspace path, use it as-is.
+ * Otherwise, prepend the workspace path to make it session-scoped.
+ */
+function resolveWorkspacePath(workspacePath: string, path: string): string {
+  if (!path) return workspacePath;
+  const cleanPath = path.replace(/\\/g, '/').replace(/\/+/g, '/').replace(/\/+$/, '');
+  // Already scoped
+  if (cleanPath === workspacePath || cleanPath.startsWith(`${workspacePath}/`)) {
+    return cleanPath;
+  }
+  return `${workspacePath}/${cleanPath}`;
+}
+
+/**
  * Filesystem tools for LLM agent
  * Factory function that creates tools bound to a specific user ID for tenant/session isolation
  */
@@ -47,6 +62,7 @@ export function createFilesystemTools(
   userId: string,
   options: FilesystemToolOptions = {},
 ): FilesystemTool[] {
+  const workspacePath = options.workspacePath || 'project';
   const tools: FilesystemTool[] = [
     {
       name: 'read_file',
@@ -63,7 +79,8 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
-          const file = await virtualFilesystem.readFile(userId, path);
+          const scopedPath = resolveWorkspacePath(workspacePath, path);
+          const file = await virtualFilesystem.readFile(userId, scopedPath);
           return {
             success: true,
             content: file.content,
@@ -103,8 +120,9 @@ export function createFilesystemTools(
       },
       execute: async ({ path, content, language }: { path: string; content: string; language?: string }): Promise<ToolCallResult> => {
         try {
-          const file = await virtualFilesystem.writeFile(userId, path, content, language);
-          
+          const scopedPath = resolveWorkspacePath(workspacePath, path);
+          const file = await virtualFilesystem.writeFile(userId, scopedPath, content, language);
+
           // CRITICAL FIX Bug #4: Emit filesystem-updated event after V2 file write
           // This ensures components update after V2 agent writes files via tools
           emitFilesystemUpdated({
@@ -113,7 +131,7 @@ export function createFilesystemTools(
             type: 'create',
             source: 'v2-tool',
           });
-          
+
           return {
             success: true,
             path: file.path,
@@ -145,7 +163,8 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
-          const listing = await virtualFilesystem.listDirectory(userId, path);
+          const scopedPath = resolveWorkspacePath(workspacePath, path);
+          const listing = await virtualFilesystem.listDirectory(userId, scopedPath);
           return {
             success: true,
             entries: listing.nodes.map(e => ({
@@ -211,12 +230,13 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
-          const result = await virtualFilesystem.deletePath(userId, path);
+          const scopedPath = resolveWorkspacePath(workspacePath, path);
+          const result = await virtualFilesystem.deletePath(userId, scopedPath);
           return {
             success: true,
-            path: path,
+            path: scopedPath,
             deletedCount: result.deletedCount,
-            message: `Deleted: ${path}`,
+            message: `Deleted: ${scopedPath}`,
           };
         } catch (error: any) {
           return {

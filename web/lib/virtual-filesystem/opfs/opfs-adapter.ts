@@ -38,6 +38,8 @@ export interface SyncResult {
   conflicts: ConflictInfo[];
   errors: string[];
   duration: number;
+  /** Whether the sync was cancelled by the abort signal */
+  cancelled?: boolean;
 }
 
 export interface ConflictInfo {

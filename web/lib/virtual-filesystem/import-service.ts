@@ -136,8 +136,8 @@ export class FileImportService {
       );
     }
 
-    // SECURITY: O(1) total size guard — string .length is a native property, no iteration needed
-    const totalSize = files.reduce((sum, f) => sum + f.content.length, 0);
+    // SECURITY: Byte-accurate total size guard
+    const totalSize = files.reduce((sum, f) => sum + Buffer.byteLength(f.content, 'utf8'), 0);
     if (totalSize > FileImportService.MAX_TOTAL_SIZE) {
       throw new Error(
         `Total import size exceeds limit: ${this.formatFileSize(totalSize)} (max: ${this.formatFileSize(FileImportService.MAX_TOTAL_SIZE)})`
@@ -172,8 +172,8 @@ export class FileImportService {
     // Process each file
     for (const file of files) {
       try {
-        // SECURITY: O(1) per-file size guard — string .length is a native property
-        const fileSize = file.content.length;
+        // SECURITY: Byte-accurate per-file size guard
+        const fileSize = Buffer.byteLength(file.content, 'utf8');
         if (fileSize > FileImportService.MAX_FILE_SIZE) {
           errors.push(`${file.name}: File exceeds size limit (${this.formatFileSize(fileSize)})`);
           continue;
