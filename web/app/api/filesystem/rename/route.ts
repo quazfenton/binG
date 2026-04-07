@@ -26,6 +26,32 @@ const logger = createLogger('API:Filesystem:Rename');
 
 export const runtime = 'nodejs';
 
+/**
+ * Recursively get all files under a directory path
+ */
+async function getAllFilesUnder(
+  ownerId: string,
+  dirPath: string,
+): Promise<Array<{ path: string; content: string; language: string }>> {
+  const files: Array<{ path: string; content: string; language: string }> = [];
+  
+  async function traverse(path: string) {
+    const listing = await virtualFilesystem.listDirectory(ownerId, path);
+    for (const node of listing.nodes) {
+      if (node.type === 'file') {
+        const file = await virtualFilesystem.readFile(ownerId, node.path);
+        files.push({ path: node.path, content: file.content, language: file.language });
+      } else {
+        // Recurse into subdirectory
+        await traverse(node.path);
+      }
+    }
+  }
+  
+  await traverse(dirPath);
+  return files;
+}
+
 const renameRequestSchema = z.object({
   oldPath: z.string().min(1, 'Source path is required'),
   newPath: z.string().min(1, 'Destination path is required'),
@@ -36,19 +62,11 @@ export async function POST(req: NextRequest) {
   let filesystemOwnerResolution: FilesystemOwnerResolution | undefined;
 
   try {
-    // Resolve authentication
+    // Resolve authentication (anonymous sessions are allowed)
     filesystemOwnerResolution = await resolveFilesystemOwnerWithFallback(req, {
       route: 'rename',
       requestId: Math.random().toString(36).slice(2, 8),
     });
-
-    if (!filesystemOwnerResolution.isAuthenticated) {
-      const errorResponse = NextResponse.json(
-        { error: 'Authentication required' },
-        { status: 401 }
-      );
-      return withAnonSessionCookie(errorResponse, filesystemOwnerResolution);
-    }
 
     const ownerId = filesystemOwnerResolution.ownerId;
     const body = await req.json();
@@ -70,8 +88,11 @@ export async function POST(req: NextRequest) {
 
     const { oldPath, newPath, overwrite } = validation.data;
 
+    logger.info('Rename request received:', { oldPath, newPath, overwrite, ownerId });
+
     // No-op: source and destination are the same
     if (oldPath === newPath) {
+      logger.info('No-op: source and destination are the same');
       return NextResponse.json({
         success: true,
         data: { oldPath, newPath, overwritten: false },
@@ -124,49 +145,65 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Check if it's a file or directory
+    // Check if it's a file or directory and perform rename
     let isDirectory = false;
     let content = '';
+    let language = '';
+    
     try {
+      // Try as file first
       const file = await virtualFilesystem.readFile(ownerId, oldPath);
       content = file.content;
+      language = file.language;
     } catch {
-      // It's a directory - for now, return error as recursive move is complex
-      return NextResponse.json(
-        { error: 'Directory move not yet implemented. Please move files individually.' },
-        { status: 400 }
-      );
-    }
-
-    // Perform rename: read → write → delete
-    // Write to new path
-    const file = await virtualFilesystem.readFile(ownerId, oldPath);
-    await virtualFilesystem.writeFile(ownerId, newPath, file.content, file.language);
-
-    // Delete old path
-    // Note: If source was already deleted (deletedCount === 0), the rename is still valid
-    // because the file exists at newPath. This can happen with concurrent operations.
-    const { deletedCount } = await virtualFilesystem.deletePath(ownerId, oldPath);
-    if (deletedCount === 0) {
-      // Verify the file exists at newPath - if so, rename succeeded despite source deletion
+      // It's a directory - need to rename the directory and all children
+      isDirectory = true;
+      const listing = await virtualFilesystem.listDirectory(ownerId, oldPath);
+      if (listing.nodes.length === 0) {
+        // Empty directory - just create the new directory marker
+        await virtualFilesystem.createDirectory(ownerId, newPath);
+        await virtualFilesystem.deletePath(ownerId, oldPath);
+        return NextResponse.json({
+          success: true,
+          data: { oldPath, newPath, overwritten: destinationExists, isDirectory: true },
+        });
+      }
+      
+      // For non-empty directories, we need to rename the directory itself
+      // Then update all child paths. Since VFS uses flat storage with paths,
+      // we need to read all files under oldPath and rewrite them under newPath
+      const allFiles = await getAllFilesUnder(ownerId, oldPath);
+      
+      // Write all files to new paths
+      for (const file of allFiles) {
+        const relativePath = file.path.substring(oldPath.length + 1);
+        const newFilePath = `${newPath}/${relativePath}`;
+        await virtualFilesystem.writeFile(ownerId, newFilePath, file.content, file.language);
+      }
+      
+      // Delete all old files
+      for (const file of allFiles) {
+        await virtualFilesystem.deletePath(ownerId, file.path);
+      }
+      
+      // Create directory marker at new path if needed
       try {
         await virtualFilesystem.readFile(ownerId, newPath);
-        // File exists at newPath - rename is complete, no rollback needed
-        logger.warn('Rename operation: source already deleted, keeping target', {
-          oldPath,
-          newPath,
-          ownerId,
-        });
       } catch {
-        // File doesn't exist at newPath either - something went wrong, rollback
-        try {
-          await virtualFilesystem.deletePath(ownerId, newPath);
-        } catch {
-          // Log but don't throw - primary error is the source deletion failure
-        }
-        throw new Error(`Failed to delete source path: ${oldPath}`);
+        await virtualFilesystem.createDirectory(ownerId, newPath);
       }
+      
+      return NextResponse.json({
+        success: true,
+        data: { oldPath, newPath, overwritten: destinationExists, isDirectory: true, filesRenamed: allFiles.length },
+      });
     }
+
+    // Perform file rename: read → write → delete
+    await virtualFilesystem.writeFile(ownerId, newPath, content, language);
+    await virtualFilesystem.deletePath(ownerId, oldPath);
+
+    logger.info('Rename operation completed:', { oldPath, newPath, isDirectory });
 
     return NextResponse.json({
       success: true,
@@ -177,6 +214,10 @@ export async function POST(req: NextRequest) {
       },
     });
   } catch (error: unknown) {
+    logger.error('Rename operation failed:', {
+      error: error instanceof Error ? error.message : String(error),
+      stack: error instanceof Error ? error.stack : undefined,
+    });
     const message = error instanceof Error ? error.message : 'Failed to rename';
     const errorResponse = NextResponse.json(
       { success: false, error: message },

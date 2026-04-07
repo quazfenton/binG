@@ -6,9 +6,7 @@ import { fsBridge, isUsingLocalFS, initializeFSBridge } from '@bing/shared/FS/fs
 import type { FileSystemWatchEvent } from '@bing/shared/FS/index';
 import { emitFilesystemUpdated } from './sync/sync-events';
 
-import { promises as fs } from 'node:fs';
 import * as path from 'node:path';
-import * as crypto from 'node:crypto';
 import { EventEmitter } from 'node:events';
 import type {
   VirtualFile,
@@ -21,14 +19,11 @@ import { diffTracker } from './filesystem-diffs';
 import { stripWorkspacePrefixes } from './scope-utils';
 import { VFSBatchOperations } from './vfs-batch-operations';
 import { createGitBackedVFS, getGitBackedVFSForOwner, type GitBackedVFS, type GitVFSOptions } from './git-backed-vfs';
+import { getDatabase } from '@/lib/database/connection';
 // import { emitFilesystemUpdated } from './sync/sync-events'; // Imported but not used - central emit deferred for now
 
 // Default configuration
 const DEFAULT_WORKSPACE_ROOT = process.env.DEFAULT_WORKSPACE_ROOT || 'project';
-const DEFAULT_STORAGE_DIR = process.env.VIRTUAL_FILESYSTEM_STORAGE_DIR 
-  || (process.platform === 'win32' 
-    ? path.join(process.env.LOCALAPPDATA || process.env.APPDATA || 'C:\\temp', 'vfs-storage')
-    : '/tmp/vfs-storage');
 const MAX_PATH_LENGTH = 1024;
 const MAX_FILE_SIZE = 100 * 1024 * 1024; // 100MB per file
 const MAX_TOTAL_WORKSPACE_SIZE = 500 * 1024 * 1024; // 500MB total workspace
@@ -45,16 +40,6 @@ interface WorkspaceState {
   version: number;
   updatedAt: string;
   loaded: boolean;
-}
-
-/**
- * Persisted workspace data structure
- */
-interface PersistedWorkspace {
-  root: string;
-  version: number;
-  updatedAt: string;
-  files: VirtualFile[];
 }
 
 /**
@@ -87,9 +72,7 @@ const CONCURRENT_MODIFICATION_THRESHOLD_MS = process.env.NODE_ENV === 'test' ? 5
 
 export class VirtualFilesystemService {
   private readonly workspaceRoot: string;
-  private readonly storageDir: string;
   private readonly workspaces = new Map<string, WorkspaceState>();
-  private readonly persistQueues = new Map<string, Promise<void>>();
   private readonly events = new EventEmitter();
   private batchManager: Map<string, VFSBatchOperations> = new Map();
 
@@ -126,7 +109,7 @@ export class VirtualFilesystemService {
     this.events.emit('snapshotChange', ownerId, version);
   }
 
-  constructor(options: { workspaceRoot?: string; storageDir?: string } = {}) {
+  constructor(options: { workspaceRoot?: string } = {}) {
     // Initialize FS Bridge for desktop mode - set flag BEFORE async call to prevent race condition
     if (isDesktopMode()) {
       // Mark as attempting initialization to prevent race condition
@@ -137,11 +120,8 @@ export class VirtualFilesystemService {
         (this as any)._fsBridgeInitializing = false;
       });
     }
-    
+
     this.workspaceRoot = (options.workspaceRoot || DEFAULT_WORKSPACE_ROOT).replace(/^\/+|\/+$/g, '') || DEFAULT_WORKSPACE_ROOT;
-    this.storageDir = options.storageDir
-      ? path.resolve(options.storageDir)
-      : path.resolve(process.env.VIRTUAL_FILESYSTEM_STORAGE_DIR || DEFAULT_STORAGE_DIR);
   }
 
   private async initializeFSBridge(): Promise<void> {
@@ -977,23 +957,15 @@ export class VirtualFilesystemService {
     return trimmed;
   }
 
-  private getWorkspaceStorageFile(ownerId: string): string {
-    const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
-    const hash = crypto.createHash('sha256').update(normalizedOwnerId).digest('hex').slice(0, 32);
-    return path.join(this.storageDir, `${hash}.json`);
-  }
-
+  /**
+   * Load workspace from SQLite database.
+   * All workspace file content is stored in the main SQLite database.
+   */
   private async ensureWorkspace(ownerId: string): Promise<WorkspaceState> {
-    console.log('[VFS] ensureWorkspace called', { ownerId });
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
     let workspace = this.workspaces.get(normalizedOwnerId);
 
     if (!workspace) {
-      console.log('[VFS] Creating new workspace', { ownerId: normalizedOwnerId });
-      
-      // DEBUG: Check if storage file exists
-      const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
-      console.log('[VFS] Storage file path:', storageFilePath);
       workspace = {
         files: new Map<string, VirtualFile>(),
         version: 0,
@@ -1004,45 +976,50 @@ export class VirtualFilesystemService {
     }
 
     if (!workspace.loaded) {
-      console.log('[VFS] Loading workspace from storage', { ownerId: normalizedOwnerId });
-      const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
       try {
-        const raw = await fs.readFile(storageFilePath, 'utf8');
-        const parsed = JSON.parse(raw) as PersistedWorkspace;
-        
-        // Fix any corrupted paths (e.g., paths starting with tmp/, workspace/, etc.)
-        const fixedFiles = (parsed.files || []).map((file) => {
-          // Check if path needs normalization
-          const needsFix = file.path.startsWith('tmp/') || 
-                          file.path.startsWith('workspace/') ||
-                          file.path.startsWith('home/') ||
-                          (file.path.startsWith('/tmp/') && !file.path.startsWith('/tmp/vfs-storage')) ||
-                          (file.path.startsWith('/workspace/')) ||
-                          (!file.path.startsWith('project/') && !file.path.startsWith('/project/'));
-          
-          if (needsFix) {
-            const fixedPath = this.normalizePath(file.path);
-            console.log('[VFS] Fixed corrupted path:', file.path, '->', fixedPath);
-            return { ...file, path: fixedPath };
-          }
-          return file;
-        });
-        
-        workspace.files = new Map(
-          fixedFiles.map((file) => [file.path, file]),
-        );
-        workspace.version = Number.isFinite(parsed.version) ? parsed.version : workspace.files.size;
-        workspace.updatedAt = parsed.updatedAt || new Date().toISOString();
-        
-        // Persist the fixed paths back to storage
-        if (fixedFiles.some((f, i) => f.path !== (parsed.files || [])[i]?.path)) {
-          console.log('[VFS] Persisting fixed paths...');
-          this.persistWorkspace(normalizedOwnerId, workspace).catch(console.error);
+        const db = getDatabase();
+
+        // Load metadata
+        const meta = db.prepare(
+          'SELECT version, root, updated_at FROM vfs_workspace_meta WHERE owner_id = ?'
+        ).get(normalizedOwnerId) as { version: number; root: string; updated_at: string } | undefined;
+
+        // Load files
+        const rows = db.prepare(
+          'SELECT path, content, language, size, version, created_at, updated_at FROM vfs_workspace_files WHERE owner_id = ? ORDER BY path'
+        ).all(normalizedOwnerId) as Array<{
+          path: string;
+          content: string;
+          language: string;
+          size: number;
+          version: number;
+          created_at: string;
+          updated_at: string;
+        }>;
+
+        if (rows.length > 0 || meta) {
+          workspace.files = new Map(rows.map(row => [row.path, {
+            path: row.path,
+            content: row.content,
+            language: row.language,
+            size: row.size,
+            version: row.version,
+            lastModified: row.updated_at,
+            createdAt: row.created_at,
+            isDirectoryMarker: row.path.endsWith('/.directory'),
+          } as VirtualFile]));
+
+          workspace.version = meta?.version ?? rows.length;
+          workspace.updatedAt = meta?.updated_at ?? new Date().toISOString();
         }
+        // If no data exists in DB, workspace stays empty — files will be created on first write
       } catch (error: unknown) {
-        const errorCode = (error as NodeJS.ErrnoException)?.code;
-        if (errorCode !== 'ENOENT') {
-          console.warn('[virtual-filesystem] Failed to load workspace from storage:', error);
+        const msg = error instanceof Error ? error.message : String(error);
+        // Table not yet created — migration hasn't run. Start empty, will populate on write.
+        if (msg.includes('no such table') || msg.includes('SQLITE_ERROR')) {
+          console.warn('[VFS] Workspace tables not yet available — workspace will be empty until migration runs');
+        } else {
+          console.error('[virtual-filesystem] Failed to load workspace from DB:', error);
         }
         workspace.files = new Map<string, VirtualFile>();
         workspace.version = 0;
@@ -1054,64 +1031,71 @@ export class VirtualFilesystemService {
     return workspace;
   }
 
+  /**
+   * Persist workspace to SQLite database.
+   * All operations (metadata update, deletes, upserts) run in a single
+   * transaction for atomicity — if any part fails, the workspace is unchanged.
+   */
   private async persistWorkspace(ownerId: string, workspace: WorkspaceState): Promise<void> {
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
-    const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
+    const db = getDatabase();
 
     // Get GitVFS instance and disable auto-commit during persist to prevent commit loops
     this.enableBatchMode(normalizedOwnerId);
 
-    // DEBUG: Log what's being persisted
-    console.log('[VFS persistWorkspace] Saving', workspace.files.size, 'files for owner:', normalizedOwnerId);
+    try {
+      const now = new Date().toISOString();
+      const currentPaths = new Set(workspace.files.keys());
 
-    const serialized: PersistedWorkspace = {
-      root: this.workspaceRoot,
-      version: workspace.version,
-      updatedAt: workspace.updatedAt,
-      files: Array.from(workspace.files.values()).sort((a, b) => a.path.localeCompare(b.path)),
-    };
+      // Prepare statements once (reused across calls)
+      const upsertMeta = db.prepare(
+        `INSERT OR REPLACE INTO vfs_workspace_meta (owner_id, version, root, updated_at) VALUES (?, ?, ?, ?)`
+      );
+      const selectPaths = db.prepare(
+        'SELECT path FROM vfs_workspace_files WHERE owner_id = ?'
+      );
+      const deleteFile = db.prepare(
+        'DELETE FROM vfs_workspace_files WHERE owner_id = ? AND path = ?'
+      );
+      const upsertFile = db.prepare(
+        `INSERT OR REPLACE INTO vfs_workspace_files
+         (id, owner_id, path, content, language, size, version, created_at, updated_at)
+         VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)`
+      );
 
-    // DEBUG: Log file paths being saved
-    if (serialized.files.length > 0) {
-      console.log('[VFS persistWorkspace] File paths:', serialized.files.map(f => f.path).slice(0, 5));
-    }
+      // Wrap everything in a single transaction for atomicity
+      const persistTx = db.transaction(() => {
+        // 1. Update metadata
+        upsertMeta.run(normalizedOwnerId, workspace.version, this.workspaceRoot, workspace.updatedAt);
 
-    const previous = this.persistQueues.get(normalizedOwnerId) || Promise.resolve();
-    const next = previous
-      .catch(() => undefined)
-      .then(async () => {
-        const tmpFilePath = `${storageFilePath}.tmp-${Date.now()}`;
-        try {
-          // Ensure storage directory exists
-          await fs.mkdir(this.storageDir, { recursive: true });
+        // 2. Delete files that no longer exist
+        const existingRows = selectPaths.all(normalizedOwnerId) as Array<{ path: string }>;
+        for (const row of existingRows) {
+          if (!currentPaths.has(row.path)) {
+            deleteFile.run(normalizedOwnerId, row.path);
+          }
+        }
 
-          await fs.writeFile(tmpFilePath, JSON.stringify(serialized, null, 2), 'utf8');
-          await fs.rename(tmpFilePath, storageFilePath);
-          
-          // Re-enable auto-commit after persist completes
-          await this.flushBatchMode(normalizedOwnerId);
-        } catch (error: any) {
-          // Cleanup temp file if rename failed
-          try {
-            await fs.unlink(tmpFilePath).catch(() => { /* ignore cleanup errors */ });
-          } catch {}
-
-          console.error('[VFS] Persist failed:', {
-            ownerId: normalizedOwnerId,
-            storageDir: this.storageDir,
-            storageFilePath,
-            error: error.message,
-            platform: process.platform,
-          });
-          
-          // Re-enable auto-commit even on error
-          await this.flushBatchMode(normalizedOwnerId);
-          throw error;
+        // 3. Upsert all current files
+        for (const [filePath, file] of workspace.files) {
+          const id = `${normalizedOwnerId}:${filePath}`;
+          upsertFile.run(id, normalizedOwnerId, filePath, file.content, file.language, file.size, file.version, file.createdAt || now, now);
         }
       });
 
-    this.persistQueues.set(normalizedOwnerId, next);
-    await next;
+      persistTx();
+
+      // Re-enable auto-commit after persist completes
+      await this.flushBatchMode(normalizedOwnerId);
+    } catch (error: any) {
+      console.error('[VFS] DB persist failed:', {
+        ownerId: normalizedOwnerId,
+        error: error.message,
+      });
+      // Re-enable auto-commit even on error
+      await this.flushBatchMode(normalizedOwnerId);
+      throw error;
+    }
   }
 
   /**
@@ -1169,14 +1153,11 @@ export class VirtualFilesystemService {
     const normalizedOwnerId = this.sanitizeOwnerId(ownerId);
     this.workspaces.delete(normalizedOwnerId);
     diffTracker.clear(ownerId);
-    
-    // Also delete storage file if it exists
-    const storageFilePath = this.getWorkspaceStorageFile(normalizedOwnerId);
-    try {
-      await fs.unlink(storageFilePath);
-    } catch {
-      // Ignore if not exists
-    }
+
+    // Also delete from database
+    const db = getDatabase();
+    db.prepare('DELETE FROM vfs_workspace_files WHERE owner_id = ?').run(normalizedOwnerId);
+    db.prepare('DELETE FROM vfs_workspace_meta WHERE owner_id = ?').run(normalizedOwnerId);
   }
 
   /**
@@ -1459,4 +1440,11 @@ class GitBackedVFSProxy {
 }
 
 // Export singleton instance with Git-backed proxy
-export const virtualFilesystem = new GitBackedVFSProxy(new VirtualFilesystemService());
+// CRITICAL FIX: Use globalThis to survive Next.js hot-reloading in dev mode
+// Without this, each module reload creates a new instance with empty workspaces
+declare global {
+  // eslint-disable-next-line no-var
+  var __vfsSingleton__: GitBackedVFSProxy | undefined;
+}
+
+export const virtualFilesystem = globalThis.__vfsSingleton__ ?? (globalThis.__vfsSingleton__ = new GitBackedVFSProxy(new VirtualFilesystemService()));

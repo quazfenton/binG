@@ -166,7 +166,7 @@ export class TerminalManager {
     
     // Track tried providers to avoid duplicates
     const tried = new Set<SandboxProviderType>()
-    
+
     const tryProvider = async (
       providerType: SandboxProviderType,
     ): Promise<{ handle: SandboxHandle; providerType: SandboxProviderType } | null> => {
@@ -174,37 +174,43 @@ export class TerminalManager {
       tried.add(providerType)
       try {
         const provider = await getSandboxProvider(providerType)
+        log.debug(`[Terminal] Trying provider ${providerType} for sandbox ${sandboxId}...`)
         const handle = await withTimeout(
           provider.getSandbox(sandboxId),
           PROVIDER_TIMEOUT_MS,
           providerType
         )
+        log.info(`[Terminal] ✓ Provider ${providerType} found sandbox ${sandboxId} — createPty=${!!handle.createPty}`)
         return { handle, providerType }
       } catch (err) {
-        console.warn(`[TerminalManager] Provider ${providerType} failed:`, err instanceof Error ? err.message : 'Unknown error')
+        log.debug(`[Terminal] ✗ Provider ${providerType} failed for ${sandboxId}:`, err instanceof Error ? err.message : 'Unknown error')
         return null
       }
     }
-    
+
     // Try primary provider first
+    log.info(`[Terminal] Trying primary provider: ${primaryType} for sandbox ${sandboxId}`)
     const primaryResult = await tryProvider(primaryType)
     if (primaryResult) return primaryResult
-    
+
     // Try all known providers to locate the sandbox (supports quota-based fallbacks)
     // This is critical because sandbox-service can create sandboxes on any provider via fallback
-    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'blaxel-mcp', 'sprites', 'codesandbox', 'webcontainer', 'webcontainer-filesystem', 'webcontainer-spawn', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral', 'vercel-sandbox'] //codesandbox***
+    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'blaxel-mcp', 'sprites', 'codesandbox', 'webcontainer', 'webcontainer-filesystem', 'webcontainer-spawn', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral', 'vercel-sandbox']
+    log.info(`[Terminal] Primary provider failed, trying all known providers for sandbox ${sandboxId}`)
     for (const providerType of allProviders) {
       const result = await tryProvider(providerType)
       if (result) return result
     }
-    
+
     // Finally try explicit fallback provider if configured
     const fallbackType = this.getFallbackProviderType()
     if (fallbackType) {
+      log.info(`[Terminal] Trying fallback provider: ${fallbackType}`)
       const fallbackResult = await tryProvider(fallbackType)
       if (fallbackResult) return fallbackResult
     }
 
+    log.error(`[Terminal] Sandbox ${sandboxId} not found on any provider. Tried: ${Array.from(tried).join(', ')}`)
     throw new Error(`Sandbox ${sandboxId} not found on configured providers`)
   }
 
@@ -224,17 +230,28 @@ export class TerminalManager {
     options?: { cols?: number; rows?: number },
     userId?: string,
   ): Promise<string> {
-    log.info(`Creating terminal session: sessionId=${sessionId}, sandboxId=${sandboxId}`)
-    
-    const { handle, providerType } = await this.resolveHandleForSandbox(sandboxId)
-    log.debug(`Resolved sandbox handle from provider: ${providerType}, workspace: ${handle.workspaceDir}`)
+    log.info(`[Terminal] Creating terminal session: sessionId=${sessionId}, sandboxId=${sandboxId}`)
+
+    let handle: SandboxHandle
+    let providerType: SandboxProviderType
+    try {
+      const resolved = await this.resolveHandleForSandbox(sandboxId)
+      handle = resolved.handle
+      providerType = resolved.providerType
+    } catch (err: any) {
+      log.error(`[Terminal] Failed to resolve sandbox handle: ${err.message}`)
+      // If we can't resolve the sandbox, we can't create a session at all
+      throw new Error(`Sandbox not found on any provider: ${sandboxId}. Available providers: daytona, e2b, sprites, codesandbox, webcontainer, opensandbox, microsandbox`)
+    }
+
+    log.info(`[Terminal] Resolved handle: provider=${providerType}, workspace=${handle.workspaceDir}, createPty=${!!handle.createPty}`)
     const provider = await getSandboxProvider(providerType)
     const ptyId = `pty-${sessionId}-${Date.now()}`
 
     // Clean up existing connection in either mode.
     await this.disconnectTerminal(sessionId)
 
-    // Emit session creation event
+    // Emit session creation event with mode info
     emitEvent(sandboxId, 'connected', {
       sessionId,
       mode: handle.createPty ? 'pty' : 'command-mode',
@@ -242,7 +259,8 @@ export class TerminalManager {
     }, { userId })
 
     if (!handle.createPty) {
-      log.debug(`PTY not available for ${sandboxId}, using command-mode`)
+      log.warn(`[Terminal] PTY not available — using command-mode (line-based shell emulation). Provider: ${providerType}`)
+      log.warn(`[Terminal] To enable real PTY, ensure sandbox is created on a provider that supports PTY (daytona, e2b, sprites, codesandbox, vercel-sandbox)`)
       // Fallback providers (e.g. microsandbox) can still support command execution mode.
       commandModeConnections.set(sessionId, {
         sandboxId,
@@ -257,7 +275,7 @@ export class TerminalManager {
         providerType,
       })
 
-      const modeMessage = '\r\n\x1b[33m[command-mode] PTY unavailable, using line-based execution.\x1b[0m\r\n'
+      const modeMessage = `\r\n\x1b[33m[command-mode] PTY unavailable, using line-based execution.\x1b[0m\r\n\x1b[90m  Provider: ${providerType} (no createPty support)\x1b[0m\r\n\x1b[90m  To enable real PTY, use a provider that supports PTY (daytona, e2b, sprites, codesandbox)\x1b[0m\r\n`
       onData(modeMessage)
       onData(`${handle.workspaceDir || '/workspace'} $ `)
 

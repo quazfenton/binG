@@ -2171,6 +2171,15 @@ export function WorkspacePanel() {
     const normalizedParentPath = normalizePath(parentPath);
     const newPath = `${normalizedParentPath}/${renameValue.trim()}`;
 
+    // DEBUG: Log rename paths
+    console.log('[WorkspacePanel] Rename operation:', {
+      renamingFile,
+      newPath,
+      vfsCurrentPath: vfs?.currentPath,
+      scopedOldPath: resolveScopedPath(renamingFile, vfs?.currentPath || '/'),
+      scopedNewPath: resolveScopedPath(newPath, vfs?.currentPath || '/'),
+    });
+
     try {
       // Use new rename API with conflict detection
       const response = await fetch('/api/filesystem/rename', {
@@ -2182,6 +2191,8 @@ export function WorkspacePanel() {
           overwrite: false,
         }),
       });
+
+      console.log('[WorkspacePanel] Rename API response status:', response.status);
 
       if (response.status === 409) {
         // Conflict detected - show confirmation dialog

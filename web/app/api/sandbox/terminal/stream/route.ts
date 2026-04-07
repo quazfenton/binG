@@ -179,11 +179,14 @@ export async function GET(req: NextRequest) {
 
         const setupPty = async () => {
           try {
+            console.log('[Terminal Stream] Creating PTY session...', { sessionId, sandboxId });
             // Always create (or replace) the PTY session; TerminalManager will clean up any existing connection
             await terminalManager.createTerminalSession(sessionId, sandboxId, onData, onPortDetected);
+            console.log('[Terminal Stream] PTY session created successfully');
             send({ type: 'connected', data: { sessionId, sandboxId } });
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Failed to connect to terminal';
+            console.error('[Terminal Stream] PTY session creation failed:', err);
             send({ type: 'error', data: msg });
           }
         };

@@ -1313,13 +1313,33 @@ export default function ConversationInterface() {
     }
   };
 
-  // Check if there are code blocks in messages for preview button glow (mode-aware)
+  // Check if there are code blocks in messages for preview button glow (legacy markdown code blocks)
   const hasCodeBlocks = useMemo(() => {
     return messages.some(
       (message) =>
         message.role === "assistant" && message.content.includes("```"),
     );
   }, [messages]);
+
+  // Track VFS MCP file edits for code preview button glow
+  // VFS tools write files directly without markdown code blocks, so we need separate tracking
+  const [hasMcpFileEdits, setHasMcpFileEdits] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onFilesystemUpdated((event) => {
+      const source = event?.detail?.source;
+      // Light up the code preview button when files are edited via MCP tools
+      if (source?.startsWith('mcp-tool')) {
+        setHasMcpFileEdits(true);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Reset MCP file edit tracking when conversation changes
+  useEffect(() => {
+    setHasMcpFileEdits(false);
+  }, [currentConversationId]);
 
   const handleToggleCodePreview = () => {
     setShowCodePreview((prevShowCodePreview) => {
@@ -2111,6 +2131,7 @@ export default function ConversationInterface() {
         availableProviders={availableProviders}
         onProviderChange={handleProviderChange}
         hasCodeBlocks={hasCodeBlocks}
+        hasMcpFileEdits={hasMcpFileEdits}
         activeTab={activeTab}
         onActiveTabChange={setActiveTab as any}
         userId={user?.id?.toString() || getStableSessionId()}

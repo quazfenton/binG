@@ -17,7 +17,7 @@ import { getProviderForTask, getModelForTask } from '@/lib/config/task-providers
 import { streamWithVercelAI, type VercelStreamOptions } from '@/lib/chat/vercel-ai-streaming';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { LLMMessage } from '@/lib/chat/llm-providers';
-import { generateId, generateText } from 'ai';
+import { generateId, generateText, tool as createTool } from 'ai';
 import type { Tool } from 'ai';
 
 // CoreMessage may not be exported in all AI SDK versions
@@ -455,7 +455,7 @@ export class AgentLoop {
     // Convert tools to Vercel format
     const vercelTools: Record<string, Tool> = {};
     for (const tool of this.tools) {
-      vercelTools[tool.name] = {
+      vercelTools[tool.name] = createTool({
         description: tool.description,
         // @ts-ignore
         parameters: tool.parameters as any,
@@ -466,7 +466,7 @@ export class AgentLoop {
           }
           return result;
         },
-      };
+      });
     }
 
     try {
@@ -1066,7 +1066,7 @@ When task is complete, just respond naturally with your final answer.
       // Convert tools
       const vercelTools: Record<string, Tool> = {};
       for (const tool of this.tools) {
-        vercelTools[tool.name] = {
+        vercelTools[tool.name] = createTool({
           description: tool.description,
           // @ts-ignore - parameters may not be in Tool type but is needed for AI SDK
           parameters: tool.parameters as any,
@@ -1077,7 +1077,7 @@ When task is complete, just respond naturally with your final answer.
             }
             return result;
           },
-        };
+        });
       }
       
       // Stream the continuation

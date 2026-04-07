@@ -13,6 +13,24 @@ import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events
 
 const logger = createLogger('Agent:FSBridge');
 
+function sanitizeSandboxPath(inputPath: string, basePath: string = '/workspace'): string {
+  if (!inputPath || typeof inputPath !== 'string') {
+    return basePath;
+  }
+  const normalizedPath = inputPath.replace(/\\/g, '/').replace(/\/+/g, '/').trim();
+  if (normalizedPath.includes('..')) {
+    throw new Error('Path traversal is not allowed');
+  }
+  if (normalizedPath.includes('\0')) {
+    throw new Error('Invalid path: null bytes are not allowed');
+  }
+  if (normalizedPath.startsWith('/') && !normalizedPath.startsWith(basePath)) {
+    throw new Error('Absolute paths outside workspace are not allowed');
+  }
+  const cleanPath = normalizedPath.startsWith('/') ? normalizedPath : `${basePath}/${normalizedPath}`.replace(/\/+/g, '/');
+  return cleanPath;
+}
+
 export interface SyncResult {
   success: boolean;
   syncedFiles: string[];
@@ -62,7 +80,7 @@ class AgentFSBridge {
       for (const file of sessionFiles) {
         try {
           const relativePath = file.path.replace('project/', '');
-          const sandboxFilePath = `${sandboxPath}/${relativePath}`;
+          const sandboxFilePath = sanitizeSandboxPath(`${sandboxPath}/${relativePath}`);
           
           await session.sandboxHandle.writeFile(sandboxFilePath, file.content);
           syncedFiles.push(file.path);
@@ -136,7 +154,8 @@ class AgentFSBridge {
             continue;
           }
 
-          const readResult = await session.sandboxHandle.readFile(sandboxFile);
+          const sanitizedFilePath = sanitizeSandboxPath(sandboxFile);
+          const readResult = await session.sandboxHandle.readFile(sanitizedFilePath);
           
           if (!readResult.success) {
             errors.push(`Failed to read ${sandboxFile}: ${readResult.output}`);

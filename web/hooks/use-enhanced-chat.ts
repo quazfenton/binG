@@ -239,11 +239,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
               : msg
           ));
           setIsLoading(false);
-          if (options.onFinish && currentMessageRef.current) {
+          if (options.onFinish) {
             options.onFinish({
-              ...currentMessageRef.current,
+              ...assistantMessage,
               content,
-              metadata: messageMetadata
+              metadata: { ...(assistantMessage.metadata || {}), ...messageMetadata }
             });
           }
           return;
@@ -254,7 +254,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
       // Some auth-required responses are returned as JSON, not SSE.
       const contentType = response.headers.get('content-type') || '';
-      
+
       // Check for JSON responses (errors, auth required, etc.)
       // Skip this for SSE streams which may include 'application/json' in content-type
       if (contentType.includes('application/json') && !contentType.includes('text/event-stream')) {
@@ -297,11 +297,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
               : msg
           ));
           setIsLoading(false);
-          if (options.onFinish && currentMessageRef.current) {
+          if (options.onFinish) {
             options.onFinish({
-              ...currentMessageRef.current,
+              ...assistantMessage,
               content,
-              metadata: messageMetadata
+              metadata: { ...(assistantMessage.metadata || {}), ...messageMetadata }
             });
           }
           return;
@@ -344,17 +344,17 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         // so the user knows the response may be incomplete.
         console.warn('Chat streaming interrupted (partial content preserved):', error);
 
-        if (hasContent && currentMessageRef.current) {
+        if (hasContent && currentMessage) {
           // Append a subtle indicator that the response was truncated
-          const partialContent = (currentMessage?.content || '') + '\n\n⚠️ _Response may be incomplete due to a connection issue._';
+          const partialContent = (currentMessage.content || '') + '\n\n⚠️ _Response may be incomplete due to a connection issue._';
           setMessages(prev => prev.map(msg =>
-            msg.id === currentMessageRef.current!.id
+            msg.id === currentMessage.id
               ? { ...msg, content: partialContent }
               : msg
           ));
           if (options.onFinish) {
             options.onFinish({
-              ...currentMessageRef.current,
+              ...currentMessage,
               content: partialContent,
             });
           }
@@ -377,6 +377,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     let currentEventType = '';
     let tokenCount = 0;  // Track token events for debugging
 
+    // CRITICAL: Track tool invocations locally during streaming
+    // messagesRef.current is stale (useEffect hasn't synced yet when done fires)
+    const streamingToolInvocations: Array<{ toolCallId: string; toolName: string; state: string }> = [];
+
     // Set up a timeout to ensure we don't get stuck
     const timeoutId = setTimeout(() => {
       console.warn('[Chat] Streaming timeout after 3min, finalizing with accumulated content', {
@@ -391,10 +395,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
             : msg
         ));
         setIsLoading(false);
-        if (options.onFinish && currentMessageRef.current) {
+        if (options.onFinish) {
           options.onFinish({
-            ...currentMessageRef.current,
-            content: accumulatedContent
+            ...assistantMessage,
+            content: accumulatedContent,
+            metadata: assistantMessage.metadata || {}
           });
         }
       }
@@ -498,9 +503,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     ));
                   }
                   // Update agent status to executing if we're receiving tokens
-                  if (agentStatus === 'thinking') {
-                    setAgentStatus('executing');
-                  }
+                  // Use functional update to avoid stale closure
+                  setAgentStatus(prev => prev === 'thinking' ? 'executing' : prev);
                   break;
 
                 case 'primary_done':
@@ -591,24 +595,22 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   
                   // CRITICAL FIX: Detect empty responses and trigger re-request
                   // Empty = no text content AND no tool invocations AND no filesystem edits
-                  // CRITICAL: Check message metadata for tool invocations (they're stored during streaming via tool_call/tool_invocation events)
-                  const currentMsg = messagesRef.current.find(msg => msg.id === assistantMessage.id);
-                  const msgToolInvocations = (currentMsg?.metadata as any)?.toolInvocations || [];
+                  // CRITICAL: Use streamingToolInvocations (local) instead of messagesRef.current
+                  // because messagesRef is stale (useEffect hasn't synced when done fires)
                   const hasToolInvocations = eventData.toolInvocations?.length > 0 ||
                     eventData.toolCalls?.length > 0 ||
                     (eventData.messageMetadata?.toolInvocations?.length > 0) ||
-                    msgToolInvocations.length > 0;
+                    streamingToolInvocations.length > 0;  // ← Local tracking, always up-to-date
                   const hasFileSystemEdits = eventData.filesystem?.applied?.length > 0 ||
-                    eventData.fileEdits?.length > 0 ||
-                    (currentMsg?.metadata as any)?.filesystem?.applied?.length > 0;
+                    eventData.fileEdits?.length > 0;
                   const isEmptyResponse = !doneContent.trim() && !hasToolInvocations && !hasFileSystemEdits;
 
                   if (isEmptyResponse) {
                     console.warn('[Chat] Empty response detected - content, tools, and filesystem edits all missing:', {
                       messageId: assistantMessage.id,
                       doneContentLength: doneContent?.length,
+                      streamingToolInvocationCount: streamingToolInvocations.length,  // ← Log local count
                       hasToolInvocations,
-                      msgToolInvocationCount: msgToolInvocations.length,
                       hasFileSystemEdits,
                       provider: eventData.provider || doneMetadata.provider || 'unknown',
                       model: eventData.model || doneMetadata.model || 'unknown',
@@ -651,12 +653,14 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // CRITICAL FIX: Auto-retry empty responses
                   // This handles cases where providers return empty content with no tools/filesystem edits
                   // Mark the original message as failed, then create a NEW bubble with loading state
+                  // NOTE: Only retry ONCE. If the retry also returns empty, stop retrying to prevent infinite loops.
                   if (isEmptyResponse) {
                     const retryCount = (doneMetadata.retryCount || 0);
-                    const maxRetries = 2; // Prevent infinite loops
+                    const maxRetries = 1; // Only 1 retry to prevent infinite loops
 
                     if (retryCount < maxRetries) {
                       // Find the last user message content
+                      // Safe to use messagesRef here since user messages don't change during streaming
                       const currentMessages = messagesRef.current;
                       const lastUserMsg = currentMessages.findLast(
                         msg => msg.role === 'user' && msg.id !== assistantMessage.id
@@ -668,11 +672,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         // CRITICAL: Clear the timeout from current stream before starting retry
                         clearTimeout(timeoutId);
 
-                        // Preserve tool invocations from the original message so they don't disappear
-                        const originalToolInvocations = (currentMsg?.metadata as any)?.toolInvocations || [];
-                        const originalFilesystem = (currentMsg?.metadata as any)?.filesystem;
+                        // Build retry message history WITHOUT the empty assistant response
+                        const messagesWithoutEmpty = currentMessages.filter(
+                          msg => msg.id !== assistantMessage.id
+                        );
 
                         // Mark the ORIGINAL message as failed (keeps tool invocations visible)
+                        // Use locally tracked streamingToolInvocations (messagesRef is stale for the current assistant message)
                         setMessages(prev => prev.map(msg =>
                           msg.id === assistantMessage.id
                             ? {
@@ -683,9 +689,10 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                                   ...doneMetadata,
                                   isEmptyResponse: true,
                                   emptyResponseAttempt: retryCount + 1,
-                                  // Preserve tool invocations so they don't disappear
-                                  toolInvocations: originalToolInvocations,
-                                  filesystem: originalFilesystem,
+                                  // Preserve tool invocations from local tracking
+                                  toolInvocations: streamingToolInvocations.length > 0
+                                    ? streamingToolInvocations
+                                    : (msg.metadata as any)?.toolInvocations,
                                 },
                               }
                             : msg
@@ -765,16 +772,17 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         }
                       }
                     } else {
-                      // Max retries reached
-                      console.error('[Chat] Max retries reached for empty response');
+                      // Max retries reached OR this is already a retry that returned empty
+                      console.warn('[Chat] Empty response after retry, stopping retries');
                       setMessages(prev => prev.map(msg =>
                         msg.id === assistantMessage.id
                           ? {
                               ...msg,
-                              content: 'Sorry, I could not generate a response after multiple attempts. Please try asking your question differently.',
+                              content: msg.content && msg.content.trim() ? msg.content : '_Response returned empty content_',
                               metadata: {
                                 ...(msg.metadata || {}),
                                 maxRetriesReached: true,
+                                isEmptyResponse: false, // Clear flag to prevent further retries
                               },
                             }
                           : msg
@@ -787,15 +795,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   setIsLoading(false);
                   setAgentStatus('completed');
                   if (options.onFinish) {
-                    // Use messagesRef.current instead of currentMessageRef.current to avoid stale closure
-                    const finalMsg = messagesRef.current.find(msg => msg.id === assistantMessage.id);
-                    if (finalMsg) {
-                      options.onFinish({
-                        ...finalMsg,
-                        content: doneContent,
-                        metadata: { ...(finalMsg.metadata || {}), ...doneMetadata }
-                      });
-                    }
+                    // Build the final message directly instead of relying on stale messagesRef
+                    const finalMsg: Message = {
+                      ...assistantMessage,
+                      content: doneContent,
+                      metadata: { ...(assistantMessage.metadata || {}), ...doneMetadata },
+                    };
+                    options.onFinish(finalMsg);
                   }
 
                   return;
@@ -1316,6 +1322,16 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   // Handle tool call events from Vercel AI SDK (tool execution starting)
                   // This is similar to tool_invocation but emitted during streaming when
                   // the model calls a tool before execution completes
+
+                  // CRITICAL: Track locally for done event detection (messagesRef is stale)
+                  if (!streamingToolInvocations.find(inv => inv.toolCallId === eventData.toolCallId)) {
+                    streamingToolInvocations.push({
+                      toolCallId: eventData.toolCallId,
+                      toolName: eventData.toolName,
+                      state: eventData.state || 'call',
+                    });
+                  }
+
                   if (process.env.NODE_ENV === 'development') {
                     console.log('[Chat] Tool call detected:', {
                       toolCallId: eventData.toolCallId,
@@ -1369,6 +1385,19 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 case 'tool_invocation':
+                  // CRITICAL: Track locally for done event detection (messagesRef is stale)
+                  const existingLocalIdx = streamingToolInvocations.findIndex(inv => inv.toolCallId === eventData.toolCallId);
+                  if (existingLocalIdx === -1) {
+                    streamingToolInvocations.push({
+                      toolCallId: eventData.toolCallId,
+                      toolName: eventData.toolName,
+                      state: eventData.state || 'result',
+                    });
+                  } else {
+                    // Update state if already exists
+                    streamingToolInvocations[existingLocalIdx].state = eventData.state || streamingToolInvocations[existingLocalIdx].state;
+                  }
+
                   setMessages(prev => prev.map(msg => {
                     if (msg.id !== assistantMessage.id) return msg;
                     const existing = Array.isArray((msg.metadata as any)?.toolInvocations)
@@ -1629,10 +1658,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         clearTimeout(timeoutId);
         setIsLoading(false);
 
-        if (options.onFinish && currentMessageRef.current) {
+        if (options.onFinish) {
           options.onFinish({
-            ...currentMessageRef.current,
-            content: accumulatedContent
+            ...assistantMessage,
+            content: accumulatedContent,
+            metadata: assistantMessage.metadata || {}
           });
         }
     } catch (streamError) {
@@ -1753,16 +1783,17 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // Set up a timeout
     const timeoutId = setTimeout(() => {
       if (accumulatedContent.trim()) {
-        setMessages(prev => prev.map(msg => 
-          msg.id === assistantMessage.id 
+        setMessages(prev => prev.map(msg =>
+          msg.id === assistantMessage.id
             ? { ...msg, content: accumulatedContent }
             : msg
         ));
         setIsLoading(false);
-        if (onFinish && currentMessageRef.current) {
+        if (onFinish) {
           onFinish({
-            ...currentMessageRef.current,
+            ...assistantMessage,
             content: accumulatedContent,
+            metadata: assistantMessage.metadata || {}
           });
         }
       }
@@ -1788,10 +1819,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
           if (dataString === '[DONE]') {
             clearTimeout(timeoutId);
             setIsLoading(false);
-            if (onFinish && currentMessageRef.current) {
+            if (onFinish) {
               onFinish({
-                ...currentMessageRef.current,
+                ...assistantMessage,
                 content: accumulatedContent,
+                metadata: assistantMessage.metadata || {}
               });
             }
             return;
@@ -1835,10 +1867,11 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // If we reach here without a 'done' event
     clearTimeout(timeoutId);
     setIsLoading(false);
-    if (onFinish && currentMessageRef.current) {
+    if (onFinish) {
       onFinish({
-        ...currentMessageRef.current,
+        ...assistantMessage,
         content: accumulatedContent,
+        metadata: assistantMessage.metadata || {}
       });
     }
   };

@@ -64,7 +64,16 @@ export function getRateLimitTier(userId?: string, apiKey?: string): RateLimitTie
 }
 
 // In-memory storage for rate limit tracking
-const rateLimitStore = new Map<string, RateLimitEntry>();
+// CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
+// Without this, rate limits are bypassed after every hot-reload (security vulnerability)
+declare global {
+  // eslint-disable-next-line no-var
+  var __rateLimitStore__: Map<string, RateLimitEntry> | undefined;
+  // eslint-disable-next-line no-var
+  var __rateLimitCleanupRegistered__: boolean | undefined;
+}
+
+const rateLimitStore = globalThis.__rateLimitStore__ ?? (globalThis.__rateLimitStore__ = new Map<string, RateLimitEntry>());
 
 // Default configurations for different endpoints
 export const RATE_LIMIT_CONFIGS = {
@@ -165,8 +174,11 @@ function cleanupExpiredEntries(): void {
   }
 }
 
-// Run cleanup every 5 minutes
-setInterval(cleanupExpiredEntries, 5 * 60 * 1000);
+// Run cleanup every 5 minutes (only once, even across hot-reloads)
+if (!globalThis.__rateLimitCleanupRegistered__) {
+  globalThis.__rateLimitCleanupRegistered__ = true;
+  setInterval(cleanupExpiredEntries, 5 * 60 * 1000);
+}
 
 /**
  * Check rate limit for a given identifier and configuration
