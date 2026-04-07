@@ -206,6 +206,8 @@ function createVFSTools(context: ToolExecutionContext): Record<string, Tool> {
   // Use sessionId from context if available, otherwise extract from conversationId
   // The conversationId format is "ownerId:sessionId" so we can extract sessionId from it
   const sessionId = context.sessionId || (context.conversationId?.includes(':') ? context.conversationId.split(':')[1] : undefined);
+  // Ensure scopePath is always defined - fallback to "project" for workspace root
+  const scopePath = context.scopePath || 'project';
   const tools: Record<string, Tool> = {};
 
   for (const [name, vfsTool] of Object.entries(mcpVFSTools)) {
@@ -213,7 +215,7 @@ function createVFSTools(context: ToolExecutionContext): Record<string, Tool> {
       ...vfsTool,
       execute: async (args: any, execOptions: any) => {
         return toolContextStore.run(
-          { userId, sessionId },
+          { userId, sessionId, scopePath },
           async () => (vfsTool as any).execute(args, execOptions),
         );
       },
