@@ -341,8 +341,7 @@ function createGitHubHandler() {
  * This is defense-in-depth; the sandbox provides the real isolation.
  */
 const DANGEROUS_COMMAND_PATTERNS = [
-  /\brm\s+-rf\s+\/(?!\w)/i,             // rm -rf /
-  /\brm\s+-rf\s+\s/i,                    // rm -rf <space>
+  /\brm\s+-rf\s+\//i,                // rm -rf <absolute-path>
   /\bmkfs\b/i,                           // format filesystem
   /\bdd\s+if=.*of=\/dev\//i,            // dd to device
   /:\(\)\s*\{\s*:\|:&\s*\}\s*;/i,       // fork bomb
@@ -473,6 +472,7 @@ const SSRF_BLOCKED_HOSTS = [
   '192.168.',
   '169.254.',  // Link-local + AWS metadata (169.254.169.254)
   'fe80:', '::1', '[::1]',
+  '::ffff:',   // IPv4-mapped IPv6 addresses (e.g., [::ffff:127.0.0.1])
   'metadata.google.internal',  // GCP metadata
   'instance-data.',             // Azure metadata
 ] as const;
