@@ -1,7 +1,6 @@
 {
-  "extends": "../../web/tsconfig.json",
   "compilerOptions": {
-    "outDir": "../dist",
+    "outDir": "./dist",
     "rootDir": "src",
     "composite": false,
     "declaration": true,
@@ -11,7 +10,12 @@
     "moduleResolution": "bundler",
     "target": "ES2022",
     "lib": ["ES2022"],
-    "types": ["node"]
+    "types": ["node"],
+    "strict": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true
   },
   "include": ["src/**/*.ts"],
   "exclude": ["node_modules", "dist"]
