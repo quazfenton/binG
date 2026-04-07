@@ -1573,9 +1573,12 @@ export function listGeneralDomainRolesV2(): GeneralDomainRoleV2[] {
 
 /**
  * Get minimal prompt variant for cost-sensitive operations.
+ * Keeps the identity block and tool reference, drops the detailed Prime Directives.
  */
 export function getGeneralMinimalPromptV2(role: GeneralDomainRoleV2): string {
   const full = GENERAL_PROMPTS_V2[role];
-  const sections = full.split(/={20,}/);
-  return sections.slice(0, 2).join('') + '\n\nFollow the structured output format described in the full prompt.';
+  // Split only at the Prime Directives boundary — avoids breaking on the
+  // ==== separators inside NON_TECHNICAL_TOOL_REFERENCE.
+  const [header] = full.split(/\n={20,}\n# PRIME DIRECTIVES/);
+  return header + '\n\nFollow the structured output format described in the full prompt.';
 }

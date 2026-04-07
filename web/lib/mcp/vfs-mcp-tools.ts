@@ -58,10 +58,14 @@ export function setToolContext(context: ToolContext): void {
  * FALLBACK: Uses "project" as the default scope if none is set.
  */
 function getToolContext(): ToolContext {
-  return toolContextStore.getStore() || {
+  const ctx = toolContextStore.getStore();
+  if (ctx) return ctx;
+  // Safe fallback — should only happen if tools are called outside
+  // of a toolContextStore.run() wrapper (which indicates a caller bug).
+  return {
     userId: 'default',
     sessionId: undefined,
-    scopePath: 'project',  // Safe default: workspace root (VFS-relative path)
+    scopePath: 'project',
   };
 }
 
@@ -80,16 +84,21 @@ function getToolContext(): ToolContext {
  * - scopePath="project/sessions/001", path="/src/app.ts" → "project/sessions/001/src/app.ts"
  * - scopePath="project", path="src/app.ts" → "project/src/app.ts"
  */
-function resolveScopedPath(path: string): string {
+function resolveScopedPath(inputPath: string): string {
+  if (!inputPath || typeof inputPath !== 'string') {
+    throw new Error('Path is required');
+  }
+
   // Strip leading slash if present and normalize backslashes
-  let cleanPath = path.startsWith('/') ? path.substring(1) : path;
+  let cleanPath = inputPath.startsWith('/') ? inputPath.substring(1) : inputPath;
   cleanPath = cleanPath.replace(/\\/g, '/');  // Handle Windows paths
   cleanPath = cleanPath.replace(/\/+/g, '/'); // Collapse double slashes
   cleanPath = cleanPath.replace(/\/+$/, '');  // Strip trailing slashes
 
   // Reject path traversal attempts in the path itself
-  if (cleanPath.includes('..')) {
-    logger.warn('Path traversal attempt detected in file path', { originalPath: path, cleanPath });
+  const segments = cleanPath.split('/');
+  if (segments.some(seg => seg === '..')) {
+    logger.warn('Path traversal attempt detected in file path', { originalPath: inputPath, cleanPath });
     throw new Error('Path cannot contain directory traversal (..)');
   }
 
@@ -117,7 +126,7 @@ function resolveScopedPath(path: string): string {
   // This catches attempts to escape session scope (e.g., writing to project/shared when scoped to project/sessions/001)
   if (cleanPath.startsWith('project/')) {
     logger.warn('Path outside session scope - will be written to workspace root instead of session', {
-      originalPath: path,
+      originalPath: inputPath,
       cleanPath,
       scopePath,
     });
@@ -163,7 +172,30 @@ export const writeFileTool = (tool as any)({
   }),
   execute: async ({ path, content, commitMessage = 'Write file via MCP tool' }) => {
     try {
+      if (!path || typeof path !== 'string') {
+        return { success: false, path, error: 'Path is required' };
+      }
+      if (content === undefined || content === null) {
+        return { success: false, path, error: 'Content is required' };
+      }
+      // Guard against extremely large content that could cause memory issues
+      const MAX_CONTENT_SIZE = 5 * 1024 * 1024; // 5MB
+      if (content.length > MAX_CONTENT_SIZE) {
+        return {
+          success: false,
+          path,
+          error: `Content too large (${(content.length / 1024 / 1024).toFixed(1)}MB). Maximum is ${(MAX_CONTENT_SIZE / 1024 / 1024).toFixed(0)}MB.`,
+        };
+      }
       const context = getToolContext();
+
+      // Validate context — if userId is 'default', the tool context wasn't set properly
+      if (context.userId === 'default') {
+        logger.warn('writeFile: tool context not set — ensure toolContextStore.run() is used', {
+          path,
+          contentLength: content.length,
+        });
+      }
       
       // Resolve path relative to session scope
       const scopedPath = resolveScopedPath(path);
@@ -227,6 +259,12 @@ export const applyDiffTool = (tool as any)({
   }),
   execute: async ({ path, diff, commitMessage = 'Applied diff via MCP tool' }) => {
     try {
+      if (!path || typeof path !== 'string') {
+        return { success: false, path, error: 'Path is required' };
+      }
+      if (!diff || typeof diff !== 'string') {
+        return { success: false, path, error: 'Diff content is required' };
+      }
       const context = getToolContext();
       const scopedPath = resolveScopedPath(path);
       logger.debug('applyDiff', { originalPath: path, scopedPath, diffLength: diff.length, userId: context.userId });
@@ -291,6 +329,9 @@ export const readFileTool = (tool as any)({
   }),
   execute: async ({ path }) => {
     try {
+      if (!path || typeof path !== 'string') {
+        return { success: false, path, error: 'Path is required', exists: false };
+      }
       const context = getToolContext();
       const scopedPath = resolveScopedPath(path);
       logger.debug('readFile', { originalPath: path, scopedPath, userId: context.userId });
@@ -375,6 +416,9 @@ export const searchFilesTool = (tool as any)({
   }),
   execute: async ({ query, path, limit = 10 }) => {
     try {
+      if (!query || typeof query !== 'string') {
+        return { success: false, query, error: 'Query is required', files: [], total: 0 };
+      }
       const context = getToolContext();
       logger.debug('searchFiles', { query, path, limit, userId: context.userId });
       
@@ -429,11 +473,19 @@ export const batchWriteTool = (tool as any)({
     try {
       const context = getToolContext();
       
+      // DEBUG: Log full context and args at entry
+      logger.debug('batchWrite: entry', {
+        filesType: typeof files,
+        filesIsArray: Array.isArray(files),
+        filesLength: files?.length ?? 'null/undefined',
+        userId: context.userId,
+        scopePath: context.scopePath,
+        firstFile: files?.[0] ? { path: files[0].path, contentLen: files[0].content?.length } : 'none',
+      });
+      
       // Validate context - if userId is 'default', the tool context wasn't set properly
       if (context.userId === 'default') {
-        logger.error('batchWrite: tool context not set - ensure toolContextStore.run() is used', {
-          filesCount: files?.length,
-        });
+        logger.error('batchWrite: tool context not set - ensure toolContextStore.run() is used');
       }
 
       // Validate input
@@ -447,11 +499,30 @@ export const batchWriteTool = (tool as any)({
         };
       }
 
+      // Guard against extremely large total content (50 files * 5MB = 250MB max)
+      const MAX_TOTAL_CONTENT_SIZE = 50 * 1024 * 1024; // 50MB
+      const totalSize = files.reduce((sum: number, f: any) => sum + (f.content?.length || 0), 0);
+      if (totalSize > MAX_TOTAL_CONTENT_SIZE) {
+        return {
+          success: false,
+          error: `Total content too large (${(totalSize / 1024 / 1024).toFixed(1)}MB). Maximum is ${(MAX_TOTAL_CONTENT_SIZE / 1024 / 1024).toFixed(0)}MB.`,
+          results: [],
+        };
+      }
+
       // Resolve all paths relative to session scope
-      const scopedFiles = files.map(file => ({
-        ...file,
-        scopedPath: resolveScopedPath(file.path),
-      }));
+      const scopedFiles = files.map(file => {
+        if (!file.path || typeof file.path !== 'string') {
+          throw new Error('Each file entry requires a "path" property');
+        }
+        if (file.content === undefined || file.content === null) {
+          throw new Error(`File "${file.path}" requires "content" property`);
+        }
+        return {
+          ...file,
+          scopedPath: resolveScopedPath(file.path),
+        };
+      });
 
       logger.debug('batchWrite', { fileCount: files.length, userId: context.userId, scopePath: context.scopePath });
 
@@ -535,7 +606,6 @@ export const batchWriteTool = (tool as any)({
         error: error.message,
         stack: error.stack,
         fileCount: files?.length,
-        userId: context?.userId,
       });
       return {
         success: false,
@@ -557,6 +627,9 @@ export const deleteFileTool = (tool as any)({
   }),
   execute: async ({ path, reason }) => {
     try {
+      if (!path || typeof path !== 'string') {
+        return { success: false, path, error: 'Path is required' };
+      }
       const context = getToolContext();
       const scopedPath = resolveScopedPath(path);
       logger.debug('deleteFile', { originalPath: path, scopedPath, reason, userId: context.userId });
@@ -599,8 +672,11 @@ export const createDirectoryTool = (tool as any)({
   }),
   execute: async ({ path }) => {
     try {
+      if (!path || typeof path !== 'string') {
+        return { success: false, path, error: 'Path is required' };
+      }
       const context = getToolContext();
-      
+
       // Resolve path relative to session scope
       const scopedPath = resolveScopedPath(path);
       logger.debug('createDirectory', { originalPath: path, scopedPath, userId: context.userId });

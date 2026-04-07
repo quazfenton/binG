@@ -251,7 +251,7 @@ export async function POST(request: NextRequest) {
         // This isolates the context per-request, preventing cross-user data leaks.
         // @ts-ignore - AI SDK tool execute takes different arg shapes
         const callResult = await toolContextStore.run(
-          { userId, sessionId },
+          { userId, sessionId, scopePath: 'project' },
           async () => targetTool.execute(toolArgs || {}, {
             messages: [],
             toolCallId: String(id || crypto.randomUUID()),

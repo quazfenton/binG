@@ -14,8 +14,8 @@ export const runtime = 'nodejs';
 const deleteRequestSchema = z.object({
   path: absolutePathSchema
     .refine(
-      (path) => path.startsWith('/home/') || path.startsWith('/workspace/'),
-      'Absolute paths must start with /home/ or /workspace/'
+      (path) => path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/project/'),
+      'Absolute paths must start with /home/, /workspace/, or /project/'
     )
     .refine(
       (path) => !path.includes('..'),

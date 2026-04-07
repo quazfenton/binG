@@ -29,8 +29,8 @@ const writeRequestSchema = z.object({
       (path) => {
         // Allow relative paths (project, project/sessions, etc.)
         if (!path.startsWith('/')) return true;
-        // If absolute, must start with /home/, /workspace/, or /tmp/
-        return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/');
+        // If absolute, must start with /home/, /workspace/, /tmp/, or /project/
+        return path.startsWith('/home/') || path.startsWith('/workspace/') || path.startsWith('/tmp/') || path.startsWith('/project/');
       },
       'Invalid path format'
     ),

@@ -1,5 +1,5 @@
 import { openai } from '@ai-sdk/openai';
-import { streamText, generateObject } from 'ai';
+import { streamText, generateObject, type Tool as CoreTool } from 'ai';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 import type { ProjectServices } from '@/lib/project-context';
 import { ToolExecutor } from '../tools/tool-executor';

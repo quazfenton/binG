@@ -320,7 +320,7 @@ export class AgentLoop {
       ];
 
       // Execute with ToolLoopAgent
-      const result = await this.toolLoopAgent.do({ messages });
+      const result = await this.toolLoopAgent.generate({ messages });
 
       // Transform ToolLoopAgent result to AgentResult format
       const toolInvocations = result.toolInvocations || [];
@@ -457,8 +457,9 @@ export class AgentLoop {
     for (const tool of this.tools) {
       vercelTools[tool.name] = createTool({
         description: tool.description,
-        // @ts-ignore
+        // @ts-ignore AI SDK v6 tool type signature changed frequently
         parameters: tool.parameters as any,
+        // @ts-ignore AI SDK v6 execute signature changed
         execute: async (args: any) => {
           const result = await tool.execute(args);
           if (!result.success) {
@@ -770,12 +771,26 @@ When task is complete, just respond naturally with your final answer.
       // Create ToolLoopAgent instance with configured model
       const vercelModel = await this.createModelInstance(provider, model);
       
+      // Build SDK tool map from the filesystem tools array
+      const sdkTools: Record<string, any> = {};
+      for (const tool of this.tools) {
+        sdkTools[tool.name] = {
+          description: tool.description,
+          parameters: tool.parameters as any,
+          execute: async (args: any) => {
+            const result = await tool.execute(args);
+            if (!result.success) {
+              throw new Error(result.error || 'Tool execution failed');
+            }
+            return result;
+          },
+        };
+      }
+
       this.toolLoopAgent = new ToolLoopAgent({
         model: vercelModel,
-        tools: Object.keys(this.tools).reduce((acc, toolName) => {
-          acc[toolName] = this.tools.find(t => t.name === toolName);
-          return acc;
-        }, {} as Record<string, any>),
+        maxIterations: this.maxIterations,
+        tools: sdkTools,
       });
       
       log.info('ToolLoopAgent initialized successfully', { provider, model, isCompatible });
@@ -1070,6 +1085,7 @@ When task is complete, just respond naturally with your final answer.
           description: tool.description,
           // @ts-ignore - parameters may not be in Tool type but is needed for AI SDK
           parameters: tool.parameters as any,
+          // @ts-ignore AI SDK v6 execute signature changed
           execute: async (args: any) => {
             const result = await tool.execute(args);
             if (!result.success) {
