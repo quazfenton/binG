@@ -25,7 +25,12 @@ export const researchTask = task({
       depth: payload.depth,
     });
 
-    const origin = process.env.NEXT_PUBLIC_APP_URL || "http://localhost:3000";
+    const origin = process.env.NEXT_PUBLIC_APP_URL || process.env.APP_ORIGIN;
+    if (!origin) {
+      throw new Error(
+        'NEXT_PUBLIC_APP_URL or APP_ORIGIN env var is required for research-task execution'
+      );
+    }
 
     const searchResponse = await fetch(`${origin}/api/news?search=${encodeURIComponent(payload.query)}`);
     if (!searchResponse.ok) {

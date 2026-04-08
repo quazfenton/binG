@@ -41,6 +41,8 @@ export interface ExecutionRecord {
   stepsExecuted: number;
   errors: string[];
   timestamp: number;
+  /** Provider that executed this capability (e.g., 'vfs', 'local-fs', 'opencode-v2') */
+  provider?: string;
   feedback?: {
     quality: number; // 0-1
     efficiency: number; // 0-1
@@ -245,27 +247,45 @@ export class BootstrappedAgency {
    * This bridges the gap between natural language tasks and Zod-validated
    * capability inputs. The LLM is expected to do this when calling the
    * capability directly — this is a fallback for agency auto-execution.
+   *
+   * Uses project-detection module to detect framework, package manager,
+   * and translate NL commands appropriately.
    */
-  private buildCapabilityInput(capabilityId: string, task: string): any {
+  private async buildCapabilityInput(capabilityId: string, task: string): Promise<any> {
     const base = { task };
+
+    // Attempt to extract a file path from the task description
+    const pathMatch = task.match(/["']?([\/\w.\-]+(?:\/[\w.\-]+)+)["']?/);
+    const extractedPath = pathMatch?.[1] ?? null;
+
+    // Attempt to extract a URL from the task description
+    const urlMatch = task.match(/https?:\/\/[^\s"'<>]+/);
+    const extractedUrl = urlMatch?.[0] ?? null;
+
+    // Note: Full project detection (framework, package manager, NL→command translation)
+    // happens in the capability router (web/lib/tools/router.ts). The agency uses a
+    // simple fallback here to avoid cross-package imports from packages/shared → web/lib.
+    // The router will handle project detection when the capability is actually executed.
 
     switch (capabilityId) {
       case 'file.read':
-        return { path: 'test.txt' };
-      case 'file.write':
-        return { path: 'test-output.txt', content: task };
       case 'file.delete':
-      case 'file.append':
-        return { path: 'test.txt', content: task };
       case 'file.list':
-        return { path: '.' };
+        if (extractedPath) return { path: extractedPath };
+        // Fall through — cannot safely default; fail fast
+        throw new Error(`Cannot auto-execute ${capabilityId}: no target path found in task`);
+      case 'file.write':
+      case 'file.append':
+        if (extractedPath) return { path: extractedPath, content: task };
+        throw new Error(`Cannot auto-execute ${capabilityId}: no target path found in task`);
       case 'sandbox.shell':
         return { command: task };
       case 'sandbox.execute':
         return { code: task, language: 'bash' as const };
       case 'web.browse':
       case 'web.fetch':
-        return { url: 'https://example.com' };
+        if (extractedUrl) return { url: extractedUrl };
+        throw new Error(`Cannot auto-execute ${capabilityId}: no URL found in task`);
       default:
         return base;
     }
@@ -342,7 +362,10 @@ export class BootstrappedAgency {
             },
           };
         } catch (routerError: any) {
-          // Router not available, use mock executor
+          // Router not available — expected in test/CI environments where the
+          // '@/lib/tools/router' path alias can't be resolved from packages/shared/agent.
+          // The "Transform failed" debug message is informational, not a failure.
+          // Falls back to mock executor below.
           log.debug('Capability router not available, using mock executor', routerError.message);
         }
 
@@ -621,6 +644,22 @@ export class BootstrappedAgency {
       ?.join('-') || 'general';
 
     return keywords;
+  }
+
+  /**
+   * Get the success rate for a specific capability, optionally scoped to a provider.
+   * Returns a value between 0.0 and 1.0.
+   * Used by CapabilityRouter for adaptive provider scoring.
+   */
+  getCapabilitySuccessRate(capabilityId: string, providerId?: string): number | null {
+    const relevant = this.executionHistory.filter(
+      r => r.capabilities.includes(capabilityId) && (!providerId || r.provider === providerId)
+    );
+
+    if (relevant.length === 0) return null;
+
+    const successful = relevant.filter(r => r.success).length;
+    return successful / relevant.length;
   }
 
   /**

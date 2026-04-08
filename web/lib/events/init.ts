@@ -79,7 +79,7 @@ export async function initializeEventSystemOnStartup(): Promise<void> {
       logger.info('Event system initialized with local backend', {
         schedulerIntervalMs: 5 * 60 * 1000,
         processorIntervalMs: 5000,
-        note: 'Set TRIGGER_API_KEY to enable durable execution via Trigger.dev',
+        note: 'Set TRIGGER_SECRET_KEY to enable durable execution via Trigger.dev',
       });
     }
 

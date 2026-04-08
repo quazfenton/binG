@@ -26,10 +26,17 @@ function sanitizeSandboxPath(inputPath: string, basePath: string = '/workspace')
   if (normalizedPath.includes('\0')) {
     throw new Error('Invalid path: null bytes are not allowed');
   }
-  if (normalizedPath.startsWith('/') && !normalizedPath.startsWith(basePath)) {
-    throw new Error('Absolute paths outside workspace are not allowed');
+  // Block absolute paths entirely — only relative paths within the workspace are allowed
+  if (normalizedPath.startsWith('/')) {
+    throw new Error('Absolute paths are not allowed; use paths relative to workspace root');
   }
-  const cleanPath = normalizedPath.startsWith('/') ? normalizedPath : `${basePath}/${normalizedPath}`.replace(/\/+/g, '/');
+  // Construct the full path and normalize
+  const cleanPath = `${basePath}/${normalizedPath}`.replace(/\/+/g, '/');
+  // Verify the resolved path stays within the workspace using boundary-safe prefix check
+  const workspacePrefix = basePath.endsWith('/') ? basePath : `${basePath}/`;
+  if (cleanPath !== basePath && !cleanPath.startsWith(workspacePrefix)) {
+    throw new Error(`Path resolves outside workspace: ${cleanPath}`);
+  }
   return cleanPath;
 }
 

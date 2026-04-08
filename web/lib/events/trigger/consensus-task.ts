@@ -37,14 +37,18 @@ export interface ConsensusTaskResult {
 
 /**
  * Execute consensus task with Trigger.dev (when available) or fallback to local
+ *
+ * Note: When Trigger.dev is used, the task runs asynchronously and the
+ * returned value is a run handle `{ runId, status }` rather than the
+ * full ConsensusTaskResult. Use the run ID to poll for completion.
  */
 export async function executeConsensusTask(
   payload: ConsensusTaskPayload
-): Promise<ConsensusTaskResult> {
-  return executeWithFallback<ConsensusTaskPayload, ConsensusTaskResult>(
+): Promise<ConsensusTaskResult | { runId: string; status: string }> {
+  return executeWithFallback<ConsensusTaskPayload, ConsensusTaskResult | { runId: string; status: string }>(
     async (taskId) => invokeTriggerTask(taskId, payload),
     (p) => executeLocally(p),
-    'consensus',
+    'consensus-task',
     payload
   );
 }
@@ -90,26 +94,56 @@ async function executeLocally(
 
 /**
  * Schedule recurring consensus task (for periodic multi-agent deliberation)
+ *
+ * Creates a recurring schedule via Trigger.dev's schedule API when available.
  */
 export async function scheduleConsensusTask(
   payload: Omit<ConsensusTaskPayload, 'task'> & {
     task: string;
     schedule: { type: 'cron' | 'interval'; expression: string };
   }
-): Promise<{ scheduled: boolean; jobId?: string }> {
+): Promise<{ scheduled: boolean; scheduleId?: string }> {
   const available = await import('./utils').then(m => m.isTriggerAvailable());
 
   if (available) {
-    return scheduleWithTrigger(
-      async () => {
-        const { invokeTriggerTask } = await import('./utils');
-        const result = await invokeTriggerTask('consensus-task', payload);
-        return { scheduled: true, jobId: (result as any).runId };
-      },
-      'consensus task'
-    );
+    const secretKey = process.env.TRIGGER_SECRET_KEY;
+    const apiUrl = process.env.TRIGGER_API_URL || 'https://api.trigger.dev';
+
+    if (!secretKey) {
+      logger.warn('Cannot schedule consensus task: TRIGGER_SECRET_KEY not set');
+      return { scheduled: false };
+    }
+
+    try {
+      const response = await fetch(`${apiUrl}/api/v1/tasks/consensus-task/schedules`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${secretKey}`,
+        },
+        body: JSON.stringify({
+          type: payload.schedule.type === 'cron' ? 'cron' : 'interval',
+          cron: payload.schedule.type === 'cron' ? payload.schedule.expression : undefined,
+          seconds: payload.schedule.type === 'interval' ? parseInt(payload.schedule.expression, 10) : undefined,
+          payload,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Schedule creation failed: ${response.status}`);
+      }
+
+      const scheduleData = await response.json();
+      logger.info('Consensus task scheduled', { scheduleId: scheduleData.id });
+      return { scheduled: true, scheduleId: scheduleData.id };
+    } catch (error: any) {
+      logger.error('Failed to schedule consensus task', error);
+      return { scheduled: false };
+    }
   }
 
-  logger.warn('Consensus scheduling not yet available - Trigger.dev configuration required');
+  logger.warn('Consensus scheduling not yet available - Trigger.dev configuration required', {
+    schedule: payload.schedule,
+  });
   return { scheduled: false };
 }

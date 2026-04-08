@@ -170,50 +170,7 @@ export async function POST(request: NextRequest) {
     const body = await request.json();
     const { jsonrpc, method, params, id } = body;
 
-    // Handle tool call directly (bypass server request handler to preserve async context)
-    if (method === 'tools/call' && params) {
-      const { name, arguments: args } = params as { name: string; arguments?: Record<string, any> };
-
-      // Extract user identity from request cookies for proper workspace scoping
-      // Must match the ownerId format used by resolveFilesystemOwner
-      const cookie = request.cookies.get('anon-session-id');
-      const rawSessionId = cookie?.value;
-      // Strip 'anon_' prefix if present (matches resolveFilesystemOwner behavior)
-      const sessionId = rawSessionId ? rawSessionId.replace(/^anon_/, '') : '';
-      const userId = sessionId ? `anon:${sessionId}` : 'anon:mcp-fallback';
-      const scopePath = 'project/sessions/000';
-
-      const tool = vfsTools[name as keyof typeof vfsTools];
-      if (!tool) {
-        return NextResponse.json({
-          jsonrpc: '2.0',
-          error: { code: -32601, message: `Unknown tool: ${name}` },
-          id,
-        }, { status: 400 });
-      }
-
-      logger.debug('MCP tool call', { tool: name, userId, scopePath, args: Object.keys(args || {}) });
-
-      // Set tool context so files are written to the correct workspace
-      const result = await toolContextStore.run(
-        { userId, scopePath },
-        async () => {
-          // @ts-ignore - AI SDK tool execute signature
-          return await tool.execute(args || {});
-        }
-      );
-
-      return NextResponse.json({
-        jsonrpc: '2.0',
-        result: {
-          content: [{ type: 'text', text: JSON.stringify(result) }],
-          isError: !(result as any).success,
-        },
-        id,
-      });
-    }
-
-    // Validate JSON-RPC format
+    // Validate JSON-RPC version BEFORE any method handling
     if (jsonrpc !== '2.0') {
       return NextResponse.json(
         {
@@ -226,6 +183,62 @@ export async function POST(request: NextRequest) {
         },
         { status: 400 }
       );
+    }
+
+    // Handle tool call directly (bypass server request handler to preserve async context)
+    if (method === 'tools/call' && params) {
+      const { name, arguments: args } = params as { name: string; arguments?: Record<string, any> };
+
+      // Extract session identity from cookies — same as resolveFilesystemOwner
+      const cookie = request.cookies.get('anon-session-id');
+      const rawSessionId = cookie?.value;
+      const sessionId = rawSessionId ? rawSessionId.replace(/^anon_/, '') : '';
+      const userId = sessionId ? `anon:${sessionId}` : 'anon:mcp-fallback';
+
+      // Build scopePath from actual session ID, NOT hardcoded '000'
+      const scopePath = sessionId ? `project/sessions/${sessionId}` : 'project/sessions/000';
+
+      const tool = vfsTools[name as keyof typeof vfsTools];
+      if (!tool) {
+        return NextResponse.json({
+          jsonrpc: '2.0',
+          error: { code: -32601, message: `Unknown tool: ${name}` },
+          id,
+        }, { status: 400 });
+      }
+
+      logger.debug('MCP tool call', { tool: name, userId, sessionId, scopePath, args: Object.keys(args || {}) });
+
+      // Set tool context so files are written to the correct workspace
+      let result: any;
+      try {
+        result = await toolContextStore.run(
+          { userId, sessionId, scopePath },
+          async () => {
+            // @ts-ignore - AI SDK tool execute signature
+            return await tool.execute(args || {});
+          }
+        );
+      } catch (error: any) {
+        logger.error('MCP tool execution failed', { tool: name, error: error.message });
+        return NextResponse.json({
+          jsonrpc: '2.0',
+          result: {
+            content: [{ type: 'text', text: JSON.stringify({ error: error.message }) }],
+            isError: true,
+          },
+          id,
+        });
+      }
+
+      return NextResponse.json({
+        jsonrpc: '2.0',
+        result: {
+          content: [{ type: 'text', text: JSON.stringify(result) }],
+          isError: !(result as any).success,
+        },
+        id,
+      });
     }
 
     const server = getMCPServer();
@@ -264,59 +277,6 @@ export async function POST(request: NextRequest) {
           id,
         });
 
-      case 'tools/call':
-        // Extract user context from request headers or params
-        // In production, this would come from auth tokens or session
-        const userId = request.headers.get('x-user-id') ||
-                       (params as any)?.userId ||
-                       'default';
-        const sessionId = request.headers.get('x-session-id') || undefined;
-        const toolName = (params as any)?.name;
-        const toolArgs = (params as any)?.arguments;
-
-        // Find the requested VFS tool
-        const targetTool = vfsTools[toolName as keyof typeof vfsTools];
-
-        if (!targetTool) {
-          return NextResponse.json({
-            jsonrpc: '2.0',
-            result: {
-              content: [{
-                type: 'text',
-                text: JSON.stringify({ error: `Unknown tool: ${toolName}` }),
-              }],
-              isError: true,
-            },
-            id,
-          });
-        }
-
-        // Build session-scoped path: project/sessions/{sessionId} when available
-        const scopePath = sessionId ? `project/sessions/${sessionId}` : 'project';
-
-        // Run tool call inside request-scoped AsyncLocalStorage context.
-        // This isolates the context per-request, preventing cross-user data leaks.
-        // @ts-ignore - AI SDK tool execute takes different arg shapes
-        const callResult = await toolContextStore.run(
-          { userId, sessionId, scopePath },
-          async () => targetTool.execute(toolArgs || {}, {
-            messages: [],
-            toolCallId: String(id || crypto.randomUUID()),
-          })
-        );
-
-        return NextResponse.json({
-          jsonrpc: '2.0',
-          result: {
-            content: [{
-              type: 'text',
-              text: JSON.stringify(callResult),
-            }],
-            isError: !(callResult as any)?.success,
-          },
-          id,
-        });
-
       case 'resources/list':
       case 'resources/read':
       case 'prompts/list':
@@ -342,7 +302,12 @@ export async function POST(request: NextRequest) {
         );
     }
   } catch (error: any) {
-    logger.error('MCP POST handler error', { error: error.message });
+    logger.error('MCP POST handler error', { 
+      error: error.message, 
+      stack: error.stack,
+      name: error.name,
+      cause: error.cause 
+    });
     // Don't leak internal error details to clients
     return NextResponse.json(
       {

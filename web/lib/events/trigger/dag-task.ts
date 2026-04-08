@@ -52,7 +52,7 @@ export async function executeDAGTask(
   return executeWithFallback<DAGTaskPayload, DAGTaskResult>(
     async (taskId) => invokeTriggerTask(taskId, payload),
     (p) => executeLocally(p),
-    'DAG',
+    'dag-task',
     payload
   );
 }

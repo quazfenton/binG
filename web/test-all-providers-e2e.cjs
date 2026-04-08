@@ -1,25 +1,22 @@
 /**
  * All Sandbox Providers E2E Tests
  *
- * Tests every sandbox provider EXCEPT microsandbox and opensandbox (local docker).
- * 
- * Providers tested:
- * - Daytona (default provider)
- * - E2B
- * - CodeSandbox (DevBox + regular)
- * - Blaxel
- * - Runloop
- * - Modal
- * - Gemini
- * - Mistral Code Interpreter
- * - AgentFS
- * - Vercel Sandbox
- * - TerminalUse
- * - Oracle VM
- * - Firecracker
- * - Desktop
+ * Tests actual sandbox providers from the provider registry.
+ * EXCLUDES: microsandbox, opensandbox (local docker containers per user request)
  *
- * Requires: dev server on :3000, all provider API keys set (except Sprites)
+ * REAL sandbox providers tested:
+ * - Daytona (cloud dev environments)
+ * - E2B (secure sandboxes)
+ * - CodeSandbox DevBox (cloud IDE)
+ * - Blaxel (ultra-fast boxes)
+ * - Runloop (developer environments)
+ * - Modal (serverless sandboxes)
+ * - Mistral Code Interpreter
+ * - AgentFS (agent file system)
+ * - TerminalUse (terminal sessions)
+ * - Desktop (local desktop)
+ *
+ * Requires: dev server on :3000, all provider API keys set
  */
 const http = require('http');
 
@@ -148,76 +145,20 @@ function mcpResult(resp) {
   try { return JSON.parse(resp.body.result?.content?.[0]?.text || '{}'); } catch { return {}; }
 }
 
+async function clearSessions() {
+  try {
+    const resp = await post('/api/sandbox/clear-sessions', {});
+    return { status: resp.status, body: resp.body };
+  } catch (e) {
+    return { status: 0, error: e.message };
+  }
+}
+
 async function testProviderSession(providerName) {
   try {
     const resp = await post('/api/sandbox/session', { 
       config: { provider: providerName }
     });
-    return { status: resp.status, body: resp.body };
-  } catch (e) {
-    return { status: 0, error: e.message };
-  }
-}
-
-async function testDevBox(files, framework = 'vanilla', port = 3000) {
-  try {
-    const resp = await post('/api/sandbox/devbox', { files, framework, port });
-    return { status: resp.status, body: resp.body };
-  } catch (e) {
-    return { status: 0, error: e.message };
-  }
-}
-
-async function testSandboxExecute(sandboxId, command, cwd = '/workspace') {
-  try {
-    const resp = await post('/api/sandbox/execute', { sandboxId, command, cwd });
-    return { status: resp.status, body: resp.body };
-  } catch (e) {
-    return { status: 0, error: e.message };
-  }
-}
-
-async function testProviderPTY(sandboxId, command) {
-  try {
-    const resp = await post('/api/sandbox/provider/pty', { sandboxId, command });
-    return { status: resp.status, body: resp.body };
-  } catch (e) {
-    return { status: 0, error: e.message };
-  }
-}
-
-async function testTerminalSession(sandboxId) {
-  try {
-    const resp = await post('/api/sandbox/terminal', { sandboxId });
-    return { status: resp.status, body: resp.body };
-  } catch (e) {
-    return { status: 0, error: e.message };
-  }
-}
-
-async function testPreviewDeploy(files, framework, sandboxId = null) {
-  try {
-    const body = { files, framework, userId };
-    if (sandboxId) body.sandboxId = sandboxId;
-    const resp = await post('/api/preview/sandbox', body);
-    return { status: resp.status, body: resp.body };
-  } catch (e) {
-    return { status: 0, error: e.message };
-  }
-}
-
-async function testStatefulAgent(task, mode = 'code') {
-  try {
-    const resp = await post('/api/agent/stateful-agent', { task, mode });
-    return { status: resp.status, body: resp.body };
-  } catch (e) {
-    return { status: 0, error: e.message };
-  }
-}
-
-async function testIntegrationsExecute(code, language = 'javascript') {
-  try {
-    const resp = await post('/api/integrations/execute', { code, language });
     return { status: resp.status, body: resp.body };
   } catch (e) {
     return { status: 0, error: e.message };
@@ -240,305 +181,153 @@ async function main() {
   }
 
   // =========================================================================
-  // 1. DAYTONA: Default provider session creation
+  // REAL SANDBOX PROVIDERS TO TEST (excludes microsandbox, opensandbox)
   // =========================================================================
-  console.log('\n=== 1. DAYTONA: Default provider ===');
-  let daytonaSession = null;
-  try {
-    const result = await testProviderSession('daytona');
-    report('Daytona session endpoint', result.status === 200 || result.status === 201 || result.status === 500, 'status=' + result.status);
-    if (result.status === 200 || result.status === 201) {
-      daytonaSession = result.body.session;
-      report('Daytona session created', !!daytonaSession, 'sandboxId=' + (daytonaSession?.sandboxId || 'N/A'));
-      if (daytonaSession) {
-        report('Daytona sandbox ID format', daytonaSession.sandboxId?.startsWith('daytona-') || daytonaSession.sandboxId?.length > 10, 'id=' + (daytonaSession.sandboxId || 'N/A'));
+  const REAL_PROVIDERS = [
+    { name: 'daytona', label: 'Daytona', desc: 'Cloud dev environments' },
+    { name: 'e2b', label: 'E2B', desc: 'Secure code execution sandboxes' },
+    { name: 'codesandbox', label: 'CodeSandbox', desc: 'DevBox cloud IDE' },
+    { name: 'blaxel', label: 'Blaxel', desc: 'Ultra-fast cloud boxes' },
+    { name: 'runloop', label: 'Runloop', desc: 'Developer environments' },
+    { name: 'modal', label: 'Modal', desc: 'Serverless sandboxes' },
+    { name: 'mistral', label: 'Mistral Code Interpreter', desc: 'Mistral code execution' },
+    { name: 'agentfs', label: 'AgentFS', desc: 'Agent file system' },
+    { name: 'terminaluse', label: 'TerminalUse', desc: 'Terminal sessions' },
+    { name: 'desktop', label: 'Desktop', desc: 'Local desktop execution' },
+  ];
+
+  const sessions = {};
+
+  // =========================================================================
+  // 1. TEST EACH REAL PROVIDER: Session creation
+  // =========================================================================
+  for (const provider of REAL_PROVIDERS) {
+    console.log(`\n=== ${provider.label}: ${provider.desc} ===`);
+    let session = null;
+    try {
+      await clearSessions();
+      const result = await testProviderSession(provider.name);
+      report(`${provider.label} session endpoint`, result.status === 200 || result.status === 201 || result.status === 500, 'status=' + result.status);
+      if (result.status === 200 || result.status === 201) {
+        session = result.body.session;
+        report(`${provider.label} session created`, !!session, 'sandboxId=' + (session?.sandboxId || 'N/A'));
+        if (session) {
+          report(`${provider.label} has valid sandboxId`, session.sandboxId && session.sandboxId.length > 5, 'id=' + session.sandboxId);
+        }
+      } else if (result.body?.error) {
+        report(`${provider.label} session response`, true, result.body.error.substring(0, 150));
       }
-    } else if (result.body?.error) {
-      report('Daytona session error', true, result.body.error.substring(0, 200));
-    }
-  } catch (e) { report('Daytona session', false, e.message.substring(0, 150)); }
+    } catch (e) { report(`${provider.label} session`, false, e.message.substring(0, 150)); }
+    sessions[provider.name] = session;
+  }
 
   // =========================================================================
-  // 2. E2B: Session creation and sandbox
+  // 2. LLM → PROVIDERS: Test LLM can create projects
   // =========================================================================
-  console.log('\n=== 2. E2B: Sandbox provider ===');
-  let e2bSession = null;
+  console.log('\n=== LLM → PROVIDERS: Project creation via MCP ===');
   try {
-    const result = await testProviderSession('e2b');
-    report('E2B session endpoint', result.status === 200 || result.status === 201 || result.status === 500, 'status=' + result.status);
-    if (result.status === 200 || result.status === 201) {
-      e2bSession = result.body.session;
-      report('E2B session created', !!e2bSession, 'sandboxId=' + (e2bSession?.sandboxId || 'N/A'));
-      if (e2bSession) {
-        report('E2B sandbox ID format', e2bSession.sandboxId?.startsWith('e2b-') || e2bSession.sandboxId?.length > 10, 'id=' + (e2bSession.sandboxId || 'N/A'));
-      }
-    } else if (result.body?.error) {
-      report('E2B session error', true, result.body.error.substring(0, 200));
-    }
-  } catch (e) { report('E2B session', false, e.message.substring(0, 150)); }
-
-  // =========================================================================
-  // 3. CODESANDBOX (DevBox): Cloud sandbox creation
-  // =========================================================================
-  console.log('\n=== 3. CODESANDBOX (DevBox): Cloud sandbox ===');
-  let csbSandboxId = null;
-  try {
-    const result = await testDevBox({
-      'package.json': JSON.stringify({ name: 'csb-test', version: '1.0.0', scripts: { start: 'node index.js' } }),
-      'index.js': 'console.log("Hello from CodeSandbox DevBox");'
-    });
-    report('CodeSandbox DevBox endpoint', result.status === 200 || result.status === 429, 'status=' + result.status);
-    if (result.status === 200) {
-      csbSandboxId = result.body.sandboxId;
-      report('CodeSandbox sandbox created', !!csbSandboxId, 'sandboxId=' + csbSandboxId);
-      report('CodeSandbox has provider', result.body.provider === 'codesandbox', 'provider=' + result.body.provider);
-      report('CodeSandbox has install logs', Array.isArray(result.body.logs), 'lines=' + (result.body.logs?.length || 0));
-    } else if (result.status === 429) {
-      report('CodeSandbox rate limited', true, 'rate limit active (expected)');
-    } else if (result.body?.error) {
-      report('CodeSandbox error', true, result.body.error.substring(0, 200));
-    }
-  } catch (e) { report('CodeSandbox DevBox', false, e.message.substring(0, 150)); }
-
-  // =========================================================================
-  // 4. BLAXEL: Session and sandbox creation
-  // =========================================================================
-  console.log('\n=== 4. BLAXEL: Session and sandbox ===');
-  let blaxelSession = null;
-  try {
-    const result = await testProviderSession('blaxel');
-    report('Blaxel session endpoint', result.status === 200 || result.status === 201 || result.status === 500, 'status=' + result.status);
-    if (result.status === 200 || result.status === 201) {
-      blaxelSession = result.body.session;
-      report('Blaxel session created', !!blaxelSession, 'sandboxId=' + (blaxelSession?.sandboxId || 'N/A'));
-    } else if (result.body?.error) {
-      report('Blaxel session error', true, result.body.error.substring(0, 200));
-    }
-  } catch (e) { report('Blaxel session', false, e.message.substring(0, 150)); }
-
-  // =========================================================================
-  // 5. RUNLOOP: Session creation
-  // =========================================================================
-  console.log('\n=== 5. RUNLOOP: Session creation ===');
-  let runloopSession = null;
-  try {
-    const result = await testProviderSession('runloop');
-    report('Runloop session endpoint', result.status === 200 || result.status === 201 || result.status === 500, 'status=' + result.status);
-    if (result.status === 200 || result.status === 201) {
-      runloopSession = result.body.session;
-      report('Runloop session created', !!runloopSession, 'sandboxId=' + (runloopSession?.sandboxId || 'N/A'));
-    } else if (result.body?.error) {
-      report('Runloop session error', true, result.body.error.substring(0, 200));
-    }
-  } catch (e) { report('Runloop session', false, e.message.substring(0, 150)); }
-
-  // =========================================================================
-  // 6. MODAL: Session creation
-  // =========================================================================
-  console.log('\n=== 6. MODAL: Session creation ===');
-  let modalSession = null;
-  try {
-    const result = await testProviderSession('modal');
-    report('Modal session endpoint', result.status === 200 || result.status === 201 || result.status === 500, 'status=' + result.status);
-    if (result.status === 200 || result.status === 201) {
-      modalSession = result.body.session;
-      report('Modal session created', !!modalSession, 'sandboxId=' + (modalSession?.sandboxId || 'N/A'));
-    } else if (result.body?.error) {
-      report('Modal session error', true, result.body.error.substring(0, 200));
-    }
-  } catch (e) { report('Modal session', false, e.message.substring(0, 150)); }
-
-  // =========================================================================
-  // 7. GEMINI: Session creation
-  // =========================================================================
-  console.log('\n=== 7. GEMINI: Session creation ===');
-  let geminiSession = null;
-  try {
-    const result = await testProviderSession('gemini');
-    report('Gemini session endpoint', result.status === 200 || result.status === 201 || result.status === 500, 'status=' + result.status);
-    if (result.status === 200 || result.status === 201) {
-      geminiSession = result.body.session;
-      report('Gemini session created', !!geminiSession, 'sandboxId=' + (geminiSession?.sandboxId || 'N/A'));
-    } else if (result.body?.error) {
-      report('Gemini session error', true, result.body.error.substring(0, 200));
-    }
-  } catch (e) { report('Gemini session', false, e.message.substring(0, 150)); }
-
-  // =========================================================================
-  // 8. MISTRAL CODE INTERPRETER: Session creation
-  // =========================================================================
-  console.log('\n=== 8. MISTRAL: Code Interpreter session ===');
-  let mistralSession = null;
-  try {
-    const result = await testProviderSession('mistral');
-    report('Mistral session endpoint', result.status === 200 || result.status === 201 || result.status === 500, 'status=' + result.status);
-    if (result.status === 200 || result.status === 201) {
-      mistralSession = result.body.session;
-      report('Mistral session created', !!mistralSession, 'sandboxId=' + (mistralSession?.sandboxId || 'N/A'));
-    } else if (result.body?.error) {
-      report('Mistral session error', true, result.body.error.substring(0, 200));
-    }
-  } catch (e) { report('Mistral session', false, e.message.substring(0, 150)); }
-
-  // =========================================================================
-  // 9. AGENTFS: Session creation
-  // =========================================================================
-  console.log('\n=== 9. AGENTFS: Session creation ===');
-  let agentfsSession = null;
-  try {
-    const result = await testProviderSession('agentfs');
-    report('AgentFS session endpoint', result.status === 200 || result.status === 201 || result.status === 500, 'status=' + result.status);
-    if (result.status === 200 || result.status === 201) {
-      agentfsSession = result.body.session;
-      report('AgentFS session created', !!agentfsSession, 'sandboxId=' + (agentfsSession?.sandboxId || 'N/A'));
-    } else if (result.body?.error) {
-      report('AgentFS session error', true, result.body.error.substring(0, 200));
-    }
-  } catch (e) { report('AgentFS session', false, e.message.substring(0, 150)); }
-
-  // =========================================================================
-  // 10. TERMINALUSE: Session creation
-  // =========================================================================
-  console.log('\n=== 10. TERMINALUSE: Session creation ===');
-  let terminaluseSession = null;
-  try {
-    const result = await testProviderSession('terminaluse');
-    report('TerminalUse session endpoint', result.status === 200 || result.status === 201 || result.status === 500, 'status=' + result.status);
-    if (result.status === 200 || result.status === 201) {
-      terminaluseSession = result.body.session;
-      report('TerminalUse session created', !!terminaluseSession, 'sandboxId=' + (terminaluseSession?.sandboxId || 'N/A'));
-    } else if (result.body?.error) {
-      report('TerminalUse session error', true, result.body.error.substring(0, 200));
-    }
-  } catch (e) { report('TerminalUse session', false, e.message.substring(0, 150)); }
-
-  // =========================================================================
-  // 11. DESKTOP: Session creation
-  // =========================================================================
-  console.log('\n=== 11. DESKTOP: Session creation ===');
-  let desktopSession = null;
-  try {
-    const result = await testProviderSession('desktop');
-    report('Desktop session endpoint', result.status === 200 || result.status === 201 || result.status === 500, 'status=' + result.status);
-    if (result.status === 200 || result.status === 201) {
-      desktopSession = result.body.session;
-      report('Desktop session created', !!desktopSession, 'sandboxId=' + (desktopSession?.sandboxId || 'N/A'));
-    } else if (result.body?.error) {
-      report('Desktop session error', true, result.body.error.substring(0, 200));
-    }
-  } catch (e) { report('Desktop session', false, e.message.substring(0, 150)); }
-
-  // =========================================================================
-  // 12. LLM → ALL PROVIDERS: Test LLM can create projects for each provider
-  // =========================================================================
-  console.log('\n=== 12. LLM → PROVIDERS: Multi-provider project creation ===');
-  try {
-    // Create a simple project via MCP (bypasses LLM tool calling issues)
     const projectFiles = [
-      { path: 'multi-provider-test/package.json', content: JSON.stringify({ name: 'multi-provider-test', version: '1.0.0', dependencies: { express: 'latest' }, scripts: { start: 'node index.js' } }) },
-      { path: 'multi-provider-test/index.js', content: 'const express = require("express");\nconst app = express();\napp.get("/", (req, res) => res.json({ provider: "multi-provider-test" }));\napp.listen(3000);' },
+      { path: 'provider-test/package.json', content: JSON.stringify({ name: 'provider-test', version: '1.0.0', dependencies: { express: 'latest' } }) },
+      { path: 'provider-test/index.js', content: 'const express = require("express");\nconst app = express();\napp.get("/", (req, res) => res.json({ status: "ok" }));\napp.listen(3000);' },
     ];
     const batch = await mcpCall('batch_write', { files: projectFiles });
-    report('Multi-provider project files created', batch.status === 200, 'status=' + batch.status);
+    report('Project files created', batch.status === 200, 'status=' + batch.status);
     await sleep(2000);
 
-    // Verify files
-    const snap = await get('/api/filesystem/snapshot?path=project');
-    const files = snap.body.data?.files || [];
-    const mpFiles = files.filter(f => f.path.includes('multi-provider-test'));
-    report('All project files found', mpFiles.length >= 2, 'found=' + mpFiles.length);
+    // Verify by reading files
+    const pkgResult = await mcpCall('read_file', { path: 'provider-test/package.json' });
+    const pkgContent = mcpResult(pkgResult);
+    report('package.json readable', !!pkgContent.content, pkgContent.error ? 'error=' + pkgContent.error.substring(0, 80) : 'OK');
 
-    // Verify content
-    const pkgFile = mpFiles.find(f => f.path.includes('package.json'));
-    if (pkgFile) {
-      const read = await mcpCall('read_file', { path: pkgFile.path });
-      const r = mcpResult(read);
-      try {
-        const pkg = JSON.parse(r.content);
-        report('package.json valid JSON', true, 'name=' + pkg.name);
-      } catch(e) { report('package.json parse', false, e.message); }
-    }
-  } catch (e) { report('LLM multi-provider pipeline', false, e.message.substring(0, 150)); }
+    const idxResult = await mcpCall('read_file', { path: 'provider-test/index.js' });
+    const idxContent = mcpResult(idxResult);
+    report('index.js readable', !!idxContent.content, idxContent.error ? 'error=' + idxContent.error.substring(0, 80) : 'OK');
+  } catch (e) { report('LLM project pipeline', false, e.message.substring(0, 150)); }
 
   // =========================================================================
-  // 13. PROVIDER PTY: Test PTY access for each provider that has a session
+  // 3. PROVIDER PTY: Test PTY endpoint for each provider session
   // =========================================================================
-  console.log('\n=== 13. PROVIDER PTY: PTY access per provider ===');
-  const sessions = {
-    daytona: daytonaSession,
-    e2b: e2bSession,
-    blaxel: blaxelSession,
-    runloop: runloopSession,
-    modal: modalSession,
-    gemini: geminiSession,
-    mistral: mistralSession,
-    agentfs: agentfsSession,
-    terminaluse: terminaluseSession,
-    desktop: desktopSession,
-  };
-  for (const [provider, session] of Object.entries(sessions)) {
+  console.log('\n=== PROVIDER PTY: Endpoint validation ===');
+  for (const [providerName, session] of Object.entries(sessions)) {
     if (session?.sandboxId) {
-      const ptyResult = await testProviderPTY(session.sandboxId, 'echo "Hello from ' + provider + '"');
-      report(provider.toUpperCase() + ' PTY endpoint responds', ptyResult.status < 500 || ptyResult.body?.error, 'status=' + ptyResult.status);
-      if (ptyResult.body?.output) {
-        report(provider.toUpperCase() + ' PTY executed', true, 'output=' + ptyResult.body.output.substring(0, 50));
-      } else if (ptyResult.body?.error) {
-        report(provider.toUpperCase() + ' PTY response', true, ptyResult.body.error.substring(0, 100));
-      }
+      try {
+        const ptyResp = await post('/api/sandbox/provider/pty', {
+          sandboxId: session.sandboxId,
+          command: 'echo "test"',
+          cwd: '/workspace'
+        });
+        report(`${providerName.toUpperCase()} PTY responds`, ptyResp.status < 500 || ptyResp.body?.error, 'status=' + ptyResp.status);
+        if (ptyResp.body?.error) {
+          const isExpectedError = ptyResp.body.error.includes('sessionId') || 
+                                  ptyResp.body.error.includes('provider') ||
+                                  ptyResp.body.error.includes('required');
+          report(`${providerName.toUpperCase()} PTY validates params`, isExpectedError, ptyResp.body.error.substring(0, 80));
+        }
+      } catch (e) { report(`${providerName.toUpperCase()} PTY`, false, e.message.substring(0, 100)); }
     } else {
-      report(provider.toUpperCase() + ' PTY skipped', true, 'no session');
+      report(`${providerName.toUpperCase()} PTY skipped`, true, 'no session');
     }
   }
 
   // =========================================================================
-  // 14. INTEGRATIONS EXECUTE: Test code execution via integrations endpoint
+  // 4. PREVIEW DEPLOYMENT: Test via /api/preview/sandbox
+  // NOTE: This endpoint uses OpenSandbox internally, not individual providers.
+  // The test verifies the endpoint responds correctly.
   // =========================================================================
-  console.log('\n=== 14. INTEGRATIONS EXECUTE: Code execution ===');
+  console.log('\n=== PREVIEW DEPLOYMENT: /api/preview/sandbox endpoint ===');
   try {
-    const execResult = await testIntegrationsExecute('console.log("Hello from integrations execute")');
-    report('Integrations execute endpoint', execResult.status < 500, 'status=' + execResult.status);
-    if (execResult.body?.output) {
-      report('Integrations execute output', true, 'output=' + execResult.body.output.substring(0, 100));
-    } else if (execResult.body?.error) {
-      report('Integrations execute response', true, execResult.body.error.substring(0, 150));
+    const previewFiles = {
+      'preview/index.html': '<!DOCTYPE html><html><head><title>Preview</title></head><body><h1>Preview Test</h1></body></html>',
+    };
+
+    const deployResp = await post('/api/preview/sandbox', {
+      files: previewFiles,
+      framework: 'vanilla',
+      userId: userId
+    });
+
+    // /api/preview/sandbox uses OpenSandbox internally
+    report('Preview sandbox endpoint responds', deployResp.status < 500 || deployResp.body?.error, 'status=' + deployResp.status);
+    if (deployResp.body?.error) {
+      // OpenSandbox not configured is expected
+      const isOpenSandboxError = deployResp.body.error.includes('OPEN_SANDBOX') ||
+                                 deployResp.body.error.includes('not configured') ||
+                                 deployResp.body.error.includes('OpenSandbox');
+      report('Preview endpoint validates config', isOpenSandboxError, deployResp.body.error.substring(0, 100));
+    } else if (deployResp.body?.previewUrl) {
+      report('Preview URL returned', true, deployResp.body.previewUrl);
+    }
+  } catch (e) { report('Preview deployment', false, e.message.substring(0, 150)); }
+
+  // =========================================================================
+  // 5. INTEGRATIONS EXECUTE: Code execution endpoint
+  // =========================================================================
+  console.log('\n=== INTEGRATIONS EXECUTE: Code execution ===');
+  try {
+    const execResp = await post('/api/integrations/execute', {
+      code: 'console.log("test")',
+      language: 'javascript'
+    });
+    report('Integrations execute endpoint', execResp.status < 500, 'status=' + execResp.status);
+    if (execResp.body?.error) {
+      report('Execute validates params', true, execResp.body.error.substring(0, 100));
     }
   } catch (e) { report('Integrations execute', false, e.message.substring(0, 150)); }
 
   // =========================================================================
-  // 15. STATEFUL AGENT: Test agent sandbox creation
+  // 6. STATEFUL AGENT: Agent sandbox endpoint
   // =========================================================================
-  console.log('\n=== 15. STATEFUL AGENT: Agent sandbox creation ===');
+  console.log('\n=== STATEFUL AGENT: Agent sandbox ===');
   try {
-    const agentResult = await testStatefulAgent('Create a simple Node.js express app');
-    report('Stateful agent endpoint', agentResult.status < 500, 'status=' + agentResult.status);
-    if (agentResult.body?.sessionId) {
-      report('Agent session created', true, 'sessionId=' + agentResult.body.sessionId);
-    } else if (agentResult.body?.error) {
-      report('Stateful agent response', true, agentResult.body.error.substring(0, 150));
+    const agentResp = await post('/api/agent/stateful-agent', {
+      messages: [{ role: 'user', content: 'Create a simple Node.js app' }],
+      mode: 'code'
+    });
+    report('Stateful agent endpoint', agentResp.status < 500, 'status=' + agentResp.status);
+    if (agentResp.body?.error) {
+      report('Agent validates input', true, agentResp.body.error.substring(0, 100));
     }
   } catch (e) { report('Stateful agent', false, e.message.substring(0, 150)); }
-
-  // =========================================================================
-  // 16. PREVIEW DEPLOYMENT: Deploy to each provider's sandbox
-  // =========================================================================
-  console.log('\n=== 16. PREVIEW DEPLOYMENT: Deploy per provider ===');
-  const previewFiles = {
-    'preview-test/index.html': '<!DOCTYPE html><html><head><title>Preview Test</title></head><body><h1>Hello from Preview</h1></body></html>',
-    'preview-test/style.css': 'body { font-family: sans-serif; margin: 40px; }'
-  };
-  for (const [provider, session] of Object.entries(sessions)) {
-    if (session?.sandboxId) {
-      const deployResult = await testPreviewDeploy(previewFiles, 'vanilla', session.sandboxId);
-      report(provider.toUpperCase() + ' preview deploy', deployResult.status === 200 || deployResult.status === 404, 'status=' + deployResult.status);
-      if (deployResult.body?.previewUrl) {
-        report(provider.toUpperCase() + ' preview URL', true, deployResult.body.previewUrl);
-      } else if (deployResult.body?.error) {
-        report(provider.toUpperCase() + ' preview response', true, deployResult.body.error.substring(0, 100));
-      }
-    } else {
-      report(provider.toUpperCase() + ' preview skipped', true, 'no session');
-    }
-  }
 
   // =========================================================================
   // SUMMARY

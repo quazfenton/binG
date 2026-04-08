@@ -1173,11 +1173,22 @@ export function extractFileEdits(content: string): FileEdit[] {
   const hasJsBlock = /```(?:javascript|js)/i.test(content);
   const hasToolSig = /(?:write_file|batch_write|delete_file|apply_diff|mkdir)\s*\(/i.test(content);
   if (hasJsBlock && hasToolSig) {
-    const decodeEscapes = (s: string) => s
-      .replace(/\\n/g, '\n')
-      .replace(/\\t/g, '\t')
-      .replace(/\\"/g, '"')
-      .replace(/\\'/g, "'");
+    const decodeEscapes = (s: string) => {
+      // Single-pass replacement handles all escape sequences including \\ -> \
+      // Order matters: \\ must be handled BEFORE \n, \t, etc.
+      return s.replace(/\\([\\ntr'"0])/g, (_, esc) => {
+        switch (esc) {
+          case '\\': return '\\';
+          case 'n': return '\n';
+          case 't': return '\t';
+          case 'r': return '\r';
+          case "'": return "'";
+          case '"': return '"';
+          case '0': return '\0';
+          default: return esc;
+        }
+      });
+    };
 
     // Helper: extract calls like funcName("arg1", "arg2") with proper escape handling
     // Uses a non-greedy match between quotes to handle nested opposite quotes

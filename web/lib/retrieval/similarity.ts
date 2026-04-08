@@ -137,8 +137,18 @@ function computeEditBoost(
     if (overlaps) return 1.0;
   }
 
-  // Proximity to cursor — inverse distance
-  const distance = Math.abs(symbol.startLine - edit.cursorLine);
+  // Proximity to cursor — measure distance to the symbol's range, not just
+  // startLine. This ensures that editing inside a long function still produces
+  // a high edit boost.
+  let distance: number;
+  if (edit.cursorLine >= symbol.startLine && edit.cursorLine <= symbol.endLine) {
+    // Cursor is inside the symbol range — very close
+    distance = 0;
+  } else if (edit.cursorLine < symbol.startLine) {
+    distance = symbol.startLine - edit.cursorLine;
+  } else {
+    distance = edit.cursorLine - symbol.endLine;
+  }
   const proximity = 1 / (1 + distance * 0.1);
 
   return proximity * 0.8; // max 0.8 for proximity-only

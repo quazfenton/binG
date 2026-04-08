@@ -167,10 +167,11 @@ export async function emitEventAndWait(
 ): Promise<EventRecord> {
   const result = await emitEvent(input, userId, sessionId);
 
+  // Import store once before the polling loop to avoid repeated resolution
+  const { getEventById } = await import('./store');
   const startTime = Date.now();
 
   while (Date.now() - startTime < timeout) {
-    const { getEventById } = await import('./store');
     const event = await getEventById(result.eventId);
 
     if (!event) {

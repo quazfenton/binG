@@ -112,12 +112,13 @@ export function useCodeRetrieval(
   // Keep a ref to avoid stale closures in callbacks
   const retrievalRef = useRef<Retrieval | null>(null);
 
-  // Initialize Retrieval on mount — uses projectId as stable dependency only
+  // Initialize Retrieval on mount — re-init if llm becomes available later
   useEffect(() => {
     let mounted = true;
 
     async function init() {
-      if (!llmRef.current) return;
+      // Skip if llm is not available or Retrieval already initialized
+      if (!llmRef.current || retrievalRef.current) return;
 
       setIsInitializing(true);
       try {
@@ -142,7 +143,7 @@ export function useCodeRetrieval(
 
     init();
     return () => { mounted = false; };
-  }, [projectId]); // Only projectId — stable across renders
+  }, [projectId, llm]); // Re-run when llm becomes available
 
   // Index files
   const indexFiles = useCallback(

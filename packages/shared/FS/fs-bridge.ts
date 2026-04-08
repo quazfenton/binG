@@ -408,10 +408,26 @@ class FSBridge {
    * Start listening for file change events emitted by Rust commands
    * When Rust write_file is called, it emits a 'file-change' event
    * This allows the TypeScript VFS layer to create shadow commits
+   *
+   * FIX: Lazy import with retry to handle race condition where the
+   * module-level dynamic import hasn't resolved yet when this is called.
    */
   private async startRustFileChangeListener(): Promise<void> {
+    // If tauriListen isn't ready yet, try to import it lazily
     if (!tauriListen) {
-      log.debug('Tauri event listening not available, skipping Rust file change listener');
+      try {
+        const eventModule = await import('@tauri-apps/api/event');
+        tauriListen = eventModule.listen;
+      } catch {
+        // Tauri not available or not in desktop mode — skip silently
+        log.debug('Tauri event listening not available, skipping Rust file change listener');
+        return;
+      }
+    }
+
+    // Double-check after lazy import
+    if (!tauriListen) {
+      log.debug('Tauri listen function still null after import, skipping');
       return;
     }
 

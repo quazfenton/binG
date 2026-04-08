@@ -750,43 +750,52 @@ export class OpencodeV2Provider implements LLMProvider {
 
   /**
    * Translate natural language task descriptions into actual shell commands.
+   * Uses the shared project-detection module for consistency.
    */
   private async translateNaturalLanguageToCommand(task: string, cwd: string): Promise<string> {
-    const lower = task.toLowerCase().trim();
+    // Import the shared project detection module
+    const { buildProjectContext, translateNaturalLanguageToCommand: translateNL } = await import('../../project-detection');
 
-    // Direct commands — pass through
-    if (/^(npm|yarn|pnpm|npx|cargo|go|python|pip|node|deno|bun)\b/.test(lower)) return task;
+    // Get file listing from the cwd directory for project detection
+    try {
+      const fs = await import('fs/promises');
+      const path = await import('path');
+      const files: string[] = [];
 
-    // "run the project", "start it", "debug the app"
-    if (/(run|start|launch|debug|execute)\s*(the\s*)?(project|app|server|dev|it|this)?\s*$/i.test(lower) ||
-        /^(run|start)$/.test(lower)) {
-      const cmd = await this.detectProjectCommand(cwd);
-      return cmd || 'npm run dev || npm start || echo "No run script found"';
+      const walkDir = async (dir: string, maxDepth: number = 3) => {
+        if (maxDepth <= 0) return;
+        try {
+          const entries = await fs.readdir(dir, { withFileTypes: true });
+          for (const entry of entries) {
+            const fullPath = path.join(dir, entry.name);
+            const relativePath = fullPath.replace(cwd, '').replace(/^\//, '');
+            files.push(relativePath);
+            if (entry.isDirectory() && !entry.name.startsWith('.') && !entry.name.startsWith('node_modules')) {
+              await walkDir(fullPath, maxDepth - 1);
+            }
+          }
+        } catch { /* ignore permission errors */ }
+      };
+
+      await walkDir(cwd);
+
+      // Try to read package.json
+      const pkgPath = path.join(cwd, 'package.json');
+      let pkgContent: string | undefined;
+      try {
+        pkgContent = await fs.readFile(pkgPath, 'utf-8');
+      } catch { /* no package.json */ }
+
+      const projectCtx = await buildProjectContext(files, async (p: string) => {
+        if (p === 'package.json' || p === '/package.json') return pkgContent || null;
+        return null;
+      });
+
+      return translateNL(task, projectCtx);
+    } catch {
+      // Fallback if project detection fails
+      return task;
     }
-
-    // Build
-    if (/^(build|compile|package)\b/i.test(lower)) {
-      const cmd = await this.detectProjectCommand(cwd);
-      return (cmd && cmd.includes('build')) ? cmd : 'npm run build || echo "No build script found"';
-    }
-
-    // Test
-    if (/^(test|run\s*tests?)\b/i.test(lower)) return 'npm test || echo "No test script found"';
-
-    // Install
-    if (/^(install|npm\s*install|yarn\s*add|pnpm\s*add)/i.test(lower)) return 'npm install';
-
-    // Lint
-    if (/^(lint|format|prettier|eslint)/i.test(lower)) return 'npm run lint || npm run format || echo "No lint script found"';
-
-    // Git
-    if (/^(git\s|commit|push|pull|branch)/i.test(lower)) return task;
-
-    // List files
-    if (/^(list|ls|dir|show\s*files)/i.test(lower)) return process.platform === 'win32' ? 'dir' : 'ls -la';
-
-    // Pass through
-    return task;
   }
 
   /**

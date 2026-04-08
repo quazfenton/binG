@@ -106,7 +106,9 @@ export function getMetricsSummary(): MetricsSummary {
 
   const traces = Array.from(grouped.entries()).map(([name, durations]) => {
     const sorted = [...durations].sort((a, b) => a - b);
-    const p95Index = Math.floor(sorted.length * 0.95);
+    // Nearest-rank method for p95: index = ceil(0.95 * N) - 1
+    // This avoids the off-by-one where Math.floor(N * 0.95) points to the max
+    const p95Index = Math.min(Math.ceil(sorted.length * 0.95) - 1, sorted.length - 1);
     return {
       name,
       count: durations.length,
