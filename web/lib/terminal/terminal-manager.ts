@@ -302,42 +302,75 @@ export class TerminalManager {
     log.debug(`Creating PTY session with dimensions: ${options?.cols ?? 120}x${options?.rows ?? 30}`)
 
     let ptyHandle: any
-    try {
-      ptyHandle = await handle.createPty({
-        id: ptyId,
-        envs: { TERM: 'xterm-256color', LANG: 'en_US.UTF-8' },
-        cols: options?.cols ?? 120,
-        rows: options?.rows ?? 30,
-        onData: (data: Uint8Array) => {
-          const text = new TextDecoder().decode(data)
-          onData(text)
+    const PTY_RETRIES = 3
+    const PTY_RETRY_BASE_MS = 2000
+    let lastError: Error | undefined
 
-          // Enhanced port detection
-          if (onPortDetected) {
-            const detectedPorts = enhancedPortDetector.detectPorts(text)
-            const connection = activePtyConnections.get(sessionId)
+    // Retry PTY creation with backoff — Daytona containers sometimes need
+    // a few seconds to boot and get a network IP assigned.
+    // "failed to resolve container IP" is a transient Daytona platform error.
+    for (let attempt = 0; attempt < PTY_RETRIES; attempt++) {
+      try {
+        ptyHandle = await handle.createPty({
+          id: ptyId,
+          envs: { TERM: 'xterm-256color', LANG: 'en_US.UTF-8' },
+          cols: options?.cols ?? 120,
+          rows: options?.rows ?? 30,
+          onData: (data: Uint8Array) => {
+            const text = new TextDecoder().decode(data)
+            onData(text)
 
-            for (const { port, protocol, url } of detectedPorts) {
-              if (handle.getPreviewLink && !connection?.detectedPorts.has(port)) {
-                handle.getPreviewLink(port).then(preview => {
-                  log.info(`Port detected: ${port} (${protocol}) -> ${url || preview.url}`)
-                  onPortDetected!(preview)
-                  connection?.detectedPorts.add(port)
+            // Enhanced port detection
+            if (onPortDetected) {
+              const detectedPorts = enhancedPortDetector.detectPorts(text)
+              const connection = activePtyConnections.get(sessionId)
 
-                  // Emit port detected event
-                  emitEvent(sandboxId, 'port_detected', {
-                    port,
-                    url: url || preview.url,
-                    protocol,
-                }, { userId })
-              }).catch(() => {
-                // Port not yet available, ignore
-              })
+              for (const { port, protocol, url } of detectedPorts) {
+                if (handle.getPreviewLink && !connection?.detectedPorts.has(port)) {
+                  handle.getPreviewLink(port).then(preview => {
+                    log.info(`Port detected: ${port} (${protocol}) -> ${url || preview.url}`)
+                    onPortDetected!(preview)
+                    connection?.detectedPorts.add(port)
+
+                    // Emit port detected event
+                    emitEvent(sandboxId, 'port_detected', {
+                      port,
+                      url: url || preview.url,
+                      protocol,
+                    }, { userId })
+                  }).catch(() => {
+                    // Port not yet available, ignore
+                  })
+                }
+              }
             }
-          }
+          },
+        })
+
+        // Success — break out of retry loop
+        break
+      } catch (err: any) {
+        lastError = err
+        const isIpError = err.message?.includes('failed to resolve container IP') ||
+                          err.message?.includes('no IP address found')
+
+        if (isIpError && attempt < PTY_RETRIES - 1) {
+          const delay = PTY_RETRY_BASE_MS * Math.pow(2, attempt)
+          log.warn(`[Terminal] PTY creation failed (container IP not ready), retrying in ${delay}ms`, {
+            attempt: attempt + 1,
+            maxRetries: PTY_RETRIES,
+          })
+          await new Promise(r => setTimeout(r, delay))
+        } else {
+          throw err // Not retryable or last attempt
         }
-      },
-    })
+      }
+    }
+
+    // If all retries exhausted without success
+    if (!ptyHandle) {
+      throw lastError || new Error('Failed to create PTY after retries')
+    }
 
     // ✅ FIX: Check connection limit before adding
     if (activePtyConnections.size >= MAX_PTY_CONNECTIONS) {
@@ -396,12 +429,6 @@ export class TerminalManager {
       activePtyConnections.delete(sessionId)
       throw error
     }
-  } catch (error: any) {
-    // Handle errors from createPty
-    log.error(`Failed to create PTY: ${error.message}`)
-    activePtyConnections.delete(sessionId)
-    throw error
-  }
   }
 
   async reconnectTerminal(
@@ -556,6 +583,18 @@ export class TerminalManager {
    */
   hasPtyConnection(sessionId: string): boolean {
     return activePtyConnections.has(sessionId)
+  }
+
+  /**
+   * Check if session has ANY active connection (PTY, command-mode, or WebSocket).
+   * Returns false when the session exists in the bridge but no terminal is actually connected.
+   */
+  hasActiveSession(sessionId: string): boolean {
+    return (
+      activePtyConnections.has(sessionId) ||
+      commandModeConnections.has(sessionId) ||
+      websocketConnections.has(sessionId)
+    )
   }
 
   /**

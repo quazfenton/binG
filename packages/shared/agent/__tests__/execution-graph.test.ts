@@ -476,6 +476,7 @@ describe('Execution Graph — Timeline', () => {
     expect(timeline.length).toBe(1);
     expect(timeline[0].nodeId).toBe('node-1');
     expect(timeline[0].duration).toBeDefined();
-    expect(timeline[0].duration).toBeGreaterThan(0);
+    // Use >= 0 because markRunning + markComplete can execute in the same millisecond
+    expect(timeline[0].duration).toBeGreaterThanOrEqual(0);
   });
 });

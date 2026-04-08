@@ -95,15 +95,16 @@ export function validateWorkspacePath(path: string): boolean {
       // Path doesn't exist - check if we can create it
       try {
         fs.mkdirSync(path, { recursive: true });
-        fs.rmdirSync(path);
+        // Verify the directory is writable without deleting it
+        fs.accessSync(path, fs.constants.W_OK);
         return true;
       } catch {
         return false;
       }
     }
   } catch {
-    // Validation failed - assume valid to avoid breaking functionality
-    return true;
+    // Validation failed - don't mask the error
+    return false;
   }
 }
 

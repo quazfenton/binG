@@ -32,8 +32,15 @@ interface ServerConfig {
 }
 
 const DEFAULT_WORKSPACE_ROOT = process.env.BING_WORKSPACE_ROOT || process.cwd();
-const MAX_COMMAND_TIMEOUT = parseInt(process.env.BING_MAX_COMMAND_TIMEOUT || '30000', 10);
-const MAX_READ_FILE_SIZE = parseInt(process.env.BING_MAX_READ_FILE_SIZE || '1048576', 10); // 1MB default
+
+// Safely parse numeric env vars — falls back to safe defaults when invalid (NaN, <= 0)
+const parsePositiveInt = (envVal: string | undefined, fallback: number): number => {
+  const parsed = Number.parseInt(envVal ?? String(fallback), 10);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+};
+
+const MAX_COMMAND_TIMEOUT = parsePositiveInt(process.env.BING_MAX_COMMAND_TIMEOUT, 30000);
+const MAX_READ_FILE_SIZE = parsePositiveInt(process.env.BING_MAX_READ_FILE_SIZE, 1048576); // 1MB default
 const ENABLE_COMMAND_EXECUTION = process.env.BING_ENABLE_COMMAND_EXECUTION !== 'false';
 
 const config: ServerConfig = {
@@ -57,9 +64,14 @@ function validatePath(requestedPath: string): string {
 
   // Normalize to consistent format
   const normalized = normalize(resolvedPath);
+  const workspaceRoot = normalize(config.workspaceRoot);
+  const workspacePrefix = workspaceRoot.endsWith(sep)
+    ? workspaceRoot
+    : `${workspaceRoot}${sep}`;
 
-  // Check for directory traversal
-  if (!normalized.startsWith(config.workspaceRoot)) {
+  // Check for directory traversal with boundary-safe prefix matching
+  // Prevents prefix bypasses: /workspace-evil must NOT pass when workspace is /workspace
+  if (normalized !== workspaceRoot && !normalized.startsWith(workspacePrefix)) {
     throw new Error(
       `Path traversal detected: "${requestedPath}" resolves outside workspace "${config.workspaceRoot}"`
     );
@@ -140,8 +152,29 @@ server.tool(
     try {
       const validatedPath = validatePath(path);
 
-      // Check if file exists
-      const stat = await fs.stat(validatedPath);
+      // Resolve the real path to prevent symlink escapes
+      // e.g., a symlink inside the workspace pointing to /etc/passwd
+      const realPath = normalize(await fs.realpath(validatedPath));
+      const workspaceRoot = normalize(config.workspaceRoot);
+      const workspacePrefix = workspaceRoot.endsWith(sep)
+        ? workspaceRoot
+        : `${workspaceRoot}${sep}`;
+
+      // Re-check that the real path still stays inside the workspace root
+      if (realPath !== workspaceRoot && !realPath.startsWith(workspacePrefix)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error: Path traversal detected: "${path}" resolves outside workspace`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      // Check if file exists (use realPath to stat the actual target)
+      const stat = await fs.stat(realPath);
       if (!stat.isFile()) {
         return {
           content: [{ type: 'text' as const, text: `Error: "${path}" is not a file` }],
@@ -162,8 +195,8 @@ server.tool(
         };
       }
 
-      // Read file content
-      const content = await fs.readFile(validatedPath, 'utf-8');
+      // Read file content from the resolved real path
+      const content = await fs.readFile(realPath, 'utf-8');
       const language = detectLanguage(path);
 
       return {

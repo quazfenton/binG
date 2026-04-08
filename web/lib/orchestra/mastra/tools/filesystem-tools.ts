@@ -273,8 +273,9 @@ export function createFilesystemTools(
           const scopedBasePath = path ? resolveWorkspacePath(workspacePath, path) : workspacePath;
 
           const results = snapshot.files.filter(f => {
-            // Filter by base path if specified
-            if (scopedBasePath && !f.path.startsWith(scopedBasePath)) {
+            // Filter by base path if specified — use exact match or strict prefix with trailing slash
+            // to prevent cross-scope leakage (e.g. "/001" matching "/0012")
+            if (scopedBasePath && f.path !== scopedBasePath && !f.path.startsWith(`${scopedBasePath}/`)) {
               return false;
             }
             // Search in filename or content

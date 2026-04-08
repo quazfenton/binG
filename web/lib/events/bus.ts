@@ -4,11 +4,17 @@
  * This is the ONLY function LLM tools should call to emit events.
  * Provides validation, persistence, and logging.
  *
+ * When Trigger.dev is configured (TRIGGER_SECRET_KEY set and SDK available),
+ * events are dispatched to Trigger.dev workers via the management API
+ * for durable, long-running execution.
+ * Otherwise, events fall back to the local SQLite event store with polling.
+ *
  * @module events/bus
  */
 
 import { AnyEvent } from './schema';
 import { createEvent, type EventRecord } from './store';
+import { invokeTriggerTask, isTriggerAvailable } from './trigger/utils';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Events:Bus');
@@ -18,14 +24,25 @@ const logger = createLogger('Events:Bus');
  */
 export interface EmitEventResult {
   eventId: string;
-  status: 'queued';
+  status: 'queued' | 'dispatched';
+  backend: 'trigger' | 'local';
 }
 
 /**
- * Emit event to event store
+ * Check if Trigger.dev is configured and should be used.
+ * Requires TRIGGER_SECRET_KEY to be set AND SDK to be importable.
+ */
+async function isTriggerConfigured(): Promise<boolean> {
+  if (!process.env.TRIGGER_SECRET_KEY) return false;
+  return isTriggerAvailable();
+}
+
+/**
+ * Emit event to event store (with Trigger.dev dispatch when available)
  *
  * This is the primary API for emitting events.
  * Validates the event schema and persists it to the database.
+ * When Trigger.dev is configured, also dispatches to the Trigger.dev worker.
  *
  * @param input - The event to emit (must match one of the event schemas)
  * @param userId - The user ID emitting the event
@@ -41,7 +58,7 @@ export interface EmitEventResult {
  *   payload: { destination: 'user@example.com' },
  * }, 'user-123');
  *
- * console.log(`Event queued: ${result.eventId}`);
+ * console.log(`Event queued: ${result.eventId} (${result.backend})`);
  * ```
  */
 export async function emitEvent(
@@ -53,10 +70,40 @@ export async function emitEvent(
     // Validate event schema
     const parsed = AnyEvent.parse(input);
 
-    // Persist to event store
+    // Persist to event store (always - for audit/replay)
     const event = await createEvent(parsed, userId, sessionId);
 
-    logger.info('Event emitted', {
+    // Try to dispatch to Trigger.dev if configured
+    const useTrigger = await isTriggerConfigured();
+
+    if (useTrigger) {
+      try {
+        // Dispatch to the event-worker task which processes individual events
+        await invokeTriggerTask('event-worker', { eventId: event.id, type: event.type });
+
+        logger.info('Event dispatched to Trigger.dev', {
+          eventId: event.id,
+          type: event.type,
+          userId,
+          sessionId,
+        });
+
+        return {
+          eventId: event.id,
+          status: 'dispatched',
+          backend: 'trigger',
+        };
+      } catch (triggerError: any) {
+        // Trigger.dev dispatch failed — fall back to local polling
+        logger.warn('Trigger.dev dispatch failed, falling back to local', {
+          eventId: event.id,
+          error: triggerError.message,
+        });
+      }
+    }
+
+    // Local execution (fallback or Trigger.dev not configured)
+    logger.info('Event emitted (local)', {
       eventId: event.id,
       type: event.type,
       userId,
@@ -66,6 +113,7 @@ export async function emitEvent(
     return {
       eventId: event.id,
       status: 'queued',
+      backend: 'local',
     };
   } catch (error: any) {
     logger.error('Failed to emit event', {
@@ -117,14 +165,12 @@ export async function emitEventAndWait(
   sessionId: string,
   timeout: number = 5 * 60 * 1000
 ): Promise<EventRecord> {
-  const { emitEvent } = await import('./bus');
-  const { getEventById } = await import('./store');
-
   const result = await emitEvent(input, userId, sessionId);
 
   const startTime = Date.now();
 
   while (Date.now() - startTime < timeout) {
+    const { getEventById } = await import('./store');
     const event = await getEventById(result.eventId);
 
     if (!event) {
@@ -178,9 +224,27 @@ export async function emitEventsBatch(
     results.push(event.id);
   }
 
+  // Dispatch to Trigger.dev if configured (one task per event for durability)
+  const useTrigger = await isTriggerConfigured();
+  if (useTrigger) {
+    const dispatchPromises = results.map(async (eventId) => {
+      try {
+        await invokeTriggerTask('event-worker', { eventId });
+      } catch (error: any) {
+        logger.warn('Trigger.dev batch dispatch failed for event, will process locally', {
+          eventId,
+          error: error.message,
+        });
+      }
+    });
+    await Promise.all(dispatchPromises);
+    logger.info('Batch events dispatched to Trigger.dev', { count: results.length });
+  }
+
   logger.info('Batch events emitted', {
     count: results.length,
     userId,
+    backend: useTrigger ? 'trigger' : 'local',
   });
 
   return results;

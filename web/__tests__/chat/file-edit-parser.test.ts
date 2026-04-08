@@ -11,6 +11,7 @@ import {
   extractFencedDiffEdits,
   extractFencedMkdirEdits,
   extractFencedDeleteBlocks,
+  extractFileEdits,
 } from '@/lib/chat/file-edit-parser';
 
 describe('file-edit-parser incremental parsing', () => {
@@ -36,6 +37,62 @@ describe('file-edit-parser incremental parsing', () => {
         content: "export const answer = 'hello';",
       },
     ]);
+  });
+
+  it('extracts text-mode fenced mkdir from incremental chunks', () => {
+    const parser = createIncrementalParser();
+    const chunks = [
+      'Creating directory:\n```mkdir: project/new-dir',
+      '\n```',
+    ];
+
+    const seen = [];
+    let buffer = '';
+
+    for (const chunk of chunks) {
+      buffer += chunk;
+      seen.push(...extractIncrementalFileEdits(buffer, parser));
+    }
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].path).toBe('project/new-dir');
+    expect(seen[0].action).toBe('mkdir');
+    expect(seen[0].content).toBe('');
+  });
+
+  it('extracts text-mode fenced delete from incremental chunks', () => {
+    const parser = createIncrementalParser();
+    const chunks = [
+      'Deleting old file:\n```delete: project/old.txt',
+      '\n```',
+    ];
+
+    const seen = [];
+    let buffer = '';
+
+    for (const chunk of chunks) {
+      buffer += chunk;
+      seen.push(...extractIncrementalFileEdits(buffer, parser));
+    }
+
+    expect(seen).toHaveLength(1);
+    expect(seen[0].path).toBe('project/old.txt');
+    expect(seen[0].action).toBe('delete');
+    expect(seen[0].content).toBe('');
+  });
+
+  it('does not re-emit mkdir/delete edits on subsequent chunks', () => {
+    const parser = createIncrementalParser();
+    let buffer = '```mkdir: project/test\n```\n```delete: project/old.txt\n```';
+
+    const firstPass = extractIncrementalFileEdits(buffer, parser);
+    buffer += '\nMore text after.';
+    const secondPass = extractIncrementalFileEdits(buffer, parser);
+
+    expect(firstPass).toHaveLength(2);
+    expect(firstPass[0].action).toBe('mkdir');
+    expect(firstPass[1].action).toBe('delete');
+    expect(secondPass).toEqual([]);
   });
 
   it('does not re-emit the same edit when later chunks extend the buffer', () => {
@@ -462,6 +519,124 @@ describe('text-mode fenced parsers (for non-FC models)', () => {
       expect(result.writes.length >= 0).toBe(true);
       expect(result.folders?.length >= 0 || Array.isArray(result.folders)).toBe(true);
       expect(result.deletes?.length >= 0 || Array.isArray(result.deletes)).toBe(true);
+    });
+  });
+
+  describe('extractFileEdits - JS-style MCP tool call fallback', () => {
+    it('extracts write_file("path", "content") from javascript code block', () => {
+      const content = '```javascript\nwrite_file("src/index.js", "console.log(\'hello\');")\n```';
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(1);
+      expect(edits[0].path).toBe('src/index.js');
+      expect(edits[0].content).toBe("console.log('hello');");
+    });
+
+    it('handles escaped newlines in content', () => {
+      const content = '```javascript\nwrite_file("app.py", "def main():\\n    print(\'hello\')")\n```';
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(1);
+      expect(edits[0].path).toBe('app.py');
+      expect(edits[0].content).toBe("def main():\n    print('hello')");
+    });
+
+    it('handles single-quoted content', () => {
+      const content = "```javascript\nwrite_file('config.json', '{\"key\": \"value\"}')\n```";
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(1);
+      expect(edits[0].path).toBe('config.json');
+      expect(edits[0].content).toBe('{"key": "value"}');
+    });
+
+    it('extracts delete_file("path")', () => {
+      const content = '```javascript\ndelete_file("src/old.txt")\n```';
+      const edits = extractFileEdits(content);
+      const deleteEdit = edits.find(e => e.action === 'delete');
+      expect(deleteEdit).toBeDefined();
+      expect(deleteEdit!.path).toBe('src/old.txt');
+    });
+
+    it('extracts mkdir("path")', () => {
+      const content = '```javascript\nmkdir("src/components")\n```';
+      const edits = extractFileEdits(content);
+      const mkdirEdit = edits.find(e => e.action === 'mkdir');
+      expect(mkdirEdit).toBeDefined();
+      expect(mkdirEdit!.path).toBe('src/components');
+    });
+
+    it('extracts apply_diff("path", "diff")', () => {
+      const content = '```javascript\napply_diff("src/app.ts", "--- old\\n+++ new")\n```';
+      const edits = extractFileEdits(content);
+      const patchEdit = edits.find(e => e.action === 'patch');
+      expect(patchEdit).toBeDefined();
+      expect(patchEdit!.path).toBe('src/app.ts');
+      expect(patchEdit!.content).toContain('--- old');
+    });
+
+    it('extracts multiple different tool calls in one block', () => {
+      const content = '```javascript\nmkdir("src")\nwrite_file("src/index.js", "console.log(\'hi\')")\n```';
+      const edits = extractFileEdits(content);
+      expect(edits.length).toBeGreaterThanOrEqual(2);
+      expect(edits.find(e => e.action === 'mkdir')?.path).toBe('src');
+      expect(edits.find(e => e.content?.includes('console.log'))?.path).toBe('src/index.js');
+    });
+
+    it('does not extract variable-based write_file calls', () => {
+      const content = '```javascript\nwrite_file(pagesPath + "/index.js", "content")\n```';
+      const edits = extractFileEdits(content);
+      // Variable concatenation can't be parsed reliably
+      expect(edits.filter(e => !e.action)).toHaveLength(0);
+    });
+
+    it('does not match tool calls outside of javascript code blocks', () => {
+      const content = 'Some text about write_file("path", "content") but not in code block.';
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(0);
+    });
+
+    it('does not match tool calls inside regular text/code without javascript fence', () => {
+      const content = 'Here is some python code:\n```python\nwrite_file("test.txt", "content")\n```';
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(0);
+    });
+
+    it('deduplicates duplicate write_file calls', () => {
+      const content = '```javascript\nwrite_file("test.txt", "hello")\nwrite_file("test.txt", "hello")\n```';
+      const edits = extractFileEdits(content);
+      expect(edits.filter(e => !e.action)).toHaveLength(1);
+    });
+
+    it('extracts write_file({ path, content }) JSON object format', () => {
+      const content = '```javascript\nwrite_file({ "path": "src/index.js", "content": "console.log(\'hello\');" })\n```';
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(1);
+      expect(edits[0].path).toBe('src/index.js');
+      expect(edits[0].content).toBe("console.log('hello');");
+    });
+
+    it('extracts write_file({ path, content }) with multiline content', () => {
+      const content = '```javascript\nwrite_file({ "path": "app.py", "content": "def main():\\n    print(\'hello\')" })\n```';
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(1);
+      expect(edits[0].path).toBe('app.py');
+      expect(edits[0].content).toContain('def main():');
+    });
+
+    it('does not match write_file({ }) with empty object', () => {
+      const content = '```javascript\nwrite_file({})\n```';
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(0);
+    });
+
+    it('does not match write_file({ path }) without content', () => {
+      const content = '```javascript\nwrite_file({ "path": "test.txt" })\n```';
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(0);
+    });
+
+    it('deduplicates JSON object format with string literal format', () => {
+      const content = '```javascript\nwrite_file("test.txt", "hello")\nwrite_file({ "path": "test.txt", "content": "hello" })\n```';
+      const edits = extractFileEdits(content);
+      expect(edits.filter(e => e.path === 'test.txt')).toHaveLength(1);
     });
   });
 });

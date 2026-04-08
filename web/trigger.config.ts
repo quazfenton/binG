@@ -15,7 +15,7 @@ export default defineConfig({
       randomize: true,
     },
   },
-  dirs: ["./trigger"],
+  dirs: ["./trigger"],  // web/trigger/ — all v3 task definitions
   build: {
     external: [
       "playwright-core",
