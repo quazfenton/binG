@@ -171,6 +171,9 @@ export class AgentLoop {
    * Execute task using ToolLoopAgent with real-time streaming
    */
   async *executeTaskStreaming(task: string): AsyncGenerator<any, AgentResult, unknown> {
+    // Reset tracking array for each execution to avoid stale data from prior tasks
+    this.lastExecutedToolCalls = [];
+
     if (this.useToolLoopAgent && !this.toolLoopAgent) {
       // Lazy initialize ToolLoopAgent with user's configured provider
       await this.initializeToolLoopAgent();
@@ -326,6 +329,9 @@ export class AgentLoop {
    * Execute with ToolLoopAgent (non-streaming)
    */
   private async executeWithToolLoopAgent(task: string): Promise<AgentResult> {
+    // Reset tracking array for each execution to avoid stale data from prior tasks
+    this.lastExecutedToolCalls = [];
+
     log.info(`Executing task with ToolLoopAgent: ${task.substring(0, 100)}${task.length > 100 ? '...' : ''}`);
 
     try {
@@ -814,8 +820,6 @@ When task is complete, just respond naturally with your final answer.
       const vercelModel = await this.createModelInstance(provider, model);
       
       // Build SDK tool map from the filesystem tools array
-      // Reset tracking array for this execution
-      this.lastExecutedToolCalls = [];
       const sdkTools: Record<string, any> = {};
       for (const tool of this.tools) {
         sdkTools[tool.name] = {

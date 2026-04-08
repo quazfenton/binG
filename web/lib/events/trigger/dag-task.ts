@@ -8,7 +8,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { executeWithFallback, scheduleWithTrigger } from './utils';
+import { executeWithFallback, invokeTriggerTask, scheduleWithTrigger } from './utils';
 
 const logger = createLogger('Trigger:DAG');
 
@@ -49,22 +49,12 @@ export interface DAGTaskResult {
 export async function executeDAGTask(
   payload: DAGTaskPayload
 ): Promise<DAGTaskResult> {
-  return executeWithFallback(
-    () => executeWithTrigger(payload),
-    () => executeLocally(payload),
-    'DAG'
+  return executeWithFallback<DAGTaskPayload, DAGTaskResult>(
+    async (taskId) => invokeTriggerTask(taskId, payload),
+    (p) => executeLocally(p),
+    'DAG',
+    payload
   );
-}
-
-/**
- * Execute with Trigger.dev SDK
- */
-async function executeWithTrigger(
-  payload: DAGTaskPayload
-): Promise<DAGTaskResult> {
-  // For now, execute locally - Trigger.dev v3 SDK integration requires task registration
-  logger.warn('Trigger.dev execution requested but not fully configured, using local execution');
-  return executeLocally(payload);
 }
 
 /**
@@ -84,7 +74,6 @@ async function executeLocally(
     parallel: payload.parallel !== false,
   };
 
-  // Execute with retry if specified
   let result: any;
   if (payload.maxRetries && payload.maxRetries > 0) {
     result = await executeDAGWithRetry(payload.dag, ctx, payload.maxRetries);
@@ -92,7 +81,6 @@ async function executeLocally(
     result = await executeDAGSmart(payload.dag, ctx);
   }
 
-  // Ensure success is always present
   return {
     success: result.success ?? true,
     nodeResults: result.nodeResults || {},
@@ -115,7 +103,19 @@ export async function scheduleDAGExecution(
     };
   }
 ): Promise<{ scheduled: boolean; jobId?: string }> {
-  // Scheduling requires Trigger.dev to be configured
+  const available = await import('./utils').then(m => m.isTriggerAvailable());
+
+  if (available) {
+    return scheduleWithTrigger(
+      async () => {
+        const { invokeTriggerTask } = await import('./utils');
+        const result = await invokeTriggerTask('dag-task', payload);
+        return { scheduled: true, jobId: (result as any).runId };
+      },
+      'DAG execution'
+    );
+  }
+
   logger.warn('DAG execution scheduling not yet available - Trigger.dev configuration required');
   return { scheduled: false };
 }

@@ -8,7 +8,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { executeWithFallback } from './utils';
+import { executeWithFallback, invokeTriggerTask, scheduleWithTrigger } from './utils';
 
 const logger = createLogger('Trigger:Consensus');
 
@@ -41,22 +41,12 @@ export interface ConsensusTaskResult {
 export async function executeConsensusTask(
   payload: ConsensusTaskPayload
 ): Promise<ConsensusTaskResult> {
-  return executeWithFallback(
-    () => executeWithTrigger(payload),
-    () => executeLocally(payload),
-    'consensus'
+  return executeWithFallback<ConsensusTaskPayload, ConsensusTaskResult>(
+    async (taskId) => invokeTriggerTask(taskId, payload),
+    (p) => executeLocally(p),
+    'consensus',
+    payload
   );
-}
-
-/**
- * Execute with Trigger.dev SDK using parallel execution
- */
-async function executeWithTrigger(
-  payload: ConsensusTaskPayload
-): Promise<ConsensusTaskResult> {
-  // For now, execute locally - Trigger.dev v3 SDK integration requires task registration
-  logger.warn('Trigger.dev execution requested but not fully configured, using local execution');
-  return executeLocally(payload);
 }
 
 /**
@@ -85,7 +75,6 @@ async function executeLocally(
     task: payload.task,
   });
 
-  // Transform AgentContribution[] to { agentId, contribution }[] format
   const transformedContributions = (result.contributions || []).map(c => ({
     agentId: c.role || 'unknown',
     contribution: c.content || '',
@@ -97,4 +86,30 @@ async function executeLocally(
     consensusScore: result.consensusScore || 0,
     contributions: transformedContributions,
   };
+}
+
+/**
+ * Schedule recurring consensus task (for periodic multi-agent deliberation)
+ */
+export async function scheduleConsensusTask(
+  payload: Omit<ConsensusTaskPayload, 'task'> & {
+    task: string;
+    schedule: { type: 'cron' | 'interval'; expression: string };
+  }
+): Promise<{ scheduled: boolean; jobId?: string }> {
+  const available = await import('./utils').then(m => m.isTriggerAvailable());
+
+  if (available) {
+    return scheduleWithTrigger(
+      async () => {
+        const { invokeTriggerTask } = await import('./utils');
+        const result = await invokeTriggerTask('consensus-task', payload);
+        return { scheduled: true, jobId: (result as any).runId };
+      },
+      'consensus task'
+    );
+  }
+
+  logger.warn('Consensus scheduling not yet available - Trigger.dev configuration required');
+  return { scheduled: false };
 }

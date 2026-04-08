@@ -36,7 +36,7 @@ const MAX_HEREDOC_LINES = 5000;
  * possessive-style workarounds (split approach) and a bounded character
  * class for the heredoc body.
  */
-function sanitizeV2ResponseContent(content: string): string {
+export function sanitizeV2ResponseContent(content: string): string {
   if (!content || typeof content !== 'string') return '';
   let sanitized = content;
 

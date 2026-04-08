@@ -192,7 +192,9 @@ class TestFetchPage:
         assert result["url"] == "https://docs.mem0.ai/platform/overview"
 
     def test_uses_path_as_is_when_no_leading_slash(self):
-        full_url = "https://other.com/page"
+        # With the scheme-based URL detection fix, absolute URLs are validated
+        # so we test a valid docs.mem0.ai URL instead of other.com
+        full_url = "https://docs.mem0.ai/platform/features"
         with patch.object(m, "fetch_url", return_value="content") as mock_fetch:
             result = m.fetch_page(full_url)
         mock_fetch.assert_called_once_with(full_url)

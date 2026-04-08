@@ -147,8 +147,20 @@ export async function createWebLocalPty(
       }
     }, 10000);
 
+    // Grace period to prevent false-positive onerror during initial connection
+    let connectionGracePeriod = true;
+    setTimeout(() => { connectionGracePeriod = false; }, 3000);
+
+    // Track whether we've ever received the 'connected' message.
+    // Once connected, SSE errors are treated as transient (reconnectable).
+    let everConnected = false;
+    let reconnectAttempts = 0;
+    const MAX_RECONNECT_ATTEMPTS = 10;
+
     eventSource.onopen = () => {
       clearTimeout(sseTimeout);
+      connectionGracePeriod = false;
+      reconnectAttempts = 0; // Reset on successful reconnect
       logger.debug('Local PTY SSE connection opened', { sessionId });
     };
 
@@ -158,6 +170,7 @@ export async function createWebLocalPty(
 
         switch (msg.type) {
           case 'connected':
+            everConnected = true;
             logger.info('Local PTY connected', { sessionId, mode });
             break;
 
@@ -173,9 +186,13 @@ export async function createWebLocalPty(
               isClosed = true;
               eventSource?.close();
               eventSource = null;
-              if (closeCallback) {
-                closeCallback();
-              }
+              // Delay closeCallback to let the user see any final output
+              // This prevents a jarring "flash" when the PTY exits
+              setTimeout(() => {
+                if (closeCallback) {
+                  closeCallback();
+                }
+              }, 500);
             }
             break;
 
@@ -190,20 +207,57 @@ export async function createWebLocalPty(
     eventSource.onerror = (err) => {
       if (isClosed) return;
 
-      const readyState = eventSource?.readyState;
-      if (readyState === EventSource.CONNECTING) {
-        logger.debug('SSE reconnecting...', { sessionId });
-        return; // EventSource will auto-reconnect
+      // During initial connection setup, EventSource fires onerror before onopen
+      // if the server is slow to respond. Skip errors during the grace period
+      // unless readyState is CLOSED (real failure).
+      if (connectionGracePeriod && eventSource?.readyState !== EventSource.CLOSED) {
+        return; // Ignore — still connecting
       }
 
-      // CLOSED or persistent error
-      logger.error('Local PTY SSE connection error', { readyState, err });
-      isClosed = true;
-      clearTimeout(sseTimeout);
-      eventSource?.close();
-      eventSource = null;
-      if (closeCallback) {
-        closeCallback();
+      const readyState = eventSource?.readyState;
+
+      // CONNECTING = EventSource is auto-reconnecting (server-side retry)
+      if (readyState === EventSource.CONNECTING) {
+        reconnectAttempts++;
+        logger.debug(`SSE reconnecting... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`, { sessionId });
+        if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+          logger.warn('SSE reconnection limit reached', { sessionId });
+          isClosed = true;
+          clearTimeout(sseTimeout);
+          eventSource?.close();
+          eventSource = null;
+          if (closeCallback) closeCallback();
+        }
+        return;
+      }
+
+      // CLOSED = connection terminated.
+      // If we've NEVER received the 'connected' message, this is a real failure.
+      // If we HAVE received 'connected', treat as transient (HMR, network blip).
+      if (!everConnected) {
+        logger.error('Local PTY SSE connection failed before establishing session', { err });
+        isClosed = true;
+        clearTimeout(sseTimeout);
+        eventSource?.close();
+        eventSource = null;
+        if (closeCallback) {
+          closeCallback();
+        }
+        return;
+      }
+
+      // We were connected but the stream dropped. Don't close the session —
+      // the EventSource will auto-reconnect. The PTY process is still alive
+      // on the server; we'll resume receiving output on reconnect.
+      reconnectAttempts++;
+      logger.debug(`SSE connection dropped, reconnecting... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`, { sessionId });
+      if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
+        logger.warn('SSE reconnection limit reached after being connected', { sessionId });
+        isClosed = true;
+        clearTimeout(sseTimeout);
+        eventSource?.close();
+        eventSource = null;
+        if (closeCallback) closeCallback();
       }
     };
 

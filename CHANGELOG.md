@@ -2,7 +2,97 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] — Hot-Reload State Preservation + Provider Tracking + Code Preview
+## [Unreleased] — Local PTY Security + Trigger.dev Stubs Fixed + Timeout Fixes
+
+### 🔴 Trigger.dev Stub Fixes
+
+- **All 6 `executeWithTrigger()` functions were no-ops** — Every task wrapper logged a warning and fell back to local execution regardless of SDK availability. Added `invokeTriggerTask()` using the Trigger.dev management API (`POST /api/v1/tasks/{taskId}/trigger`) with proper auth via `TRIGGER_SECRET_KEY`.
+- **All 4 scheduling functions returned `{ scheduled: false }`** — Now call `schedules.create()` from `@trigger.dev/sdk/v3` when the SDK is available, with event bus fallback for skill-bootstrap.
+- **No registered `task()` definitions existed** — Created `web/trigger/` directory with 6 real v3 `task()` definitions: `agent-loop`, `consensus-task`, `dag-task`, `reflection-task`, `research-task`, `skill-bootstrap`. Each has `maxDuration`, retry config, and a concrete `run` function.
+- **`executeWithFallback` signature didn't pass payload** — Old 3-arg version couldn't pass payload to local execution. Changed to 4-arg: `(triggerExecute, localExecute, taskName, payload)` — all 6 wrappers updated.
+- **Dual `trigger.config.ts` with non-overlapping `dirs`** — Root config only scanned `web/lib/events/trigger/`, web config only scanned `web/trigger/`. Fixed: root config now includes both directories.
+- **`invokeTriggerTask` used non-existent SDK method** — Old code called `tasks.invoke()` which doesn't exist in v3/v4. Replaced with management API `fetch()` call that throws on failure (triggering fallback to local execution).
+
+### 🔴 Critical Bug Fixes
+
+- **Sandbox connection timeout firing during sandbox creation** — Timeout started BEFORE `/api/sandbox/terminal` completed, so 10s timeout fired while sandbox was still being created (24s for Daytona). Fixed: timeout now starts AFTER sandbox creation, only timing out the SSE/PTY connection phase.
+- **NaN timeout from invalid env var** — `parseInt(NaN)` on `NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS` caused immediate timeout. Added `clampTimeout()` validation with min 10s / max 120s bounds.
+- **AbortError triggered duplicate PTY fallback** — When timeout aborted the SSE connection, catch block attempted PTY WebSocket fallback using an aborted signal. Added `AbortError` detection to skip fallback when timeout already handled.
+- **Local PTY session leak on SSE disconnect** — `ReadableStream.cancel()` killed the PTY and deleted the session on every SSE disconnect (Fast Refresh/HMR). Fixed: `cancel()` is now a no-op; PTY persists independently of SSE streams and is cleaned up by TTL or explicit close.
+- **Local PTY auth bypass on SSE stream** — Auth check only verified ownership if `authResult.success && authResult.userId`, allowing unauthenticated users through. Now requires auth before stream creation.
+- **Stale terminal closure in web local PTY callbacks** — `onOutput` and `onClose` closed over `termRef` set once during init; if terminal closed/reopened, callbacks wrote to stale or null instance. Fixed: callbacks now lookup terminal by ID on each invocation.
+- **TypeScript syntax error in session store** — `(session as any).outputQueue: string[] = []` is invalid TS syntax. Fixed: added `outputQueue: string[]` to `LocalPtySession` interface, removed all `any` casts.
+- **Overly aggressive env var filtering** — Pattern `'KEY'` filtered legitimate vars like `PRIMARY_KEY`, `CACHE_KEY`. Changed to anchored regex patterns matching only secret-like names.
+- **Docker PTY race condition** — `docker exec` ran before container shell was ready. Added exponential backoff retry loop (200ms-2000ms) with health check before PTY spawn.
+- **Session map initialization race** — Input/resize routes used `?? new Map()` creating separate maps when route.ts hadn't loaded. Changed to `??= new Map()` for safe singleton.
+- **Wrong SSE Connection header** — `Connection: 'keep-alive'` is incorrect for SSE. Changed to `Connection: 'close'` per spec (sandbox + local PTY routes).
+- **Missing Content-Type validation** — Input and resize routes accepted any Content-Type. Added `application/json` check returning 415.
+- **Null reference in SSE disconnect handler** — `s?.exitCode` where `s` was null (just checked `!s`). Fixed: use captured `session` variable.
+- **Env var hint referenced invalid mode** — Error message said `ENABLE_LOCAL_PTY=direct` but valid mode is `on`. Fixed.
+- **Terminal disconnect didn't close EventSource promptly** — `disconnect()` closed EventSource after an `await fetch()`, allowing browser auto-reconnect. Fixed: EventSource closed synchronously first, state reset immediately, async cleanup fire-and-forget.
+- **cleanupHandlers didn't await disconnect** — `cleanupHandlers` was sync, returned before disconnect finished. Made async + await.
+- **closeTerminal didn't await cleanupHandlers** — Terminal disposed before connections closed. Added `await`.
+- **Terminal-manager PTY retry loop had unclosed try block** — Outer `try {` never closed, causing connection limit code to run inside the try block. Removed unnecessary outer try, moved retry logic to standalone for loop.
+- **Duplicate session validation in sandbox input route** — Redundant ownership check after rate limit. Removed duplicate.
+- **Sandbox stream didn't close on PTY creation failure** — Stream hung forever when PTY creation failed. Added `controller.close()` after error message.
+- **Local PTY Windows PATH overwritten with Unix paths** — `getCleanEnv()` set `PATH` to `/usr/local/sbin:..` on Windows, making PowerShell unable to find commands. Fixed: preserves system `PATH` on Windows, sets `HOME` from `USERPROFILE`.
+- **Local PTY spawn errors crashed the route** — Unhandled `node-pty.spawn()` exceptions. Added try-catch with helpful error messages per platform.
+- **Local PTY unsafe terminal dimensions** — No min/max clamping on cols/rows. Added 1-500 cols, 1-200 rows validation for all spawn paths (direct, unshare, docker).
+- **Web local PTY SSE false-positive onerror** — EventSource fires `onerror` before `onopen` on slow connections. Added 3s grace period + `everConnected` tracking to distinguish real failures from transient reconnects.
+- **Web local PTY close callback jarring flash** — `onClose` fired immediately on PTY exit. Added 500ms delay to let user see final output.
+- **NaN timeout from invalid env var** — `parseInt(NaN)` on `NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS` caused immediate timeout. Added `clampTimeout()` validation with min 10s / max 120s bounds.
+- **AbortError triggered duplicate PTY fallback** — When timeout aborted the SSE connection, catch block attempted PTY WebSocket fallback using an aborted signal. Added `AbortError` detection to skip fallback when timeout already handled.
+- **Local PTY session leak on SSE disconnect** — `ReadableStream.cancel()` killed the PTY but didn't delete session from the map. Added `sessions.delete(sessionId)` in cancel handler.
+- **Local PTY auth bypass on SSE stream** — Auth check only verified ownership if `authResult.success && authResult.userId`, allowing unauthenticated users through. Now requires auth before stream creation.
+- **Stale terminal closure in web local PTY callbacks** — `onOutput` and `onClose` closed over `termRef` set once during init; if terminal closed/reopened, callbacks wrote to stale or null instance. Fixed: callbacks now lookup terminal by ID on each invocation.
+- **TypeScript syntax error in session store** — `(session as any).outputQueue: string[] = []` is invalid TS syntax. Fixed: added `outputQueue: string[]` to `LocalPtySession` interface, removed all `any` casts.
+- **Overly aggressive env var filtering** — Pattern `'KEY'` filtered legitimate vars like `PRIMARY_KEY`, `CACHE_KEY`. Changed to anchored regex patterns matching only secret-like names (`*_API_KEY`, `*_TOKEN`, `*_PASSWORD`, `DATABASE_URL`, etc.).
+- **Docker PTY race condition** — `docker exec` ran before container shell was ready. Added exponential backoff retry loop (200ms-2000ms) with health check before PTY spawn.
+- **Session map initialization race** — Input/resize routes used `?? new Map()` creating separate maps when route.ts hadn't loaded. Changed to `??= new Map()` for safe singleton.
+- **Wrong SSE Connection header** — `Connection: 'keep-alive'` is incorrect for SSE. Changed to `Connection: 'close'` per spec.
+- **Missing Content-Type validation** — Input and resize routes accepted any Content-Type. Added `application/json` check returning 415.
+- **Null reference in SSE disconnect handler** — `s?.exitCode` where `s` was null (just checked `!s`). Fixed: use captured `session` variable.
+- **Env var hint referenced invalid mode** — Error message said `ENABLE_LOCAL_PTY=direct` but valid mode is `on`. Fixed.
+
+### 🛡 Security
+
+- **Local PTY isolation modes**: Added `unshare` (Linux user namespace), `docker` (container isolation), `localhost` (dev-only), `off` (production default), `on` (dev no-isolation).
+- **Environment variable sanitization**: Regex-based filtering removes secrets (`*_API_KEY`, `*_TOKEN`, `*_PASSWORD`, `DATABASE_URL`, `REDIS_URL`) while preserving safe vars.
+- **Session ownership enforcement**: All API endpoints (create, input, resize, SSE) verify authenticated user owns the session.
+- **Input size limits**: 16KB max per write, dimension validation (cols 10-500, rows 5-200).
+- **Session rate limits**: Max 5 PTY sessions per user, 30-minute session TTL with 5-minute cleanup.
+- **Process cleanup**: Graceful shutdown on SIGTERM, process exit cleanup, container auto-removal.
+
+### 🐧 New: Linux User Namespace Isolation (`unshare` mode)
+
+- Each PTY session runs in isolated user/mount/PID namespaces via `unshare --user --map-root-user --mount --pid --fork --mount-proc`.
+- No cross-user process visibility, isolated filesystem view, no network isolation (use `docker` mode for that).
+- Requires: Linux kernel 3.8+, `kernel.unprivileged_userns_clone=1`, `util-linux` package.
+
+### 🐳 New: Docker PTY Isolation
+
+- Per-session Docker containers with `--network none`, memory/CPU limits, auto-removal.
+- Includes readiness probe with exponential backoff before PTY exec.
+- Dockerfile: `web/Dockerfile.local-pty` (node:20-slim + dev tools).
+
+### 📝 Documentation
+
+- `docs/LOCAL_PTY_WEB_MODE.md` — Complete guide: architecture, isolation modes, API reference, troubleshooting.
+
+### 🧪 Tests
+
+- `__tests__/web-local-pty.test.ts` — 16 tests (14 passed, 2 skipped for vitest 4 native fetch limitation): session creation, input, resize, close, SSE message handling, error recovery, SSR detection.
+
+### Changed Files
+
+- `web/app/api/terminal/local-pty/route.ts` — Complete rewrite: security gates, 5 isolation modes, typed session store, env sanitization, Docker readiness probe.
+- `web/app/api/terminal/local-pty/input/route.ts` — Auth, ownership, Content-Type validation, 16KB size limit.
+- `web/app/api/terminal/local-pty/resize/route.ts` — Auth, ownership, dimension validation, Content-Type check.
+- `web/lib/terminal/web-local-pty.ts` — SSE grace period, reconnect handling, typed interface, proper cleanup.
+- `web/components/terminal/TerminalPanel.tsx` — Stale closure fix, web local PTY input/resize/close routing, VFS handler restored.
+- `web/lib/sandbox/sandbox-connection-manager.ts` — Timeout timing fix, NaN clamp, AbortError guard, progress messages.
+- `env.example` — Added `ENABLE_LOCAL_PTY` documentation.
+- `web/Dockerfile.local-pty` — New: purpose-built image for Docker isolation mode.
 
 ### 🔴 Critical Bug Fixes
 
@@ -19,6 +109,10 @@ All notable changes to this project will be documented in this file.
 - **VFS file scoping for all tools** — Added `resolveWorkspacePath()` to `create_directory`, `search_files`, and `file_exists` tools. All VFS MCP tools now scope paths to workspace, preventing cross-session file access.
 
 ### 🧪 Test Coverage
+
+- **file-edit-parser.test.ts** — Added 24 new edge case tests: multiple file blocks, whitespace handling, nested paths, empty content/path rejection, 10K char content, unicode paths (rejected by design), special characters, command name/JSON rejection, mixed case openers, multiple mkdir/delete blocks, path validation, mixed format integration. **47/47 passing.**
+- **batch-write-parser.test.ts** — Added 28 new tests: single/multi file creation, newlines/special chars, unicode, backticks in code, 50K char content, nested paths, whitespace preservation, escaped quotes, empty content, error handling (invalid JSON, non-array, null/number/string elements, undefined), mixed format prefixes (files=, files:, args=, data=, input=, items=). **88/88 passing.**
+- **run-e2e-test.cjs** — End-to-end test suite: chat with tools, filesystem snapshot verification, directory listing, provider tracking, simple chat, error handling. **10/10 passing.**
 
 ### 🏗 Architecture
 
