@@ -1,6 +1,6 @@
 {
   "version": 1,
-  "updatedAt": "2026-04-08T03:27:41.708Z",
+  "updatedAt": "2026-04-08T12:38:48.151Z",
   "quotas": {
     "composio": {
       "monthlyLimit": 20000,
@@ -22,7 +22,7 @@
     },
     "daytona": {
       "monthlyLimit": 5000,
-      "currentUsage": 1,
+      "currentUsage": 4,
       "resetDate": "2026-05-01",
       "isDisabled": false
     },

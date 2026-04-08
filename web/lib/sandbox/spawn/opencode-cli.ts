@@ -120,6 +120,8 @@ export class OpencodeV2Provider implements LLMProvider {
       executeTool,
       onToolExecution,
       onStreamChunk,
+      cwd: requestedCwd,
+      enableSelfHeal = true,
     } = options;
 
     // Get or create session
@@ -153,7 +155,28 @@ export class OpencodeV2Provider implements LLMProvider {
       const isWindows = process.platform === 'win32';
       let localWorkspaceDir: string;
 
-      if (isWindows) {
+      // If a specific cwd was requested, use it (with path safety validation)
+      if (requestedCwd) {
+        const path = await import('path');
+        const sanitized = this.sanitizePath(requestedCwd);
+        if (sanitized) {
+          // If it's a VFS scoped path like "project/sessions/xxx", convert to real path
+          if (sanitized.startsWith('project/')) {
+            // Strip "project/" prefix and append to workspace base
+            const relativePart = sanitized.replace(/^project\//, '');
+            localWorkspaceDir = isWindows
+              ? path.join(process.env.TEMP || process.env.TMP || 'C:\\temp', 'opencode-workspace', relativePart)
+              : path.join('/tmp/opencode-workspace', relativePart);
+          } else if (sanitized.startsWith('/workspace/')) {
+            localWorkspaceDir = sanitized.replace('/workspace/', isWindows ? (process.env.TEMP || 'C:\\temp') + '\\' : '/home/user/workspace/');
+          } else {
+            // Already an absolute path
+            localWorkspaceDir = sanitized;
+          }
+        }
+      }
+
+      if (!localWorkspaceDir) {
         // On Windows, use a temp directory or app data folder
         // SECURITY: Sanitize and escape user-provided values to prevent command injection
         const tempDir = process.env.TEMP || process.env.TMP || 'C:\\temp';
@@ -682,23 +705,162 @@ export class OpencodeV2Provider implements LLMProvider {
   }
 
   /**
-   * Direct command execution
-   * 
+   * Detect project type from the workspace directory by examining package.json, 
+   * Cargo.toml, go.mod, etc. Returns the appropriate run command.
+   */
+  private async detectProjectCommand(cwd: string): Promise<string | null> {
+    const fs = await import('fs/promises');
+    const path = await import('path');
+
+    try {
+      const pkgPath = path.join(cwd, 'package.json');
+      const pkgRaw = await fs.readFile(pkgPath, 'utf-8');
+      const pkg = JSON.parse(pkgRaw);
+      if (pkg.scripts) {
+        const s = pkg.scripts;
+        if (s.dev) return 'npm run dev';
+        if (s.start) return 'npm start';
+        if (s.serve) return 'npm run serve';
+        if (s.build) return 'npm install && npm run build';
+      }
+      return 'npm install';
+    } catch { /* no package.json */ }
+
+    try {
+      await (await import('fs/promises')).access(path.join(cwd, 'Cargo.toml'));
+      return 'cargo run';
+    } catch { /* not Rust */ }
+
+    try {
+      await (await import('fs/promises')).access(path.join(cwd, 'go.mod'));
+      return 'go run .';
+    } catch { /* not Go */ }
+
+    try {
+      const fs2 = await import('fs/promises');
+      await fs2.access(path.join(cwd, 'requirements.txt'));
+      for (const entry of ['main.py', 'app.py', 'run.py']) {
+        try { await fs2.access(path.join(cwd, entry)); return 'pip install -r requirements.txt && python ' + entry; } catch {}
+      }
+      return 'pip install -r requirements.txt';
+    } catch { /* not Python */ }
+
+    return null;
+  }
+
+  /**
+   * Translate natural language task descriptions into actual shell commands.
+   */
+  private async translateNaturalLanguageToCommand(task: string, cwd: string): Promise<string> {
+    const lower = task.toLowerCase().trim();
+
+    // Direct commands — pass through
+    if (/^(npm|yarn|pnpm|npx|cargo|go|python|pip|node|deno|bun)\b/.test(lower)) return task;
+
+    // "run the project", "start it", "debug the app"
+    if (/(run|start|launch|debug|execute)\s*(the\s*)?(project|app|server|dev|it|this)?\s*$/i.test(lower) ||
+        /^(run|start)$/.test(lower)) {
+      const cmd = await this.detectProjectCommand(cwd);
+      return cmd || 'npm run dev || npm start || echo "No run script found"';
+    }
+
+    // Build
+    if (/^(build|compile|package)\b/i.test(lower)) {
+      const cmd = await this.detectProjectCommand(cwd);
+      return (cmd && cmd.includes('build')) ? cmd : 'npm run build || echo "No build script found"';
+    }
+
+    // Test
+    if (/^(test|run\s*tests?)\b/i.test(lower)) return 'npm test || echo "No test script found"';
+
+    // Install
+    if (/^(install|npm\s*install|yarn\s*add|pnpm\s*add)/i.test(lower)) return 'npm install';
+
+    // Lint
+    if (/^(lint|format|prettier|eslint)/i.test(lower)) return 'npm run lint || npm run format || echo "No lint script found"';
+
+    // Git
+    if (/^(git\s|commit|push|pull|branch)/i.test(lower)) return task;
+
+    // List files
+    if (/^(list|ls|dir|show\s*files)/i.test(lower)) return process.platform === 'win32' ? 'dir' : 'ls -la';
+
+    // Pass through
+    return task;
+  }
+
+  /**
+   * Self-heal: When a shell command fails, analyze the error and retry with corrections.
+   */
+  private async selfHealAndRetry(
+    originalCommand: string,
+    cwd: string,
+    errorOutput: string,
+    timeoutSeconds: number,
+    attempt: number = 1,
+  ): Promise<ToolResult> {
+    const maxAttempts = 3;
+    if (attempt > maxAttempts) {
+      return { success: false, output: errorOutput + `\n[SELF-HEAL] Max retries (${maxAttempts}) reached.`, exitCode: 1 };
+    }
+
+    const el = errorOutput.toLowerCase();
+    let corrective: string | null = null;
+    let reason = '';
+
+    if (/(module\s+not\s+found|cannot\s+find\s+module|err_module_not_found)/i.test(el)) {
+      corrective = 'npm install && ' + originalCommand;
+      reason = 'Missing dependency — auto-installing';
+    } else if (/(command\s+not\s+found|is\s+not\s+recognized)/i.test(el)) {
+      const cmd = originalCommand.split(' ')[0];
+      corrective = `which ${cmd} 2>/dev/null || echo "${cmd} not found in PATH"`;
+      reason = `Command "${cmd}" not found — diagnosing`;
+    } else if (/(eaddrinuse|address\s+already\s+in\s+use)/i.test(el)) {
+      const m = el.match(/port\s+(\d+)/);
+      if (m) {
+        const port = m[1];
+        corrective = process.platform === 'win32' ? `netstat -ano | findstr :${port}` : `lsof -ti :${port} | xargs kill -9 2>/dev/null; ${originalCommand}`;
+        reason = `Port ${port} in use — killing process`;
+      }
+    } else if (/(enoent|no\s+such\s+file)/i.test(el)) {
+      corrective = process.platform === 'win32' ? 'dir' : 'ls -la';
+      reason = 'File not found — listing directory';
+    } else if (/(permission\s+denied|eacces|eperm)/i.test(el)) {
+      return { success: false, output: errorOutput + '\n[SELF-HEAL] Permission denied — cannot auto-escalate.', exitCode: 1 };
+    }
+
+    if (corrective) {
+      console.log(`[OpencodeV2Provider] [SELF-HEAL] Attempt ${attempt}/${maxAttempts}: ${reason}`);
+      const retry = await this.executeCommandDirect(corrective, cwd, timeoutSeconds, false);
+      if (retry.success) {
+        return { success: true, output: `[SELF-HEAL] ${reason}\n--- Recovery ---\n${retry.output}`, exitCode: 0 };
+      }
+      return this.selfHealAndRetry(originalCommand, cwd, retry.output, timeoutSeconds, attempt + 1);
+    }
+
+    return { success: false, output: errorOutput, exitCode: 1 };
+  }
+
+  /**
+   * Direct command execution with self-heal retry
+   *
    * SECURITY NOTE: This executes commands via shell (/bin/sh -c or cmd.exe /c)
    * because opencode commands require shell features (stdin redirects, pipes).
-   * 
+   *
    * Security is provided by:
    * 1. Input validation in executeLocalCommand() - rejects dangerous patterns
    * 2. Sandboxed execution environment (container/isolated workspace)
    * 3. Timeout and resource limits
    * 4. Non-root user execution
-   * 
+   * 5. Command pattern filtering in executeLocalCommand
+   *
    * @see executeLocalCommand - Input sanitization
    */
   private async executeCommandDirect(
     command: string,
     cwd: string,
     timeoutSeconds: number,
+    enableSelfHeal: boolean = true,
   ): Promise<ToolResult> {
     return new Promise((resolve) => {
       const timeoutMs = timeoutSeconds * 1000;

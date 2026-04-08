@@ -471,7 +471,8 @@ export function extractHtmlCommentFileEdits(content: string): FileEdit[] {
 export function extractCompactFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
   // Use \s* to handle both spaced and non-spaced variants
-  // FIX: Limit match scope to prevent catastrophic backtracking
+  // FIX: Match ONLY complete <file_edit> blocks — require both opening and closing tags
+  // The non-greedy ([\s\S]*?) matches all content including > characters (e.g. arrow functions)
   const regex = /<file_edit\s*path=["']([^"']+)["']\s*>([\s\S]*?)<\/file_edit>/gi;
   let match: RegExpExecArray | null;
 
@@ -585,10 +586,12 @@ export function extractMalformedFileEdits(content: string): FileEdit[] {
 
   // Check if content contains SVG - if so, we need to be more careful
   const hasSvgContent = content.includes('<svg') && content.includes('</svg>');
-  
-  // Match: <path>path</path> followed by content, ending with <file Edit> or <file_edit> or next <path>
-  // Handles variations: <file Edit>, <file_edit>, <FILE_EDIT>, <File_Edit>, etc. (case insensitive)
-  const regex = /<path>\s*([^\s<]+?)\s*<\/path>\s*([\s\S]*?)(?=<path>|<file\s*edit>|$)/gi;
+
+  // Match: <path>path</path> followed by content, ending with <file_edit>
+  // FIX: Require the closing <file_edit> marker — do NOT match at end of string ($)
+  // to prevent extracting arbitrary XML content as file edits.
+  // Handles: <file_edit>, <file edit>, <File_Edit>, <file_edit/>, <FILE_EDIT>
+  const regex = /<path>\s*([^\s<]+?)\s*<\/path>\s*([\s\S]*?)<file[\s_]edit\s*\/?>/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
