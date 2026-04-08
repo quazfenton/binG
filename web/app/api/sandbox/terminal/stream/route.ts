@@ -187,7 +187,8 @@ export async function GET(req: NextRequest) {
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Failed to connect to terminal';
             console.error('[Terminal Stream] PTY session creation failed:', err);
-            send({ type: 'error', data: msg });
+            console.error('[Terminal Stream] Error stack:', err instanceof Error ? err.stack : 'N/A');
+            send({ type: 'error', data: `PTY creation failed: ${msg}` });
           }
         };
 

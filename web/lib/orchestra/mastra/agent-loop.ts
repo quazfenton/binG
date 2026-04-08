@@ -98,6 +98,8 @@ export class AgentLoop {
   private toolLoopAgent: any | null = null;
   private useToolLoopAgent: boolean = false;
   private configuredModel?: string;
+  // Track tool invocations manually since ToolLoopAgent may not populate result.toolInvocations
+  private lastExecutedToolCalls: Array<{ toolCallId: string; toolName: string; args: Record<string, any>; result: any }> = [];
 
   constructor(
     userId: string,
@@ -229,8 +231,32 @@ export class AgentLoop {
       // Wait for final result
       const finalResult = await result.consumeStream();
 
-      // FALLBACK: If no tool invocations, try parsing text-based tool calls from response
+      // FALLBACK 1: If no tool invocations from stream, try manually tracked invocations
+      if (toolInvocations.length === 0 && this.lastExecutedToolCalls.length > 0) {
+        log.debug(`Stream didn't report tool invocations, using manually tracked: ${this.lastExecutedToolCalls.length} calls`);
+        for (const tc of this.lastExecutedToolCalls) {
+          const inv = {
+            toolInvocation: {
+              toolCallId: tc.toolCallId,
+              toolName: tc.toolName,
+              args: tc.args,
+              result: tc.result,
+              state: 'result',
+            },
+          };
+          toolInvocations.push(inv);
+          results.push({
+            iteration: results.length + 1,
+            tool: tc.toolName,
+            arguments: tc.args,
+            result: tc.result,
+          });
+        }
+      }
+
+      // FALLBACK 2: If still no tool invocations, try parsing text-based tool calls from response
       if (toolInvocations.length === 0 && finalResult.text) {
+        log.debug('Stream completed without tool calls, LLM response:', finalResult.text.substring(0, 300));
         const textToolCalls = this.parseTextToolCalls(finalResult.text);
         if (textToolCalls.length > 0) {
           log.info(`ToolLoopAgent: No function calls, found ${textToolCalls.length} text-based tool calls, executing fallback`);
@@ -323,7 +349,18 @@ export class AgentLoop {
       const result = await this.toolLoopAgent.generate({ messages });
 
       // Transform ToolLoopAgent result to AgentResult format
-      const toolInvocations = result.toolInvocations || [];
+      // FIX: ToolLoopAgent may not populate toolInvocations correctly, so fall back to manually tracked invocations
+      let toolInvocations = result.toolInvocations || [];
+      if (toolInvocations.length === 0 && this.lastExecutedToolCalls.length > 0) {
+        log.debug(`ToolLoopAgent didn't report tool invocations, using manually tracked: ${this.lastExecutedToolCalls.length} calls`);
+        toolInvocations = this.lastExecutedToolCalls.map(tc => ({
+          toolCallId: tc.toolCallId,
+          toolName: tc.toolName,
+          args: tc.args,
+          result: tc.result,
+          state: 'result',
+        }));
+      }
       const results: AgentIterationResult[] = toolInvocations.map((inv: any, idx: number) => ({
         iteration: idx + 1,
         tool: inv.toolName,
@@ -350,6 +387,11 @@ export class AgentLoop {
       }
 
       log.info(`Task completed with ToolLoopAgent: ${toolInvocations.length} tool calls`);
+
+      // Log response text when no tools were called (for debugging model behavior)
+      if (toolInvocations.length === 0 && result.text) {
+        log.debug('ToolLoopAgent completed without tool calls, LLM response:', result.text.substring(0, 300));
+      }
 
       // FALLBACK: If no tool invocations, try parsing text-based tool calls from response
       if (toolInvocations.length === 0 && result.text) {
@@ -772,13 +814,27 @@ When task is complete, just respond naturally with your final answer.
       const vercelModel = await this.createModelInstance(provider, model);
       
       // Build SDK tool map from the filesystem tools array
+      // Reset tracking array for this execution
+      this.lastExecutedToolCalls = [];
       const sdkTools: Record<string, any> = {};
       for (const tool of this.tools) {
         sdkTools[tool.name] = {
           description: tool.description,
           parameters: tool.parameters as any,
           execute: async (args: any) => {
+            log.debug(`Tool executed: ${tool.name}`, args);
             const result = await tool.execute(args);
+            log.debug(`Tool completed: ${tool.name}`, { success: result.success });
+            
+            // Track invocation manually since ToolLoopAgent may not report them
+            const toolCallId = `${tool.name}-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+            this.lastExecutedToolCalls.push({
+              toolCallId,
+              toolName: tool.name,
+              args,
+              result,
+            });
+            
             if (!result.success) {
               throw new Error(result.error || 'Tool execution failed');
             }
@@ -792,8 +848,14 @@ When task is complete, just respond naturally with your final answer.
         maxIterations: this.maxIterations,
         tools: sdkTools,
       });
-      
-      log.info('ToolLoopAgent initialized successfully', { provider, model, isCompatible });
+
+      log.info('ToolLoopAgent initialized successfully', {
+        provider,
+        model,
+        isCompatible,
+        toolCount: Object.keys(sdkTools).length,
+        toolNames: Object.keys(sdkTools).join(', '),
+      });
     } catch (error: any) {
       log.error('Failed to initialize ToolLoopAgent', {
         error: error.message,
@@ -924,55 +986,150 @@ When task is complete, just respond naturally with your final answer.
    */
   private parseTextToolCalls(text: string): Array<{ name: string; arguments: Record<string, any> }> {
     const toolCalls: Array<{ name: string; arguments: Record<string, any> }> = [];
-    const toolNames = this.tools.map(t => t.name).join('|');
-    
+    const toolNames = this.tools.map(t => t.name);
+    const toolNamesPattern = toolNames.join('|');
+
     // Pattern 1: write_file({ "path": "...", "content": "..." })
-    const pattern1 = new RegExp(`(${toolNames})\\s*\\(\\s*(\{[^}]+\})\\s*\\)`, 'gi');
+    // Find tool name + opening paren, then scan forward to find matching closing paren
+    const pattern1 = new RegExp(`(${toolNamesPattern})\\s*\\(`, 'gi');
     let match;
     while ((match = pattern1.exec(text)) !== null) {
       try {
-        const args = JSON.parse(match[2]);
+        const startIdx = match.index + match[0].length;
+        // Scan forward to find matching closing paren, tracking brace depth
+        let depth = 0;
+        let inString = false;
+        let escapeNext = false;
+        let endIdx = -1;
+        for (let i = startIdx; i < text.length; i++) {
+          const ch = text[i];
+          if (escapeNext) {
+            escapeNext = false;
+            continue;
+          }
+          if (ch === '\\' && inString) {
+            escapeNext = true;
+            continue;
+          }
+          if (ch === '"') {
+            inString = !inString;
+            continue;
+          }
+          if (inString) continue;
+          if (ch === '{' || ch === '(') {
+            depth++;
+          } else if (ch === '}' || ch === ')') {
+            if (depth <= 0 && ch === ')') {
+              endIdx = i;
+              break;
+            }
+            depth--;
+          }
+        }
+        if (endIdx === -1) continue;
+
+        const argText = text.substring(startIdx, endIdx).trim();
+        const openBrace = argText.indexOf('{');
+        const closeBrace = argText.lastIndexOf('}');
+        if (openBrace === -1 || closeBrace === -1) continue;
+        const jsonStr = argText.substring(openBrace, closeBrace + 1);
+        // Skip empty objects like {} - must have at least one key
+        if (jsonStr.trim() === '{}') continue;
+        const args = JSON.parse(jsonStr);
+        // Skip if parsed object has no keys
+        if (Object.keys(args).length === 0) continue;
         toolCalls.push({ name: match[1], arguments: args });
       } catch (e) {
-        // Try to parse as JS object if JSON fails
-        try {
-          const args = eval('({' + match[2] + '})');
-          toolCalls.push({ name: match[1], arguments: args });
-        } catch (e2) {
-          // Skip invalid arguments
-        }
+        // Skip invalid arguments
       }
     }
-    
+
     // Pattern 2: [Tool: write_file] { "path": "..." }
-    const pattern2 = new RegExp(`\\[\\s*Tool:\\s*(${toolNames})\\s*\\]\\s*(\{[^}]+\})`, 'gi');
+    // Match tool tag, then extract JSON from after tag using balanced brace scanning
+    const pattern2 = new RegExp(`\\[\\s*Tool:\\s*(${toolNamesPattern})\\s*\\]`, 'gi');
     while ((match = pattern2.exec(text)) !== null) {
       try {
-        const args = JSON.parse(match[2]);
+        const tagEndIdx = match.index + match[0].length;
+        const afterTag = text.substring(tagEndIdx);
+        // Find the first { after the tag
+        const openBrace = afterTag.indexOf('{');
+        if (openBrace === -1) continue;
+        // Scan forward from the first { to find the matching }
+        let depth = 0;
+        let inString = false;
+        let escapeNext = false;
+        let closeIdx = -1;
+        for (let i = openBrace; i < afterTag.length; i++) {
+          const ch = afterTag[i];
+          if (escapeNext) { escapeNext = false; continue; }
+          if (ch === '\\' && inString) { escapeNext = true; continue; }
+          if (ch === '"') { inString = !inString; continue; }
+          if (inString) continue;
+          if (ch === '{') depth++;
+          else if (ch === '}') {
+            depth--;
+            if (depth === 0) { closeIdx = i; break; }
+          }
+        }
+        if (closeIdx === -1) continue;
+        const jsonStr = afterTag.substring(openBrace, closeIdx + 1);
+        // Skip empty objects
+        if (jsonStr.trim() === '{}') continue;
+        const args = JSON.parse(jsonStr);
+        if (Object.keys(args).length === 0) continue;
         toolCalls.push({ name: match[1], arguments: args });
       } catch (e) {
         // Skip invalid JSON
       }
     }
-    
+
     // Pattern 3: { "tool": "write_file", "path": "..." } or { "name": "write_file", ... }
-    const pattern3 = /\{[^{}]*"(?:tool|name)"\\s*:\\s*"(${toolNames})"[^{}]*\}/gi;
-    while ((match = pattern3.exec(text)) !== null) {
+    // Find all top-level { } blocks and check if they contain tool/name key
+    const pattern3Start = /\{/g;
+    while ((match = pattern3Start.exec(text)) !== null) {
       try {
-        const parsed = JSON.parse(match[0]);
+        const openIdx = match.index;
+        // Scan forward to find matching }
+        let depth = 0;
+        let inString = false;
+        let escapeNext = false;
+        let closeIdx = -1;
+        for (let i = openIdx; i < text.length; i++) {
+          const ch = text[i];
+          if (escapeNext) { escapeNext = false; continue; }
+          if (ch === '\\' && inString) { escapeNext = true; continue; }
+          if (ch === '"') { inString = !inString; continue; }
+          if (inString) continue;
+          if (ch === '{') depth++;
+          else if (ch === '}') {
+            depth--;
+            if (depth === 0) { closeIdx = i; break; }
+          }
+        }
+        if (closeIdx === -1) continue;
+        const jsonStr = text.substring(openIdx, closeIdx + 1);
+        // Quick check: must contain "tool" or "name" key
+        if (!jsonStr.includes('"tool"') && !jsonStr.includes('"name"')) continue;
+        const parsed = JSON.parse(jsonStr);
+        if (!parsed.tool && !parsed.name) continue;
+        // Check if the tool name matches one of our tools
+        const toolName = parsed.tool || parsed.name;
+        if (!toolNames.includes(toolName)) continue;
         const args = { ...parsed };
         delete args.tool;
         delete args.name;
-        toolCalls.push({ name: parsed.tool || parsed.name, arguments: args });
+        // Skip empty args
+        if (Object.keys(args).length === 0) continue;
+        toolCalls.push({ name: toolName, arguments: args });
       } catch (e) {
         // Skip invalid JSON
       }
     }
-    
+
     if (toolCalls.length > 0) {
       log.debug(`Parsed ${toolCalls.length} text-based tool calls from LLM response`);
     }
-    
+
     return toolCalls;
   }
 

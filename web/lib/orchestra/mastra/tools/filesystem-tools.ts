@@ -198,13 +198,15 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
+          // Scope the path to workspace
+          const scopedPath = resolveWorkspacePath(workspacePath, path);
           // Create directory by writing a .keep file (VFS creates parent dirs automatically)
-          const keepFilePath = `${path}/.keep`;
+          const keepFilePath = `${scopedPath}/.keep`;
           await virtualFilesystem.writeFile(userId, keepFilePath, '');
           return {
             success: true,
-            path: path,
-            message: `Directory created: ${path}`,
+            path: scopedPath,
+            message: `Directory created: ${scopedPath}`,
           };
         } catch (error: any) {
           return {
@@ -267,10 +269,12 @@ export function createFilesystemTools(
       execute: async ({ query, path }: { query: string; path?: string }): Promise<ToolCallResult> => {
         try {
           const snapshot = await virtualFilesystem.exportWorkspace(userId);
+          // Scope the base path if provided
+          const scopedBasePath = path ? resolveWorkspacePath(workspacePath, path) : workspacePath;
 
           const results = snapshot.files.filter(f => {
             // Filter by base path if specified
-            if (path && !f.path.startsWith(path)) {
+            if (scopedBasePath && !f.path.startsWith(scopedBasePath)) {
               return false;
             }
             // Search in filename or content
@@ -314,10 +318,11 @@ export function createFilesystemTools(
       },
       execute: async ({ path }: { path: string }): Promise<ToolCallResult> => {
         try {
+          const scopedPath = resolveWorkspacePath(workspacePath, path);
           // Try to read as file first
           try {
-            await virtualFilesystem.readFile(userId, path);
-            return { success: true, exists: true, type: 'file' };
+            await virtualFilesystem.readFile(userId, scopedPath);
+            return { success: true, exists: true, type: 'file', path: scopedPath };
           } catch (error: any) {
             if (!error.message?.includes('not found')) {
               throw error;  // Real error, not "not found"
@@ -326,16 +331,17 @@ export function createFilesystemTools(
 
           // File not found - check if it's a directory
           try {
-            const listing = await virtualFilesystem.listDirectory(userId, path);
+            const listing = await virtualFilesystem.listDirectory(userId, scopedPath);
             return {
               success: true,
               exists: true,
               type: 'directory',
+              path: scopedPath,
               entries: listing.nodes.length
             };
           } catch (error: any) {
             if (error.message?.includes('not found')) {
-              return { success: true, exists: false };
+              return { success: true, exists: false, path: scopedPath };
             }
             throw error;
           }

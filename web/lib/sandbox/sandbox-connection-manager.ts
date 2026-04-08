@@ -51,7 +51,10 @@ import type { SandboxProviderType } from './providers'
 const logger = createLogger('SandboxConnection')
 
 // Connection configuration
-const CONNECTION_TIMEOUT_MS = 10000 // 10 seconds
+const CONNECTION_TIMEOUT_MS = parseInt(
+  process.env.NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS || '30000',
+  10
+) // Default 30s (configurable via env), increased from 10s to allow slow providers like Daytona
 const CONNECTION_COOLDOWN_MS = 5000 // 5 seconds
 const MAX_RECONNECT_ATTEMPTS = 5
 const INITIAL_RECONNECT_DELAY = 1000 // 1 second
@@ -165,17 +168,15 @@ export class SandboxConnectionManager {
     // Write connection message
     this.writeLine('')
     this.writeLine('\x1b[33m⟳ Connecting to sandbox...\x1b[0m')
-    this.writeLine('\x1b[90mThis may take a moment on first connection.\x1b[0m')
-    this.writeLine(`\x1b[90mTimeout after ${CONNECTION_TIMEOUT_MS / 1000}s will fall back to command-mode.\x1b[0m`)
+    this.writeLine('\x1b[90mStep 1/2: Creating or verifying sandbox instance...\x1b[0m')
+    this.writeLine('\x1b[90mThis may take 20-30s on first connection.\x1b[0m')
     this.writeLine('')
 
     // Start spinner
     this.startSpinner()
 
-    // Set connection timeout
-    this.connectionTimeout = setTimeout(() => {
-      this.handleConnectionTimeout()
-    }, CONNECTION_TIMEOUT_MS)
+    // Declare token at method scope so catch block can reuse it
+    let connectionToken: string | undefined
 
     try {
       // Create sandbox session
@@ -211,8 +212,10 @@ export class SandboxConnectionManager {
       const providerType = this.detectProviderType(sandboxId)
       logger.debug(`Detected provider type: ${providerType} for sandbox ${sandboxId}`)
 
-      // Get connection token
-      let connectionToken: string | undefined
+      // Update user with progress
+      this.writeLine('\x1b[90mStep 2/2: Establishing terminal connection...\x1b[0m')
+
+      // Get connection token (reuses outer-scope declaration)
       try {
         const tokenResponse = await fetch('/api/sandbox/terminal/stream', {
           method: 'POST',
@@ -232,6 +235,11 @@ export class SandboxConnectionManager {
         logger.warn('Failed to get connection token', err)
       }
 
+      // NOW start the timeout for the SSE/PTY connection phase only
+      this.connectionTimeout = setTimeout(() => {
+        this.handleConnectionTimeout()
+      }, CONNECTION_TIMEOUT_MS)
+
       // Try SSE first — it uses standard HTTP/1.1 with no protocol upgrade,
       // making it reliable behind Next.js proxies, load balancers, and reverse proxies.
       logger.info('[Terminal] Attempting SSE connection (primary transport)')
@@ -242,13 +250,27 @@ export class SandboxConnectionManager {
       return // SSE successful, exit early
 
     } catch (sseError: any) {
+      // Check if this was an intentional abort (timeout already handled)
+      if (sseError.name === 'AbortError' || sseError.message?.includes('aborted')) {
+        logger.debug('[Terminal] Connection aborted (timeout or cancellation)')
+        // Timeout handler already fell back to local mode, don't attempt PTY fallback
+        return
+      }
+
       // SSE failed — try provider-specific PTY WebSocket as fallback
-      // Extract variables from the try block scope before the catch
+      // Reuse sessionId, sandboxId from state; reuse connectionToken from earlier fetch
       const sessionState = this.state
       const { sessionId, sandboxId } = sessionState
-      const providerType = this.detectProviderType(sandboxId || '')
-      let connectionToken: string | undefined
 
+      // Guard: skip PTY fallback if we don't have a session
+      if (!sessionId || !sandboxId) {
+        logger.warn('[Terminal] No session/sandbox ID for PTY fallback, skipping')
+        this.handleConnectionError(new Error('No session available for terminal connection'))
+        return
+      }
+
+      const providerType = this.detectProviderType(sandboxId)
+      // Reuse the connectionToken from the successful fetch above (don't redeclare)
       logger.warn('[Terminal] SSE failed, trying provider PTY WebSocket', sseError)
 
       if (providerType && ['e2b', 'daytona', 'sprites', 'codesandbox', 'vercel-sandbox'].includes(providerType)) {
@@ -621,7 +643,7 @@ export class SandboxConnectionManager {
     return new Promise<void>((resolve, reject) => {
       let settled = false
 
-      // Set a connection timeout for SSE (shorter than overall timeout)
+      // Set a connection timeout for SSE (slightly longer than overall timeout to allow PTY setup)
       const sseTimeout = setTimeout(() => {
         if (!settled) {
           settled = true
@@ -630,7 +652,7 @@ export class SandboxConnectionManager {
           logger.warn('[Terminal SSE] Connection timeout — no response from server')
           reject(new Error('SSE connection timed out — server did not respond'))
         }
-      }, 15000) // 15s timeout for SSE
+      }, 35000) // 35s timeout for SSE (increased from 15s to allow slow PTY setup)
 
       eventSource.onopen = () => {
         logger.info('[Terminal SSE] EventSource connection opened')

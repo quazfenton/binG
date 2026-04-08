@@ -40,8 +40,9 @@ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve
 export const runtime = 'nodejs';
 
 // SECURITY: O(1) body size guard — checked BEFORE buffering files into memory
-// Aligned with FileImportService.MAX_TOTAL_SIZE (500MB)
-const MAX_IMPORT_BODY_BYTES = 500 * 1024 * 1024; // 500MB (matches service limit)
+// Lower than FileImportService.MAX_TOTAL_SIZE (500MB) to prevent OOM from in-memory buffering
+// until streaming multipart parsing is implemented
+const MAX_IMPORT_BODY_BYTES = 120 * 1024 * 1024; // 120MB safety cap until streaming multipart parsing
 
 // Request schema for validation
 const importOptionsSchema = z.object({

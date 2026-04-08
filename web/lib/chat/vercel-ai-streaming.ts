@@ -27,6 +27,9 @@ import { createGoogleGenerativeAI } from '@ai-sdk/google';
 import { createMistral } from '@ai-sdk/mistral';
 import type { StreamingResponse, LLMMessage } from './llm-providers';
 import { chatLogger } from './chat-logger';
+
+// Cache for tool call arguments - needed because AI SDK doesn't repeat args in tool-result
+const toolCallArgsCache = new Map<string, any>();
 import { getProviderForModel } from './openai-compat-wrapper';
 import { tokenTracker } from './ai-caching';
 import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitError, handleTokenLimitError } from './ai-middleware';
@@ -551,16 +554,57 @@ export async function* streamWithVercelAI(
     // FIX: Detect if model supports function calling (Vercel AI SDK v6+).
     // If tools are passed but the model doesn't support function calling,
     // the LLM will output tool-like JSON as raw text instead of using native tool calls.
-    // We detect this, warn the user, and strip tools to avoid confusing the model.
+    // We detect this, strip tools, and inject text-mode instructions so the model
+    // can still perform file actions using a parseable text format.
     if (streamOptions.tools) {
       const supportsFC = (vercelModel as any)?.supports?.functionCalling;
       if (supportsFC === false) {
-        chatLogger.warn('Model does not support function calling — stripping tools', {
+        chatLogger.warn('Model does not support function calling — using text-mode tool instructions', {
           provider,
           model: modelName,
-          hint: `The LLM outputs tool-like JSON as text. Use gpt-4o, claude-sonnet-4-5, or another model that supports function calling.`,
         });
         delete streamOptions.tools;
+
+        // Inject text-mode tool instructions into the system prompt so the model
+        // knows how to perform file actions without native function calling.
+        const TEXT_MODE_TOOL_INSTRUCTIONS = `
+FILE OPERATIONS — You do NOT have tool calls. Use EXACTLY these text formats:
+
+CREATE OR OVERWRITE A FILE:
+\`\`\`file: path/to/file.ext
+your full file content here
+\`\`\`
+
+EDIT EXISTING FILE (preferred — use unified diff):
+\`\`\`diff: path/to/file.ext
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ existing @@
+-line to remove
++line to add
+\`\`\`
+
+CREATE DIRECTORY:
+\`\`\`mkdir: path/to/directory
+\`\`\`
+
+DELETE FILE:
+\`\`\`delete: path/to/file.ext
+\`\`\`
+
+RULES:
+- Always use the exact fence format shown above.
+- For existing files, prefer diff edits over full rewrites.
+- For new files, write the complete content.
+- Do NOT use backtick code blocks for anything else that starts with "file:" or "diff:".
+- Do NOT invent file paths — use paths the user provided or that exist in the project.
+`;
+
+        if (streamOptions.system) {
+          streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+        } else {
+          streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+        }
       } else if (supportsFC === undefined) {
         // Model doesn't report this capability — could be unknown provider.
         // Most OpenAI-compatible providers support FC, so proceed but log.
@@ -652,16 +696,28 @@ export async function* streamWithVercelAI(
         }
 
         case 'tool-call': {
-          // Clear time-to-first-token timeout once we receive any response
-          onFirstToken();
-          
+            // Clear time-to-first-token timeout once we receive any response
+            onFirstToken();
+            
+            const callArgs = (chunk as any).args || (chunk as any).arguments || {};
+            
+            // DEBUG: Log what args are being received in tool-call chunk
+            chatLogger.debug('tool-call chunk received', {
+              toolCallId: (chunk as any).toolCallId,
+              toolName: (chunk as any).toolName,
+              hasArgs: !!callArgs && Object.keys(callArgs).length > 0,
+              argsKeys: callArgs ? Object.keys(callArgs) : [],
+            });
+
+            // Cache args so tool-result can include them (AI SDK doesn't repeat args in result)
+            toolCallArgsCache.set((chunk as any).toolCallId, callArgs);
           yield {
             content: '',
             isComplete: false,
             toolCalls: [{
               id: (chunk as any).toolCallId,
               name: (chunk as any).toolName,
-              arguments: (chunk as any).args || (chunk as any).arguments || {},
+              arguments: callArgs,
             }],
             timestamp: new Date(),
           };
@@ -669,18 +725,26 @@ export async function* streamWithVercelAI(
         }
 
         case 'tool-result': {
+          // Recover args from the earlier tool-call event since tool-result doesn't include them
+          const resultToolCallId = (chunk as any).toolCallId;
+          const cachedArgs = toolCallArgsCache.get(resultToolCallId);
+          const finalArgs = cachedArgs || (chunk as any).args || (chunk as any).arguments;
           yield {
             content: '',
             isComplete: false,
             toolInvocations: [{
-              toolCallId: (chunk as any).toolCallId,
+              toolCallId: resultToolCallId,
               toolName: (chunk as any).toolName,
               state: 'result' as const,
-              args: (chunk as any).args || {},
+              // Only include args if they're non-empty; broken models may send empty args
+              ...(finalArgs && typeof finalArgs === 'object' && Object.keys(finalArgs).length > 0
+                ? { args: finalArgs }
+                : {}),
               result: (chunk as any).result,
             }],
             timestamp: new Date(),
           };
+          if (cachedArgs) toolCallArgsCache.delete(resultToolCallId);
           break;
         }
 
@@ -848,11 +912,43 @@ export async function* streamWithVercelAI(
         if (fallbackStreamOptions.tools) {
           const supportsFC = (fallbackModel as any)?.supports?.functionCalling;
           if (supportsFC === false) {
-            chatLogger.warn('Fallback model does not support function calling — stripping tools', {
+            chatLogger.warn('Fallback model does not support function calling — using text-mode tool instructions', {
               fallbackProvider: fallbackProviderName,
               fallbackModel: fallbackModelName,
             });
             delete fallbackStreamOptions.tools;
+
+            // Inject same text-mode instructions as main path
+            const TEXT_MODE_TOOL_INSTRUCTIONS = `
+FILE OPERATIONS — You do NOT have tool calls. Use EXACTLY these text formats:
+
+CREATE OR OVERWRITE A FILE:
+\`\`\`file: path/to/file.ext
+your full file content here
+\`\`\`
+
+EDIT EXISTING FILE (preferred — use unified diff):
+\`\`\`diff: path/to/file.ext
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ existing @@
+-line to remove
++line to add
+\`\`\`
+
+CREATE DIRECTORY:
+\`\`\`mkdir: path/to/directory
+\`\`\`
+
+DELETE FILE:
+\`\`\`delete: path/to/file.ext
+\`\`\`
+`;
+            if (fallbackStreamOptions.system) {
+              fallbackStreamOptions.system = fallbackStreamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+            } else {
+              fallbackStreamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+            }
           }
         }
         

@@ -331,12 +331,20 @@ export class EnhancedLLMService {
       autoAttachFiles: !!autoAttachFiles,
     });
 
+    // Compute session-aware scopePath for VFS tools
+    const sessionIdFromConv = conversationId?.includes(':') 
+      ? conversationId.split(':')[1] 
+      : conversationId;
+    const computedScopePath = request.scopePath 
+      || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project');
+
     // If tools are enabled and user ID is provided, process tools
     if (enableTools && userId && conversationId) {
       const toolResult = await this.processToolRequest(
         llmRequest.messages,
         userId,
-        conversationId
+        conversationId,
+        computedScopePath
       );
 
       if (toolResult.requiresAuth && toolResult.authUrl) {
@@ -385,7 +393,7 @@ export class EnhancedLLMService {
         return response;
       }
 
-      return this.executeModelToolCallsFromResponse(response, userId, conversationId);
+      return this.executeModelToolCallsFromResponse(response, userId, conversationId, computedScopePath);
     };
 
     // Try primary provider first
@@ -1229,12 +1237,13 @@ export class EnhancedLLMService {
     }
   }
 
-  async processToolRequest(messages: LLMMessage[], userId: string, conversationId: string) {
+  async processToolRequest(messages: LLMMessage[], userId: string, conversationId: string, scopePath?: string) {
     try {
       const result = await toolContextManager.processToolRequest(
         messages,
         userId,
-        conversationId
+        conversationId,
+        scopePath
       );
 
       return {
@@ -1259,7 +1268,8 @@ export class EnhancedLLMService {
   private async executeModelToolCallsFromResponse(
     response: LLMResponse,
     userId: string,
-    conversationId: string
+    conversationId: string,
+    scopePath?: string
   ): Promise<LLMResponse> {
     const toolCalls = await this.extractToolCallsFromLLMResponse(response, userId);
     if (toolCalls.length === 0) {
@@ -1318,7 +1328,7 @@ export class EnhancedLLMService {
               metadata: { source: 'llm_tool_use' }
             }
           )
-        : await callMCPToolFromAI_SDK(selectedTool, call.arguments, userId);
+        : await callMCPToolFromAI_SDK(selectedTool, call.arguments, userId, scopePath);
 
       toolResults.push({
         name: selectedTool,

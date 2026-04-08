@@ -527,11 +527,12 @@ export class LivePreviewOffloading {
    */
   analyzeHeuristics(request: PreviewRequest): OffloadHeuristics {
     const { files } = request;
-    const filePaths = Object.keys(files);
-    const fileContents = Object.values(files);
+    const safeFiles = files || {};
+    const filePaths = Object.keys(safeFiles);
+    const fileContents = Object.values(safeFiles);
 
     // Detect node_modules size
-    const nodeModulesSizeMB = this.estimateNodeModulesSize(files);
+    const nodeModulesSizeMB = this.estimateNodeModulesSize(safeFiles);
 
     // Estimate build time based on project characteristics
     const estimatedBuildTime = this.estimateBuildTime(filePaths, fileContents);
@@ -540,7 +541,7 @@ export class LivePreviewOffloading {
     const estimatedMemoryMB = this.estimateMemoryUsage(filePaths, fileContents);
 
     // Analyze build logs if available
-    const buildLogs = this.extractBuildLogs(files);
+    const buildLogs = this.extractBuildLogs(safeFiles);
     const buildWarningsCount = this.countBuildWarnings(buildLogs);
     const buildErrorsCount = this.countBuildErrors(buildLogs);
 
@@ -773,15 +774,18 @@ export class LivePreviewOffloading {
    */
   detectProject(request: PreviewRequest): ProjectDetection & { heuristics?: OffloadHeuristics } {
     const { files, scopePath } = request;
-    
+
+    // Guard against undefined/null files
+    const safeFiles = files || {};
+
     // Handle both object format and array format for backward compatibility
-    const filesObj = Array.isArray(files) 
-      ? (files as Array<{name: string; content: string}>).reduce((acc, f) => {
+    const filesObj = Array.isArray(safeFiles)
+      ? (safeFiles as Array<{name: string; content: string}>).reduce((acc, f) => {
           if (f.name && f.content !== undefined) acc[f.name] = f.content;
           return acc;
         }, {} as Record<string, string>)
-      : files as Record<string, string>;
-    
+      : safeFiles as Record<string, string>;
+
     const filePaths = Object.keys(filesObj);
     const fileCount = filePaths.length;
 
@@ -1478,13 +1482,15 @@ export class LivePreviewOffloading {
    * Migrated from preview-offloader.ts
    */
   detectPort(files: Record<string, string>): number {
+    // Guard against undefined/null
+    const safeFiles = files || {};
     // Handle both Record and array formats for backward compatibility
-    const filesObj: Record<string, string> = Array.isArray(files)
-      ? (files as Array<{name: string; content: string}>).reduce((acc, f) => {
+    const filesObj: Record<string, string> = Array.isArray(safeFiles)
+      ? (safeFiles as Array<{name: string; content: string}>).reduce((acc, f) => {
           if (f.name && f.content !== undefined) acc[f.name] = f.content;
           return acc;
         }, {} as Record<string, string>)
-      : files as Record<string, string>;
+      : safeFiles as Record<string, string>;
 
     const packageJson = this.parsePackageJson(filesObj['package.json'] || filesObj['/package.json']);
 

@@ -116,6 +116,9 @@ def search_docs(query: str, section: str | None = None) -> dict:
 
     # Fallback: search llms.txt index for matching URLs
     index_content = fetch_url(LLMS_INDEX)
+    if index_content.startswith("HTTP Error") or index_content.startswith("URL Error"):
+        return {"error": f"Fallback index fetch failed: {index_content}", "suggestion": "Check network connectivity or try a different query"}
+
     query_lower = query.lower()
     matching_urls = []
 
@@ -140,9 +143,10 @@ def search_docs(query: str, section: str | None = None) -> dict:
 
 def fetch_page(page_path: str) -> dict:
     """Fetch a specific documentation page."""
-    # If it looks like an absolute URL, validate it's within docs.mem0.ai
-    if page_path.startswith("http://") or page_path.startswith("https://"):
-        parsed = urllib.parse.urlparse(page_path)
+    # Parse the path/URL to detect any absolute URL with a scheme
+    parsed = urllib.parse.urlparse(page_path)
+    if parsed.scheme:
+        # Absolute URL: validate host is allowed
         if parsed.hostname != ALLOWED_HOST:
             return {"error": f"Access denied: host must be {ALLOWED_HOST}, got {parsed.hostname}"}
         if parsed.scheme not in ALLOWED_SCHEMES:

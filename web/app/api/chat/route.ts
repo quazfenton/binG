@@ -1963,28 +1963,63 @@ export async function POST(request: NextRequest) {
                   }
 
                   // Handle tool calls if present
+                  // Skip partial tool calls with empty args (streamed incrementally by Vercel AI SDK)
+                  // — the tool_invocation event below will contain the full args once execution completes
                   if (streamChunk.toolCalls && streamChunk.toolCalls.length > 0) {
                     for (const toolCall of streamChunk.toolCalls) {
+                      const args = toolCall.arguments;
+                      if (!args || (typeof args === 'object' && Object.keys(args).length === 0)) continue;
                       realEmit('tool_call', {
                         toolCallId: toolCall.id,
                         toolName: toolCall.name,
-                        args: toolCall.arguments,
+                        args,
                         timestamp: Date.now(),
                       });
                     }
                   }
 
                   // Handle tool invocations if present
+                  // FIX: Only emit tool_invocation from stream when args are populated.
+                  // The onToolExecution callback (line ~893) emits with full args after tool execution completes.
+                  // Vercel AI SDK streams tool arguments incrementally, so early chunks may have empty args.
                   if (streamChunk.toolInvocations && streamChunk.toolInvocations.length > 0) {
                     for (const toolInvocation of streamChunk.toolInvocations) {
-                      realEmit('tool_invocation', {
-                        toolCallId: toolInvocation.toolCallId,
-                        toolName: toolInvocation.toolName,
-                        state: toolInvocation.state,
-                        args: toolInvocation.args,
-                        result: toolInvocation.result,
-                        timestamp: Date.now(),
-                      });
+                      // Skip emission when args are empty - onToolExecution callback will emit with full args
+                      const hasArgs = toolInvocation.args && 
+                        (typeof toolInvocation.args === 'object' ? Object.keys(toolInvocation.args).length > 0 : true);
+                      
+                      // Also skip partial call state (args not yet fully streamed)
+                      // Vercel AI SDK uses 'call' state for tool-call, 'result' for tool-result
+                      const isPartialCall = toolInvocation.state === 'call' && !hasArgs;
+                      
+                      if (isPartialCall) {
+                        continue; // Wait for result state with populated args
+                      }
+                      
+                      // For result state, try to get args from result if toolInvocation.args is empty
+                      let args = toolInvocation.args;
+                      const isEmptyArgs = !args || (typeof args === 'object' && Object.keys(args).length === 0);
+                      if (toolInvocation.state === 'result' && isEmptyArgs) {
+                        // Try to extract args from result if available
+                        if (toolInvocation.result?.input) {
+                          args = toolInvocation.result.input;
+                        } else if (toolInvocation.result?.args) {
+                          args = toolInvocation.result.args;
+                        }
+                      }
+
+                      // Only emit if we have args or it's a result state (to show completion)
+                      if (hasArgs || toolInvocation.state === 'result') {
+                        const finalArgs = args && typeof args === 'object' && Object.keys(args).length > 0 ? args : undefined;
+                        realEmit('tool_invocation', {
+                          toolCallId: toolInvocation.toolCallId,
+                          toolName: toolInvocation.toolName,
+                          state: toolInvocation.state,
+                          ...(finalArgs ? { args: finalArgs } : {}),
+                          result: toolInvocation.result,
+                          timestamp: Date.now(),
+                        });
+                      }
                     }
                   }
 
@@ -2058,8 +2093,14 @@ export async function POST(request: NextRequest) {
                         // Flush batch mode to commit all changes at once
                         await flushVFSBatchMode(filesystemOwnerId);
 
-                        // Emit applied file edits
+                        // Emit applied file edits + tool_invocation events for UI display
+                        // CRITICAL FIX: When LLM doesn't support proper function calling,
+                        // the Vercel AI SDK streams empty args. We compensate by emitting
+                        // tool_invocation events with actual parsed args from streamedEdits.
                         if (streamedEdits?.applied?.length) {
+                          // Track if we found any edits that need tool_invocation emission
+                          let emittedAnyToolInvocation = false;
+
                           for (const edit of streamedEdits.applied) {
                             // Validate path before emitting
                             if (!isValidFilePath(edit.path)) {
@@ -2073,9 +2114,10 @@ export async function POST(request: NextRequest) {
                               continue;
                             }
                             // CRITICAL FIX: Determine operation type and send correct data format
-                            // Check for diff field to determine if it's a patch operation
                             const hasDiff = !!edit.diff;
                             const isPatch = edit.operation === 'patch' || hasDiff;
+
+                            // Emit file_edit event (existing behavior)
                             realEmit('file_edit', {
                               path: edit.path,
                               status: 'applied',
@@ -2083,6 +2125,33 @@ export async function POST(request: NextRequest) {
                               timestamp: Date.now(),
                               content: edit.content || '',
                               diff: isPatch ? (edit.diff || '') : undefined,
+                            });
+
+                            // FIX: Also emit tool_invocation with actual parsed args
+                            // This ensures the UI can display tool calls even when the LLM
+                            // didn't emit structured function calls (e.g., minimax/m2.5:free)
+                            const toolCallId = edit.commitId || `write_file-${Date.now()}-${edit.path}`;
+                            const toolArgs = {
+                              path: edit.path,
+                              content: edit.content || '',
+                              commitMessage: edit.commitMessage || edit.message || '',
+                            };
+                            realEmit('tool_invocation', {
+                              toolCallId,
+                              toolName: 'write_file',
+                              state: 'result',
+                              args: toolArgs,
+                              result: { success: true, path: edit.path },
+                              timestamp: Date.now(),
+                            });
+                            emittedAnyToolInvocation = true;
+                          }
+
+                          if (emittedAnyToolInvocation) {
+                            chatLogger.debug('Emitted tool_invocation events for parsed filesystem edits', {
+                              requestId: streamRequestId,
+                              editCount: streamedEdits.applied.length,
+                              paths: streamedEdits.applied.map(e => e.path).join(', '),
                             });
                           }
                         }

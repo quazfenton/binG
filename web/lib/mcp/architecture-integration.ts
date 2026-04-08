@@ -879,7 +879,8 @@ async function executeArcadeTool(
 export async function callMCPToolFromAI_SDK(
   toolName: string,
   args: Record<string, any>,
-  userId: string  // Required for Arcade tools
+  userId: string,  // Required for Arcade tools
+  scopePath?: string  // VFS scope path for session-scoped file operations
 ): Promise<{ success: boolean; output: string; error?: string }> {
   try {
     logger.debug(`Calling MCP tool: ${toolName}`, { args })
@@ -934,11 +935,19 @@ export async function callMCPToolFromAI_SDK(
       });
 
       // Run inside request-scoped context so the tool gets the right userId and scopePath
+      // Compute session-aware scopePath from conversationId if not provided
+      const sessionIdFromConv = args.conversationId?.includes(':') 
+        ? args.conversationId.split(':')[1] 
+        : args.conversationId;
+      const computedScopePath = scopePath 
+        || (args as any).scopePath
+        || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project');
+
       const result = await toolContextStore.run(
         {
           userId,
-          sessionId: args.sessionId,
-          scopePath: (args as any).scopePath || 'project',  // Pass scopePath if available
+          sessionId: args.sessionId || sessionIdFromConv,
+          scopePath: computedScopePath,  // Use session-aware scope path
         },
         async () => vfsTool.execute(args || {}, {
           messages: [],

@@ -1072,20 +1072,22 @@ export function extractFileEdits(content: string): FileEdit[] {
 }
 
 /**
- * Extract fenced diff blocks: ```diff path\ncontent\n```
+ * Extract fenced diff blocks: ```diff path\ncontent\n``` or ```diff: path\ncontent\n```
  *
  * FIX: Now correctly distinguishes between:
  * - ```diff path\n<unified diff content>``` (diff patch for a file)
+ * - ```diff: path\n<unified diff content>``` (text-mode diff for non-FC models)
  * - ```diff\ndiff --git a/path b/path\n...``` (raw git diff output - should NOT be parsed as file edit)
  */
 export function extractFencedDiffEdits(content: string): DiffEdit[] {
   const edits: DiffEdit[] = [];
 
   // Fast-path signature check (consistent with other extractors)
-  // Use case-insensitive regex to match the actual parser regex behavior
+  // Match both ```diff path and ```diff: path formats
   if (!/```diff/i.test(content)) return edits;
 
-  const regex = /```diff\s+([^\n]+)\n([\s\S]*?)```/gi;
+  // Match both ```diff path\n...``` and ```diff: path\n...```
+  const regex = /```diff:?\s+([^\n]+)\n([\s\S]*?)```/gi;
   let match: RegExpExecArray | null;
 
   while ((match = regex.exec(content)) !== null) {
@@ -1119,6 +1121,76 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
   }
 
   return edits;
+}
+
+/**
+ * Extract text-mode fenced file edits: ```file: path\ncontent\n```
+ * Used when the model doesn't support function calling — text-mode tool
+ * instructions tell it to use this format for file creation/overwrite.
+ */
+export function extractFencedFileEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  if (!/```file:/i.test(content)) return edits;
+
+  const regex = /```file:\s+([^\n]+)\n([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const targetPath = match[1]?.trim();
+    const fileContent = match[2] ?? '';
+    if (!targetPath) continue;
+    if (!isValidExtractedPath(targetPath)) continue;
+    // Skip empty content
+    if (!fileContent || fileContent.trim().length === 0) continue;
+
+    edits.push({ path: targetPath, content: fileContent.trimEnd() });
+  }
+
+  return edits;
+}
+
+/**
+ * Extract text-mode fenced mkdir: ```mkdir: path\n```
+ */
+export function extractFencedMkdirEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  if (!/```mkdir:/i.test(content)) return edits;
+
+  // Match both ```mkdir: path``` and ```mkdir: path\n```
+  const regex = /```mkdir:\s+([^\s`]+)[\s\S]*?```/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const targetPath = match[1]?.trim();
+    if (!targetPath) continue;
+    if (!isValidExtractedPath(targetPath)) continue;
+
+    edits.push({ path: targetPath, content: '', action: 'mkdir' });
+  }
+
+  return edits;
+}
+
+/**
+ * Extract text-mode fenced delete: ```delete: path\n```
+ */
+export function extractFencedDeleteBlocks(content: string): DeleteEdit[] {
+  const deletes: DeleteEdit[] = [];
+  if (!/```delete:/i.test(content)) return deletes;
+
+  // Match both ```delete: path``` and ```delete: path\n```
+  const regex = /```delete:\s+([^\s`]+)[\s\S]*?```/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = regex.exec(content)) !== null) {
+    const targetPath = match[1]?.trim();
+    if (!targetPath) continue;
+    if (!isValidExtractedPath(targetPath)) continue;
+
+    deletes.push({ path: targetPath });
+  }
+
+  return deletes;
 }
 
 /**
@@ -1249,11 +1321,15 @@ export function extractFsActionWrites(content: string): FileEdit[] {
   }
 
   // Extract top-level WRITE commands (```language ... ``` with WRITE prefix)
-  const regularBlockRegex = /```[a-zA-Z]*\s*([\s\S]*?)```/gi;
+  // EXCLUDE fs-actions blocks which are already handled above
+  const regularBlockRegex = /```([a-zA-Z0-9_-]+)\s*([\s\S]*?)```/gi;
   let regularBlockMatch: RegExpExecArray | null;
 
   while ((regularBlockMatch = regularBlockRegex.exec(content)) !== null) {
-    const blockContent = regularBlockMatch[1] || '';
+    const lang = regularBlockMatch[1] || '';
+    // Skip fs-actions blocks - already handled above
+    if (lang === 'fs-actions') continue;
+    const blockContent = regularBlockMatch[2] || '';
     // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
     const writeRegex = /^WRITE\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
     let writeMatch: RegExpExecArray | null;
@@ -1265,7 +1341,10 @@ export function extractFsActionWrites(content: string): FileEdit[] {
       if (!isValidExtractedPath(path)) continue;
       // CRITICAL FIX: Skip edits with empty content
       if (!fileContent || fileContent.trim().length === 0) continue;
-      writes.push({ path, content: fileContent });
+      // Deduplicate using trimmed content comparison
+      if (!writes.some(w => w.path === path && w.content.trim() === fileContent.trim())) {
+        writes.push({ path, content: fileContent });
+      }
     }
   }
 
@@ -1289,10 +1368,14 @@ export function extractTopLevelWrites(content: string): FileEdit[] {
     return writes;
   }
 
+  // CRITICAL FIX: Strip code blocks to avoid matching WRITE inside them
+  // (fs-actions blocks are already handled by extractFsActionWrites)
+  const contentWithoutCodeBlocks = content.replace(/```[\s\S]*?```/g, '');
+
   // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
   const topLevelWriteRegex = /^WRITE\s+<?([^\s<>]+)>?(?:\n\s*){0,2}<<<\s*\n([\s\S]*?)\s*>>>/gim;
   let match: RegExpExecArray | null;
-  while ((match = topLevelWriteRegex.exec(content)) !== null) {
+  while ((match = topLevelWriteRegex.exec(contentWithoutCodeBlocks)) !== null) {
     const path = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!path) continue;
@@ -1300,15 +1383,15 @@ export function extractTopLevelWrites(content: string): FileEdit[] {
     if (!isValidExtractedPath(path)) continue;
     // CRITICAL FIX: Skip edits with empty content
     if (!fileContent || fileContent.trim().length === 0) continue;
-    // Deduplicate - check if we already have this exact edit
-    if (!writes.some(w => w.path === path && w.content === fileContent)) {
+    // Deduplicate using trimmed content comparison
+    if (!writes.some(w => w.path === path && w.content.trim() === fileContent.trim())) {
       writes.push({ path, content: fileContent });
     }
   }
 
   // Alternative regex for inline format: WRITE path <<<content>>> or WRITE <path> <<<content>>>
   const altWriteRegex = /^WRITE\s+<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)>>>/gim;
-  while ((match = altWriteRegex.exec(content)) !== null) {
+  while ((match = altWriteRegex.exec(contentWithoutCodeBlocks)) !== null) {
     const path = match[1]?.trim();
     const fileContent = match[2] ?? '';
     if (!path) continue;
@@ -1316,7 +1399,7 @@ export function extractTopLevelWrites(content: string): FileEdit[] {
     if (!isValidExtractedPath(path)) continue;
     // CRITICAL FIX: Skip edits with empty content
     if (!fileContent || fileContent.trim().length === 0) continue;
-    if (!writes.some(w => w.path === path && w.content === fileContent)) {
+    if (!writes.some(w => w.path === path && w.content.trim() === fileContent.trim())) {
       writes.push({ path, content: fileContent });
     }
   }
@@ -1714,6 +1797,11 @@ export function parseFilesystemResponse(content: string, forceExtract: boolean =
   for (const edit of extractBashHereDocWrites(content)) addWrite(edit);
   for (const edit of extractFilenameHintCodeBlocks(content)) addWrite(edit);
   for (const edit of extractFencedDiffEdits(content)) addDiff(edit);
+  for (const edit of extractFencedFileEdits(content)) addWrite(edit);
+  for (const edit of extractFencedMkdirEdits(content)) {
+    if (edit.path) folders.add(edit.path);
+  }
+  for (const edit of extractFencedDeleteBlocks(content)) deletes.add(edit.path);
   for (const edit of extractFsActionPatches(content)) addDiff(edit);
   for (const edit of extractPatchEdits(content)) addDiff(edit);
   for (const edit of extractApplyDiffOperations(content)) addApplyDiff(edit);
@@ -2251,9 +2339,24 @@ export function extractIncrementalFileEdits(
     allEdits.push(edit);
   }
 
-  // Fenced diff blocks (```diff path\n...```)
+  // Fenced diff blocks (```diff path\n...``` or ```diff: path\n...```)
   for (const edit of extractFencedDiffEdits(parseWindow)) {
     allEdits.push({ path: edit.path, content: edit.diff });
+  }
+
+  // Text-mode fenced file edits (```file: path\n...```) — for non-FC models
+  for (const edit of extractFencedFileEdits(parseWindow)) {
+    allEdits.push(edit);
+  }
+
+  // Text-mode fenced mkdir (```mkdir: path```) — for non-FC models
+  for (const edit of extractFencedMkdirEdits(parseWindow)) {
+    allEdits.push({ path: edit.path, content: '', action: 'mkdir' });
+  }
+
+  // Text-mode fenced delete (```delete: path```) — for non-FC models
+  for (const edit of extractFencedDeleteBlocks(parseWindow)) {
+    allEdits.push({ path: edit.path, content: '', action: 'delete' });
   }
 
   // Bash heredoc writes inside fenced ```bash blocks

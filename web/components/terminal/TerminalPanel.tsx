@@ -23,6 +23,7 @@ import { emitFilesystemUpdated, onFilesystemUpdated } from '@/lib/virtual-filesy
 import { createRefreshScheduler } from '@/lib/virtual-filesystem/refresh-scheduler';
 import { getSponsorAd, trackAdView, adsEnabled, type EthicalAdResponse } from '@/lib/ads/ethical-ads-service';
 import { desktopPtyManager, shouldUseDesktopPty, type DesktopPtyInstance, requestShellCompletion } from '@/lib/terminal/desktop-pty-provider';
+import { createWebLocalPty, isWebLocalPtyAvailable, type WebLocalPtyInstance } from '@/lib/terminal/web-local-pty';
 import { isDesktopMode } from '@/lib/utils/desktop-env';
 
 const logger = createLogger('TerminalPanel');
@@ -66,8 +67,10 @@ interface TerminalInstance {
   eventSource: EventSource | null;
   websocket: WebSocket | null;
   isConnected: boolean;
-  // Desktop PTY session
+  // Desktop PTY session (Tauri)
   ptyInstance?: DesktopPtyInstance;
+  // Web local PTY session (node-pty)
+  webLocalPtyInstance?: WebLocalPtyInstance;
 }
 
 interface LocalFileSystem {
@@ -928,6 +931,10 @@ export default function TerminalPanel({
       if (terminal.ptyInstance) {
         await terminal.ptyInstance.close();
       }
+      // Close web local PTY session if any
+      if (terminal.webLocalPtyInstance) {
+        await terminal.webLocalPtyInstance.close();
+      }
       // Clear connection timeout
       if ((terminal as any).__connectionTimeout) {
         clearTimeout((terminal as any).__connectionTimeout);
@@ -1198,12 +1205,19 @@ export default function TerminalPanel({
 
 
   const sendInput = useCallback(async (sessionId: string, data: string) => {
-    // Check if there's a WebSocket available for this session
-    const term = terminalsRef.current.find(t => t.sandboxInfo.sessionId === sessionId && t.websocket && t.websocket.readyState === WebSocket.OPEN);
+    // Check if there's a web local PTY instance for this terminal
+    const term = terminalsRef.current.find(t => t.id === sessionId && t.webLocalPtyInstance);
+    if (term?.webLocalPtyInstance) {
+      await term.webLocalPtyInstance.writeInput(data);
+      return;
+    }
 
-    if (term?.websocket) {
+    // Check if there's a WebSocket available for this session
+    const wsTerm = terminalsRef.current.find(t => t.sandboxInfo.sessionId === sessionId && t.websocket && t.websocket.readyState === WebSocket.OPEN);
+
+    if (wsTerm?.websocket) {
       // Use WebSocket for bidirectional streaming (ARCH 4 improvement)
-      term.websocket.send(JSON.stringify({ type: 'input', data }));
+      wsTerm.websocket.send(JSON.stringify({ type: 'input', data }));
       return;
     }
 
@@ -1237,12 +1251,19 @@ export default function TerminalPanel({
   }, []);
 
   const sendResize = useCallback(async (sessionId: string, cols: number, rows: number) => {
-    // Check if there's a WebSocket available for this session
-    const term = terminalsRef.current.find(t => t.sandboxInfo.sessionId === sessionId && t.websocket && t.websocket.readyState === WebSocket.OPEN);
+    // Check if there's a web local PTY instance for this terminal
+    const term = terminalsRef.current.find(t => t.id === sessionId && t.webLocalPtyInstance);
+    if (term?.webLocalPtyInstance) {
+      await term.webLocalPtyInstance.resize(cols, rows);
+      return;
+    }
 
-    if (term?.websocket) {
+    // Check if there's a WebSocket available for this session
+    const wsTerm = terminalsRef.current.find(t => t.sandboxInfo.sessionId === sessionId && t.websocket && t.websocket.readyState === WebSocket.OPEN);
+
+    if (wsTerm?.websocket) {
       // Use WebSocket for resize (lower latency)
-      term.websocket.send(JSON.stringify({ type: 'resize', cols, rows }));
+      wsTerm.websocket.send(JSON.stringify({ type: 'resize', cols, rows }));
       return;
     }
 
@@ -1357,12 +1378,12 @@ export default function TerminalPanel({
 
       // Write welcome message - will be updated by VFS sync effect
       terminal.writeln('');
-      // Check if we should use desktop PTY
+      // Check if we should use desktop PTY (Tauri)
       if (isDesktopMode() && shouldUseDesktopPty()) {
         terminal.writeln('');
         terminal.writeln('\x1b[1;33m● Desktop Mode - Using Local PTY\x1b[0m');
         terminal.writeln('\x1b[90m  Connecting to real shell...\x1b[0m');
-        
+
         // Initialize desktop PTY
         let pty = null;
         try {
@@ -1376,7 +1397,7 @@ export default function TerminalPanel({
           terminal.writeln('\x1b[31m✗ Failed to connect to local shell\x1b[0m');
           terminal.writeln('\x1b[90m  Falling back to simulated terminal.\x1b[0m');
         }
-        
+
         if (pty) {
           // Update terminal to use PTY
           const termRef = terminalsRef.current.find(t => t.id === terminalId);
@@ -1384,12 +1405,12 @@ export default function TerminalPanel({
             termRef.ptyInstance = pty;
             termRef.mode = 'desktop-pty';
             termRef.isConnected = true;
-            
+
             // Handle PTY output
             pty.onOutput((data) => {
               termRef.terminal?.write(data);
             });
-            
+
             // Handle PTY close
             pty.onClose(() => {
               termRef.mode = 'local';
@@ -1398,11 +1419,11 @@ export default function TerminalPanel({
               termRef.terminal?.writeln('\r\n\x1b[31m[PTY session closed]\x1b[0m');
               termRef.terminal?.write(getPrompt('local', localShellCwdRef.current[terminalId] || 'project'));
             });
-            
+
             // Handle file changes from PTY - sync to VFS and local filesystem view
             pty.onFileChange((path, type) => {
               console.log('[TerminalPanel] PTY file change:', type, path);
-              
+
               // Update local filesystem state
               if (type === 'delete') {
                 delete localFileSystemRef.current[path];
@@ -1414,7 +1435,7 @@ export default function TerminalPanel({
                   modifiedAt: Date.now(),
                 };
               }
-              
+
               // Sync to VFS
               if (type !== 'delete' && localFileSystemRef.current[path]) {
                 // Read the actual content from file and sync to VFS
@@ -1426,7 +1447,7 @@ export default function TerminalPanel({
                   );
                 }).catch(console.error);
               }
-              
+
               // Sync to terminal executors
               Object.values(terminalHandlersRef.current).forEach(handlers => {
                 if (handlers?.localFS) {
@@ -1434,17 +1455,73 @@ export default function TerminalPanel({
                 }
               });
             });
+
+            terminal.writeln('\x1b[1;32m✓ Connected to local shell\x1b[0m');
+            terminal.writeln('');
           }
-          
-          terminal.writeln('\x1b[1;32m✓ Connected to local shell\x1b[0m');
-          terminal.writeln('');
         } else {
           terminal.writeln('\x1b[90m  Falling back to simulated terminal.\x1b[0m');
         }
       } else {
+        // Web mode: try local PTY via node-pty on server
+        terminal.writeln('');
         terminal.writeln('\x1b[1;32m● Terminal Ready\x1b[0m');
-        terminal.writeln('\x1b[90m  Initializing workspace...\x1b[0m');
-        terminal.writeln('\x1b[90m  Type "connect" to connect to sandbox.\x1b[0m');
+        terminal.writeln('\x1b[90m  Checking for local PTY availability...\x1b[0m');
+
+        let webPty: WebLocalPtyInstance | null = null;
+        try {
+          const available = await isWebLocalPtyAvailable();
+          if (available) {
+            terminal.writeln('\x1b[90m  Local PTY found on server, connecting...\x1b[0m');
+            webPty = await createWebLocalPty({
+              cols: terminal.cols,
+              rows: terminal.rows,
+              cwd: localShellCwdRef.current[terminalId] || 'project/sessions',
+            });
+          }
+        } catch (ptyError) {
+          logger.debug('Web local PTY not available', ptyError);
+        }
+
+        if (webPty) {
+          // Update terminal to use web local PTY
+          const termRef = terminalsRef.current.find(t => t.id === terminalId);
+          if (termRef) {
+            termRef.webLocalPtyInstance = webPty;
+            termRef.mode = 'desktop-pty'; // Reuse the PTY mode indicator
+            termRef.isConnected = true;
+
+            // Handle PTY output
+            webPty.onOutput((data) => {
+              termRef.terminal?.write(data);
+            });
+
+            // Handle PTY close
+            webPty.onClose(() => {
+              termRef.mode = 'local';
+              termRef.isConnected = false;
+              termRef.webLocalPtyInstance = undefined;
+              termRef.terminal?.writeln('\r\n\x1b[31m[PTY session closed]\x1b[0m');
+              termRef.terminal?.write(getPrompt('local', localShellCwdRef.current[terminalId] || 'project'));
+            });
+          }
+
+          terminal.writeln('\x1b[1;32m✓ Connected to server local shell\x1b[0m');
+          const ptyMode = webPty.mode;
+          if (ptyMode === 'docker') {
+            terminal.writeln('\x1b[90m  Running in isolated Docker container\x1b[0m');
+          } else if (ptyMode === 'unshare') {
+            terminal.writeln('\x1b[90m  Running in isolated user namespace (Linux)\x1b[0m');
+          } else if (ptyMode === 'localhost') {
+            terminal.writeln('\x1b[90m  Running on server\'s local PTY (localhost mode)\x1b[0m');
+          } else {
+            terminal.writeln('\x1b[90m  Running on server\'s real PTY (dev mode)\x1b[0m');
+          }
+          terminal.writeln('');
+        } else {
+          terminal.writeln('\x1b[90m  Using simulated terminal.\x1b[0m');
+          terminal.writeln('\x1b[90m  Type "connect" to connect to sandbox.\x1b[0m');
+        }
       }
       terminal.writeln('');
 
@@ -1471,7 +1548,7 @@ export default function TerminalPanel({
         // GET HANDLERS FOR THIS TERMINAL
         const handlers = terminalHandlersRef.current[terminalId];
 
-        // Desktop PTY mode: handle Tab for shell completion
+        // Desktop PTY mode: handle Tab for shell completion (Tauri)
         if (term.mode === 'desktop-pty' && term.ptyInstance) {
           // Handle Tab key for shell completion
           if (data === '\t') {
@@ -1483,18 +1560,18 @@ export default function TerminalPanel({
               return;
             }
             desktopPtyLastTabTimeRef.current[terminalId] = now;
-            
+
             const currentLine = desktopPtyInputLineRef.current[terminalId] || '';
-            
+
             if (!currentLine.trim()) {
               // No input - send Tab directly to shell for default completion
               term.ptyInstance.writeInput(data);
               return;
             }
-            
+
             // Get completions from backend
             const cwd = localShellCwdRef.current[terminalId] || 'project';
-            
+
             requestShellCompletion(
               term.ptyInstance!.sessionId,
               currentLine,
@@ -1510,19 +1587,19 @@ export default function TerminalPanel({
                 // Get the part after the prefix (what user has typed)
                 const prefix = currentLine.split(/\s+/).pop() || '';
                 const suffix = completion.slice(prefix.length);
-                
+
                 // Write the completion suffix to terminal
                 term.terminal?.write(suffix);
-                
+
                 // Update the input line ref
                 desktopPtyInputLineRef.current[terminalId] = currentLine + suffix;
-                
+
                 term.ptyInstance?.writeInput(suffix);
               } else {
                 // Multiple completions - show them inline with selection
                 const displayCompletions = completions.slice(0, 10);
                 const prefix = currentLine.split(/\s+/).pop() || '';
-                
+
                 // Store completion state for keyboard navigation
                 completionStateRef.current[terminalId] = {
                   completions: displayCompletions,
@@ -1650,6 +1727,24 @@ export default function TerminalPanel({
           return;
         }
 
+        // Web local PTY mode: forward input to server-side PTY (no shell completion)
+        if (term.mode === 'desktop-pty' && term.webLocalPtyInstance) {
+          // Handle Enter for line tracking
+          if (data === '\r' || data === '\n') {
+            desktopPtyInputLineRef.current[terminalId] = '';
+          } else if (data === '\u007f') {
+            // Backspace
+            const currentLine = desktopPtyInputLineRef.current[terminalId] || '';
+            desktopPtyInputLineRef.current[terminalId] = currentLine.slice(0, -1);
+          } else if (data >= ' ') {
+            desktopPtyInputLineRef.current[terminalId] = (desktopPtyInputLineRef.current[terminalId] || '') + data;
+          }
+
+          // Forward raw bytes to web local PTY
+          term.webLocalPtyInstance.writeInput(data);
+          return;
+        }
+
         // PTY mode: forward raw bytes to sandbox, skip local handling
         if (term.mode === 'pty' && term.sandboxInfo.sessionId) {
           // Buffer input until connected
@@ -1693,6 +1788,12 @@ export default function TerminalPanel({
         // Desktop PTY: resize the local PTY
         if (term?.mode === 'desktop-pty' && term.ptyInstance) {
           term.ptyInstance.resize(cols, rows);
+          return;
+        }
+
+        // Web local PTY: resize the server-side PTY
+        if (term?.mode === 'desktop-pty' && term.webLocalPtyInstance) {
+          term.webLocalPtyInstance.resize(cols, rows);
           return;
         }
         

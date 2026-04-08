@@ -15,6 +15,10 @@ All notable changes to this project will be documented in this file.
 - **Duplicate variable declarations in `vfs-mcp-tools.ts`** — `successCount` and `failCount` were declared twice in `batchWriteTool`, causing compile error. Removed duplicate.
 - **Missing input validation in MCP tools** — Added null checks for `content`, content size guards (5MB per file, 50MB for batch), and context validation warnings.
 - **Path traversal detection improved** — Changed from `includes('..')` to segment-level `some(seg => seg === '..')` to prevent edge case bypasses.
+- **ToolLoopAgent tool invocation tracking** — ToolLoopAgent wasn't populating `result.toolInvocations` even when tools executed. Added manual tracking array `lastExecutedToolCalls` that records each tool execution, used as fallback when ToolLoopAgent doesn't report invocations. Fixes: logs show "0 tool calls" despite tools running.
+- **VFS file scoping for all tools** — Added `resolveWorkspacePath()` to `create_directory`, `search_files`, and `file_exists` tools. All VFS MCP tools now scope paths to workspace, preventing cross-session file access.
+
+### 🧪 Test Coverage
 
 ### 🏗 Architecture
 
@@ -32,6 +36,7 @@ All notable changes to this project will be documented in this file.
 - **Directory traversal broken in migration script** — `findFiles()` in `migrate-agent-imports.js` ignored recursive results. Fixed with `fs.statSync` + `results.concat()` for proper recursive traversal.
 - **TerminalPanel.tsx TS syntax error** — Missing closing `}` for `if (term.terminal.rows > 0)` block, causing cascading parse error. Fixed.
 - **`getGeneralMinimalPromptV2/V3` truncates tool list** — Splitting on `/={20,}/` matched `====` separators inside `NON_TECHNICAL_TOOL_REFERENCE`, dropping the actual tool list from minimal prompts. Fixed: split only at `\n={20,}\n# PRIME DIRECTIVES` boundary to keep identity + tool reference intact.
+- **Text-mode tool instructions for non-function-calling models** — When a model reports `supports.functionCalling === false`, tools are stripped and text-mode instructions are injected into the system prompt. The model is told to use parseable fenced formats: ```file: path\ncontent\n```, ```diff: path\ndiff\n```, ```mkdir: path```, ```delete: path```. New parsers `extractFencedFileEdits`, `extractFencedMkdirEdits`, `extractFencedDeleteBlocks` extract these from responses and wire them into both batch and incremental parsing paths.
 - **ToolLoopAgent stops after one iteration** — Two bugs: (1) `maxIterations` was never passed to the `ToolLoopAgent` constructor, defaulting to 1 iteration instead of the configured 10; (2) tools were mapped using array indices (`"0"`, `"1"`) instead of tool names (`"read_file"`, `"write_file"`), so the agent couldn't find its tools. Fixed: pass `maxIterations` and build proper `{ [name]: Tool }` map.
 - **VFS persistWorkspace partial-commit risk** — Metadata update and delete operations ran outside the transaction, leaving workspace inconsistent if upserts failed. Fixed: all operations (meta, deletes, upserts) now run in a single atomic transaction.
 - **VFS ensureWorkspace silent error swallowing** — All DB errors were caught and silently returned an empty workspace. Now distinguishes "table doesn't exist" (expected before migration) from real errors (logged as `console.error`).
@@ -428,4 +433,117 @@ curl -X POST http://localhost:3000/api/filesystem/write \
 - `STATEFUL_AGENT_ENABLE_BOOTSTRAPPED_AGENCY` — Defaults to `true` (was `false`)
 - `USE_STATEFUL_AGENT` — Defaults to `!== 'false'` (was `=== 'true'`)
 - `AI_SDK_MAX_STEPS` — Default changed from `10` to `15`
+
+
+ -        * ─────────────────────────────────────────────────────────────                                                               │
+  │    3686 -        * COMMENTED OUT — Old tag-based editing instructions.                                                                         │
+  │    3687 -        * Re-enable this block (and replace VFS_FILE_EDITING_TOOL_PROMPT below)                                                       │
+  │    3688 -        * if you need to fall back to <file_edit> / APPLY_DIFF / WRITE <<<                                                            │
+  │    3689 -        * tag-based parsing instead of MCP tool calling.                                                                              │
+  │    3690 -        *                                                                                                                             │
+  │    3691 -        * For file changes, prefer one of these parseable schemas:                                                                    │
+  │    3692 -        *                                                                                                                             │
+  │    3693 -        * CAPABILITY CHOICE:                                                                                                          │
+  │    3694 -        * - For modifying an existing file, use APPLY_DIFF first.                                                                     │
+  │    3695 -        * - For creating a brand-new file, use WRITE or <file_edit path="...">...</file_edit>.                                        │
+  │    3696 -        * - For deleting a file, use DELETE <path>.                                                                                   │
+  │    3697 -        * - For reading or referring to existing workspace content, use <file_read path="..." /> when needed.                         │
+  │    3698 -        * - For shell/runtime instructions meant for the user terminal, emit a single ```bash block.                                  │
+  │    3699 -        *                                                                                                                             │
+  │    3700 -        * FOR EXISTING FILES, prefer surgical edits (APPLY_DIFF) over full rewrites:                                                  │
+  │    3701 -        *   <apply_diff path="src/utils.ts">                                                                                          │
+  │    3702 -        *     <search>function oldName() {                                                                                            │
+  │    3703 -        *       return 1;                                                                                                             │
+  │    3704 -        *     }</search>                                                                                                              │
+  │    3705 -        *     <replace>function newName() {                                                                                           │
+  │    3706 -        *       return 2;                                                                                                             │
+  │    3707 -        *     }</replace>                                                                                                             │
+  │    3708 -        *   </apply_diff>                                                                                                             │
+  │    3709 -        * Or in fs-actions blocks:                                                                                                    │
+  │    3710 -        *   APPLY_DIFF <path>                                                                                                         │
+  │    3711 -        *   <<<                                                                                                                       │
+  │    3712 -        *   <exact code to find>                                                                                                      │
+  │    3713 -        *   ===                                                                                                                       │
+  │    3714 -        *   <replacement code>                                                                                                        │
+  │    3715 -        *   >>>                                                                                                                       │
+  │    3716 -        *                                                                                                                             │
+  │    3717 -        * FOR NEW FILES, use full writes:                                                                                             │
+  │    3718 -        * 1) <file_edit path="...">...</file_edit>                                                                                    │
+  │    3719 -        * 2) COMMANDS write_diffs                                                                                                     │
+  │    3720 -        * 3) ```fs-actions ...``` blocks with:                                                                                        │
+  │    3721 -        *    WRITE <path>                                                                                                             │
+  │    3722 -        *    <<<                                                                                                                      │
+  │    3723 -        *    <full file content>                                                                                                      │
+  │    3724 -        *    >>>                                                                                                                      │
+  │    3725 -        *    PATCH <path>                                                                                                             │
+  │    3726 -        *    <<<                                                                                                                      │
+  │    3727 -        *    <unified diff body>                                                                                                      │
+  │    3728 -        *    >>>                                                                                                                      │
+  │    3729 -        *    DELETE <path>                                                                                                            │
+  │    3730 -        *                                                                                                                             │
+  │    3731 -        * IMPORTANT: For edits to existing files, ALWAYS use APPLY_DIFF instead of WRITE.                                             │
+  │    3732 -        * APPLY_DIFF only replaces the exact block you specify, preventing context truncation.                                        │
+  │    3733 -        * Use WRITE only when creating new files or when a complete rewrite is explicitly needed.                                     │
+  │    3734 -        * Do not rewrite whole existing files unless the user explicitly wants a full rewrite.                                        │
+  │    3735 -        *                                                                                                                             │
+  │    3736 -        * DIFF AUTHORING RULES:                                                                                                       │
+  │    3737 -        * - The <search> block or APPLY_DIFF search section must match the existing code exactly, including spacing and punctuation.  │
+  │    3738 -        * - Keep each diff surgical and minimal; prefer multiple small APPLY_DIFF operations over one large rewrite.                  │
+  │    3739 -        * - Include enough surrounding context in the search block to uniquely identify the target.                                   │
+  │    3740 -        * - If multiple files are involved, emit one operation per file rather than mixing contents.                                  │
+  │    3741 -        *                                                                                                                             │
+  │    3742 -        * DIFF-BASED SELF-HEALING:                                                                                                    │
+  │    3743 -        * - If an edit might fail because surrounding code may have drifted, first read/reference the latest file content and then    │
+  │         emit a narrower APPLY_DIFF.                                                                                                            │
+  │    3744 -        * - If a search block is large, brittle, or repeated, reduce it to the smallest unique exact block.                           │
+  │    3745 -        * - If an earlier attempted patch likely failed, do not repeat the same broad patch; emit a corrected APPLY_DIFF with fresher │
+  │         exact context.                                                                                                                         │
+  │    3746 -        * - Prefer preserving user code and making the minimum viable edit rather than replacing entire functions or files.           │
+  │    3747 -        * Prefer concrete multi-file edits when user requests full project scaffolding.                                               │
+  │    3748 -        *                                                                                                                             │
+  │    3749 -        * To read a file from the workspace, use: <file_read path="..." />                                                            │
+  │    3750 -        *                                                                                                                             │
+  │    3751 -        * When the user asks how to run code, include shell commands in ```bash blocks.                                               │
+  │    3752 -        * The user has a terminal that can execute these commands.                                                                    │
+  │    3753 -        * For multi-step setups, provide all commands in a single bash block so they can be run together.                             │
+  │    3754 -        * Use bash blocks for user-facing commands only; use filesystem edit schemas for file mutations.                              │
+  │    3755 -        * If a task is too large for a single response, end with the exact token: [CONTINUE_REQUESTED]                                │
+  │    3756 -        * Example: ```bash                                                                                                            │
+  │    3757 -        * npm install                                                                                                                 │
+  │    3758 -        * npm run dev                                                                                                                 │
+  │    3759 -        * ```                                                                                                                         │
+  │    3760 -        * ─────────────────────────────────────────────────────────────                                                               │
+  │    3761 -        */                                                                                                                            │
+  │    3762 -       VFS_FILE_EDITING_TOOL_PROMPT,
+
+## [Unreleased] — VFS Tool Calling Robustness + Parser Hardening + Session Scope Fixes
+
+### 🔴 Critical Bug Fixes
+
+- **`batchWrite` duplicate GitVFS buffering (4-6x per write)** — Each write file operation buffered the same change multiple times because `trackTransaction()` and `changeBuffer` independently tracked changes with no deduplication. Fixed: `trackTransaction()` now removes existing entries for same path before adding; `handleFileChange()` deduplicates by path+version in `changeBuffer`; `commitChanges()` uses Set-based O(1) deduplication when merging buffers.
+- **VFS MCP tool call args empty (`args: {}`)** — Vercel AI SDK's `tool-result` stream chunks don't include args. The `toolCallArgsCache` in `vercel-ai-streaming.ts` now caches args from `tool-call` chunks and recovers them in `tool-result` chunks. Route.ts now omits the `args` field entirely from SSE events when empty instead of emitting `{}`.
+- **Empty tool_call SSE events from Vercel AI SDK** — Models without function calling support produced partial tool call chunks with empty args. Added filter in `route.ts` to skip emitting `tool_call` events when `args` is empty — only `tool_invocation` result events are emitted.
+- **`/project/` paths rejected by read/write/delete APIs (400)** — Validation schemas in `read/route.ts`, `write/route.ts`, and `delete/route.ts` only allowed `/home/`, `/workspace/`, or `/tmp/` for absolute paths. Added `/project/` to all three schemas.
+- **Session scope not flowing to VFS tools** — `scopePath` was computed in `route.ts` but never passed through the LLM request chain to `enhanced-llm-service.ts` → `vercel-ai-tools.ts` → `toolContextStore.run()`. Added `scopePath` to `RouterRequest` interface, `EnhancedLLMRequest` interface, and threaded it through all call sites.
+- **`@bing/platform/env` import resolution error in tests** — Missing `"./env"` export in `packages/platform/package.json`. Added export entry.
+- **`vitest.config.ts` missing** — Created with proper `@/` and `@bing/*` aliases for test module resolution.
+
+### 🛠 Parser Hardening (`parseBatchWriteFiles`)
+
+- **Raw control character sanitization** — LLMs often emit unescaped `\n`, `\t`, `\r` inside JSON string values. Added `sanitizeJsonString()` that walks text character-by-character tracking quote state and escapes raw control chars.
+- **Trailing comma support** — LLMs commonly output `[{...},]`. Added `text.replace(/,\s*([}\]])/g, '$1')` fallback before sanitization.
+- **Single-quote normalization** — LLMs output `"{'path':'a','content':'b'}"`. Added `text.replace(/'/g, '"')` fallback.
+- **Invalid entry filtering** — `[{...}, null, "string"]` now filters to only valid objects. `filterValidFiles()` removes non-objects and nulls.
+- **Unified `parseAndValidate()`** — All parse paths now use a single function that handles parse + validate + filter, eliminating code duplication.
+
+### 📋 Test Infrastructure
+
+- **`vitest.config.ts`** — Added with `@/` and `@bing/*` aliases for proper module resolution.
+- **116 batch-write-parser tests passing** — 88 standalone + 28 production parser tests.
+- **`@bing/platform/package.json`** — Added `"./env"` export for test import resolution.
+
+### 📝 System Prompt Improvements
+
+- **`VFS_FILE_EDITING_TOOL_PROMPT`** — Rewritten to be explicit: "CRITICAL: All file operations MUST use the provided filesystem tools via function/tool calling." Includes exact parameter formats, numbered critical rules, and forbids XML tags/heredocs.
+- **Removed 80-line commented-out XML tag instructions** from `route.ts` that confused models about which format to use.                              
 

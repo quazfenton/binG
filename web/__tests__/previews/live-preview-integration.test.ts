@@ -1053,7 +1053,7 @@ describe('LivePreview Integration', () => {
     });
 
     it('should handle undefined files array', () => {
-      const result = detectProject({ files: [] } as any);
+      const result = detectProject({ files: undefined } as any);
       expect(result.framework).toBe('unknown');
     });
 

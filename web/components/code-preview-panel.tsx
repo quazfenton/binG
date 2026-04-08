@@ -5347,8 +5347,9 @@ root.render(<App />);` };
 
             // Try exact match first, then basename fallback
             let cssContent = allFiles.get(cleanHref);
-            if (!cssContent) {
+            if (!cssContent && !/^(?:[a-z]+:)?\/\//i.test(href)) {
               // Try basename match (e.g., "styles.css" from "css/styles.css")
+              // Only for relative paths — external URLs must not be replaced by local files
               const baseName = cleanHref.split('/').pop() || '';
               cssContent = allFiles.get(baseName);
             }
