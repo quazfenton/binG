@@ -58,9 +58,14 @@ export class GitBackedVFS {
   private options: Required<GitVFSOptions>;
   private changeBuffer: GitVFSChange[] = [];
   private transactionLog: Map<string, TransactionEntry[]> = new Map();
+  // FIX: Track the owner this instance belongs to — prevents duplicate handling
+  // when multiple GitVFS instances exist (one per owner+session composite key).
+  // Without this, every instance's listener fires for ALL file change events.
+  private readonly ownerId: string;
 
-  constructor(vfs: VirtualFilesystemService, options: GitVFSOptions = {}) {
+  constructor(vfs: VirtualFilesystemService, options: GitVFSOptions = {}, ownerId?: string) {
     this.vfs = vfs;
+    this.ownerId = ownerId || options.sessionId || 'default';
     this.shadowCommitManager = new ShadowCommitManager();
     this.options = {
       autoCommit: options.autoCommit ?? true,  // Enabled by default for immediate feedback
@@ -78,8 +83,16 @@ export class GitBackedVFS {
 
   /**
    * Handle VFS file change events
+   * FIX: Only process events for this instance's owner — prevents N instances
+   * from all buffering the same change when N GitBackedVFS instances exist.
    */
   private handleFileChange(event: FilesystemChangeEvent): void {
+    // Ignore events for other owners — each GitBackedVFS instance only cares
+    // about its own owner's file changes.
+    // The ownerId may be a compositeKey (ownerId:sessionId), so check both
+    // exact match and prefix match (compositeKey starts with event.ownerId).
+    const isMatch = event.ownerId === this.ownerId || this.ownerId.startsWith(event.ownerId + ':');
+    if (!isMatch) return;
     if (!this.options.autoCommit || this.isPersisting) return;
 
     // Deduplicate: skip if this path is already buffered at same or newer version
@@ -98,7 +111,7 @@ export class GitBackedVFS {
     };
 
     this.changeBuffer.push(change);
-    logger.debug(`[GitVFS] Buffered change: ${event.type} ${event.path} v${event.version}`);
+    logger.debug(`[GitVFS] Buffered change: ${event.type} ${event.path} v${event.version} (owner: ${this.ownerId.substring(0, 30)})`);
   }
 
   /**
@@ -323,12 +336,14 @@ export class GitBackedVFS {
     const key = transactionId || ownerId;
     const transactions = this.transactionLog.get(key) || [];
 
-    // Also include any changes from changeBuffer that aren't in transactions
-    // FIX: Deduplicate changeBuffer against transactions to prevent double-buffering
-    const seenPaths = new Set(transactions.map(tx => tx.path));
-    const bufferedChanges = this.changeBuffer.filter(change => !seenPaths.has(change.path));
+    // FIX: Only use transactionLog for shadow commits — do NOT include changeBuffer.
+    // changeBuffer is populated by handleFileChange() which fires for EVERY VFS event
+    // across ALL GitBackedVFS instances, causing duplicate entries when multiple
+    // instances exist for the same owner. The transactionLog is the authoritative
+    // source since trackTransaction() is called explicitly by writeFile/deleteFile.
+    const changesToCommit = transactions;
 
-    if (transactions.length === 0 && bufferedChanges.length === 0) {
+    if (changesToCommit.length === 0) {
       return { success: true, committedFiles: 0 };
     }
 
@@ -339,21 +354,31 @@ export class GitBackedVFS {
       const vfs: Record<string, string> = desktopMode
         ? {} // Content not stored in desktop mode — only metadata persisted
         : Object.fromEntries(
-            transactions
+            changesToCommit
               .filter(tx => tx.type !== 'DELETE' && tx.newContent)
               .map(tx => [tx.path, tx.newContent])
           );
 
+      // FIX: Get current workspace version from the VFS and pass it to shadow commit
+      let workspaceVersion: number | undefined;
+      try {
+        workspaceVersion = await this.vfs.getWorkspaceVersion(ownerId);
+      } catch {
+        // Version not available — shadow commit will store null
+      }
+
       // Create shadow commit with all changes
-      const result = await this.shadowCommitManager.commit(vfs, transactions, {
+      const result = await this.shadowCommitManager.commit(vfs, changesToCommit, {
         sessionId: this.options.sessionId,
         message: message || this.options.commitMessage,
         author: ownerId,
         source: 'git-vfs',
         integration: 'vfs-auto-commit',
+        workspaceVersion,
       });
 
-      // FIX: Only clear buffers on SUCCESS to prevent data loss on commit failure
+      // FIX: Clear buffers on SUCCESS to prevent data loss on commit failure
+      // AND clear changeBuffer to prevent stale entries from being re-committed
       if (result.success) {
         this.changeBuffer = [];
         if (transactionId) {
@@ -637,9 +662,10 @@ export function disableVFSBatchMode(ownerId: string) {
  */
 export function createGitBackedVFS(
   vfs: VirtualFilesystemService,
-  options?: GitVFSOptions
+  options?: GitVFSOptions,
+  ownerId?: string
 ): GitBackedVFS {
-  return new GitBackedVFS(vfs, options);
+  return new GitBackedVFS(vfs, options, ownerId);
 }
 
 // Singleton instances per owner+session composite key
@@ -680,12 +706,13 @@ export function getGitBackedVFSForOwner(
       : ownerId;  // No sessionId provided - use ownerId as sessionId
 
   if (!gitVFSInstances.has(compositeKey)) {
-    // Pass the composite sessionId so ShadowCommit uses correct format for rollback queries
+    // Pass the composite sessionId AND ownerId so ShadowCommit uses correct format
+    // and handleFileChange only processes events for this owner
     gitVFSInstances.set(compositeKey, createGitBackedVFS(vfs, {
       ...options,
       // Always use compositeKey as sessionId to ensure consistent ShadowCommit queries
       sessionId: compositeKey,
-    }));
+    }, ownerId));
   }
   return gitVFSInstances.get(compositeKey)!;
 }

@@ -561,12 +561,15 @@ class OpenCodeV2Provider implements CapabilityProvider {
           ? `run ${input.language} code: ${input.code}`
           : input.command;
 
+        // Pass cwd from validated input so shell executes in the right directory
         const result = await provider.runAgentLoop({
           userMessage: command,
           tools: [],
-          systemPrompt: '',
+          systemPrompt: input.cwd ? `Working directory: ${input.cwd}` : '',
           maxSteps: 5,
           executeTool: async () => ({ success: true, output: '', exitCode: 0 }),
+          cwd: input.cwd || undefined,
+          enableSelfHeal: true,
         });
 
         return {

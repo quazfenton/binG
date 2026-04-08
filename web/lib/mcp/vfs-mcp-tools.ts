@@ -531,12 +531,14 @@ export const searchFilesTool = (tool as any)({
     return { success: false, query, error: 'Query is required', files: [], total: 0 };
   }
   const context = getToolContext();
-  logger.debug('searchFiles', { query, path, limit, userId: context.userId });
-  
+  // Scope the path filter to the current session, just like other file tools
+  const scopedPath = path ? resolveScopedPath(path) : undefined;
+  logger.debug('searchFiles', { query, path: scopedPath, limit, userId: context.userId });
+
   const results = await virtualFilesystem.search(
     context.userId,
     query,
-    { path, limit }
+    { path: scopedPath, limit }
   );
 
   // Normalize: proxy may return array or { files: [...] }

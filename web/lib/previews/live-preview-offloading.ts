@@ -899,13 +899,17 @@ export class LivePreviewOffloading {
     // Check for Node.js/Express backend - but NOT if there's a frontend framework
     // Must check ALL frontend frameworks to avoid misdetecting Next.js + Express as 'node'
     const hasExpress = deps.express || deps['express'] || deps['koa'] || deps['koa'] || deps['fastify'] || deps['fastify'];
-    const hasServerFiles = filePaths.some(p => SERVER_FILES.slice(0, 4).includes(p));
+    // Only check for specific server files (not generic ones like app.js which can be frontend entry points)
+    const hasSpecificServerFiles = filePaths.some(p => ['server.js', 'server.ts', 'server.mjs', 'index.mjs'].includes(p));
+    // Also check code content for backend patterns
+    const hasBackendCodePatterns = this.detectBackendCodePatterns(files);
     const hasFrontend = deps.react || deps['react'] || deps.vue || deps['@vue/core'] || deps.svelte || 
       deps['@sveltejs/kit'] || deps.next || deps['next'] || deps['@angular/core'] || deps['solid-js'] || 
       deps.astro || deps.gatsby || deps['@remix-run/react'] || deps['@builder.io/qwik'];
     
-    // Only detect as 'node' if there's no frontend framework
-    if ((hasExpress || hasServerFiles) && !hasFrontend) {
+    // Only detect as 'node' if there's strong evidence of backend (express deps OR specific server files OR backend code patterns)
+    // and no frontend framework detected
+    if ((hasExpress || hasSpecificServerFiles || hasBackendCodePatterns) && !hasFrontend) {
       return 'node';
     }
     
@@ -975,7 +979,7 @@ export class LivePreviewOffloading {
       if (pythonContent.includes('from django import') || pythonContent.includes('django.setup()') || pythonContent.includes('DJANGO_')) return 'django';
       
       // Default to flask if Python but no specific framework detected
-      if (hasServerFiles) return 'node';  // Mixed Node + Python
+      if (hasSpecificServerFiles) return 'node';  // Mixed Node + Python
     }
 
     // JavaScript/TypeScript frameworks by file patterns
@@ -998,20 +1002,44 @@ export class LivePreviewOffloading {
     if (jsContent.includes('from "@sveltejs/') || jsContent.includes('svelte/store')) return 'svelte';
     if (jsContent.includes('from "@angular/') || jsContent.includes('@Component(')) return 'angular';
     
-    // Node.js/Express detection from code
-    if (jsContent.includes('express()') || jsContent.includes('express.') || jsContent.includes('app.get(') || jsContent.includes('app.post(')) return 'node';
-
-    // Check for HTML files - vanilla project
-    if (filePaths.some(p => p.endsWith('.html'))) return 'vanilla';
-
-    // Node.js detection from code content (fallback)
-    if (hasServerFiles || jsContent.includes('express()') || jsContent.includes('app.get(')) {
+    // Node.js/Express detection from code (only with specific server files)
+    if (hasSpecificServerFiles && (jsContent.includes('express()') || jsContent.includes('app.get('))) {
       if (!hasVue && !hasSvelte && !hasAngular && !hasJsx) {
         return 'node';
       }
     }
 
+    // Check for HTML files - vanilla project (should come BEFORE general node detection)
+    if (filePaths.some(p => p.endsWith('.html'))) return 'vanilla';
+
     return 'unknown';
+  }
+
+  /**
+   * Detect backend code patterns in JavaScript/TypeScript files
+   */
+  private detectBackendCodePatterns(files: Record<string, string>): boolean {
+    const jsFiles = Object.entries(files)
+      .filter(([p]) => /\.(js|ts|jsx|tsx|mjs|cjs)$/.test(p))
+      .map(([, c]) => c)
+      .join('\n');
+    
+    const backendPatterns = [
+      /require\(['"]express['"]\)/,
+      /from ['"]express['"]/,
+      /require\(['"]fastify['"]\)/,
+      /require\(['"]sqlite3['"]\)/,
+      /require\(['"]pg['"]\)/,
+      /require\(['"]mongoose['"]\)/,
+      /\.listen\(\d+\)/,
+      /app\.listen\(/,
+      /server\.listen\(/,
+      /process\.env\./,
+      /__dirname/,
+      /require\(['"]node:/,
+    ];
+    
+    return backendPatterns.filter(p => p.test(jsFiles)).length >= 2;
   }
 
   /**

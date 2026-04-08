@@ -707,5 +707,30 @@ console.log(x);
       // Without "batch_write" or "write_file" text, this format shouldn't match
       expect(edits).toHaveLength(0);
     });
+
+    it('does NOT extract content without closing <file_edit> tag', () => {
+      // LLM output with XML-like tags but no proper file_edit structure
+      const content = '<recursive>true</recursive>\n\n</tool>';
+      const edits = extractFileEdits(content);
+      // Should NOT extract this as a file edit — no <path> tag or closing marker
+      expect(edits).toHaveLength(0);
+    });
+
+    it('extracts malformed format ONLY when closing <file_edit> marker is present', () => {
+      const content = '<path>src/test.ts</path>\nexport const x = 1;\n<file_edit>';
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(1);
+      expect(edits[0].path).toBe('src/test.ts');
+      expect(edits[0].content).toBe('export const x = 1;');
+    });
+
+    it('rejects content with > characters in arrow functions (XML parser fix)', () => {
+      // The compact parser uses non-greedy ([\s\S]*?) which correctly captures
+      // content including > characters up to </file_edit>
+      const content = '<file_edit path="arrow.js">const fn = (x) => x + 1;</file_edit>';
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(1);
+      expect(edits[0].content).toBe('const fn = (x) => x + 1;');
+    });
   });
 });
