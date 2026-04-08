@@ -8,6 +8,7 @@ import type {
 } from '../providers/llm-provider'
 import { getSandboxProvider } from '../providers'
 import type { SandboxHandle } from '../providers/sandbox-provider'
+import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync'
 
 const DEFAULT_MAX_STEPS = 15
 const PROCESS_TIMEOUT_MS = 300_000 // 5 minutes
@@ -270,6 +271,14 @@ export class OpencodeProvider implements LLMProvider {
           },
           resources: { cpu: 2, memory: 4 },
         })
+        
+        // Start VFS sync for bidirectional file sync
+        try {
+          sandboxFilesystemSync.startSync(sandbox.id, sessionId);
+          console.log(`[OpencodeSpawn] VFS sync started for sandbox: ${sandbox.id}`);
+        } catch (syncErr: any) {
+          console.warn(`[OpencodeSpawn] Failed to start VFS sync:`, syncErr.message);
+        }
       }
 
       // Ensure opencode is installed in the sandbox

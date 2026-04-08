@@ -18,6 +18,94 @@ import { sandboxBridge } from '../../sandbox/sandbox-service-bridge';
 import { virtualFilesystem } from '../virtual-filesystem-service';
 import { emitFilesystemUpdated } from './sync-events';
 
+// ============================================================================
+// Comprehensive sync exclusion patterns — all languages
+// Prevents syncing node_modules, Python venvs, caches, build outputs, etc.
+// ============================================================================
+const SYNC_EXCLUDE_PATTERNS: RegExp[] = [
+  // === JavaScript / Node.js ===
+  /\/node_modules\//,
+  /\/\.next\//,
+  /\/\.nuxt\//,
+  /\/\.cache\//,
+  /\/\.parcel-cache\//,
+  /\/\.turbo\//,
+  /\/\.vite\//,
+  /\/coverage\//,
+  /\/\.nyc_output\//,
+  /\/\.eslintcache/,
+  /\/\.prettiercache/,
+
+  // === Python ===
+  /\/__pycache__\//,
+  /\/\.venv\//,
+  /\/venv\//,
+  /\/\.virtualenv\//,
+  /\/site-packages\//,
+  /\/\.eggs\//,
+  /\/\.python-eggs\//,
+  /\/pip-selfcheck\.json/,
+  /\/\.pytest_cache\//,
+  /\/\.mypy_cache\//,
+  /\/\.tox\//,
+  /\/\.nox\//,
+  /\/\.pytype\//,
+  /\/\.ruff_cache\//,
+  /\/\.ipynb_checkpoints\//,
+  /\/\.spyproject\//,
+
+  // === Java / Kotlin ===
+  /\/target\//,               // Maven
+  /\/\.gradle\//,             // Gradle cache
+  /\/\.mvn\//,                // Maven wrapper
+
+  // === Rust ===
+  /\/target\//,               // Cargo build
+  /\/\.cargo\/registry\//,    // Cargo package cache
+
+  // === Go ===
+  /\/vendor\//,               // Go vendored deps
+  /\/pkg\//,                  // Go compiled packages
+  /\/bin\//,                  // Go compiled binaries
+
+  // === .NET / C# ===
+  /\/obj\//,                  // Intermediate build
+  /\/\.nuget\//,              // NuGet cache
+  /\/packages\//,             // NuGet packages folder
+
+  // === Ruby ===
+  /\/vendor\/bundle\//,
+  /\/\.bundle\//,
+  /\/vendor\/cache\//,
+  /\/\.gem\//,
+
+  // === PHP ===
+  /\/vendor\//,               // Composer deps
+
+  // === General / build outputs ===
+  /\/dist\//,
+  /\/build\//,
+  /\/out\//,
+  /\/\.idea\//,
+  /\/Thumbs\.db/,
+  /\/\.DS_Store/,
+  /\.log$/,
+  /\.tmp$/,
+  /\.bak$/,
+  /\.swp$/,
+  /\.swo$/,
+  /~$/,
+  /\.part$/,
+];
+
+/**
+ * Check if a file path should be excluded from VFS sync.
+ * Covers node_modules, Python venvs, caches, build outputs, etc. for all languages.
+ */
+function shouldExcludeFromSync(filePath: string): boolean {
+  return SYNC_EXCLUDE_PATTERNS.some(pattern => pattern.test(filePath));
+}
+
 // Workspace directory varies by provider
 // This will be resolved per-sandbox based on the provider
 /**
@@ -51,7 +139,7 @@ function getWorkspaceDirsForSandbox(sandboxId: string): string[] {
     return ['/workspace', '/workspace/project'];
   }
   if (sandboxId.startsWith('local-')) {
-    return ['/workspace', '/workspace/project'];
+    return ['/workspace'];
   }
   if (sandboxId.startsWith('desktop-')) {
     return ['/workspace', '/home/user/project'];
@@ -291,6 +379,16 @@ class SandboxFilesystemSync {
       return;
     }
 
+    // Skip sync for local fallback sandboxes that are NOT running in containers.
+    // LocalSandboxHandle is a dev-only fallback that writes directly to the local filesystem.
+    // When running in a container with its own database, LOCAL_SANDBOX_HAS_DB=true enables sync.
+    // When running as a dev fallback (no container), sync is skipped to avoid polluting
+    // the Next.js app's directory or syncing to the wrong database.
+    if (sandboxId.startsWith('local-') && process.env.LOCAL_SANDBOX_HAS_DB !== 'true') {
+      console.log(`[SandboxSync] Skipping sync for local fallback sandbox: ${sandboxId} (no container DB)`);
+      return;
+    }
+
     // Get polling config for this sandbox type
     const pollingConfig = getPollingConfig(sandboxId);
     
@@ -446,6 +544,11 @@ class SandboxFilesystemSync {
     const syncedFiles: Array<{ path: string; workspaceVersion?: number }> = [];
 
     for (const file of files) {
+      // === EXCLUSION CHECK: Skip node_modules, venvs, caches, build outputs, etc. ===
+      if (shouldExcludeFromSync(file.name)) {
+        continue;
+      }
+
       const sandboxPath = `${workspaceDir}/${file.name}`;
       try {
         const sandboxContent = await sandboxBridge.readFile(sandboxId, sandboxPath);
@@ -533,6 +636,11 @@ class SandboxFilesystemSync {
     const vfsRoot = 'project';
 
     for (const file of snapshot.files) {
+      // === EXCLUSION CHECK: Skip node_modules, venvs, caches, build outputs, etc. ===
+      if (shouldExcludeFromSync(file.path)) {
+        continue;
+      }
+
       const workspaceDir = getWorkspaceDirForSandbox(sandboxId);
       // Strip VFS workspace root prefix so files go directly to sandbox workspace
       const relativePath = file.path.startsWith(vfsRoot + '/')

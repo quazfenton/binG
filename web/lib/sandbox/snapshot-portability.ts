@@ -35,6 +35,7 @@ import { getSandboxProvider, type SandboxProviderType } from './providers';
 import { getTerminalSession, updateTerminalSession } from '../terminal/session/terminal-session-store';
 import { createLogger } from '../utils/logger';
 import { vfsSyncBackService } from '../virtual-filesystem/sync/vfs-sync-back';
+import { sandboxFilesystemSync } from '../virtual-filesystem/sync/sandbox-filesystem-sync';
 
 const logger = createLogger('Phase3:SnapshotPortability');
 
@@ -217,6 +218,15 @@ export class SnapshotPortability {
           },
         },
       });
+      
+      // Start VFS sync for imported snapshot sandbox
+      try {
+        const { sandboxFilesystemSync } = await import('../virtual-filesystem/sync/sandbox-filesystem-sync');
+        sandboxFilesystemSync.startSync(handle.id, snapshot.userId);
+        logger.info(`VFS sync started for imported snapshot sandbox: ${handle.id}`);
+      } catch (syncErr: any) {
+        logger.warn(`Failed to start VFS sync for snapshot import:`, syncErr.message);
+      }
       
       return { sessionId, sandboxId: handle.id };
     } catch (error: any) {

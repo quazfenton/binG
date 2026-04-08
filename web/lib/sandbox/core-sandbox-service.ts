@@ -7,6 +7,7 @@ import { randomUUID } from 'crypto'
 import { quotaManager } from '../management/quota-manager'
 import { createLogger } from '@/lib/utils/logger'
 import { isDesktopMode } from '@bing/platform/env'
+import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync'
 
 const log = createLogger('SandboxService')
 
@@ -79,19 +80,37 @@ export class SandboxService {
   }
 
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
+    // Explicit prefix matches (highest priority)
+    if (sandboxId.startsWith('daytona-')) return 'daytona'
+    if (sandboxId.startsWith('runloop-')) return 'runloop'
+    if (sandboxId.startsWith('desktop-')) return 'desktop'
+    if (sandboxId.startsWith('agentfs-')) return 'agentfs'
+    if (sandboxId.startsWith('modal-')) return 'modal'
     if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent'
     if (sandboxId.startsWith('mistral-')) return 'mistral'
     // Check specific blaxel-mcp prefix BEFORE the general blaxel- prefix
     if (sandboxId.startsWith('blaxel-mcp-')) return 'blaxel-mcp'
     if (sandboxId.startsWith('blaxel-')) return 'blaxel'
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites'
-    if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox'
+    if (sandboxId.startsWith('csb-')) return 'codesandbox'
     if (sandboxId.startsWith('webcontainer-')) return 'webcontainer'
     if (sandboxId.startsWith('wc-fs-')) return 'webcontainer-filesystem'
     if (sandboxId.startsWith('wc-spawn-')) return 'webcontainer-spawn'
     if (sandboxId.startsWith('osb-ci-')) return 'opensandbox-code-interpreter'
     if (sandboxId.startsWith('osb-agent-')) return 'opensandbox-agent'
     if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) return 'opensandbox'
+    if (sandboxId.startsWith('microsandbox-') || sandboxId.startsWith('micro-')) return 'microsandbox'
+    // LocalSandboxHandle fallback (no container — skip VFS sync)
+    if (sandboxId.startsWith('local-')) return 'microsandbox'
+    // Pattern-based detection (lower priority)
+    // E2B: 18-25 char alphanumeric (no hyphens)
+    if (/^[a-z0-9]{18,25}$/i.test(sandboxId)) return 'e2b'
+    // CodeSandbox: exactly 6-char alphanumeric
+    if (/^[a-z0-9]{6}$/i.test(sandboxId)) return 'codesandbox'
+    // Blaxel/Runloop/Mistral: short codes (5-7 chars)
+    if (/^[a-z0-9]{5,7}$/i.test(sandboxId)) return 'blaxel'
+    // UUID format (Daytona)
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sandboxId)) return 'daytona'
     return null
   }
 
@@ -156,6 +175,15 @@ export class SandboxService {
 
     this.sandboxProviderById.set(handle.id, provider)
     quotaManager.recordUsage(provider.name)
+    
+    // Start VFS sync for bidirectional file sync between VFS database and sandbox
+    try {
+      sandboxFilesystemSync.startSync(handle.id, userId);
+      log.debug('VFS sync started for sandbox', { sandboxId: handle.id, userId });
+    } catch (syncErr: any) {
+      log.warn('Failed to start VFS sync for sandbox:', syncErr.message);
+    }
+    
     return handle
   }
 

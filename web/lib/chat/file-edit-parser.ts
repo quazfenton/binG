@@ -1165,6 +1165,23 @@ export function extractFileEdits(content: string): FileEdit[] {
     allEdits.push(...extractToolNameFencedBlocks(content));
   }
 
+  // FALLBACK: Parse text-mode fenced file edits: ```file: path\ncontent\n```
+  // Used when model doesn't support function calling — text-mode tool instructions
+  // tell it to use this format for file creation/overwrite.
+  if (content.includes('```file:')) {
+    allEdits.push(...extractFencedFileEdits(content));
+  }
+
+  // FALLBACK: Parse text-mode fenced mkdir: ```mkdir: path\n```
+  if (content.includes('```mkdir:')) {
+    allEdits.push(...extractFencedMkdirEdits(content));
+  }
+
+  // FALLBACK: Parse text-mode fenced delete: ```delete: path\n```
+  if (content.includes('```delete:')) {
+    allEdits.push(...extractFencedDeleteBlocks(content));
+  }
+
   // FALLBACK: Parse JavaScript-style MCP tool calls from ```javascript code blocks
   // Catches: write_file("path", "content"), delete_file("path"), mkdir("path"), apply_diff("path", "diff")
   // Only activates when there's a ```javascript/js block AND a tool call signature

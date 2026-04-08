@@ -32,6 +32,8 @@
 import { v4 as uuidv4 } from 'uuid';
 import { createLogger } from '@/lib/utils/logger';
 import { getSandboxProvider, type SandboxProviderType } from '../providers';
+import { sandboxBridge } from '../sandbox-service-bridge';
+import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 
 const logger = createLogger('CloudAgent:Spawner');
 
@@ -41,6 +43,7 @@ export interface CloudAgentConfig {
   systemPrompt?: string;
   maxSteps?: number;
   timeout?: number;
+  userId?: string;
 }
 
 export interface CloudAgentInstance {
@@ -151,6 +154,15 @@ class CloudAgentSpawner {
       });
 
       logger.info(`Cloud agent spawned: ${agentId}, sandbox: ${handle.id}`);
+
+      // Start VFS sync for bidirectional file sync between VFS database and sandbox
+      try {
+        const userId = config.userId || agentId;
+        sandboxFilesystemSync.startSync(handle.id, userId);
+        logger.info(`VFS sync started for cloud agent: ${handle.id}`);
+      } catch (syncErr: any) {
+        logger.warn(`Failed to start VFS sync for cloud agent:`, syncErr.message);
+      }
 
       return {
         success: true,

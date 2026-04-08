@@ -1,3 +1,4 @@
+// FORCE RECOMPILE: 1775662791909
 /**
  * Capability Router - Maps capabilities to actual tool providers
  *
@@ -606,14 +607,36 @@ class OpenCodeV2Provider implements CapabilityProvider {
             enableSelfHeal: true,
           });
 
-        return {
-          success: true,
-          output: {
+          return {
             success: true,
-            output: result.response,
-            exitCode: 0,
-          },
-        };
+            output: {
+              success: true,
+              output: result.response,
+              exitCode: 0,
+            },
+          };
+        } catch (projectCtxError: any) {
+          // Project detection failed, fall back to raw command
+          log.debug('Project detection failed, using raw command', projectCtxError.message);
+          const result = await provider.runAgentLoop({
+            userMessage: command,
+            tools: [],
+            systemPrompt: input.cwd ? `Working directory: ${input.cwd}` : '',
+            maxSteps: 5,
+            executeTool: async () => ({ success: true, output: '', exitCode: 0 }),
+            cwd: input.cwd ? resolveVfsPathToRealPath(input.cwd, session.workspacePath || process.cwd()) : undefined,
+            enableSelfHeal: true,
+          });
+
+          return {
+            success: true,
+            output: {
+              success: true,
+              output: result.response,
+              exitCode: 0,
+            },
+          };
+        }
       }
 
       return { success: false, error: `Unhandled capability: ${capabilityId}` };
