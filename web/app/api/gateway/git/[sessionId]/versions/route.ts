@@ -91,8 +91,11 @@ export async function GET(
       return withAnonSessionCookie(response, authResolution);
     }
 
-    // Session-scoped: query by owner_id since shadow_commits stores
-    // the full owner string as session_id (not the conversation ID).
+    // Session-scoped: query by owner_id.
+    // NOTE: shadow_commits stores the full owner string (e.g. "anon:timestamp_id")
+    // in both owner_id and session_id columns, NOT the conversation ID from the URL.
+    // Until the commit schema is updated to store conversationId separately,
+    // we query by owner_id and filter client-side if needed.
     const rows = db.prepare(`
       SELECT id, session_id, message, workspace_version, created_at, transactions
       FROM shadow_commits
@@ -134,8 +137,9 @@ export async function GET(
     return withAnonSessionCookie(response, authResolution);
   } catch (error) {
     console.error('[Git Versions] Error:', error);
+    // Don't leak internal error details to clients
     return NextResponse.json(
-      { error: 'Failed to fetch versions', versions: [], details: error instanceof Error ? error.message : String(error) },
+      { error: 'Failed to fetch versions', versions: [] },
       { status: 500 }
     );
   }

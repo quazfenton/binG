@@ -281,6 +281,8 @@ class TestListSection:
         assert "error" in result
         assert "nonexistent-section" in result["error"]
         assert "available" in result
+        # Verify error message is informative and includes the unknown section
+        assert "Unknown section: nonexistent-section" == result["error"]
 
     def test_available_sections_listed_on_error(self):
         result = m.list_section("bad")
@@ -321,10 +323,15 @@ class TestMain:
                 return captured.getvalue(), None
 
     def test_no_args_exits_with_code_1(self):
+        import io
         with patch("sys.argv", ["mem0_doc_search.py"]):
-            with pytest.raises(SystemExit) as exc_info:
-                m.main()
-        assert exc_info.value.code == 1
+            captured = io.StringIO()
+            with patch("sys.stdout", captured):
+                with pytest.raises(SystemExit) as exc_info:
+                    m.main()
+            assert exc_info.value.code == 1
+            output = captured.getvalue().lower()
+            assert "usage" in output or "error" in output, f"Expected usage/error message but got: {captured.getvalue()}"
 
     def test_index_flag_calls_get_index(self):
         fake_result = {"total_pages": 5, "urls": ["https://docs.mem0.ai/p1"], "sections": ["platform"]}
