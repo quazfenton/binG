@@ -283,6 +283,14 @@ export class BootstrappedAgency {
           for (const cap of capabilities) {
             try {
               const result = await router.execute(cap, { task }, context);
+              // Router reports failures via { success: false } instead of throwing
+              if (!result.success) {
+                allSuccess = false;
+                lastError = result.error || `Capability failed: ${cap}`;
+                results.set(cap, { error: lastError });
+                if (chain['config']?.stopOnFailure) break;
+                continue;
+              }
               results.set(cap, result);
             } catch (err: any) {
               allSuccess = false;
@@ -351,7 +359,12 @@ export class BootstrappedAgency {
           const router = getCapabilityRouter();
           const context = { userId: 'agency', sessionId: this.config.sessionId };
           const result = await router.execute(capability, { task }, context);
-          return { success: true, data: result };
+          // Propagate the router's actual success/error status instead of hardcoding success
+          return {
+            success: result.success,
+            data: result,
+            error: result.success ? undefined : (result.error || `Capability failed: ${capability}`),
+          };
         } catch {
           // Router not available, use mock
         }

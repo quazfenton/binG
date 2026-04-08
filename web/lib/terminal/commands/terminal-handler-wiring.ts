@@ -267,12 +267,17 @@ export function hasHandler(handlers: Record<string, TerminalHandlers>, terminalI
 /**
  * Helper: Cleanup handlers for terminal
  */
-export function cleanupHandlers(handlers: Record<string, TerminalHandlers>, terminalId: string): void {
+export async function cleanupHandlers(handlers: Record<string, TerminalHandlers>, terminalId: string): Promise<void> {
   const handler = handlers[terminalId]
   if (handler) {
     handler.health.stop()
     handler.batcher.flush()
-    handler.connection.disconnect()
+    // Disconnect is async — wait for it to close connections before cleanup
+    try {
+      await handler.connection.disconnect()
+    } catch {
+      // Ignore disconnect errors — connections are being closed anyway
+    }
     handler.ui.cleanup()
     delete handlers[terminalId]
   }

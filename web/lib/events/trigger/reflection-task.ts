@@ -9,7 +9,7 @@
 
 import { createLogger } from '@/lib/utils/logger';
 import { reflectionEngine } from '@/lib/orchestra/reflection-engine';
-import { executeWithFallback } from './utils';
+import { executeWithFallback, invokeTriggerTask, scheduleWithTrigger } from './utils';
 
 const logger = createLogger('Trigger:Reflection');
 
@@ -39,22 +39,12 @@ export interface ReflectionTaskResult {
 export async function executeReflectionTask(
   payload: ReflectionTaskPayload
 ): Promise<ReflectionTaskResult> {
-  return executeWithFallback(
-    () => executeWithTrigger(payload),
-    () => executeLocally(payload),
-    'reflection'
+  return executeWithFallback<ReflectionTaskPayload, ReflectionTaskResult>(
+    async (taskId) => invokeTriggerTask(taskId, payload),
+    (p) => executeLocally(p),
+    'reflection',
+    payload
   );
-}
-
-/**
- * Execute with Trigger.dev SDK
- */
-async function executeWithTrigger(
-  payload: ReflectionTaskPayload
-): Promise<ReflectionTaskResult> {
-  // For now, execute locally - Trigger.dev v3 SDK integration requires task registration
-  logger.warn('Trigger.dev execution requested but not fully configured, using local execution');
-  return executeLocally(payload);
 }
 
 /**
@@ -63,14 +53,12 @@ async function executeWithTrigger(
 async function executeLocally(
   payload: ReflectionTaskPayload
 ): Promise<ReflectionTaskResult> {
-  // Build content to reflect on
   const content = JSON.stringify({
     result: payload.result,
     error: payload.error,
     history: payload.history?.slice(-10),
   }, null, 2);
 
-  // Perform reflection
   const reflections = await reflectionEngine.reflect(content);
   const summary = reflectionEngine.synthesizeReflections(reflections);
 
@@ -96,7 +84,19 @@ export async function scheduleReflection(
     delayMs?: number;
   }
 ): Promise<{ scheduled: boolean; jobId?: string }> {
-  // Scheduling requires Trigger.dev to be configured
+  const available = await import('./utils').then(m => m.isTriggerAvailable());
+
+  if (available) {
+    return scheduleWithTrigger(
+      async () => {
+        const { invokeTriggerTask } = await import('./utils');
+        const result = await invokeTriggerTask('reflection-task', payload);
+        return { scheduled: true, jobId: (result as any).runId };
+      },
+      'reflection'
+    );
+  }
+
   logger.warn('Reflection scheduling not yet available - Trigger.dev configuration required');
   return { scheduled: false };
 }

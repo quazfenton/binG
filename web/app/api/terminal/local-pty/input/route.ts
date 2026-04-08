@@ -11,13 +11,22 @@ declare global {
   var __localPtySessions: Map<string, any> | undefined;
 }
 
-const sessions = globalThis.__localPtySessions ?? new Map();
+const sessions = globalThis.__localPtySessions ??= new Map();
 
 // Input size limit (16KB per write — prevents buffer flooding)
 const MAX_INPUT_SIZE = 16 * 1024;
 
 export async function POST(req: NextRequest) {
   try {
+    // Validate Content-Type
+    const contentType = req.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return NextResponse.json(
+        { error: 'Content-Type must be application/json' },
+        { status: 415 }
+      );
+    }
+
     // Auth check
     const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
     if (!authResult.success || !authResult.userId) {

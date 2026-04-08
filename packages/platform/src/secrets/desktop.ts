@@ -24,11 +24,13 @@ class DesktopSecrets implements SecretsAdapter {
       return await invoke<string>('get_secret', { service: SERVICE_NAME, key });
     } catch (error) {
       const errorMsg = error instanceof Error ? error.message : String(error);
-      // Missing secrets are expected — don't log those
-      if (!errorMsg.includes('not found') && !errorMsg.includes('NotFound')) {
-        console.warn('[DesktopSecrets] Failed to get secret:', errorMsg);
+      // Missing secrets are expected — return null for not-found
+      if (errorMsg.includes('not found') || errorMsg.includes('NotFound')) {
+        return null;
       }
-      return null;
+      // Rethrow all other errors so callers can handle real backend problems
+      console.warn('[DesktopSecrets] Failed to get secret:', errorMsg);
+      throw error;
     }
   }
 

@@ -104,19 +104,6 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // ✅ SECURITY: Verify session ownership BEFORE any buffer operations
-    // Prevents cross-user command injection via buffer pollution
-    if (!userSession || userSession.sessionId !== sessionId) {
-      logger.warn('Unauthorized terminal input attempt', {
-        userId: authResult.userId,
-        sessionId,
-      });
-      return NextResponse.json(
-        { error: 'Unauthorized: You do not own this terminal session' },
-        { status: 403 }
-      );
-    }
-
     // Interactive PTY sessions must receive raw bytes immediately.
     // Only command-mode input is buffered for newline-based security validation.
     if (terminalManager.hasPtyConnection(sessionId)) {
@@ -130,6 +117,20 @@ export async function POST(req: NextRequest) {
       });
 
       return NextResponse.json({ success: true, mode: 'pty' });
+    }
+
+    // Check if the terminal manager has ANY connection for this session
+    // (command-mode or WebSocket). If not, the PTY failed to start and
+    // the session is in a zombie state — tell the client gracefully.
+    if (!terminalManager.hasActiveSession(sessionId)) {
+      logger.warn('No active terminal session for input', { sessionId });
+      return NextResponse.json(
+        {
+          error: 'Terminal session is not active. The sandbox PTY may have failed to start.',
+          hint: 'Close and reopen the terminal to retry.',
+        },
+        { status: 503 }
+      );
     }
 
     // ✅ BUFFER command-mode input for security validation
@@ -209,6 +210,19 @@ export async function POST(req: NextRequest) {
     return NextResponse.json({ success: true, buffered: true });
   } catch (error) {
     const err = error as Error;
+
+    // Graceful handling when PTY failed to start (sandbox in zombie state)
+    if (err.message?.includes('No active terminal session')) {
+      logger.warn('Terminal input rejected — no active session', { sessionId });
+      return NextResponse.json(
+        {
+          error: 'Terminal session is not active. The sandbox PTY may have failed to start.',
+          hint: 'Close and reopen the terminal to retry.',
+        },
+        { status: 503 }
+      );
+    }
+
     logger.error('Terminal input error', {
       message: err.message,
       stack: err.stack,

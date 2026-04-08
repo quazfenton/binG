@@ -21,6 +21,8 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { randomUUID } from 'crypto';
+import * as path from 'path';
+import * as fs from 'fs';
 import type { IPty } from 'node-pty';
 
 export const runtime = 'nodejs';
@@ -34,10 +36,12 @@ interface LocalPtySession {
   userId: string;
   pty: IPty;
   createdAt: number;
-  exited: boolean; // node-pty doesn't expose exited state reliably
+  exited: boolean;
   exitCode: number | undefined;
   dockerContainerId?: string;
   unsharePid?: number;
+  // Output queue for SSE streaming (typed, not `any`)
+  outputQueue: string[];
 }
 
 // Security: Max sessions per user to prevent resource exhaustion
@@ -142,6 +146,35 @@ async function cleanupDockerContainer(containerId: string): Promise<void> {
 }
 
 // ============================================================
+// Helper: Resolve virtual workspace paths to real filesystem paths
+// ============================================================
+
+function resolveRealCwd(cwd: string | undefined): string {
+  if (!cwd) return process.cwd();
+
+  // Virtual VFS paths like 'project/sessions', 'project/...', etc.
+  // Map to a real directory on the host filesystem
+  const realBase = process.env.LOCAL_PTY_WORKSPACE_ROOT || process.cwd();
+
+  // Strip VFS prefix (e.g. 'project/' -> just the rest)
+  const relative = cwd.replace(/^(project\/|workspace\/)/i, '');
+
+  // Join with real base and normalize
+  const resolved = path.resolve(realBase, relative);
+
+  // Verify the directory exists; fall back to cwd if not
+  try {
+    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
+      return resolved;
+    }
+  } catch {
+    // Ignore — fall through to default
+  }
+
+  return process.cwd();
+}
+
+// ============================================================
 // Helper: Validate terminal dimensions
 // ============================================================
 
@@ -172,26 +205,44 @@ function getUserSessionCount(userId: string): number {
 
 function getCleanEnv(): NodeJS.ProcessEnv {
   const cleanEnv: NodeJS.ProcessEnv = {};
+  // Match full secret-like variable names, avoiding false positives
+  // like PRIMARY_KEY, CACHE_KEY, etc.
   const secretPatterns = [
-    'SECRET', 'KEY', 'TOKEN', 'PASSWORD', 'PASS', 'CREDENTIAL',
-    'AUTH', 'API_KEY', 'PRIVATE', 'SIGNING',
+    /^.*_SECRET$/,
+    /^.*_API_KEY$/,
+    /^.*_TOKEN$/,
+    /^.*_PASSWORD$/,
+    /^.*_PASS$/,
+    /^.*_CREDENTIAL$/,
+    /^.*_AUTH_TOKEN$/,
+    /^.*_AUTH_KEY$/,
+    /^.*_PRIVATE_KEY$/,
+    /^.*_SIGNING_KEY$/,
+    /^DATABASE_URL$/,
+    /^REDIS_URL$/,
   ];
 
   for (const [key, value] of Object.entries(process.env)) {
-    const isSecret = secretPatterns.some(pattern =>
-      key.toUpperCase().includes(pattern)
-    );
+    const isSecret = secretPatterns.some(pattern => pattern.test(key));
     if (!isSecret && value !== undefined) {
       cleanEnv[key] = value;
     }
   }
 
+  // Platform-specific defaults
+  const isWindows = process.platform === 'win32';
+
   return {
     ...cleanEnv,
+    // TERM is needed for xterm.js color rendering; PowerShell ignores it (harmless)
     TERM: 'xterm-256color',
-    HOME: process.env.HOME || '/home/node',
-    PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
-    LANG: 'en_US.UTF-8',
+    // HOME: Windows uses USERPROFILE, Unix uses HOME
+    HOME: process.env.HOME || (isWindows ? (process.env.USERPROFILE || process.cwd()) : '/home/node'),
+    // PATH: NEVER override on Windows — PowerShell needs the system PATH
+    // On Unix, use a sensible default if PATH is empty
+    PATH: isWindows ? (process.env.PATH || 'C:\\Windows\\System32;C:\\Windows') : (process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'),
+    // LANG: Only set on Unix; Windows PowerShell doesn't use it
+    ...(isWindows ? {} : { LANG: 'en_US.UTF-8' }),
   };
 }
 
@@ -346,13 +397,47 @@ async function createDirectPtySession(
   cwd: string | undefined,
   ptyShell: string
 ): Promise<NextResponse> {
-  const pty = nodePty.spawn(ptyShell, [], {
-    name: 'xterm-256color',
-    cols,
-    rows,
-    cwd: cwd || process.env.HOME || process.cwd(),
-    env: getCleanEnv(),
+  const realCwd = resolveRealCwd(cwd);
+
+  // node-pty requires minimum dimensions of 1x1 on Windows (conpty requirement)
+  // and sensible max values to prevent memory issues
+  const safeCols = Math.max(1, Math.min(cols, 500));
+  const safeRows = Math.max(1, Math.min(rows, 200));
+
+  logger.info('[Local PTY] Spawning PTY process', {
+    shell: ptyShell,
+    cols: safeCols,
+    rows: safeRows,
+    cwd: realCwd,
+    platform: process.platform,
   });
+
+  let pty: IPty;
+  try {
+    pty = nodePty.spawn(ptyShell, [], {
+      name: 'xterm-256color',
+      cols: safeCols,
+      rows: safeRows,
+      cwd: realCwd,
+      env: getCleanEnv(),
+    });
+  } catch (spawnError: any) {
+    logger.error('[Local PTY] Failed to spawn shell process', {
+      shell: ptyShell,
+      error: spawnError.message,
+      platform: process.platform,
+    });
+    return NextResponse.json(
+      {
+        error: `Failed to start shell: ${spawnError.message}`,
+        hint: process.platform === 'win32'
+          ? 'Ensure PowerShell is available. Check that the shell path is correct.'
+          : `Ensure ${ptyShell} is installed and accessible.`,
+        mode: 'sandbox',
+      },
+      { status: 500 }
+    );
+  }
 
   registerSession(sessionId, userId, pty);
 
@@ -376,7 +461,7 @@ async function createUnsharePtySession(
     return NextResponse.json(
       {
         error: 'User namespace isolation requires Linux',
-        hint: 'Set ENABLE_LOCAL_PTY=direct or use Docker mode instead',
+        hint: 'Set ENABLE_LOCAL_PTY=on or use Docker mode instead',
         mode: 'sandbox',
       },
       { status: 503 }
@@ -400,11 +485,13 @@ async function createUnsharePtySession(
   ];
 
   try {
+    const safeCols = Math.max(1, Math.min(cols, 500));
+    const safeRows = Math.max(1, Math.min(rows, 200));
     const pty = nodePty.spawn('unshare', unshareArgs, {
       name: 'xterm-256color',
-      cols,
-      rows,
-      cwd: cwd || process.env.HOME || process.cwd(),
+      cols: safeCols,
+      rows: safeRows,
+      cwd: resolveRealCwd(cwd),
       env: getCleanEnv(),
     });
 
@@ -516,17 +603,54 @@ async function createDockerPtySession(
 
       console.log(`[Local PTY] Docker container started: ${containerId}`);
 
+      // Wait for container to be fully ready (shell may not be available immediately)
+      const { exec: execSync } = await import('child_process');
+      let ready = false;
+      for (let attempt = 0; attempt < 10; attempt++) {
+        try {
+          await new Promise<void>((resolve, reject) => {
+            execSync(`docker exec ${containerId} /bin/sh -c "echo ready"`, (err) => {
+              if (err) reject(err);
+              else resolve();
+            });
+          });
+          ready = true;
+          break;
+        } catch {
+          // Container not ready yet, wait and retry
+          await new Promise(r => setTimeout(r, 200 * (attempt + 1))); // Backoff: 200ms, 400ms, 600ms...
+        }
+      }
+
+      if (!ready) {
+        console.error(`[Local PTY] Docker container ${containerId} never became ready`);
+        // Cleanup
+        try {
+          await cleanupDockerContainer(containerId);
+        } catch { /* ignore */ }
+        return NextResponse.json(
+          {
+            error: 'Docker container failed to initialize',
+            hint: 'Check Docker daemon and image availability',
+            mode: 'sandbox',
+          },
+          { status: 500 }
+        );
+      }
+
       // Now use node-pty to exec into the container
+      const safeCols = Math.max(1, Math.min(cols, 500));
+      const safeRows = Math.max(1, Math.min(rows, 200));
       const pty = nodePty.spawn('docker', [
         'exec',
-        '-i', // Only stdin (no -t, node-pty already provides TTY emulation)
+        '-i',
         containerId,
         ptyShell,
-        '-l', // Login shell
+        '-l',
       ], {
         name: 'xterm-256color',
-        cols,
-        rows,
+        cols: safeCols,
+        rows: safeRows,
         cwd: workspaceDir,
         env: {
           TERM: 'xterm-256color',
@@ -551,7 +675,7 @@ function registerSession(
   sessionId: string,
   userId: string,
   pty: IPty,
-  extras: Partial<LocalPtySession> = {}
+  extras: Partial<Omit<LocalPtySession, 'sessionId' | 'userId' | 'pty' | 'createdAt' | 'exited' | 'exitCode' | 'outputQueue'>> = {}
 ): void {
   const session: LocalPtySession = {
     sessionId,
@@ -560,32 +684,31 @@ function registerSession(
     createdAt: Date.now(),
     exited: false,
     exitCode: undefined,
+    outputQueue: [],
     ...extras,
   };
 
   sessions.set(sessionId, session);
 
-  // Track output for SSE polling
-  (session as any).lastOutput = null;
-  (session as any).outputQueue: string[] = [];
-
-  // Set up output handler — queue output for SSE
+  // Set up output handler — queue output for SSE polling
+  // No need to re-lookup session; we close over the session directly
   pty.onData((data: string) => {
-    const s = sessions.get(sessionId);
-    if (s) {
-      if (!(s as any).outputQueue) (s as any).outputQueue = [];
-      (s as any).outputQueue.push(data);
+    // Only queue if session still exists and hasn't exited
+    if (!session.exited) {
+      session.outputQueue.push(data);
     }
   });
 
   // Track exit state
-  pty.onExit(({ exitCode }) => {
-    const s = sessions.get(sessionId);
-    if (s) {
-      s.exited = true;
-      s.exitCode = exitCode;
-      console.log(`[Local PTY] Session ${sessionId} exited with code ${exitCode}`);
-    }
+  pty.onExit(({ exitCode, signal }) => {
+    session.exited = true;
+    session.exitCode = exitCode;
+    logger.info(`[Local PTY] Session exited`, {
+      sessionId,
+      exitCode,
+      signal,
+      uptime: Date.now() - session.createdAt,
+    });
   });
 }
 
@@ -610,9 +733,15 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // Verify session ownership (auth check)
+  // Verify session ownership — even anonymous users get a userId assigned
   const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
-  if (authResult.success && authResult.userId && session.userId !== authResult.userId) {
+  if (!authResult.success || !authResult.userId) {
+    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+      status: 401,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  }
+  if (session.userId !== authResult.userId) {
     return new Response(JSON.stringify({ error: 'Unauthorized: session does not belong to this user' }), {
       status: 403,
       headers: { 'Content-Type': 'application/json' },
@@ -638,18 +767,17 @@ export async function GET(req: NextRequest) {
       const pollInterval = setInterval(() => {
         const s = sessions.get(sessionId);
         if (!s) {
-          // Session was cleaned up
-          send({ type: 'disconnected', data: { exitCode: s?.exitCode ?? null } });
+          // Session was cleaned up — send disconnect with whatever exit code we can find
+          send({ type: 'disconnected', data: { exitCode: session.exitCode ?? null } });
           clearInterval(pollInterval);
           controller.close();
           return;
         }
 
-        // Drain output queue
-        const queue = (s as any).outputQueue as string[] | undefined;
-        if (queue && queue.length > 0) {
-          const output = queue.join('');
-          queue.length = 0; // Clear queue
+        // Drain output queue (type-safe, no `any` casts)
+        if (s.outputQueue.length > 0) {
+          const output = s.outputQueue.join('');
+          s.outputQueue.length = 0; // Clear queue
           send({ type: 'pty', data: output });
         }
 
@@ -668,11 +796,17 @@ export async function GET(req: NextRequest) {
     },
 
     cancel() {
-      // Client disconnected — clean up session
-      const session = sessions.get(sessionId);
-      if (session && !session.exited) {
-        session.pty.kill();
-      }
+      // SSE stream disconnected — the poll interval is already cleared by the
+      // `return()` cleanup function. DON'T kill the PTY or delete the session.
+      // The PTY session persists independently of SSE streams and will be
+      // cleaned up by:
+      //   - The 30-minute TTL cleanup interval
+      //   - The explicit close terminal action (via POST to a close endpoint)
+      //   - The PTY process exiting naturally (triggers 'disconnected' message)
+      //
+      // This is critical for dev mode: Fast Refresh/HMR interrupts SSE connections
+      // but the browser's EventSource auto-reconnects with the same sessionId.
+      // The session must remain in the map for the reconnect to work.
     },
   });
 
@@ -680,7 +814,7 @@ export async function GET(req: NextRequest) {
     headers: {
       'Content-Type': 'text/event-stream',
       'Cache-Control': 'no-cache, no-transform',
-      Connection: 'keep-alive',
+      Connection: 'close',
       'X-Accel-Buffering': 'no',
     },
   });

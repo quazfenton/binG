@@ -95,7 +95,16 @@ export async function runJob(name: string, payload: any): Promise<JobRunResult> 
       return { jobId, result: { success: true, data } };
     }
 
-    return { jobId, result: { success: false, error: `No handler registered for job: ${name}` } };
+    // No handler registered — update registry to 'failed' so getJobStatus doesn't show 'running' forever
+    const errorMsg = `No handler registered for job: ${name}`;
+    webJobRegistry.set(jobId, {
+      id: jobId,
+      name,
+      status: 'failed',
+      progress: 0,
+      result: { success: false, error: errorMsg },
+    });
+    return { jobId, result: { success: false, error: errorMsg } };
   } catch (error: any) {
     const errorMsg = error?.message || String(error);
     webJobRegistry.set(jobId, {

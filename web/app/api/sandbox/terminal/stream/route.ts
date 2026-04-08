@@ -189,6 +189,10 @@ export async function GET(req: NextRequest) {
             console.error('[Terminal Stream] PTY session creation failed:', err);
             console.error('[Terminal Stream] Error stack:', err instanceof Error ? err.stack : 'N/A');
             send({ type: 'error', data: `PTY creation failed: ${msg}` });
+            // Close the stream so the client doesn't hang forever
+            setTimeout(() => {
+              try { controller.close(); } catch { /* already closed */ }
+            }, 100);
           }
         };
 
@@ -204,7 +208,7 @@ export async function GET(req: NextRequest) {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
+        'Connection': 'close',
         'X-Accel-Buffering': 'no',
       },
     });

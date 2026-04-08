@@ -980,6 +980,10 @@ export function extractFileEdits(content: string): FileEdit[] {
     content.includes('mkdir') ||
     content.includes('rm ') ||
     content.includes('sed') ||
+    content.includes('write_file(') ||
+    content.includes('delete_file(') ||
+    content.includes('apply_diff(') ||
+    content.includes('batch_write(') ||
     (content.includes('"tool"') && content.includes('"arguments"'));
 
   if (!hasAnyMarker) {
@@ -1048,6 +1052,145 @@ export function extractFileEdits(content: string): FileEdit[] {
   //   { "tool": "write_file", "arguments": { "path": ..., "content": ... } }
   if (content.includes('"tool"') && content.includes('"arguments"')) {
     allEdits.push(...extractJsonToolCalls(content));
+  }
+
+  // FALLBACK: Parse JavaScript-style MCP tool calls from ```javascript code blocks
+  // Catches: write_file("path", "content"), delete_file("path"), mkdir("path"), apply_diff("path", "diff")
+  // Only activates when there's a ```javascript/js block AND a tool call signature
+  // This handles models that output JS function calls instead of native function calling
+  // O(1) signature gate: only runs expensive regexes when both signatures are present
+  const hasJsBlock = /```(?:javascript|js)/i.test(content);
+  const hasToolSig = /(?:write_file|batch_write|delete_file|apply_diff|mkdir)\s*\(/i.test(content);
+  if (hasJsBlock && hasToolSig) {
+    const decodeEscapes = (s: string) => s
+      .replace(/\\n/g, '\n')
+      .replace(/\\t/g, '\t')
+      .replace(/\\"/g, '"')
+      .replace(/\\'/g, "'");
+
+    // Helper: extract calls like funcName("arg1", "arg2") with proper escape handling
+    // Uses a non-greedy match between quotes to handle nested opposite quotes
+    const extractJsToolCalls = (funcName: string, argCount: number): Array<string[]> => {
+      const results: Array<string[]> = [];
+      // Build pattern for N quoted string args
+      // Double-quoted: "(?:[^"\\]|\\.)*" - matches string with escape sequences
+      // Single-quoted: '(?:[^'\\]|\\.)*'
+      const dq = '"(?:[^"\\\\]|\\\\.)*"';
+      const sq = "'(?:[^'\\\\]|\\\\.)*'";
+
+      // Build patterns for each arg count
+      const dqPatterns: string[] = [];
+      const sqPatterns: string[] = [];
+      for (let i = 0; i < argCount; i++) {
+        dqPatterns.push(`\\s*(${dq})\\s*`);
+        sqPatterns.push(`\\s*(${sq})\\s*`);
+      }
+
+      const argsDq = dqPatterns.join(',');
+      const argsSq = sqPatterns.join(',');
+      const fullDq = new RegExp(`${funcName}\\s*\\(${argsDq}\\)`, 'gi');
+      const fullSq = new RegExp(`${funcName}\\s*\\(${argsSq}\\)`, 'gi');
+
+      for (const regex of [fullDq, fullSq]) {
+        let m: RegExpExecArray | null;
+        while ((m = regex.exec(content)) !== null) {
+          // Strip surrounding quotes from each captured arg
+          const args = m.slice(1).map(a => a?.slice(1, -1) ?? '');
+          results.push(args);
+        }
+      }
+      return results;
+    };
+
+    // write_file("path", "content")
+    for (const [path, rawContent] of extractJsToolCalls('write_file', 2)) {
+      const trimmedPath = path.trim();
+      const fileContent = decodeEscapes(rawContent);
+      if (trimmedPath && isValidExtractedPath(trimmedPath) && fileContent.trim()) {
+        if (!allEdits.some(e => e.path === trimmedPath && e.content.trim() === fileContent.trim())) {
+          allEdits.push({ path: trimmedPath, content: fileContent });
+        }
+      }
+    }
+
+    // delete_file("path")
+    for (const [path] of extractJsToolCalls('delete_file', 1)) {
+      const trimmedPath = path.trim();
+      if (trimmedPath && isValidExtractedPath(trimmedPath)) {
+        if (!allEdits.some(e => e.path === trimmedPath && e.action === 'delete')) {
+          allEdits.push({ path: trimmedPath, content: '', action: 'delete' });
+        }
+      }
+    }
+
+    // apply_diff("path", "diff")
+    for (const [path, rawDiff] of extractJsToolCalls('apply_diff', 2)) {
+      const trimmedPath = path.trim();
+      const diff = decodeEscapes(rawDiff);
+      if (trimmedPath && isValidExtractedPath(trimmedPath) && diff.trim()) {
+        if (!allEdits.some(e => e.path === trimmedPath && e.action === 'patch')) {
+          allEdits.push({ path: trimmedPath, content: diff, action: 'patch' });
+        }
+      }
+    }
+
+    // mkdir("path")
+    for (const [path] of extractJsToolCalls('mkdir', 1)) {
+      const trimmedPath = path.trim();
+      if (trimmedPath && isValidExtractedPath(trimmedPath)) {
+        if (!allEdits.some(e => e.path === trimmedPath && e.action === 'mkdir')) {
+          allEdits.push({ path: trimmedPath, content: '', action: 'mkdir' });
+        }
+      }
+    }
+
+    // Handle JSON object format: write_file({ "path": "...", "content": "..." })
+    // Uses balanced scanning to find matching braces and parse the JSON object
+    if (content.includes('write_file({')) {
+      const writeObjPattern = /write_file\s*\(/gi;
+      let m: RegExpExecArray | null;
+      while ((m = writeObjPattern.exec(content)) !== null) {
+        try {
+          const startIdx = m.index + m[0].length;
+          // Balanced scan: find the closing ) while tracking brace depth and string state
+          let depth = 0, inString = false, escapeNext = false, endIdx = -1;
+          for (let i = startIdx; i < content.length; i++) {
+            const ch = content[i];
+            if (escapeNext) { escapeNext = false; continue; }
+            if (ch === '\\' && inString) { escapeNext = true; continue; }
+            if (ch === '"') { inString = !inString; continue; }
+            if (inString) continue;
+            if (ch === '{' || ch === '(') depth++;
+            else if (ch === '}' || ch === ')') {
+              if (depth <= 0 && ch === ')') { endIdx = i; break; }
+              depth--;
+            }
+          }
+          if (endIdx === -1) continue;
+
+          const argText = content.substring(startIdx, endIdx).trim();
+          const openBrace = argText.indexOf('{');
+          const closeBrace = argText.lastIndexOf('}');
+          if (openBrace === -1 || closeBrace === -1 || closeBrace <= openBrace) continue;
+
+          const jsonStr = argText.substring(openBrace, closeBrace + 1);
+          if (jsonStr.trim() === '{}') continue;
+
+          const args = JSON.parse(jsonStr);
+          if (!args.path || !args.content) continue;
+
+          const trimmedPath = String(args.path).trim();
+          const fileContent = String(args.content);
+          if (!fileContent.trim()) continue;
+          if (!isValidExtractedPath(trimmedPath)) continue;
+          if (!allEdits.some(e => e.path === trimmedPath && e.content.trim() === fileContent.trim())) {
+            allEdits.push({ path: trimmedPath, content: fileContent });
+          }
+        } catch {
+          // Skip malformed JSON or parse errors
+        }
+      }
+    }
   }
   if (content.includes('<!--')) {
     allEdits.push(...extractHtmlCommentFileEdits(content));
@@ -1322,13 +1465,20 @@ export function extractFsActionWrites(content: string): FileEdit[] {
 
   // Extract top-level WRITE commands (```language ... ``` with WRITE prefix)
   // EXCLUDE fs-actions blocks which are already handled above
-  const regularBlockRegex = /```([a-zA-Z0-9_-]+)\s*([\s\S]*?)```/gi;
+  // NOTE: Language identifier is optional to support unlabeled triple-backtick blocks
+  // O(1) gate: only scan code blocks if WRITE + heredoc markers are present
+  if (!content.includes('WRITE') && !content.includes('<<<')) {
+    return writes;
+  }
+
+  const regularBlockRegex = /```(?:([a-zA-Z0-9_-]+)\s*)?([\s\S]*?)```/gi;
   let regularBlockMatch: RegExpExecArray | null;
 
   while ((regularBlockMatch = regularBlockRegex.exec(content)) !== null) {
     const lang = regularBlockMatch[1] || '';
     // Skip fs-actions blocks - already handled above
     if (lang === 'fs-actions') continue;
+    // Capture group shifted: group 2 is now content when lang is present, group 1 when absent
     const blockContent = regularBlockMatch[2] || '';
     // Updated regex to handle both: WRITE path <<<...>>> and WRITE <path> <<<...>>>
     const writeRegex = /^WRITE\s*<?([^\s<>]+)>?\s*<<<\s*([\s\S]*?)\s*>>>$/gim;
@@ -2387,8 +2537,10 @@ export function extractIncrementalFileEdits(
   for (const edit of allEdits) {
     // CRITICAL FIX: Skip edits with empty content (incomplete streaming tags)
     // Check both content and diff fields since some edits use diff
+    // EXCEPTION: mkdir and delete actions legitimately have no content
     const editContent = edit.content || edit.diff || '';
-    if (!editContent || editContent.trim().length === 0) {
+    const isNonContentAction = edit.action === 'mkdir' || edit.action === 'delete';
+    if (!isNonContentAction && (!editContent || editContent.trim().length === 0)) {
       continue;
     }
 

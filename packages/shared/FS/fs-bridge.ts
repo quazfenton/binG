@@ -105,26 +105,29 @@ class FSBridge {
         });
         this.initializing = false;
       } catch (err) {
-        this.initializing = false;
         log.warn('Workspace manager failed, using direct FS', { error: err });
-        
-        // Fallback to direct filesystem
-        this.fs = createFileSystem();
-        await this.fs.initialize({
-          root: config.workspaceRoot || getDefaultWorkspaceRoot() || '',
-          userId: config.userId,
-          sessionId: config.sessionId,
-          boundaryEnabled: config.boundaryEnabled || false,
-        });
-        this.initialized = true;
-        
-        // Start file watcher for auto-refresh when external changes occur
-        await this.startFileWatcher();
 
-        // Start listening for file change events from Rust commands
-        await this.startRustFileChangeListener();
+        try {
+          // Fallback to direct filesystem
+          this.fs = createFileSystem();
+          await this.fs.initialize({
+            root: config.workspaceRoot || getDefaultWorkspaceRoot() || '',
+            userId: config.userId,
+            sessionId: config.sessionId,
+            boundaryEnabled: config.boundaryEnabled || false,
+          });
+          this.initialized = true;
 
-        this.initializing = false;
+          // Start file watcher for auto-refresh when external changes occur
+          await this.startFileWatcher();
+
+          // Start listening for file change events from Rust commands
+          await this.startRustFileChangeListener();
+
+          log.info('FS Bridge initialized with direct FS fallback');
+        } finally {
+          this.initializing = false;
+        }
       }
     } else {
       // Web mode - no local FS needed

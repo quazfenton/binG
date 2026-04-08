@@ -161,7 +161,8 @@ class TaskRouter {
     };
 
     const maxScore = Math.max(...Object.values(scores));
-    const primaryType = (Object.entries(scores)
+    // FIX: If no keywords matched (all scores are 0), classify as 'unknown' instead of defaulting to 'coding'
+    const primaryType = maxScore === 0 ? 'unknown' : (Object.entries(scores)
       .find(([, score]) => score === maxScore)?.[0] ?? 'unknown') as TaskType;
 
     // FIX (Bug 5 & 7): Explicit target assignment with no fall-through ambiguity.

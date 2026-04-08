@@ -66,10 +66,10 @@ export async function POST(req: Request) {
       typeof msg === 'object' &&
       msg !== null &&
       typeof (msg as any).role === 'string' &&
-      typeof (msg as any).content === 'string',
+      (typeof (msg as any).content === 'string' || Array.isArray((msg as any).content)),
   );
   if (!validMessages) {
-    return new Response('Invalid request: each message must have role (string) and content (string)', { status: 400 });
+    return new Response('Invalid request: each message must have role (string) and content (string or array)', { status: 400 });
   }
 
   const model = 'gpt-4-turbo';

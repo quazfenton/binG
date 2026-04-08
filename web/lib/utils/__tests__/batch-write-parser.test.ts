@@ -20,8 +20,14 @@ function parseBatchWriteFiles(files: unknown): Array<{ path: string; content: st
    * Filter array entries to only include valid file objects (objects with at least a path or content).
    * Returns null if no valid entries remain.
    */
-  function filterValidFiles(files: unknown[]): Array<{ path?: string; content?: string }> | null {
-    const valid = files.filter(item => item && typeof item === 'object' && !Array.isArray(item));
+  function filterValidFiles(files: unknown[]): Array<{ path: string; content: string }> | null {
+    const valid = files
+      .filter((item): item is Record<string, unknown> => item && typeof item === 'object' && !Array.isArray(item))
+      .filter(item => 'path' in item || 'content' in item)
+      .map(item => ({
+        path: (item as any).path ?? '',
+        content: (item as any).content ?? '',
+      }));
     return valid.length > 0 ? valid : (files.length === 0 ? [] : null);
   }
 
@@ -589,7 +595,9 @@ describe('parseBatchWriteFiles', () => {
     const input = '[{"content": "only content"}]';
     const result = parseBatchWriteFiles(input);
     expect(result).toHaveLength(1);
-    expect(result?.[0].path).toBeUndefined();
+    // Missing path defaults to empty string
+    expect(result?.[0].path).toBe('');
+    expect(result?.[0].content).toBe('only content');
   });
 
   it('handles object with missing content property', () => {
@@ -597,7 +605,8 @@ describe('parseBatchWriteFiles', () => {
     const result = parseBatchWriteFiles(input);
     expect(result).toHaveLength(1);
     expect(result?.[0].path).toBe('file.txt');
-    expect(result?.[0].content).toBeUndefined();
+    // Missing content defaults to empty string
+    expect(result?.[0].content).toBe('');
   });
 
   it('handles null values in array', () => {

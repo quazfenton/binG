@@ -11,7 +11,7 @@ declare global {
   var __localPtySessions: Map<string, any> | undefined;
 }
 
-const sessions = globalThis.__localPtySessions ?? new Map();
+const sessions = globalThis.__localPtySessions ??= new Map();
 
 // Valid terminal dimension ranges
 const MIN_COLS = 10;
@@ -21,6 +21,15 @@ const MAX_ROWS = 200;
 
 export async function POST(req: NextRequest) {
   try {
+    // Validate Content-Type
+    const contentType = req.headers.get('content-type') || '';
+    if (!contentType.includes('application/json')) {
+      return NextResponse.json(
+        { error: 'Content-Type must be application/json' },
+        { status: 415 }
+      );
+    }
+
     // Auth check
     const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
     if (!authResult.success || !authResult.userId) {

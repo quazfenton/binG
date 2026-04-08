@@ -10,6 +10,9 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
 
 describe('Task Router — Task Classification', () => {
   it('scores keywords correctly for coding tasks', async () => {
@@ -87,7 +90,7 @@ describe('Task Router — Advanced Task Timeout (Bug 4 Fix)', () => {
 
     // Verify timeout enforcement
     expect(content).toContain('timedOut = true');
-    expect(content).toContain('kernel.cancelAgent(agentId)');
+    expect(content).toContain('cancelAgent(agentId)');
     expect(content).toContain('clearInterval(interval)');
     // Verify max timeout cap
     expect(content).toContain('Math.min(');

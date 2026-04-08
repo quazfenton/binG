@@ -171,25 +171,27 @@ export async function initializeEventSystem(): Promise<void> {
 }
 
 /**
- * Start event processing (scheduler + router)
- * Returns timer that should be cleared on shutdown
+ * Start event processing (scheduler + event worker)
+ * Returns timers that should be cleared on shutdown
+ *
+ * When Trigger.dev is configured, this function returns null timers
+ * because events are dispatched to Trigger.dev workers instead.
  */
 export function startEventProcessing(options?: {
   schedulerIntervalMs?: number;
   processorIntervalMs?: number;
 }): { schedulerTimer: NodeJS.Timeout; processorTimer: NodeJS.Timeout } {
   const { startScheduler } = require('./scheduler');
-  const { startEventProcessor } = require('./router');
+  const { startEventWorker } = require('./trigger/worker');
 
   const schedulerIntervalMs = options?.schedulerIntervalMs ?? 5 * 60 * 1000; // 5 minutes
-  const processorIntervalMs = options?.processorIntervalMs ?? 5000; // 5 seconds
 
   const schedulerTimer = startScheduler(schedulerIntervalMs);
-  const processorTimer = startEventProcessor(processorIntervalMs);
+  const processorTimer = startEventWorker();
 
   console.log('[Events] Event processing started', {
     schedulerIntervalMs,
-    processorIntervalMs,
+    backend: 'local',
   });
 
   return { schedulerTimer, processorTimer };
@@ -204,10 +206,9 @@ export function stopEventProcessing(timers: {
   processorTimer: NodeJS.Timeout;
 }): void {
   const { stopScheduler } = require('./scheduler');
-  const { stopEventProcessor } = require('./router');
 
   stopScheduler(timers.schedulerTimer);
-  stopEventProcessor(timers.processorTimer);
+  clearInterval(timers.processorTimer);
 
   console.log('[Events] Event processing stopped');
 }

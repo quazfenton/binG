@@ -913,10 +913,10 @@ export default function TerminalPanel({
   const closeTerminal = useCallback(async (terminalId: string) => {
     const terminal = terminalsRef.current.find(t => t.id === terminalId);
     if (terminal) {
-      // CLEANUP HANDLERS FIRST
+      // CLEANUP HANDLERS FIRST — must await to ensure SSE/WebSocket are closed
       const handlers = terminalHandlersRef.current[terminalId];
       if (handlers) {
-        cleanupHandlers(terminalHandlersRef.current, terminalId);
+        await cleanupHandlers(terminalHandlersRef.current, terminalId);
       }
 
       terminal.eventSource?.close();
@@ -1487,36 +1487,38 @@ export default function TerminalPanel({
           // Update terminal to use web local PTY
           const termRef = terminalsRef.current.find(t => t.id === terminalId);
           if (termRef) {
+            // CRITICAL: Set mode and instance BEFORE clearing, so onData handler
+            // routes input to PTY immediately. Clear terminal to remove the
+            // "Terminal Ready / Checking PTY..." messages — the PTY provides
+            // its own banner and prompt.
+            termRef.mode = 'desktop-pty';
             termRef.webLocalPtyInstance = webPty;
-            termRef.mode = 'desktop-pty'; // Reuse the PTY mode indicator
             termRef.isConnected = true;
 
-            // Handle PTY output
+            // Clear any pre-existing local content before PTY output arrives
+            termRef.terminal?.clear();
+
+            // Handle PTY output — lookup terminal by ID on each callback to avoid stale refs
             webPty.onOutput((data) => {
-              termRef.terminal?.write(data);
+              const current = terminalsRef.current.find(t => t.id === terminalId);
+              current?.terminal?.write(data);
             });
 
-            // Handle PTY close
+            // Handle PTY close — lookup terminal by ID to avoid stale refs
             webPty.onClose(() => {
-              termRef.mode = 'local';
-              termRef.isConnected = false;
-              termRef.webLocalPtyInstance = undefined;
-              termRef.terminal?.writeln('\r\n\x1b[31m[PTY session closed]\x1b[0m');
-              termRef.terminal?.write(getPrompt('local', localShellCwdRef.current[terminalId] || 'project'));
+              const current = terminalsRef.current.find(t => t.id === terminalId);
+              if (current) {
+                current.mode = 'local';
+                current.isConnected = false;
+                current.webLocalPtyInstance = undefined;
+                current.terminal?.writeln('\r\n\x1b[31m[PTY session closed]\x1b[0m');
+                current.terminal?.write(getPrompt('local', localShellCwdRef.current[terminalId] || 'project'));
+              }
             });
           }
 
-          terminal.writeln('\x1b[1;32m✓ Connected to server local shell\x1b[0m');
-          const ptyMode = webPty.mode;
-          if (ptyMode === 'docker') {
-            terminal.writeln('\x1b[90m  Running in isolated Docker container\x1b[0m');
-          } else if (ptyMode === 'unshare') {
-            terminal.writeln('\x1b[90m  Running in isolated user namespace (Linux)\x1b[0m');
-          } else if (ptyMode === 'localhost') {
-            terminal.writeln('\x1b[90m  Running on server\'s local PTY (localhost mode)\x1b[0m');
-          } else {
-            terminal.writeln('\x1b[90m  Running on server\'s real PTY (dev mode)\x1b[0m');
-          }
+          // Brief status message — PTY will provide its own banner/prompt
+          terminal.writeln('\x1b[90m  Connecting to server local PTY...\x1b[0m');
           terminal.writeln('');
         } else {
           terminal.writeln('\x1b[90m  Using simulated terminal.\x1b[0m');

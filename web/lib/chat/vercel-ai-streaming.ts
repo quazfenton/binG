@@ -728,7 +728,7 @@ RULES:
           // Recover args from the earlier tool-call event since tool-result doesn't include them
           const resultToolCallId = (chunk as any).toolCallId;
           const cachedArgs = toolCallArgsCache.get(resultToolCallId);
-          const finalArgs = cachedArgs || (chunk as any).args || (chunk as any).arguments;
+          const finalArgs = cachedArgs || (chunk as any).args || (chunk as any).arguments || {};
           yield {
             content: '',
             isComplete: false,
@@ -736,10 +736,7 @@ RULES:
               toolCallId: resultToolCallId,
               toolName: (chunk as any).toolName,
               state: 'result' as const,
-              // Only include args if they're non-empty; broken models may send empty args
-              ...(finalArgs && typeof finalArgs === 'object' && Object.keys(finalArgs).length > 0
-                ? { args: finalArgs }
-                : {}),
+              args: finalArgs,
               result: (chunk as any).result,
             }],
             timestamp: new Date(),

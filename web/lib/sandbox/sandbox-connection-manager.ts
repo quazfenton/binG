@@ -51,11 +51,21 @@ import type { SandboxProviderType } from './providers'
 const logger = createLogger('SandboxConnection')
 
 // Connection configuration
-const CONNECTION_TIMEOUT_MS = parseInt(
-  process.env.NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS || '30000',
-  10
-) // Default 30s (configurable via env), increased from 10s to allow slow providers like Daytona
+const CONNECTION_TIMEOUT_MS = clampTimeout(
+  parseInt(process.env.NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS || '30000', 10),
+  10000,  // minimum 10s
+  120000  // maximum 120s
+);
 const CONNECTION_COOLDOWN_MS = 5000 // 5 seconds
+
+/**
+ * Clamp timeout to sane bounds.
+ * Prevents NaN from invalid env vars and caps to avoid infinite waits.
+ */
+function clampTimeout(value: number, min: number, max: number): number {
+  if (isNaN(value) || value <= 0) return min;
+  return Math.min(max, Math.max(min, value));
+}
 const MAX_RECONNECT_ATTEMPTS = 5
 const INITIAL_RECONNECT_DELAY = 1000 // 1 second
 const HEALTH_CHECK_INTERVAL = 30000 // 30 seconds
@@ -1260,36 +1270,21 @@ export class SandboxConnectionManager {
     this.clearConnectionTimeout()
     this.abortController?.abort()
 
-    if (this.state.websocket) {
-      this.state.websocket.close()
-      this.state.websocket = null
-    }
-
+    // CRITICAL: Close EventSource FIRST (synchronously) to prevent
+    // browser auto-reconnect. Must happen before any async operations.
     if (this.state.eventSource) {
       this.state.eventSource.close()
       this.state.eventSource = null
     }
 
-    if (sessionId) {
-      try {
-        await fetch('/api/sandbox/terminal', {
-          method: 'DELETE',
-          headers: {
-            'Content-Type': 'application/json',
-            ...this.getAuthHeaders(),
-          },
-          credentials: 'include',
-          body: JSON.stringify({ sessionId }),
-        })
-      } catch (error) {
-        logger.warn('Failed to delete sandbox terminal session during disconnect', error)
-      }
+    if (this.state.websocket) {
+      this.state.websocket.close()
+      this.state.websocket = null
     }
 
+    // Reset state immediately so reconnect handlers won't fire
     this.state.status = 'disconnected'
     this.state.mode = 'local'
-    this.state.sessionId = undefined
-    this.state.sandboxId = undefined
     this.state.reconnectAttempts = 0
     this.commandQueue = []
 
@@ -1298,6 +1293,26 @@ export class SandboxConnectionManager {
       isConnected: false,
       mode: 'local',
     })
+
+    // Async cleanup (fire and forget — don't block disconnect)
+    if (sessionId) {
+      fetch('/api/sandbox/terminal', {
+        method: 'DELETE',
+        headers: {
+          'Content-Type': 'application/json',
+          ...this.getAuthHeaders(),
+        },
+        credentials: 'include',
+        body: JSON.stringify({ sessionId }),
+        // Abort signal in case this takes too long
+        signal: AbortSignal.timeout(5000),
+      }).catch(() => {
+        // Ignore cleanup errors — server may already know session is gone
+      })
+    }
+
+    this.state.sessionId = undefined
+    this.state.sandboxId = undefined
   }
 
   /**

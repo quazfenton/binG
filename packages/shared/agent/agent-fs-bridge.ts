@@ -18,7 +18,9 @@ function sanitizeSandboxPath(inputPath: string, basePath: string = '/workspace')
     return basePath;
   }
   const normalizedPath = inputPath.replace(/\\/g, '/').replace(/\/+/g, '/').trim();
-  if (normalizedPath.includes('..')) {
+  // Check for real parent-directory traversal segments, not just substring matches.
+  // This allows legitimate filenames like "file..spec.ts" while blocking "../escape".
+  if (/(^|\/)\.\.(\/|$)/.test(normalizedPath)) {
     throw new Error('Path traversal is not allowed');
   }
   if (normalizedPath.includes('\0')) {

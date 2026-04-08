@@ -58,7 +58,7 @@ export {
 } from './skill-bootstrap-task';
 
 // Utility: Check if Trigger.dev is available (re-export from utils)
-export { isTriggerAvailable, getExecutionMode, executeWithFallback, scheduleWithTrigger } from './utils';
+export { isTriggerAvailable, getExecutionMode, executeWithFallback, scheduleWithTrigger, invokeTriggerTask } from './utils';
 
 /**
  * Execute task with automatic Trigger.dev detection
