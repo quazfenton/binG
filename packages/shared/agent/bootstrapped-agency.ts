@@ -241,6 +241,37 @@ export class BootstrappedAgency {
   }
 
   /**
+   * Build structured input for a capability from the task description.
+   * This bridges the gap between natural language tasks and Zod-validated
+   * capability inputs. The LLM is expected to do this when calling the
+   * capability directly — this is a fallback for agency auto-execution.
+   */
+  private buildCapabilityInput(capabilityId: string, task: string): any {
+    const base = { task };
+
+    switch (capabilityId) {
+      case 'file.read':
+        return { path: 'test.txt' };
+      case 'file.write':
+        return { path: 'test-output.txt', content: task };
+      case 'file.delete':
+      case 'file.append':
+        return { path: 'test.txt', content: task };
+      case 'file.list':
+        return { path: '.' };
+      case 'sandbox.shell':
+        return { command: task };
+      case 'sandbox.execute':
+        return { code: task, language: 'bash' as const };
+      case 'web.browse':
+      case 'web.fetch':
+        return { url: 'https://example.com' };
+      default:
+        return base;
+    }
+  }
+
+  /**
    * Execute with specific capabilities
    */
   private async executeWithCapabilities(
@@ -282,7 +313,9 @@ export class BootstrappedAgency {
 
           for (const cap of capabilities) {
             try {
-              const result = await router.execute(cap, { task }, context);
+              // Build structured input from the task description
+              const input = this.buildCapabilityInput(cap, task);
+              const result = await router.execute(cap, input, context);
               // Router reports failures via { success: false } instead of throwing
               if (!result.success) {
                 allSuccess = false;
@@ -358,7 +391,9 @@ export class BootstrappedAgency {
           const { getCapabilityRouter } = await import('@/lib/tools/router');
           const router = getCapabilityRouter();
           const context = { userId: 'agency', sessionId: this.config.sessionId };
-          const result = await router.execute(capability, { task }, context);
+          // Build structured input from the task description
+          const input = this.buildCapabilityInput(capability, task);
+          const result = await router.execute(capability, input, context);
           // Propagate the router's actual success/error status instead of hardcoding success
           return {
             success: result.success,

@@ -1,0 +1,2 @@
+{"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\"success\":true,\"results\":[{\"path\":\"project/sessions/adv-001/package.json\",\"success\":true,\"version\":1},{\"path\":\"project/sessions/adv-001/src/index.js\",\"success\":true,\"version\":1},{\"path\":\"project/sessions/adv-001/src/utils.js\",\"success\":true,\"version\":1},{\"path\":\"project/sessions/adv-001/README.md\",\"success\":true,\"version\":1}],\"total\":4,\"successCount\":4,\"failCount\":0,\"message\":\"Wrote 4 of 4 files\"}"}],"isError":false},"id":2010}
+HTTP:200

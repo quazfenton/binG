@@ -5,6 +5,7 @@ export default defineConfig({
   test: {
     globals: true,
     environment: 'node',
+    pool: 'forks', // Required for AsyncLocalStorage support (toolContextStore)
     include: ['**/__tests__/**/*.test.ts', '**/*.test.ts'],
     exclude: ['**/node_modules/**', '**/deprecated/**', '**/.next/**'],
     testTimeout: 30000,
