@@ -42,6 +42,7 @@
 
 import { getSandboxProvider } from './providers';
 import { createLogger } from '../utils/logger';
+import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 
 const logger = createLogger('Phase2:E2BIntegration');
 
@@ -66,6 +67,9 @@ export interface AmpAgentConfig {
   
   /** Timeout in ms */
   timeout?: number;
+  
+  /** User ID for VFS sync */
+  userId?: string;
 }
 
 /**
@@ -139,6 +143,9 @@ export interface GitCloneConfig {
   
   /** Shallow clone depth */
   depth?: number;
+  
+  /** User ID for VFS sync */
+  userId?: string;
 }
 
 /**
@@ -221,6 +228,15 @@ export class E2BIntegration {
       
       logger.info(`Created E2B sandbox ${handle.id} for AMP agent`);
       
+      // Start VFS sync for AMP agent sandbox
+      try {
+        const userId = config.userId || 'amp-agent';
+        sandboxFilesystemSync.startSync(handle.id, userId);
+        logger.info(`VFS sync started for AMP agent sandbox: ${handle.id}, userId: ${userId}`);
+      } catch (syncErr: any) {
+        logger.warn(`Failed to start VFS sync for AMP agent:`, syncErr.message);
+      }
+      
       // Get AMP service
       const ampService = handle.getAmpService();
       if (!ampService) {
@@ -278,6 +294,13 @@ export class E2BIntegration {
         language: 'typescript',
         envVars: { AMP_API_KEY: process.env.AMP_API_KEY },
       });
+      
+      // Start VFS sync for streaming AMP sandbox
+      try {
+        sandboxFilesystemSync.startSync(handle.id, 'amp-stream');
+      } catch (syncErr: any) {
+        logger.warn(`Failed to start VFS sync for stream AMP:`, syncErr.message);
+      }
       
       const ampService = handle.getAmpService();
       if (!ampService) {
@@ -347,6 +370,13 @@ export class E2BIntegration {
       
       logger.info(`Created E2B sandbox ${handle.id} for Codex agent`);
       
+      // Start VFS sync for Codex sandbox
+      try {
+        sandboxFilesystemSync.startSync(handle.id, 'codex-agent');
+      } catch (syncErr: any) {
+        logger.warn(`Failed to start VFS sync for Codex:`, syncErr.message);
+      }
+      
       // Get Codex service
       const codexService = handle.getCodexService();
       if (!codexService) {
@@ -397,6 +427,13 @@ export class E2BIntegration {
     try {
       const provider = await getSandboxProvider('e2b');
       const handle = await provider.createSandbox({});
+      
+      // Start VFS sync for clone sandbox
+      try {
+        sandboxFilesystemSync.startSync(handle.id, 'git-clone');
+      } catch (syncErr: any) {
+        logger.warn(`Failed to start VFS sync for git clone:`, syncErr.message);
+      }
 
       const path = config.path || '/home/user/repo';
       const branch = config.branch || 'main';

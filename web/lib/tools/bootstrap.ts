@@ -198,6 +198,17 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     errors.push(`Event system: ${error.message}`);
   }
 
+  // Register advanced schedule tools (task.agent-loop, task.dag-run, task.skill-bootstrap)
+  // These extend the basic event system with agent loop orchestration and DAG workflows
+  try {
+    const { registerAllScheduleTools } = await import('./bootstrap/schedule-bootstrap');
+    const count = await registerAllScheduleTools(registry, config);
+    toolCount += count;
+    logger.info(`Registered ${count} advanced schedule tools`);
+  } catch (error: any) {
+    logger.debug('Advanced schedule tools not available', error.message);
+  }
+
   // Register Arcade tools (auto-enabled if API key is set)
   if (shouldEnableArcade) {
     try {

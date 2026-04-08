@@ -14,6 +14,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { resolveRequestAuth } from '@/lib/auth/request-auth';
 import { sandboxBridge } from '@/lib/sandbox/sandbox-service-bridge';
+import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 import { createLogger } from '@/lib/utils/logger';
 import { SandboxSecurityManager } from '@/lib/sandbox/security-manager';
 
@@ -316,6 +317,15 @@ export async function POST(req: NextRequest) {
       url: previewUrl,
       port: actualPort,
     });
+
+    // Start VFS sync - sync files between VFS database and CodeSandbox
+    // This enables bidirectional sync: VFS → Sandbox and Sandbox → VFS
+    try {
+      sandboxFilesystemSync.startSync(sandboxId, authResult.userId);
+      logger.info('VFS sync started for DevBox', { sandboxId, userId: authResult.userId });
+    } catch (syncErr: any) {
+      logger.warn('Failed to start VFS sync for DevBox:', syncErr.message);
+    }
 
     return NextResponse.json({
       success: true,

@@ -2301,6 +2301,111 @@ export const detectPort = (files: Record<string, string>) =>
 export const getCodeSandboxTemplate = (framework: AppFramework) =>
   livePreviewOffloading.getCodeSandboxTemplate(framework);
 
+// ============================================================================
+// Cloud Preview Integration via PreviewManager
+// ============================================================================
+// Bridges the detection/offload decision (this module) with the actual
+// cloud preview execution (PreviewManager). Used by code-preview-panel.tsx
+// to start sandbox-based previews when local preview isn't suitable.
+// ============================================================================
+
+import { getPreviewManager, type StartPreviewConfig, type PreviewResult } from '../sandbox/preview-manager';
+import type { SandboxHandle } from '../sandbox/providers/sandbox-provider';
+
+export interface CloudPreviewConfig {
+  /** Sandbox handle (from sandbox provider) */
+  handle: SandboxHandle;
+  /** Project files (if not already in sandbox) */
+  files?: Record<string, string>;
+  /** Detected framework */
+  framework?: string;
+  /** Port to expose (auto-detected if not provided) */
+  port?: number;
+  /** Start command (auto-generated from framework if not provided) */
+  startCommand?: string;
+}
+
+/**
+ * Start a cloud preview for a sandbox session.
+ *
+ * Integrates PreviewManager with live-preview-offloading detection:
+ * 1. Detects framework from files (if not provided)
+ * 2. Auto-generates start command based on framework
+ * 3. Uses PreviewManager for port allocation, caching, and URL generation
+ *
+ * @returns Preview result with URL, port, and metadata
+ */
+export async function startCloudPreview(config: CloudPreviewConfig): Promise<PreviewResult> {
+  const { handle, files, framework: providedFramework, port: providedPort, startCommand } = config;
+  const previewManager = getPreviewManager();
+
+  // Detect framework from files if not provided
+  let detectedFramework = providedFramework;
+  if (files && !detectedFramework) {
+    const detectionResult = livePreviewOffloading.detectProject({ files });
+    detectedFramework = detectionResult.framework === 'unknown' ? 'vanilla' : detectionResult.framework;
+  }
+  const framework = detectedFramework || 'vanilla';
+
+  // Auto-generate start command based on framework
+  let cmd = startCommand;
+  if (!cmd) {
+    const frameworkCommands: Record<string, string> = {
+      react: 'npm run dev',
+      next: 'npm run dev',
+      vue: 'npm run dev',
+      svelte: 'npm run dev',
+      angular: 'npm start',
+      vite: 'npm run dev',
+      'vite-react': 'npm run dev',
+      vanilla: 'npx serve -l ' + (providedPort || 3000) + ' .',
+      flask: 'python app.py',
+      fastapi: 'uvicorn main:app --host 0.0.0.0 --port ' + (providedPort || 8000),
+      django: 'python manage.py runserver 0.0.0.0:' + (providedPort || 8000),
+      python: 'python main.py',
+      node: 'node index.js',
+    };
+    cmd = frameworkCommands[framework] || 'npm run dev';
+  }
+
+  // Auto-detect port from files if not provided
+  let finalPort = providedPort;
+  if (!finalPort && files) {
+    finalPort = livePreviewOffloading.detectPort(files);
+  }
+  finalPort = finalPort || 3000;
+
+  // Start the preview via PreviewManager (handles caching, port allocation, provider-specific methods)
+  const previewConfig: StartPreviewConfig = {
+    handle,
+    port: finalPort,
+    startCommand: cmd,
+    framework,
+    background: true,
+  };
+
+  logger.info('[startCloudPreview] Starting cloud preview', {
+    sandboxId: handle.id,
+    framework,
+    port: finalPort,
+    startCommand: cmd,
+  });
+
+  const result = await previewManager.startPreview(previewConfig);
+
+  logger.info('[startCloudPreview] Cloud preview started', {
+    sandboxId: handle.id,
+    url: result.url,
+    port: result.port,
+    framework,
+  });
+
+  return {
+    ...result,
+    metadata: { ...result.metadata, framework },
+  };
+}
+
 /**
  * Extract YouTube video ID from URL or plain ID
  *

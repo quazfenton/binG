@@ -323,7 +323,9 @@ export class BootstrappedAgency {
 
         // Try to use the real capability router if available
         try {
-          const { getCapabilityRouter } = await import('@/lib/tools/router');
+          // Use relative path — the @/ alias only works in web/ directory
+          // packages/shared/agent → web/lib/tools/router
+          const { getCapabilityRouter } = await import('../../../web/lib/tools/router');
           const router = getCapabilityRouter();
           const context = { userId: 'agency', sessionId: this.config.sessionId };
 
@@ -334,7 +336,7 @@ export class BootstrappedAgency {
           for (const cap of capabilities) {
             try {
               // Build structured input from the task description
-              const input = this.buildCapabilityInput(cap, task);
+              const input = await this.buildCapabilityInput(cap, task);
               const result = await router.execute(cap, input, context);
               // Router reports failures via { success: false } instead of throwing
               if (!result.success) {
@@ -363,8 +365,7 @@ export class BootstrappedAgency {
           };
         } catch (routerError: any) {
           // Router not available — expected in test/CI environments where the
-          // '@/lib/tools/router' path alias can't be resolved from packages/shared/agent.
-          // The "Transform failed" debug message is informational, not a failure.
+          // relative import path can't be resolved by the bundler.
           // Falls back to mock executor below.
           log.debug('Capability router not available, using mock executor', routerError.message);
         }
@@ -415,7 +416,7 @@ export class BootstrappedAgency {
           const router = getCapabilityRouter();
           const context = { userId: 'agency', sessionId: this.config.sessionId };
           // Build structured input from the task description
-          const input = this.buildCapabilityInput(capability, task);
+          const input = await this.buildCapabilityInput(capability, task);
           const result = await router.execute(capability, input, context);
           // Propagate the router's actual success/error status instead of hardcoding success
           return {
