@@ -1,7 +1,7 @@
 import type { SandboxHandle } from './providers/sandbox-provider'
 import { generateSecureId } from '@/lib/utils';
 
-interface DaemonProcess {
+export interface DaemonProcess {
   id: string
   sessionId: string
   command: string

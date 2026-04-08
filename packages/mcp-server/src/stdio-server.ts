@@ -236,14 +236,35 @@ server.tool(
     try {
       const validatedPath = validatePath(path);
 
+      // Resolve the real path to prevent symlink escapes
+      // e.g., a symlink inside the workspace pointing outside the workspace
+      const realPath = normalize(await fs.realpath(validatedPath));
+      const workspaceRoot = normalize(config.workspaceRoot);
+      const workspacePrefix = workspaceRoot.endsWith(sep)
+        ? workspaceRoot
+        : `${workspaceRoot}${sep}`;
+
+      // Re-check that the real path still stays inside the workspace root
+      if (realPath !== workspaceRoot && !realPath.startsWith(workspacePrefix)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error: Path traversal detected: "${path}" resolves outside workspace`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
       // Ensure parent directory exists
-      const parentDir = validatedPath.substring(0, validatedPath.lastIndexOf(sep));
+      const parentDir = realPath.substring(0, realPath.lastIndexOf(sep));
       if (parentDir) {
         await fs.mkdir(parentDir, { recursive: true });
       }
 
-      // Write file
-      await fs.writeFile(validatedPath, content, 'utf-8');
+      // Write file to the resolved real path
+      await fs.writeFile(realPath, content, 'utf-8');
 
       const language = detectLanguage(path);
       const size = Buffer.byteLength(content, 'utf-8');

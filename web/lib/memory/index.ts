@@ -28,7 +28,7 @@ export {
 export type { VectorEntry, EdgeEntry, ProjectMeta } from "../memory/vectorStore";
 
 // ─── Embeddings ───────────────────────────────────────────────────────────────
-export { embed, embedBatch, buildSymbolEmbedInput, clearEmbedCache } from "../memory/embeddings";
+export { embed, embedBatch, buildSymbolEmbedInput, clearEmbedCache, EMBED_CACHE } from "../memory/embeddings";
 
 // ─── Chunking ─────────────────────────────────────────────────────────────────
 export { chunkText, chunkByLines, chunkBySections } from "../memory/chunk";

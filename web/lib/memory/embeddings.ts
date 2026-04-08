@@ -6,13 +6,17 @@
 
 const EMBED_CACHE = new Map<string, number[]>();
 
+// Export for health check monitoring
+export { EMBED_CACHE };
+
 /**
  * Embeds a text string by calling your Next.js API route.
  * The route should call OpenAI text-embedding-3-small (or equivalent local model).
  */
 export async function embed(text: string): Promise<number[]> {
-  // Normalize input
-  const key = text.trim().toLowerCase();
+  // Use full text as cache key — trimming alone could cause collisions
+  // between semantically different strings that share the same trim.
+  const key = text;
 
   if (EMBED_CACHE.has(key)) {
     return EMBED_CACHE.get(key)!;
@@ -43,10 +47,12 @@ export async function embedBatch(
   texts: string[],
   concurrency = 5
 ): Promise<number[][]> {
+  // Validate concurrency to prevent infinite loop when <= 0
+  const effectiveConcurrency = Math.max(1, concurrency);
   const results: number[][] = new Array(texts.length);
 
-  for (let i = 0; i < texts.length; i += concurrency) {
-    const batch = texts.slice(i, i + concurrency);
+  for (let i = 0; i < texts.length; i += effectiveConcurrency) {
+    const batch = texts.slice(i, i + effectiveConcurrency);
     const embeddings = await Promise.all(batch.map(embed));
     embeddings.forEach((e, j) => {
       results[i + j] = e;

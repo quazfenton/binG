@@ -233,6 +233,7 @@ export class VirtualFilesystemService {
     content: string,
     language?: string,
     options?: { failIfExists?: boolean; append?: boolean },
+    _sessionId?: string // optional: for GitBackedVFS session scoping (unused in base VFS)
   ): Promise<VirtualFile> {
     // Desktop mode: Use local filesystem instead of VFS
     if (isDesktopMode() && isUsingLocalFS()) {
@@ -1241,9 +1242,10 @@ class GitBackedVFSProxy {
     filePath: string,
     content: string,
     language?: string,
-    options?: { failIfExists?: boolean; append?: boolean }
+    options?: { failIfExists?: boolean; append?: boolean },
+    sessionId?: string // optional: for GitBackedVFS session scoping
   ): Promise<VirtualFile> {
-    const gitVFS = this.vfs.getGitBackedVFS(ownerId);
+    const gitVFS = this.vfs.getGitBackedVFS(ownerId, sessionId ? { sessionId } : undefined);
     return gitVFS.writeFile(ownerId, filePath, content, language, options);
   }
 

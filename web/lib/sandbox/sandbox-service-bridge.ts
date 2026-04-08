@@ -22,6 +22,8 @@ import {
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { sandboxFilesystemSync } from '../virtual-filesystem/sync/sandbox-filesystem-sync';
 import { sandboxPersistenceManager } from '../storage/persistence-manager';
+import { DaemonManager } from './daemon-manager';
+import { getPreviewManager, PreviewManager } from './preview-manager';
 
 import { createLogger } from '@/lib/utils/logger';
 
@@ -35,6 +37,19 @@ export class SandboxServiceBridge {
   private sandboxService: any = null;
   private mountedFilesystemVersionBySandbox = new Map<string, number>();
   private tarPipeThreshold = parseInt(process.env.SPRITES_TAR_PIPE_THRESHOLD || '10', 10);
+  // Singleton instances for daemon and preview management
+  private _daemonManager = new DaemonManager();
+  private _previewManager = getPreviewManager();
+
+  /** Get the daemon manager for background process management */
+  get daemonManager(): DaemonManager {
+    return this._daemonManager;
+  }
+
+  /** Get the preview manager for preview URL management */
+  get previewManager(): PreviewManager {
+    return this._previewManager;
+  }
 
   private async ensureInitialized(): Promise<void> {
     if (this.initialized) return;
@@ -106,9 +121,54 @@ export class SandboxServiceBridge {
 
   async destroyWorkspace(sessionId: string, sandboxId: string): Promise<void> {
     await this.ensureInitialized();
+    // Stop filesystem sync
     sandboxFilesystemSync.stopSync(sandboxId);
+    // Stop all daemons for this session
+    try {
+      const provider = this.inferProviderFromSandboxId(sandboxId);
+      const providerObj = await this.getProvider(provider);
+      const handle = await providerObj.getSandbox(sandboxId);
+      await this._daemonManager.stopAllDaemons(handle, sessionId);
+    } catch (e) {
+      logger.warn('Failed to stop daemons during destroy', { sandboxId, error: e });
+    }
+    // Clear preview cache
+    this._previewManager.clearCacheForSandbox(sandboxId);
+    // Destroy the workspace
     await this.sandboxService.destroyWorkspace(sessionId, sandboxId);
     this.mountedFilesystemVersionBySandbox.delete(sandboxId);
+  }
+
+  // ---------------------------------------------------------------------------
+  // Daemon management helpers
+  // ---------------------------------------------------------------------------
+
+  async startDaemon(sandboxId: string, sessionId: string, command: string, options?: { port?: number }) {
+    const provider = this.inferProviderFromSandboxId(sandboxId);
+    const providerObj = await this.getProvider(provider);
+    const handle = await providerObj.getSandbox(sandboxId);
+    return this._daemonManager.startDaemon(handle, sessionId, command, options);
+  }
+
+  async stopDaemon(sandboxId: string, sessionId: string, daemonId: string) {
+    const provider = this.inferProviderFromSandboxId(sandboxId);
+    const providerObj = await this.getProvider(provider);
+    const handle = await providerObj.getSandbox(sandboxId);
+    return this._daemonManager.stopDaemon(handle, sessionId, daemonId);
+  }
+
+  async listDaemons(sandboxId: string, sessionId: string) {
+    const provider = this.inferProviderFromSandboxId(sandboxId);
+    const providerObj = await this.getProvider(provider);
+    const handle = await providerObj.getSandbox(sandboxId);
+    return this._daemonManager.listDaemons(handle, sessionId);
+  }
+
+  async getDaemonLogs(sandboxId: string, daemonId: string, tailLines?: number) {
+    const provider = this.inferProviderFromSandboxId(sandboxId);
+    const providerObj = await this.getProvider(provider);
+    const handle = await providerObj.getSandbox(sandboxId);
+    return this._daemonManager.getDaemonLogs(handle, daemonId, tailLines);
   }
 
   getSession(sessionId: string): WorkspaceSession | undefined {
@@ -145,27 +205,67 @@ export class SandboxServiceBridge {
 
   /**
    * Infer provider type from sandbox ID
-   * P1 FIX: Extended to include more providers and return null for unknown instead of defaulting to e2b
+   * P1 FIX: Extended to include all providers and return null for unknown
+   *
+   * Provider ID patterns observed from actual sandbox creation:
+   * - Daytona: UUID format (8-4-4-4-12) or 'daytona-' prefix
+   * - E2B: 21-char alphanumeric or 'e2b-' prefix
+   * - CodeSandbox: 6-char code or 'csb-' prefix
+   * - Blaxel: 6-char code or 'blaxel-' prefix
+   * - Runloop: 6-char code or 'runloop-' prefix
+   * - Modal: 'modal-{timestamp}-{random}'
+   * - Mistral: 6-char code or 'mistral-' prefix
+   * - AgentFS: 'agentfs-{timestamp}'
+   * - TerminalUse: 'local-{timestamp}'
+   * - Desktop: 'desktop-{hash}'
+   * - WebContainer: 'webcontainer-' prefix
+   * - OpenSandbox: 'opensandbox-' prefix
+   * - MicroSandbox: 'microsandbox-' prefix
+   * - Sprites: 'sprite-' or 'bing-' prefix
+   * - Vercel: 'vercel-' prefix
    */
   inferProviderFromSandboxId(sandboxId: string): string | null {
-    // E2B new format: some IDs don't have the 'e2b-' prefix (e.g., 'ii8938a6cyxwggwamxh1k')
-    // These are alphanumeric strings, typically 18-20 chars
-    const isE2BFormat = /^[a-z0-9]{15,25}$/i.test(sandboxId);
-    if (isE2BFormat) return 'e2b';
-    
+    if (!sandboxId || typeof sandboxId !== 'string') return null;
+
+    // Explicit prefix matches first (highest priority)
+    if (sandboxId.startsWith('daytona-')) return 'daytona';
+    if (sandboxId.startsWith('e2b-')) return 'e2b';
+    if (sandboxId.startsWith('csb-')) return 'codesandbox';
     if (sandboxId.startsWith('blaxel-') || sandboxId.startsWith('blaxel-mcp-')) return 'blaxel';
-    if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites';
+    if (sandboxId.startsWith('runloop-')) return 'runloop';
+    if (sandboxId.startsWith('modal-')) return 'modal';
     if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent';
     if (sandboxId.startsWith('mistral-')) return 'mistral';
-    if (sandboxId.startsWith('e2b-')) return 'e2b';
-    if (sandboxId.startsWith('daytona-')) return 'daytona';
-    if (sandboxId.startsWith('runloop-')) return 'runloop';
-    if (sandboxId.startsWith('microsandbox-')) return 'microsandbox';
-    if (sandboxId.startsWith('csb-') || sandboxId.length === 6) return 'codesandbox';
+    if (sandboxId.startsWith('agentfs-')) return 'agentfs';
+    if (sandboxId.startsWith('local-')) return 'terminaluse'; // TerminalUse uses local-{timestamp}
+    if (sandboxId.startsWith('desktop-')) return 'desktop';
+    if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) return 'sprites';
     if (sandboxId.startsWith('webcontainer-')) return 'webcontainer';
-    if (sandboxId.startsWith('opensandbox-')) return 'opensandbox';
+    if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) return 'opensandbox';
+    if (sandboxId.startsWith('microsandbox-') || sandboxId.startsWith('micro-')) return 'microsandbox';
     if (sandboxId.startsWith('vercel-')) return 'vercel';
     if (sandboxId.startsWith('codespace-')) return 'codespaces';
+
+    // Pattern-based detection (lower priority, after explicit prefixes)
+    // E2B: 18-25 char alphanumeric (no hyphens)
+    if (/^[a-z0-9]{18,25}$/i.test(sandboxId)) return 'e2b';
+
+    // CodeSandbox: exactly 6-char alphanumeric
+    if (/^[a-z0-9]{6}$/i.test(sandboxId)) return 'codesandbox';
+
+    // Blaxel/Runloop/Mistral/TerminalUse: short codes (5-7 chars)
+    // These are ambiguous - default to most likely based on length
+    if (/^[a-z0-9]{5,7}$/i.test(sandboxId)) {
+      // Could be blaxel, runloop, mistral, or terminaluse
+      // Default to blaxel as it's the most common short-code provider
+      return 'blaxel';
+    }
+
+    // UUID format (Daytona)
+    if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sandboxId)) {
+      return 'daytona';
+    }
+
     // P1 FIX: Return null instead of defaulting to e2b - let caller decide how to handle unknown
     return null;
   }

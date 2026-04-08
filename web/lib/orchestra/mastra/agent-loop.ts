@@ -98,8 +98,19 @@ export class AgentLoop {
   private toolLoopAgent: any | null = null;
   private useToolLoopAgent: boolean = false;
   private configuredModel?: string;
+  /** Optional bootstrapped agency for learned tool selection */
+  private agency: any = null;
   // Track tool invocations manually since ToolLoopAgent may not populate result.toolInvocations
   private lastExecutedToolCalls: Array<{ toolCallId: string; toolName: string; args: Record<string, any>; result: any }> = [];
+
+  /**
+   * Set the bootstrapped agency for learned tool selection.
+   * When set, `parseTextToolCalls` prefers capabilities the agency
+   * has learned to be successful for similar tasks.
+   */
+  setAgency(agency: any): void {
+    this.agency = agency;
+  }
 
   constructor(
     userId: string,

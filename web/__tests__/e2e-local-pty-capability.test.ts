@@ -275,8 +275,10 @@ describe('Agency + Capability Router Integration', () => {
 
     const topCaps = Array.from(metrics.mostUsedCapabilities.entries());
     expect(topCaps.length).toBeGreaterThanOrEqual(1);
-    expect(topCaps[0][0]).toBe('file.write');
-    expect(topCaps[0][1]).toBe(2);
+    // file.write should be among the most used (exact position is order-dependent under ties)
+    const writeEntry = topCaps.find(([cap]) => cap === 'file.write');
+    expect(writeEntry).toBeDefined();
+    expect(writeEntry![1]).toBe(2);
   });
 });
 
@@ -294,8 +296,12 @@ describe('Local PTY with node-pty — Real Execution', () => {
       return;
     }
 
+    const defaultShell = process.platform === 'win32'
+      ? 'powershell.exe'
+      : (process.env.SHELL || '/bin/bash');
+
     const pty = nodePty.spawn(
-      process.platform === 'win32' ? 'powershell.exe' : '/bin/bash',
+      defaultShell,
       [],
       {
         name: 'xterm-256color',
@@ -328,8 +334,12 @@ describe('Local PTY with node-pty — Real Execution', () => {
       return;
     }
 
+    const defaultShell = process.platform === 'win32'
+      ? 'powershell.exe'
+      : (process.env.SHELL || '/bin/bash');
+
     const pty = nodePty.spawn(
-      process.platform === 'win32' ? 'powershell.exe' : '/bin/bash',
+      defaultShell,
       [],
       {
         name: 'xterm-256color',

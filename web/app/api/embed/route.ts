@@ -39,8 +39,10 @@ setInterval(() => {
 
 export async function POST(req: NextRequest) {
   try {
-    // Rate limiting
-    const ip = req.headers.get("x-forwarded-for") ?? req.headers.get("x-real-ip") ?? "unknown";
+    // Rate limiting — normalize to a single client IP to prevent bypass
+    // via varied header values (e.g., different casing or extra spaces)
+    const rawIp = req.headers.get("x-forwarded-for") ?? req.headers.get("x-real-ip") ?? "unknown";
+    const ip = rawIp.split(",")[0].trim().toLowerCase();
     if (!checkRateLimit(ip)) {
       return NextResponse.json({ error: "Rate limit exceeded" }, { status: 429 });
     }
@@ -127,11 +129,14 @@ export async function PUT(req: NextRequest) {
     }
 
     // Validate and sanitize all texts
-    const sanitizedTexts = texts.map((t: unknown, i: number) => {
-      if (typeof t !== "string") throw new Error(`Item ${i} is not a string`);
-      if (t.length > 8000) return t.slice(0, 8000); // safety trim
-      return t;
-    });
+    const sanitizedTexts: string[] = [];
+    for (let i = 0; i < texts.length; i++) {
+      const t = texts[i];
+      if (typeof t !== "string") {
+        return NextResponse.json({ error: `Item ${i} is not a string` }, { status: 400 });
+      }
+      sanitizedTexts.push(t.length > 8000 ? t.slice(0, 8000) : t);
+    }
 
     if (!OPENAI_API_KEY) {
       return NextResponse.json({ error: "OPENAI_API_KEY not set" }, { status: 500 });

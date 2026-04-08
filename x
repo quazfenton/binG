@@ -1,1 +1,0 @@
-{"jsonrpc":"2.0","result":{"content":[{"type":"text","text":"{\"success\":true,\"path\":\"project/sessions/prod-001/fix-arrow.js\",\"size\":21,\"message\":\"File written successfully\",\"version\":1}"}],"isError":false},"id":5002}

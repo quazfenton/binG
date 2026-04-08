@@ -658,7 +658,7 @@ batch_write
       expect(edits.find(e => e.path === 'project/index.js')).toBeDefined();
     });
 
-    it('extracts write_file from plain tool name + json block', () => {
+    it('extracts write_file from fenced javascript block', () => {
       // The parser handles write_file("path", "content") inside ```javascript blocks
       const content = '```javascript\nwrite_file("test.js", "hello")\n```';
       const edits = extractFileEdits(content);
@@ -668,7 +668,7 @@ batch_write
       expect(match!.content).toBe('hello');
     });
 
-    it('extracts from fenced block with { files: [...] } wrapper', () => {
+    it('extracts from raw JSON tool call (unfenced)', () => {
       // The parser handles JSON tool call format: {"tool":"batch_write","arguments":{"files":...}}
       const content = '{"tool":"batch_write","arguments":{"files":[{"path":"a.txt","content":"a"},{"path":"b.txt","content":"b"}]}}';
       const edits = extractFileEdits(content);

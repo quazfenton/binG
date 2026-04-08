@@ -48,9 +48,15 @@ declare global {
 
 // Clear sessions before each test
 beforeEach(() => {
-  globalThis.__localPtySessions = new Map();
+  if (globalThis.__localPtySessions) {
+    globalThis.__localPtySessions.clear();
+  } else {
+    globalThis.__localPtySessions = new Map();
+  }
   vi.clearAllMocks();
-  vi.resetModules(); // Reset module cache to pick up fresh sessions map
+  // NOTE: Do NOT use vi.resetModules() here — the route module registers
+  // module-level setInterval and process.on listeners. Resetting would
+  // leak handles and destabilize the test suite.
 });
 
 // ============================================================
@@ -111,10 +117,9 @@ describe('POST /api/terminal/local-pty', () => {
     });
 
     const res = await POST(req as any);
-    // Will fail on node-pty import or spawn, but NOT on localhost check
-    // We just verify it got past the localhost check
+    // Should NOT be rejected for localhost check (503).
+    // May succeed (200) if dependencies are available, or fail later (4xx/5xx).
     expect(res.status).not.toBe(503);
-    expect(res.status).toBeGreaterThanOrEqual(400); // Will fail later in pipeline
 
     vi.unstubAllEnvs();
   });

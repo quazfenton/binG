@@ -561,16 +561,50 @@ class OpenCodeV2Provider implements CapabilityProvider {
           ? `run ${input.language} code: ${input.code}`
           : input.command;
 
-        // Pass cwd from validated input so shell executes in the right directory
-        const result = await provider.runAgentLoop({
-          userMessage: command,
-          tools: [],
-          systemPrompt: input.cwd ? `Working directory: ${input.cwd}` : '',
-          maxSteps: 5,
-          executeTool: async () => ({ success: true, output: '', exitCode: 0 }),
-          cwd: input.cwd || undefined,
-          enableSelfHeal: true,
-        });
+        // Build project context for smart command translation
+        const { buildProjectContext, resolveVfsPathToRealPath, translateNaturalLanguageToCommand, formatSmartContextAsMarkdown } = await import('../project-detection');
+
+        // Get file listing from VFS for project detection
+        let projectContext: Awaited<ReturnType<typeof buildProjectContext>> | null = null;
+        try {
+          const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+          const ownerId = context.userId || 'default';
+          const workspace = await virtualFilesystem.exportWorkspace(ownerId);
+          const filePaths = workspace.files.map(f => f.path);
+
+          // Read package.json if available
+          projectContext = await buildProjectContext(filePaths, async (path: string) => {
+            try {
+              const file = await virtualFilesystem.readFile(ownerId, path.replace(/^\//, ''));
+              return file.content;
+            } catch {
+              return null;
+            }
+          });
+
+          // Translate natural language command using detected project context
+          const translatedCommand = translateNaturalLanguageToCommand(command, projectContext);
+
+          // Add smart context to system prompt so LLM knows what it's working with
+          const smartContextMd = formatSmartContextAsMarkdown(projectContext.smartContext);
+          const systemPrompt = `${smartContextMd}\n\nWorking directory: ${input.cwd || projectContext.projectRoot || session.workspacePath || ''}`;
+
+          // Resolve cwd from VFS scoped path to real filesystem path
+          const cwdPath = input.cwd || (projectContext.projectRoot ? `${session.workspacePath || ''}/${projectContext.projectRoot}`.replace(/\/\//g, '/') : undefined);
+          let resolvedCwd: string | undefined;
+          if (cwdPath) {
+            resolvedCwd = resolveVfsPathToRealPath(cwdPath, session.workspacePath || process.cwd());
+          }
+
+          const result = await provider.runAgentLoop({
+            userMessage: translatedCommand,
+            tools: [],
+            systemPrompt,
+            maxSteps: 5,
+            executeTool: async () => ({ success: true, output: '', exitCode: 0 }),
+            cwd: resolvedCwd,
+            enableSelfHeal: true,
+          });
 
         return {
           success: true,
@@ -1381,6 +1415,17 @@ class OAuthIntegrationProvider implements CapabilityProvider {
 export class CapabilityRouter {
   private providers = new Map<string, CapabilityProvider>();
   private initialized = false;
+  /** Optional reference to bootstrapped agency for adaptive routing */
+  private agency: any = null;
+
+  /**
+   * Set the bootstrapped agency instance for adaptive routing.
+   * When set, the router uses learned capability success rates
+   * to influence provider selection.
+   */
+  setAgency(agency: any): void {
+    this.agency = agency;
+  }
 
   /**
    * Register a provider
@@ -1446,7 +1491,7 @@ export class CapabilityRouter {
   }
 
   /**
-   * Score a provider based on capability metadata
+   * Score a provider based on capability metadata and learned agency data
    * Higher score = better choice
    */
   private scoreProvider(providerId: string, capability: CapabilityDefinition): number {
@@ -1474,6 +1519,15 @@ export class CapabilityRouter {
     const priorityIndex = capability.providerPriority.indexOf(providerId);
     if (priorityIndex >= 0) {
       score += (capability.providerPriority.length - priorityIndex) * 5;
+    }
+
+    // Agency adaptive scoring — if agency has learned success rates for this
+    // capability, boost providers with higher historical success
+    if (this.agency && typeof this.agency.getCapabilitySuccessRate === 'function') {
+      const rate = this.agency.getCapabilitySuccessRate(capability.id, providerId);
+      if (typeof rate === 'number') {
+        score += rate * 50; // Up to +50 for high success rate
+      }
     }
 
     return score;
@@ -1657,6 +1711,15 @@ export function getCapabilityRouter(): CapabilityRouter {
     routerInstance = new CapabilityRouter();
   }
   return routerInstance;
+}
+
+/**
+ * Wire a bootstrapped agency into the capability router for adaptive routing.
+ * Call this after the agency is created (e.g., in StatefulAgent constructor).
+ */
+export function wireAgencyToRouter(agency: any): void {
+  const router = getCapabilityRouter();
+  router.setAgency(agency);
 }
 
 export async function initializeCapabilityRouter(): Promise<void> {

@@ -83,6 +83,22 @@ export {
 } from './sandbox-connection-manager'
 
 export {
+  DaemonManager,
+  type DaemonProcess,
+} from './daemon-manager'
+
+export {
+  PreviewManager,
+  PreviewCache,
+  PortManager,
+  getPreviewManager,
+  resetPreviewManager,
+  type StartPreviewConfig,
+  type PreviewResult,
+  type PreviewCacheEntry,
+} from './preview-manager'
+
+export {
   TerminalInputBatcher,
   createTerminalInputBatcher,
   type TerminalInputBatcherConfig,

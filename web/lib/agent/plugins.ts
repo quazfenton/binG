@@ -124,9 +124,12 @@ export function createGitPlugin(): Plugin {
         if (!_ctx.exec) throw new Error("exec not available");
         const msg = args?.message as string;
         if (!msg || typeof msg !== "string") throw new Error("commit requires a message");
-        // Truncate to prevent excessive command length
-        const safeMsg = msg.slice(0, 500).replace(/[;|&$`\\]/g, ""); // strip shell metacharacters
-        return _ctx.exec(`git add -A && git commit -m "${safeMsg}"`);
+        // Truncate and sanitize to prevent shell injection — escape both single and double quotes
+        const safeMsg = msg
+          .slice(0, 500)
+          .replace(/[;|&$`\\(){}!#]/g, "")
+          .replace(/'/g, "'\\''");
+        return _ctx.exec(`git add -A && git commit -m '${safeMsg}'`);
       },
       async log(args) {
         if (!_ctx.exec) throw new Error("exec not available");
@@ -150,13 +153,17 @@ export function createLintPlugin(): Plugin {
     commands: {
       async check(args) {
         if (!_ctx.exec) throw new Error("exec not available");
-        const file = args?.file as string ?? ".";
-        return _ctx.exec(`npx eslint ${file} --format json`);
+        const raw = args?.file as string ?? ".";
+        // Strip shell metacharacters to prevent injection
+        const file = raw.replace(/[;|&$`\\'"(){}!#<>*?[\]~]/g, "");
+        return _ctx.exec(`npx eslint '${file}' --format json`);
       },
       async fix(args) {
         if (!_ctx.exec) throw new Error("exec not available");
-        const file = args?.file as string ?? ".";
-        return _ctx.exec(`npx eslint ${file} --fix`);
+        const raw = args?.file as string ?? ".";
+        // Strip shell metacharacters to prevent injection
+        const file = raw.replace(/[;|&$`\\'"(){}!#<>*?[\]~]/g, "");
+        return _ctx.exec(`npx eslint '${file}' --fix`);
       },
     },
     setup(ctx) {

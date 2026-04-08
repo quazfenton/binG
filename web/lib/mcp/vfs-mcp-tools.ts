@@ -326,7 +326,8 @@ export const writeFileTool = (tool as any)({
     scopedPath,
     content,
     undefined, // language - auto-detected
-    { failIfExists: false } // allow overwrite
+    { failIfExists: false }, // allow overwrite
+    context.sessionId // pass sessionId for GitBackedVFS
   );
 
   // Emit file event for UI updates and session tracking
@@ -457,6 +458,7 @@ export const readFileTool = (tool as any)({
     language: f.language,
     size: f.size,
     lastModified: f.lastModified,
+    version: f.version ?? 1,
     exists: true,
   };
     } catch (error: any) {
@@ -677,7 +679,8 @@ export const batchWriteTool = (tool as any)({
       file.scopedPath,
       file.content,
       undefined,
-      { failIfExists: false }
+      { failIfExists: false },
+      context.sessionId // pass sessionId for GitBackedVFS
     );
     logger.debug('batchWrite: file written', {
       scopedPath: file.scopedPath,
