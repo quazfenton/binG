@@ -247,11 +247,14 @@ export async function POST(request: NextRequest) {
           });
         }
 
+        // Build session-scoped path: project/sessions/{sessionId} when available
+        const scopePath = sessionId ? `project/sessions/${sessionId}` : 'project';
+
         // Run tool call inside request-scoped AsyncLocalStorage context.
         // This isolates the context per-request, preventing cross-user data leaks.
         // @ts-ignore - AI SDK tool execute takes different arg shapes
         const callResult = await toolContextStore.run(
-          { userId, sessionId, scopePath: 'project' },
+          { userId, sessionId, scopePath },
           async () => targetTool.execute(toolArgs || {}, {
             messages: [],
             toolCallId: String(id || crypto.randomUUID()),

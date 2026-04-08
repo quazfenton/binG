@@ -210,13 +210,19 @@ pub async fn write_file(
         std::fs::create_dir_all(parent).map_err(|e| format!("Failed to create directory: {}", e))?;
     }
 
-    // Canonicalize to prevent symlink escape attacks
-    let canonical = std::fs::canonicalize(&full_path)
-        .unwrap_or_else(|_| full_path.clone());
+    // Canonicalize the parent directory to prevent symlink escape attacks
+    // We canonicalize the parent (not the file) because the file may not exist yet,
+    // but the parent was just created by create_dir_all above.
+    // This ensures a symlinked parent pointing outside the workspace is caught.
+    let canonical_parent = full_path
+        .parent()
+        .ok_or_else(|| "Invalid file path".to_string())?;
+    let canonical_parent = std::fs::canonicalize(canonical_parent)
+        .map_err(|e| format!("Failed to canonicalize parent directory: {}", e))?;
     let canonical_base = std::fs::canonicalize(&base_dir)
         .map_err(|e| format!("Failed to canonicalize base directory: {}", e))?;
 
-    if !canonical.starts_with(&canonical_base) {
+    if !canonical_parent.starts_with(&canonical_base) {
         return Err("Access denied: resolved path escapes workspace".to_string());
     }
 
@@ -634,41 +640,80 @@ pub async fn create_pty_session(
     let session_id_clone = session_id.clone();
     let app_clone = app.clone();
     let sessions_clone = sessions.0.clone();
-    
+
     std::thread::spawn(move || {
         let mut buffer = [0u8; 4096];
+        let mut consecutive_errors = 0u32;
+        const MAX_CONSECUTIVE_ERRORS: u32 = 10;
+
         loop {
             // Get master from sessions
             let master = {
-                let sessions = match sessions_clone.lock() {
+                let sessions_guard = match sessions_clone.lock() {
                     Ok(s) => s,
-                    Err(_) => break,
+                    Err(poisoned) => {
+                        eprintln!("[PTY] Session map lock poisoned for '{}', cleaning up", session_id_clone);
+                        // Attempt recovery: try to kill the child if we can get the session
+                        let _ = poisoned.into_inner();
+                        break;
+                    }
                 };
-                match sessions.get(&session_id_clone) {
+                match sessions_guard.get(&session_id_clone) {
                     Some(s) => s.master.try_clone_reader(),
-                    None => break,
+                    None => {
+                        // Session was removed (likely via close_pty_session), exit cleanly
+                        break;
+                    }
                 }
             };
-            
+
             let mut reader = match master {
                 Ok(r) => r,
-                Err(_) => break,
+                Err(e) => {
+                    eprintln!("[PTY] Failed to clone master reader for '{}': {}", session_id_clone, e);
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        eprintln!("[PTY] Too many consecutive errors for '{}', exiting reader thread", session_id_clone);
+                        break;
+                    }
+                    // Brief backoff to avoid busy-waiting
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                    continue;
+                }
             };
 
             match reader.read(&mut buffer) {
-                Ok(0) => break,
+                Ok(0) => break, // EOF - session closed normally
                 Ok(n) => {
+                    consecutive_errors = 0; // Reset on success
                     let data = String::from_utf8_lossy(&buffer[..n]).to_string();
                     let _ = app_clone.emit("pty-output", PtyOutputEvent {
                         session_id: session_id_clone.clone(),
                         data,
                     });
                 }
-                Err(_) => break,
+                Err(e) => {
+                    eprintln!("[PTY] Read error for '{}': {}", session_id_clone, e);
+                    consecutive_errors += 1;
+                    if consecutive_errors >= MAX_CONSECUTIVE_ERRORS {
+                        eprintln!("[PTY] Too many consecutive read errors for '{}', exiting reader thread", session_id_clone);
+                        break;
+                    }
+                    // Brief backoff to avoid busy-waiting
+                    std::thread::sleep(std::time::Duration::from_millis(50));
+                }
             }
         }
-        // Emit close event
+
+        // Emit close event and attempt cleanup
         let _ = app_clone.emit("pty-closed", serde_json::json!({ "session_id": session_id_clone }));
+
+        // Attempt to remove session and kill child process if still present
+        if let Ok(mut sessions) = sessions_clone.lock() {
+            if let Some(session) = sessions.remove(&session_id_clone) {
+                let _ = session.child.kill();
+            }
+        }
     });
 
     Ok(PtyCreateResult {

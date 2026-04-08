@@ -30,6 +30,117 @@ import { createLogger } from '../utils/logger';
 const logger = createLogger('VFS-MCP-Tools');
 
 /**
+ * Parse files argument for batch_write tool.
+ * Handles various formats the LLM might send:
+ * - Direct array: [{path, content}, ...]
+ * - JSON string: '[{"path":..., "content":...}, ...]'
+ * - files= format: 'files=[{path, content}, ...]'
+ * - files: format: 'files:[{path, content}, ...]'
+ * 
+ * @param files - The files argument from LLM (may be array or string)
+ * @returns Parsed array of {path, content} objects, or null if unparseable
+ */
+export function parseBatchWriteFiles(files: unknown): Array<{ path: string; content: string }> | null {
+  // If already an array, validate and filter invalid entries
+  if (Array.isArray(files)) {
+    const valid = files.filter(item => item && typeof item === 'object' && !Array.isArray(item));
+    return valid.length > 0 ? valid : (files.length === 0 ? [] : null);
+  }
+
+  // If not a string, can't parse
+  if (typeof files !== 'string') {
+    return null;
+  }
+
+  const trimmed = files.trim();
+
+  // Empty or whitespace-only check
+  if (!trimmed) {
+    return null;
+  }
+
+  /** Sanitize raw control characters within JSON string values (LLMs often emit unescaped newlines). */
+  function sanitizeJsonString(text: string): string {
+    let result = ''; let inString = false; let escapeNext = false;
+    for (let i = 0; i < text.length; i++) {
+      const ch = text[i];
+      if (escapeNext) { result += ch; escapeNext = false; continue; }
+      if (ch === '\\' && inString) { result += ch; escapeNext = true; continue; }
+      if (ch === '"') { inString = !inString; result += ch; continue; }
+      if (inString) {
+        if (ch === '\n') result += '\\n';
+        else if (ch === '\r') result += '\\r';
+        else if (ch === '\t') result += '\\t';
+        else if (ch === '\b') result += '\\b';
+        else if (ch === '\f') result += '\\f';
+        else result += ch;
+      } else result += ch;
+    }
+    return result;
+  }
+
+  /** Try to parse JSON with fallbacks for trailing commas, single quotes, and raw control chars. */
+  function tryParseJson(text: string, sanitize = false): unknown {
+    try { return JSON.parse(text); } catch {}
+    try { return JSON.parse(text.replace(/,\s*([}\]])/g, '$1')); } catch {}
+    // LLMs often output single-quoted JSON — normalize to double quotes
+    try { return JSON.parse(text.replace(/'/g, '"')); } catch {}
+    if (sanitize) {
+      try { return JSON.parse(sanitizeJsonString(text)); } catch {}
+      try { return JSON.parse(sanitizeJsonString(text.replace(/,\s*([}\]])/g, '$1'))); } catch {}
+      try { return JSON.parse(sanitizeJsonString(text.replace(/'/g, '"'))); } catch {}
+    }
+    return undefined;
+  }
+
+  function parseAndValidate(text: string) {
+    const parsed = tryParseJson(text, true);
+    if (Array.isArray(parsed)) {
+      const valid = parsed.filter(item => item && typeof item === 'object' && !Array.isArray(item));
+      return valid.length > 0 ? valid : (parsed.length === 0 ? [] : null);
+    }
+    if (parsed && typeof parsed === 'object' && 'files' in parsed) {
+      const extracted = (parsed as any).files;
+      if (Array.isArray(extracted)) {
+        const valid = extracted.filter(item => item && typeof item === 'object' && !Array.isArray(item));
+        return valid.length > 0 ? valid : (extracted.length === 0 ? [] : null);
+      }
+    }
+    return null;
+  }
+
+  let result = parseAndValidate(files);
+  if (result) return result;
+
+  // Format: object with files property
+  try {
+    const objMatch = trimmed.match(/\{[\s\S]*"files"[\s\S]*\}/i);
+    if (objMatch) { result = parseAndValidate(objMatch[0]); if (result) return result; }
+  } catch {}
+
+  // Format: starts with [...]
+  if (trimmed.startsWith('[')) {
+    const match = trimmed.match(/\[[\s\S]*\]/);
+    if (match) { result = parseAndValidate(match[0]); if (result) return result; }
+  }
+
+  // Format: files=... or files:... or filesArray=...
+  for (const pattern of [
+    /(?:files(?:Array)?|args|data|input|items)\s*[:=]\s*(\[[\s\S]*\])/i,
+    /"(?:files|args|data|input|items)"\s*:\s*(\[[\s\S]*\])/i,
+  ]) {
+    const match = trimmed.match(pattern);
+    if (match?.[1]) { result = parseAndValidate(match[1]); if (result) return result; }
+  }
+
+  // Last resort: any JSON array
+  const anyArrayMatch = trimmed.match(/\[[\s\S]*\]/);
+  if (anyArrayMatch) return parseAndValidate(anyArrayMatch[0]);
+
+  return null;
+}
+
+/**
  * Tool execution context - user ID and scope path extracted from request
  */
 export interface ToolContext {
@@ -126,9 +237,9 @@ function resolveScopedPath(inputPath: string): string {
   // This catches attempts to escape session scope (e.g., writing to project/shared when scoped to project/sessions/001)
   if (cleanPath.startsWith('project/')) {
     logger.warn('Path outside session scope - will be written to workspace root instead of session', {
-      originalPath: inputPath,
-      cleanPath,
-      scopePath,
+  originalPath: inputPath,
+  cleanPath,
+  scopePath,
     });
     // Still allow it for now (could be intentional for shared files), but log for visibility
     return cleanPath;
@@ -172,76 +283,76 @@ export const writeFileTool = (tool as any)({
   }),
   execute: async ({ path, content, commitMessage = 'Write file via MCP tool' }) => {
     try {
-      if (!path || typeof path !== 'string') {
-        return { success: false, path, error: 'Path is required' };
-      }
-      if (content === undefined || content === null) {
-        return { success: false, path, error: 'Content is required' };
-      }
-      // Guard against extremely large content that could cause memory issues
-      const MAX_CONTENT_SIZE = 5 * 1024 * 1024; // 5MB
-      if (content.length > MAX_CONTENT_SIZE) {
-        return {
-          success: false,
-          path,
-          error: `Content too large (${(content.length / 1024 / 1024).toFixed(1)}MB). Maximum is ${(MAX_CONTENT_SIZE / 1024 / 1024).toFixed(0)}MB.`,
-        };
-      }
-      const context = getToolContext();
+  if (!path || typeof path !== 'string') {
+    return { success: false, path, error: 'Path is required' };
+  }
+  if (content === undefined || content === null) {
+    return { success: false, path, error: 'Content is required' };
+  }
+  // Guard against extremely large content that could cause memory issues
+  const MAX_CONTENT_SIZE = 5 * 1024 * 1024; // 5MB
+  if (content.length > MAX_CONTENT_SIZE) {
+    return {
+  success: false,
+  path,
+  error: `Content too large (${(content.length / 1024 / 1024).toFixed(1)}MB). Maximum is ${(MAX_CONTENT_SIZE / 1024 / 1024).toFixed(0)}MB.`,
+    };
+  }
+  const context = getToolContext();
 
-      // Validate context — if userId is 'default', the tool context wasn't set properly
-      if (context.userId === 'default') {
-        logger.warn('writeFile: tool context not set — ensure toolContextStore.run() is used', {
-          path,
-          contentLength: content.length,
-        });
-      }
-      
-      // Resolve path relative to session scope
-      const scopedPath = resolveScopedPath(path);
-      logger.debug('writeFile', { originalPath: path, scopedPath, contentLength: content.length, userId: context.userId });
+  // Validate context — if userId is 'default', the tool context wasn't set properly
+  if (context.userId === 'default') {
+    logger.warn('writeFile: tool context not set — ensure toolContextStore.run() is used', {
+  path,
+  contentLength: content.length,
+    });
+  }
+  
+  // Resolve path relative to session scope
+  const scopedPath = resolveScopedPath(path);
+  logger.debug('writeFile', { originalPath: path, scopedPath, contentLength: content.length, userId: context.userId });
 
-      // Check if file exists for event type
-      let existed = false;
-      try {
-        await virtualFilesystem.readFile(context.userId, scopedPath);
-        existed = true;
-      } catch {
-        // File doesn't exist, this is a create
-      }
+  // Check if file exists for event type
+  let existed = false;
+  try {
+    await virtualFilesystem.readFile(context.userId, scopedPath);
+    existed = true;
+  } catch {
+    // File doesn't exist, this is a create
+  }
 
-      const result = await virtualFilesystem.writeFile(
-        context.userId,
-        scopedPath,
-        content,
-        undefined, // language - auto-detected
-        { failIfExists: false } // allow overwrite
-      );
+  const result = await virtualFilesystem.writeFile(
+    context.userId,
+    scopedPath,
+    content,
+    undefined, // language - auto-detected
+    { failIfExists: false } // allow overwrite
+  );
 
-      // Emit file event for UI updates and session tracking
-      await emitFileEvent({
-        userId: context.userId,
-        sessionId: context.sessionId,
-        path: scopedPath,
-        type: existed ? 'update' : 'create',
-        content,
-        source: 'mcp-tool',
-      });
+  // Emit file event for UI updates and session tracking
+  await emitFileEvent({
+    userId: context.userId,
+    sessionId: context.sessionId,
+    path: scopedPath,
+    type: existed ? 'update' : 'create',
+    content,
+    source: 'mcp-tool',
+  });
 
-      return {
-        success: true,
-        path: (result as any).path || path,
-        size: content.length,
-        message: (result as any).message || `File written successfully`,
-        version: (result as any).version ?? 1,
-      };
+  return {
+    success: true,
+    path: (result as any).path || path,
+    size: content.length,
+    message: (result as any).message || `File written successfully`,
+    version: (result as any).version ?? 1,
+  };
     } catch (error: any) {
-      logger.error('writeFile failed', { path, error: error.message });
-      return {
-        success: false,
-        path,
-        error: error.message,
-      };
+  logger.error('writeFile failed', { path, error: error.message });
+  return {
+    success: false,
+    path,
+    error: error.message,
+  };
     }
   },
 });
@@ -259,61 +370,61 @@ export const applyDiffTool = (tool as any)({
   }),
   execute: async ({ path, diff, commitMessage = 'Applied diff via MCP tool' }) => {
     try {
-      if (!path || typeof path !== 'string') {
-        return { success: false, path, error: 'Path is required' };
-      }
-      if (!diff || typeof diff !== 'string') {
-        return { success: false, path, error: 'Diff content is required' };
-      }
-      const context = getToolContext();
-      const scopedPath = resolveScopedPath(path);
-      logger.debug('applyDiff', { originalPath: path, scopedPath, diffLength: diff.length, userId: context.userId });
+  if (!path || typeof path !== 'string') {
+    return { success: false, path, error: 'Path is required' };
+  }
+  if (!diff || typeof diff !== 'string') {
+    return { success: false, path, error: 'Diff content is required' };
+  }
+  const context = getToolContext();
+  const scopedPath = resolveScopedPath(path);
+  logger.debug('applyDiff', { originalPath: path, scopedPath, diffLength: diff.length, userId: context.userId });
 
-      // First, read the current file to apply the diff
-      const currentFile = await virtualFilesystem.readFile(context.userId, scopedPath);
-      
-      // Parse and apply the unified diff using existing file-diff-utils
-      const { applyDiffToContent } = await import('../chat/file-diff-utils');
-      const newContent = applyDiffToContent(currentFile.content, path, diff);
-      
-      if (newContent === null) {
-        throw new Error('Failed to apply diff - the diff may not match the current file content');
-      }
-      
-      // Write the modified content back (file exists, so allow overwrite)
-      const result = await virtualFilesystem.writeFile(
-        context.userId,
-        scopedPath,
-        newContent,
-        currentFile.language,
-        { failIfExists: false }
-      );
+  // First, read the current file to apply the diff
+  const currentFile = await virtualFilesystem.readFile(context.userId, scopedPath);
+  
+  // Parse and apply the unified diff using existing file-diff-utils
+  const { applyDiffToContent } = await import('../chat/file-diff-utils');
+  const newContent = applyDiffToContent(currentFile.content, path, diff);
+  
+  if (newContent === null) {
+    throw new Error('Failed to apply diff - the diff may not match the current file content');
+  }
+  
+  // Write the modified content back (file exists, so allow overwrite)
+  const result = await virtualFilesystem.writeFile(
+    context.userId,
+    scopedPath,
+    newContent,
+    currentFile.language,
+    { failIfExists: false }
+  );
 
-      // Emit diff event for enhanced-diff-viewer
-      await emitFileEvent({
-        userId: context.userId,
-        sessionId: context.sessionId,
-        path: scopedPath,
-        type: 'update',
-        content: newContent,
-        previousContent: currentFile.content,
-        source: 'mcp-tool-diff',
-        metadata: { diff },
-      });
+  // Emit diff event for enhanced-diff-viewer
+  await emitFileEvent({
+    userId: context.userId,
+    sessionId: context.sessionId,
+    path: scopedPath,
+    type: 'update',
+    content: newContent,
+    previousContent: currentFile.content,
+    source: 'mcp-tool-diff',
+    metadata: { diff },
+  });
 
-      return {
-        success: true,
-        path: result.path,
-        message: 'Diff applied successfully',
-        version: result.version,
-      };
+  return {
+    success: true,
+    path: result.path,
+    message: 'Diff applied successfully',
+    version: result.version,
+  };
     } catch (error: any) {
-      logger.error('applyDiff failed', { path, error: error.message });
-      return {
-        success: false,
-        path,
-        error: error.message,
-      };
+  logger.error('applyDiff failed', { path, error: error.message });
+  return {
+    success: false,
+    path,
+    error: error.message,
+  };
     }
   },
 });
@@ -329,33 +440,33 @@ export const readFileTool = (tool as any)({
   }),
   execute: async ({ path }) => {
     try {
-      if (!path || typeof path !== 'string') {
-        return { success: false, path, error: 'Path is required', exists: false };
-      }
-      const context = getToolContext();
-      const scopedPath = resolveScopedPath(path);
-      logger.debug('readFile', { originalPath: path, scopedPath, userId: context.userId });
+  if (!path || typeof path !== 'string') {
+    return { success: false, path, error: 'Path is required', exists: false };
+  }
+  const context = getToolContext();
+  const scopedPath = resolveScopedPath(path);
+  logger.debug('readFile', { originalPath: path, scopedPath, userId: context.userId });
 
-      const file = await virtualFilesystem.readFile(context.userId, scopedPath);
-      const f = file as any;
+  const file = await virtualFilesystem.readFile(context.userId, scopedPath);
+  const f = file as any;
 
-      return {
-        success: true,
-        path: f.path,
-        content: f.content,
-        language: f.language,
-        size: f.size,
-        lastModified: f.lastModified,
-        exists: true,
-      };
+  return {
+    success: true,
+    path: f.path,
+    content: f.content,
+    language: f.language,
+    size: f.size,
+    lastModified: f.lastModified,
+    exists: true,
+  };
     } catch (error: any) {
-      logger.error('readFile failed', { path, error: error.message });
-      return {
-        success: false,
-        path,
-        error: error.message,
-        exists: false,
-      };
+  logger.error('readFile failed', { path, error: error.message });
+  return {
+    success: false,
+    path,
+    error: error.message,
+    exists: false,
+  };
     }
   },
 });
@@ -372,33 +483,33 @@ export const listFilesTool = (tool as any)({
   }),
   execute: async ({ path, recursive = false }) => {
     try {
-      const context = getToolContext();
-      const scopedPath = resolveScopedPath(path);
-      logger.debug('listFiles', { originalPath: path, scopedPath, recursive, userId: context.userId });
+  const context = getToolContext();
+  const scopedPath = resolveScopedPath(path);
+  logger.debug('listFiles', { originalPath: path, scopedPath, recursive, userId: context.userId });
 
-      const listing = await virtualFilesystem.listDirectory(context.userId, scopedPath);
-      
-      return {
-        success: true,
-        path: listing.path,
-        nodes: listing.nodes.map(node => ({
-          type: node.type,
-          name: node.name,
-          path: node.path,
-          language: node.language,
-          size: node.size,
-          lastModified: node.lastModified,
-        })),
-        count: listing.nodes.length,
-      };
+  const listing = await virtualFilesystem.listDirectory(context.userId, scopedPath);
+  
+  return {
+    success: true,
+    path: listing.path,
+    nodes: listing.nodes.map(node => ({
+  type: node.type,
+  name: node.name,
+  path: node.path,
+  language: node.language,
+  size: node.size,
+  lastModified: node.lastModified,
+    })),
+    count: listing.nodes.length,
+  };
     } catch (error: any) {
-      logger.error('listFiles failed', { path, error: error.message });
-      return {
-        success: false,
-        path,
-        error: error.message,
-        nodes: [],
-      };
+  logger.error('listFiles failed', { path, error: error.message });
+  return {
+    success: false,
+    path,
+    error: error.message,
+    nodes: [],
+  };
     }
   },
 });
@@ -416,42 +527,42 @@ export const searchFilesTool = (tool as any)({
   }),
   execute: async ({ query, path, limit = 10 }) => {
     try {
-      if (!query || typeof query !== 'string') {
-        return { success: false, query, error: 'Query is required', files: [], total: 0 };
-      }
-      const context = getToolContext();
-      logger.debug('searchFiles', { query, path, limit, userId: context.userId });
-      
-      const results = await virtualFilesystem.search(
-        context.userId,
-        query,
-        { path, limit }
-      );
+  if (!query || typeof query !== 'string') {
+    return { success: false, query, error: 'Query is required', files: [], total: 0 };
+  }
+  const context = getToolContext();
+  logger.debug('searchFiles', { query, path, limit, userId: context.userId });
+  
+  const results = await virtualFilesystem.search(
+    context.userId,
+    query,
+    { path, limit }
+  );
 
-      // Normalize: proxy may return array or { files: [...] }
-      const files = Array.isArray(results) ? results : (results as any).files || [];
+  // Normalize: proxy may return array or { files: [...] }
+  const files = Array.isArray(results) ? results : (results as any).files || [];
 
-      return {
-        success: true,
-        query,
-        files: files.map((file: any) => ({
-          path: file.path,
-          name: file.name,
-          language: file.language,
-          score: file.score,
-          snippet: file.snippet,
-          lastModified: file.lastModified,
-        })),
-        total: files.length,
-      };
+  return {
+    success: true,
+    query,
+    files: files.map((file: any) => ({
+  path: file.path,
+  name: file.name,
+  language: file.language,
+  score: file.score,
+  snippet: file.snippet,
+  lastModified: file.lastModified,
+    })),
+    total: files.length,
+  };
     } catch (error: any) {
-      logger.error('searchFiles failed', { query, error: error.message });
-      return {
-        success: false,
-        query,
-        error: error.message,
-        files: [],
-      };
+  logger.error('searchFiles failed', { query, error: error.message });
+  return {
+    success: false,
+    query,
+    error: error.message,
+    files: [],
+  };
     }
   },
 });
@@ -464,154 +575,172 @@ export const batchWriteTool = (tool as any)({
   description: 'Write multiple files in one operation. Efficient for creating several related files at once (e.g., component files, config files).',
   parameters: z.object({
     files: z.array(z.object({
-      path: z.string().describe('File path'),
-      content: z.string().describe('File content'),
-    })).max(50, 'Cannot write more than 50 files in a single batch').describe('Array of {path, content} objects'),
-    commitMessage: z.string().optional().describe('Optional description for all files'),
+  path: z.string().describe('File path'),
+  content: z.string().describe('File content'),
+    })).max(50, 'Cannot write more than 50 files in a single batch').describe('Array of {path, content} objects'),    commitMessage: z.string().optional().describe('Optional description for all files'),
   }),
   execute: async ({ files, commitMessage = 'Batch write via MCP tool' }) => {
     try {
       const context = getToolContext();
       
-      // DEBUG: Log full context and args at entry
-      logger.debug('batchWrite: entry', {
-        filesType: typeof files,
-        filesIsArray: Array.isArray(files),
-        filesLength: files?.length ?? 'null/undefined',
-        userId: context.userId,
-        scopePath: context.scopePath,
-        firstFile: files?.[0] ? { path: files[0].path, contentLen: files[0].content?.length } : 'none',
-      });
+      // Parse files argument - handles string format from LLM
+      const filesArray = parseBatchWriteFiles(files);
       
-      // Validate context - if userId is 'default', the tool context wasn't set properly
-      if (context.userId === 'default') {
-        logger.error('batchWrite: tool context not set - ensure toolContextStore.run() is used');
-      }
-
-      // Validate input
-      if (!files || !Array.isArray(files) || files.length === 0) {
-        const errMsg = 'No files provided to batch_write';
-        logger.error('batchWrite: ' + errMsg, { filesType: typeof files, filesValue: JSON.stringify(files)?.slice(0, 200) });
-        return {
-          success: false,
-          error: errMsg,
-          results: [],
-        };
-      }
-
-      // Guard against extremely large total content (50 files * 5MB = 250MB max)
-      const MAX_TOTAL_CONTENT_SIZE = 50 * 1024 * 1024; // 50MB
-      const totalSize = files.reduce((sum: number, f: any) => sum + (f.content?.length || 0), 0);
-      if (totalSize > MAX_TOTAL_CONTENT_SIZE) {
-        return {
-          success: false,
-          error: `Total content too large (${(totalSize / 1024 / 1024).toFixed(1)}MB). Maximum is ${(MAX_TOTAL_CONTENT_SIZE / 1024 / 1024).toFixed(0)}MB.`,
-          results: [],
-        };
-      }
-
-      // Resolve all paths relative to session scope
-      const scopedFiles = files.map(file => {
-        if (!file.path || typeof file.path !== 'string') {
-          throw new Error('Each file entry requires a "path" property');
-        }
-        if (file.content === undefined || file.content === null) {
-          throw new Error(`File "${file.path}" requires "content" property`);
-        }
-        return {
-          ...file,
-          scopedPath: resolveScopedPath(file.path),
-        };
+      logger.debug('batchWrite: after parsing', { 
+        filesArrayType: typeof filesArray,
+        filesArrayIsArray: Array.isArray(filesArray),
+        filesArrayLength: filesArray?.length
       });
 
-      logger.debug('batchWrite', { fileCount: files.length, userId: context.userId, scopePath: context.scopePath });
+    // DEBUG: Log full context and args at entry
+    logger.debug('batchWrite: entry', {
+  filesType: typeof files,
+  filesIsArray: Array.isArray(filesArray),
+  filesLength: filesArray?.length ?? 'null/undefined',
+  userId: context.userId,
+  scopePath: context.scopePath,
+  firstFile: filesArray?.[0] ? { path: filesArray[0].path, contentLen: filesArray[0].content?.length } : 'none',
+  rawFilesSample: typeof files === 'string' ? files.slice(0, 300) : 'not-string',
+    });
+    
+    // Validate context - if userId is 'default', the tool context wasn't set properly
+    if (context.userId === 'default') {
+  logger.error('batchWrite: tool context not set - ensure toolContextStore.run() is used');
+    }
+  
+    // Validate input
+    if (!filesArray || !Array.isArray(filesArray) || filesArray.length === 0) {
+    const errMsg = 'No files provided to batch_write';
+    logger.error('batchWrite: ' + errMsg, { filesType: typeof files, filesValue: JSON.stringify(filesArray)?.slice(0, 200) });
+    return {
+  success: false,
+  error: errMsg,
+  results: [],
+    };
+  }
 
-      // Track file existence for event type determination
-      const fileStates = await Promise.all(
-        scopedFiles.map(async (file) => {
-          try {
-            await virtualFilesystem.readFile(context.userId, file.scopedPath);
-            return { path: file.scopedPath, existed: true };
-          } catch {
-            return { path: file.scopedPath, existed: false };
-          }
-        })
-      );
+  // Enforce 50-file limit (Zod max() only validates AI SDK function calls, not direct MCP)
+  if (filesArray.length > 50) {
+    return {
+  success: false,
+  error: `Cannot write more than 50 files in a single batch (received ${filesArray.length})`,
+  results: [],
+    };
+  }
 
-      const results = await Promise.all(
-        scopedFiles.map(async (file) => {
-          try {
-            const result = await virtualFilesystem.writeFile(
-              context.userId,
-              file.scopedPath,
-              file.content,
-              undefined,
-              { failIfExists: false }
-            );
-            logger.debug('batchWrite: file written', {
-              scopedPath: file.scopedPath,
-              userId: context.userId,
-              version: result?.version,
-            });
-            return { path: file.scopedPath, success: true, version: result.version };
-          } catch (error: any) {
-            logger.error('batchWrite: single file failed', {
-              scopedPath: file.scopedPath,
-              error: error.message,
-              stack: error.stack,
-            });
-            return { path: file.scopedPath, success: false, error: error.message };
-          }
-        })
-      );
+  // Guard against extremely large total content (50 files * 5MB = 250MB max)
+  const MAX_TOTAL_CONTENT_SIZE = 50 * 1024 * 1024; // 50MB
+  const totalSize = filesArray.reduce((sum: number, f: any) => sum + (f.content?.length || 0), 0);
+  if (totalSize > MAX_TOTAL_CONTENT_SIZE) {
+    return {
+  success: false,
+  error: `Total content too large (${(totalSize / 1024 / 1024).toFixed(1)}MB). Maximum is ${(MAX_TOTAL_CONTENT_SIZE / 1024 / 1024).toFixed(0)}MB.`,
+  results: [],
+    };
+  }
 
-      const successCount = results.filter(r => r.success).length;
-      const failCount = results.filter(r => !r.success).length;
-      
-      logger.info('batchWrite: completed', {
-        userId: context.userId,
-        total: files.length,
-        successCount,
-        failCount,
-        scopedPaths: scopedFiles.map(f => f.scopedPath),
-      });
+  // Resolve all paths relative to session scope
+  const scopedFiles = filesArray.map(file => {
+    if (!file.path || typeof file.path !== 'string') {
+  throw new Error('Each file entry requires a "path" property');
+    }
+    if (file.content === undefined || file.content === null) {
+  throw new Error(`File "${file.path}" requires "content" property`);
+    }
+    return {
+  ...file,
+  scopedPath: resolveScopedPath(file.path),
+    };
+  });
 
-      // Emit batch file events
-      const filesWithContent = scopedFiles.map(f => {
-        const state = fileStates.find(s => s.path === f.scopedPath);
-        return {
-          path: f.scopedPath,
-          type: (state?.existed ? 'update' : 'create') as 'create' | 'update',
-          content: f.content,
-        };
-      });
+  logger.debug('batchWrite', { fileCount: filesArray.length, userId: context.userId, scopePath: context.scopePath });
 
-      await emitBatchFileEvents({
-        userId: context.userId,
-        sessionId: context.sessionId,
-        files: filesWithContent,
-        source: 'mcp-tool',
-      });
+  // Track file existence for event type determination
+  const fileStates = await Promise.all(
+    scopedFiles.map(async (file) => {
+  try {
+    await virtualFilesystem.readFile(context.userId, file.scopedPath);
+    return { path: file.scopedPath, existed: true };
+  } catch {
+    return { path: file.scopedPath, existed: false };
+  }
+    })
+  );
 
-      return {
-        success: failCount === 0,
-        results,
-        total: files.length,
-        successCount,
-        failCount,
-        message: `Wrote ${successCount} of ${files.length} files`,
-      };
+  const results = await Promise.all(
+    scopedFiles.map(async (file) => {
+  try {
+    const result = await virtualFilesystem.writeFile(
+      context.userId,
+      file.scopedPath,
+      file.content,
+      undefined,
+      { failIfExists: false }
+    );
+    logger.debug('batchWrite: file written', {
+      scopedPath: file.scopedPath,
+      userId: context.userId,
+      version: result?.version,
+    });
+    return { path: file.scopedPath, success: true, version: result.version };
+  } catch (error: any) {
+    logger.error('batchWrite: single file failed', {
+      scopedPath: file.scopedPath,
+      error: error.message,
+      stack: error.stack,
+    });
+    return { path: file.scopedPath, success: false, error: error.message };
+  }
+    })
+  );
+
+  const successCount = results.filter(r => r.success).length;
+  const failCount = results.filter(r => !r.success).length;
+  
+  logger.info('batchWrite: completed', {
+    userId: context.userId,
+    total: files.length,
+    successCount,
+    failCount,
+    scopedPaths: scopedFiles.map(f => f.scopedPath),
+  });
+
+  // Emit batch file events
+  const filesWithContent = scopedFiles.map(f => {
+    const state = fileStates.find(s => s.path === f.scopedPath);
+    return {
+  path: f.scopedPath,
+  type: (state?.existed ? 'update' : 'create') as 'create' | 'update',
+  content: f.content,
+    };
+  });
+
+  await emitBatchFileEvents({
+    userId: context.userId,
+    sessionId: context.sessionId,
+    files: filesWithContent,
+    source: 'mcp-tool',
+  });
+
+  return {
+    success: failCount === 0,
+    results,
+    total: files.length,
+    successCount,
+    failCount,
+    message: `Wrote ${successCount} of ${files.length} files`,
+  };
     } catch (error: any) {
-      logger.error('batchWrite failed', {
-        error: error.message,
-        stack: error.stack,
-        fileCount: files?.length,
-      });
-      return {
-        success: false,
-        error: error.message,
-        results: [],
-      };
+  logger.error('batchWrite failed', {
+    error: error.message,
+    stack: error.stack,
+    fileCount: files?.length,
+  });
+  return {
+    success: false,
+    error: error.message,
+    results: [],
+  };
     }
   },
 });
@@ -627,37 +756,37 @@ export const deleteFileTool = (tool as any)({
   }),
   execute: async ({ path, reason }) => {
     try {
-      if (!path || typeof path !== 'string') {
-        return { success: false, path, error: 'Path is required' };
-      }
-      const context = getToolContext();
-      const scopedPath = resolveScopedPath(path);
-      logger.debug('deleteFile', { originalPath: path, scopedPath, reason, userId: context.userId });
+  if (!path || typeof path !== 'string') {
+    return { success: false, path, error: 'Path is required' };
+  }
+  const context = getToolContext();
+  const scopedPath = resolveScopedPath(path);
+  logger.debug('deleteFile', { originalPath: path, scopedPath, reason, userId: context.userId });
 
-      const result = await virtualFilesystem.deletePath(context.userId, scopedPath);
+  const result = await virtualFilesystem.deletePath(context.userId, scopedPath);
 
-      // Emit delete event
-      await emitFileEvent({
-        userId: context.userId,
-        sessionId: context.sessionId,
-        path: scopedPath,
-        type: 'delete',
-        source: 'mcp-tool',
-      });
+  // Emit delete event
+  await emitFileEvent({
+    userId: context.userId,
+    sessionId: context.sessionId,
+    path: scopedPath,
+    type: 'delete',
+    source: 'mcp-tool',
+  });
 
-      return {
-        success: true,
-        path: scopedPath,
-        deletedCount: result.deletedCount,
-        message: `Deleted: ${reason || 'MCP tool request'}`,
-      };
+  return {
+    success: true,
+    path: scopedPath,
+    deletedCount: result.deletedCount,
+    message: `Deleted: ${reason || 'MCP tool request'}`,
+  };
     } catch (error: any) {
-      logger.error('deleteFile failed', { path, error: error.message });
-      return {
-        success: false,
-        path,
-        error: error.message,
-      };
+  logger.error('deleteFile failed', { path, error: error.message });
+  return {
+    success: false,
+    path,
+    error: error.message,
+  };
     }
   },
 });
@@ -672,39 +801,39 @@ export const createDirectoryTool = (tool as any)({
   }),
   execute: async ({ path }) => {
     try {
-      if (!path || typeof path !== 'string') {
-        return { success: false, path, error: 'Path is required' };
-      }
-      const context = getToolContext();
+  if (!path || typeof path !== 'string') {
+    return { success: false, path, error: 'Path is required' };
+  }
+  const context = getToolContext();
 
-      // Resolve path relative to session scope
-      const scopedPath = resolveScopedPath(path);
-      logger.debug('createDirectory', { originalPath: path, scopedPath, userId: context.userId });
+  // Resolve path relative to session scope
+  const scopedPath = resolveScopedPath(path);
+  logger.debug('createDirectory', { originalPath: path, scopedPath, userId: context.userId });
 
-      const result = await virtualFilesystem.createDirectory(context.userId, scopedPath);
+  const result = await virtualFilesystem.createDirectory(context.userId, scopedPath);
 
-      // Emit create event for directory (type: 'create' for consistency)
-      await emitFileEvent({
-        userId: context.userId,
-        sessionId: context.sessionId,
-        path: scopedPath,
-        type: 'create',
-        source: 'mcp-tool-directory',
-      });
+  // Emit create event for directory (type: 'create' for consistency)
+  await emitFileEvent({
+    userId: context.userId,
+    sessionId: context.sessionId,
+    path: scopedPath,
+    type: 'create',
+    source: 'mcp-tool-directory',
+  });
 
-      return {
-        success: true,
-        path: result.path,
-        createdAt: result.createdAt,
-        message: `Directory created: ${path}`,
-      };
+  return {
+    success: true,
+    path: result.path,
+    createdAt: result.createdAt,
+    message: `Directory created: ${path}`,
+  };
     } catch (error: any) {
-      logger.error('createDirectory failed', { path, error: error.message });
-      return {
-        success: false,
-        path,
-        error: error.message,
-      };
+  logger.error('createDirectory failed', { path, error: error.message });
+  return {
+    success: false,
+    path,
+    error: error.message,
+  };
     }
   },
 });
@@ -718,21 +847,21 @@ export const getWorkspaceStatsTool = (tool as any)({
   parameters: z.object({}),
   execute: async () => {
     try {
-      const context = getToolContext();
-      logger.debug('getWorkspaceStats', { userId: context.userId });
-      
-      const stats = await virtualFilesystem.getWorkspaceStats(context.userId);
+  const context = getToolContext();
+  logger.debug('getWorkspaceStats', { userId: context.userId });
+  
+  const stats = await virtualFilesystem.getWorkspaceStats(context.userId);
 
-      return {
-        success: true,
-        ...stats,
-      };
+  return {
+    success: true,
+    ...stats,
+  };
     } catch (error: any) {
-      logger.error('getWorkspaceStats failed', { error: error.message });
-      return {
-        success: false,
-        error: error.message,
-      };
+  logger.error('getWorkspaceStats failed', { error: error.message });
+  return {
+    success: false,
+    error: error.message,
+  };
     }
   },
 });
@@ -776,61 +905,61 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
   write_file: {
     description: writeFileTool.description,
     parameters: z.object({
-      path: z.string().describe('Full virtual path'),
-      content: z.string().describe('Complete file content'),
-      commitMessage: z.string().optional(),
+  path: z.string().describe('Full virtual path'),
+  content: z.string().describe('Complete file content'),
+  commitMessage: z.string().optional(),
     }),
   },
   apply_diff: {
     description: applyDiffTool.description,
     parameters: z.object({
-      path: z.string().describe('Target file path'),
-      diff: z.string().describe('Unified diff format'),
-      commitMessage: z.string().optional(),
+  path: z.string().describe('Target file path'),
+  diff: z.string().describe('Unified diff format'),
+  commitMessage: z.string().optional(),
     }),
   },
   read_file: {
     description: readFileTool.description,
     parameters: z.object({
-      path: z.string().describe('Full path to the file'),
+  path: z.string().describe('Full path to the file'),
     }),
   },
   list_files: {
     description: listFilesTool.description,
     parameters: z.object({
-      path: z.string().default('/'),
-      recursive: z.boolean().optional().default(false),
+  path: z.string().default('/'),
+  recursive: z.boolean().optional().default(false),
     }),
   },
   search_files: {
     description: searchFilesTool.description,
     parameters: z.object({
-      query: z.string().describe('Search term'),
-      path: z.string().optional(),
-      limit: z.number().optional().default(10),
+  query: z.string().describe('Search term'),
+  path: z.string().optional(),
+  limit: z.number().optional().default(10),
     }),
   },
   batch_write: {
     description: batchWriteTool.description,
     parameters: z.object({
-      files: z.array(z.object({
-        path: z.string(),
-        content: z.string(),
-      })),
-      commitMessage: z.string().optional(),
+  files: z.array(z.object({
+    path: z.string(),
+    content: z.string(),
+  })),
+  commitMessage: z.string().optional(),
     }),
   },
   delete_file: {
     description: deleteFileTool.description,
     parameters: z.object({
-      path: z.string(),
-      reason: z.string().optional(),
+  path: z.string(),
+  reason: z.string().optional(),
     }),
   },
   create_directory: {
     description: createDirectoryTool.description,
     parameters: z.object({
-      path: z.string(),
+  path: z.string(),
     }),
   },
   get_workspace_stats: {
@@ -848,9 +977,9 @@ export function getVFSToolDefinitions() {
   return Object.entries(TOOL_META).map(([name, meta]) => ({
     type: 'function' as const,
     function: {
-      name,
-      description: meta.description,
-      parameters: meta.parameters,
+  name,
+  description: meta.description,
+  parameters: meta.parameters,
     },
   }));
 }
