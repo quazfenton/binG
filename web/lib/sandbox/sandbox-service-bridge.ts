@@ -74,7 +74,20 @@ export class SandboxServiceBridge {
   async getOrCreateSession(userId: string, config?: SandboxConfig): Promise<WorkspaceSession> {
     // Check for existing active session
     const existing = storeGetSessionByUserId(userId);
-    if (existing) return existing;
+    if (existing) {
+      // FIX: Verify the sandbox is still alive before returning cached session
+      const isAlive = await this.verifySandboxAlive(existing.sandboxId);
+      if (isAlive) {
+        logger.debug('Returning existing live session', { sandboxId: existing.sandboxId });
+        return existing;
+      }
+      // Sandbox is dead - clean up stale session and create fresh one
+      logger.warn('Stale session detected (sandbox dead), creating new one', {
+        sandboxId: existing.sandboxId,
+        sessionId: existing.sessionId,
+      });
+      deleteSessionFromStore(existing.sessionId);
+    }
 
     // Check if a session is already being created for this user (prevent race condition)
     const pendingKey = `user:${userId}`;
@@ -96,6 +109,86 @@ export class SandboxServiceBridge {
 
     pendingCreations.set(pendingKey, creationPromise);
     return creationPromise;
+  }
+
+  /**
+   * Verify that a sandbox is still alive/accessible.
+   * Returns false if the sandbox has been terminated or is unreachable.
+   */
+  async verifySandboxAlive(sandboxId: string): Promise<boolean> {
+    if (!sandboxId) return false;
+    try {
+      const provider = this.inferProviderFromSandboxId(sandboxId);
+      if (!provider) return false;
+      const providerObj = await this.getProvider(provider);
+      const handle = await providerObj.getSandbox(sandboxId);
+      // Quick liveness check: execute a trivial command
+      if (handle.executeCommand) {
+        const result = await handle.executeCommand('true', '/workspace', 5000);
+        return result.success === true;
+      }
+      // If no executeCommand, assume alive if getSandbox succeeded
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  /**
+   * Cleanup: Destroy sandbox and clear session (called on disconnect/idle).
+   */
+  async cleanupSession(sessionId: string, sandboxId: string): Promise<void> {
+    try {
+      logger.info('Cleaning up sandbox session', { sessionId, sandboxId });
+      await this.destroyWorkspace(sessionId, sandboxId);
+      deleteSessionFromStore(sessionId);
+      logger.info('Sandbox session cleaned up', { sessionId });
+    } catch (error: any) {
+      logger.error('Failed to cleanup sandbox session', {
+        sessionId, sandboxId, error: error.message
+      });
+      // Still remove from store even if destroy fails
+      deleteSessionFromStore(sessionId);
+    }
+  }
+
+  /**
+   * Suspend sandbox: Save state and stop without destroying.
+   * Uses auto-suspend service for state preservation.
+   */
+  async suspendSession(sandboxId: string, reason: string = 'idle'): Promise<boolean> {
+    try {
+      const { AutoSuspendService } = await import('./auto-suspend-service');
+      const autoSuspend = AutoSuspendService.getInstance();
+      // Register all available providers with the suspend service
+      const { getSandboxProvider } = await import('./providers');
+      const providerTypes: string[] = ['daytona', 'e2b', 'codesandbox', 'blaxel', 'runloop', 'modal', 'mistral', 'agentfs', 'terminaluse', 'desktop'];
+      for (const pt of providerTypes) {
+        try {
+          const p = await getSandboxProvider(pt as any);
+          autoSuspend.registerProvider(pt, p);
+        } catch { /* provider not configured */ }
+      }
+
+      autoSuspend.trackActivity(sandboxId);
+      return autoSuspend.suspendSandbox(sandboxId, reason as any);
+    } catch (error: any) {
+      logger.warn('Failed to suspend sandbox', { sandboxId, error: error.message });
+      return false;
+    }
+  }
+
+  /**
+   * Resume sandbox: Restore from suspended state.
+   */
+  async resumeSession(sandboxId: string): Promise<boolean> {
+    try {
+      const { AutoSuspendService } = await import('./auto-suspend-service');
+      return AutoSuspendService.getInstance().resumeSandbox(sandboxId);
+    } catch (error: any) {
+      logger.warn('Failed to resume sandbox', { sandboxId, error: error.message });
+      return false;
+    }
   }
 
   async executeCommand(sandboxId: string, command: string, cwd?: string) {
@@ -367,6 +460,38 @@ export class SandboxServiceBridge {
 }
 
 export const sandboxBridge = new SandboxServiceBridge();
+
+// ---------------------------------------------------------------------------
+// Auto-start auto-suspend service for idle sandbox detection
+// ---------------------------------------------------------------------------
+(async function startAutoSuspend() {
+  try {
+    const { AutoSuspendService } = await import('./auto-suspend-service');
+    const service = AutoSuspendService.getInstance({
+      idleTimeout: parseInt(process.env.SANDBOX_IDLE_TIMEOUT_MS || '1800000', 10), // 30 min default
+      checkInterval: parseInt(process.env.SANDBOX_CHECK_INTERVAL_MS || '300000', 10), // 5 min default
+      preserveState: process.env.SANDBOX_PRESERVE_STATE !== 'false',
+      restoreState: process.env.SANDBOX_RESTORE_STATE !== 'false',
+    });
+
+    // Register all providers
+    const { getSandboxProvider } = await import('./providers');
+    const providerTypes: string[] = ['daytona', 'e2b', 'codesandbox', 'blaxel', 'runloop', 'modal', 'mistral', 'agentfs', 'terminaluse', 'desktop'];
+    for (const pt of providerTypes) {
+      try {
+        const p = await getSandboxProvider(pt as any);
+        service.registerProvider(pt, p);
+      } catch { /* provider not configured */ }
+    }
+
+    service.start();
+    logger.info('Auto-suspend service started', {
+      idleTimeout: service['config'].idleTimeout / 60000 + 'min',
+    });
+  } catch (error: any) {
+    logger.warn('Failed to start auto-suspend service', { error: error.message });
+  }
+})();
 
 /**
  * Standalone helper so route handlers can destructure:

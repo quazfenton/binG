@@ -518,7 +518,14 @@ export function optimizeDAG(dag: DAG): DAG {
   // Step 2: Reorder for parallelism
   optimized = optimizeForParallelism(optimized);
 
-  return optimized;
+  // Mark as optimized
+  return {
+    ...optimized,
+    metadata: {
+      ...optimized.metadata,
+      optimized: true,
+    },
+  };
 }
 
 // ============================================================================

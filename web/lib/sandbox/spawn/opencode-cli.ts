@@ -59,6 +59,7 @@ import type { SandboxHandle, SandboxCreateConfig } from '../providers/sandbox-pr
 import { openCodeV2SessionManager, type V2SessionConfig, type OpenCodeV2Session } from '../../session/agent/opencode-v2-session-manager';
 import { nullclawMCPBridge } from '../../mcp/nullclaw-mcp-bridge';
 import { v4 as uuidv4 } from 'uuid';
+import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 
 const logger = createLogger('OpenCode:V2Provider');
 
@@ -499,7 +500,18 @@ export class OpencodeV2Provider implements LLMProvider {
       resources: this.config.sandbox?.resources || { cpu: 2, memory: 4 },
     };
 
-    return sandboxProvider.createSandbox(config);
+    const handle = await sandboxProvider.createSandbox(config);
+    
+    // Start VFS sync for bidirectional file sync
+    try {
+      const sessionId = this.currentSession?.id || uuidv4();
+      sandboxFilesystemSync.startSync(handle.id, sessionId);
+      console.log(`[OpencodeV2] VFS sync started for sandbox: ${handle.id}`);
+    } catch (syncErr: any) {
+      console.warn(`[OpencodeV2] Failed to start VFS sync:`, syncErr.message);
+    }
+    
+    return handle;
   }
 
   /**

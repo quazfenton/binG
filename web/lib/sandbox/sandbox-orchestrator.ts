@@ -21,6 +21,7 @@ import {
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import type { SandboxHandle } from './providers/sandbox-provider';
 import { getSandboxProvider, type SandboxProviderType } from './providers';
+import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 
 const logger = createLogger('Sandbox:Orchestrator');
 
@@ -475,6 +476,15 @@ export class SandboxOrchestrator {
       },
     });
     await handle.executeCommand(`mkdir -p "${workspaceDir.replace(/(["\\$`])/g, '\\$1')}"`);
+    
+    // Start VFS sync for bidirectional file sync between VFS database and sandbox
+    try {
+      sandboxFilesystemSync.startSync(handle.id, userId);
+      logger.info('VFS sync started for orchestrator sandbox', { sandboxId: handle.id, userId });
+    } catch (syncErr: any) {
+      logger.warn('Failed to start VFS sync for orchestrator sandbox:', syncErr.message);
+    }
+    
     return handle;
   }
 }

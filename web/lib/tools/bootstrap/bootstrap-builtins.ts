@@ -137,56 +137,9 @@ export async function registerBuiltInCapabilities(registry: ToolRegistry): Promi
   }
 
   // ========================================================================
-  // Register Arcade integration tools
+  // Arcade tools are registered by bootstrap-arcade.ts (dedicated module)
+  // Skip here to avoid duplicate registration
   // ========================================================================
-  try {
-    if (process.env.ARCADE_API_KEY) {
-      const { ArcadeService } = await import('@/lib/integrations/arcade-service');
-      const arcade = new ArcadeService({ apiKey: process.env.ARCADE_API_KEY });
-
-      // Dynamically discover all available Arcade tools and register them
-      const toolkits = await arcade.getToolkits();
-      let arcadeToolCount = 0;
-
-      for (const toolkit of toolkits.slice(0, 15)) { // Limit to top 15 toolkits
-        try {
-          const tools = await arcade.getTools({ toolkit });
-          for (const tool of tools.slice(0, 5)) { // Limit to 5 tools per toolkit
-            await registry.registerTool({
-              name: `arcade:${tool.name}`,
-              capability: 'integration.execute',
-              provider: 'arcade',
-              handler: async (args: any, context: any) => {
-                const userId = context.userId || 'anonymous';
-                const result = await arcade.executeTool(tool.name, args, userId);
-                if (result.requiresAuth && result.authUrl) {
-                  return { success: false, requiresAuth: true, authUrl: result.authUrl, message: `Connect ${tool.toolkit} to use this tool` };
-                }
-                return { success: result.success, data: result.output, error: result.error };
-              },
-              metadata: {
-                latency: 'medium',
-                cost: 'low',
-                reliability: 0.95,
-                tags: ['arcade', toolkit.toLowerCase(), 'integration'],
-              },
-              permissions: ['integration:execute'],
-            });
-            arcadeToolCount++;
-          }
-        } catch (e: any) {
-          logger.debug(`Failed to register tools for toolkit ${toolkit}`, e.message);
-        }
-      }
-
-      if (arcadeToolCount > 0) {
-        logger.info(`Auto-discovered and registered ${arcadeToolCount} Arcade tools from ${toolkits.length} toolkits`);
-        count += arcadeToolCount;
-      }
-    }
-  } catch (error: any) {
-    logger.warn('Arcade integration not available', error.message);
-  }
 
   // ========================================================================
   // Register Nango integration tools (proxy-based API access)
