@@ -72,7 +72,8 @@ function createMCPServer(): Server {
     }
 
     try {
-      // Execute the tool with the provided arguments
+      // NOTE: Tool context is set by the POST handler directly.
+      // This server request handler is only used for non-HTTP tool calls.
       // @ts-ignore - AI SDK tool execute signature
       const result = await tool.execute(args || {});
 
@@ -168,6 +169,49 @@ export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
     const { jsonrpc, method, params, id } = body;
+
+    // Handle tool call directly (bypass server request handler to preserve async context)
+    if (method === 'tools/call' && params) {
+      const { name, arguments: args } = params as { name: string; arguments?: Record<string, any> };
+
+      // Extract user identity from request cookies for proper workspace scoping
+      // Must match the ownerId format used by resolveFilesystemOwner
+      const cookie = request.cookies.get('anon-session-id');
+      const rawSessionId = cookie?.value;
+      // Strip 'anon_' prefix if present (matches resolveFilesystemOwner behavior)
+      const sessionId = rawSessionId ? rawSessionId.replace(/^anon_/, '') : '';
+      const userId = sessionId ? `anon:${sessionId}` : 'anon:mcp-fallback';
+      const scopePath = 'project/sessions/000';
+
+      const tool = vfsTools[name as keyof typeof vfsTools];
+      if (!tool) {
+        return NextResponse.json({
+          jsonrpc: '2.0',
+          error: { code: -32601, message: `Unknown tool: ${name}` },
+          id,
+        }, { status: 400 });
+      }
+
+      logger.debug('MCP tool call', { tool: name, userId, scopePath, args: Object.keys(args || {}) });
+
+      // Set tool context so files are written to the correct workspace
+      const result = await toolContextStore.run(
+        { userId, scopePath },
+        async () => {
+          // @ts-ignore - AI SDK tool execute signature
+          return await tool.execute(args || {});
+        }
+      );
+
+      return NextResponse.json({
+        jsonrpc: '2.0',
+        result: {
+          content: [{ type: 'text', text: JSON.stringify(result) }],
+          isError: !(result as any).success,
+        },
+        id,
+      });
+    }
 
     // Validate JSON-RPC format
     if (jsonrpc !== '2.0') {

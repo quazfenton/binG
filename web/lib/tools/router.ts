@@ -1492,6 +1492,24 @@ export class CapabilityRouter {
       return { success: false, error: `Unknown capability: ${capabilityId}` };
     }
 
+    // SECURITY: Validate input against the capability's Zod schema before forwarding.
+    // This prevents malformed LLM-generated inputs from reaching providers.
+    const parsed = capability.inputSchema.safeParse(input);
+    if (!parsed.success) {
+      const fieldErrors = parsed.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
+      logger.warn(`[CapabilityRouter] Input validation failed for ${capabilityId}`, {
+        errors: fieldErrors,
+        inputKeys: Object.keys(input || {}),
+      });
+      return {
+        success: false,
+        error: `Invalid input for ${capabilityId}: ${fieldErrors}`,
+      };
+    }
+
+    // Use the parsed (and potentially default-enriched) input for providers
+    const validatedInput = parsed.data;
+
     // Check permissions if specified
     if (capability.permissions && capability.permissions.length > 0) {
       const hasPermission = this.checkPermissions(capability.permissions, context);
@@ -1526,7 +1544,7 @@ export class CapabilityRouter {
       logger.debug(`[CapabilityRouter] Executing ${capabilityId} via ${provider.name} (score: ${score})`);
 
       try {
-        const result = await provider.execute(capabilityId, input, context);
+        const result = await provider.execute(capabilityId, validatedInput, context);
 
         if (result.success) {
           logger.debug(`[CapabilityRouter] ${capabilityId} succeeded via ${provider.name} (score: ${score})`);
