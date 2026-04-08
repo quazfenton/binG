@@ -216,7 +216,7 @@ export class DesktopFileSystem implements IFileSystem {
     
     // Use config root or fall back to default workspace folder name
     // For Tauri, the workspace is relative to the home directory
-    this.workspaceRoot = config.root || 'opencode-workspaces';
+    this.workspaceRoot = config.root || 'workspace';
     
     if (!this.workspaceRoot) {
       throw new Error('Cannot determine workspace root for desktop mode');

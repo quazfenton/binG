@@ -54,7 +54,7 @@ binG Desktop executes shell commands directly on your machine via your configure
 │ Linux/macOS │ $SHELL or /bin/bash │ -c                  │
 └─────────────┴─────────────────────┴─────────────────────┘
 2. Workspace Management
-- Default workspace:  ~/opencode-workspaces  (Linux/macOS) or  %USERPROFILE%\opencode-workspaces  (Windows)
+- Default workspace:  ~/workspace  (Linux/macOS) or  %USERPROFILE%\workspace  (Windows)
 - Custom workspace: Set  DESKTOP_WORKSPACE_ROOT  environment variable
 - Path validation: All file operations are validated to stay within workspace bounds
 3. Security Features

@@ -109,8 +109,8 @@ export async function createWebLocalPty(
       body: JSON.stringify({
         cols: options.cols || 80,
         rows: options.rows || 24,
-        cwd: options.cwd,
-        shell: options.shell,
+        cwd: options.cwd || '',
+        shell: options.shell || '',
       }),
     });
 

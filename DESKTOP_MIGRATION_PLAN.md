@@ -260,7 +260,7 @@ packages/platform/src/database/
 | Web (Current) | Desktop (New) |
 |---------------|---------------|
 | Cloud sandbox (Daytona, E2B, etc.) | Local shell on user's machine |
-| Workspace in cloud | Workspace in `~/opencode-workspaces` |
+| Workspace in cloud | Workspace in `~/workspace` |
 | Timeout-based execution | Native process execution |
 | Network isolation | Full local network access |
 

@@ -274,7 +274,8 @@ export default function ConversationInterface() {
   });
   const filesystemSessionIdRef = useRef(filesystemSessionId);
   const persistedUiStateUpdatedAtRef = useRef(0);
-  const continueProcessedRef = useRef<string | null>(null);
+  // NOTE: [CONTINUE_REQUESTED] auto-continue handled server-side via streamWithAutoContinue
+  // and the auto-continue event handler in use-enhanced-chat.ts.
   const chatHistorySavedRef = useRef<string | null>(null);
   const diffApplyQueueRef = useRef<Promise<void>>(Promise.resolve());
 
@@ -692,37 +693,10 @@ export default function ConversationInterface() {
           voiceService.speak(lastMessage.content).catch(console.error);
         }
 
-        // Track last CONTINUE_REQUESTED message ID to prevent duplicate auto-submits
-        const lastContinueMessageId = lastMessage.id;
-        const lastContinueContent = lastMessage.content;
-
-        // Check if message ends with CONTINUE_REQUESTED token (not just contains it)
-        if (!lastContinueContent.trimEnd().endsWith('[CONTINUE_REQUESTED]')) {
-          return; // Skip - AI didn't request continuation
-        }
-
-        // Check if we already processed this CONTINUE_REQUESTED message
-        const alreadyProcessed = continueProcessedRef.current === lastContinueMessageId;
-        if (alreadyProcessed) {
-          return; // Skip duplicate processing
-        }
-        continueProcessedRef.current = lastContinueMessageId;
-
-        console.log('[Continuance] Auto-triggering next request');
-        toast.info('Continuance requested by AI - sending next message');
-
-        setTimeout(() => {
-          const fakeEvent = {
-            preventDefault: () => {},
-            currentTarget: { reset: () => {} },
-          } as React.FormEvent<HTMLFormElement>;
-
-          setInput('Please continue with the remaining tasks or improvements.');
-
-          setTimeout(() => {
-            handleSubmit(fakeEvent);
-          }, 50);
-        }, 1000);
+        // NOTE: [CONTINUE_REQUESTED] auto-continue is now handled server-side
+        // in streamWithAutoContinue → emits 'auto-continue' event →
+        // useEnhanced-chat strips the token and auto-submits continuation.
+        // No UI-side duplication needed.
       }
     }
   }, [

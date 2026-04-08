@@ -260,7 +260,7 @@ export class AgentLoop {
       // FALLBACK 2: If still no tool invocations, try parsing text-based tool calls from response
       if (toolInvocations.length === 0 && finalResult.text) {
         log.debug('Stream completed without tool calls, LLM response:', finalResult.text.substring(0, 300));
-        const textToolCalls = this.parseTextToolCalls(finalResult.text);
+        const textToolCalls = await this.parseTextToolCalls(finalResult.text);
         if (textToolCalls.length > 0) {
           log.info(`ToolLoopAgent: No function calls, found ${textToolCalls.length} text-based tool calls, executing fallback`);
           
@@ -401,7 +401,7 @@ export class AgentLoop {
 
       // FALLBACK: If no tool invocations, try parsing text-based tool calls from response
       if (toolInvocations.length === 0 && result.text) {
-        const textToolCalls = this.parseTextToolCalls(result.text);
+        const textToolCalls = await this.parseTextToolCalls(result.text);
         if (textToolCalls.length > 0) {
           log.info(`ToolLoopAgent (non-streaming): No function calls, found ${textToolCalls.length} text-based tool calls, executing fallback`);
           
@@ -609,7 +609,7 @@ export class AgentLoop {
           // FALLBACK: If no function calls were made, try parsing text-based tool calls
           // This handles models that don't support function calling
           if (allToolCalls.length === 0 && fullText.length > 0) {
-            const textToolCalls = this.parseTextToolCalls(fullText);
+            const textToolCalls = await this.parseTextToolCalls(fullText);
             if (textToolCalls.length > 0) {
               log.info(`No function calls detected, found ${textToolCalls.length} text-based tool calls, executing fallback`);
               
@@ -983,151 +983,40 @@ When task is complete, just respond naturally with your final answer.
   /**
    * Parse text-based tool calls from LLM response
    * Fallback for models that don't support function calling
-   * Supports patterns like:
-   * - write_file({ "path": "...", "content": "..." })
-   * - [Tool: write_file] { "path": "...", "content": "..." }
-   * - { "tool": "write_file", "path": "...", "content": "..." }
+   * Delegates to the master extractFileEdits which handles ALL formats:
+   *   - write_file({ "path": "...", "content": "..." })
+   *   - { "tool": "write_file", "path": "...", "content": "..." }
+   *   - { "tool": "write_file", "arguments": { "path": "...", "content": "..." } }
+   *   - [Tool: write_file] { "path": "...", "content": "..." }
+   *   - <file_edit path="...">content</file_edit>
+   *   - cat > file << 'EOF' ... EOF
+   *   - WRITE path <<<content>>>
+   *   - <!-- path -->content
+   *   - ```file: path\ncontent```
    */
-  private parseTextToolCalls(text: string): Array<{ name: string; arguments: Record<string, any> }> {
+  private async parseTextToolCalls(text: string): Promise<Array<{ name: string; arguments: Record<string, any> }>> {
+    const { extractFileEdits } = await import('@/lib/chat/file-edit-parser');
+
+    // extractFileEdits is the master dispatcher — handles every known format
+    const fileEdits = extractFileEdits(text);
+
+    // Convert FileEdit[] to generic tool call format
     const toolCalls: Array<{ name: string; arguments: Record<string, any> }> = [];
-    const toolNames = this.tools.map(t => t.name);
-    const toolNamesPattern = toolNames.join('|');
+    for (const edit of fileEdits) {
+      // Map action to tool name
+      let toolName: string = edit.action || 'write_file';
+      if (edit.action === 'write') toolName = 'write_file';
+      else if (edit.action === 'patch') toolName = 'apply_diff';
+      else if (edit.action === 'mkdir') toolName = 'create_directory';
 
-    // Pattern 1: write_file({ "path": "...", "content": "..." })
-    // Find tool name + opening paren, then scan forward to find matching closing paren
-    const pattern1 = new RegExp(`(${toolNamesPattern})\\s*\\(`, 'gi');
-    let match;
-    while ((match = pattern1.exec(text)) !== null) {
-      try {
-        const startIdx = match.index + match[0].length;
-        // Scan forward to find matching closing paren, tracking brace depth
-        let depth = 0;
-        let inString = false;
-        let escapeNext = false;
-        let endIdx = -1;
-        for (let i = startIdx; i < text.length; i++) {
-          const ch = text[i];
-          if (escapeNext) {
-            escapeNext = false;
-            continue;
-          }
-          if (ch === '\\' && inString) {
-            escapeNext = true;
-            continue;
-          }
-          if (ch === '"') {
-            inString = !inString;
-            continue;
-          }
-          if (inString) continue;
-          if (ch === '{' || ch === '(') {
-            depth++;
-          } else if (ch === '}' || ch === ')') {
-            if (depth <= 0 && ch === ')') {
-              endIdx = i;
-              break;
-            }
-            depth--;
-          }
-        }
-        if (endIdx === -1) continue;
+      // Deduplicate by tool name + path
+      if (toolCalls.some(t => t.name === toolName && t.arguments.path === edit.path)) continue;
 
-        const argText = text.substring(startIdx, endIdx).trim();
-        const openBrace = argText.indexOf('{');
-        const closeBrace = argText.lastIndexOf('}');
-        if (openBrace === -1 || closeBrace === -1) continue;
-        const jsonStr = argText.substring(openBrace, closeBrace + 1);
-        // Skip empty objects like {} - must have at least one key
-        if (jsonStr.trim() === '{}') continue;
-        const args = JSON.parse(jsonStr);
-        // Skip if parsed object has no keys
-        if (Object.keys(args).length === 0) continue;
-        toolCalls.push({ name: match[1], arguments: args });
-      } catch (e) {
-        // Skip invalid arguments
-      }
-    }
+      const args: Record<string, any> = { path: edit.path };
+      if (edit.content) args.content = edit.content;
+      if (edit.diff) args.diff = edit.diff;
 
-    // Pattern 2: [Tool: write_file] { "path": "..." }
-    // Match tool tag, then extract JSON from after tag using balanced brace scanning
-    const pattern2 = new RegExp(`\\[\\s*Tool:\\s*(${toolNamesPattern})\\s*\\]`, 'gi');
-    while ((match = pattern2.exec(text)) !== null) {
-      try {
-        const tagEndIdx = match.index + match[0].length;
-        const afterTag = text.substring(tagEndIdx);
-        // Find the first { after the tag
-        const openBrace = afterTag.indexOf('{');
-        if (openBrace === -1) continue;
-        // Scan forward from the first { to find the matching }
-        let depth = 0;
-        let inString = false;
-        let escapeNext = false;
-        let closeIdx = -1;
-        for (let i = openBrace; i < afterTag.length; i++) {
-          const ch = afterTag[i];
-          if (escapeNext) { escapeNext = false; continue; }
-          if (ch === '\\' && inString) { escapeNext = true; continue; }
-          if (ch === '"') { inString = !inString; continue; }
-          if (inString) continue;
-          if (ch === '{') depth++;
-          else if (ch === '}') {
-            depth--;
-            if (depth === 0) { closeIdx = i; break; }
-          }
-        }
-        if (closeIdx === -1) continue;
-        const jsonStr = afterTag.substring(openBrace, closeIdx + 1);
-        // Skip empty objects
-        if (jsonStr.trim() === '{}') continue;
-        const args = JSON.parse(jsonStr);
-        if (Object.keys(args).length === 0) continue;
-        toolCalls.push({ name: match[1], arguments: args });
-      } catch (e) {
-        // Skip invalid JSON
-      }
-    }
-
-    // Pattern 3: { "tool": "write_file", "path": "..." } or { "name": "write_file", ... }
-    // Find all top-level { } blocks and check if they contain tool/name key
-    const pattern3Start = /\{/g;
-    while ((match = pattern3Start.exec(text)) !== null) {
-      try {
-        const openIdx = match.index;
-        // Scan forward to find matching }
-        let depth = 0;
-        let inString = false;
-        let escapeNext = false;
-        let closeIdx = -1;
-        for (let i = openIdx; i < text.length; i++) {
-          const ch = text[i];
-          if (escapeNext) { escapeNext = false; continue; }
-          if (ch === '\\' && inString) { escapeNext = true; continue; }
-          if (ch === '"') { inString = !inString; continue; }
-          if (inString) continue;
-          if (ch === '{') depth++;
-          else if (ch === '}') {
-            depth--;
-            if (depth === 0) { closeIdx = i; break; }
-          }
-        }
-        if (closeIdx === -1) continue;
-        const jsonStr = text.substring(openIdx, closeIdx + 1);
-        // Quick check: must contain "tool" or "name" key
-        if (!jsonStr.includes('"tool"') && !jsonStr.includes('"name"')) continue;
-        const parsed = JSON.parse(jsonStr);
-        if (!parsed.tool && !parsed.name) continue;
-        // Check if the tool name matches one of our tools
-        const toolName = parsed.tool || parsed.name;
-        if (!toolNames.includes(toolName)) continue;
-        const args = { ...parsed };
-        delete args.tool;
-        delete args.name;
-        // Skip empty args
-        if (Object.keys(args).length === 0) continue;
-        toolCalls.push({ name: toolName, arguments: args });
-      } catch (e) {
-        // Skip invalid JSON
-      }
+      toolCalls.push({ name: toolName, arguments: args });
     }
 
     if (toolCalls.length > 0) {

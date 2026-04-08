@@ -24,6 +24,14 @@ import { randomUUID } from 'crypto';
 import * as path from 'path';
 import * as fs from 'fs';
 import type { IPty } from 'node-pty';
+import { createLogger } from '@/lib/utils/logger';
+import { generateSecureId } from '@/lib/utils';
+import {
+  materializeWorkspace,
+  watchWorkspaceForChanges,
+} from '@/lib/virtual-filesystem/vfs-workspace-materializer';
+
+const logger = createLogger('LocalPTY');
 
 export const runtime = 'nodejs';
 
@@ -40,8 +48,14 @@ interface LocalPtySession {
   exitCode: number | undefined;
   dockerContainerId?: string;
   unsharePid?: number;
+  // SSH client for Oracle VM sessions — closed on cleanup
+  sshClient?: any;
   // Output queue for SSE streaming (typed, not `any`)
   outputQueue: string[];
+  // VFS file watcher — syncs real filesystem changes back to VFS database
+  vfsWatcher?: { stop: () => void };
+  // Real workspace directory on disk (materialized from VFS)
+  workspaceDir: string;
 }
 
 // Security: Max sessions per user to prevent resource exhaustion
@@ -58,11 +72,11 @@ const sessions = globalThis.__localPtySessions ??= new Map<string, LocalPtySessi
 // Configuration
 // ============================================================
 
-type IsolationMode = 'off' | 'localhost' | 'unshare' | 'docker' | 'on';
+type IsolationMode = 'off' | 'localhost' | 'unshare' | 'docker' | 'oracle-vm' | 'on';
 
 const ENABLE_LOCAL_PTY: IsolationMode =
   (process.env.ENABLE_LOCAL_PTY as IsolationMode) ||
-  (process.env.NODE_ENV === 'production' ? 'off' : 'on');
+  (process.env.ORACLE_VM_HOST ? 'oracle-vm' : process.env.NODE_ENV === 'production' ? 'off' : 'on');
 
 // Docker isolation config
 const DOCKER_IMAGE = process.env.LOCAL_PTY_DOCKER_IMAGE || 'node:20-slim';
@@ -85,7 +99,8 @@ const MAX_SESSION_AGE = 30 * 60 * 1000; // 30 minutes
 
 const cleanupInterval = setInterval(async () => {
   const now = Date.now();
-  for (const [id, session] of sessions.entries()) {
+  // Use Array.from to avoid concurrent modification issues
+  for (const [id, session] of Array.from(sessions.entries())) {
     if (now - session.createdAt > MAX_SESSION_AGE || session.exited) {
       await cleanupSession(id, session);
     }
@@ -95,24 +110,50 @@ const cleanupInterval = setInterval(async () => {
 // Cleanup on process exit
 if (typeof process !== 'undefined') {
   process.on('exit', () => {
-    for (const [id, session] of sessions.entries()) {
+    for (const [id, session] of Array.from(sessions.entries())) {
       try {
         session.pty.kill();
-      } catch {
-        // Ignore errors during shutdown
+      } catch { /* ignore */ }
+      // Also close SSH clients for Oracle VM sessions
+      if (session.sshClient) {
+        try { session.sshClient.end(); } catch { /* ignore */ }
       }
     }
   });
 
   process.on('SIGTERM', () => {
     clearInterval(cleanupInterval);
+    // Graceful shutdown — kill all sessions
+    for (const [id, session] of Array.from(sessions.entries())) {
+      try {
+        if (session.vfsWatcher) session.vfsWatcher.stop();
+        if (session.sshClient) session.sshClient.end();
+        session.pty.kill();
+      } catch { /* ignore */ }
+    }
     process.exit(0);
   });
 }
 
 async function cleanupSession(id: string, session: LocalPtySession): Promise<void> {
   try {
-    if (session.dockerContainerId) {
+    // Stop the VFS file watcher first
+    if (session.vfsWatcher) {
+      try {
+        session.vfsWatcher.stop();
+      } catch {
+        // Ignore watcher cleanup errors
+      }
+    }
+
+    // Close SSH client for Oracle VM sessions (also kills the pseudo-PTY)
+    if (session.sshClient) {
+      try {
+        session.sshClient.end();
+      } catch {
+        // Ignore SSH cleanup errors
+      }
+    } else if (session.dockerContainerId) {
       await cleanupDockerContainer(session.dockerContainerId);
     } else if (session.unsharePid) {
       // Kill the unshare process tree
@@ -149,29 +190,13 @@ async function cleanupDockerContainer(containerId: string): Promise<void> {
 // Helper: Resolve virtual workspace paths to real filesystem paths
 // ============================================================
 
-function resolveRealCwd(cwd: string | undefined): string {
-  if (!cwd) return process.cwd();
-
-  // Virtual VFS paths like 'project/sessions', 'project/...', etc.
-  // Map to a real directory on the host filesystem
-  const realBase = process.env.LOCAL_PTY_WORKSPACE_ROOT || process.cwd();
-
-  // Strip VFS prefix (e.g. 'project/' -> just the rest)
-  const relative = cwd.replace(/^(project\/|workspace\/)/i, '');
-
-  // Join with real base and normalize
-  const resolved = path.resolve(realBase, relative);
-
-  // Verify the directory exists; fall back to cwd if not
-  try {
-    if (fs.existsSync(resolved) && fs.statSync(resolved).isDirectory()) {
-      return resolved;
-    }
-  } catch {
-    // Ignore — fall through to default
-  }
-
-  return process.cwd();
+/**
+ * Resolve the VFS workspace directory for a user.
+ * If the workspace hasn't been materialized yet, materialize it now.
+ * Otherwise, return the existing materialized directory.
+ */
+async function resolveWorkspaceDir(userId: string): Promise<string> {
+  return materializeWorkspace(userId);
 }
 
 // ============================================================
@@ -192,8 +217,9 @@ function validateDimensions(cols: number, rows: number): { cols: number; rows: n
 // ============================================================
 
 function getUserSessionCount(userId: string): number {
+  // Copy values to array to avoid concurrent modification during cleanup
   let count = 0;
-  for (const session of sessions.values()) {
+  for (const session of Array.from(sessions.values())) {
     if (session.userId === userId && !session.exited) count++;
   }
   return count;
@@ -251,34 +277,69 @@ function getCleanEnv(): NodeJS.ProcessEnv {
 // ============================================================
 
 export async function POST(req: NextRequest) {
+  // Determine if this is a new anonymous session that needs a cookie
+  const existingAnonCookie = req.cookies.get('anon-session-id')?.value;
+  let anonSessionIdToSet: string | undefined;
+
+  // Resolve auth
+  let authResult = await resolveRequestAuth(req, { allowAnonymous: true });
+
+  // If auth failed and there's no existing anon cookie, create a new anonymous identity
+  // This ensures first-time visitors get a unique session ID on their first request
+  if (!authResult.success && !existingAnonCookie) {
+    anonSessionIdToSet = generateSecureId('anon');
+    const anonId = anonSessionIdToSet.startsWith('anon_') ? anonSessionIdToSet.slice(5) : anonSessionIdToSet;
+    authResult = { success: true, userId: `anon:${anonId}`, source: 'anonymous' };
+  }
+
+  // If we resolved an anonymous session and there's no existing cookie, set it
+  if (!existingAnonCookie && authResult.success && authResult.source === 'anonymous') {
+    if (!anonSessionIdToSet) {
+      // Auth succeeded but we didn't generate one above — extract from userId
+      const anonPart = authResult.userId.replace('anon:', '');
+      anonSessionIdToSet = `anon_${anonPart}`;
+    }
+  }
+
+  /** Add the anon-session-id cookie to a response if this is a new anonymous session. */
+  const addAnonSessionCookie = (response: NextResponse): NextResponse => {
+    if (anonSessionIdToSet) {
+      const isSecure = process.env.NODE_ENV === 'production';
+      response.headers.set(
+        'set-cookie',
+        `anon-session-id=${anonSessionIdToSet}; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly${isSecure ? '; Secure' : ''}`
+      );
+    }
+    return response;
+  };
+
   try {
     // === Security gate ===
     if (ENABLE_LOCAL_PTY === 'off') {
-      return NextResponse.json(
+      return addAnonSessionCookie(NextResponse.json(
         {
           error: 'Local PTY is disabled. Use sandbox providers for terminal access.',
           mode: 'sandbox',
           hint: 'Set ENABLE_LOCAL_PTY=localhost to enable for local development',
         },
         { status: 503 }
-      );
+      ));
     }
 
     // Localhost-only mode
     if (ENABLE_LOCAL_PTY === 'localhost') {
       const origin = req.headers.get('origin') || req.headers.get('host') || '';
       if (!origin.includes('localhost') && !origin.includes('127.0.0.1') && !origin.includes('::1')) {
-        return NextResponse.json(
+        return addAnonSessionCookie(NextResponse.json(
           { error: 'Local PTY is only available from localhost', mode: 'sandbox' },
           { status: 503 }
-        );
+        ));
       }
     }
 
-    // Resolve auth
-    const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
+    // Resolve auth (already done above, just validate)
     if (!authResult.success || !authResult.userId) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+      return addAnonSessionCookie(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }));
     }
 
     // Parse body
@@ -288,10 +349,10 @@ export async function POST(req: NextRequest) {
     // Validate dimensions
     const dims = validateDimensions(rawCols, rawRows);
     if (!dims) {
-      return NextResponse.json(
+      return addAnonSessionCookie(NextResponse.json(
         { error: `Invalid dimensions: cols=${rawCols}, rows=${rawRows}. Must be cols:[${MIN_COLS}-${MAX_COLS}], rows:[${MIN_ROWS}-${MAX_ROWS}]` },
         { status: 400 }
-      );
+      ));
     }
     const { cols, rows } = dims;
 
@@ -299,22 +360,22 @@ export async function POST(req: NextRequest) {
     if (checkOnly) {
       try {
         await import('node-pty');
-        return NextResponse.json({ available: true, mode: ENABLE_LOCAL_PTY });
+        return addAnonSessionCookie(NextResponse.json({ available: true, mode: ENABLE_LOCAL_PTY }));
       } catch {
-        return NextResponse.json({ available: false, mode: ENABLE_LOCAL_PTY }, { status: 503 });
+        return addAnonSessionCookie(NextResponse.json({ available: false, mode: ENABLE_LOCAL_PTY }, { status: 503 }));
       }
     }
 
     // Check session limit
     const userSessionCount = getUserSessionCount(authResult.userId);
     if (userSessionCount >= MAX_SESSIONS_PER_USER) {
-      return NextResponse.json(
+      return addAnonSessionCookie(NextResponse.json(
         {
           error: `Too many PTY sessions (${userSessionCount}/${MAX_SESSIONS_PER_USER}). Close existing sessions first.`,
           mode: 'sandbox',
         },
         { status: 429 }
-      );
+      ));
     }
 
     // Import node-pty
@@ -322,26 +383,26 @@ export async function POST(req: NextRequest) {
     try {
       nodePty = await import('node-pty');
     } catch {
-      return NextResponse.json(
+      return addAnonSessionCookie(NextResponse.json(
         {
           error: 'node-pty not installed',
           hint: 'Run: npm install node-pty',
           mode: 'sandbox',
         },
         { status: 503 }
-      );
+      ));
     }
 
     // Determine shell
     const defaultShell = process.platform === 'win32'
       ? 'powershell.exe'
-      : process.env.SHELL || '/bin/bash';
-    const ptyShell = shell || defaultShell;
+      : (process.env.SHELL && process.env.SHELL.length > 0) ? process.env.SHELL : '/bin/bash';
+    const ptyShell = (shell && shell.length > 0) ? shell : defaultShell;
     const sessionId = randomUUID();
 
     // === Isolation mode: unshare (Linux user namespaces) ===
     if (ENABLE_LOCAL_PTY === 'unshare') {
-      return await createUnsharePtySession(
+      return addAnonSessionCookie(await createUnsharePtySession(
         nodePty,
         sessionId,
         authResult.userId,
@@ -349,12 +410,23 @@ export async function POST(req: NextRequest) {
         rows,
         cwd,
         ptyShell
-      );
+      ));
+    }
+
+    // === Isolation mode: Oracle VM (SSH-based PTY) ===
+    if (ENABLE_LOCAL_PTY === 'oracle-vm') {
+      return addAnonSessionCookie(await createOracleVMPtySession(
+        sessionId,
+        authResult.userId,
+        cols,
+        rows,
+        ptyShell
+      ));
     }
 
     // === Isolation mode: Docker ===
     if (ENABLE_LOCAL_PTY === 'docker') {
-      return await createDockerPtySession(
+      return addAnonSessionCookie(await createDockerPtySession(
         nodePty,
         sessionId,
         authResult.userId,
@@ -362,11 +434,11 @@ export async function POST(req: NextRequest) {
         rows,
         cwd,
         ptyShell
-      );
+      ));
     }
 
     // === Direct spawn mode (dev only) ===
-    return await createDirectPtySession(
+    return addAnonSessionCookie(await createDirectPtySession(
       nodePty,
       sessionId,
       authResult.userId,
@@ -374,13 +446,13 @@ export async function POST(req: NextRequest) {
       rows,
       cwd,
       ptyShell
-    );
+    ));
   } catch (error: any) {
     console.error('[Local PTY] Failed to create session:', error);
-    return NextResponse.json(
+    return addAnonSessionCookie(NextResponse.json(
       { error: 'Failed to create PTY session', details: error.message },
       { status: 500 }
-    );
+    ));
   }
 }
 
@@ -397,7 +469,11 @@ async function createDirectPtySession(
   cwd: string | undefined,
   ptyShell: string
 ): Promise<NextResponse> {
-  const realCwd = resolveRealCwd(cwd);
+  // Materialize VFS files to a real directory for this user
+  const workspaceDir = await resolveWorkspaceDir(userId);
+
+  // Start VFS file watcher to sync changes from the shell back to the database
+  const vfsWatcher = watchWorkspaceForChanges(userId);
 
   // node-pty requires minimum dimensions of 1x1 on Windows (conpty requirement)
   // and sensible max values to prevent memory issues
@@ -408,7 +484,7 @@ async function createDirectPtySession(
     shell: ptyShell,
     cols: safeCols,
     rows: safeRows,
-    cwd: realCwd,
+    workspaceDir,
     platform: process.platform,
   });
 
@@ -418,10 +494,12 @@ async function createDirectPtySession(
       name: 'xterm-256color',
       cols: safeCols,
       rows: safeRows,
-      cwd: realCwd,
+      cwd: workspaceDir,
       env: getCleanEnv(),
     });
   } catch (spawnError: any) {
+    // Spawn failed — stop the file watcher to avoid leaks
+    vfsWatcher.stop();
     logger.error('[Local PTY] Failed to spawn shell process', {
       shell: ptyShell,
       error: spawnError.message,
@@ -439,9 +517,12 @@ async function createDirectPtySession(
     );
   }
 
-  registerSession(sessionId, userId, pty);
+  registerSession(sessionId, userId, pty, {
+    vfsWatcher,
+    workspaceDir,
+  });
 
-  return NextResponse.json({ sessionId, mode: 'direct' });
+  return NextResponse.json({ sessionId, mode: 'direct', workspaceDir });
 }
 
 // ============================================================
@@ -487,22 +568,23 @@ async function createUnsharePtySession(
   try {
     const safeCols = Math.max(1, Math.min(cols, 500));
     const safeRows = Math.max(1, Math.min(rows, 200));
+    const workspaceDir = await resolveWorkspaceDir(userId);
     const pty = nodePty.spawn('unshare', unshareArgs, {
       name: 'xterm-256color',
       cols: safeCols,
       rows: safeRows,
-      cwd: resolveRealCwd(cwd),
+      cwd: workspaceDir,
       env: getCleanEnv(),
     });
 
     // Get the PID of the unshare process for cleanup
     const unsharePid = (pty as any).pid || (pty as any)._pid;
 
-    registerSession(sessionId, userId, pty, { unsharePid });
+    registerSession(sessionId, userId, pty, { unsharePid, workspaceDir });
 
     console.log(`[Local PTY] Unshare session created: ${sessionId}`);
 
-    return NextResponse.json({ sessionId, mode: 'unshare' });
+    return NextResponse.json({ sessionId, mode: 'unshare', workspaceDir });
   } catch (error: any) {
     // Check if unshare is available
     if (error.message?.includes('ENOENT') || error.message?.includes('unshare')) {
@@ -534,9 +616,12 @@ async function createDockerPtySession(
 ): Promise<NextResponse> {
   const { spawn } = await import('child_process');
 
+  // Materialize VFS files and set up file watching for Docker workspace too
+  const workspaceDir = await resolveWorkspaceDir(userId);
+  const vfsWatcher = watchWorkspaceForChanges(userId);
+
   // Generate a unique container name
   const containerName = `pty-${sessionId.slice(0, 12)}`;
-  const workspaceDir = cwd || '/workspace';
 
   // Start container in detached mode
   const dockerProcess = spawn('docker', [
@@ -551,8 +636,11 @@ async function createDockerPtySession(
     '--network',
     'none', // No network access (security)
     '--rm', // Auto-remove on exit
+    // Mount the VFS workspace directory into the container so file changes
+    // are visible to the local file watcher
+    '-v', `${workspaceDir}:/workspace`,
     '-w',
-    workspaceDir,
+    '/workspace',
     DOCKER_IMAGE,
     'sleep', 'infinity', // Keep container running, we'll exec into it
   ]);
@@ -609,7 +697,8 @@ async function createDockerPtySession(
       for (let attempt = 0; attempt < 10; attempt++) {
         try {
           await new Promise<void>((resolve, reject) => {
-            execSync(`docker exec ${containerId} /bin/sh -c "echo ready"`, (err) => {
+            // Try multiple shells since some containers may not have /bin/sh
+            execSync(`docker exec ${containerId} ls /workspace >/dev/null 2>&1`, (err) => {
               if (err) reject(err);
               else resolve();
             });
@@ -628,6 +717,7 @@ async function createDockerPtySession(
         try {
           await cleanupDockerContainer(containerId);
         } catch { /* ignore */ }
+        vfsWatcher.stop();
         return NextResponse.json(
           {
             error: 'Docker container failed to initialize',
@@ -651,19 +741,420 @@ async function createDockerPtySession(
         name: 'xterm-256color',
         cols: safeCols,
         rows: safeRows,
-        cwd: workspaceDir,
+        cwd: '/workspace',
         env: {
           TERM: 'xterm-256color',
-          HOME: workspaceDir,
+          HOME: '/workspace',
           PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
           LANG: 'en_US.UTF-8',
         },
       });
 
-      registerSession(sessionId, userId, pty, { dockerContainerId: containerId });
+      registerSession(sessionId, userId, pty, {
+        dockerContainerId: containerId,
+        vfsWatcher,
+        workspaceDir,
+      });
 
-      resolve(NextResponse.json({ sessionId, mode: 'docker' }));
+      resolve(NextResponse.json({ sessionId, mode: 'docker', workspaceDir }));
     });
+  });
+}
+
+// ============================================================
+// Remote VFS Sync for Oracle VM
+// ============================================================
+
+/**
+ * Safely escape a string for use in a remote SSH shell command.
+ * Prevents command injection via malicious filenames or workspace paths.
+ */
+function shellEscape(s: string): string {
+  // Replace single quotes with '\'' (end quote, escaped quote, start quote)
+  // This is the safest cross-platform shell escape method
+  return `'${s.replace(/'/g, "'\\''")}'`;
+}
+
+/**
+ * Poll the remote Oracle VM workspace for file changes and sync them to the VFS database.
+ * Uses SSH exec commands to list files and read content.
+ * Returns a stop function to cancel the sync loop.
+ */
+function startRemoteVfsSync(
+  sshClient: any,
+  userId: string,
+  remoteWorkspace: string,
+  sessionId: string
+): { stop: () => void } {
+  let stopped = false;
+  let execInProgress = false; // Prevent overlapping exec calls
+  const POLL_INTERVAL_MS = 5000; // Check every 5 seconds
+  const MAX_FILE_SIZE = 5 * 1024 * 1024; // 5 MB limit
+  const fileState = new Map<string, { size: number; mtime: string }>();
+
+  // Validate the remote workspace path to prevent command injection
+  const SAFE_PATH_RE = /^[a-zA-Z0-9_./-]+$/;
+  if (!SAFE_PATH_RE.test(remoteWorkspace)) {
+    logger.error('[Local PTY] Unsafe Oracle VM workspace path — VFS sync disabled', {
+      remoteWorkspace,
+    });
+    return { stop: () => {} }; // No-op stop function
+  }
+
+  // Execute a command on the remote VM via the existing SSH client
+  async function execRemote(command: string): Promise<string> {
+    if (stopped || execInProgress) {
+      if (execInProgress) throw new Error('SSH exec already in progress');
+      throw new Error('Remote VFS sync is stopped');
+    }
+
+    return new Promise((resolve, reject) => {
+      const timeout = setTimeout(() => {
+        reject(new Error('SSH exec timeout'));
+      }, 30000); // 30s timeout per exec
+
+      execInProgress = true;
+      sshClient.exec(command, (err: any, stream: any) => {
+        if (err) {
+          clearTimeout(timeout);
+          execInProgress = false;
+          return reject(err);
+        }
+        let output = '';
+        stream.on('data', (data: Buffer) => { output += data.toString(); });
+        stream.stderr.on('data', () => { /* ignore stderr */ });
+        stream.on('close', (code: number) => {
+          clearTimeout(timeout);
+          execInProgress = false;
+          if (code === 0) resolve(output);
+          else reject(new Error(`Remote command failed with code ${code}`));
+        });
+        stream.on('error', (err: any) => {
+          clearTimeout(timeout);
+          execInProgress = false;
+          reject(err);
+        });
+      });
+    });
+  }
+
+  async function pollRemoteChanges(): Promise<void> {
+    if (stopped) return;
+
+    try {
+      // SECURITY: remoteWorkspace is validated above with SAFE_PATH_RE
+      const escapedWorkspace = shellEscape(remoteWorkspace);
+      // Use find + stat for portable file listing (GNU and BSD compatible)
+      // Limit to 1000 files to prevent resource exhaustion on large directories
+      const fileListOutput = await execRemote(
+        `find ${escapedWorkspace} -type f -exec stat -c '%n\\t%s\\t%Y' {} + 2>/dev/null | head -n 1000 || true`
+      );
+
+      const currentFiles = new Map<string, { size: number; mtime: string }>();
+      const newFiles: string[] = [];
+      const modifiedFiles: string[] = [];
+
+      // Parse the output — stat output is: fullPath\tsize\tmtime
+      for (const line of fileListOutput.trim().split('\n').filter(Boolean)) {
+        const parts = line.split('\t');
+        if (parts.length < 3) continue;
+        const fullPath = parts[0];
+        const sizeStr = parts[1];
+        const mtime = parts[2];
+        const size = parseInt(sizeStr, 10);
+        if (isNaN(size)) continue;
+
+        // Strip the workspace prefix to get relative path
+        const relPath = fullPath.startsWith(remoteWorkspace + '/')
+          ? fullPath.slice(remoteWorkspace.length + 1)
+          : fullPath;
+
+        // SECURITY: Validate relative path — reject traversal attempts
+        if (relPath.startsWith('..') || relPath.startsWith('/') || relPath.includes('\0')) continue;
+
+        // Skip large files
+        if (size > MAX_FILE_SIZE) continue;
+
+        currentFiles.set(relPath, { size, mtime });
+
+        const prevState = fileState.get(relPath);
+        if (!prevState) {
+          newFiles.push(relPath);
+        } else if (mtime !== prevState.mtime || size !== prevState.size) {
+          modifiedFiles.push(relPath);
+        }
+      }
+
+      // Sync new files to VFS
+      for (const filePath of newFiles) {
+        try {
+          // SECURITY: Validate and escape the file path
+          if (!SAFE_PATH_RE.test(filePath)) continue;
+          const escapedPath = shellEscape(filePath);
+          const content = await execRemote(`cat ${escapedWorkspace}/${escapedPath} 2>/dev/null || true`);
+          if (content) {
+            await syncRemoteFileToVfsDirect(userId, filePath, content);
+            const stat = currentFiles.get(filePath)!;
+            fileState.set(filePath, stat);
+          }
+        } catch (err: any) {
+          logger.debug('Failed to sync new remote file', { path: filePath, error: err.message });
+        }
+      }
+
+      // Sync modified files
+      for (const filePath of modifiedFiles) {
+        try {
+          if (!SAFE_PATH_RE.test(filePath)) continue;
+          const escapedPath = shellEscape(filePath);
+          const content = await execRemote(`cat ${escapedWorkspace}/${escapedPath} 2>/dev/null || true`);
+          if (content) {
+            await syncRemoteFileToVfsDirect(userId, filePath, content);
+            const stat = currentFiles.get(filePath)!;
+            fileState.set(filePath, stat);
+          }
+        } catch (err: any) {
+          logger.debug('Failed to sync modified remote file', { path: filePath, error: err.message });
+        }
+      }
+
+      // Detect deleted files
+      for (const [filePath] of fileState) {
+        if (!currentFiles.has(filePath)) {
+          try {
+            await syncFileToVfs(userId, filePath, 'delete');
+          } catch { /* ignore */ }
+          fileState.delete(filePath);
+        }
+      }
+    } catch (err: any) {
+      // SSH exec can fail during cleanup or connection loss — don't spam logs
+      if (!stopped && !err.message?.includes('closed') && !err.message?.includes('timeout')) {
+        logger.debug('Remote VFS sync poll failed', { error: err.message });
+      }
+    }
+  }
+
+  // Initial snapshot
+  pollRemoteChanges().catch(() => {});
+
+  // Start polling
+  const interval = setInterval(() => {
+    if (!execInProgress) {
+      pollRemoteChanges().catch(() => {});
+    }
+  }, POLL_INTERVAL_MS);
+
+  return {
+    stop: () => {
+      stopped = true;
+      clearInterval(interval);
+      logger.info('Remote VFS sync stopped', { sessionId });
+    },
+  };
+}
+
+/**
+ * Sync file content directly to VFS database (bypasses local filesystem read).
+ * Used for remote files where we already have the content from SSH.
+ */
+async function syncRemoteFileToVfsDirect(
+  userId: string,
+  filePath: string,
+  content: string
+): Promise<void> {
+  const normalizedId = userId.replace(/^anon:/, '').replace(/\.\./g, '').replace(/[\\/ \0]/g, '_').substring(0, 255) || '_default';
+
+  try {
+    const db = getDb();
+    const ext = require('path').extname(filePath).toLowerCase();
+    const languageMap: Record<string, string> = {
+      '.js': 'javascript', '.jsx': 'javascript', '.ts': 'typescript', '.tsx': 'typescript',
+      '.py': 'python', '.rb': 'ruby', '.go': 'go', '.rs': 'rust',
+      '.html': 'html', '.css': 'css', '.json': 'json', '.md': 'markdown',
+      '.yaml': 'yaml', '.yml': 'yaml', '.xml': 'xml',
+      '.sh': 'shell', '.bash': 'shell', '.ps1': 'powershell',
+      '.sql': 'sql', '.java': 'java', '.cpp': 'cpp', '.c': 'c',
+    };
+    const language = languageMap[ext] || 'plaintext';
+
+    db.prepare(
+      `INSERT OR REPLACE INTO vfs_workspace_files
+       (owner_id, path, content, language, size, version, updated_at)
+       VALUES (?, ?, ?, ?, ?, COALESCE(
+         (SELECT version FROM vfs_workspace_files WHERE owner_id = ? AND path = ?) + 1,
+         1
+       ), datetime('now'))`
+    ).run(normalizedId, filePath, content, language, Buffer.byteLength(content, 'utf-8'), normalizedId, filePath);
+
+    db.prepare(
+      `INSERT OR REPLACE INTO vfs_workspace_meta (owner_id, version, root, updated_at)
+       VALUES (?, COALESCE((SELECT version FROM vfs_workspace_meta WHERE owner_id = ?) + 1, 1), ?, datetime('now'))`
+    ).run(normalizedId, normalizedId, process.env.ORACLE_VM_WORKSPACE || '/home/opc/workspace');
+  } catch (err: any) {
+    if (!err.message?.includes('no such table')) {
+      logger.error('Failed to sync remote file to VFS', { path: filePath, error: err.message });
+    }
+  }
+}
+
+// ============================================================
+// Oracle VM (SSH-based PTY)
+// ============================================================
+
+/**
+ * Create a PTY session on a remote Oracle VM via SSH.
+ * Uses the ssh2 library to open an interactive shell on the VM.
+ */
+async function createOracleVMPtySession(
+  sessionId: string,
+  userId: string,
+  cols: number,
+  rows: number,
+  ptyShell: string
+): Promise<NextResponse> {
+  const { Client } = await import('ssh2');
+
+  const host = process.env.ORACLE_VM_HOST;
+  const port = parseInt(process.env.ORACLE_VM_PORT || '22');
+  const username = process.env.ORACLE_VM_USER || 'opc';
+  const privateKey = process.env.ORACLE_VM_PRIVATE_KEY;
+  const privateKeyPath = process.env.ORACLE_VM_KEY_PATH;
+  const workspace = process.env.ORACLE_VM_WORKSPACE || '/home/opc/workspace';
+
+  if (!host) {
+    return NextResponse.json(
+      {
+        error: 'Oracle VM is not configured (ORACLE_VM_HOST not set)',
+        hint: 'Set ORACLE_VM_HOST and ORACLE_VM_KEY_PATH in your environment.',
+        mode: 'sandbox',
+      },
+      { status: 503 }
+    );
+  }
+
+  const safeCols = Math.max(1, Math.min(cols, 500));
+  const safeRows = Math.max(1, Math.min(rows, 200));
+
+  return new Promise<NextResponse>((resolve) => {
+    const client = new Client();
+
+    const connectionConfig: any = {
+      host,
+      port,
+      username,
+      readyTimeout: 15000,
+      keepaliveInterval: 10000,
+      keepaliveCountMax: 3,
+    };
+
+    if (privateKey) {
+      connectionConfig.privateKey = privateKey;
+    } else if (privateKeyPath) {
+      try {
+        connectionConfig.privateKey = fs.readFileSync(privateKeyPath);
+      } catch (err: any) {
+        logger.error('[Local PTY] Failed to read Oracle VM SSH key', { path: privateKeyPath });
+        return resolve(NextResponse.json(
+          { error: `Failed to read SSH key: ${err.message}`, mode: 'sandbox' },
+          { status: 500 }
+        ));
+      }
+    }
+
+    client.on('ready', () => {
+      client.shell(
+        {
+          term: 'xterm-256color',
+          cols: safeCols,
+          rows: safeRows,
+        },
+        (err: any, stream: any) => {
+          if (err) {
+            client.end();
+            logger.error('[Local PTY] Oracle VM shell failed', { error: err.message });
+            return resolve(NextResponse.json(
+              { error: `Failed to open shell: ${err.message}`, mode: 'sandbox' },
+              { status: 500 }
+            ));
+          }
+
+          // Create a pseudo-IPty adapter so our existing architecture works
+          const sshPty = {
+            pid: 0,
+            onData: (cb: (data: string) => void) => {
+              stream.on('data', (data: Buffer) => cb(data.toString()));
+            },
+            onExit: (cb: (info: { exitCode: number; signal?: string }) => void) => {
+              stream.on('close', (code: number) => cb({ exitCode: code }));
+            },
+            write: (data: string) => stream.write(data),
+            resize: (c: number, r: number) => {
+              try { stream.setWindow(r, c); } catch { /* ignore */ }
+            },
+            kill: () => {
+              try { stream.end(); } catch { /* ignore */ }
+              try { client.end(); } catch { /* ignore */ }
+            },
+            waitForConnection: async () => { /* already connected */ },
+            disconnect: async () => {
+              try { stream.end(); } catch { /* ignore */ }
+              try { client.end(); } catch { /* ignore */ }
+            },
+            wait: async () => ({ exitCode: 0 }),
+            sendInput: async (data: string) => stream.write(data),
+          } as unknown as IPty;
+
+          // Start remote VFS sync — polls the Oracle VM workspace for file changes
+          // and syncs them back to the VFS database
+          const remoteVfsSync = startRemoteVfsSync(
+            client,
+            userId,
+            workspace,
+            sessionId
+          );
+
+          registerSession(sessionId, userId, sshPty, {
+            sshClient: client,
+            vfsWatcher: remoteVfsSync,
+            workspaceDir: workspace,
+          });
+
+          logger.info('[Local PTY] Oracle VM SSH session created', {
+            sessionId,
+            host,
+            username,
+            cols: safeCols,
+            rows: safeRows,
+          });
+
+          resolve(NextResponse.json({ sessionId, mode: 'oracle-vm', workspaceDir: workspace }));
+        }
+      );
+    });
+
+    client.on('error', (err: any) => {
+      logger.error('[Local PTY] Oracle VM SSH connection error', { error: err.message });
+      resolve(NextResponse.json(
+        { error: `SSH connection failed: ${err.message}`, mode: 'sandbox' },
+        { status: 500 }
+      ));
+    });
+
+    client.on('close', () => {
+      logger.debug('[Local PTY] Oracle VM SSH connection closed');
+      // Find and mark the session as exited
+      const session = sessions.get(sessionId);
+      if (session && !session.exited) {
+        session.exited = true;
+        session.exitCode = 0;
+        logger.info('[Local PTY] Oracle VM session marked as exited', { sessionId });
+        // Trigger cleanup on next interval — don't call cleanupSession directly
+        // since we're inside an event handler and cleanupSession is async
+      }
+    });
+
+    client.connect(connectionConfig);
   });
 }
 
@@ -733,19 +1224,46 @@ export async function GET(req: NextRequest) {
     });
   }
 
-  // Verify session ownership — even anonymous users get a userId assigned
+  // Verify session ownership using the anon-session-id cookie.
+  // For anonymous users, the cookie IS the identity — not the resolved auth.
+  const anonCookie = req.cookies.get('anon-session-id')?.value;
   const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
-  if (!authResult.success || !authResult.userId) {
-    return new Response(JSON.stringify({ error: 'Unauthorized' }), {
-      status: 401,
-      headers: { 'Content-Type': 'application/json' },
-    });
-  }
-  if (session.userId !== authResult.userId) {
-    return new Response(JSON.stringify({ error: 'Unauthorized: session does not belong to this user' }), {
-      status: 403,
-      headers: { 'Content-Type': 'application/json' },
-    });
+
+  // Authenticated users: check userId match
+  if (authResult.success && !authResult.userId.startsWith('anon:')) {
+    if (session.userId !== authResult.userId) {
+      return new Response(JSON.stringify({ error: 'Unauthorized: session does not belong to this user' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+  } else if (authResult.success && authResult.userId.startsWith('anon:')) {
+    // Anonymous users: the anon-session-id cookie must match the session's userId
+    const sessionAnonId = session.userId.replace(/^anon:/, '');
+    const cookieAnonId = anonCookie?.replace(/^anon_?/, '') || '';
+    if (sessionAnonId !== cookieAnonId) {
+      return new Response(JSON.stringify({ error: 'Unauthorized: session does not belong to this user' }), {
+        status: 403,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
+  } else {
+    // No auth resolved — if there's an anon cookie, use it
+    if (anonCookie) {
+      const sessionAnonId = session.userId.replace(/^anon:/, '');
+      const cookieAnonId = anonCookie.replace(/^anon_?/, '');
+      if (sessionAnonId !== cookieAnonId) {
+        return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+          status: 401,
+          headers: { 'Content-Type': 'application/json' },
+        });
+      }
+    } else {
+      return new Response(JSON.stringify({ error: 'Unauthorized' }), {
+        status: 401,
+        headers: { 'Content-Type': 'application/json' },
+      });
+    }
   }
 
   const stream = new ReadableStream({

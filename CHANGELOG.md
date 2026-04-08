@@ -639,5 +639,15 @@ curl -X POST http://localhost:3000/api/filesystem/write \
 ### 📝 System Prompt Improvements
 
 - **`VFS_FILE_EDITING_TOOL_PROMPT`** — Rewritten to be explicit: "CRITICAL: All file operations MUST use the provided filesystem tools via function/tool calling." Includes exact parameter formats, numbered critical rules, and forbids XML tags/heredocs.
-- **Removed 80-line commented-out XML tag instructions** from `route.ts` that confused models about which format to use.                              
+- **Removed 80-line commented-out XML tag instructions** from `route.ts` that confused models about which format to use.
+
+### 🧠 Smart Context & Context Pack Optimizations
+
+- **`scopePath` priority boost in smart-context** — Files within the active session scope (`project/sessions/001`) get a +25 score boost. This is a soft priority, NOT a hard filter — new chats and cross-project suggestions still work normally.
+- **Deferred vector store indexing** — `indexFilesToVectorStore` now runs async in background via `.catch()` instead of blocking context pack generation. Slow embedders or network failures no longer stall LLM requests.
+- **Empty workspace gate** — `buildWorkspaceSessionContext` now does a quick `listDirectory` check before expensive context pack generation. Returns minimal "no files yet" message instantly for new chats instead of waiting for full pack generation.
+- **`maxContinuations` limit on auto-continue** — `autoContinueWithFiles` now accepts `maxContinuations` (default: 3) to prevent infinite loops when the LLM keeps requesting files that don't exist.
+- **File request limit gate** — LLM file requests capped at 20 files to prevent abuse.
+- **`getExtensionsForLanguage()` helper** — Import resolution now prioritizes source file's language extensions first (e.g., `.ts`/`.tsx` for TypeScript files) instead of trying all 20+ extensions for every import. Reduces O(imports × 20) lookups to O(imports × 5).
+- **Removed unused extension arrays** from `resolveImportPath` — cleaned up dead code.                              
 

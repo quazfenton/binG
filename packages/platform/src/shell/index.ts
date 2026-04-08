@@ -130,22 +130,22 @@ export function getDesktopConfig(
   if (!workspaceRootValid) {
     if (platform === 'win32') {
       if (typeof process !== 'undefined' && process.env.USERPROFILE) {
-        workspaceRoot = `${process.env.USERPROFILE}\\opencode-workspaces`;
+        workspaceRoot = `${process.env.USERPROFILE}\\workspace`;
         workspaceRootValid = validateWorkspacePath(workspaceRoot);
       }
       // Fallback to C: drive
       if (!workspaceRootValid) {
-        workspaceRoot = 'C:\\opencode-workspaces';
+        workspaceRoot = 'C:\\workspace';
         workspaceRootValid = validateWorkspacePath(workspaceRoot);
       }
     } else {
       if (typeof process !== 'undefined' && process.env.HOME) {
-        workspaceRoot = `${process.env.HOME}/opencode-workspaces`;
+        workspaceRoot = `${process.env.HOME}/workspace`;
         workspaceRootValid = validateWorkspacePath(workspaceRoot);
       }
       // Fallback to /tmp
       if (!workspaceRootValid) {
-        workspaceRoot = '/tmp/opencode-workspaces';
+        workspaceRoot = '/tmp/workspace';
         workspaceRootValid = validateWorkspacePath(workspaceRoot);
       }
     }
@@ -153,7 +153,7 @@ export function getDesktopConfig(
   
   // If all paths invalid, use current directory as last resort
   if (!workspaceRootValid) {
-    workspaceRoot = './opencode-workspaces';
+    workspaceRoot = './workspace';
   }
 
   return {

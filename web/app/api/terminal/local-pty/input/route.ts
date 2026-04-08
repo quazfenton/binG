@@ -16,6 +16,40 @@ const sessions = globalThis.__localPtySessions ??= new Map();
 // Input size limit (16KB per write — prevents buffer flooding)
 const MAX_INPUT_SIZE = 16 * 1024;
 
+/**
+ * Verify that the requesting user owns the session.
+ * Handles both authenticated and anonymous users via cookie matching.
+ */
+async function verifySessionOwnership(req: NextRequest, session: any): Promise<NextResponse | null> {
+  const anonCookie = req.cookies.get('anon-session-id')?.value;
+  const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
+
+  if (authResult.success && !authResult.userId.startsWith('anon:')) {
+    // Authenticated user — session must match their userId
+    if (session.userId !== authResult.userId) {
+      return NextResponse.json({ error: 'Unauthorized: session does not belong to this user' }, { status: 403 });
+    }
+  } else if (authResult.success && authResult.userId.startsWith('anon:')) {
+    // Anonymous user — cookie must match the session's anonymous identity
+    const sessionAnonId = session.userId.replace(/^anon:/, '');
+    const cookieAnonId = anonCookie?.replace(/^anon_?/, '') || '';
+    if (sessionAnonId !== cookieAnonId) {
+      return NextResponse.json({ error: 'Unauthorized: session does not belong to this user' }, { status: 403 });
+    }
+  } else if (anonCookie) {
+    // No resolved auth, but cookie exists — check it matches
+    const sessionAnonId = session.userId.replace(/^anon:/, '');
+    const cookieAnonId = anonCookie.replace(/^anon_?/, '');
+    if (sessionAnonId !== cookieAnonId) {
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+  } else {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+
+  return null; // Authorized
+}
+
 export async function POST(req: NextRequest) {
   try {
     // Validate Content-Type

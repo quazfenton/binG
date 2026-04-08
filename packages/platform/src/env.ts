@@ -79,14 +79,14 @@ export function getDefaultWorkspaceRoot(): string | null {
     if (!userProfile) {
       return null;
     }
-    return `${userProfile}\\opencode-workspaces`;
+    return `${userProfile}\\workspace`;
   }
 
   const home = typeof process !== 'undefined' ? process.env.HOME : undefined;
   if (!home) {
     return null;
   }
-  return `${home}/opencode-workspaces`;
+  return `${home}/workspace`;
 }
 
 export interface DesktopConfig {
