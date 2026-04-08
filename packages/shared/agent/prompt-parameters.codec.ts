@@ -53,6 +53,9 @@ const ENUM_KEYS = [
 
 type EnumKey = (typeof ENUM_KEYS)[number];
 
+/** Key for the customInstructions string field (not an enum, handled separately) */
+const CUSTOM_INSTRUCTIONS_KEY = 'customInstructions';
+
 const ENUM_VALUES: Record<EnumKey, readonly string[]> = {
   responseDepth: Object.values(ResponseDepth),
   expertiseLevel: Object.values(ExpertiseLevel),
@@ -80,9 +83,11 @@ const HEADER_BYTE = VERSION; // 0x01
 export function encodeParams(params: PromptParameters): string {
   // Check if any values are actually set
   const hasValues = ENUM_KEYS.some(key => params[key] !== undefined);
-  if (!hasValues) return '';
+  const hasCustomInstructions = typeof params.customInstructions === 'string' && params.customInstructions.trim().length > 0;
+  if (!hasValues && !hasCustomInstructions) return '';
 
-  const bytes = new Uint8Array(1 + ENUM_KEYS.length);
+  // 1 header + 10 enum values + 1 byte for customInstructions hash
+  const bytes = new Uint8Array(1 + ENUM_KEYS.length + 1);
   bytes[0] = HEADER_BYTE;
 
   for (let i = 0; i < ENUM_KEYS.length; i++) {
@@ -96,6 +101,18 @@ export function encodeParams(params: PromptParameters): string {
         bytes[i + 1] = idx + 1;
       }
     }
+  }
+
+  // Encode customInstructions as a byte hash (for detection, not reconstruction)
+  if (hasCustomInstructions) {
+    const str = params.customInstructions as string;
+    let hash = 0;
+    for (let i = 0; i < str.length; i++) {
+      hash = ((hash << 5) - hash) + str.charCodeAt(i);
+      hash = hash & hash;
+    }
+    // Map to 1-255 range (0 means not set)
+    bytes[ENUM_KEYS.length + 1] = (Math.abs(hash) % 255) + 1;
   }
 
   // URL-safe base64: replace +/ with -_, strip padding
@@ -210,14 +227,28 @@ export function diffParams(
     }
   }
 
+  // Compare customInstructions separately (it's a free-form string, not an enum)
+  const beforeCustom = before.customInstructions ?? '';
+  const afterCustom = after.customInstructions ?? '';
+  let customInstructionsChanged = false;
+  if (!beforeCustom && afterCustom) {
+    (added as any).customInstructions = afterCustom;
+  } else if (beforeCustom && !afterCustom) {
+    (removed as any).customInstructions = beforeCustom;
+  } else if (beforeCustom && afterCustom && beforeCustom !== afterCustom) {
+    customInstructionsChanged = true;
+  }
+
   const hasChanges = Object.keys(added).length > 0 ||
     Object.keys(removed).length > 0 ||
-    changed.length > 0;
+    changed.length > 0 ||
+    customInstructionsChanged;
 
   const parts: string[] = [];
   if (Object.keys(added).length) parts.push(`${Object.keys(added).length} added`);
   if (Object.keys(removed).length) parts.push(`${Object.keys(removed).length} removed`);
   if (changed.length) parts.push(`${changed.length} changed`);
+  if (customInstructionsChanged) parts.push('customInstructions changed');
   const summary = hasChanges ? parts.join(', ') : 'No changes';
 
   return { added, removed, changed, hasChanges, summary };

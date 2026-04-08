@@ -253,6 +253,10 @@ export interface ProviderConfig {
     baseUrl?: string
     model?: string
   }
+  antigravity?: {
+    enabled?: boolean
+    // Accounts are loaded from DB, not config
+  }
 }
 
 export const PROVIDERS: Record<string, LLMProvider> = {
@@ -606,6 +610,20 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     supportsStreaming: true,
     maxTokens: 128000,
     description: 'Cloudflare Workers AI - Serverless AI inference at the edge with 10,000 neurons/day free tier'
+  },
+  antigravity: {
+    id: 'antigravity',
+    name: 'Antigravity',
+    models: [
+      'antigravity-gemini-3-pro',
+      'antigravity-gemini-3.1-pro',
+      'antigravity-gemini-3-flash',
+      'antigravity-claude-sonnet-4-6',
+      'antigravity-claude-opus-4-6-thinking',
+    ],
+    supportsStreaming: true,
+    maxTokens: 1048576,
+    description: 'Google Antigravity — Gemini 3 & Claude 4.6 via Google OAuth quota'
   }
 }
 
@@ -866,6 +884,9 @@ class LLMService {
             await this.initOpencodeClient()
             response = await this.opencodeClient.provider.generateResponse(request)
             break;
+          case 'antigravity':
+            response = await this.generateAntigravityResponse(model, messages, temperature, maxTokens, requestId)
+            break;
           default:
             throw createLLMError(`Unsupported provider: ${provider}`, {
               code: ERROR_CODES.LLM.UNSUPPORTED_PROVIDER,
@@ -1005,6 +1026,12 @@ class LLMService {
         case 'opencode':
           await this.initOpencodeClient()
           for await (const chunk of this.opencodeClient.provider.generateStreamingResponse(request)) {
+            chunkCount++;
+            yield chunk;
+          }
+          break
+        case 'antigravity':
+          for await (const chunk of this.streamAntigravityResponse(model, messages, temperature, maxTokens)) {
             chunkCount++;
             yield chunk;
           }
@@ -2000,6 +2027,123 @@ class LLMService {
     const provider = PROVIDERS[providerId]
     return provider ? provider.models : []
   }
+
+  // =========================================================================
+  // Antigravity Provider — Google OAuth-based access to Gemini 3 & Claude 4.6
+  // =========================================================================
+
+  private async generateAntigravityResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number,
+    requestId?: string
+  ): Promise<LLMResponse> {
+    const { sendAntigravityChat, ANTIGRAVITY_MODELS } = await import('@/lib/llm/antigravity-provider');
+    const { getAntigravityAccounts } = await import('@/lib/database/antigravity-accounts');
+
+    const modelConfig = ANTIGRAVITY_MODELS[model];
+    if (!modelConfig) {
+      throw new Error(`Unknown Antigravity model: ${model}`);
+    }
+
+    // Load user's Antigravity accounts from DB
+    const accounts = await getAntigravityAccounts(requestId || 'default');
+    if (!accounts || accounts.length === 0) {
+      throw new Error('No Antigravity accounts connected. Authenticate via /api/antigravity/login');
+    }
+
+    // Try each account with rate-limit fallback
+    let lastError: Error | null = null;
+    for (const account of accounts) {
+      try {
+        const response = await sendAntigravityChat({
+          model,
+          messages: messages as any,
+          temperature,
+          maxTokens,
+          stream: false,
+        }, account);
+
+        return {
+          content: response.content,
+          reasoning: response.thinking,
+          tokensUsed: response.usage?.promptTokens + response.usage?.completionTokens || 0,
+          finishReason: response.finishReason,
+          timestamp: new Date(),
+          metadata: { provider: 'antigravity', model, email: account.email },
+          usage: response.usage ? {
+            prompt_tokens: response.usage.promptTokens,
+            completion_tokens: response.usage.completionTokens,
+            total_tokens: response.usage.promptTokens + response.usage.completionTokens,
+          } : undefined,
+        };
+      } catch (e: any) {
+        lastError = e;
+        if (e.message?.includes('Rate limited')) {
+          chatLogger.warn('Antigravity account rate limited, trying next', { email: account.email });
+          continue;
+        }
+        throw e;
+      }
+    }
+
+    throw lastError || new Error('All Antigravity accounts failed');
+  }
+
+  private async *streamAntigravityResponse(
+    model: string,
+    messages: LLMMessage[],
+    temperature: number,
+    maxTokens: number
+  ): AsyncGenerator<StreamingResponse> {
+    const { sendAntigravityChat, ANTIGRAVITY_MODELS } = await import('@/lib/llm/antigravity-provider');
+    const { getAntigravityAccounts } = await import('@/lib/database/antigravity-accounts');
+
+    const modelConfig = ANTIGRAVITY_MODELS[model];
+    if (!modelConfig) {
+      throw new Error(`Unknown Antigravity model: ${model}`);
+    }
+
+    const accounts = await getAntigravityAccounts('default');
+    if (!accounts || accounts.length === 0) {
+      throw new Error('No Antigravity accounts connected. Authenticate via /api/antigravity/login');
+    }
+
+    let lastError: Error | null = null;
+    for (const account of accounts) {
+      try {
+        const response = await sendAntigravityChat({
+          model,
+          messages: messages as any,
+          temperature,
+          maxTokens,
+          stream: true,
+        }, account);
+
+        yield {
+          content: response.content,
+          reasoning: response.thinking,
+          isComplete: true,
+          finishReason: response.finishReason,
+          provider: 'antigravity',
+          metadata: { model, email: account.email },
+          usage: response.usage ? {
+            promptTokens: response.usage.promptTokens,
+            completionTokens: response.usage.completionTokens,
+            totalTokens: response.usage.promptTokens + response.usage.completionTokens,
+          } : undefined,
+        };
+        return;
+      } catch (e: any) {
+        lastError = e;
+        if (e.message?.includes('Rate limited')) continue;
+        throw e;
+      }
+    }
+
+    throw lastError || new Error('All Antigravity accounts failed');
+  }
 }
 
 export const llmService = new LLMService({
@@ -2046,6 +2190,9 @@ export const llmService = new LLMService({
     hostname: process.env.OPENCODE_HOSTNAME || '127.0.0.1',
     port: parseInt(process.env.OPENCODE_PORT || '4096'),
     model: process.env.OPENCODE_MODEL || 'anthropic/claude-3-5-sonnet-20241022',
+  },
+  antigravity: {
+    enabled: process.env.ANTIGRAVITY_ENABLED !== 'false',
   }
 })
 

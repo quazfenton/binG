@@ -1423,6 +1423,9 @@ export function listGeneralDomainRolesV4(): GeneralDomainRoleV4[] {
  */
 export function getGeneralMinimalPromptV4(role: GeneralDomainRoleV4): string {
   const full = GENERAL_PROMPTS_V4[role];
-  const sections = full.split(/={20,}/);
-  return sections.slice(0, 2).join('') + '\n\nFollow the structured output format described in the full prompt.';
+  // Split on the PRIME DIRECTIVES section boundary, not on the internal
+  // separators inside ACTUAL_TOOL_REFERENCE (which also uses `====` lines).
+  const match = full.match(/^([\s\S]*?\n)={20,}\n# PRIME DIRECTIVES\n={20,}/);
+  if (!match) return full;
+  return match[1] + '\n\nFollow the structured output format described in the full prompt.';
 }

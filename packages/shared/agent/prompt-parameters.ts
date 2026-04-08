@@ -930,20 +930,19 @@ const PARAMETER_KEYS = [
  * Generate a stable cache key from parameter values.
  * Used to memoize modifier text and avoid re-generating identical text.
  */
-function paramsCacheKey(params: PromptParameters): string {
+async function paramsCacheKey(params: PromptParameters): Promise<string> {
   const parts: string[] = [];
   for (const key of PARAMETER_KEYS) {
     const value = params[key as keyof PromptParameters];
     if (value !== undefined) {
-      // Include customInstructions in cache key (hash long strings to keep key short)
+      // Include customInstructions in cache key (hash long strings with SHA-256 to keep key short)
       if (key === 'customInstructions' && typeof value === 'string') {
         if (value.trim()) {
-          let hash = 0;
-          for (let i = 0; i < value.length; i++) {
-            hash = ((hash << 5) - hash) + value.charCodeAt(i);
-            hash = hash & hash;
-          }
-          parts.push(`${key}=hash:${Math.abs(hash)}`);
+          const encoder = new TextEncoder();
+          const hashBuffer = await crypto.subtle.digest('SHA-256', encoder.encode(value));
+          const hashArray = Array.from(new Uint8Array(hashBuffer));
+          const hashHex = hashArray.slice(0, 8).map(b => b.toString(16).padStart(2, '0')).join('');
+          parts.push(`${key}=sha256:${hashHex}`);
         }
       } else {
         parts.push(`${key}=${value}`);
@@ -954,21 +953,52 @@ function paramsCacheKey(params: PromptParameters): string {
 }
 
 const MODIFIER_CACHE = new Map<string, string>();
+const MODIFIER_CACHE_MAX_SIZE = 100;
+
+/**
+ * Get a value from the modifier cache, moving the key to the end (most recently used).
+ */
+function cacheGet(key: string): string | undefined {
+  const value = MODIFIER_CACHE.get(key);
+  if (value !== undefined) {
+    MODIFIER_CACHE.delete(key);
+    MODIFIER_CACHE.set(key, value);
+  }
+  return value;
+}
+
+/**
+ * Set a value in the modifier cache, evicting the least recently used entry if full.
+ */
+function cacheSet(key: string, value: string): void {
+  if (MODIFIER_CACHE.has(key)) {
+    MODIFIER_CACHE.delete(key);
+  } else if (MODIFIER_CACHE.size >= MODIFIER_CACHE_MAX_SIZE) {
+    const oldestKey = MODIFIER_CACHE.keys().next().value;
+    MODIFIER_CACHE.delete(oldestKey);
+  }
+  MODIFIER_CACHE.set(key, value);
+}
 
 /**
  * Apply prompt modifiers to generate a suffix that modifies any base prompt.
  * Uses a composition cache for O(1) lookup of previously generated text.
  *
  * @param params - The prompt parameter configuration (any field optional)
+ * @param presetKey - Optional preset key for telemetry (default: null)
  * @returns A string to append to the base role prompt
  */
-export function applyPromptModifiers(params: PromptParameters): string {
-  const cacheKey = paramsCacheKey(params);
-  const cached = MODIFIER_CACHE.get(cacheKey);
+export async function applyPromptModifiers(params: PromptParameters, presetKey?: string | null): Promise<string> {
+  const cacheKey = await paramsCacheKey(params);
+  const cached = cacheGet(cacheKey);
   if (cached !== undefined) return cached;
 
   const result = _applyPromptModifiersInternal(params);
-  MODIFIER_CACHE.set(cacheKey, result);
+  cacheSet(cacheKey, result);
+
+  // Emit telemetry event when modifiers are applied
+  emitTelemetryEvent(params, presetKey ?? null);
+
   return result;
 }
 
