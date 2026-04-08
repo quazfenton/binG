@@ -39,6 +39,18 @@ export { search, getTabMemory, updateTabMemory, recordSymbolAccess } from "../re
 export type { SearchOptions, SearchResult, TabMemory } from "../retrieval/search";
 
 export {
+  retrieveHybrid,
+  buildPromptWithContext,
+} from "../retrieval/hybrid-retrieval";
+export type { HybridRetrievalOptions, HybridRetrievalResult } from "../retrieval/hybrid-retrieval";
+
+export {
+  runContextPipeline,
+  buildPipelineSystemMessage,
+} from "../retrieval/context-pipeline";
+export type { ContextSourceResult, PipelineContextOptions } from "../retrieval/context-pipeline";
+
+export {
   cosineSimilarity,
   rankSymbols,
   expandGraph,
@@ -95,5 +107,13 @@ export {
 export type { Plugin, PluginContext } from "../agent/plugins";
 
 // ─── Metrics ──────────────────────────────────────────────────────────────────
-export { trace, increment, getCounter, getMetricsSummary, clearMetrics } from "../agent/metrics";
+export { trace, increment, getCounter, getMetricsSummary, clearMetrics, setMetricsLogger } from "../agent/metrics";
 export type { TraceEntry, MetricsSummary } from "../agent/metrics";
+
+// ─── Validated Agent Loop (with plugin validation + rollback) ─────────────────
+export { runValidatedAgentLoop } from "../agent/validated-agent-loop";
+export type { ValidatedAgentLoopOptions, ValidatedAgentResult } from "../agent/validated-agent-loop";
+
+// ─── File Watcher → Auto-Reindex ──────────────────────────────────────────────
+export { watchAndReindex } from "../memory/file-watcher-reindex";
+export type { WatcherReindexOptions, WatcherHandle } from "../memory/file-watcher-reindex";

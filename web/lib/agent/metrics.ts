@@ -3,6 +3,8 @@
  *
  * Track: embedding time, retrieval latency, diff time, agent iterations.
  * Lightweight — no external deps, stores in memory.
+ *
+ * Can be wired to any logger (chatLogger, console, etc.) via setMetricsLogger().
  */
 
 // ─── Trace ────────────────────────────────────────────────────────────────────
@@ -39,12 +41,32 @@ export async function trace<T>(
   }
 }
 
+/** Optional logger callback — set via setMetricsLogger() */
+type LoggerFn = (level: "debug" | "info" | "warn" | "error", message: string, data?: Record<string, unknown>) => void;
+let _metricsLogger: LoggerFn | null = null;
+
+/**
+ * Wire metrics to an external logger (e.g. chatLogger).
+ * Traces and counters will be logged at the configured level.
+ */
+export function setMetricsLogger(logger: LoggerFn): void {
+  _metricsLogger = logger;
+}
+
 function record(name: string, durationMs: number, metadata?: Record<string, unknown>) {
   _traces.push({ name, durationMs, timestamp: Date.now(), metadata });
   if (_traces.length > MAX_TRACES) _traces.shift();
 
-  if (typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
-    const ms = durationMs.toFixed(1);
+  const ms = durationMs.toFixed(1);
+
+  // Log to configured metrics logger (if any)
+  if (_metricsLogger) {
+    const level = metadata?.error ? "error" : "debug";
+    _metricsLogger(level, `[trace] ${name} — ${ms}ms`, metadata ?? undefined);
+  }
+
+  // Fallback: console.debug in development
+  if (!_metricsLogger && typeof process !== "undefined" && process.env?.NODE_ENV === "development") {
     console.debug(`[trace] ${name} — ${ms}ms`, metadata ?? "");
   }
 }

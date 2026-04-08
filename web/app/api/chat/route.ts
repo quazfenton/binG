@@ -8,6 +8,7 @@ import { detectRequestType } from "@/lib/utils/request-type-detector";
 import { generateSecureId } from '@/lib/utils';
 import { chatRequestLogger } from '@/lib/chat/chat-request-logger';
 import { chatLogger } from '@/lib/chat/chat-logger';
+import { setMetricsLogger } from '@/lib/agent/metrics';
 import { virtualFilesystem } from '@/lib/virtual-filesystem/virtual-filesystem-service';
 import { filesystemEditSessionService } from '@/lib/virtual-filesystem/filesystem-edit-session-service';
 import { contextPackService } from '@/lib/virtual-filesystem/context-pack-service';
@@ -323,6 +324,14 @@ export async function POST(request: NextRequest) {
       userId: authResult.userId,
     });
 
+    // Wire metrics to chatLogger for this request
+    setMetricsLogger((level, message, data) => {
+      if (level === 'error') chatLogger.error(message, { requestId, ...data });
+      else if (level === 'warn') chatLogger.warn(message, { requestId, ...data });
+      else if (level === 'info') chatLogger.info(message, { requestId, ...data });
+      else chatLogger.debug(message, { requestId, ...data });
+    });
+
     const {
       messages,
       provider: requestedProvider,
@@ -523,7 +532,10 @@ export async function POST(request: NextRequest) {
     
     // PARALLEL EXECUTION: Run independent async operations concurrently
     // This reduces latency by 40-60% by not waiting for each operation sequentially
-    const [denialContext, workspaceSessionContext, mem0Result] = await Promise.all([
+    const userPrompt = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content : '';
+    const scopePathForHybrid = sanitizeScopePath(requestedScopePath);
+
+    const [denialContext, workspaceSessionContext, mem0Result, hybridContext] = await Promise.all([
       // Get recent filesystem edit denials
       filesystemEditSessionService.getRecentDenials(
         `${filesystemOwnerId}:${resolvedConversationId}`,
@@ -531,7 +543,7 @@ export async function POST(request: NextRequest) {
       ),
       // Build workspace session context (only if filesystem edits are enabled)
       enableFilesystemEdits
-        ? buildWorkspaceSessionContext(filesystemOwnerId, sanitizeScopePath(requestedScopePath), {
+        ? buildWorkspaceSessionContext(filesystemOwnerId, scopePathForHybrid, {
             useContextPack: shouldUseContextPackFinal,
             maxTokens: body.maxTokens,
           })
@@ -546,7 +558,15 @@ export async function POST(request: NextRequest) {
             chatLogger.warn('Mem0 search failed (non-critical)', { error: memError.message });
             return { success: false, results: [] };
           })
-        : Promise.resolve({ success: false, results: [] })
+        : Promise.resolve({ success: false, results: [] }),
+      // Hybrid retrieval: AST-based symbol retrieval with smart-context fallback
+      enableFilesystemEdits && userPrompt
+        ? buildHybridWorkspaceContext(filesystemOwnerId, scopePathForHybrid, {
+            prompt: userPrompt,
+            projectId: scopePathForHybrid, // Use scopePath as stable project ID
+            maxTokens: body.maxTokens,
+          })
+        : Promise.resolve(''),
     ]);
 
     // Build memory context from mem0 results
@@ -563,6 +583,7 @@ export async function POST(request: NextRequest) {
       denialContext,
       workspaceSessionContext,
       memoryContext,
+      hybridContext,
     );
 
     // V1 / Regular LLM: Apply response style modifiers to messages
@@ -2310,13 +2331,16 @@ export async function POST(request: NextRequest) {
                       });
                     }
                   } else if (hasMcpFileEdits) {
-                    // MCP tool execution path: files were modified via function calling
-                    const fileEditsContent = mcpFileEdits
-                      .map(e => `\n\`\`\`fs-actions\nWRITE ${e.path} <<<\n[file created/modified via MCP tool]\n>>>\n\`\`\``)
-                      .join('\n\n');
-                    enhancedContent = streamingContentBuffer + '\n\n' + fileEditsContent;
-                    chatLogger.debug('Including MCP tool file edits in spec amplification', {
+                    // MCP tool execution path: files were modified via function calling.
+                    // Do NOT inject WRITE markers with placeholder content into enhancedContent —
+                    // the background refinement engine would parse those markers and overwrite
+                    // the real file content with the placeholder text.
+                    // Instead, just note that files were created/updated via MCP.
+                    enhancedContent = streamingContentBuffer +
+                      `\n\n[Note: ${mcpFileEdits.length} file(s) were created/updated via tool calls: ${mcpFileEdits.map(e => e.path).join(', ')}]`;
+                    chatLogger.debug('Noting MCP tool file edits in spec amplification (no WRITE markers)', {
                       fileCount: mcpFileEdits.length,
+                      paths: mcpFileEdits.map(e => e.path),
                     });
                   }
 
@@ -3706,6 +3730,64 @@ async function buildWorkspaceSessionContext(
   }
 }
 
+/**
+ * Hybrid workspace context — combines AST-based symbol retrieval with existing
+ * smart-context fallback. No breaking changes to existing behavior.
+ *
+ * When the vector store has indexed symbols for this project, uses the
+ * high-precision 7-signal ranking. Falls back to smart-context keyword scoring
+ * when no symbols are available.
+ */
+async function buildHybridWorkspaceContext(
+  ownerId: string,
+  scopePath?: string,
+  opts?: {
+    prompt?: string;
+    projectId?: string;
+    explicitFiles?: string[];
+    maxTokens?: number;
+    tabId?: string;
+  }
+): Promise<string> {
+  // Fast gate: if no prompt and no projectId, fall back to existing behavior
+  if (!opts?.prompt && !opts?.projectId) {
+    return ''; // Signal caller to use existing buildWorkspaceSessionContext
+  }
+
+  try {
+    const { retrieveHybrid } = await import('@/lib/retrieval/hybrid-retrieval');
+    const result = await retrieveHybrid({
+      userId: ownerId,
+      projectId: opts?.projectId,
+      prompt: opts?.prompt ?? '',
+      explicitFiles: opts?.explicitFiles,
+      currentProjectPath: scopePath,
+      scopePath,
+      tabId: opts?.tabId,
+      maxContextTokens: opts?.maxTokens,
+    });
+
+    if (result.source === 'fallback') {
+      // Neither retrieval path worked — fall back to existing function
+      return '';
+    }
+
+    return [
+      `=== WORKSPACE CONTEXT (${result.source === 'symbol-retrieval' ? 'AST Symbols' : 'Smart Context'}) ===`,
+      `Files: ${result.filesIncluded}`,
+      result.symbolCount > 0 ? `Symbols: ${result.symbolCount}` : '',
+      `Estimated Tokens: ${result.estimatedTokens}`,
+      result.warnings.length > 0 ? `⚠️ ${result.warnings.join('; ')}` : '',
+      '',
+      result.bundle,
+    ].filter(Boolean).join('\n');
+  } catch (err) {
+    // Silently fall back to existing behavior
+    console.debug('[Chat] Hybrid retrieval failed, using existing context:', err instanceof Error ? err.message : String(err));
+    return '';
+  }
+}
+
 function appendFilesystemContextMessages(
   messages: LLMMessage[],
   attachedFiles: ChatFilesystemFileContext[],
@@ -3713,6 +3795,7 @@ function appendFilesystemContextMessages(
   denialContext: Array<{ reason: string; paths: string[]; timestamp: string }> = [],
   workspaceContext: string = '',
   memoryContext: string = '',
+  hybridContext: string = '',
 ): LLMMessage[] {
   if (!attachedFiles.length && !allowFileEdits) {
     return messages;
@@ -3763,6 +3846,7 @@ function appendFilesystemContextMessages(
         ? VFS_FILE_EDITING_TOOL_PROMPT
         : '',
       workspaceContext ? `Current workspace session context:\n${workspaceContext}` : '',
+      hybridContext ? `Codebase retrieval context:\n${hybridContext}` : '',
       memoryContext ? `User memory context:\n${memoryContext}` : '',
       denialContext.length > 0
         ? `Recent denied edits (avoid repeating without adjustment):\n${denialContext

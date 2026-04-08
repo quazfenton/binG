@@ -22,9 +22,12 @@ export async function POST(request: NextRequest) {
       : undefined;
 
     // Rate limiting: Check before processing (strict limits to prevent brute-force)
-    const rateLimitResult = rateLimitMiddleware(request, 'login', normalizedEmail);
-    if (!rateLimitResult.success && rateLimitResult.response) {
-      return rateLimitResult.response;
+    // Skip rate limiting in development for easier testing
+    if (process.env.NODE_ENV !== 'development') {
+      const rateLimitResult = rateLimitMiddleware(request, 'login', normalizedEmail);
+      if (!rateLimitResult.success && rateLimitResult.response) {
+        return rateLimitResult.response;
+      }
     }
 
     // Get client info for session

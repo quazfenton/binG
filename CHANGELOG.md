@@ -2,7 +2,28 @@
 
 All notable changes to this project will be documented in this file.
 
-## [Unreleased] — Local PTY Security + Trigger.dev Stubs Fixed + Timeout Fixes
+## [Unreleased] — Local PTY Security + Trigger.dev Stubs Fixed + Timeout Fixes + Capability Router Input Validation
+
+### 🔒 Capability Router Input Validation (Security Gate)
+- **LLM inputs bypassed Zod schema validation** — The capability router forwarded raw inputs to providers without validating against each capability's inputSchema. Malformed LLM outputs (e.g., `{ task: "..." }` instead of `{ path: "file.txt" }`) caused cryptic provider errors instead of clear validation failures. Fixed: `router.execute()` now runs `capability.inputSchema.safeParse(input)` before forwarding to any provider. Returns `Invalid input` error with field-level details when validation fails.
+- **Bootstrapped agency sent `{ task }` instead of structured capability inputs** — Added `buildCapabilityInput()` method that maps natural language tasks to structured capability inputs (e.g., `file.read` → `{ path: 'test.txt' }`). Used in both chain and single-capability execution paths.
+- **sandbox.shell `cwd` was completely ignored** — Router validated `cwd` in inputSchema but never passed it to the execution layer. Fixed: `LLMAgentOptions` now includes `cwd` and `enableSelfHeal` fields; router passes `cwd` through to `runAgentLoop`; `OpencodeV2Provider.runAgentLoop()` resolves `cwd` from VFS scoped paths (`project/sessions/002`) to real filesystem paths.
+
+### 🔄 Bash Self-Heal + Natural Language Terminal Execution
+- **Bash self-heal: automatic error recovery** — When a shell command fails, `selfHealAndRetry()` analyzes the error output and auto-corrects: missing dependencies → `npm install`, port conflicts → kill existing process, file not found → list directory. Up to 3 retry attempts with different corrective actions.
+- **Natural language → command translation** — `translateNaturalLanguageToCommand()` converts prompts like "run the project", "build it", "test everything" into actual shell commands by detecting project type (npm, Rust, Go, Python).
+- **Project detection** — `detectProjectCommand()` inspects `package.json` (dev/start/serve/build scripts), `Cargo.toml`, `go.mod`, `requirements.txt` to determine the correct run command.
+- **LLMAgentOptions extended** — Added `cwd?: string` and `enableSelfHeal?: boolean` to `LLMAgentOptions` interface. Router passes `input.cwd` through to provider; provider resolves VFS scoped paths to real filesystem paths.
+
+### 🔒 Additional Security Fixes
+- **SSH command injection via `startRemoteVfsSync`** — Remote workspace path wasn't validated or escaped before use in SSH exec commands. Added `shellEscape()` and `SAFE_PATH_RE` validation.
+- **Concurrent map modification in cleanup interval** — `sessions.entries()` iterated while `cleanupSession()` deleted entries. Changed to `Array.from(sessions.entries())`.
+- **SIGTERM didn't kill PTY sessions** — Only cleared the interval. Now gracefully shuts down all sessions (stops watchers, closes SSH clients, kills PTYs).
+
+### 🧪 Comprehensive Test Coverage (107 tests, all passing)
+- **`advanced-capability-agency.test.ts` (55 tests)** — Agency learning, adaptation, pattern recognition, capability definitions, natural language → capability mapping, provider priority, edge cases, concurrent execution
+- **`e2e-local-pty-capability.test.ts` (21 tests)** — Local PTY route validation (env sanitization, shell escaping, path traversal rejection, dimension clamping), capability router input validation, provider fallback chain, agency integration, real node-pty spawn verification, full-stack natural language routing, owner isolation
+- **`bash-selfheal-terminal.test.ts` (31 tests)** — Project detection (npm/Rust/Go/Python), natural language → command translation, self-heal error pattern matching (missing deps, port conflicts, file not found, permission denied), cwd resolution from VFS scopedPath to real filesystem path, capability router cwd pass-through, E2E full pipeline simulation
 
 ### 🔴 Trigger.dev Stub Fixes
 
@@ -649,5 +670,34 @@ curl -X POST http://localhost:3000/api/filesystem/write \
 - **`maxContinuations` limit on auto-continue** — `autoContinueWithFiles` now accepts `maxContinuations` (default: 3) to prevent infinite loops when the LLM keeps requesting files that don't exist.
 - **File request limit gate** — LLM file requests capped at 20 files to prevent abuse.
 - **`getExtensionsForLanguage()` helper** — Import resolution now prioritizes source file's language extensions first (e.g., `.ts`/`.tsx` for TypeScript files) instead of trying all 20+ extensions for every import. Reduces O(imports × 20) lookups to O(imports × 5).
-- **Removed unused extension arrays** from `resolveImportPath` — cleaned up dead code.                              
+- **Removed unused extension arrays** from `resolveImportPath` — cleaned up dead code.
+
+### 🔄 Layer 2: Hybrid Retrieval (AST + Smart-Context Fallback)
+
+- **`hybrid-retrieval.ts`** — New hybrid retrieval: tries AST-based symbol retrieval (cosine + PageRank + 7-signal ranking) first, falls back to existing `smart-context.ts` (keyword + import graph scoring). Zero breaking changes — smart-context remains the fallback path.
+- **`buildHybridWorkspaceContext()` in route.ts** — New parallel context builder that calls hybrid retrieval. Returns empty string when no symbols/projectId, signaling the caller to use existing `buildWorkspaceSessionContext`.
+- **`useCodeRetrieval` hook** — Added `hybridSearch()` method for React components to use the hybrid path alongside existing smart-context.
+- **Deduplication** — Removed duplicate `orchestrator.ts`, `plugins.ts`, `metrics.ts`, `contextBuilder.ts`, `agentLoop.ts` from `memory/`. Single sources of truth now in `lib/agent/` and `lib/context/`. All `memory/` files now focus on storage/indexing.
+- **`useCodeRetrieval` stable refs** — Fixed re-initialization on every render by using `useRef` pattern — only `projectId` triggers re-init.
+
+### 🔌 Wiring: Hybrid Retrieval into Chat Route
+
+- **Parallel execution in route.ts** — Added `buildHybridWorkspaceContext` to the existing `Promise.all` block alongside `buildWorkspaceSessionContext`, `mem0Search`, and `getRecentDenials`. Zero added latency — runs concurrently.
+- **System prompt injection** — Hybrid retrieval context (`Codebase retrieval context:`) appended to the LLM system message in `appendFilesystemContextMessages`, after workspace session context and before memory context.
+- **ScopePath as projectId** — Uses `requestedScopePath` (e.g. `project/sessions/001`) as stable project identifier for cross-session persistence in IndexedDB.
+- **Gate: only activates when `enableFilesystemEdits` AND user prompt exist** — No overhead for non-coding requests.
+
+### 🎨 Layer 3: Polish — Fallback, Rollback, Observability
+
+- **`context-pipeline.ts`** — Ordered context pipeline with timeout-bounded sources. Tries: hybrid retrieval → workspace session → attached files → memory → minimal fallback. Each source has configurable timeout (default 3s). Failed/timed-out sources silently skipped. Results merged with deduplication.
+- **`validated-agent-loop.ts`** — Wraps `runAgentLoop` with plugin-based validation (ESLint, tsc) and automatic rollback. On validation failure, original content is restored via `writeFile`. Returns metadata: `pluginsPassed`, `pluginsRan`, `rolledBack`, `rollbackReason`.
+- **`file-watcher-reindex.ts`** — Watches project directories for file changes and triggers incremental reindexing. Debounces rapid changes (default 2s). On desktop: uses Tauri file watcher. Falls back to polling if watcher unavailable. On web: no-op.
+- **Metrics wired to `chatLogger`** — `setMetricsLogger()` in `metrics.ts` allows traces and counters to flow through existing `chatLogger` pipeline. All `trace()` calls now log to `chatLogger.debug()` with `requestId` context. Errors log to `chatLogger.error()`.
+- **`/api/memory/health` endpoint** — Health check for retrieval subsystem. Checks: IndexedDB vector store, embedding cache latency, symbol counts per project, metrics availability. Returns `{ status: "ok"|"degraded"|"error", components: {...} }`.
+- **All Layer 3 modules zero breaking changes** — Each has its own fallback path. Context pipeline falls back to existing behavior. Validated agent loop falls back to basic validation. File watcher is no-op on web. Health endpoint is standalone.
+
+### 📋 Test Results
+
+- **116 tests passing** — 88 standalone + 28 production batch-write-parser tests
+- All Layer 3 modules tested via existing test infrastructure                              
 

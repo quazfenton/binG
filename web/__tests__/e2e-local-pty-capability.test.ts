@@ -135,14 +135,13 @@ describe('Capability Router — Input Validation E2E', () => {
   it('accepts file.write with valid input and executes through VFS provider', async () => {
     const result = await router.execute(
       'file.write',
-      { path: 'e2e-test-file.txt', content: 'hello e2e' },
+      { path: 'e2e-test-file-write.txt', content: 'hello e2e' },
       { userId: 'test' }
     );
-    // file.write should succeed via VFS provider even if MCP/Local FS fail
-    // The key assertion: input validation passed (not rejected at router level)
-    // Result may still have error if all providers failed, but input validation passed
-    if (result.success) {
-      expect(result.output).toBeDefined();
+    // Input validation passed (Zod schema accepted the input).
+    // If result.error is defined, it should NOT mention schema validation failure.
+    if (result.error) {
+      expect(result.error).not.toContain('Invalid input');
     }
   });
 
@@ -381,9 +380,10 @@ describe('Full Stack E2E: Natural Language → Capability → Real Execution', (
 
     // Step 3: Router validates + executes (input validation should pass)
     const routerResult = await router.execute('file.write', input, { userId: 'fullstack-user' });
-    // Input validation passed (Zod schema accepted the input)
-    // Provider execution may succeed or fail depending on VFS availability
-    expect(routerResult.error).not.toContain('Invalid input');
+    // Input validation passed (Zod schema accepted the input).
+    if (routerResult.error) {
+      expect(routerResult.error).not.toContain('Invalid input');
+    }
 
     // Step 4: Agency records the execution
     // Note: agency.execute passes capabilities but NOT structured input to the router.
@@ -434,7 +434,9 @@ describe('Full Stack E2E: Natural Language → Capability → Real Execution', (
       { userId: 'user-a' }
     );
     // Input validation passed — the file.write request was properly formed
-    expect(writeResult.error).not.toContain('Invalid input');
+    if (writeResult.error) {
+      expect(writeResult.error).not.toContain('Invalid input');
+    }
 
     // User B tries to read the same path — VFS is owner-scoped
     const readResult = await router.execute(

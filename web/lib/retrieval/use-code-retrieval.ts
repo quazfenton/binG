@@ -20,6 +20,7 @@ import {
   trace,
 } from "../memory";
 import type { SearchResult } from "../retrieval/search";
+import { retrieveHybrid, type HybridRetrievalOptions, type HybridRetrievalResult } from "./hybrid-retrieval";
 
 export interface UseCodeRetrievalOptions {
   /** Stable project identifier — same ID across sessions for persistence */
@@ -69,6 +70,17 @@ export interface UseCodeRetrievalReturn {
   setOpenFiles: (filePaths: string[]) => void;
   /** Clear caches (e.g. when switching projects) */
   clearCache: () => void;
+  /** Hybrid retrieval: AST symbols → smart-context fallback */
+  hybridSearch: (
+    query: string,
+    userId: string,
+    opts?: {
+      explicitFiles?: string[];
+      scopePath?: string;
+      tabId?: string;
+      maxContextTokens?: number;
+    }
+  ) => Promise<HybridRetrievalResult>;
 }
 
 /**
@@ -225,6 +237,32 @@ export function useCodeRetrieval(
     retrievalRef.current?.clearCache();
   }, []);
 
+  // Hybrid retrieval — tries AST-based symbol retrieval, falls back to smart-context
+  const hybridSearch = useCallback(
+    async (
+      query: string,
+      userId: string,
+      searchOpts?: {
+        explicitFiles?: string[];
+        scopePath?: string;
+        tabId?: string;
+        maxContextTokens?: number;
+      }
+    ): Promise<HybridRetrievalResult> => {
+      return retrieveHybrid({
+        userId,
+        projectId,
+        prompt: query,
+        explicitFiles: searchOpts?.explicitFiles,
+        currentProjectPath: searchOpts?.scopePath,
+        scopePath: searchOpts?.scopePath,
+        tabId: searchOpts?.tabId ?? retrievalRef.current?.getTabMemory().tabId,
+        maxContextTokens: searchOpts?.maxContextTokens,
+      });
+    },
+    [projectId]
+  );
+
   return {
     retrieval,
     isInitializing,
@@ -237,5 +275,6 @@ export function useCodeRetrieval(
     setActiveTab,
     setOpenFiles,
     clearCache,
+    hybridSearch,
   };
 }

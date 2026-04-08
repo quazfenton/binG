@@ -1,10 +1,10 @@
 {
   "version": 1,
-  "updatedAt": "2026-04-06T23:10:22.962Z",
+  "updatedAt": "2026-04-08T12:34:26.735Z",
   "quotas": {
     "brevo": {
       "monthlyLimit": 300,
-      "currentUsage": 1,
+      "currentUsage": 2,
       "resetDate": "2026-05-01",
       "isDisabled": false,
       "priority": 1
