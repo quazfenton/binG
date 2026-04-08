@@ -3565,6 +3565,17 @@ async function buildWorkspaceSessionContext(
   // Use context pack if requested and available - includes file contents!
   if (options?.useContextPack) {
     try {
+      // Quick gate: check if workspace has any files before expensive generation
+      const quickList = await virtualFilesystem.listDirectory(ownerId, scopePath || '/');
+      const hasFiles = (quickList.nodes || []).some(n => n.type === 'file');
+      if (!hasFiles && (quickList.nodes || []).length === 0) {
+        return [
+          `=== WORKSPACE CONTEXT ===`,
+          `Root: ${scopePath || '/'}`,
+          `No files in workspace yet. Create files by asking me to build something.`,
+        ].join('\n');
+      }
+
       const contextPack = await contextPackService.generateContextPack(ownerId, scopePath || '/', {
         format: 'plain',
         includeContents: true,

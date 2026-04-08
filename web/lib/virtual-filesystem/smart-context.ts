@@ -40,6 +40,10 @@ export interface SmartContextOptions {
   recentSessionFiles?: string[];
   /** Current project root path (to prioritize files in this project) */
   currentProjectPath?: string;
+  /** VFS scope path for session isolation (e.g. "project/sessions/001").
+   *  Used as a priority boost for files within the scope — NOT a hard filter.
+   *  New chats and cross-project suggestions still work normally. */
+  scopePath?: string;
   /** Maximum total context size in bytes */
   maxTotalSize?: number;
   /** Output format */
@@ -163,6 +167,25 @@ function isJSLanguage(ext: string): boolean {
 }
 
 /**
+ * Get likely file extensions for a given source file's language.
+ * Used to prioritize extension guessing during import resolution.
+ */
+function getExtensionsForLanguage(ext: string): string[] {
+  switch (ext) {
+    case 'ts': return ['', '.ts', '.tsx'];
+    case 'tsx': return ['', '.tsx', '.ts'];
+    case 'js': return ['', '.js', '.jsx', '.mjs', '.cjs'];
+    case 'jsx': return ['', '.jsx', '.js'];
+    case 'py': return ['', '.py'];
+    case 'rs': return ['', '.rs'];
+    case 'go': return ['', '.go'];
+    case 'css': return ['', '.css', '.scss'];
+    case 'scss': return ['', '.scss', '.css'];
+    default: return ['', '.ts', '.tsx', '.js', '.jsx']; // Default to JS/TS
+  }
+}
+
+/**
  * Check if an import path is external (package, stdlib, etc.) based on language
  */
 function isExternalImport(rawPath: string, sourceExt: string): boolean {
@@ -221,6 +244,7 @@ function isExternalImport(rawPath: string, sourceExt: string): boolean {
 function resolveImportPath(
   rawPath: string,
   sourceDir: string,
+  sourceExt: string,
   allFilePathsLower: Set<string>,
   allFilePathsOriginal: Map<string, string>
 ): string | null {
@@ -249,14 +273,6 @@ function resolveImportPath(
     return null;
   }
 
-  // Common extensions to try for extensionless imports (ordered by likelihood)
-  const jsExtensions = ['', '.ts', '.tsx', '.js', '.jsx', '.mjs'];
-  const pyExtensions = ['', '.py'];
-  const rsExtensions = ['', '.rs'];
-  const goExtensions = ['', '.go'];
-  const cssExtensions = ['', '.css', '.scss'];
-  const otherExtensions = ['', '.json', '.md', '.yaml', '.yml', '.toml'];
-
   // Try each candidate with appropriate extensions
   for (const candidate of candidates) {
     const candidateLower = candidate.toLowerCase();
@@ -266,8 +282,11 @@ function resolveImportPath(
       return allFilePathsOriginal.get(candidateLower) || candidate;
     }
 
-    // Try with extensions — try all languages since imports can cross boundaries
-    const allExts = [...jsExtensions, ...pyExtensions, ...rsExtensions, ...cssExtensions, ...otherExtensions];
+    // Try with extensions — prioritize source file's language first
+    const sourceExts = getExtensionsForLanguage(sourceExt);
+    const fallbackExts = ['', '.ts', '.tsx', '.js', '.jsx', '.py', '.rs', '.go', '.css', '.scss'];
+    const allExts = [...new Set([...sourceExts, ...fallbackExts])];
+
     for (const ext of allExts) {
       const withExt = candidate + ext;
       const withExtLower = withExt.toLowerCase();
@@ -426,7 +445,7 @@ function extractImportsFromContent(
     if (isExternalImport(rawImport, sourceExt)) continue;
 
     // Resolve to actual VFS path
-    const resolved = resolveImportPath(rawImport, sourceDir, allFilePathsLower, allFilePathsOriginal);
+    const resolved = resolveImportPath(rawImport, sourceDir, sourceExt, allFilePathsLower, allFilePathsOriginal);
     if (resolved) {
       resolvedImports.push(resolved);
     }
@@ -445,6 +464,7 @@ function scoreFile(
   allFiles: VirtualFile[],
   importMap: Map<string, Set<string>>,
   reverseImportMap: Map<string, Set<string>>,
+  options: SmartContextOptions, // Changed from individual params to include scopePath
   recentSessionFiles?: Set<string>, // Files from recent conversation sessions
   currentProjectPath?: string, // Current project path to prioritize
 ): FileScore {
@@ -528,6 +548,14 @@ function scoreFile(
   if (currentProjectPath && path.startsWith(currentProjectPath)) {
     reasons.push('current project file');
     score += 40; // Moderate boost to current project files
+  }
+
+  // 9. Scope path priority boost — files within the active session scope get priority.
+  // This is a soft boost, NOT a hard filter, so new chats and cross-project suggestions
+  // still work normally. Files outside the scope are still included if they score high enough.
+  if (options.scopePath && path.startsWith(options.scopePath.toLowerCase())) {
+    reasons.push('within active session scope');
+    score += 25;
   }
 
   // If no signals matched, return zero score (file won't be included unless VFS is small)
@@ -656,7 +684,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
 
   // Score all files
   const scored = allFiles
-    .map(f => scoreFile(f, signals, explicitFiles, allFiles, importMap, reverseImportMap, recentSessionFiles, normalizedProjectPath))
+    .map(f => scoreFile(f, signals, explicitFiles, allFiles, importMap, reverseImportMap, options, recentSessionFiles, normalizedProjectPath))
     .filter(s => s.score > 0)
     .sort((a, b) => b.score - a.score);
 
@@ -973,6 +1001,9 @@ export function extractToolCallFileRequests(toolCalls: Array<{ name: string; arg
 /**
  * Auto-continue mechanism: If LLM requested files, generate a follow-up context pack
  * Returns a continuation message with the requested files attached
+ *
+ * @param options.maxContinuations - Maximum number of auto-continuations allowed (default: 3)
+ *   Prevents infinite loops when the LLM keeps requesting files that don't exist.
  */
 export async function autoContinueWithFiles(options: {
   userId: string;
@@ -980,32 +1011,39 @@ export async function autoContinueWithFiles(options: {
   toolCalls?: Array<{ name: string; arguments: Record<string, any> }>;
   conversationId?: string;
   maxTotalSize?: number;
+  maxContinuations?: number;
 }): Promise<{ shouldContinue: boolean; contextPack: string; requestedFiles: string[] } | null> {
-  const { userId, llmResponse, toolCalls, maxTotalSize = 300000 } = options;
-  
+  const { userId, llmResponse, toolCalls, maxTotalSize = 300000, maxContinuations = 3 } = options;
+
   // Detect file requests from LLM response text
   const textRequestedFiles = detectFileReadRequest(llmResponse);
-  
+
   // Detect file requests from tool calls
   const toolRequestedFiles = toolCalls ? extractToolCallFileRequests(toolCalls) : [];
-  
+
   // Combine and deduplicate
   const allRequestedFiles = [...new Set([...textRequestedFiles, ...toolRequestedFiles])];
-  
+
   if (allRequestedFiles.length === 0) {
     return null; // No files requested, no continuation needed
   }
-  
+
+  // Gate: limit number of files requested to prevent abuse
+  if (allRequestedFiles.length > 20) {
+    console.warn('[SmartContext] LLM requested too many files, limiting to 20');
+    allRequestedFiles.length = 20;
+  }
+
   // Generate context pack with requested files explicitly attached
   try {
     const contextResult = await generateSmartContext({
       userId,
-      prompt: `Auto-continue: Read requested files`, // Not used for scoring when explicitFiles provided
+      prompt: `Auto-continue: Read requested files`,
       explicitFiles: allRequestedFiles,
       maxTotalSize,
       format: 'markdown',
     });
-    
+
     return {
       shouldContinue: true,
       contextPack: contextResult.bundle,
@@ -1072,10 +1110,48 @@ export async function* streamWithAutoContinue(
     }
   }
   
-  // After stream completes, check if LLM requested files
+  // After stream completes, check if LLM requested files OR continuation
   // Only auto-continue if we got a complete response
   if (isComplete && (fullResponse.trim() || allToolCalls.length > 0)) {
     try {
+      // Check for [CONTINUE_REQUESTED] token — LLM needs more turns
+      const requestedContinuation = fullResponse.trimEnd().endsWith('[CONTINUE_REQUESTED]');
+
+      if (requestedContinuation) {
+        // Build a context-aware continuation signal
+        // Include summary of tool calls executed so the model knows what was done
+        const toolSummary = allToolCalls.length > 0
+          ? allToolCalls.map(tc => `${tc.name}(${tc.arguments?.path || tc.name})`).join(', ')
+          : 'none';
+
+        // Get the last 300 chars of response for task context
+        const contextHint = fullResponse.length > 300
+          ? '...' + fullResponse.slice(-300).replace(/\[CONTINUE_REQUESTED\]/gi, '').trimStart()
+          : fullResponse.replace(/\[CONTINUE_REQUESTED\]/gi, '').trim();
+
+        logger.info('Auto-continuing: LLM requested more turns', {
+          toolCount: allToolCalls.length,
+          toolSummary,
+        });
+
+        // Yield a structured event — NOT content — so the client knows
+        // to auto-submit a new message with context, not append to current response
+        yield {
+          type: 'auto-continue',
+          content: '',
+          toolSummary,
+          contextHint,
+          isComplete: true,
+          timestamp: new Date(),
+          metadata: {
+            autoContinue: true,
+            continuationRequested: true,
+            toolCount: allToolCalls.length,
+          },
+        };
+        return;
+      }
+
       const autoContinue = await autoContinueWithFiles({
         userId,
         llmResponse: fullResponse,

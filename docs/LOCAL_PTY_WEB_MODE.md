@@ -8,6 +8,8 @@ Users get a **real shell** on the server with full terminal capabilities: colors
 
 ## Quick Start
 
+### Option A: Local PTY (node-pty)
+
 ```bash
 # 1. Install node-pty (requires Python + build tools)
 cd web && npm install node-pty
@@ -19,7 +21,18 @@ echo 'ENABLE_LOCAL_PTY=localhost' >> .env.local
 npm run dev
 ```
 
-Open the terminal panel — it will auto-connect to the server's real shell.
+### Option B: Oracle VM SSH PTY (no native deps)
+
+```bash
+# 1. Set Oracle VM credentials
+echo 'ORACLE_VM_HOST=your-vm-ip' >> .env.local
+echo 'ORACLE_VM_KEY_PATH=/path/to/ssh/key' >> .env.local
+
+# 2. Restart Next.js — auto-enables oracle-vm mode
+npm run dev
+```
+
+Open the terminal panel — it will auto-connect to the real shell.
 
 ---
 
@@ -40,7 +53,8 @@ Open the terminal panel — it will auto-connect to the server's real shell.
 ┌──────────────────────────────────────────────────────────────┐
 │  Next.js Server (Node.js)                                    │
 │                                                              │
-│  route.ts:  POST → node-pty.spawn()  →  store in sessions    │
+│  route.ts:  POST → node-pty.spawn()     →  store in sessions │
+│             POST → SSH shell (oracle-vm) →  store in sessions│
 │  route.ts:  GET  → ReadableStream SSE  →  poll output queue  │
 │  input.ts:  POST → session.pty.write(data)                   │
 │  resize.ts: POST → session.pty.resize(cols, rows)            │
@@ -50,11 +64,12 @@ Open the terminal panel — it will auto-connect to the server's real shell.
 ### Flow
 
 1. **Terminal opens** → TerminalPanel checks `isWebLocalPtyAvailable()`
-2. **Session created** → `POST /api/terminal/local-pty` spawns node-pty process
+2. **Session created** → `POST /api/terminal/local-pty` spawns node-pty process **or** opens SSH shell (oracle-vm)
 3. **SSE connects** → `GET /api/terminal/local-pty?sessionId=...` streams output
 4. **User types** → `POST /api/terminal/local-pty/input` writes keystrokes
 5. **Terminal resizes** → `POST /api/terminal/local-pty/resize` updates dimensions
-6. **Session cleanup** → Auto-cleanup after 30 min or on terminal close
+6. **VFS sync** → File changes (local or remote) sync to VFS database automatically
+7. **Session cleanup** → Auto-cleanup after 30 min or on terminal close
 
 ---
 
@@ -177,6 +192,60 @@ docker build -t local-pty-base -f web/Dockerfile.local-pty .
 # Then set: LOCAL_PTY_DOCKER_IMAGE=local-pty-base
 ```
 
+### `oracle-vm` (SSH to Remote Oracle VM)
+
+Each user gets an isolated SSH shell session on a remote Oracle Cloud Infrastructure VM. The connection is bridged through SSE so the browser gets a full interactive terminal experience.
+
+**Auto-detection**: When `ORACLE_VM_HOST` is set, this mode is automatically enabled for all users — no need to set `ENABLE_LOCAL_PTY` explicitly.
+
+```bash
+# Required — triggers auto-detection
+ORACLE_VM_HOST=your-vm-ip-or-hostname
+
+# Optional configuration
+ORACLE_VM_PORT=22                    # SSH port (default: 22)
+ORACLE_VM_USER=opc                   # SSH username (default: opc)
+ORACLE_VM_KEY_PATH=/path/to/key.pem  # SSH private key file
+ORACLE_VM_PRIVATE_KEY=-----BEGIN...  # Or paste the key directly
+ORACLE_VM_WORKSPACE=/home/opc/workspace  # Working directory on VM
+```
+
+**Isolation diagram:**
+
+```
+┌── Next.js Server ──────────────────────────────────────────┐
+│                                                            │
+│  User A ──SSH shell──► Oracle VM (isolated SSH session)   │
+│  User B ──SSH shell──► Oracle VM (isolated SSH session)   │
+│  User C ──SSH shell──► Oracle VM (isolated SSH session)   │
+│                                                            │
+│  Each user gets:                                           │
+│  • Independent SSH shell process                          │
+│  • Same VM filesystem (but separate processes)             │
+│  • VM's network access                                     │
+│  • No access to other users' SSH sessions                  │
+└────────────────────────────────────────────────────────────┘
+```
+
+**Features:**
+- **Full isolation** — Each user gets their own SSH shell process
+- **No local dependencies** — Doesn't require `node-pty` or Docker on the server
+- **Remote execution** — Commands run on the Oracle VM, not the Next.js server
+- **VFS sync** — File changes on the remote VM are synced to the VFS database every 5 seconds via SSH polling
+- **Keepalive** — SSH keepalive prevents connection drops
+- **Graceful cleanup** — SSH sessions are closed when the terminal closes
+
+**Comparison with other modes:**
+
+| Feature | `local` / `docker` / `unshare` | `oracle-vm` |
+|---------|-------------------------------|-------------|
+| **Where commands run** | Next.js server | Remote Oracle VM |
+| **Requires node-pty** | Yes | No |
+| **Requires Docker** | `docker` mode only | No |
+| **VFS file sync** | Yes (local file watcher, 1s poll) | Yes (SSH polling, 5s poll) |
+| **Network access** | Server's network | VM's network |
+| **Filesystem** | Server temp dir | VM `/home/opc/workspace` |
+
 ### `on` (Dev Only — No Isolation)
 
 Direct spawn on the server with no isolation. All users share the same OS user, filesystem, and process table.
@@ -224,10 +293,11 @@ Sessions are cleaned up automatically:
 
 - **On exit**: PTY process exit triggers immediate cleanup
 - **On timeout**: Sessions older than 30 minutes are killed
-- **On disconnect**: SSE client disconnect kills the PTY
+- **On disconnect**: SSE client disconnect triggers cleanup
 - **On server shutdown**: `SIGTERM` handler cleans all sessions
 - **Docker containers**: Auto-removed via `--rm` flag
 - **Unshare processes**: Killed via process group (`kill -9 -PGID`)
+- **Oracle VM SSH sessions**: SSH client closed, VFS sync polling stopped
 
 ---
 
@@ -305,7 +375,13 @@ Server-sent events stream. Message types:
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `ENABLE_LOCAL_PTY` | `off` (prod) / `on` (dev) | Isolation mode |
+| `ENABLE_LOCAL_PTY` | `off` (prod) / auto-detects `oracle-vm` / `on` (dev) | Isolation mode |
+| `ORACLE_VM_HOST` | *(empty)* | Oracle VM hostname/IP — auto-enables `oracle-vm` mode |
+| `ORACLE_VM_PORT` | `22` | SSH port |
+| `ORACLE_VM_USER` | `opc` | SSH username |
+| `ORACLE_VM_KEY_PATH` | *(empty)* | Path to SSH private key file |
+| `ORACLE_VM_PRIVATE_KEY` | *(empty)* | SSH private key content (alternative to KEY_PATH) |
+| `ORACLE_VM_WORKSPACE` | `/home/opc/workspace` | Working directory on the VM |
 | `LOCAL_PTY_DOCKER_IMAGE` | `node:20-slim` | Docker image for isolation mode |
 | `LOCAL_PTY_DOCKER_MEMORY` | `512m` | Memory limit per container |
 | `LOCAL_PTY_DOCKER_CPU` | `1` | CPU cores per container |
@@ -408,8 +484,33 @@ sudo usermod -aG docker $USER
 
 1. Check `ENABLE_LOCAL_PTY` is not set to `off`
 2. Check server logs for `[Local PTY]` messages
-3. Verify `node-pty` is installed: `node -e "require('node-pty')"`
-4. Check SSE connection in browser DevTools Network tab
+3. For `oracle-vm` mode: verify SSH connectivity (`ssh -i key.pem opc@host`)
+4. For `node-pty` modes: verify `node-pty` is installed: `node -e "require('node-pty')"`
+5. Check SSE connection in browser DevTools Network tab
+
+### `SSH connection failed: Connection refused` (oracle-vm mode)
+
+```bash
+# Verify the VM is reachable
+ping $ORACLE_VM_HOST
+
+# Test SSH manually
+ssh -i $ORACLE_VM_KEY_PATH $ORACLE_VM_USER@$ORACLE_VM_HOST echo "connected"
+
+# Check firewall rules on the VM (port 22 must be open)
+# In OCI Console: Networking → Virtual Cloud Networks → Security Lists
+```
+
+### `Failed to read SSH key` (oracle-vm mode)
+
+```bash
+# Verify key file exists and is readable
+ls -la $ORACLE_VM_KEY_PATH
+cat $ORACLE_VM_KEY_PATH | head -1  # Should show "-----BEGIN..."
+
+# Or use ORACLE_VM_PRIVATE_KEY instead of ORACLE_VM_KEY_PATH
+# Paste the entire key content (including BEGIN/END lines)
+```
 
 ### SSE connection timeout
 
@@ -419,6 +520,19 @@ The SSE stream has a 10-second connection timeout. If PTY creation is slow:
 2. Check `unshare` permissions
 3. Try `ENABLE_LOCAL_PTY=on` (dev mode) to isolate the issue
 
+### Files not appearing in VFS (Oracle VM mode)
+
+The Oracle VM VFS sync polls every 5 seconds. File changes may take up to 5 seconds to appear in the VFS:
+
+```bash
+# Verify the sync is working — check server logs
+# You should see: [VFSWorkspace] Synced file change to VFS
+
+# If sync isn't working, verify SSH exec works:
+ssh -i $ORACLE_VM_KEY_PATH $ORACLE_VM_USER@$ORACLE_VM_HOST \
+  "find /home/opc/workspace -type f -printf '%P\t%s\t%T@\n'"
+```
+
 ---
 
 ## File Structure
@@ -426,13 +540,15 @@ The SSE stream has a 10-second connection timeout. If PTY creation is slow:
 ```
 web/
 ├── app/api/terminal/local-pty/
-│   ├── route.ts          # Session creation + SSE output stream
+│   ├── route.ts          # Session creation + SSE + SSH (oracle-vm)
 │   ├── input/
 │   │   └── route.ts      # Send keystrokes to PTY
 │   └── resize/
 │       └── route.ts      # Resize PTY dimensions
 ├── lib/terminal/
 │   └── web-local-pty.ts  # Client-side PTY wrapper
+├── lib/virtual-filesystem/
+│   └── vfs-workspace-materializer.ts  # VFS ↔ RealFS sync
 ├── components/terminal/
 │   └── TerminalPanel.tsx # Terminal UI (integrates web local PTY)
 └── Dockerfile.local-pty  # Docker image for isolation mode

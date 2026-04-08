@@ -1609,6 +1609,37 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }
                   break;
 
+                // Auto-continue: LLM signaled it needs more turns
+                // Strip [CONTINUE_REQUESTED] from response, then auto-submit continuation
+                case 'auto-continue': {
+                  // Strip the [CONTINUE_REQUESTED] token from the current message
+                  setMessages(prev => prev.map(msg =>
+                    msg.id === assistantMessage.id && msg.content.includes('[CONTINUE_REQUESTED]')
+                      ? { ...msg, content: msg.content.replace(/\[CONTINUE_REQUESTED\]/gi, '').trimEnd() }
+                      : msg
+                  ));
+
+                  // Build continuation prompt with context from the stream
+                  const contextHint = eventData.contextHint || '';
+                  const continuationPrompt = contextHint
+                    ? `[CONTINUATION] Continue from where you left off.\n\nYour last response: ${contextHint}\n\nResume the task — pick up exactly where you stopped.`
+                    : 'Please continue with the remaining tasks.';
+
+                  console.log('[Auto-continue] Triggering next request');
+
+                  // Set the input and submit after state settles
+                  setInput(continuationPrompt);
+                  setTimeout(() => {
+                    handleSubmit(
+                      {
+                        preventDefault: () => {},
+                        currentTarget: { reset: () => {} },
+                      } as React.FormEvent<HTMLFormElement>
+                    );
+                  }, 100);
+                  break;
+                }
+
                 // Orchestration progress events from mode handlers
                 case 'orchestration_progress':
                   // Update agent activity with orchestration progress
