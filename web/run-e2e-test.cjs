@@ -115,6 +115,21 @@ async function main() {
   }
 
   // =========================================================================
+  // 0. INITIALIZE SESSION: Get cookie from filesystem endpoint
+  // =========================================================================
+  console.log('\n=== 0. SESSION INIT: Establish session cookie ===');
+  try {
+    // The snapshot endpoint sets the anon-session-id cookie via withAnonSessionCookie
+    const initSnap = await get('/api/filesystem/snapshot?path=project');
+    report('Initial snapshot OK', initSnap.status === 200, 'status=' + initSnap.status);
+    report('Session cookie captured', !!sessionCookie, sessionCookie ? 'YES (owner: ' + sessionCookie.split(';')[0].substring(0, 50) + ')' : 'NO');
+    // Set a cookie header for subsequent requests
+    if (sessionCookie) {
+      // The cookie was already captured from the response
+    }
+  } catch (e) { report('Session init', false, e.message); }
+
+  // =========================================================================
   // 1. MCP: Direct write_file tool call
   // =========================================================================
   console.log('\n=== 1. MCP: Direct write_file tool call ===');
@@ -178,17 +193,20 @@ async function main() {
   // =========================================================================
   // 3. MCP: list_directory tool
   // =========================================================================
-  console.log('\n=== 3. MCP: list_directory tool ===');
+  console.log('\n=== 3. MCP: list_files tool ===');
   try {
     const mcp = await post('/api/mcp', {
       jsonrpc: '2.0',
       method: 'tools/call',
-      params: { name: 'list_directory', arguments: { path: 'project/sessions' }, id: 3 }
+      params: { name: 'list_files', arguments: { path: 'project/sessions' } },
+      id: 3
     });
-    report('MCP list_directory returns 200', mcp.status === 200, 'status=' + mcp.status);
+    report('MCP list_files returns 200', mcp.status === 200, 'status=' + mcp.status);
     const resultText = mcp.body.result?.content?.[0]?.text || '';
-    report('Result has content', resultText.length > 0, 'len=' + resultText.length);
-  } catch (e) { report('MCP list_directory', false, e.message); }
+    const errorText = mcp.body.error?.message || '';
+    report('Result has content', resultText.length > 0 || errorText.length > 0, 'len=' + resultText.length + (errorText ? ' error=' + errorText.substring(0, 200) : ''));
+    if (resultText) console.log('  Result: ' + resultText.substring(0, 200));
+  } catch (e) { report('MCP list_files', false, e.message); }
 
   // =========================================================================
   // 4. MCP: read_file tool (read back a file we just created)

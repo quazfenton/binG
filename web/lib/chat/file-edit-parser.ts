@@ -952,6 +952,79 @@ export function extractJsonToolCalls(content: string): FileEdit[] {
 }
 
 /**
+ * Extract file edits from tool-name + fenced-code-block format.
+ *
+ * When the LLM can't do native function calling, it often outputs:
+ *   batch_write
+ *
+ *   ```javascript
+ *   [{ "path": "file.js", "content": "..." }]
+ *   ```
+ *
+ * Or for single files:
+ *   write_file
+ *
+ *   ```json
+ *   { "path": "file.js", "content": "..." }
+ *   ```
+ *
+ * This parser catches those patterns and converts them to FileEdit objects.
+ */
+function extractToolNameFencedBlocks(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+
+  // Extract fenced code blocks
+  const fencedRegex = /```(?:javascript|js|json|bash)?\s*\n([\s\S]*?)```/gi;
+  let fencedMatch: RegExpExecArray | null;
+
+  while ((fencedMatch = fencedRegex.exec(content)) !== null) {
+    const codeBlock = fencedMatch[1]?.trim();
+    if (!codeBlock) continue;
+
+    try {
+      const parsed = JSON.parse(codeBlock);
+
+      if (Array.isArray(parsed)) {
+        // batch_write format: [{ path, content }, ...]
+        for (const item of parsed) {
+          if (item && typeof item === 'object' && typeof item.path === 'string' && typeof item.content === 'string') {
+            const trimmedPath = item.path.trim();
+            if (trimmedPath && isValidExtractedPath(trimmedPath)) {
+              edits.push({ path: trimmedPath, content: item.content });
+            }
+          }
+        }
+      } else if (parsed && typeof parsed === 'object') {
+        // Single file format: { path, content } or { path, content, action? }
+        if (typeof parsed.path === 'string' && typeof parsed.content === 'string') {
+          const trimmedPath = parsed.path.trim();
+          if (trimmedPath && isValidExtractedPath(trimmedPath)) {
+            const action = parsed.action || 'write';
+            edits.push({ path: trimmedPath, content: parsed.content, action: action as FileEdit['action'] });
+          }
+        }
+        // Also handle nested files array: { files: [...] }
+        else if (Array.isArray(parsed.files)) {
+          for (const file of parsed.files) {
+            if (file && typeof file === 'object' && typeof file.path === 'string' && typeof file.content === 'string') {
+              const trimmedPath = file.path.trim();
+              if (trimmedPath && isValidExtractedPath(trimmedPath)) {
+                edits.push({ path: trimmedPath, content: file.content });
+              }
+            }
+          }
+        }
+      }
+    } catch {
+      // Not valid JSON — skip this fenced block
+      continue;
+    }
+  }
+
+  return edits;
+}
+
+/**
  * Extract both compact and multi-line file_edit formats
  * Also extracts file_write, ws_action, simple JSON formats, and raw JSON tool calls.
  * Uses conditional parsing - only runs regex if signature is detected
@@ -984,6 +1057,20 @@ export function extractFileEdits(content: string): FileEdit[] {
     content.includes('delete_file(') ||
     content.includes('apply_diff(') ||
     content.includes('batch_write(') ||
+    content.includes('\nbatch_write') ||
+    content.includes('\nwrite_file') ||
+    content.startsWith('batch_write') ||
+    content.startsWith('write_file') ||
+    content.startsWith('write_files') ||
+    content.startsWith('delete_file') ||
+    content.startsWith('apply_diff') ||
+    content.includes('\nwrite_files') ||
+    content.includes('\ndelete_file') ||
+    content.includes('\napply_diff') ||
+    content.includes('```file:') ||
+    content.includes('```diff') ||
+    content.includes('```mkdir:') ||
+    content.includes('```delete:') ||
     (content.includes('"tool"') && content.includes('"arguments"'));
 
   if (!hasAnyMarker) {
@@ -1052,6 +1139,27 @@ export function extractFileEdits(content: string): FileEdit[] {
   //   { "tool": "write_file", "arguments": { "path": ..., "content": ... } }
   if (content.includes('"tool"') && content.includes('"arguments"')) {
     allEdits.push(...extractJsonToolCalls(content));
+  }
+
+  // FALLBACK: Parse tool-name + code-block format (common when LLM can't do FC).
+  // Catches patterns like:
+  //   batch_write
+  //
+  //   ```javascript
+  //   [{ "path": "...", "content": "..." }]
+  //   ```
+  //   OR
+  //   write_file
+  //
+  //   ```json
+  //   { "path": "...", "content": "..." }
+  //   ```
+  // O(1) gate: only when a known tool name appears as plain text AND there's a code block
+  const FILE_TOOL_NAMES = ['batch_write', 'write_file', 'write_files', 'delete_file', 'apply_diff', 'create_directory'];
+  const hasToolName = FILE_TOOL_NAMES.some(t => new RegExp(`^${t}\\b`, 'mi').test(content));
+  const hasFencedBlock = /```(?:javascript|js|json|bash)/i.test(content);
+  if (hasToolName && hasFencedBlock) {
+    allEdits.push(...extractToolNameFencedBlocks(content));
   }
 
   // FALLBACK: Parse JavaScript-style MCP tool calls from ```javascript code blocks

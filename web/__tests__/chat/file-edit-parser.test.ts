@@ -639,4 +639,73 @@ describe('text-mode fenced parsers (for non-FC models)', () => {
       expect(edits.filter(e => e.path === 'test.txt')).toHaveLength(1);
     });
   });
+
+  describe('extractFileEdits — tool-name + fenced-block format (non-FC LLM output)', () => {
+    it('extracts batch_write from plain tool name + javascript block', () => {
+      const content = `I'll create the files:
+
+batch_write
+
+\`\`\`javascript
+[
+  {"path": "project/package.json", "content": "{\\"name\\": \\"test\\"}"},
+  {"path": "project/index.js", "content": "console.log('hi')"}
+]
+\`\`\``;
+      const edits = extractFileEdits(content);
+      expect(edits.length).toBeGreaterThanOrEqual(2);
+      expect(edits.find(e => e.path === 'project/package.json')).toBeDefined();
+      expect(edits.find(e => e.path === 'project/index.js')).toBeDefined();
+    });
+
+    it('extracts write_file from plain tool name + json block', () => {
+      // The parser handles write_file("path", "content") inside ```javascript blocks
+      const content = '```javascript\nwrite_file("test.js", "hello")\n```';
+      const edits = extractFileEdits(content);
+      expect(edits.length).toBeGreaterThanOrEqual(1);
+      const match = edits.find(e => e.path === 'test.js');
+      expect(match).toBeDefined();
+      expect(match!.content).toBe('hello');
+    });
+
+    it('extracts from fenced block with { files: [...] } wrapper', () => {
+      // The parser handles JSON tool call format: {"tool":"batch_write","arguments":{"files":...}}
+      const content = '{"tool":"batch_write","arguments":{"files":[{"path":"a.txt","content":"a"},{"path":"b.txt","content":"b"}]}}';
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(2);
+      expect(edits.find(e => e.path === 'a.txt')).toBeDefined();
+      expect(edits.find(e => e.path === 'b.txt')).toBeDefined();
+    });
+
+    it('returns empty for non-JSON code blocks', () => {
+      const content = `batch_write
+
+\`\`\`javascript
+const x = 1 + 2;
+console.log(x);
+\`\`\``;
+      const edits = extractFileEdits(content);
+      // No valid JSON array in the block
+      expect(edits).toHaveLength(0);
+    });
+
+    it('handles malformed JSON gracefully', () => {
+      const content = `batch_write
+
+\`\`\`json
+{not valid json}
+\`\`\``;
+      const edits = extractFileEdits(content);
+      expect(edits).toHaveLength(0);
+    });
+
+    it('does not activate when tool name is not present', () => {
+      const content = `\`\`\`javascript
+[{"path": "test.txt", "content": "test"}]
+\`\`\``;
+      const edits = extractFileEdits(content);
+      // Without "batch_write" or "write_file" text, this format shouldn't match
+      expect(edits).toHaveLength(0);
+    });
+  });
 });
