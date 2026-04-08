@@ -89,8 +89,10 @@ class AgentFSBridge {
       for (const file of sessionFiles) {
         try {
           const relativePath = file.path.replace('project/', '');
-          const sandboxFilePath = sanitizeSandboxPath(`${sandboxPath}/${relativePath}`);
-          
+          // sanitizeSandboxPath expects a relative path and joins it with the sandbox basePath
+          const sanitizedRelative = sanitizeSandboxPath(relativePath);
+          const sandboxFilePath = `${sandboxPath}/${sanitizedRelative}`;
+
           await session.sandboxHandle.writeFile(sandboxFilePath, file.content);
           syncedFiles.push(file.path);
           
@@ -163,7 +165,16 @@ class AgentFSBridge {
             continue;
           }
 
-          const sanitizedFilePath = sanitizeSandboxPath(sandboxFile);
+          // sandboxFile from `find` is absolute (e.g. /workspace/src/file.ts).
+          // Strip the sandbox root prefix to get a relative path for sanitization.
+          const normalizedSandboxFile = sandboxFile.replace(/\\/g, '/');
+          const sandboxRoot = sandboxPath.replace(/\\/g, '/').replace(/\/+$/, '');
+          const relativePath = normalizedSandboxFile.startsWith(`${sandboxRoot}/`)
+            ? normalizedSandboxFile.slice(sandboxRoot.length + 1)
+            : normalizedSandboxFile;
+
+          const sanitizedRelative = sanitizeSandboxPath(relativePath);
+          const sanitizedFilePath = `${sandboxPath}/${sanitizedRelative}`;
           const readResult = await session.sandboxHandle.readFile(sanitizedFilePath);
           
           if (!readResult.success) {

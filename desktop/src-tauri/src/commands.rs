@@ -226,10 +226,12 @@ pub async fn write_file(
         return Err("Access denied: resolved path escapes workspace".to_string());
     }
 
+    // Determine if this is a create or update BEFORE the write
+    let is_new = !full_path.exists();
+
     std::fs::write(&full_path, content).map_err(|e| format!("Failed to write file: {}", e))?;
 
-    // Determine if this is a create or update (after write succeeds)
-    let change_type = if full_path.exists() { "update" } else { "create" };
+    let change_type = if is_new { "create" } else { "update" };
 
     // Emit file change event to TypeScript layer for VFS shadow commit tracking
     let _ = app.emit("file-change", FileChangeEvent {
@@ -320,11 +322,14 @@ pub async fn create_checkpoint(
         commit_hash,
     };
 
-    // Create a git commit as the shadow commit backing store
-    let git_result = create_git_commit(&workspace, &checkpoint_name);
-    if let Err(e) = git_result {
-        // Log but don't fail - checkpoint is still tracked in memory
-        eprintln!("Warning: git commit failed: {}", e);
+    // Store the checkpoint in the CheckpointManager so restore/delete can find it
+    {
+        let mut managers = checkpoints.0.lock().map_err(|e| e.to_string())?;
+        let state = managers.entry(workspace.clone()).or_insert_with(|| CheckpointState {
+            workspace_path: workspace.clone(),
+            checkpoints: Vec::new(),
+        });
+        state.checkpoints.push(checkpoint.clone());
     }
 
     Ok(checkpoint)

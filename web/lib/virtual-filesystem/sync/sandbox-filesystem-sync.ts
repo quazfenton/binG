@@ -89,7 +89,6 @@ const SYNC_EXCLUDE_PATTERNS: RegExp[] = [
   /\/\.idea\//,
   /\/Thumbs\.db/,
   /\/\.DS_Store/,
-  /\.log$/,
   /\.tmp$/,
   /\.bak$/,
   /\.swp$/,

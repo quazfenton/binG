@@ -112,7 +112,7 @@ export async function runOpenCodeDirect(options: OpenCodeDirectOptions): Promise
       description: t.function.description,
       parameters: t.function.parameters,
     })),
-    systemPrompt: (process.env.OPENCODE_SYSTEM_PROMPT || '') + applyPromptModifiers(promptParams ?? {}),
+    systemPrompt: (process.env.OPENCODE_SYSTEM_PROMPT || '') + await applyPromptModifiers(promptParams ?? {}),
     maxSteps: parseInt(process.env.OPENCODE_MAX_STEPS || '15', 10),
     onStreamChunk: onChunk,
     onToolExecution: async (toolName, args, toolResult) => {

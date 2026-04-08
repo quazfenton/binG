@@ -1,4 +1,4 @@
-# Changelog
+﻿# Changelog
 
 All notable changes to this project will be documented in this file.
 
@@ -75,7 +75,6 @@ All notable changes to this project will be documented in this file.
 - **Web local PTY close callback jarring flash** — `onClose` fired immediately on PTY exit. Added 500ms delay to let user see final output.
 - **NaN timeout from invalid env var** — `parseInt(NaN)` on `NEXT_PUBLIC_TERMINAL_CONNECTION_TIMEOUT_MS` caused immediate timeout. Added `clampTimeout()` validation with min 10s / max 120s bounds.
 - **AbortError triggered duplicate PTY fallback** — When timeout aborted the SSE connection, catch block attempted PTY WebSocket fallback using an aborted signal. Added `AbortError` detection to skip fallback when timeout already handled.
-- **Local PTY session leak on SSE disconnect** — `ReadableStream.cancel()` killed the PTY but didn't delete session from the map. Added `sessions.delete(sessionId)` in cancel handler.
 - **Local PTY auth bypass on SSE stream** — Auth check only verified ownership if `authResult.success && authResult.userId`, allowing unauthenticated users through. Now requires auth before stream creation.
 - **Stale terminal closure in web local PTY callbacks** — `onOutput` and `onClose` closed over `termRef` set once during init; if terminal closed/reopened, callbacks wrote to stale or null instance. Fixed: callbacks now lookup terminal by ID on each invocation.
 - **TypeScript syntax error in session store** — `(session as any).outputQueue: string[] = []` is invalid TS syntax. Fixed: added `outputQueue: string[]` to `LocalPtySession` interface, removed all `any` casts.
@@ -561,88 +560,6 @@ curl -X POST http://localhost:3000/api/filesystem/write \
 - `USE_STATEFUL_AGENT` — Defaults to `!== 'false'` (was `=== 'true'`)
 - `AI_SDK_MAX_STEPS` — Default changed from `10` to `15`
 
-
- -        * ─────────────────────────────────────────────────────────────                                                               │
-  │    3686 -        * COMMENTED OUT — Old tag-based editing instructions.                                                                         │
-  │    3687 -        * Re-enable this block (and replace VFS_FILE_EDITING_TOOL_PROMPT below)                                                       │
-  │    3688 -        * if you need to fall back to <file_edit> / APPLY_DIFF / WRITE <<<                                                            │
-  │    3689 -        * tag-based parsing instead of MCP tool calling.                                                                              │
-  │    3690 -        *                                                                                                                             │
-  │    3691 -        * For file changes, prefer one of these parseable schemas:                                                                    │
-  │    3692 -        *                                                                                                                             │
-  │    3693 -        * CAPABILITY CHOICE:                                                                                                          │
-  │    3694 -        * - For modifying an existing file, use APPLY_DIFF first.                                                                     │
-  │    3695 -        * - For creating a brand-new file, use WRITE or <file_edit path="...">...</file_edit>.                                        │
-  │    3696 -        * - For deleting a file, use DELETE <path>.                                                                                   │
-  │    3697 -        * - For reading or referring to existing workspace content, use <file_read path="..." /> when needed.                         │
-  │    3698 -        * - For shell/runtime instructions meant for the user terminal, emit a single ```bash block.                                  │
-  │    3699 -        *                                                                                                                             │
-  │    3700 -        * FOR EXISTING FILES, prefer surgical edits (APPLY_DIFF) over full rewrites:                                                  │
-  │    3701 -        *   <apply_diff path="src/utils.ts">                                                                                          │
-  │    3702 -        *     <search>function oldName() {                                                                                            │
-  │    3703 -        *       return 1;                                                                                                             │
-  │    3704 -        *     }</search>                                                                                                              │
-  │    3705 -        *     <replace>function newName() {                                                                                           │
-  │    3706 -        *       return 2;                                                                                                             │
-  │    3707 -        *     }</replace>                                                                                                             │
-  │    3708 -        *   </apply_diff>                                                                                                             │
-  │    3709 -        * Or in fs-actions blocks:                                                                                                    │
-  │    3710 -        *   APPLY_DIFF <path>                                                                                                         │
-  │    3711 -        *   <<<                                                                                                                       │
-  │    3712 -        *   <exact code to find>                                                                                                      │
-  │    3713 -        *   ===                                                                                                                       │
-  │    3714 -        *   <replacement code>                                                                                                        │
-  │    3715 -        *   >>>                                                                                                                       │
-  │    3716 -        *                                                                                                                             │
-  │    3717 -        * FOR NEW FILES, use full writes:                                                                                             │
-  │    3718 -        * 1) <file_edit path="...">...</file_edit>                                                                                    │
-  │    3719 -        * 2) COMMANDS write_diffs                                                                                                     │
-  │    3720 -        * 3) ```fs-actions ...``` blocks with:                                                                                        │
-  │    3721 -        *    WRITE <path>                                                                                                             │
-  │    3722 -        *    <<<                                                                                                                      │
-  │    3723 -        *    <full file content>                                                                                                      │
-  │    3724 -        *    >>>                                                                                                                      │
-  │    3725 -        *    PATCH <path>                                                                                                             │
-  │    3726 -        *    <<<                                                                                                                      │
-  │    3727 -        *    <unified diff body>                                                                                                      │
-  │    3728 -        *    >>>                                                                                                                      │
-  │    3729 -        *    DELETE <path>                                                                                                            │
-  │    3730 -        *                                                                                                                             │
-  │    3731 -        * IMPORTANT: For edits to existing files, ALWAYS use APPLY_DIFF instead of WRITE.                                             │
-  │    3732 -        * APPLY_DIFF only replaces the exact block you specify, preventing context truncation.                                        │
-  │    3733 -        * Use WRITE only when creating new files or when a complete rewrite is explicitly needed.                                     │
-  │    3734 -        * Do not rewrite whole existing files unless the user explicitly wants a full rewrite.                                        │
-  │    3735 -        *                                                                                                                             │
-  │    3736 -        * DIFF AUTHORING RULES:                                                                                                       │
-  │    3737 -        * - The <search> block or APPLY_DIFF search section must match the existing code exactly, including spacing and punctuation.  │
-  │    3738 -        * - Keep each diff surgical and minimal; prefer multiple small APPLY_DIFF operations over one large rewrite.                  │
-  │    3739 -        * - Include enough surrounding context in the search block to uniquely identify the target.                                   │
-  │    3740 -        * - If multiple files are involved, emit one operation per file rather than mixing contents.                                  │
-  │    3741 -        *                                                                                                                             │
-  │    3742 -        * DIFF-BASED SELF-HEALING:                                                                                                    │
-  │    3743 -        * - If an edit might fail because surrounding code may have drifted, first read/reference the latest file content and then    │
-  │         emit a narrower APPLY_DIFF.                                                                                                            │
-  │    3744 -        * - If a search block is large, brittle, or repeated, reduce it to the smallest unique exact block.                           │
-  │    3745 -        * - If an earlier attempted patch likely failed, do not repeat the same broad patch; emit a corrected APPLY_DIFF with fresher │
-  │         exact context.                                                                                                                         │
-  │    3746 -        * - Prefer preserving user code and making the minimum viable edit rather than replacing entire functions or files.           │
-  │    3747 -        * Prefer concrete multi-file edits when user requests full project scaffolding.                                               │
-  │    3748 -        *                                                                                                                             │
-  │    3749 -        * To read a file from the workspace, use: <file_read path="..." />                                                            │
-  │    3750 -        *                                                                                                                             │
-  │    3751 -        * When the user asks how to run code, include shell commands in ```bash blocks.                                               │
-  │    3752 -        * The user has a terminal that can execute these commands.                                                                    │
-  │    3753 -        * For multi-step setups, provide all commands in a single bash block so they can be run together.                             │
-  │    3754 -        * Use bash blocks for user-facing commands only; use filesystem edit schemas for file mutations.                              │
-  │    3755 -        * If a task is too large for a single response, end with the exact token: [CONTINUE_REQUESTED]                                │
-  │    3756 -        * Example: ```bash                                                                                                            │
-  │    3757 -        * npm install                                                                                                                 │
-  │    3758 -        * npm run dev                                                                                                                 │
-  │    3759 -        * ```                                                                                                                         │
-  │    3760 -        * ─────────────────────────────────────────────────────────────                                                               │
-  │    3761 -        */                                                                                                                            │
-  │    3762 -       VFS_FILE_EDITING_TOOL_PROMPT,
-
 ## [Unreleased] — VFS Tool Calling Robustness + Parser Hardening + Session Scope Fixes
 
 ### 🔴 Critical Bug Fixes
@@ -721,5 +638,30 @@ curl -X POST http://localhost:3000/api/filesystem/write \
 - **`embeddings.ts` cache key collision** — `.trim()` could merge distinct inputs. Changed to use full `text` as cache key.
 - **`context-pipeline.ts` dead import** — `trace` imported but never used. Removed.
 - **`health/route.ts` IndexedDB server crash** — IndexedDB is browser-only, caused 503 on server. Fixed: checks `typeof indexedDB !== "undefined"` and gracefully skips client-only checks on server. All 4 components now report "ok".
-- **`health/route.ts` embedding smoke test** — `embed()` uses relative URL which fails on server. Fixed: verifies module loads and cache is accessible instead of calling embed().                              
+- **`health/route.ts` embedding smoke test** — `embed()` uses relative URL which fails on server. Fixed: verifies module loads and cache is accessible instead of calling embed().
+
+### 🔧 Tool Registration Deduplication
+
+- **Arcade tools registered twice** — `bootstrap-builtins.ts` (line 140) AND `bootstrap-arcade.ts` both called `ArcadeService.getTools()` and registered `arcade:${tool.name}` tools. Fixed: removed Arcade block from `bootstrap-builtins.ts`, kept dedicated `bootstrap-arcade.ts` module.
+- **`task.schedule/status/cancel` registered 3x** — `bootstrap-events.ts` (active), `schedule-bootstrap.ts` (orphaned), `schedule-task-tool.ts` (never called). Fixed: added dedup guard in `schedule-bootstrap.ts` (`registry.getTool('task.schedule')` check), marked `schedule-task-tool.ts`'s `registerScheduleTaskTools()` as deprecated with guard.
+- **Advanced schedule tools not bootstrapped** — `schedule-bootstrap.ts` has `task.agent-loop`, `task.dag-run`, `task.skill-bootstrap` that were never called from main chain. Fixed: added `registerAllScheduleTools()` call to `bootstrap.ts` after event tools.
+
+### 🔌 Arcade SDK OAuth Integration
+
+- **`/api/integrations/arcade/auth` endpoint** — New Arcade SDK-based OAuth using `client.auth.start()` / `client.auth.waitForCompletion()`. Primary auth path for provider tokens (GitHub, Google, Slack, etc.). Falls back to existing direct OAuth (e.g., `/api/integrations/github/oauth/...`) when Arcade SDK unavailable.
+  - `POST` — Start auth or complete it (with `flowId`). Returns `{ authUrl }` if user needs to authorize, or `{ token }` if already authorized.
+  - `GET ?provider=github` — Check if provider is connected (checks Arcade + direct OAuth).
+- **ArcadeService new methods** — `startProviderAuth()` (uses `client.auth.start()`), `waitForProviderAuth()` (uses `client.auth.waitForCompletion()` with manual polling fallback), `getProviderToken()` (combined start+wait with existing-connection check).
+- **Fallback chain**: Arcade SDK → Arcade HTTP API → existing direct OAuth → error.
+
+### 🔌 Arcade SDK OAuth in IntegrationPanel UI
+
+- **IntegrationPanel connect flow** — Now tries Arcade SDK OAuth first (`POST /api/integrations/arcade/auth`) for all providers including GitHub. If Arcade returns an auth URL, opens it in a popup and polls for completion. Falls back to Auth0 Connected Accounts (`/auth/login?connection=github`), then legacy OAuth (`/api/auth/oauth/initiate`).
+- **Scopes passed through** — Each integration's `scopes` array (e.g., `['repo', 'issues', 'pull_requests']` for GitHub) is sent to the Arcade endpoint.
+- **Connection source tracking** — UI already displays `Arcade` / `Auth0` / `Nango` / `OAuth` badges showing which provider handled the connection.
+
+### 🔌 Arcade SDK Scopes — Object Form
+
+- **`client.auth.start()` scopes format** — Updated to use object form `{ scopes: [...] }` instead of plain array. Matches Arcade SDK docs for Discord (`{ scopes: ["identify", "email", "guilds", "guilds.join"] }`), Google, and GitHub. Falls back to no-scopes call when scopes not provided.
+- **Discord + Reddit → Arcade** — Added to `ARCADE_PROVIDERS` set in IntegrationPanel so `getProviderAuthConfig()` returns `{ method: 'arcade' }` for these providers (Arcade SDK preferred over Nango).                              
 

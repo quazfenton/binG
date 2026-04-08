@@ -43,6 +43,27 @@ import { createLogger } from '../../utils/logger';
 
 const logger = createLogger('VFS:SyncBack');
 
+// ============================================================================
+// Comprehensive sync exclusion patterns — all languages
+// ============================================================================
+const SYNC_EXCLUDE_PATTERNS: RegExp[] = [
+  /\/node_modules\//, /\/\.next\//, /\/\.nuxt\//, /\/\.cache\//,
+  /\/\.parcel-cache\//, /\/\.turbo\//, /\/\.vite\//, /\/coverage\//,
+  /\/__pycache__\//, /\/\.venv\//, /\/venv\//, /\/\.virtualenv\//,
+  /\/site-packages\//, /\/\.eggs\//, /\/pip-selfcheck\.json/,
+  /\/\.pytest_cache\//, /\/\.mypy_cache\//, /\/\.tox\//, /\/\.nox\//,
+  /\/\.ruff_cache\//, /\/\.ipynb_checkpoints\//,
+  /\/target\//, /\/\.gradle\//, /\/\.cargo\/registry\//,
+  /\/vendor\//, /\/pkg\//, /\/bin\//, /\/obj\//, /\/\.nuget\//,
+  /\/\.bundle\//, /\/\.gem\//,
+  /\/dist\//, /\/build\//, /\/out\//, /\/\.idea\//,
+  /\/Thumbs\.db/, /\/\.DS_Store/, /\.tmp$/, /\.bak$/, /\.swp$/, /\.swo$/, /~$/, /\.part$/,
+];
+
+function shouldExcludeFromSync(filePath: string): boolean {
+  return SYNC_EXCLUDE_PATTERNS.some(pattern => pattern.test(filePath));
+}
+
 /**
  * Default configuration
  */
@@ -209,9 +230,10 @@ export class VFSyncBackService {
       // Skip . and ..
       if (fileName === '.' || fileName === '..') continue;
       
-      // Skip directories
+      // Skip directories and excluded files
       if (permissions.startsWith('d')) continue;
-      
+      if (shouldExcludeFromSync(`${cwd}/${fileName}`)) continue;
+
       // Read file content
       try {
         const filePath = `${cwd}/${fileName}`
@@ -284,7 +306,13 @@ export class VFSyncBackService {
         // Sync was cancelled
         break;
       }
-      
+
+      // === EXCLUSION CHECK: Skip node_modules, venvs, caches, build outputs, etc. ===
+      if (shouldExcludeFromSync(file.path)) {
+        skippedFiles++;
+        continue;
+      }
+
       // Update progress
       if (status.progress) {
         status.progress.currentFile = filesSynced + skippedFiles + failedFiles;
