@@ -477,6 +477,17 @@ async function createDirectPtySession(
   // Materialize VFS files to a real directory for this user
   const workspaceDir = await resolveWorkspaceDir(userId);
 
+  // Verify the workspace directory exists before spawning
+  const fs = await import('fs/promises');
+  const path = await import('path');
+  try {
+    await fs.access(workspaceDir);
+  } catch {
+    // Directory doesn't exist — create it
+    await fs.mkdir(workspaceDir, { recursive: true });
+    logger.info('[Local PTY] Created workspace directory', { workspaceDir });
+  }
+
   // Start VFS file watcher to sync changes from the shell back to the database
   const vfsWatcher = watchWorkspaceForChanges(userId);
 

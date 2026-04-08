@@ -165,6 +165,8 @@ def fetch_page(page_path: str) -> dict:
 def get_index() -> dict:
     """Fetch the full documentation index from llms.txt."""
     content = fetch_url(LLMS_INDEX)
+    if content.startswith("HTTP Error") or content.startswith("URL Error"):
+        return {"error": f"Failed to fetch index: {content}"}
     urls = [line.strip() for line in content.splitlines() if line.strip() and not line.startswith("#")]
     return {"total_pages": len(urls), "urls": urls, "sections": list(SECTION_MAP.keys())}
 

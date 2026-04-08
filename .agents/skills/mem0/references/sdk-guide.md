@@ -120,7 +120,7 @@ results = client.search("vegetarian", user_id="alice", keyword_search=True)
 **TypeScript:**
 ```typescript
 const results = await client.search("dietary preferences", { user_id: "alice" });
-const results = await client.search("work experience", {
+const workResults = await client.search("work experience", {
     filters: { AND: [{ user_id: "alice" }, { categories: { contains: "professional_details" } }] },
     top_k: 5,
     rerank: true,

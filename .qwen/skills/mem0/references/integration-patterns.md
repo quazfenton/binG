@@ -259,6 +259,7 @@ result = Runner.run_sync(triage_agent, "Plan a healthy meal for my Italy trip")
 Source: [docs.mem0.ai/integrations/pipecat](https://docs.mem0.ai/integrations/pipecat)
 
 ```python
+import os
 from pipecat.services.mem0 import Mem0MemoryService
 
 memory = Mem0MemoryService(

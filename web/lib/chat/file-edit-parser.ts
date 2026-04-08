@@ -1286,6 +1286,10 @@ export function extractFileEdits(content: string): FileEdit[] {
     // Handle JSON object format: write_file({ "path": "...", "content": "..." })
     // Also handles: create_file({ ... }), writeToFile({ ... }), delete_file({ ... }), apply_diff({ ... })
     allEdits.push(...extractTextToolCallEdits(content));
+
+    // Handle batch_write([{ path: "...", content: "..." }, ...]) format
+    // Common when LLM outputs multiple files in a single batch call
+    allEdits.push(...extractBatchWriteEdits(content));
   }
 
   // Handle flat JSON tool calls: { "tool": "write_file", "path": "...", "content": "..." }
@@ -1329,6 +1333,214 @@ export function extractFileEdits(content: string): FileEdit[] {
  * - ```diff: path\n<unified diff content>``` (text-mode diff for non-FC models)
  * - ```diff\ndiff --git a/path b/path\n...``` (raw git diff output - should NOT be parsed as file edit)
  */
+/**
+ * Extract batch_write([{ path: "...", content: "..." }, ...]) format.
+ *
+ * Handles LLM output where multiple files are written in a single batch call:
+ *   batch_write([{
+ *     path: "package.json",
+ *     content: `{...}`
+ *   }, {
+ *     path: "src/main.js",
+ *     content: `...`
+ *   }])
+ *
+ * Also handles: create_files(...), write_files(...), batch_create(...)
+ */
+export function extractBatchWriteEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+
+  // Check for batch function patterns
+  const batchPattern = /(batch_write|create_files|write_files|batch_create)\s*\(/gi;
+  let batchMatch: RegExpExecArray | null;
+
+  while ((batchMatch = batchPattern.exec(content)) !== null) {
+    const startIdx = batchMatch.index + batchMatch[0].length;
+
+    // Find the matching closing paren with balanced bracket tracking
+    let bracketDepth = 0;
+    let parenDepth = 1; // We're already inside the opening (
+    let inString = false;
+    let stringChar = '';
+    let escapeNext = false;
+    let endIdx = -1;
+
+    for (let i = startIdx; i < content.length; i++) {
+      const ch = content[i];
+
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+      if (inString) {
+        if (ch === '\\') {
+          escapeNext = true;
+          continue;
+        }
+        if (ch === stringChar) {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (ch === '"' || ch === "'" || ch === '`') {
+        inString = true;
+        stringChar = ch;
+        continue;
+      }
+
+      if (ch === '[') bracketDepth++;
+      else if (ch === ']') bracketDepth--;
+      else if (ch === '(') parenDepth++;
+      else if (ch === ')') {
+        parenDepth--;
+        if (parenDepth === 0 && bracketDepth <= 0) {
+          endIdx = i;
+          break;
+        }
+      }
+    }
+
+    if (endIdx === -1) continue;
+
+    // Extract the array content
+    const arrayContent = content.substring(startIdx, endIdx).trim();
+
+    // Now parse individual { path, content } objects from the array
+    // Use a state machine to handle nested objects with template literals
+    const fileObjects = parseFileObjectsFromArray(arrayContent);
+
+    for (const fileObj of fileObjects) {
+      if (fileObj.path && isValidExtractedPath(fileObj.path)) {
+        const fileContent = fileObj.content || fileObj.diff || '';
+        if (fileContent.trim()) {
+          const action = fileObj.diff ? 'patch' as const : 'write' as const;
+          if (!edits.some(e => e.path === fileObj.path)) {
+            edits.push({
+              path: fileObj.path,
+              content: fileContent,
+              action,
+            });
+          }
+        }
+      }
+    }
+  }
+
+  return edits;
+}
+
+/**
+ * Parse { path: "...", content: "..." } objects from a JavaScript array string.
+ * Handles both JSON-style ("key": "value") and JS-style (key: "value") objects.
+ * Also handles template literals with backticks for multi-line content.
+ */
+function parseFileObjectsFromArray(arrayContent: string): Array<{ path?: string; content?: string; diff?: string }> {
+  const objects: Array<{ path?: string; content?: string; diff?: string }> = [];
+
+  let i = 0;
+  while (i < arrayContent.length) {
+    // Skip whitespace and commas
+    while (i < arrayContent.length && /[\s,]/.test(arrayContent[i])) i++;
+    if (i >= arrayContent.length) break;
+
+    // Look for opening {
+    if (arrayContent[i] !== '{') {
+      i++;
+      continue;
+    }
+
+    // Find matching }
+    const objStart = i;
+    let braceDepth = 0;
+    let inString = false;
+    let stringChar = '';
+    let escapeNext = false;
+    let objEnd = -1;
+
+    for (let j = i; j < arrayContent.length; j++) {
+      const ch = arrayContent[j];
+
+      if (escapeNext) {
+        escapeNext = false;
+        continue;
+      }
+      if (inString) {
+        if (ch === '\\' && stringChar !== '`') {
+          escapeNext = true;
+          continue;
+        }
+        if (ch === stringChar) {
+          inString = false;
+        }
+        continue;
+      }
+
+      if (ch === '"' || ch === "'" || ch === '`') {
+        inString = true;
+        stringChar = ch;
+        continue;
+      }
+
+      if (ch === '{') braceDepth++;
+      else if (ch === '}') {
+        braceDepth--;
+        if (braceDepth === 0) {
+          objEnd = j;
+          break;
+        }
+      }
+    }
+
+    if (objEnd === -1) break;
+
+    // Extract and parse the object
+    const objStr = arrayContent.substring(objStart, objEnd + 1);
+    const parsed = parseSimpleFileObject(objStr);
+    if (parsed && (parsed.path || parsed.content)) {
+      objects.push(parsed);
+    }
+
+    i = objEnd + 1;
+  }
+
+  return objects;
+}
+
+/**
+ * Parse a single { path: "...", content: "..." } object string.
+ * Handles both quoted and unquoted keys, and template literal values.
+ */
+function parseSimpleFileObject(objStr: string): { path?: string; content?: string; diff?: string } | null {
+  const result: { path?: string; content?: string; diff?: string } = {};
+
+  // Match key-value pairs: "key": "value" or key: "value" or key: `value`
+  const kvRegex = /(?:^|,)\s*["']?(path|content|diff)["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/gs;
+  let match: RegExpExecArray | null;
+
+  while ((match = kvRegex.exec(objStr)) !== null) {
+    const key = match[1];
+    let value = match[2];
+
+    // Strip surrounding quotes/backticks
+    if ((value.startsWith('"') && value.endsWith('"')) ||
+        (value.startsWith("'") && value.endsWith("'"))) {
+      value = value.slice(1, -1);
+      // Unescape
+      value = value.replace(/\\"/g, '"').replace(/\\'/g, "'").replace(/\\n/g, '\n').replace(/\\t/g, '\t');
+    } else if (value.startsWith('`') && value.endsWith('`')) {
+      value = value.slice(1, -1);
+      // Template literal - just remove the backticks, keep content as-is
+    }
+
+    if (key === 'path') result.path = value;
+    else if (key === 'content') result.content = value;
+    else if (key === 'diff') result.diff = value;
+  }
+
+  return Object.keys(result).length > 0 ? result : null;
+}
+
 /**
  * Extract tool-call-style file edits using balanced paren/brace scanning.
  *

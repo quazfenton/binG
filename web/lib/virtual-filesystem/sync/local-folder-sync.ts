@@ -25,6 +25,27 @@ import { normalizeScopePath, resolveScopedPath } from '../scope-utils';
 import { createLogger } from '@/lib/utils/logger';
 import { buildApiHeaders } from '@/lib/utils';
 
+// ============================================================================
+// Comprehensive sync exclusion patterns — all languages
+// ============================================================================
+const SYNC_EXCLUDE_PATTERNS: RegExp[] = [
+  /\/node_modules\//, /\/\.next\//, /\/\.nuxt\//, /\/\.cache\//,
+  /\/\.parcel-cache\//, /\/\.turbo\//, /\/\.vite\//, /\/coverage\//,
+  /\/__pycache__\//, /\/\.venv\//, /\/venv\//, /\/\.virtualenv\//,
+  /\/site-packages\//, /\/\.eggs\//, /\/pip-selfcheck\.json/,
+  /\/\.pytest_cache\//, /\/\.mypy_cache\//, /\/\.tox\//, /\/\.nox\//,
+  /\/\.ruff_cache\//, /\/\.ipynb_checkpoints\//,
+  /\/target\//, /\/\.gradle\//, /\/\.cargo\/registry\//,
+  /\/vendor\//, /\/pkg\//, /\/bin\//, /\/obj\//, /\/\.nuget\//,
+  /\/\.bundle\//, /\/\.gem\//,
+  /\/dist\//, /\/build\//, /\/out\//, /\/\.idea\//,
+  /\/Thumbs\.db/, /\/\.DS_Store/, /\.tmp$/, /\.bak$/, /\.swp$/, /\.swo$/, /~$/, /\.part$/,
+];
+
+function shouldExcludeFromSync(filePath: string): boolean {
+  return SYNC_EXCLUDE_PATTERNS.some(pattern => pattern.test(filePath));
+}
+
 // VFS API endpoints - used instead of importing server-only virtualFilesystem
 const VFS_API_BASE = '/api/filesystem';
 
@@ -194,6 +215,11 @@ export class LocalFolderSyncService {
       
       for (const entry of entries) {
         if (entry.type === 'file') {
+          // === EXCLUSION CHECK: Skip node_modules, venvs, caches, build outputs, etc. ===
+          if (shouldExcludeFromSync(entry.path)) {
+            continue;
+          }
+
           try {
             // Read from OPFS
             const file = await opfsCore.readFile(entry.path);
@@ -277,6 +303,11 @@ export class LocalFolderSyncService {
       
       for (const node of listing.data.nodes) {
         if (node.type === 'file') {
+          // === EXCLUSION CHECK: Skip node_modules, venvs, caches, build outputs, etc. ===
+          if (shouldExcludeFromSync(node.path)) {
+            continue;
+          }
+
           try {
             // Read from VFS
             const file = await vfsReadFile(folder.ownerId, node.path);

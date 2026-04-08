@@ -1527,12 +1527,19 @@ export default function TerminalPanel({
       }
       terminal.writeln('');
 
-      const cwd = localShellCwdRef.current[terminalId] || normalizeScopePath(filesystemScopePathRef.current);
-      terminal.write(getPrompt('local', cwd));
-
-      updateTerminalState(terminalId, { terminal, fitAddon, mode: 'local' });
-
+      // Only set mode: 'local' if PTY was NOT available.
+      // If PTY was available, the mode was already set to 'desktop-pty' inside the
+      // if (webPty) block above. Overwriting it here causes the terminal to fall
+      // back to local command mode after the first command.
       const termRef = terminalsRef.current.find(t => t.id === terminalId);
+      const ptyWasAvailable = termRef?.mode === 'desktop-pty' && !!termRef?.webLocalPtyInstance;
+
+      if (!ptyWasAvailable) {
+        const cwd = localShellCwdRef.current[terminalId] || normalizeScopePath(filesystemScopePathRef.current);
+        terminal.write(getPrompt('local', cwd));
+        updateTerminalState(terminalId, { terminal, fitAddon, mode: 'local' });
+      }
+
       if (termRef) {
         termRef.terminal = terminal;
         termRef.fitAddon = fitAddon;

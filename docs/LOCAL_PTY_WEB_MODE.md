@@ -12,13 +12,13 @@ Users get a **real shell** on the server with full terminal capabilities: colors
 
 ```bash
 # 1. Install node-pty (requires Python + build tools)
-cd web && npm install node-pty
+cd web && pnpm install node-pty
 
 # 2. Enable local PTY (dev mode)
 echo 'ENABLE_LOCAL_PTY=localhost' >> .env.local
 
 # 3. Restart Next.js
-npm run dev
+pnpm dev
 ```
 
 ### Option B: Oracle VM SSH PTY (no native deps)

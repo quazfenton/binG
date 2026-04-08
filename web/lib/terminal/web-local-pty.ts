@@ -136,32 +136,52 @@ export async function createWebLocalPty(
     const streamUrl = `/api/terminal/local-pty?sessionId=${encodeURIComponent(sessionId)}`;
     eventSource = new EventSource(streamUrl);
 
-    // SSE connection timeout
-    const sseTimeout = setTimeout(() => {
-      if (!isClosed && eventSource?.readyState !== EventSource.OPEN) {
-        logger.warn('SSE connection timed out', { sessionId });
+    // WAIT for SSE 'connected' message before returning.
+    // Without this, the caller sees isConnected=true but the EventSource
+    // is still CONNECTING, causing a race where the terminal falls back
+    // to local command mode before PTY output arrives.
+    await new Promise<void>((resolve, reject) => {
+      const connectionTimeout = setTimeout(() => {
         eventSource?.close();
-        eventSource = null;
-        isClosed = true;
-        if (closeCallback) closeCallback();
-      }
-    }, 10000);
+        reject(new Error('SSE connection timed out after 10s'));
+      }, 10000);
 
-    // Grace period to prevent false-positive onerror during initial connection
-    let connectionGracePeriod = true;
-    setTimeout(() => { connectionGracePeriod = false; }, 3000);
+      // SSE doesn't fire named events by message type — we must parse onmessage
+      // and resolve when we see { type: 'connected' }.
+      const checkConnected = (event: MessageEvent) => {
+        try {
+          const msg = JSON.parse(event.data);
+          if (msg.type === 'connected') {
+            clearTimeout(connectionTimeout);
+            eventSource!.removeEventListener('message', checkConnected);
+            logger.debug('SSE connected event received', { sessionId });
+            resolve();
+          }
+        } catch {
+          // Not JSON — ignore during connection wait
+        }
+      };
+
+      eventSource!.addEventListener('message', checkConnected);
+
+      eventSource!.onerror = () => {
+        if (eventSource?.readyState === EventSource.CLOSED) {
+          clearTimeout(connectionTimeout);
+          eventSource!.removeEventListener('message', checkConnected);
+          reject(new Error('SSE connection failed'));
+        }
+      };
+    });
 
     // Track whether we've ever received the 'connected' message.
     // Once connected, SSE errors are treated as transient (reconnectable).
-    let everConnected = false;
+    let everConnected = true;
     let reconnectAttempts = 0;
     const MAX_RECONNECT_ATTEMPTS = 10;
 
     eventSource.onopen = () => {
-      clearTimeout(sseTimeout);
-      connectionGracePeriod = false;
       reconnectAttempts = 0; // Reset on successful reconnect
-      logger.debug('Local PTY SSE connection opened', { sessionId });
+      logger.debug('Local PTY SSE reconnection opened', { sessionId });
     };
 
     eventSource.onmessage = (event) => {
@@ -170,6 +190,7 @@ export async function createWebLocalPty(
 
         switch (msg.type) {
           case 'connected':
+            // Already handled during connection wait, but set flag again for safety
             everConnected = true;
             logger.info('Local PTY connected', { sessionId, mode });
             break;
@@ -207,13 +228,6 @@ export async function createWebLocalPty(
     eventSource.onerror = (err) => {
       if (isClosed) return;
 
-      // During initial connection setup, EventSource fires onerror before onopen
-      // if the server is slow to respond. Skip errors during the grace period
-      // unless readyState is CLOSED (real failure).
-      if (connectionGracePeriod && eventSource?.readyState !== EventSource.CLOSED) {
-        return; // Ignore — still connecting
-      }
-
       const readyState = eventSource?.readyState;
 
       // CONNECTING = EventSource is auto-reconnecting (server-side retry)
@@ -223,7 +237,6 @@ export async function createWebLocalPty(
         if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
           logger.warn('SSE reconnection limit reached', { sessionId });
           isClosed = true;
-          clearTimeout(sseTimeout);
           eventSource?.close();
           eventSource = null;
           if (closeCallback) closeCallback();
@@ -232,29 +245,13 @@ export async function createWebLocalPty(
       }
 
       // CLOSED = connection terminated.
-      // If we've NEVER received the 'connected' message, this is a real failure.
-      // If we HAVE received 'connected', treat as transient (HMR, network blip).
-      if (!everConnected) {
-        logger.error('Local PTY SSE connection failed before establishing session', { err });
-        isClosed = true;
-        clearTimeout(sseTimeout);
-        eventSource?.close();
-        eventSource = null;
-        if (closeCallback) {
-          closeCallback();
-        }
-        return;
-      }
-
-      // We were connected but the stream dropped. Don't close the session —
-      // the EventSource will auto-reconnect. The PTY process is still alive
-      // on the server; we'll resume receiving output on reconnect.
+      // Since we awaited the 'connected' event before returning from this function,
+      // everConnected is always true at this point. Treat as transient.
       reconnectAttempts++;
       logger.debug(`SSE connection dropped, reconnecting... (${reconnectAttempts}/${MAX_RECONNECT_ATTEMPTS})`, { sessionId });
       if (reconnectAttempts >= MAX_RECONNECT_ATTEMPTS) {
         logger.warn('SSE reconnection limit reached after being connected', { sessionId });
         isClosed = true;
-        clearTimeout(sseTimeout);
         eventSource?.close();
         eventSource = null;
         if (closeCallback) closeCallback();

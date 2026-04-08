@@ -66,7 +66,7 @@ Messages In
 ### Processing modes
 
 **Async (default, `async_mode=True`):**
-- API returns immediately: `{"status": "PENDING", "event_id": "..."}`
+- API returns immediately: `{"id": "...", "event": "queued", "data": {...}}`
 - Processing happens in background
 - Use webhooks for completion notifications
 - Best for: high-throughput, non-blocking workflows

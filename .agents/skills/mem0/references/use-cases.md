@@ -599,7 +599,7 @@ def store_email(user_id: str, sender: str, subject: str, body: str, date: str):
 def search_emails(user_id: str, query: str):
     return client.search(
         query,
-        filters={"AND": [{"user_id": user_id}, {"categories": {"contains": "email"}}]},
+        filters={"AND": [{"user_id": user_id}, {"metadata": {"email_type": "incoming"}}]},
         top_k=10
     )
 
@@ -608,7 +608,7 @@ def get_emails_from_sender(user_id: str, sender: str):
         filters={
             "AND": [
                 {"user_id": user_id},
-                {"metadata": {"contains": sender}}
+                {"metadata": {"sender": sender}}
             ]
         }
     )
@@ -637,7 +637,7 @@ async function storeEmail(userId: string, sender: string, subject: string, body:
 
 async function searchEmails(userId: string, query: string) {
     return client.search(query, {
-        filters: { AND: [{ user_id: userId }, { categories: { contains: 'email' } }] },
+        filters: { AND: [{ user_id: userId }, { metadata: { email_type: 'incoming' } }] },
         top_k: 10,
     });
 }

@@ -1,7 +1,7 @@
 # Mem0 Integration Patterns
 
 Working code examples for integrating Mem0 Platform with popular AI frameworks.
-All examples use `MemoryClient` (Platform API key).
+Examples use a variety of adapters depending on the framework: `MemoryClient` (Python SDK), `createMem0` (Vercel AI SDK), `Mem0MemoryService` (Pipecat), and `Mem0Memory` (LlamaIndex). All connect to the Mem0 Platform API.
 
 Code examples are sourced from official Mem0 integration docs at docs.mem0.ai, simplified for quick reference.
 

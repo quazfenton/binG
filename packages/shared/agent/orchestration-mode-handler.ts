@@ -197,7 +197,7 @@ export async function executeWithOrchestrationMode(
         const modeConfig = (request as any).modeConfig as ModeConfig | undefined;
         const promptParams = modeConfig?.promptParams;
         const baseSystemPrompt = process.env.OPENCODE_SYSTEM_PROMPT || '';
-        const systemPrompt = baseSystemPrompt + applyPromptModifiers(promptParams ?? {});
+        const systemPrompt = baseSystemPrompt + await applyPromptModifiers(promptParams ?? {});
 
         const unifiedResult = await processUnifiedAgentRequest({
           userMessage: request.task,

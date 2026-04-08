@@ -20,6 +20,27 @@
 
 import type { SandboxHandle } from '../../sandbox/providers/sandbox-provider';
 
+// ============================================================================
+// Comprehensive sync exclusion patterns — all languages
+// ============================================================================
+const SYNC_EXCLUDE_PATTERNS: RegExp[] = [
+  /\/node_modules\//, /\/\.next\//, /\/\.nuxt\//, /\/\.cache\//,
+  /\/\.parcel-cache\//, /\/\.turbo\//, /\/\.vite\//, /\/coverage\//,
+  /\/__pycache__\//, /\/\.venv\//, /\/venv\//, /\/\.virtualenv\//,
+  /\/site-packages\//, /\/\.eggs\//, /\/pip-selfcheck\.json/,
+  /\/\.pytest_cache\//, /\/\.mypy_cache\//, /\/\.tox\//, /\/\.nox\//,
+  /\/\.ruff_cache\//, /\/\.ipynb_checkpoints\//,
+  /\/target\//, /\/\.gradle\//, /\/\.cargo\/registry\//,
+  /\/vendor\//, /\/pkg\//, /\/bin\//, /\/obj\//, /\/\.nuget\//,
+  /\/\.bundle\//, /\/\.gem\//,
+  /\/dist\//, /\/build\//, /\/out\//, /\/\.idea\//,
+  /\/Thumbs\.db/, /\/\.DS_Store/, /\.tmp$/, /\.bak$/, /\.swp$/, /\.swo$/, /~$/, /\.part$/,
+];
+
+function shouldExcludeFromSync(filePath: string): boolean {
+  return SYNC_EXCLUDE_PATTERNS.some(pattern => pattern.test(filePath));
+}
+
 // Type definitions
 export interface VfsFile {
   path: string;
@@ -264,12 +285,15 @@ export class UniversalVfsSync {
     files: VfsFile[],
     options?: SyncOptions
   ): Promise<SyncResult> {
+    // Filter out excluded files before syncing
+    const filteredFiles = files.filter(f => !shouldExcludeFromSync(f.path));
+
     const strategy = this.strategies.get(provider);
     if (!strategy) {
       console.warn(`[UniversalVfsSync] No strategy for provider: ${provider}, using generic sync`);
-      return this.genericSync(handle, files, options);
+      return this.genericSync(handle, filteredFiles, options);
     }
-    return strategy.sync(handle, files, options);
+    return strategy.sync(handle, filteredFiles, options);
   }
 
   private static async genericSync(
