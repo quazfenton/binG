@@ -235,6 +235,7 @@ function getCleanEnv(): NodeJS.ProcessEnv {
   // like PRIMARY_KEY, CACHE_KEY, etc.
   const secretPatterns = [
     /^.*_SECRET$/,
+    /^.*_SECRET_.*$/,         // AWS_SECRET_ACCESS_KEY, STRIPE_SECRET_KEY, etc.
     /^.*_API_KEY$/,
     /^.*_TOKEN$/,
     /^.*_PASSWORD$/,
@@ -244,8 +245,12 @@ function getCleanEnv(): NodeJS.ProcessEnv {
     /^.*_AUTH_KEY$/,
     /^.*_PRIVATE_KEY$/,
     /^.*_SIGNING_KEY$/,
+    /^.*_ACCESS_KEY$/,        // AWS_ACCESS_KEY_ID
+    /^.*_SECRET_KEY$/,        // STRIPE_SECRET_KEY
     /^DATABASE_URL$/,
     /^REDIS_URL$/,
+    /^.*_ENCRYPTION_KEY$/,    // Encryption keys
+    /^.*_SESSION_SECRET$/,    // Session secrets
   ];
 
   for (const [key, value] of Object.entries(process.env)) {

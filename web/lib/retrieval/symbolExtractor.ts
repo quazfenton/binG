@@ -42,8 +42,14 @@ export async function initParser(): Promise<void> {
   _parserReady = true;
 }
 
+// Cache a separate Parser instance per language to avoid concurrent mutation
+// of the shared parser's language setting.
+const _parserCache = new Map<Language, Parser>();
+
 async function getParser(lang: Language): Promise<Parser> {
-  if (!_parserReady || !_parser) await initParser();
+  if (_parserCache.has(lang)) return _parserCache.get(lang)!;
+
+  if (!_parserReady) await initParser();
 
   const wasmPaths: Partial<Record<Language, string>> = {
     ts: "/tree-sitter-typescript.wasm",
@@ -55,9 +61,11 @@ async function getParser(lang: Language): Promise<Parser> {
   if (!wasmPath) throw new Error(`Unsupported language: ${lang}`);
 
   const language = await Parser.Language.load(wasmPath);
-  _parser!.setLanguage(language);
+  const parser = new Parser();
+  parser.setLanguage(language);
+  _parserCache.set(lang, parser);
 
-  return _parser!;
+  return parser;
 }
 
 // ─── Language Detection ───────────────────────────────────────────────────────

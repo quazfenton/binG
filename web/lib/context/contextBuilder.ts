@@ -70,7 +70,8 @@ export function buildContext(
     }
   }
 
-  // 2. Fit into token budget greedily
+  // 2. Fit into token budget — use a greedy approach that skips oversized
+  // symbols but continues trying to fill the remaining budget with smaller ones
   let tokenCount = 0;
   const fitted: RankedSymbol[] = [];
 
@@ -78,7 +79,9 @@ export function buildContext(
     const block = formatSymbolBlock(symbol, includeScores);
     const cost = estimateTokens(block);
 
-    if (tokenCount + cost > safeMaxTokens) break;
+    // Skip symbols that don't fit, but continue trying others
+    // (a single large symbol shouldn't block all remaining smaller ones)
+    if (tokenCount + cost > safeMaxTokens) continue;
 
     fitted.push(symbol);
     tokenCount += cost;

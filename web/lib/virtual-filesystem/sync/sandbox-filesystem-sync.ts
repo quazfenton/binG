@@ -26,34 +26,75 @@ import { emitFilesystemUpdated } from './sync-events';
  * This returns an array to check all possibilities for delete detection
  */
 function getWorkspaceDirsForSandbox(sandboxId: string): string[] {
-  // E2B new format: some IDs don't have the 'e2b-' prefix (e.g., 'ii8938a6cyxwggwamxh1k')
-  // These are alphanumeric strings, typically 18-20 chars
-  const isE2BFormat = /^[a-z0-9]{15,25}$/i.test(sandboxId);
-  
-  if (isE2BFormat) {
-    // E2B can have multiple workspace locations
+  if (!sandboxId || typeof sandboxId !== 'string') return ['/workspace'];
+
+  // Explicit prefix matches first (highest priority)
+  if (sandboxId.startsWith('e2b-')) {
     return ['/home/user', '/home/user/project', '/home/user/code'];
   }
-  
-  // Infer provider from sandbox ID prefix
-  if (sandboxId.startsWith('mistral-')) {
+  if (sandboxId.startsWith('mistral-') || sandboxId.startsWith('mistral-agent-')) {
     return ['/workspace', '/workspace/project', '/app'];
   }
-  if (sandboxId.startsWith('blaxel-')) {
+  if (sandboxId.startsWith('blaxel-') || sandboxId.startsWith('blaxel-mcp-')) {
     return ['/workspace', '/workspace/app'];
   }
   if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-')) {
     return ['/home/sprite/workspace', '/home/sprite/projects'];
   }
-  if (sandboxId.startsWith('csb-') || sandboxId.length === 6) {
+  if (sandboxId.startsWith('csb-')) {
     return ['/workspace', '/workspace/src'];
   }
-  if (sandboxId.startsWith('e2b-')) {
-    return ['/home/user', '/home/user/project'];
+  if (sandboxId.startsWith('modal-')) {
+    return ['/workspace', '/workspace/project'];
+  }
+  if (sandboxId.startsWith('agentfs-')) {
+    return ['/workspace', '/workspace/project'];
+  }
+  if (sandboxId.startsWith('local-')) {
+    return ['/workspace', '/workspace/project'];
+  }
+  if (sandboxId.startsWith('desktop-')) {
+    return ['/workspace', '/home/user/project'];
+  }
+  if (sandboxId.startsWith('daytona-')) {
+    return ['/home/daytona/workspace', '/home/daytona/projects'];
+  }
+  if (sandboxId.startsWith('runloop-')) {
+    return ['/workspace', '/workspace/project'];
+  }
+  if (sandboxId.startsWith('opensandbox-') || sandboxId.startsWith('osb-')) {
+    return ['/workspace', '/workspace/project'];
+  }
+  if (sandboxId.startsWith('microsandbox-') || sandboxId.startsWith('micro-')) {
+    return ['/workspace', '/workspace/project'];
+  }
+  if (sandboxId.startsWith('webcontainer-')) {
+    return ['/home/project', '/home/node/project'];
+  }
+  if (sandboxId.startsWith('vercel-')) {
+    return ['/workspace', '/workspace/project'];
   }
 
-  // Default to Daytona (most common)
-  return ['/home/daytona/workspace', '/home/daytona/projects'];
+  // Pattern-based detection
+  // E2B: 18-25 char alphanumeric
+  if (/^[a-z0-9]{18,25}$/i.test(sandboxId)) {
+    return ['/home/user', '/home/user/project', '/home/user/code'];
+  }
+  // CodeSandbox: 6-char code
+  if (/^[a-z0-9]{6}$/i.test(sandboxId)) {
+    return ['/workspace', '/workspace/src'];
+  }
+  // Blaxel/Runloop/Mistral short codes: 5-7 chars
+  if (/^[a-z0-9]{5,7}$/i.test(sandboxId)) {
+    return ['/workspace', '/workspace/app'];
+  }
+  // UUID format (Daytona)
+  if (/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(sandboxId)) {
+    return ['/home/daytona/workspace', '/home/daytona/projects'];
+  }
+
+  // Default workspace for unknown providers
+  return ['/workspace', '/workspace/project'];
 }
 
 /**

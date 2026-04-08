@@ -177,10 +177,16 @@ export async function runAgentLoop(opts: AgentLoopOptions): Promise<AgentResult>
     // 2. Call LLM with timeout
     let diff: string;
     try {
-      const timeoutPromise = new Promise<never>((_, reject) =>
-        setTimeout(() => reject(new Error(`LLM call timed out after ${llmTimeoutMs}ms`)), llmTimeoutMs)
-      );
+      let timeoutId: ReturnType<typeof setTimeout> | undefined;
+      const timeoutPromise = new Promise<never>((_, reject) => {
+        timeoutId = setTimeout(
+          () => reject(new Error(`LLM call timed out after ${llmTimeoutMs}ms`)),
+          llmTimeoutMs
+        );
+      });
       diff = await Promise.race([llm(userPrompt, systemPrompt), timeoutPromise]);
+      // Clear the timeout timer once the race settles to avoid accumulating pending timers
+      if (timeoutId !== undefined) clearTimeout(timeoutId);
     } catch (err) {
       lastError = `LLM call failed: ${String(err)}`;
       onIteration?.({ iteration: i + 1, status: "retrying", error: lastError });

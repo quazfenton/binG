@@ -189,6 +189,8 @@ export async function GET(req: NextRequest) {
             console.error('[Terminal Stream] PTY session creation failed:', err);
             console.error('[Terminal Stream] Error stack:', err instanceof Error ? err.stack : 'N/A');
             send({ type: 'error', data: `PTY creation failed: ${msg}` });
+            // Clean up ping interval and subscriptions to prevent leaks
+            cleanup?.();
             // Close the stream so the client doesn't hang forever
             setTimeout(() => {
               try { controller.close(); } catch { /* already closed */ }

@@ -172,10 +172,11 @@ export async function initializeEventSystem(): Promise<void> {
 
 /**
  * Start event processing (scheduler + event worker)
- * Returns timers that should be cleared on shutdown
+ * Returns timers that should be cleared on shutdown.
  *
- * When Trigger.dev is configured, this function returns null timers
- * because events are dispatched to Trigger.dev workers instead.
+ * Note: Even when Trigger.dev is configured, the local scheduler and
+ * worker are still started as a fallback. Trigger.dev tasks are dispatched
+ * separately via the trigger API.
  */
 export function startEventProcessing(options?: {
   schedulerIntervalMs?: number;

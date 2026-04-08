@@ -222,6 +222,16 @@ export class StatefulAgent {
         enableAdaptiveSelection: true,
       });
       log.info('Bootstrapped Agency initialized', { sessionId: this.sessionId });
+
+      // Wire agency into capability router for adaptive provider selection (non-blocking)
+      // Use .then() to avoid await in constructor
+      import('@/lib/tools/router')
+        .then(({ wireAgencyToRouter }) => {
+          wireAgencyToRouter(this.agency);
+        })
+        .catch((err: any) => {
+          log.warn('Failed to wire agency to capability router (non-fatal)', { error: err.message });
+        });
     }
   }
 

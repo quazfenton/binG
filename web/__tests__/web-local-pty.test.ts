@@ -211,6 +211,8 @@ describe('createWebLocalPty', () => {
     const es = MockEventSource.getLastInstance();
     es!.onmessage?.({ data: JSON.stringify({ type: 'disconnected', data: { exitCode: 0 } }) });
 
+    // The implementation has a 500ms disconnect delay before onClose fires
+    await new Promise(resolve => setTimeout(resolve, 600));
     expect(closed).toBe(true);
   });
 

@@ -150,8 +150,11 @@ describe('LLM Tool Integration — End-to-End', () => {
     it('handles mixed valid/invalid paths gracefully', async () => {
       const files = [
         { path: 'project/sessions/999/valid.txt', content: 'valid' },
+        { path: '../../../etc/passwd', content: 'traversal' },
+        { path: '', content: 'empty path' },
       ];
       const result = await runTool(batchWriteTool, { files });
+      // Should process valid entries while rejecting invalid ones
       expect(result.success).toBe(true);
     });
 
@@ -294,7 +297,8 @@ describe('LLM Tool Integration — End-to-End', () => {
 
     it('rejects path with encoded traversal', async () => {
       const result = await runTool(writeFileTool, {
-        path: 'project/../../../etc/passwd',
+        // URL-encoded path that decodes to a traversal attempt
+        path: 'project/%2e%2e/%2e%2e/%2e%2e/etc/passwd',
         content: 'hacked',
       });
       expect(result.success).toBe(false);

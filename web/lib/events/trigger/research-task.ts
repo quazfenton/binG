@@ -33,14 +33,19 @@ export interface ResearchTaskResult {
 
 /**
  * Execute research task with Trigger.dev (when available) or fallback to local
+ *
+ * Note: When Trigger.dev is used, the task runs asynchronously and the
+ * returned value is a run handle `{ runId, status }` rather than the
+ * full ResearchTaskResult. Use the run ID to poll for completion.
+ * Local fallback returns the full result synchronously.
  */
 export async function executeResearchTask(
   payload: ResearchTaskPayload
-): Promise<ResearchTaskResult> {
-  return executeWithFallback<ResearchTaskPayload, ResearchTaskResult>(
+): Promise<ResearchTaskResult | { runId: string; status: string }> {
+  return executeWithFallback<ResearchTaskPayload, ResearchTaskResult | { runId: string; status: string }>(
     async (taskId) => invokeTriggerTask(taskId, payload),
     (p) => executeLocally(p),
-    'research',
+    'research-task',
     payload
   );
 }
@@ -86,25 +91,57 @@ async function executeLocally(
 
 /**
  * Schedule recurring research task
+ *
+ * Creates a recurring schedule via Trigger.dev's schedule API when available.
+ * Falls back to logging a warning when Trigger.dev is not configured.
  */
 export async function scheduleResearchTask(
   payload: ResearchTaskPayload & {
     schedule: { type: 'cron' | 'interval'; expression: string };
   }
-): Promise<{ scheduled: boolean; jobId?: string }> {
+): Promise<{ scheduled: boolean; scheduleId?: string }> {
   const available = await import('./utils').then(m => m.isTriggerAvailable());
 
   if (available) {
-    return scheduleWithTrigger(
-      async () => {
-        const { invokeTriggerTask } = await import('./utils');
-        const result = await invokeTriggerTask('research-task', payload);
-        return { scheduled: true, jobId: (result as any).runId };
-      },
-      'research task'
-    );
+    const secretKey = process.env.TRIGGER_SECRET_KEY;
+    const apiUrl = process.env.TRIGGER_API_URL || 'https://api.trigger.dev';
+
+    if (!secretKey) {
+      logger.warn('Cannot schedule research task: TRIGGER_SECRET_KEY not set');
+      return { scheduled: false };
+    }
+
+    try {
+      // Use Trigger.dev schedule API
+      const response = await fetch(`${apiUrl}/api/v1/tasks/research-task/schedules`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${secretKey}`,
+        },
+        body: JSON.stringify({
+          type: payload.schedule.type === 'cron' ? 'cron' : 'interval',
+          cron: payload.schedule.type === 'cron' ? payload.schedule.expression : undefined,
+          seconds: payload.schedule.type === 'interval' ? parseInt(payload.schedule.expression, 10) : undefined,
+          payload,
+        }),
+      });
+
+      if (!response.ok) {
+        throw new Error(`Schedule creation failed: ${response.status}`);
+      }
+
+      const scheduleData = await response.json();
+      logger.info('Research task scheduled', { scheduleId: scheduleData.id });
+      return { scheduled: true, scheduleId: scheduleData.id };
+    } catch (error: any) {
+      logger.error('Failed to schedule research task', error);
+      return { scheduled: false };
+    }
   }
 
-  logger.warn('Research scheduling not yet available - Trigger.dev configuration required');
+  logger.warn('Research scheduling not yet available - Trigger.dev configuration required', {
+    schedule: payload.schedule,
+  });
   return { scheduled: false };
 }

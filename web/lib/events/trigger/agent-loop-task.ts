@@ -37,7 +37,7 @@ export async function executeAgentLoopTask(
   return executeWithFallback<AgentLoopTaskPayload, AgentLoopTaskResult>(
     async (taskId) => invokeTriggerTask(taskId, payload),
     (p) => executeLocally(p),
-    'agent loop',
+    'agent-loop',
     payload
   );
 }

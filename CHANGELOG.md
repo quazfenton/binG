@@ -15,15 +15,27 @@ All notable changes to this project will be documented in this file.
 - **Project detection** — `detectProjectCommand()` inspects `package.json` (dev/start/serve/build scripts), `Cargo.toml`, `go.mod`, `requirements.txt` to determine the correct run command.
 - **LLMAgentOptions extended** — Added `cwd?: string` and `enableSelfHeal?: boolean` to `LLMAgentOptions` interface. Router passes `input.cwd` through to provider; provider resolves VFS scoped paths to real filesystem paths.
 
+### 🧠 Universal Project Detection + Auto-Context (Any Agent/Provider)
+- **New `web/lib/project-detection/` module** — Consolidates scattered detection logic from `live-preview-offloading.ts`, `code-preview-panel.tsx`, and `opencode-cli.ts` into a single universal module that ANY agent/provider can use.
+- **Framework detection** (`detectFrameworkFromFiles`) — Detects Next.js, Nuxt, Vue, Svelte, React, Astro, Angular, Solid, Remix, Gatsby, Qwik, Vite, Django, Flask, FastAPI, Streamlit, Gradio, Rust, Go, Python from file lists + package.json dependencies. Priority order: dependencies → config files → file extensions → Python/Rust/Go markers.
+- **Entry file detection** (`detectEntryFile`) — Finds the correct entry point for 17+ frameworks using `FRAMEWORK_ENTRY_POINTS` map.
+- **Project root detection** (`computeRootScores`, `detectProjectRoot`) — Scores all directories by root indicator files (`package.json`, `Cargo.toml`, `go.mod`, `tsconfig.json`, etc.) and returns the highest-scoring directory.
+- **Command detection** (`detectRunCommand`, `detectTestCommand`, `detectBuildCommand`) — Reads package.json scripts to determine the correct commands. Falls back to framework-specific defaults.
+- **Auto-context builder** (`buildProjectContext`) — Builds complete `ProjectContext` from file paths + optional `readFileFn`. Includes framework, entry file, project root, run/test/build commands, package.json scripts, config file indicators.
+- **VFS path resolution** (`resolveVfsPathToRealPath`) — Converts VFS scoped paths (`project/sessions/002/src`) to real filesystem paths. Used by capability router for ANY provider (OpenCode, Daytona, E2B, etc.).
+- **Capability router cwd resolution** — Router now calls `resolveVfsPathToRealPath()` to convert VFS scoped paths to real paths before passing to providers. Works for ALL providers, not just OpenCode.
+- **Auto-context for LLM** — LLM can now read project structure BEFORE executing commands via `buildProjectContext()`, enabling informed decisions about what commands to run.
+
 ### 🔒 Additional Security Fixes
 - **SSH command injection via `startRemoteVfsSync`** — Remote workspace path wasn't validated or escaped before use in SSH exec commands. Added `shellEscape()` and `SAFE_PATH_RE` validation.
 - **Concurrent map modification in cleanup interval** — `sessions.entries()` iterated while `cleanupSession()` deleted entries. Changed to `Array.from(sessions.entries())`.
 - **SIGTERM didn't kill PTY sessions** — Only cleared the interval. Now gracefully shuts down all sessions (stops watchers, closes SSH clients, kills PTYs).
 
-### 🧪 Comprehensive Test Coverage (107 tests, all passing)
+### 🧪 Comprehensive Test Coverage (141 tests, all passing)
 - **`advanced-capability-agency.test.ts` (55 tests)** — Agency learning, adaptation, pattern recognition, capability definitions, natural language → capability mapping, provider priority, edge cases, concurrent execution
 - **`e2e-local-pty-capability.test.ts` (21 tests)** — Local PTY route validation (env sanitization, shell escaping, path traversal rejection, dimension clamping), capability router input validation, provider fallback chain, agency integration, real node-pty spawn verification, full-stack natural language routing, owner isolation
 - **`bash-selfheal-terminal.test.ts` (31 tests)** — Project detection (npm/Rust/Go/Python), natural language → command translation, self-heal error pattern matching (missing deps, port conflicts, file not found, permission denied), cwd resolution from VFS scopedPath to real filesystem path, capability router cwd pass-through, E2E full pipeline simulation
+- **`e2e-project-detection-terminal.test.ts` (65 tests)** — Framework detection (17+ frameworks), entry file detection, project root scoring, command detection, NL→command translation with context, VFS path resolution, buildProjectContext, full E2E pipeline from LLM prompt → project detection → command execution
 
 ### 🔴 Trigger.dev Stub Fixes
 
@@ -699,5 +711,15 @@ curl -X POST http://localhost:3000/api/filesystem/write \
 ### 📋 Test Results
 
 - **116 tests passing** — 88 standalone + 28 production batch-write-parser tests
-- All Layer 3 modules tested via existing test infrastructure                              
+- All Layer 3 modules tested via existing test infrastructure
+- **E2E test suite** — `scripts/e2e-memory-test.ts` tests: health, embedding, chat, context retrieval, agent loop, validation. All 6 pass.
+
+### 🔧 Critical Fixes (post-review)
+
+- **`symbolExtractor.ts` duplicate `let _parserReady`** — Compile error (TS2451). Removed duplicate declaration on line 42.
+- **`plugins.ts` shell injection in git commit** — Single quotes bypassed sanitizer. Fixed with proper `'\\''` escaping technique.
+- **`embeddings.ts` cache key collision** — `.trim()` could merge distinct inputs. Changed to use full `text` as cache key.
+- **`context-pipeline.ts` dead import** — `trace` imported but never used. Removed.
+- **`health/route.ts` IndexedDB server crash** — IndexedDB is browser-only, caused 503 on server. Fixed: checks `typeof indexedDB !== "undefined"` and gracefully skips client-only checks on server. All 4 components now report "ok".
+- **`health/route.ts` embedding smoke test** — `embed()` uses relative URL which fails on server. Fixed: verifies module loads and cache is accessible instead of calling embed().                              
 

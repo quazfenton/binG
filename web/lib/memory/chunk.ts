@@ -19,11 +19,16 @@ export function chunkText(
   size = 500,
   overlap = 50
 ): Chunk[] {
+  // Guard against non-positive step size that would cause an infinite loop
+  const effectiveSize = Math.max(1, size);
+  const effectiveOverlap = Math.min(overlap, effectiveSize - 1);
+  const step = effectiveSize - effectiveOverlap;
+
   const chunks: Chunk[] = [];
   let index = 0;
 
-  for (let i = 0; i < text.length; i += size - overlap) {
-    const end = Math.min(i + size, text.length);
+  for (let i = 0; i < text.length; i += step) {
+    const end = Math.min(i + effectiveSize, text.length);
     chunks.push({
       text: text.slice(i, end),
       index: index++,
@@ -45,13 +50,18 @@ export function chunkByLines(
   maxLines = 30,
   overlapLines = 5
 ): Chunk[] {
+  // Guard against non-positive step that would cause an infinite loop
+  const effectiveMaxLines = Math.max(1, maxLines);
+  const effectiveOverlap = Math.min(overlapLines, effectiveMaxLines - 1);
+  const step = effectiveMaxLines - effectiveOverlap;
+
   const lines = text.split("\n");
   const chunks: Chunk[] = [];
   let index = 0;
   let charOffset = 0;
 
-  for (let i = 0; i < lines.length; i += maxLines - overlapLines) {
-    const slice = lines.slice(i, i + maxLines);
+  for (let i = 0; i < lines.length; i += step) {
+    const slice = lines.slice(i, i + effectiveMaxLines);
     const chunkText = slice.join("\n");
     const startChar = charOffset;
 
@@ -63,10 +73,10 @@ export function chunkByLines(
     });
 
     // Advance char offset by the non-overlapping lines
-    const advanceLines = lines.slice(i, i + (maxLines - overlapLines));
+    const advanceLines = lines.slice(i, i + step);
     charOffset += advanceLines.join("\n").length + 1;
 
-    if (i + maxLines >= lines.length) break;
+    if (i + effectiveMaxLines >= lines.length) break;
   }
 
   return chunks;

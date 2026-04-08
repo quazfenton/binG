@@ -19,7 +19,7 @@
 
 import { retrieveHybrid, type HybridRetrievalResult } from "../retrieval/hybrid-retrieval";
 import { createLogger } from "@/lib/utils/logger";
-import { trace, increment } from "../agent/metrics";
+import { increment } from "../agent/metrics";
 
 const logger = createLogger("ContextPipeline");
 
