@@ -47,7 +47,7 @@ export interface WorkspaceInfo {
 }
 
 export interface WorkspaceInitOptions {
-  /** Custom workspace root (default: ~/opencode-workspaces) */
+  /** Custom workspace root (default: ~/workspace) */
   root?: string;
   /** Enable boundary mode to limit LLM access */
   boundaryEnabled?: boolean;

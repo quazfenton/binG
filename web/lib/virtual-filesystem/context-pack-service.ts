@@ -132,7 +132,11 @@ class ContextPackService {
     const files = await this.collectFiles(ownerId, rootPath, opts, warnings);
 
     // Index new/changed files into project's vector store (contentHash avoids re-embedding)
-    await this.indexFilesToVectorStore(projectServices, files, warnings);
+    // DEFERRED: Run async in background so slow embedding doesn't block context generation
+    this.indexFilesToVectorStore(projectServices, files, warnings).catch(e => {
+      // Non-failure: warnings are already collected, logging is sufficient
+      console.warn('[ContextPack] Background indexing failed:', e instanceof Error ? e.message : String(e));
+    });
     
     // Generate bundle in requested format
     let bundle = this.generateBundle(tree, files, opts);

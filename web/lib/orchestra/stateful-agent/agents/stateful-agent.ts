@@ -963,6 +963,44 @@ Use 'createFile' for new files.`;
         }
       });
 
+      // FALLBACK: If native tool calls returned empty but text contains tool-like patterns,
+      // parse and execute them (handles models that don't support function calling)
+      if (result.toolCalls?.length === 0 && result.text) {
+        const { extractTextToolCallEdits, extractFlatJsonToolCalls, extractToolTagEdits } = await import('@/lib/chat/file-edit-parser');
+        const textEdits = [
+          ...extractTextToolCallEdits(result.text),
+          ...extractFlatJsonToolCalls(result.text),
+          ...extractToolTagEdits(result.text),
+        ];
+
+        if (textEdits.length > 0) {
+          log.info(`StatefulAgent: No native tool calls, found ${textEdits.length} text-based tool calls, executing fallback`);
+          for (const edit of textEdits) {
+            try {
+              // Map action to tool name
+              let toolName = edit.action;
+              if (edit.action === 'write') toolName = 'createFile';
+              else if (edit.action === 'patch') toolName = 'applyDiff';
+              else if (edit.action === 'delete') toolName = 'deleteFile';
+
+              const callArgs: any = { path: edit.path };
+              if (edit.content) callArgs.content = edit.content;
+              if (edit.diff) callArgs.diff = edit.diff;
+
+              const execResult = await this.toolExecutor.execute(toolName, callArgs);
+
+              // Update VFS for successful file operations
+              if (execResult.success && edit.path) {
+                this.vfs[edit.path] = typeof edit.content === 'string' ? edit.content : '';
+                await this.addMemoryNode('file', edit.content || '', edit.path);
+              }
+            } catch (err: any) {
+              log.warn(`Text-based tool execution failed: ${edit.action}`, err.message);
+            }
+          }
+        }
+      }
+
       this.status = 'verifying';
     } catch (error: any) {
       this.errors.push({
@@ -1409,6 +1447,51 @@ export async function* runStatefulAgentStreaming(
   // Yield text chunks
   for await (const chunk of result.textStream) {
     yield chunk;
+  }
+
+  // FALLBACK: If no tool calls were made but text contains tool-like patterns,
+  // parse and execute them (handles models that don't support function calling)
+  const finalToolCalls = await result.toolCalls;
+  if ((!finalToolCalls || finalToolCalls.length === 0) && agent) {
+    try {
+      const { extractTextToolCallEdits, extractFlatJsonToolCalls, extractToolTagEdits } = await import('@/lib/chat/file-edit-parser');
+      // Get the full response text from the result
+      const fullText = await result.text;
+      if (fullText) {
+        const textEdits = [
+          ...extractTextToolCallEdits(fullText),
+          ...extractFlatJsonToolCalls(fullText),
+          ...extractToolTagEdits(fullText),
+        ];
+
+        if (textEdits.length > 0) {
+          log.info(`StatefulAgent streaming: No native tool calls, found ${textEdits.length} text-based tool calls, executing fallback`);
+          for (const edit of textEdits) {
+            try {
+              let toolName = edit.action;
+              if (edit.action === 'write') toolName = 'createFile';
+              else if (edit.action === 'patch') toolName = 'applyDiff';
+              else if (edit.action === 'delete') toolName = 'deleteFile';
+
+              const callArgs: any = { path: edit.path };
+              if (edit.content) callArgs.content = edit.content;
+              if (edit.diff) callArgs.diff = edit.diff;
+
+              const execResult = await agent['toolExecutor'].execute(toolName, callArgs);
+
+              if (execResult.success && edit.path) {
+                vfs[edit.path] = typeof edit.content === 'string' ? edit.content : '';
+                options?.onToolExecution?.(toolName, callArgs, execResult);
+              }
+            } catch (err: any) {
+              log.warn(`Text-based tool execution failed: ${edit.action}`, err.message);
+            }
+          }
+        }
+      }
+    } catch (err: any) {
+      log.warn('StatefulAgent streaming: Text-based fallback parsing failed', err.message);
+    }
   }
 
   // Return final result
