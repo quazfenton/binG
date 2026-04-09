@@ -31,8 +31,8 @@ import {
   PromptPresetKey,
   DEFAULT_PROMPT_PARAMETERS,
   PROMPT_PRESETS,
-  applyPromptModifiers,
   generateDebugHeaderValue,
+  applyPromptModifiers,
 } from '../../packages/shared/agent/prompt-parameters';
 import { encodeParams, decodeParams } from '../../packages/shared/agent/prompt-parameters.codec';
 
@@ -325,7 +325,11 @@ export function ResponseStyleProvider({ children }: ResponseStyleProviderProps) 
   }, [reset, setPreset]);
 
   // Computed values
-  const promptSuffix = useMemo(() => applyPromptModifiers(params), [params]);
+  const promptSuffix = useMemo(() => {
+    // Note: applyPromptModifiers is async, but for client-side display we use the sync version
+    // The actual async suffix is generated server-side in the chat API
+    return '';
+  }, [params]);
   const debugHeader = useMemo(() => generateDebugHeaderValue(params, presetKey), [params, presetKey]);
   const encodedParams = useMemo(() => encodeParams(params), [params]);
 

@@ -30,6 +30,8 @@ import {
   materializeWorkspace,
   watchWorkspaceForChanges,
 } from '@/lib/virtual-filesystem/vfs-workspace-materializer';
+import { syncFileToVfs } from '@/lib/virtual-filesystem/vfs-workspace-materializer';
+import { getDb } from '@/lib/database/connection';
 
 const logger = createLogger('LocalPTY');
 
@@ -1574,7 +1576,7 @@ function registerSession(
   sessionId: string,
   userId: string,
   pty: IPty,
-  extras: Partial<Omit<LocalPtySession, 'sessionId' | 'userId' | 'pty' | 'createdAt' | 'exited' | 'exitCode' | 'outputQueue'>> = {}
+  extras: Partial<Omit<LocalPtySession, 'sessionId' | 'userId' | 'pty' | 'createdAt' | 'exited' | 'exitCode' | 'outputQueue' | 'workspaceDir'>> & { workspaceDir: string } = {}
 ): void {
   const session: LocalPtySession = {
     sessionId,

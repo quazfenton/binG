@@ -42,8 +42,9 @@ async function test() {
         { role: 'user', content: 'Create file named from-llm.txt with content: LLM created this!' }
       ],
       stream: true,
-      provider: 'nvidia',
-      model: 'nvidia/nemotron-4-340b-instruct',
+      provider: 'google',
+      model: 'gemini-2.5-flash-lite',
+      env: { AGENT_EXECUTION_ENGINE: 'v1-agent-loop' },
       enableTools: true,
     }),
   });

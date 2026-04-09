@@ -33,6 +33,7 @@ setInterval(() => {
 }, TERMINAL_LIMITS.CLEANUP_INTERVAL_MS);
 
 export async function POST(req: NextRequest) {
+  let sessionId: string | undefined;
   try {
     const authResult = await resolveRequestAuth(req, { allowAnonymous: true });
     if (!authResult.success || !authResult.userId) {

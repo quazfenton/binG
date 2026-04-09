@@ -50,6 +50,7 @@ export async function initParser(): Promise<void> {
 
 // Cache a separate Parser instance per language to avoid concurrent mutation
 // of the shared parser's language setting.
+// @ts-ignore - Parser type from web-tree-sitter
 const _parserCache = new Map<Language, Parser>();
 
 async function getParser(lang: Language): Promise<Parser> {

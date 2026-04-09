@@ -16,7 +16,12 @@
  */
 
 import crypto from 'crypto';
-import { getDatabase } from '@/lib/database/connection';
+
+// Lazy-load getDatabase to prevent better-sqlite3 from being bundled in client
+function getDatabase() {
+  const { getDatabase: getDb } = require('@/lib/database/connection');
+  return getDb();
+}
 
 export interface AntigravityAccount {
   id: string;

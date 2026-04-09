@@ -135,6 +135,7 @@ export async function grepFiles(
   if (isDesktop && opts.rootPath) {
     // @ts-ignore - Tauri API only available in desktop builds
     const { invoke } = await import("@tauri-apps/api/tauri");
+    // @ts-ignore - Tauri invoke is dynamically typed
     return invoke<GrepMatch[]>("grep_search", {
       root: opts.rootPath,
       query,

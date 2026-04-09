@@ -1080,7 +1080,7 @@ export function extractFileEdits(content: string): FileEdit[] {
     return [];
   }
 
-  const allEdits: FileEdit[] = [];
+  const allEdits: (FileEdit | DeleteEdit)[] = [];
 
   // Try bash heredoc syntax (writes, mkdir, deletes, patches)
   const bashEdits = extractBashFileEdits(content);
@@ -1303,6 +1303,34 @@ export function extractFileEdits(content: string): FileEdit[] {
   if (content.includes('[Tool:')) {
     allEdits.push(...extractToolTagEdits(content));
   }
+
+  // Format D: <function=tool_name> format (Mistral)
+  if (content.includes('<function=')) {
+    const funcs = content.match(/<function=(\w+)>[\s\S]*?<\/function>/gi) || [];
+    for (const funcBlock of funcs) {
+      const nameMatch = /<function=(\w+)>/i.exec(funcBlock);
+      if (!nameMatch) continue;
+      const name = nameMatch[1].toLowerCase();
+      if (!['write_file','create_file','delete_file','apply_diff','mkdir'].includes(name)) continue;
+      
+      const pathMatch = /<parameter=path>([^<\n]+)/i.exec(funcBlock);
+      if (!pathMatch) continue;
+      const path = pathMatch[1].trim();
+      if (!path || !isValidExtractedPath(path)) continue;
+      
+      let action = name === 'delete_file' ? 'delete' : name === 'apply_diff' ? 'patch' : name === 'mkdir' ? 'mkdir' : 'write';
+      let fileContent = '';
+      
+      if (action === 'write') {
+        const contentMatch = /<parameter=content>([\s\S]*?)(?:<\/parameter>|$)/i.exec(funcBlock);
+        fileContent = contentMatch ? contentMatch[1].trim() : '';
+        if (!fileContent) continue;
+      }
+      
+      allEdits.push({ path, content: fileContent, action });
+    }
+  }
+
   if (content.includes('<!--')) {
     allEdits.push(...extractHtmlCommentFileEdits(content));
   }
@@ -1728,6 +1756,10 @@ export function extractFlatJsonToolCalls(content: string): FileEdit[] {
  *
  * Uses balanced brace scanning to correctly extract complete JSON objects.
  */
+
+
+
+
 export function extractToolTagEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
   const fileEditTools = ['write_file', 'create_file', 'writeToFile', 'write_files', 'batch_write', 'delete_file', 'apply_diff', 'mkdir'];
@@ -2706,6 +2738,11 @@ export function sanitizeFileEditTags(content: string): string {
     }
     // Remove orphaned closing tags
     sanitized = sanitized.replace(/<\/tool_call>/gi, '');
+
+  // Remove <function=tool_name> format (Mistral models)
+  if (sanitized.includes('<function=')) {
+    sanitized = sanitized.replace(/<function=[\s\S]*?<\/function>/gi, '');
+  }
   }
 
   // Remove leaked project/artifact XML tags and continuation markers

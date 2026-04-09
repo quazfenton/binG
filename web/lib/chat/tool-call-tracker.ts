@@ -135,6 +135,13 @@ class ToolCallTracker {
   async recordToolCall(record: ToolCallRecord): Promise<void> {
     await this.initialize();
 
+    // Real-time console logging for immediate visibility
+    const statusIcon = record.success ? '✓' : '✗';
+    const errorSuffix = record.error ? ` — ${record.error.slice(0, 80)}` : '';
+    console.log(
+      `[ToolCall] ${statusIcon} ${record.model} (${record.provider}) → ${record.toolName}${errorSuffix}`
+    );
+
     // Deduplicate by toolCallId
     if (record.toolCallId) {
       if (this.seenToolCallIds.has(record.toolCallId)) {
@@ -195,6 +202,15 @@ class ToolCallTracker {
     });
 
     if (uniqueRecords.length === 0) return;
+
+    // Real-time console logging for batch
+    for (const r of uniqueRecords) {
+      const statusIcon = r.success ? '✓' : '✗';
+      const errorSuffix = r.error ? ` — ${r.error.slice(0, 80)}` : '';
+      console.log(
+        `[ToolCall] ${statusIcon} ${r.model} (${r.provider}) → ${r.toolName}${errorSuffix}`
+      );
+    }
 
     // SQLite batch path
     if (this.db) {

@@ -571,7 +571,7 @@ export class ResponseRouter {
   private async routeRequest(request: RouterRequest, span?: any): Promise<RouterResponse> {
     const errors: Array<{ endpoint: string; error: Error }> = []
     const fallbackChain: string[] = []
-    const requestType = detectRequestType(request.messages)
+    const requestType = (await detectRequestType(request.messages)).type
 
     // Define endpoint priority chain
     const endpoints = [
@@ -584,8 +584,8 @@ export class ResponseRouter {
         // Do not handle tool/sandbox requests - let specialized endpoints handle those
         // Tool requests need actual tool execution (Arcade/Nango APIs), not just LLM responses
         // Sandbox requests need actual sandbox execution, not just LLM responses
-        canHandle: (req: RouterRequest) => {
-          const detectedType = detectRequestType(req.messages)
+        canHandle: async (req: RouterRequest) => {
+          const detectedType = (await detectRequestType(req.messages)).type
           // When native tool calling is enabled (Vercel AI SDK), handle tool requests here
           // instead of routing to regex-based intent parsing
           if (detectedType === 'tool' && req.enableTools !== false && !req.nativeToolCalling) {
@@ -600,7 +600,7 @@ export class ResponseRouter {
         },
         processRequest: async (req: RouterRequest) => {
           // Pass all required fields including tool/sandbox flags
-          const detectedType = detectRequestType(req.messages)
+          const detectedType = (await detectRequestType(req.messages)).type
           
           // NEW: Use streaming method when stream=true for real-time token streaming
           if (req.stream === true) {
@@ -686,8 +686,8 @@ export class ResponseRouter {
         enabled: process.env.N8N_ENABLED === 'true',
         service: n8nAgentService,
         healthCheck: () => n8nAgentService.healthCheck(),
-        canHandle: (req: RouterRequest) => {
-          const detectedType = detectRequestType(req.messages)
+        canHandle: async (req: RouterRequest) => {
+          const detectedType = (await detectRequestType(req.messages)).type
           if (detectedType === 'tool' || detectedType === 'sandbox') {
             return false
           }
@@ -708,8 +708,8 @@ export class ResponseRouter {
         enabled: process.env.CUSTOM_FALLBACK_ENABLED === 'true',
         service: customFallbackService,
         healthCheck: () => customFallbackService.healthCheck(),
-        canHandle: (req: RouterRequest) => {
-          const detectedType = detectRequestType(req.messages)
+        canHandle: async (req: RouterRequest) => {
+          const detectedType = (await detectRequestType(req.messages)).type
           if (detectedType === 'tool' || detectedType === 'sandbox') {
             return false
           }
@@ -792,11 +792,11 @@ export class ResponseRouter {
           const health = await checkGatewayHealth()
           return health.healthy
         },
-        canHandle: (req: RouterRequest) => {
+        canHandle: async (req: RouterRequest) => {
           // V2 is best for code/agent tasks — detect by request type, not enableTools flag.
           // enableTools is now true for ALL authenticated requests, so it's no longer
           // a useful discriminator for routing. Rely on content detection instead.
-          const requestType = detectRequestType(req.messages)
+          const requestType = (await detectRequestType(req.messages)).type
           return requestType === 'sandbox' || requestType === 'tool'
         },
         processRequest: async (req: RouterRequest) => this.processV2GatewayRequest(req),
@@ -871,7 +871,7 @@ export class ResponseRouter {
       }
 
       // Check if endpoint can handle request
-      if (!endpoint.canHandle(request)) {
+      if (!await endpoint.canHandle(request)) {
         continue
       }
 
