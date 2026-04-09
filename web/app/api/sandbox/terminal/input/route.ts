@@ -123,7 +123,9 @@ export async function POST(req: NextRequest) {
     // (command-mode or WebSocket). If not, the PTY failed to start and
     // the session is in a zombie state — tell the client gracefully.
     if (!terminalManager.hasActiveSession(sessionId)) {
-      logger.warn('No active terminal session for input', { sessionId });
+      // Don't log as warn — this is expected when the client sends input
+      // before the sandbox PTY has finished initializing.
+      logger.debug('No active terminal session for input (client sent too early)', { sessionId });
       return NextResponse.json(
         {
           error: 'Terminal session is not active. The sandbox PTY may have failed to start.',

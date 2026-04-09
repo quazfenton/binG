@@ -310,6 +310,7 @@ export class AgentOrchestrator {
       const toolName = toolDef.name;
       if (!toolName) continue;
 
+      // @ts-expect-error - AI SDK 6.x tool execute type mismatch with current parameters type
       this.sdkTools[toolName] = aiTool({
         description: toolDef.description || `Execute ${toolName}`,
         parameters: toolDef.parameters,

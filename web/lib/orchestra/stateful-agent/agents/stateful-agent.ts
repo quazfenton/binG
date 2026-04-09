@@ -1,4 +1,4 @@
-import { openai } from '@ai-sdk/openai';
+import { getVercelModel } from '../../../chat/vercel-ai-streaming';
 import { streamText, generateObject, type Tool as CoreTool } from 'ai';
 import type { SandboxHandle } from '@/lib/sandbox/providers/sandbox-provider';
 import type { ProjectServices } from '@/lib/project-context';
@@ -216,6 +216,7 @@ export class StatefulAgent {
     if (this.enableBootstrappedAgency) {
       this.agency = createBootstrappedAgency({
         sessionId: this.sessionId,
+        userId: this.userId,  // Pass real user ID — prevents 'agency' phantom workspace
         enableLearning: true,
         maxHistorySize: 1000,
         enablePatternRecognition: true,
@@ -1232,7 +1233,7 @@ Provide only the corrected code, no explanation.`;
   }
 
   /**
-   * Derive capabilities used from transaction log
+   * Derive capabilities used from transaction log and tool metrics
    */
   private deriveCapabilitiesFromExecution(execution: {
     transactionLog: Array<{ path: string; type: string; timestamp: number; originalContent?: string }>;
@@ -1241,26 +1242,76 @@ Provide only the corrected code, no explanation.`;
     const caps = new Set<string>();
 
     // File operations from transaction log
-    const fileOps = execution.transactionLog.filter(t => t.type === 'CREATE' || t.type === 'UPDATE');
-    if (fileOps.length > 0) {
-      caps.add('file.read');
-      caps.add('file.write');
+    const createOps = execution.transactionLog.filter(t => t.type === 'CREATE');
+    const updateOps = execution.transactionLog.filter(t => t.type === 'UPDATE');
+    const deleteOps = execution.transactionLog.filter(t => t.type === 'DELETE');
+    const readOps = execution.transactionLog.filter(t => t.type === 'READ');
+
+    if (createOps.length > 0) caps.add('file.write');
+    if (updateOps.length > 0) { caps.add('file.read'); caps.add('file.write'); }
+    if (deleteOps.length > 0) caps.add('file.delete');
+    if (readOps.length > 0) caps.add('file.read');
+
+    // File list/search operations
+    if (execution.toolMetrics?.byTool?.listFiles?.count > 0) {
+      caps.add('file.list');
+    }
+    if (execution.toolMetrics?.byTool?.searchFiles?.count > 0) {
+      caps.add('file.search');
     }
 
-    // If tool metrics show shell executions
+    // Shell executions (sandbox shell, terminal commands)
     if (execution.toolMetrics?.byTool?.execShell?.count > 0) {
       caps.add('sandbox.shell');
     }
+    if (execution.toolMetrics?.byTool?.runCommand?.count > 0) {
+      caps.add('sandbox.shell');
+    }
 
-    // If syntax checks were run
+    // Sandbox execution
+    if (execution.toolMetrics?.byTool?.executeSandbox?.count > 0) {
+      caps.add('sandbox.execute');
+    }
+
+    // Web operations (fetch, browse, search)
+    if (execution.toolMetrics?.byTool?.webFetch?.count > 0) {
+      caps.add('web.fetch');
+    }
+    if (execution.toolMetrics?.byTool?.webBrowse?.count > 0) {
+      caps.add('web.browse');
+    }
+    if (execution.toolMetrics?.byTool?.webSearch?.count > 0) {
+      caps.add('web.search');
+    }
+
+    // Repository operations
+    if (execution.toolMetrics?.byTool?.git?.count > 0) {
+      caps.add('repo.git');
+    }
     if (execution.toolMetrics?.byTool?.syntaxCheck?.count > 0) {
       caps.add('repo.analyze');
     }
+    if (execution.toolMetrics?.byTool?.repoSearch?.count > 0) {
+      caps.add('repo.search');
+    }
 
-    // Default fallback
+    // Memory operations
+    if (execution.toolMetrics?.byTool?.memoryStore?.count > 0) {
+      caps.add('memory.store');
+    }
+    if (execution.toolMetrics?.byTool?.memoryRetrieve?.count > 0) {
+      caps.add('memory.retrieve');
+    }
+
+    // Automation / task operations
+    if (execution.toolMetrics?.byTool?.scheduleTask?.count > 0) {
+      caps.add('task.schedule');
+    }
+
+    // If nothing was actually recorded (execution failed immediately),
+    // don't falsely record file.read/write
     if (caps.size === 0) {
-      caps.add('file.read');
-      caps.add('file.write');
+      return [];
     }
 
     return Array.from(caps);

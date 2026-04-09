@@ -10,7 +10,7 @@
  * @see docs/COMPREHENSIVE_TECHNICAL_REVIEW_2026-02-28.md Security section
  */
 
-import { resolve, relative } from 'node:path';
+import { resolve, relative, posix as posixPath } from 'node:path';
 import { 
   FilePathSchema, 
   FileContentSchema, 
@@ -65,6 +65,23 @@ export class SandboxSecurityManager {
     // Normalize path separators
     let normalized = inputPath.replace(/\\/g, '/');
 
+    // Handle embedded Windows paths in Linux paths, e.g. "/home/user/C:/home/user"
+    // This happens when a Windows absolute path is concatenated with a workspace dir
+    // Pattern: some-prefix + DriveLetter:/ + rest
+    const embeddedWindowsPath = normalized.match(/^(.*?)([A-Za-z]):\/(.*)$/);
+    if (embeddedWindowsPath && normalized.startsWith('/')) {
+      const prefix = embeddedWindowsPath[1];
+      const rest = embeddedWindowsPath[3];
+      console.warn(`[SandboxSecurityManager] Embedded Windows path detected`, {
+        inputPath,
+        normalized,
+        prefix,
+        rest,
+        hint: 'Stripping Windows drive letter from embedded path'
+      });
+      normalized = prefix + rest;
+    }
+
     // Check for Windows drive letters (e.g., C:\, D:\) - convert to Linux path
     // These appear as absolute paths on Windows but need special handling on Linux
     const windowsDriveMatch = normalized.match(/^([A-Za-z]):\//);
@@ -88,11 +105,19 @@ export class SandboxSecurityManager {
       normalized = normalized.replace(/^\/workspace\//, '/home/user/workspace/');
     }
 
-    // Also handle any remaining Windows-style paths that got concatenated incorrectly
-    // e.g., "/home/user/C:\home\user" -> "/home/user"
-    const weirdWindowsPath = normalized.match(/^(.+?):\\(.+)$/);
-    if (weirdWindowsPath) {
-      normalized = weirdWindowsPath[1];
+    // FIX: Strip any remaining Windows drive letter patterns (e.g., "/foo/C:/bar" → "/foo/bar")
+    // This catches embedded paths that survived earlier normalization
+    // The regex matches: anything + DriveLetter + / + anything
+    const remainingDrivePattern = normalized.match(/^(.*)\/([A-Za-z]):\/(.*)$/);
+    if (remainingDrivePattern) {
+      const prefix = remainingDrivePattern[1];
+      const rest = remainingDrivePattern[3];
+      console.warn(`[SandboxSecurityManager] Stripping remaining embedded Windows path`, {
+        inputPath,
+        before: normalized,
+        after: `${prefix}/${rest}`,
+      });
+      normalized = `${prefix}/${rest}`;
     }
 
     // Check for obvious traversal attempts
@@ -109,14 +134,36 @@ export class SandboxSecurityManager {
       resolved = resolve(workspaceDir, normalized);
     }
 
+    // CRITICAL: node:path.resolve() returns platform-native paths.
+    // On Windows, resolve('/home/user') → 'C:\home\user'.
+    // Sandbox providers (E2B, Daytona, etc.) run Linux — we MUST return
+    // forward-slash paths. Strip Windows drive letters and convert separators.
+    resolved = resolved.replace(/\\/g, '/');
+
+    // FIX: Strip Windows drive letter while preserving absolute path semantics
+    // C:/home/user → /home/user  (drive at start = root path)
+    // /foo/C:/bar → /foo/bar     (embedded drive = strip drive + colon)
+    if (/^[A-Za-z]:\//.test(resolved)) {
+      // Drive at start: C:/home/user → /home/user (slice(2) keeps the /)
+      resolved = resolved.slice(2);
+    } else {
+      // Embedded drive: /foo/C:/bar → /foo/bar
+      const embeddedMatch = resolved.match(/^(.*)\/([A-Za-z]):\/(.*)$/);
+      if (embeddedMatch) {
+        resolved = `${embeddedMatch[1]}/${embeddedMatch[3]}`;
+      }
+    }
+
     // Ensure the resolved path is actually within the workspace
     // Allow /tmp paths for temporary prompt files
     if (normalized.startsWith('/tmp/') || normalized.startsWith('/tmp')) {
       return resolved;
     }
-    
-    const rel = relative(workspaceDir, resolved);
-    const isWithin = !rel.startsWith('..') && !pathIsAbsolute(rel);
+
+    // FIX: Use posix.relative() since sandbox paths are Linux-style
+    // Using platform-native relative() on Windows breaks POSIX path comparisons
+    const rel = posixPath.relative(workspaceDir, resolved);
+    const isWithin = !rel.startsWith('..') && !posixPath.isAbsolute(rel);
 
     if (!isWithin && resolved !== workspaceDir) {
       throw new Error(`Security Exception: Path '${inputPath}' is outside the authorized workspace '${workspaceDir}'`);

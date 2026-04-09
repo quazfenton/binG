@@ -6,8 +6,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { z } from 'zod';
-// @ts-ignore - Module path resolution issue
-import { cloudAgentOffload } from '../../../../../packages/shared/agent/cloud-agent-offload';
+import { cloudAgentOffload } from '@bing/shared/agent/cloud-agent-offload';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:AgentV2:Cloud:Agent');

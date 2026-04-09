@@ -55,20 +55,56 @@ function createReleaseFunction(
 }
 
 /**
- * Check Redis health before attempting lock
+ * Check Redis health before attempting lock.
+ * Uses a 2-second timeout to fail fast when Redis is unreachable,
+ * allowing the unified lock to fall back to Memory without waiting
+ * for ioredis's full retry cycle.
  */
 export async function checkRedisHealth(): Promise<{ healthy: boolean; error?: string }> {
   try {
     const redis = getRedisClient();
-    const result = await redis.ping();
+
+    // Fail fast: if Redis isn't connected within 2s, skip it
+    const pingPromise = redis.ping();
+    const timeoutPromise = new Promise<never>((_, reject) =>
+      setTimeout(() => reject(new Error('Redis health check timed out (2s)')), 2000)
+    );
+
+    const result = await Promise.race([pingPromise, timeoutPromise]);
     if (result === 'PONG') {
       return { healthy: true };
     }
     return { healthy: false, error: `Unexpected ping response: ${result}` };
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
-    return { healthy: false, error: `Redis health check failed: ${errorMessage}` };
+    return { healthy: false, error: `Redis unavailable: ${errorMessage}` };
   }
+}
+
+/**
+ * Quick health check before attempting lock acquisition
+ * Returns null if Redis is healthy, throws if unavailable.
+ *
+ * Pre-check: If the Redis client is not in 'ready' or 'connect' state,
+ * fail immediately instead of waiting for a ping timeout. This avoids
+ * the 2s delay when ioredis is still cycling through its internal
+ * reconnection attempts.
+ */
+async function ensureRedisAvailable(): Promise<ReturnType<typeof getRedisClient>> {
+  const redis = getRedisClient();
+
+  // Fast path: if ioredis hasn't connected yet (or is reconnecting),
+  // skip Redis immediately without waiting for a ping/timeout.
+  // ioredis status: 'wait' → 'connecting' → 'connect' → 'ready'
+  if (redis.status !== 'ready' && redis.status !== 'connecting') {
+    throw new Error(`Redis client status is '${redis.status}' — skipping Redis lock strategy`);
+  }
+
+  const health = await checkRedisHealth();
+  if (!health.healthy) {
+    throw new Error(`Redis unavailable: ${health.error}`);
+  }
+  return redis;
 }
 
 /**
@@ -82,7 +118,7 @@ export async function acquireSessionLock(sessionId: string): Promise<SessionLock
   let redis: ReturnType<typeof getRedisClient>;
   
   try {
-    redis = getRedisClient();
+    redis = await ensureRedisAvailable();
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : String(error);
     log.error('Failed to get Redis client', { sessionId, error: errorMessage });

@@ -258,7 +258,7 @@ export class EnhancedPTYTerminalManager {
     instance.terminal.writeln('\x1b[1;32m● Local Terminal\x1b[0m');
     instance.terminal.writeln('\x1b[90mType "help" for available commands. Type "connect" for full sandbox.\x1b[0m');
     instance.terminal.writeln('');
-    this.writePrompt(instance.terminal, executor.getCwd());
+    this.writePrompt(instance.terminal, instance, executor.getCwd());
 
     this.clearTerminalHandlers(instance)
 
@@ -272,7 +272,7 @@ export class EnhancedPTYTerminalManager {
 
         // Execute command
         executor.execute(command).then(() => {
-          this.writePrompt(instance.terminal, executor.getCwd());
+          this.writePrompt(instance.terminal, instance, executor.getCwd());
         });
       } else if (data === '\u007f') {
         // Backspace
@@ -547,10 +547,28 @@ export class EnhancedPTYTerminalManager {
   }
 
   /**
-   * Write prompt
+   * Write prompt — shows user email + workspace/session info instead of full path
    */
-  private writePrompt(terminal: any, cwd: string): void {
-    const prompt = `\x1b[1;32m➜\x1b[0m \x1b[36m${cwd}\x1b[0m $ `;
+  private writePrompt(terminal: any, instance: PTYTerminalInstance, cwd: string): void {
+    // Build a friendly display name from the user's ID
+    let displayName = 'user';
+    if (instance.session?.userId) {
+      displayName = instance.session.userId.slice(0, 12);
+    }
+
+    // Build a short workspace display — prefer session sandboxId or project name
+    let workspaceInfo = '';
+    if (instance.session?.sandboxId) {
+      // Truncate sandbox ID to first 8 chars
+      workspaceInfo = instance.session.sandboxId.slice(0, 8);
+    } else {
+      // Extract last path segment from cwd as workspace name
+      const segments = cwd.replace(/\\/g, '/').split('/').filter(Boolean);
+      workspaceInfo = segments.length > 0 ? segments[segments.length - 1] : 'project';
+    }
+
+    // Prompt format: ➜ user @ workspace $
+    const prompt = `\x1b[1;32m➜\x1b[0m \x1b[36m${displayName}\x1b[0m@\x1b[33m${workspaceInfo}\x1b[0m $ `;
     terminal.write(prompt);
   }
   

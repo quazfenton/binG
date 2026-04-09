@@ -1,5 +1,19 @@
-// @ts-ignore - Module path resolution issue
-import { FEATURE_FLAGS } from '../../infra/config/config/features';
+// Inlined feature flags to avoid Turbopack module resolution issues
+const FEATURE_FLAGS = {
+  NEXTCLOUD_URL: process.env.NEXTCLOUD_URL || '',
+  NEXTCLOUD_USERNAME: process.env.NEXTCLOUD_USERNAME || '',
+  NEXTCLOUD_PASSWORD: process.env.NEXTCLOUD_PASSWORD || '',
+  ENABLE_CLOUD_STORAGE: process.env.ENABLE_CLOUD_STORAGE === 'true',
+  CLOUD_STORAGE_PROVIDER: process.env.CLOUD_STORAGE_PROVIDER || 'gcp',
+  CLOUD_STORAGE_BUCKET: process.env.CLOUD_STORAGE_BUCKET || '',
+  CLOUD_STORAGE_MAX_SIZE: parseInt(process.env.CLOUD_STORAGE_MAX_SIZE || '104857600', 10),
+  CLOUD_STORAGE_PER_USER_LIMIT_BYTES: parseInt(process.env.CLOUD_STORAGE_PER_USER_LIMIT_BYTES || '5368709120', 10),
+  IS_DEVELOPMENT: process.env.NODE_ENV === 'development',
+  ENABLE_VPS_DEPLOYMENT: process.env.ENABLE_VPS_DEPLOYMENT === 'true',
+  VPS_PROVIDER: process.env.VPS_PROVIDER || 'aws',
+  VPS_DEFAULT_REGION: process.env.VPS_DEFAULT_REGION || 'us-east-1',
+  VPS_DEFAULT_SIZE: process.env.VPS_DEFAULT_SIZE || 't3.medium',
+};
 import { createClient } from 'webdav';
 import { S3Client, PutObjectCommand, GetObjectCommand, DeleteObjectCommand, ListObjectsV2Command, HeadObjectCommand } from '@aws-sdk/client-s3';
 import { getSignedUrl } from '@aws-sdk/s3-request-presigner';

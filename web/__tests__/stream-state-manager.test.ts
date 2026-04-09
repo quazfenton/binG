@@ -4,12 +4,15 @@
  * Tests all state transitions, edge cases, and safety guarantees.
  */
 
-import { streamStateManager } from './stream-state-manager';
+import { streamStateManager } from '../lib/streaming/stream-state-manager';
 
-// Helper to create a test stream state
+let testCounter = 0;
+
+// Helper to create a test stream state with unique ID
 function createTestState(overrides = {}) {
+  testCounter++;
   return streamStateManager.create({
-    streamId: 'test-stream-1',
+    streamId: `test-stream-${Date.now()}-${testCounter}`,
     userId: 'test-user',
     provider: 'openai',
     model: 'gpt-4o',
@@ -20,15 +23,12 @@ function createTestState(overrides = {}) {
 describe('StreamStateManager', () => {
   beforeEach(() => {
     streamStateManager.stopCleanup();
-    // Clear internal state via a create+delete cycle
-    const s = createTestState();
-    streamStateManager.abort(s.streamId);
   });
 
   describe('create', () => {
     it('creates a stream state with correct defaults', () => {
       const state = createTestState();
-      expect(state.streamId).toBe('test-stream-1');
+      expect(state.streamId).toMatch(/^test-stream-/);
       expect(state.userId).toBe('test-user');
       expect(state.status).toBe('starting');
       expect(state.tokenCount).toBe(0);
@@ -50,12 +50,17 @@ describe('StreamStateManager', () => {
     });
 
     it('overwrites existing state for same streamId', () => {
-      const s1 = createTestState();
-      streamStateManager.appendToken(s1.streamId, 'hello');
-      expect(s1.content).toBe('hello');
+      const state = createTestState();
+      const streamId = state.streamId;
+      streamStateManager.appendToken(streamId, 'hello');
 
-      const s2 = createTestState();
-      expect(s2.streamId).toBe('test-stream-1');
+      const s2 = streamStateManager.create({
+        streamId,
+        userId: 'test-user',
+        provider: 'openai',
+        model: 'gpt-4o',
+      });
+      expect(s2.streamId).toBe(streamId);
       expect(s2.content).toBe(''); // Fresh state
       expect(s2.tokenCount).toBe(0);
     });
@@ -182,7 +187,6 @@ describe('StreamStateManager', () => {
 
   describe('getStats', () => {
     it('returns correct counts', () => {
-      // Clear first
       const s1 = createTestState();
       const s2 = streamStateManager.create({
         streamId: 'test-stream-2',
@@ -196,6 +200,7 @@ describe('StreamStateManager', () => {
       const stats = streamStateManager.getStats();
       expect(stats.total).toBeGreaterThanOrEqual(2);
       expect(stats.complete).toBeGreaterThanOrEqual(1);
+      // s2 should be streaming since we only appended tokens
       expect(stats.streaming).toBeGreaterThanOrEqual(1);
     });
   });

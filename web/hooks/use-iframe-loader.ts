@@ -192,6 +192,10 @@ export function useIframeLoader({
       setLoadingProgress(100);
       handleFallback(); // Cascade to next level
     }, timeout);
+
+    // Actually load the fallback URL - this updates currentUrlRef and starts the loading cycle
+    currentUrlRef.current = nextFallbackUrl;
+    setIsLoading(true);
   }, [timeout, onFailed]);
 
   const handleLoad = useCallback((newUrl: string) => {
