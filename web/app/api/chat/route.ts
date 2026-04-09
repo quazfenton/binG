@@ -806,6 +806,26 @@ export async function POST(request: NextRequest) {
           });
 
           if (gatewayResult.success) {
+            // FIX: Apply file edits from V2 gateway response before returning
+            try {
+              const gwResponse = typeof gatewayResult.response === 'string' ? gatewayResult.response : '';
+              if (gwResponse) {
+                await applyFilesystemEditsFromResponse({
+                  ownerId: filesystemOwnerId,
+                  conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                  requestId,
+                  scopePath: requestedScopePath,
+                  lastUserMessage: '',
+                  attachedPaths: [],
+                  responseContent: gwResponse,
+                  preParsedEdits: null,
+                });
+              }
+            } catch (editError: any) {
+              chatLogger.warn('Failed to apply file edits from V2 gateway response', { requestId }, {
+                error: editError.message,
+              });
+            }
             return NextResponse.json(gatewayResult);
           }
           // Fall through to v1 if gateway failed
@@ -846,6 +866,26 @@ export async function POST(request: NextRequest) {
               errorCode: v2Result.errorCode,
             });
           } else {
+            // FIX: Apply file edits from V2 local execution response before returning
+            try {
+              const v2Response = typeof v2Result.response === 'string' ? v2Result.response : '';
+              if (v2Response) {
+                await applyFilesystemEditsFromResponse({
+                  ownerId: filesystemOwnerId,
+                  conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                  requestId,
+                  scopePath: requestedScopePath,
+                  lastUserMessage: '',
+                  attachedPaths: [],
+                  responseContent: v2Response,
+                  preParsedEdits: null,
+                });
+              }
+            } catch (editError: any) {
+              chatLogger.warn('Failed to apply file edits from V2 local response', { requestId }, {
+                error: editError.message,
+              });
+            }
             return NextResponse.json(v2Result);
           }
         }
@@ -926,6 +966,7 @@ export async function POST(request: NextRequest) {
     const config: UnifiedAgentConfig = {
       userMessage: task,  // User message only — NOT the filesystem context
       userId: authenticatedUserId || filesystemOwnerId,  // Pass real user ID for VFS scoping
+      conversationId: resolvedConversationId,  // FIX: Pass session ID for VFS session scoping (e.g., "001")
       conversationHistory: contextualMessages.map((m) => ({
         role: m.role,
         content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
@@ -2066,7 +2107,8 @@ export async function POST(request: NextRequest) {
 
               // Send initial 'init' event to establish stream connection immediately
               // This helps client-side rendering detect the stream has started
-              const abortController = request.signal ? { abort: () => request.signal!.abort(), signal: request.signal } : new AbortController();
+              // Always have a valid AbortSignal for stream functions
+              const abortSignal = request.signal || new AbortController().signal;
 
               // Create stream state for tracking and WebSocket control channel
               // Lazy import to avoid 'ws' module resolution during instrumentation
@@ -2091,7 +2133,7 @@ export async function POST(request: NextRequest) {
                     provider: actualProvider,
                     model: actualModel,
                     maxTokens: clientResponse.usage?.total_tokens || 65536,
-                    abortController,
+                    abortSignal,
                   });
                   streamStateCreated = true;
                 } catch (e) {
@@ -2274,6 +2316,24 @@ export async function POST(request: NextRequest) {
                       // For result state, try to get args from result if toolInvocation.args is empty
                       let args = toolInvocation.args;
                       const isEmptyArgs = !args || (typeof args === 'object' && Object.keys(args).length === 0);
+                      
+                      // DIAGNOSTIC: Log when args are empty at result state
+                      if (toolInvocation.state === 'result') {
+                        if (isEmptyArgs) {
+                          chatLogger.warn('[TOOL-INVOKE] Tool result has empty args', {
+                            toolCallId: toolInvocation.toolCallId,
+                            toolName: toolInvocation.toolName,
+                            hasCachedArgs: !!(toolInvocation.result?.input || toolInvocation.result?.args),
+                          });
+                        } else {
+                          chatLogger.info('[TOOL-INVOKE] Tool result with args', {
+                            toolCallId: toolInvocation.toolCallId,
+                            toolName: toolInvocation.toolName,
+                            argsKeys: Object.keys(args),
+                          });
+                        }
+                      }
+                      
                       if (toolInvocation.state === 'result' && isEmptyArgs) {
                         // Try to extract args from result if available
                         if (toolInvocation.result?.input) {
@@ -2459,15 +2519,35 @@ export async function POST(request: NextRequest) {
                             // FIX: Also emit tool_invocation with actual parsed args
                             // This ensures the UI can display tool calls even when the LLM
                             // didn't emit structured function calls (e.g., minimax/m2.5:free)
-                            const toolCallId = edit.commitId || `write_file-${Date.now()}-${edit.path}`;
-                            const toolArgs = {
-                              path: edit.path,
-                              content: edit.content || '',
-                              commitMessage: edit.commitMessage || edit.message || '',
-                            };
+                            // Use correct tool based on operation type (write vs patch)
+                            const editDiff = edit.diff || (isPatch ? edit.content : '');
+                            const toolCallId = edit.commitId || (isPatch ? `apply_diff-${Date.now()}-${edit.path}` : `write_file-${Date.now()}-${edit.path}`);
+                            let toolName: string;
+                            let toolArgs: Record<string, any>;
+                            
+                            // Handle both content and diff fields (may be stored either way)
+                            if (isPatch && editDiff) {
+                              toolName = 'apply_diff';
+                              toolArgs = {
+                                path: edit.path,
+                                diff: editDiff,
+                              };
+                            } else if (edit.operation === 'delete') {
+                              toolName = 'delete_file';
+                              toolArgs = {
+                                path: edit.path,
+                              };
+                            } else {
+                              toolName = 'write_file';
+                              toolArgs = {
+                                path: edit.path,
+                                content: edit.content || editDiff || '',
+                              };
+                            }
+                            
                             realEmit('tool_invocation', {
                               toolCallId,
-                              toolName: 'write_file',
+                              toolName,
                               state: 'result',
                               args: toolArgs,
                               result: { success: true, path: edit.path },

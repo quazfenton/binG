@@ -1579,13 +1579,18 @@ export function WorkspacePanel() {
                   break;
 
                 case SSE_EVENT_TYPES.TOOL_INVOCATION:
-                  // Track tool calls
-                  if (data.data) {
-                    setAgentActivity((prev) => ({
-                      ...prev,
-                      status: 'executing',
-                      toolInvocations: [...prev.toolInvocations, data.data],
-                    }));
+                  // Track tool calls with deduplication by toolCallId
+                  if (data.data?.toolCallId) {
+                    setAgentActivity((prev) => {
+                      // Skip if already exists (prevent duplicates)
+                      const exists = prev.toolInvocations.some(t => t.toolCallId === data.data.toolCallId);
+                      if (exists) return prev;
+                      return {
+                        ...prev,
+                        status: 'executing',
+                        toolInvocations: [...prev.toolInvocations, data.data],
+                      };
+                    });
                   }
                   break;
 

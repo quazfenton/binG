@@ -173,10 +173,11 @@ function getToolContext(): ToolContext {
   if (ctx) return ctx;
   // Safe fallback — should only happen if tools are called outside
   // of a toolContextStore.run() wrapper (which indicates a caller bug).
+  // Use consistent default session matching MCP route defaults (project/sessions/000)
   return {
     userId: 'default',
     sessionId: undefined,
-    scopePath: 'project',
+    scopePath: 'project/sessions/000',
   };
 }
 
@@ -219,7 +220,7 @@ function resolveScopedPath(inputPath: string): string {
   }
 
   const context = getToolContext();
-  const scopePath = context.scopePath || 'project';  // Ensure scopePath is always defined
+  const scopePath = context.scopePath || 'project/sessions/000';  // Ensure scopePath defaults to session scope
 
   // SECURITY: Validate scopePath itself doesn't contain traversal attempts
   if (scopePath.includes('..')) {
@@ -262,7 +263,7 @@ export function initializeVFSTools(userId: string, sessionId?: string, scopePath
   setToolContext({
     userId,
     sessionId,
-    scopePath: scopePath || 'project',  // Default to workspace root if not provided
+    scopePath: scopePath || 'project/sessions/000',  // Default to session scope
   });
 }
 
@@ -296,21 +297,32 @@ export const writeFileTool = (tool as any)({
   success: false,
   path,
   error: `Content too large (${(content.length / 1024 / 1024).toFixed(1)}MB). Maximum is ${(MAX_CONTENT_SIZE / 1024 / 1024).toFixed(0)}MB.`,
-    };
+};
   }
   const context = getToolContext();
 
+  // ENHANCED: Log VFS tool invocation with full context
+  logger.info('[VFS-TOOL] writeFile invoked', {
+    originalPath: path,
+    contentLength: content?.length || 0,
+    contentPreview: content?.slice(0, 100) || '(empty)',
+    userId: context.userId,
+    scopePath: context.scopePath,
+    sessionId: context.sessionId,
+    hasValidContext: context.userId !== 'default',
+  });
+
   // Validate context — if userId is 'default', the tool context wasn't set properly
   if (context.userId === 'default') {
-    logger.warn('writeFile: tool context not set — ensure toolContextStore.run() is used', {
-  path,
-  contentLength: content.length,
+    logger.warn('[VFS-TOOL] WARNING: Using default context (toolContextStore.run() may be missing)', {
+      path,
+      contentLength: content.length,
     });
   }
   
   // Resolve path relative to session scope
   const scopedPath = resolveScopedPath(path);
-  logger.debug('writeFile', { originalPath: path, scopedPath, contentLength: content.length, userId: context.userId });
+  logger.info('[VFS-TOOL] Resolved scoped path', { originalPath: path, scopedPath, scopePath: context.scopePath });
 
   // Check if file exists for event type
   let existed = false;
@@ -379,7 +391,16 @@ export const applyDiffTool = (tool as any)({
   }
   const context = getToolContext();
   const scopedPath = resolveScopedPath(path);
-  logger.debug('applyDiff', { originalPath: path, scopedPath, diffLength: diff.length, userId: context.userId });
+  
+  // ENHANCED: Log VFS tool invocation with full context
+  logger.info('[VFS-TOOL] applyDiff invoked', {
+    originalPath: path,
+    scopedPath,
+    diffLength: diff.length,
+    diffPreview: diff.slice(0, 200),
+    userId: context.userId,
+    scopePath: context.scopePath,
+  });
 
   // First, read the current file to apply the diff
   const currentFile = await virtualFilesystem.readFile(context.userId, scopedPath);
@@ -446,7 +467,14 @@ export const readFileTool = (tool as any)({
   }
   const context = getToolContext();
   const scopedPath = resolveScopedPath(path);
-  logger.debug('readFile', { originalPath: path, scopedPath, userId: context.userId });
+  
+  // ENHANCED: Log VFS tool invocation
+  logger.info('[VFS-TOOL] readFile invoked', {
+    originalPath: path,
+    scopedPath,
+    userId: context.userId,
+    scopePath: context.scopePath,
+  });
 
   const file = await virtualFilesystem.readFile(context.userId, scopedPath);
   const f = file as any;

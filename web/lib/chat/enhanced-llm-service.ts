@@ -18,6 +18,7 @@ import { toolContextManager } from '../tools/tool-context-manager';
 import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
 import { getProviderForTask, getModelForTask } from '../config/task-providers';
+import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import { advancedToolCallDispatcher } from '../tools/tool-integration/parsers/dispatcher';
 import { callMCPToolFromAI_SDK, getMCPToolsForAI_SDK } from '../mcp/architecture-integration';
 import { chatLogger } from './chat-logger';
@@ -349,11 +350,9 @@ export class EnhancedLLMService {
     });
 
     // Compute session-aware scopePath for VFS tools
-    const sessionIdFromConv = conversationId?.includes(':') 
-      ? conversationId.split(':')[1] 
-      : conversationId;
+    const sessionIdFromConv = normalizeSessionId(conversationId || '');
     const computedScopePath = request.scopePath 
-      || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project');
+      || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
 
     // If tools are enabled and user ID is provided, process tools
     if (enableTools && userId && conversationId) {
@@ -713,11 +712,9 @@ export class EnhancedLLMService {
           try {
             const { getAllTools, extractPublicUrls } = await import('./vercel-ai-tools');
             // Compute session-aware scopePath for VFS tools
-            const sessionIdFromConv = request.conversationId?.includes(':') 
-              ? request.conversationId.split(':')[1] 
-              : request.conversationId;
+            const sessionIdFromConv = normalizeSessionId(request.conversationId || '');
             const computedScopePath = (request as any).scopePath 
-              || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project');
+              || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
             
             vercelTools = await getAllTools({
               userId: request.userId,
@@ -821,12 +818,27 @@ export class EnhancedLLMService {
               ];
               chatLogger.info('URL detected in prompt, injected web_fetch hint', { requestId, urls: detectedUrls });
             }
-          } catch (toolErr: any) {
+} catch (toolErr: any) {
             chatLogger.warn('Failed to build Vercel AI tools, proceeding without', { requestId, error: toolErr.message });
           }
         }
+        
+        // ENHANCED: Log tools being passed to stream
+        if (vercelTools && Object.keys(vercelTools).length > 0) {
+          chatLogger.info('[TOOLS] Tools passed to streamWithVercelAI', {
+            requestId,
+            toolCount: Object.keys(vercelTools).length,
+            toolNames: Object.keys(vercelTools),
+          });
+        } else {
+          chatLogger.warn('[TOOLS] NO tools passed to streamWithVercelAI - file operations will use text parsing', {
+            requestId,
+            enableTools: request.enableTools,
+            userId: request.userId,
+          });
+        }
 
-      // Wrap with auto-continue support
+        // Wrap with auto-continue support
         const { streamWithAutoContinue } = await import('@/lib/virtual-filesystem/smart-context');
         const baseStream = streamWithVercelAI({
           provider: vercelProvider,

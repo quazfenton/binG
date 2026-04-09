@@ -237,6 +237,8 @@ export async function POST(request: NextRequest) {
       const result = await runStatefulAgent(userMessage, {
         sessionId,
         userId,
+        // FIX: Pass sessionId as conversationId for VFS session folder scoping
+        conversationId: sessionId,
         sandboxHandle,
         enforcePlanActVerify,
         maxSelfHealAttempts: parseInt(

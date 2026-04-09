@@ -222,7 +222,12 @@ export async function GET(req: NextRequest) {
   try {
     owner = await resolveFilesystemOwner(req);
     const url = new URL(req.url);
-    const pathFilter = (url.searchParams.get('path') || 'project').replace(/\/+$/, '');
+    // Query project/sessions/* when path is project to catch session-scoped files
+    let pathFilter = url.searchParams.get('path') || 'project';
+    if (pathFilter === 'project') {
+      pathFilter = 'project/sessions';
+    }
+    pathFilter = pathFilter.replace(/\/+$/, '');
 
     // SECURITY: Validate pathFilter with schema before use
     const parseResult = snapshotRequestSchema.safeParse({ path: pathFilter });

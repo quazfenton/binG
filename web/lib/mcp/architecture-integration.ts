@@ -18,6 +18,7 @@ import type { BlaxelProvider } from '../sandbox/providers/blaxel-provider'
 import { ArcadeService, getArcadeService } from '../integrations/arcade-service'
 import { nullclawMCPBridge } from './nullclaw-mcp-bridge'
 import { initializeNullclaw, isNullclawAvailable, getNullclawMode } from '@bing/shared/agent/nullclaw-integration'
+import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 // Dynamically imported to avoid pulling Node.js-only deps (fs, database) into client bundle
 // import { standaloneGitTools } from '../tools/git-tools'
 
@@ -941,12 +942,10 @@ export async function callMCPToolFromAI_SDK(
 
       // Run inside request-scoped context so the tool gets the right userId and scopePath
       // Compute session-aware scopePath from conversationId if not provided
-      const sessionIdFromConv = args.conversationId?.includes(':') 
-        ? args.conversationId.split(':')[1] 
-        : args.conversationId;
+      const sessionIdFromConv = normalizeSessionId(args.conversationId || '');
       const computedScopePath = scopePath 
         || (args as any).scopePath
-        || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project');
+        || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
 
       const result = await toolContextStore.run(
         {

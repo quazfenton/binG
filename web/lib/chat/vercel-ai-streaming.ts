@@ -552,6 +552,14 @@ export async function* streamWithVercelAI(
     // Add tools if provided
     if (tools && Object.keys(tools).length > 0) {
       streamOptions.tools = tools;
+    } else {
+      // Log when tools are NOT provided (different from FC check)
+      chatLogger.warn('[TOOLS] No tools provided to stream - file operations will use text parsing only', {
+        provider,
+        model: modelName,
+        hasToolsArg: !!tools,
+        toolsKeys: tools ? Object.keys(tools) : [],
+      });
     }
 
     // FIX: Detect if model supports function calling (Vercel AI SDK v6+).
@@ -561,10 +569,26 @@ export async function* streamWithVercelAI(
     // can still perform file actions using a parseable text format.
     if (streamOptions.tools) {
       const supportsFC = (vercelModel as any)?.supports?.functionCalling;
+      const toolCount = Object.keys(streamOptions.tools).length;
+      chatLogger.info('[FC-GATE] Checking function calling support', {
+        provider,
+        model: modelName,
+        supportsFC,
+        toolCount,
+        toolNames: Object.keys(streamOptions.tools),
+      });
       if (supportsFC === false) {
-        chatLogger.warn('Model does not support function calling — using text-mode tool instructions', {
+        chatLogger.warn('[FC-GATE] Model does NOT support function calling — using text-mode fallback', {
           provider,
           model: modelName,
+          toolCount,
+        });
+        // EXPLICITLY STRIP TOOLS - model doesn't support FC
+        chatLogger.warn('[TOOLS-STRIP] Explicitly stripping tools from request (FC not supported)', {
+          provider,
+          model: modelName,
+          strippedToolCount: toolCount,
+          reason: 'model does not support function calling',
         });
         delete streamOptions.tools;
 
@@ -610,12 +634,59 @@ RULES:
         }
       } else if (supportsFC === undefined) {
         // Model doesn't report this capability — could be unknown provider.
-        // Most OpenAI-compatible providers support FC, so proceed but log.
-        chatLogger.debug('Model does not report function calling capability — attempting anyway', {
+        // Most OpenAI-compatible providers support FC, so proceed but ALSO inject
+        // text-mode fallback instructions so the model can still perform file actions
+        // via parseable text format if native tool calls fail.
+        chatLogger.warn('[FC-GATE] Function calling ability UNKNOWN (model did not report) — attempting native tool calls with text-mode fallback', {
           provider,
           model: modelName,
+          toolCount,
+          warning: 'Model may not support function calling — text-mode instructions injected as safety net',
         });
+
+        // Inject text-mode tool instructions into the system prompt as a safety net
+        // so the model can still perform file actions via text format if native FC fails
+        const TEXT_MODE_TOOL_INSTRUCTIONS = `
+FILE OPERATIONS — If you are unable to use tool calls, use EXACTLY these text formats:
+
+CREATE OR OVERWRITE A FILE:
+\`\`\`file: path/to/file.ext
+your full file content here
+\`\`\`
+
+EDIT EXISTING FILE (preferred — use unified diff):
+\`\`\`diff: path/to/file.ext
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ existing @@
+-line to remove
++line to add
+\`\`\`
+
+CREATE DIRECTORY:
+\`\`\`mkdir: path/to/directory
+\`\`\`
+
+DELETE FILE:
+\`\`\`delete: path/to/file.ext
+\`\`\`
+
+RULES:
+- Always use the exact fence format shown above.
+- For existing files, prefer diff edits over full rewrites.
+- For new files, write the complete content.
+- Do NOT use backtick code blocks for anything else that starts with "file:" or "diff:".
+- Do NOT invent file paths — use paths the user provided or that exist in the project.
+`;
+
+        if (streamOptions.system) {
+          streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+        } else {
+          streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+        }
       }
+    } else {
+      chatLogger.info('[FC-GATE] No tools provided, skipping function calling check', { provider, model: modelName });
     }
 
     // Provider-specific options (e.g., Anthropic cache control)
@@ -703,23 +774,34 @@ RULES:
             onFirstToken();
             
             const callArgs = (chunk as any).args || (chunk as any).arguments || {};
+            const hasArgs = !!callArgs && Object.keys(callArgs).length > 0;
+            const toolName = (chunk as any).toolName;
+            const toolCallId = (chunk as any).toolCallId;
             
-            // DEBUG: Log what args are being received in tool-call chunk
-            chatLogger.debug('tool-call chunk received', {
-              toolCallId: (chunk as any).toolCallId,
-              toolName: (chunk as any).toolName,
-              hasArgs: !!callArgs && Object.keys(callArgs).length > 0,
-              argsKeys: callArgs ? Object.keys(callArgs) : [],
-            });
+            // ENHANCED: Log tool call with detailed args info
+            if (hasArgs) {
+              chatLogger.info('[TOOL-CALL] Received tool call with args', {
+                toolCallId,
+                toolName,
+                argsKeys: Object.keys(callArgs),
+                argsPreview: JSON.stringify(callArgs).slice(0, 200),
+              });
+            } else {
+              chatLogger.warn('[TOOL-CALL] Received tool call with EMPTY args (may fail)', {
+                toolCallId,
+                toolName,
+                warning: 'Tool may execute with empty args - check if model streaming completed',
+              });
+            }
 
             // Cache args so tool-result can include them (AI SDK doesn't repeat args in result)
-            toolCallArgsCache.set((chunk as any).toolCallId, callArgs);
+            toolCallArgsCache.set(toolCallId, callArgs);
           yield {
             content: '',
             isComplete: false,
             toolCalls: [{
-              id: (chunk as any).toolCallId,
-              name: (chunk as any).toolName,
+              id: toolCallId,
+              name: toolName,
               arguments: callArgs,
             }],
             timestamp: new Date(),
@@ -732,6 +814,14 @@ RULES:
           const resultToolCallId = (chunk as any).toolCallId;
           const cachedArgs = toolCallArgsCache.get(resultToolCallId);
           const finalArgs = cachedArgs || (chunk as any).args || (chunk as any).arguments || {};
+          
+          // ENHANCED: Log tool result
+          chatLogger.info('[TOOL-RESULT] Tool execution completed', {
+            toolCallId: resultToolCallId,
+            toolName: (chunk as any).toolName,
+            hasCachedArgs: !!cachedArgs,
+            hasResultArgs: !!((chunk as any).args || (chunk as any).arguments),
+          });
           yield {
             content: '',
             isComplete: false,
@@ -798,6 +888,29 @@ RULES:
           id: tc.toolCallId,
           name: tc.toolName,
           arguments: (tc as any).args || (tc as any).arguments || {},
+        });
+      }
+    }
+
+    // DIAGNOSTIC: Log tool call summary to help debug VFS MCP tool invocation issues
+    if (tools) {
+      const toolCount = Object.keys(tools).length;
+      if (allToolCalls.length > 0) {
+        chatLogger.info('[TOOL-SUMMARY] LLM invoked tools', {
+          provider,
+          model: modelName,
+          toolsAvailable: toolCount,
+          toolsCalled: allToolCalls.length,
+          toolNames: allToolCalls.map(tc => tc.name),
+        });
+      } else {
+        chatLogger.warn('[TOOL-SUMMARY] LLM did NOT call any tools despite tools being available', {
+          provider,
+          model: modelName,
+          toolsAvailable: toolCount,
+          toolNames: Object.keys(tools),
+          finishReason,
+          hint: 'Check if model supports function calling — see [FC-GATE] logs above',
         });
       }
     }
@@ -907,6 +1020,12 @@ RULES:
 
         if (fallbackSystemPrompt) fallbackStreamOptions.system = fallbackSystemPrompt;
         if (tools && Object.keys(tools).length > 0) fallbackStreamOptions.tools = tools;
+        else {
+          chatLogger.warn('[TOOLS] Fallback: No tools provided', {
+            fallbackProvider: fallbackProviderName,
+            fallbackModel: fallbackModelName,
+          });
+        }
 
         // Same function calling support check for fallback path
         if (fallbackStreamOptions.tools) {
@@ -915,6 +1034,12 @@ RULES:
             chatLogger.warn('Fallback model does not support function calling — using text-mode tool instructions', {
               fallbackProvider: fallbackProviderName,
               fallbackModel: fallbackModelName,
+            });
+            // EXPLICITLY STRIP TOOLS - fallback model doesn't support FC
+            chatLogger.warn('[TOOLS-STRIP] Fallback: Explicitly stripping tools', {
+              fallbackProvider: fallbackProviderName,
+              fallbackModel: fallbackModelName,
+              reason: 'fallback model does not support function calling',
             });
             delete fallbackStreamOptions.tools;
 

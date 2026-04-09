@@ -215,6 +215,9 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
   // 3. Build unified agent config
   const config: UnifiedAgentConfig = {
     userMessage: request.userMessage,
+    // FIX: Pass userId and conversationId for proper VFS session scoping
+    userId: request.userId,
+    conversationId: request.conversationId,
     conversationHistory: request.messages,
     systemPrompt: request.systemPrompt,
     maxSteps: request.maxSteps || parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),

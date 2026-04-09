@@ -2,6 +2,14 @@
 
 All notable changes to this project will be documented in this file.
 
+- **unified-router.ts (P0)** — `userId` and `conversationId` were never passed to `UnifiedAgentConfig`, causing all VFS operations to fall back to anonymous defaults. Now both fields are forwarded from the request.
+- **stateful-agent.ts (P0)** — `conversationId` was never defined in `StatefulAgentOptions`. Constructor now extracts it from composite sessionId using `lastIndexOf(':')`, or uses explicit `conversationId` option.
+- **stateful-agent.ts (P0)** — Context pack used composite `sessionId` as VFS `ownerId`, causing read mismatches. Now uses `this.userId` instead.
+- **stateful-agent route.ts (P0)** — `runStatefulAgent` never received `conversationId`, so VFS writes went to wrong session folder. Now passes `conversationId: sessionId`.
+- **langgraph nodes (P0)** — All 4 nodes (planner, executor, verifier, self-healing) created StatefulAgent without `conversationId`. Now extract it from composite `sessionId` using `lastIndexOf(':')`.
+- **route.ts (P0)** — UnifiedAgentConfig now includes `conversationId: resolvedConversationId` for proper VFS session isolation.
+- **route.ts (P0)** — V2 gateway/local execution success paths now call `applyFilesystemEditsFromResponse` to actually persist file edits to VFS (previously only V1 fallback path did this).
+
 ### Additional Bug Fixes
 - **agent-fs-bridge.ts (P0)** — Double-prefixed sandbox read path. `sanitizeSandboxPath()` returns the FULL path with basePath, but code was prepending `sandboxPath` again. Fixed to use `sanitizeSandboxPath(relativePath, sandboxPath)` directly.
 - **antigravity callback (P1)** — Missing OAuth state validation (CSRF vulnerability). Added check for missing `state` parameter.

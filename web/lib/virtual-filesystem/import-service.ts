@@ -149,7 +149,7 @@ export class FileImportService {
     const folderName = importFolderName || `imports-${timestamp}`;
     // CRITICAL FIX: Normalize sessionId to prevent composite IDs in paths
     const simpleSessionId = sessionId ? normalizeSessionId(sessionId) : undefined;
-    const baseScopePath = scopePath || (simpleSessionId ? `project/sessions/${simpleSessionId}` : 'project');
+    const baseScopePath = scopePath || (simpleSessionId ? `project/sessions/${simpleSessionId}` : 'project/sessions/000');
     const destinationPath = resolveScopedPath(folderName, baseScopePath);
 
     logger.info(`Starting import to ${destinationPath}`, {
