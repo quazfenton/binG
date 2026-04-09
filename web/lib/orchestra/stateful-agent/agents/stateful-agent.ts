@@ -60,6 +60,7 @@ async function acquireSessionLock(sessionId: string): Promise<() => void> {
 export interface StatefulAgentOptions {
   sessionId?: string;
   userId?: string;
+  conversationId?: string;  // FIX: Separate conversationId for VFS session scoping
   sandboxHandle?: SandboxHandle;
   maxSelfHealAttempts?: number;
   enforcePlanActVerify?: boolean;
@@ -191,7 +192,13 @@ export class StatefulAgent {
   constructor(options: StatefulAgentOptions = {}) {
     this.sessionId = options.sessionId || crypto.randomUUID();
     this.userId = options.userId || 'anonymous';
-    this.conversationId = options.sessionId || crypto.randomUUID();
+    // FIX: Extract conversationId from the end of composite sessionId
+    // Composite keys can be "userId:001" or "anon:timestamp_random:001"
+    // We need just the trailing conversation segment (e.g., "001")
+    const lastColon = options.sessionId?.lastIndexOf(':');
+    this.conversationId = options.conversationId
+      || (lastColon !== undefined && lastColon >= 0 ? options.sessionId!.slice(lastColon + 1) : options.sessionId)
+      || crypto.randomUUID();
     this.sandboxHandle = options.sandboxHandle;
     this.projectServices = options.projectServices;
     this.maxSelfHealAttempts = options.maxSelfHealAttempts || 3;
@@ -590,8 +597,10 @@ Respond with a list of file paths, one per line. No other text.`;
       // First, try to use context pack for comprehensive context gathering
       if (process.env.STATEFUL_AGENT_USE_CONTEXT_PACK !== 'false') {
         try {
+          // FIX: Use userId (not composite sessionId) as ownerId for VFS reads.
+          // Composite keys like "userId:001" would cause VFS path mismatches.
           const contextPack = await contextPackService.generateContextPack(
-            this.sessionId,
+            this.userId,
             '/',
             {
               format: 'plain',

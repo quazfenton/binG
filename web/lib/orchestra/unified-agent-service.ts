@@ -73,6 +73,7 @@ export interface UnifiedAgentConfig {
   systemPrompt?: string;
   conversationHistory?: Array<{ role: string; content: string }>;
   userId?: string;  // Authenticated user ID — passed to BootstrappedAgency for VFS scoping
+  conversationId?: string;  // Session/conversation ID for VFS session scoping (e.g., "001")
 
   // Project isolation (provides project-scoped vector memory and retrieval)
   projectContext?: ProjectContext;
@@ -611,9 +612,16 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
   }
 
   try {
+    // FIX: Use conversationId for VFS session scoping.
+    // Build composite key: "userId:conversationId" for proper VFS isolation
+    const vfsSessionId = config.conversationId
+      ? `${config.userId || 'system'}:${config.conversationId}`
+      : (config.projectContext?.id || `unified-${Date.now()}`);
+
     const agentOptions: StatefulAgentOptions = {
-      sessionId: config.projectContext?.id || `unified-${Date.now()}`,
+      sessionId: vfsSessionId,  // FIX: Use composite key for VFS scoping
       userId: config.userId,  // Pass authenticated user ID to BootstrappedAgency
+      conversationId: config.conversationId,  // FIX: Pass conversationId for session folder scoping
       maxSelfHealAttempts: parseInt(process.env.STATEFUL_AGENT_MAX_SELF_HEAL_ATTEMPTS || '3'),
       enforcePlanActVerify: true,
       enableReflection: process.env.STATEFUL_AGENT_ENABLE_REFLECTION !== 'false',
@@ -795,9 +803,12 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
     log.info('Executing Mastra workflow', { workflowId, userMessage: config.userMessage.substring(0, 100) });
 
     // Execute workflow via Mastra integration
+    // FIX: Use conversationId for VFS session scoping
     const workflowResult = await mastraWorkflowIntegration.executeWorkflow(workflowId, {
       task: config.userMessage,
-      ownerId: config.userId || config.sandboxId || 'default',
+      ownerId: config.conversationId
+        ? `${config.userId || 'system'}:${config.conversationId}`
+        : (config.userId || config.sandboxId || 'default'),
       systemPrompt: config.systemPrompt,
       maxSteps: config.maxSteps,
     });
@@ -865,8 +876,10 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
 
     if (hasToolCapability(capabilityId)) {
       log.debug('Executing tool via capability', { tool: name, capability: capabilityId });
+      // FIX: Pass conversationId as sessionId for VFS session scoping
       const result = await executeToolCapability(capabilityId, args, {
         userId: config.userId || 'system',
+        sessionId: config.conversationId,  // FIX: Session scoping for VFS
         workspaceId: config.projectContext?.id,
       });
       return { success: result.success, output: (result.output as string) || result.error, exitCode: result.exitCode };
@@ -901,7 +914,8 @@ async function runV1ApiWithTools(
   // Use the agent loop from sandbox
   const options = {
     userMessage: config.userMessage,
-    sandboxId: config.sandboxId || 'default',
+    // FIX: Use conversationId for VFS session scoping, fallback to sandboxId
+    sandboxId: config.conversationId || config.sandboxId || 'default',
     systemPrompt:
       config.systemPrompt ||
       'You are a helpful software engineering assistant. Prefer exact, minimal edits; inspect files before changing them; use diff-style self-healing by re-reading stale files and correcting only the smallest failing region.',

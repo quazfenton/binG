@@ -22,12 +22,13 @@
  * ```
  */
 
-import { tool, type Tool, type CoreTool, type ToolExecutionOptions } from 'ai';
+import { tool, type Tool, type ToolCallOptions } from 'ai';
 import { z } from 'zod';
 import { chatLogger } from './chat-logger';
 import type { ToolExecutionContext } from './vercel-ai-streaming';
 import { isMCPAvailable, vfsTools as mcpVFSTools, toolContextStore, getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { ALL_CAPABILITIES, type CapabilityDefinition } from '@/lib/tools/capabilities';
+import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
 import { getCapabilityRouter } from '@/lib/tools/router';
 
 // ============================================================================
@@ -172,8 +173,8 @@ function createCapabilityTool(
 
   return tool({
     description: capability.description,
-    parameters,
-    execute: async (args, execOptions: ToolExecutionOptions | undefined) => {
+    inputSchema: parameters,
+    execute: async (args, execOptions: ToolCallOptions) => {
       const execContext = {
         userId: context.userId,
         conversationId: context.conversationId,
@@ -211,17 +212,17 @@ function createCapabilityTool(
  */
 function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {
   const userId = context.userId || 'default';
-  const sessionId = context.sessionId || (context.conversationId?.includes(':') ? context.conversationId.split(':')[1] : undefined);
-  const scopePath = context.scopePath || 'project';
+  const sessionId = context.sessionId || normalizeSessionId(context.conversationId || '');
+  const scopePath = context.scopePath || 'project/sessions/000';
   const tools: Record<string, Tool> = {};
 
   for (const [name, vfsTool] of Object.entries(mcpVFSTools)) {
-    const baseTool = vfsTool as Tool & { execute?: (args: unknown, opts?: ToolExecutionOptions) => Promise<unknown> };
+    const baseTool = vfsTool as Tool & { execute?: (args: unknown, opts?: ToolCallOptions) => Promise<unknown> };
     const originalExecute = baseTool.execute;
 
     tools[name] = {
       ...baseTool,
-      execute: async (args: unknown, opts?: ToolExecutionOptions) => {
+      execute: async (args: unknown, opts?: ToolCallOptions) => {
         return toolContextStore.run(
           { userId, sessionId, scopePath },
           () => originalExecute?.(args, opts)
@@ -265,7 +266,7 @@ async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<s
 
       tools[name] = tool({
         description: description || `MCP tool: ${name}`,
-        parameters: toolParams,
+        inputSchema: toolParams,
         execute: async (args: unknown) => {
           if (isVFSTool) {
             chatLogger.info('[VFS MCP] Tool invoked', {
@@ -303,14 +304,14 @@ async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<s
 /**
  * Create capability chain tool for multi-step workflows.
  */
-function createCapabilityChainTool(context: ToolExecutionContext): Record<string, CoreTool> {
+function createCapabilityChainTool(context: ToolExecutionContext): Record<string, Tool> {
   const router = getCapabilityRouter();
   const availableCaps = ALL_CAPABILITIES.map(c => c.id).join(', ');
 
   return {
     run_capability_chain: tool({
       description: `Execute a chain of capabilities in sequence. Available: ${availableCaps}`,
-      parameters: z.object({
+      inputSchema: z.object({
         name: z.string().describe('Chain name/description'),
         steps: z.array(z.object({
           capability: z.string().describe('Capability ID (e.g., "file.read", "sandbox.shell")'),
@@ -338,6 +339,7 @@ function createCapabilityChainTool(context: ToolExecutionContext): Record<string
                 userId: context.userId,
                 conversationId: context.conversationId,
                 sessionId: context.sessionId,
+                scopePath: context.scopePath,
               });
             },
           });
