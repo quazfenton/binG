@@ -27,7 +27,7 @@ import { toast } from "sonner";
 import { cn } from "@/lib/utils";
 import { secureRandomId } from "@/lib/utils/crypto-random";
 import type { Message } from "@/types";
-import type { LLMProvider } from "@/lib/chat/llm-providers";
+import type { LLMProviderConfig } from "@/lib/chat/llm-providers-types";
 
 import {
   X,
@@ -71,7 +71,7 @@ interface ChatThread {
 }
 
 interface EnhancedWorkspacePanelProps {
-  availableProviders: LLMProvider[];
+  availableProviders: LLMProviderConfig[];
   currentProvider: string;
   currentModel: string;
   onProviderChange: (provider: string, model: string) => void;

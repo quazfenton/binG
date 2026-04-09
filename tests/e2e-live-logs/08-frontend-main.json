@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-09T18:11:55.127Z",
+  "timestamp": "2026-04-09T21:06:49.730Z",
   "url": "http://localhost:3000/api/filesystem/read",
   "method": "POST",
   "status": 404,
@@ -11,20 +11,20 @@
     "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
     "content-type": "application/json",
     "cross-origin-resource-policy": "cross-origin",
-    "date": "Thu, 09 Apr 2026 18:11:55 GMT",
+    "date": "Thu, 09 Apr 2026 21:06:49 GMT",
     "keep-alive": "timeout=5",
     "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
     "referrer-policy": "strict-origin-when-cross-origin",
-    "set-cookie": "anon-session-id=anon_1775758315125_55237dc0d4ab012dcd; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly",
+    "set-cookie": "anon-session-id=anon_1775768809722_a73826a2adeb5e353a; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly",
     "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
     "transfer-encoding": "chunked",
     "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
-    "x-anonymous-session-id": "anon_1775758315125_55237dc0d4ab012dcd",
+    "x-anonymous-session-id": "anon_1775768809722_a73826a2adeb5e353a",
     "x-content-type-options": "nosniff",
-    "x-csp-nonce-script": "aGqHGHR2ekujHaoG9iXCpBs8EPpwpNFhFkxVRE6cT4I",
-    "x-csp-nonce-style": "xXaUx6nyoGFexfU3wY_gUVvhxxIEuKO5QZ-NgNg6skk",
+    "x-csp-nonce-script": "tSkq__xg5ABhDC5NGiodsp6dtnKvV-dNdEl_VtxARGk",
+    "x-csp-nonce-style": "9TO0u29XsqB0AeQtbN3updXYSoSFWwUBh_Fwrei7WOI",
     "x-frame-options": "SAMEORIGIN",
-    "x-request-id": "req_1775758315119_qkhswltzmss",
+    "x-request-id": "req_1775768809710_j6lc63qgoh",
     "x-xss-protection": "1; mode=block"
   },
   "body": {
@@ -36,6 +36,6 @@
     "error": "File not found"
   },
   "cookies": {
-    "anon-session-id": "anon_1775758315125_55237dc0d4ab012dcd"
+    "anon-session-id": "anon_1775768809722_a73826a2adeb5e353a"
   }
 }

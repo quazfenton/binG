@@ -328,6 +328,8 @@ export async function POST(request: NextRequest) {
 
     // Validate request body with Zod schema
     const parseResult = chatRequestSchema.safeParse(rawBody);
+    console.log('[ROUTE] Raw body keys:', Object.keys(rawBody));
+    console.log('[ROUTE] Parsed result:', parseResult.success ? 'success' : parseResult.error?.message);
     if (!parseResult.success) {
       const firstError = parseResult.error.errors[0];
       chatLogger.error('Schema validation failed', { requestId }, {
@@ -798,6 +800,7 @@ export async function POST(request: NextRequest) {
     // V2 Agent Mode: route to OpenCode/Nullclaw workflow
     // Use task classifier result instead of redundant regex detection
     const isCodeRequestAuto = classification.isCodeRequest;
+    console.log('[ROUTE] agentMode from request:', agentMode);
     const wantsV2 =
       agentMode === 'v2' ||
       (agentMode === 'auto' && (
@@ -994,18 +997,10 @@ export async function POST(request: NextRequest) {
     } else if (Object.values(promptParams).some(v => v !== undefined)) {
       promptSuffix = await applyPromptModifiers(promptParams);
     }
+
     const systemPrompt = promptSuffix ? baseSystemPrompt + promptSuffix : baseSystemPrompt;
 
-    // Emit telemetry event for analytics (non-blocking, fire-and-forget)
-    emitTelemetryEvent(promptParams, body.presetKey || null);
-
-    // Log active response style for debugging
-    const debugHeaderValue = generateDebugHeaderValue(promptParams, body.presetKey || null);
-    if (debugHeaderValue !== 'default') {
-      chatLogger.debug('Response style active', { requestId }, { style: debugHeaderValue });
-    }
-
-    const config: UnifiedAgentConfig = {
+const config: UnifiedAgentConfig = {
       userMessage: task,  // User message only — NOT the filesystem context
       userId: authenticatedUserId || filesystemOwnerId,  // Pass real user ID for VFS scoping
       conversationId: resolvedConversationId,  // FIX: Pass session ID for VFS session scoping (e.g., "001")
@@ -1569,12 +1564,53 @@ export async function POST(request: NextRequest) {
       // Default: Use existing unified agent flow (task-router mode)
       // This is the fallback when no custom orchestration mode is selected
       // FIX: Skip when AGENT_EXECUTION_ENGINE='v1-agent-loop' — fall through to direct Mastra path
+      console.log('[ROUTE-DEBUG] About to call processUnifiedAgentRequest with config.tools:', config.tools?.map(t => t.name));
       if (AGENT_EXECUTION_ENGINE !== 'v1-agent-loop') {
         const result = await processUnifiedAgentRequest(config);
+
+        // FIX: Extract and apply file edits from the LLM response text.
+        // The LLM may output code blocks, diffs, or write_file instructions
+        // that need to be parsed and written to the VFS.
+        // This bridges the gap between v1-api chat mode and actual file creation.
+        let appliedEdits = null;
+        if (result.success && result.response && enableFilesystemEdits) {
+          try {
+            appliedEdits = await applyFilesystemEditsFromResponse({
+              ownerId: filesystemOwnerId,
+              conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+              requestId: requestId || `v1-${Date.now()}`,
+              scopePath: requestedScopePath,
+              lastUserMessage: typeof lastUserMessage === 'string' ? lastUserMessage : '',
+              attachedPaths: attachedFilesystemFiles.map((f) => f.path),
+              responseContent: result.response,
+              commands: {},
+              forceExtract: true,
+            });
+
+            if (appliedEdits?.applied?.length) {
+              chatLogger.info('File edits extracted from v1-api response', {
+                requestId,
+                editCount: appliedEdits.applied.length,
+                edits: appliedEdits.applied.map((e: any) => ({ path: e.path, operation: e.operation })),
+              });
+            }
+          } catch (parseError: any) {
+            chatLogger.warn('Failed to extract file edits from v1-api response', {
+              requestId,
+              error: parseError.message,
+            });
+          }
+        }
+
         return NextResponse.json({
           success: result.success,
           content: result.response,
-          data: result,
+          data: {
+            ...result,
+            appliedEdits: appliedEdits
+              ? { count: appliedEdits.applied?.length || 0, paths: appliedEdits.applied?.map((e: any) => e.path) || [] }
+              : null,
+          },
         });
       }
 

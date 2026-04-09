@@ -96,9 +96,11 @@ export async function requireAdminApiOrForbidden(req: NextRequest): Promise<Admi
  */
 export async function requireAdminPage(): Promise<AdminResult> {
   const cookieStore = await cookies();
+  // Check ALL known session/auth cookie names
   const authToken = cookieStore.get('auth-token')?.value
     || cookieStore.get('token')?.value
-    || cookieStore.get('next-auth.session-token')?.value;
+    || cookieStore.get('next-auth.session-token')?.value
+    || cookieStore.get('session_id')?.value;
 
   if (!authToken) {
     redirect('/login?redirect=' + encodeURIComponent(await getCurrentPath()));

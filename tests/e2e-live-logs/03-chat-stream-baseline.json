@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-09T18:10:44.234Z",
+  "timestamp": "2026-04-09T21:04:13.544Z",
   "body": {
     "messages": [
       {
@@ -22,7 +22,7 @@
     "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
     "content-type": "text/event-stream",
     "cross-origin-resource-policy": "cross-origin",
-    "date": "Thu, 09 Apr 2026 18:10:42 GMT",
+    "date": "Thu, 09 Apr 2026 21:04:06 GMT",
     "expires": "0",
     "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
     "pragma": "no-cache",
@@ -32,23 +32,23 @@
     "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
     "x-accel-buffering": "no",
     "x-content-type-options": "nosniff",
-    "x-csp-nonce-script": "9a777H6DtJtQgsyJgckUephgFnm-8IIWZQdUgKstgEo",
-    "x-csp-nonce-style": "vWzKov2Y7k37xSmB3BobmyWcIe-0bC0Rfbo7OE9umOI",
+    "x-csp-nonce-script": "HK7mAjOgba_k9X4p55gFHq9wc1ATbmQeMwN6DGUxF8Q",
+    "x-csp-nonce-style": "KdQdR9CHic1bqtbrTPNZVJy5Cu6f3C0Fq0nrHsK45EQ",
     "x-frame-options": "SAMEORIGIN",
-    "x-request-id": "req_1775758237224_08hnhd1vj2iq",
+    "x-request-id": "req_1775768633397_hwg9fsr1ai",
     "x-xss-protection": "1; mode=block"
   },
-  "raw": "event: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775758242956,\"stepIndex\":0}\n\nevent: token\ndata: {\"content\":\"Hi \",\"timestamp\":1775758244205}\n\nevent: token\ndata: {\"content\":\"there!\",\"timestamp\":1775758244225}\n\nevent: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775758244232,\"stepIndex\":1}\n\nevent: done\ndata: {\"success\":true,\"content\":\"Hi there!\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775758242956,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775758244232,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"Hi there!\",\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":336,\"fallbackChain\":[],\"fallbackFrom\":\"v2-containerized\",\"triedModes\":[\"v2-containerized\",\"v1-api\"],\"classification\":{\"complexity\":\"simple\",\"confidence\":0.58}}}}\n\n",
-  "eventCount": 5,
-  "tokenText": "Hi there!",
+  "raw": "event: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775768646430,\"stepIndex\":0}\n\nevent: token\ndata: {\"content\":\"Hi \",\"timestamp\":1775768653493}\n\nevent: token\ndata: {\"content\":\"there! \",\"timestamp\":1775768653511}\n\nevent: token\ndata: {\"content\":\"👋\",\"timestamp\":1775768653529}\n\nevent: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775768653538,\"stepIndex\":1}\n\nevent: done\ndata: {\"success\":true,\"content\":\"Hi there! 👋\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775768646430,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775768653538,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"Hi there! 👋\",\"steps\":[],\"totalSteps\":0,\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":445,\"toolInvocations\":[],\"fallbackChain\":[]}}}\n\n",
+  "eventCount": 6,
+  "tokenText": "Hi there! 👋",
   "toolEvents": [],
   "fileEvents": [],
   "done": {
     "event": "done",
-    "rawData": "{\"success\":true,\"content\":\"Hi there!\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775758242956,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775758244232,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"Hi there!\",\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":336,\"fallbackChain\":[],\"fallbackFrom\":\"v2-containerized\",\"triedModes\":[\"v2-containerized\",\"v1-api\"],\"classification\":{\"complexity\":\"simple\",\"confidence\":0.58}}}}",
+    "rawData": "{\"success\":true,\"content\":\"Hi there! 👋\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775768646430,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775768653538,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"Hi there! 👋\",\"steps\":[],\"totalSteps\":0,\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":445,\"toolInvocations\":[],\"fallbackChain\":[]}}}",
     "data": {
       "success": true,
-      "content": "Hi there!",
+      "content": "Hi there! 👋",
       "messageMetadata": {
         "agent": "unified",
         "mode": "v1-api",
@@ -56,35 +56,29 @@
           {
             "step": "Start agentic pipeline",
             "status": "started",
-            "timestamp": 1775758242956,
+            "timestamp": 1775768646430,
             "stepIndex": 0
           },
           {
             "step": "Start agentic pipeline",
             "status": "completed",
-            "timestamp": 1775758244232,
+            "timestamp": 1775768653538,
             "stepIndex": 1
           }
         ]
       },
       "data": {
         "success": true,
-        "response": "Hi there!",
+        "response": "Hi there! 👋",
+        "steps": [],
+        "totalSteps": 0,
         "mode": "v1-api",
         "metadata": {
           "provider": "mistral",
           "model": "mistral-small-latest",
-          "duration": 336,
-          "fallbackChain": [],
-          "fallbackFrom": "v2-containerized",
-          "triedModes": [
-            "v2-containerized",
-            "v1-api"
-          ],
-          "classification": {
-            "complexity": "simple",
-            "confidence": 0.58
-          }
+          "duration": 445,
+          "toolInvocations": [],
+          "fallbackChain": []
         }
       }
     }

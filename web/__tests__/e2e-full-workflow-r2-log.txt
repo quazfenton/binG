@@ -1,0 +1,81 @@
+[2026-04-09T21:10:02.346Z] [INFO] ╔══════════════════════════════════════════════════════════════╗
+[2026-04-09T21:10:02.354Z] [INFO] ║  FULL WORKFLOW E2E TEST SUITE - ROUND 2                    ║
+[2026-04-09T21:10:02.354Z] [INFO] ╚══════════════════════════════════════════════════════════════╝
+[2026-04-09T21:10:02.354Z] [INFO] === AUTHENTICATION ===
+[2026-04-09T21:10:02.915Z] [INFO] 
+=== TEST 1: Google Gemini 3 Flash Preview ===
+[2026-04-09T21:10:38.992Z] [INFO] 
+=== TEST 2: Nvidia meta/llama-3.3-70b-instruct ===
+[2026-04-09T21:11:07.822Z] [INFO] 
+=== TEST 3: Non-Streaming Google ===
+[2026-04-09T21:11:28.132Z] [INFO] 
+=== TEST 4: Code Generation (Vite App) ===
+[2026-04-09T21:11:53.926Z] [INFO] 
+=== TEST 5: Multi-File Context Bundling ===
+[2026-04-09T21:12:29.853Z] [INFO] 
+=== TEST 6: Diff Application / Modify Existing File ===
+[2026-04-09T21:12:58.861Z] [INFO] 
+=== TEST 7: Empty Response Retry (...) ===
+[2026-04-09T21:13:25.959Z] [INFO] 
+=== TEST 8: MCP Tool Definitions ===
+[2026-04-09T21:13:26.010Z] [WARN]   MCP raw response: {"jsonrpc":"2.0","result":{"tools":[{"name":"write_file","description":"Create a new file or completely overwrite an existing file in the Virtual File System. Use this when the entire content is known or for new files.","inputSchema":{"_def":{"unknownKeys":"strip","catchall":{"_def":{"typeName":"ZodNever"},"~standard":{"version":1,"vendor":"zod"}},"typeName":"ZodObject"},"~standard":{"version":1,"vendor":"zod"},"_cached":null}},{"name":"apply_diff","description":"Apply a unified diff patch to an
+[2026-04-09T21:13:29.019Z] [INFO] 
+=== TEST 9: VFS Path Resolution ===
+[2026-04-09T21:13:32.172Z] [INFO] 
+=== TEST 10: OpenRouter (google/gemini-2.5-flash) ===
+[2026-04-09T21:13:35.402Z] [INFO] 
+=== TEST 11: Nvidia Nemotron-4-340b ===
+[2026-04-09T21:14:03.817Z] [INFO] 
+=== TEST 12: Nvidia Nemotron Nano 12b ===
+[2026-04-09T21:14:34.729Z] [INFO] 
+=== TEST 13: OpenRouter Free (nemotron-3-nano-30b-a3b:free) ===
+[2026-04-09T21:15:06.116Z] [INFO] 
+=== TEST 14: Google Gemini 3.1 Flash Lite ===
+[2026-04-09T21:15:31.306Z] [INFO] 
+=== TEST 15: VFS Write → LLM Read → Modify Cycle ===
+[2026-04-09T21:16:00.436Z] [INFO] 
+=== TEST 16: Batch File Creation via LLM ===
+[2026-04-09T21:16:35.075Z] [INFO] 
+=== TEST 17: LLM Uses read_file Tool ===
+[2026-04-09T21:17:46.229Z] [INFO] 
+============================================================
+[2026-04-09T21:17:46.230Z] [INFO] FINAL RESULTS: 21/57 passed
+[2026-04-09T21:17:46.230Z] [INFO] 
+FAILED TESTS:
+[2026-04-09T21:17:46.230Z] [INFO]   ❌ Google streams: tokens=0
+[2026-04-09T21:17:46.230Z] [INFO]   ❌ Google correct: text=""
+[2026-04-09T21:17:46.230Z] [INFO]   ❌ Nvidia streams
+[2026-04-09T21:17:46.230Z] [INFO]   ❌ Nvidia correct: text=""
+[2026-04-09T21:17:46.231Z] [INFO]   ❌ Non-streaming has content: content=""
+[2026-04-09T21:17:46.231Z] [INFO]   ❌ Non-streaming correct
+[2026-04-09T21:17:46.231Z] [INFO]   ❌ Code gen responds: chars=0
+[2026-04-09T21:17:46.231Z] [INFO]   ❌ Tool calls detected: count=0
+[2026-04-09T21:17:46.231Z] [INFO]   ❌ File edits detected: count=0
+[2026-04-09T21:17:46.231Z] [INFO]   ❌ Files created in VFS: files=0
+[2026-04-09T21:17:46.231Z] [INFO]   ❌ Multi-file responds: chars=0
+[2026-04-09T21:17:46.231Z] [INFO]   ❌ Multi-file correct (mentions 3000)
+[2026-04-09T21:17:46.231Z] [INFO]   ❌ Diff responds: chars=0
+[2026-04-09T21:17:46.231Z] [INFO]   ❌ File edits from diff: edits=0
+[2026-04-09T21:17:46.231Z] [INFO]   ❌ MCP has tools: count=0
+[2026-04-09T21:17:46.232Z] [INFO]   ❌ read_file available
+[2026-04-09T21:17:46.232Z] [INFO]   ❌ write_file available
+[2026-04-09T21:17:46.232Z] [INFO]   ❌ list_files available
+[2026-04-09T21:17:46.232Z] [INFO]   ❌ read_files available
+[2026-04-09T21:17:46.232Z] [INFO]   ❌ apply_diff available
+[2026-04-09T21:17:46.232Z] [INFO]   ❌ OpenRouter responds: HTTP 400: {"error":"Model google/gemini-2.5-flash is not supported by openrouter","availableModels":["minimax/minimax-m2.5:free","qwen/qwen3-coder:free","openai/gpt-oss-120b:free","z-ai/glm-4.5-air:free","nvidia/nemotron-3-nano-30b-a3b:free","meta-llama/llama-3.3-70b-instruct:free","nvidia/nemotron-nano-12b-v2-vl:free","nvidia/nemotron-3-super-120b-a12b:free","stepfun/step-3.5-flash:free","openai/gpt-oss-20b:free","qwen/qwen3-next-80b-a3b-instruct:free","arcee-ai/trinity-mini:free","mistralai/mistral-smal
+[2026-04-09T21:17:46.232Z] [INFO]   ❌ Nemotron streams
+[2026-04-09T21:17:46.232Z] [INFO]   ❌ Nemotron correct: text=""
+[2026-04-09T21:17:46.232Z] [INFO]   ❌ Nano streams
+[2026-04-09T21:17:46.232Z] [INFO]   ❌ Nano correct: text=""
+[2026-04-09T21:17:46.233Z] [INFO]   ❌ OR Free streams
+[2026-04-09T21:17:46.233Z] [INFO]   ❌ OR Free correct: text=""
+[2026-04-09T21:17:46.233Z] [INFO]   ❌ Gemini 3.1 Lite streams
+[2026-04-09T21:17:46.233Z] [INFO]   ❌ Gemini 3.1 Lite correct: text=""
+[2026-04-09T21:17:46.233Z] [INFO]   ❌ Write-Read cycle responds: chars=0
+[2026-04-09T21:17:46.233Z] [INFO]   ❌ Mentions version
+[2026-04-09T21:17:46.233Z] [INFO]   ❌ Batch responds: chars=0
+[2026-04-09T21:17:46.233Z] [INFO]   ❌ Batch file edits: edits=0
+[2026-04-09T21:17:46.233Z] [INFO]   ❌ Batch files created: files=0
+[2026-04-09T21:17:46.233Z] [INFO]   ❌ Read tool responds: chars=0
+[2026-04-09T21:17:46.234Z] [INFO]   ❌ Read tool mentions content: text=""
+[2026-04-09T21:17:46.234Z] [INFO] ============================================================

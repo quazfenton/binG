@@ -26,7 +26,17 @@ export interface UseVirtualFilesystemOptions {
   autoLoad?: boolean;
   useOPFS?: boolean;       // Enable OPFS caching for instant reads/writes
   offlineMode?: boolean;   // Force offline operation
-  sessionId?: string;      // Optional session ID for session isolation
+  /**
+   * Composite session ID — format is `userId:sessionNum` (e.g., "1:004")
+   * for authenticated users, or just session number for anonymous users.
+   * This is used as the ownerId for VFS database partitioning.
+   */
+  compositeSessionId?: string;
+  /**
+   * Authenticated user ID — when provided, becomes the ownerId for VFS
+   * operations. When omitted, falls back to anonymous session ID.
+   */
+  userId?: string;
 }
 
 export interface SyncStatus {
@@ -210,13 +220,37 @@ export function useVirtualFilesystem(
     return match ? match[1] : null;
   };
   
-  // Allow passing sessionId from parent, or derive from path, or fall back to anonymous
+  // Allow passing compositeSessionId from parent, or derive from path, or fall back to anonymous
   const getSessionId = useCallback(() => {
-    if (options?.sessionId) return options.sessionId;
+    if (options?.compositeSessionId) return options.compositeSessionId;
     const derived = deriveSessionIdFromPath(initialPath);
     if (derived) return derived;
     return getOrCreateAnonymousSessionId();
-  }, [options?.sessionId, initialPath]);
+  }, [options?.compositeSessionId, initialPath]);
+
+  // FIX: Derive ownerId for server-side VFS operations.
+  // Priority order:
+  // 1. Explicit options.userId (authenticated user) — ensures logged-in users see their own workspace
+  // 2. Composite sessionId in "userId:sessionNum" format (e.g., "1:004") — extract userId part
+  // 3. Derive from scoped path (e.g., "project/sessions/004")
+  // 4. Fall back to anonymous session ID
+  const getOwnerId = useCallback(() => {
+    // Priority 1: Explicit authenticated userId
+    if (options?.userId) return options.userId;
+
+    // Priority 2: Composite sessionId format "userId:sessionNum"
+    if (options?.compositeSessionId && options.compositeSessionId.includes(':')) {
+      const [userIdPart] = options.compositeSessionId.split(':');
+      if (userIdPart && userIdPart !== 'anon') return userIdPart;
+    }
+
+    // Priority 3: Derive from scoped path
+    const derived = deriveSessionIdFromPath(initialPath);
+    if (derived) return derived;
+
+    // Priority 4: Fall back to anonymous session ID
+    return getOrCreateAnonymousSessionId();
+  }, [options?.userId, options?.compositeSessionId, initialPath]);
 
   const [currentPath, setCurrentPath] = useState(initialPath);
   const currentPathRef = useRef(currentPath);
@@ -240,16 +274,17 @@ export function useVirtualFilesystem(
   // Initialize OPFS on mount if enabled
   useEffect(() => {
     if (useOPFS && typeof window !== 'undefined') {
-      const sessionId = getSessionId();
-      
+      // Use authenticated userId for OPFS workspace when available
+      const opfsOwnerId = options?.userId || getSessionId();
+
       // Check if OPFS is supported
       if (!OPFSAdapter.isSupported()) {
         logWarn('OPFS not supported in this browser - using server-only mode');
         return;
       }
-      
-      opfsAdapter.enable(sessionId).then(() => {
-        log('OPFS enabled successfully for session:', sessionId);
+
+      opfsAdapter.enable(opfsOwnerId).then(() => {
+        log('OPFS enabled successfully for owner:', opfsOwnerId);
       }).catch(err => {
         logWarn('OPFS initialization failed, falling back to server-only:', err?.message || err);
       });
@@ -260,7 +295,7 @@ export function useVirtualFilesystem(
         opfsAdapter.disable().catch(console.error);
       }
     };
-  }, [useOPFS, logWarn, getSessionId]);
+  }, [useOPFS, logWarn, options?.userId, options?.compositeSessionId, getSessionId]);
 
   // Track online status
   useEffect(() => {
@@ -394,7 +429,7 @@ export function useVirtualFilesystem(
       const detail = event.detail;
 
       // Get current session ID when event fires (not at effect creation time)
-      const ownerId = getSessionId();
+      const ownerId = getOwnerId();
       const currentPath = currentPathRef.current;
 
       // Determine which paths need refresh (deduplicate)
@@ -425,13 +460,13 @@ export function useVirtualFilesystem(
       // empty results while writes went to a different workspace.
 
       // CRITICAL FIX: Extract simple session ID from potentially composite IDs
-      // This handles formats like "anon:timestamp:001" -> "001" (same logic as server's normalizeSessionId)
+      // This handles formats like "1:004" -> "004" (composite) or "1" -> "1" (just userId)
       // Returns empty string for invalid input - caller should handle this case
       const extractSessionPart = (id: string): string => {
         if (!id || typeof id !== 'string') return '';
         const trimmed = id.trim();
         if (!trimmed) return '';
-        // Extract last segment after any colons (handles composite IDs)
+        // Extract last segment after any colons (handles composite IDs like "1:004")
         if (trimmed.includes(':')) {
           const parts = trimmed.split(':');
           return parts[parts.length - 1].trim();
@@ -442,8 +477,8 @@ export function useVirtualFilesystem(
       // If event has a sessionId, sync with local session to prevent reading from wrong workspace
       if (detail.sessionId) {
         const eventSessionId = detail.sessionId;
-        const ownerId = getSessionId();
-        const currentSessionPart = extractSessionPart(ownerId);
+        const currentOwnerId = getOwnerId();
+        const currentSessionPart = extractSessionPart(currentOwnerId);
         
         // If the session parts differ, sync to the server's session to ensure reads
         // hit the same workspace where the writes occurred
@@ -527,7 +562,7 @@ export function useVirtualFilesystem(
       // Clear pending paths on cleanup
       pendingPathsToRefresh.clear();
     };
-  }, [log, logWarn, getSessionId, invalidateSnapshotCache, setCachedList, buildApiHeaders]);
+  }, [log, logWarn, getOwnerId, invalidateSnapshotCache, setCachedList, buildApiHeaders]);
 
   const request = useCallback(async <TData>(
     url: string,
@@ -614,7 +649,7 @@ export function useVirtualFilesystem(
 
   const listDirectory = useCallback(async (pathToLoad?: string) => {
     const targetPath = pathToLoad || currentPathRef.current;
-      const ownerId = getSessionId();
+      const ownerId = getOwnerId();
     
     // Check list cache first
     const cachedList = getCachedList(targetPath, ownerId);
@@ -658,10 +693,11 @@ export function useVirtualFilesystem(
     // Normalize path: strip leading slash since VFS uses relative paths (e.g., "project/..." not "/project/...")
     const normalizedPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
 
-    // OPFS-first strategy
+    // OPFS-first strategy — use authenticated userId for OPFS when available
     if (useOPFS) {
       try {
-        const opfsFile = await opfsAdapter.readFile(getSessionId(), normalizedPath);
+        const opfsOwnerId = options?.userId || getSessionId();
+        const opfsFile = await opfsAdapter.readFile(opfsOwnerId, normalizedPath);
         log(`readFile: OPFS cache hit for "${normalizedPath}"`);
         return opfsFile;
       } catch (err) {
@@ -674,21 +710,22 @@ export function useVirtualFilesystem(
       method: 'POST',
       body: JSON.stringify({ path: normalizedPath }),
     });
-  }, [request, useOPFS, logWarn]);
+  }, [request, useOPFS, logWarn, options?.userId, getSessionId]);
 
   const writeFile = useCallback(async (filePath: string, content: string) => {
     // Normalize path: strip leading slash since VFS uses relative paths
     const normalizedPath = filePath.startsWith('/') ? filePath.substring(1) : filePath;
     log(`writeFile: writing "${normalizedPath}" (contentLength=${content.length})`);
 
-    // Invalidate snapshot cache on write
-    invalidateSnapshotCache(normalizedPath, getSessionId());
+    // Invalidate snapshot cache on write — use authenticated userId
+    invalidateSnapshotCache(normalizedPath, getOwnerId());
 
     // OPFS write-through strategy: write to OPFS for instant local reads,
     // then also write to server so listDirectory (server-backed) stays in sync
     if (useOPFS && !offlineMode) {
-      // Write to OPFS instantly for local cache
-      const opfsFile = await opfsAdapter.writeFile(getSessionId(), normalizedPath, content);
+      // Write to OPFS instantly for local cache — use authenticated userId
+      const opfsOwnerId = options?.userId || getSessionId();
+      const opfsFile = await opfsAdapter.writeFile(opfsOwnerId, normalizedPath, content);
       log(`writeFile: OPFS write complete for "${normalizedPath}", version=${opfsFile.version}`);
 
       // Also write to server so list/snapshot APIs reflect the change
@@ -726,11 +763,11 @@ export function useVirtualFilesystem(
     log(`writeFile: server write complete for "${data.path}", version=${data.version}`);
     await listDirectory(currentPathRef.current);
     return data;
-  }, [listDirectory, request, useOPFS, offlineMode, log, logWarn]);
+  }, [listDirectory, request, useOPFS, offlineMode, log, logWarn, getOwnerId, options?.userId, getSessionId]);
 
   const deletePath = useCallback(async (targetPath: string) => {
-    // Invalidate snapshot cache on delete
-    invalidateSnapshotCache(targetPath, getOrCreateAnonymousSessionId());
+    // Invalidate snapshot cache on delete — use authenticated userId
+    invalidateSnapshotCache(targetPath, getOwnerId());
     
     try {
       const data = await request<{ deletedCount: number }>('/api/filesystem/delete', {
@@ -769,7 +806,7 @@ export function useVirtualFilesystem(
 
   const getSnapshot = useCallback(async (pathForSnapshot?: string) => {
     const targetPath = pathForSnapshot || currentPathRef.current;
-      const ownerId = getSessionId();
+      const ownerId = getOwnerId();
     const cacheKey = `${ownerId}:${targetPath}`;
 
     // Check shared cache first
@@ -831,7 +868,7 @@ export function useVirtualFilesystem(
     setSyncStatus(prev => ({ ...prev, isSyncing: true }));
 
     try {
-      const ownerId = getSessionId();
+      const ownerId = getOwnerId();
       const result = await opfsAdapter.syncToServer(ownerId);
       
       setSyncStatus(prev => ({

@@ -292,34 +292,48 @@ export class TaskClassifier {
       // Use explicit cases — unknown providers fall back safely to mistral-small-latest
       // rather than trying createMistral('claude-3-5-sonnet') which would crash.
       let model: any;
-      switch (fastModelProvider) {
-        case 'openai':
-          model = createOpenAI({ apiKey: process.env.OPENAI_API_KEY || '' })(fastModelName);
-          break;
-        case 'openrouter':
-          model = createOpenAI({
-            apiKey: process.env.OPENROUTER_API_KEY || '',
-            baseURL: 'https://openrouter.ai/api/v1',
-          })(fastModelName);
-          break;
-        case 'google':
-          model = createGoogleGenerativeAI({ apiKey: process.env.GOOGLE_API_KEY || '' })(fastModelName);
-          break;
-        case 'mistral':
-          model = createMistral({ apiKey: process.env.MISTRAL_API_KEY || '' })(fastModelName);
-          break;
-        default:
-          // Unknown provider (e.g., anthropic, chutes, groq) — safely fallback to Mistral Small
-          // instead of crashing with createMistral('unknown-model-name')
-          if (fastModelProvider !== 'mistral') {
-            console.warn(`[TaskClassifier] Provider '${fastModelProvider}' not supported for semantics, using mistral-small-latest`);
-          }
+switch (fastModelProvider) {
+      case 'openai':
+        model = createOpenAI({ apiKey: process.env.OPENAI_API_KEY || '' })(fastModelName);
+        break;
+      case 'openrouter':
+        model = createOpenAI({
+          apiKey: process.env.OPENROUTER_API_KEY || '',
+          baseURL: 'https://openrouter.ai/api/v1',
+        })(fastModelName);
+        break;
+      case 'google':
+        model = createGoogleGenerativeAI({ apiKey: process.env.GOOGLE_API_KEY || '' })(fastModelName);
+        break;
+      case 'mistral':
+        model = createMistral({ apiKey: process.env.MISTRAL_API_KEY || '' })(fastModelName);
+        break;
+      case 'anthropic':
+        // Using OpenAI SDK as a generic fallback for providers not explicitly supported
+        model = createOpenAI({ apiKey: process.env.ANTHROPIC_API_KEY || '' })(fastModelName);
+        break;
+      case 'groq':
+        model = createOpenAI({ apiKey: process.env.GROQ_API_KEY || '' })(fastModelName);
+        break;
+      default:
+        // Fallback: try any known API key environment variable
+        const fallbackKey =
+          process.env.OPENAI_API_KEY ||
+          process.env.OPENROUTER_API_KEY ||
+          process.env.GOOGLE_API_KEY ||
+          process.env.MISTRAL_API_KEY ||
+          '';
+        if (fallbackKey) {
+          model = createOpenAI({ apiKey: fallbackKey })(fastModelName);
+        } else {
+          console.warn(`[TaskClassifier] Provider '${fastModelProvider}' not supported and no API key found, using mistral-small-latest`);
           model = createMistral({ apiKey: process.env.MISTRAL_API_KEY || '' })('mistral-small-latest');
-      }
+        }
+    }
 
       const result = await generateObject({
         model,
-        prompt: `Estimate task scope. Respond with JSON:
+        prompt: `Estimate task scope. Respond with JSON only. No extra text:
 {
   "estimatedFiles": <number of files likely to be modified>,
   "estimatedSteps": <number of discrete steps>,
@@ -334,22 +348,29 @@ Task: ${message.substring(0, 500)}`,
           estimatedSteps: z.number(),
           requiresResearch: z.boolean(),
           requiresTesting: z.boolean(),
-          riskLevel: z.enum(['low', 'medium', 'high']),
+          riskLevel: z.enum(['low', 'medium', 'high']), Notes: z.string()
         }),
         maxOutputTokens: 200,
       });
       
-      const analysis = result.object;
-      let score = 0.5;
-      const factors: string[] = [];
-      
-      // File count factor
-      if (analysis.estimatedFiles > 5) {
-        score += 0.2;
-        factors.push(`${analysis.estimatedFiles} files`);
-      } else if (analysis.estimatedFiles <= 1) {
-        score -= 0.2;
-      }
+const analysis = result.object;
+       let score = 0.5;
+       const factors: string[] = [];
+
+       // Log or use any extra notes (optional)
+       if (analysis.Notes && analysis.Notes.trim().length > 0) {
+         // Optionally log or factor in notes for debugging
+         console.log(`[TaskClassifier] Semantic analysis notes: ${analysis.Notes}`);
+         // For now, just log; could adjust score based on notes content if needed
+       }
+
+       // File count factor
+       if (analysis.estimatedFiles > 5) {
+         score += 0.2;
+         factors.push(`${analysis.estimatedFiles} files`);
+       } else if (analysis.estimatedFiles <= 1) {
+         score -= 0.2;
+       }
       
       // Step count factor
       if (analysis.estimatedSteps > 5) {

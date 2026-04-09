@@ -1,0 +1,350 @@
+{
+  "timestamp": "2026-04-09T21:17:46.234Z",
+  "total": 57,
+  "passed": 21,
+  "failed": 36,
+  "tests": [
+    {
+      "name": "Login succeeds",
+      "pass": true,
+      "detail": "status=200",
+      "timestamp": 1775769002914
+    },
+    {
+      "name": "Auth token received",
+      "pass": true,
+      "detail": "len=280",
+      "timestamp": 1775769002914
+    },
+    {
+      "name": "Google streams",
+      "pass": false,
+      "detail": "tokens=0",
+      "timestamp": 1775769035989
+    },
+    {
+      "name": "Google completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769035989
+    },
+    {
+      "name": "Google correct",
+      "pass": false,
+      "detail": "text=\"\"",
+      "timestamp": 1775769035990
+    },
+    {
+      "name": "Nvidia streams",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769064806
+    },
+    {
+      "name": "Nvidia completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769064806
+    },
+    {
+      "name": "Nvidia correct",
+      "pass": false,
+      "detail": "text=\"\"",
+      "timestamp": 1775769064806
+    },
+    {
+      "name": "Non-streaming responds",
+      "pass": true,
+      "detail": "status=200",
+      "timestamp": 1775769085122
+    },
+    {
+      "name": "Non-streaming has content",
+      "pass": false,
+      "detail": "content=\"\"",
+      "timestamp": 1775769085123
+    },
+    {
+      "name": "Non-streaming correct",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769085123
+    },
+    {
+      "name": "Code gen responds",
+      "pass": false,
+      "detail": "chars=0",
+      "timestamp": 1775769105894
+    },
+    {
+      "name": "Code gen completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769105894
+    },
+    {
+      "name": "Tool calls detected",
+      "pass": false,
+      "detail": "count=0",
+      "timestamp": 1775769105895
+    },
+    {
+      "name": "File edits detected",
+      "pass": false,
+      "detail": "count=0",
+      "timestamp": 1775769105895
+    },
+    {
+      "name": "Files created in VFS",
+      "pass": false,
+      "detail": "files=0",
+      "timestamp": 1775769110922
+    },
+    {
+      "name": "Multi-file responds",
+      "pass": false,
+      "detail": "chars=0",
+      "timestamp": 1775769146844
+    },
+    {
+      "name": "Multi-file correct (mentions 3000)",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769146845
+    },
+    {
+      "name": "Diff responds",
+      "pass": false,
+      "detail": "chars=0",
+      "timestamp": 1775769175855
+    },
+    {
+      "name": "Diff completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769175855
+    },
+    {
+      "name": "File edits from diff",
+      "pass": false,
+      "detail": "edits=0",
+      "timestamp": 1775769175855
+    },
+    {
+      "name": "Empty-like handled",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769202946
+    },
+    {
+      "name": "Request completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769202947
+    },
+    {
+      "name": "MCP responds",
+      "pass": true,
+      "detail": "status=200",
+      "timestamp": 1775769206009
+    },
+    {
+      "name": "MCP has tools",
+      "pass": false,
+      "detail": "count=0",
+      "timestamp": 1775769206010
+    },
+    {
+      "name": "read_file available",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769206010
+    },
+    {
+      "name": "write_file available",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769206010
+    },
+    {
+      "name": "list_files available",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769206010
+    },
+    {
+      "name": "read_files available",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769206010
+    },
+    {
+      "name": "apply_diff available",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769206011
+    },
+    {
+      "name": "Nested write",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769209060
+    },
+    {
+      "name": "Leading slash write",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769209099
+    },
+    {
+      "name": "Traversal rejected",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769209132
+    },
+    {
+      "name": "Nested files exist",
+      "pass": true,
+      "detail": "nodes=2",
+      "timestamp": 1775769209164
+    },
+    {
+      "name": "OpenRouter responds",
+      "pass": false,
+      "detail": "HTTP 400: {\"error\":\"Model google/gemini-2.5-flash is not supported by openrouter\",\"availableModels\":[\"minimax/minimax-m2.5:free\",\"qwen/qwen3-coder:free\",\"openai/gpt-oss-120b:free\",\"z-ai/glm-4.5-air:free\",\"nvidia/nemotron-3-nano-30b-a3b:free\",\"meta-llama/llama-3.3-70b-instruct:free\",\"nvidia/nemotron-nano-12b-v2-vl:free\",\"nvidia/nemotron-3-super-120b-a12b:free\",\"stepfun/step-3.5-flash:free\",\"openai/gpt-oss-20b:free\",\"qwen/qwen3-next-80b-a3b-instruct:free\",\"arcee-ai/trinity-mini:free\",\"mistralai/mistral-smal",
+      "timestamp": 1775769212391
+    },
+    {
+      "name": "Nemotron streams",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769240812
+    },
+    {
+      "name": "Nemotron completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769240812
+    },
+    {
+      "name": "Nemotron correct",
+      "pass": false,
+      "detail": "text=\"\"",
+      "timestamp": 1775769240812
+    },
+    {
+      "name": "Nano streams",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769271715
+    },
+    {
+      "name": "Nano completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769271716
+    },
+    {
+      "name": "Nano correct",
+      "pass": false,
+      "detail": "text=\"\"",
+      "timestamp": 1775769271716
+    },
+    {
+      "name": "OR Free streams",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769303103
+    },
+    {
+      "name": "OR Free completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769303103
+    },
+    {
+      "name": "OR Free correct",
+      "pass": false,
+      "detail": "text=\"\"",
+      "timestamp": 1775769303103
+    },
+    {
+      "name": "Gemini 3.1 Lite streams",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769328294
+    },
+    {
+      "name": "Gemini 3.1 Lite completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769328295
+    },
+    {
+      "name": "Gemini 3.1 Lite correct",
+      "pass": false,
+      "detail": "text=\"\"",
+      "timestamp": 1775769328295
+    },
+    {
+      "name": "Write-Read cycle responds",
+      "pass": false,
+      "detail": "chars=0",
+      "timestamp": 1775769357423
+    },
+    {
+      "name": "Write-Read completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769357423
+    },
+    {
+      "name": "Mentions version",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775769357423
+    },
+    {
+      "name": "Batch responds",
+      "pass": false,
+      "detail": "chars=0",
+      "timestamp": 1775769387038
+    },
+    {
+      "name": "Batch completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769387038
+    },
+    {
+      "name": "Batch file edits",
+      "pass": false,
+      "detail": "edits=0",
+      "timestamp": 1775769387039
+    },
+    {
+      "name": "Batch files created",
+      "pass": false,
+      "detail": "files=0",
+      "timestamp": 1775769392062
+    },
+    {
+      "name": "Read tool responds",
+      "pass": false,
+      "detail": "chars=0",
+      "timestamp": 1775769463220
+    },
+    {
+      "name": "Read tool completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775769463220
+    },
+    {
+      "name": "Read tool mentions content",
+      "pass": false,
+      "detail": "text=\"\"",
+      "timestamp": 1775769463220
+    }
+  ]
+}

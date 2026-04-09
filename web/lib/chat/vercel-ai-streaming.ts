@@ -559,8 +559,77 @@ export async function* streamWithVercelAI(
       toolNames: tools ? Object.keys(tools) : [],
     });
 
+    // PROVIDER-SPECIFIC FC FIX: Some providers (NVIDIA NIM) report supportsFC=true
+    // but specific models don't actually support function calling and return 400.
+    // Strip tools upfront for known incompatible provider+model combos.
+    let skipTools = false;
     if (tools && Object.keys(tools).length > 0) {
+      const nvidiaNonFCModels = [
+        'google/gemma-3-27b-it',
+        'google/gemma-3-12b-it',
+        'google/gemma-3-4b-it',
+        'meta/llama-3.1-8b-instruct',
+        'meta/llama-3.1-70b-instruct',
+        'meta/llama-3.3-70b-instruct',
+      ];
+      if (provider === 'nvidia' && nvidiaNonFCModels.some(m => modelName.includes(m))) {
+        skipTools = true;
+        chatLogger.warn('[FC-BYPASS] NVIDIA model does not support function calling despite SDK reporting otherwise', {
+          provider,
+          model: modelName,
+          action: 'Stripping tools and using text-mode fallback',
+          knownIssue: 'NVIDIA NIM returns 400 "DEGRADED function cannot be invoked" for tool calls on these models',
+        });
+      }
+    }
+
+    if (tools && Object.keys(tools).length > 0 && !skipTools) {
       streamOptions.tools = tools;
+    } else if (skipTools && tools) {
+      chatLogger.warn('[TOOLS-STRIP] Provider-specific tool stripping applied', {
+        provider,
+        model: modelName,
+        strippedToolCount: Object.keys(tools).length,
+        reason: 'provider API returns 400 for tool calls on this model',
+      });
+      // Inject text-mode tool instructions since tools were stripped
+      const TEXT_MODE_TOOL_INSTRUCTIONS = `
+FILE OPERATIONS — You do NOT have tool calls. Use EXACTLY these text formats:
+
+CREATE OR OVERWRITE A FILE:
+\`\`\`file: path/to/file.ext
+your full file content here
+\`\`\`
+
+EDIT EXISTING FILE (preferred — use unified diff):
+\`\`\`diff: path/to/file.ext
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ existing @@
+-line to remove
++line to add
+\`\`\`
+
+CREATE DIRECTORY:
+\`\`\`mkdir: path/to/directory
+\`\`\`
+
+DELETE FILE:
+\`\`\`delete: path/to/file.ext
+\`\`\`
+
+RULES:
+- Always use the exact fence format shown above.
+- For existing files, prefer diff edits over full rewrites.
+- For new files, write the complete content.
+- Do NOT use backtick code blocks for anything else that starts with "file:" or "diff:".
+- Do NOT invent file paths — use paths the user provided or that exist in the project.
+`;
+      if (streamOptions.system) {
+        streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
+      } else {
+        streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
+      }
     } else {
       // Log when tools are NOT provided (different from FC check)
       chatLogger.warn('[TOOLS] ⚠ No tools provided to stream - file operations will use text parsing only', {

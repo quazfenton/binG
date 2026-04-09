@@ -1074,7 +1074,12 @@ export function extractFileEdits(content: string): FileEdit[] {
     content.includes('```diff') ||
     content.includes('```mkdir:') ||
     content.includes('```delete:') ||
-    (content.includes('"tool"') && content.includes('"arguments"'));
+    (content.includes('"tool"') && content.includes('"arguments"')) ||
+    content.includes('<|tool_call_begin|>') ||
+    (content.includes('```') && /\bbatch_write|write_files|create_files/i.test(content)) ||
+    content.includes('```tool_call') ||
+    content.includes('```tool-call') ||
+    content.includes('```toolcall');
 
   if (!hasAnyMarker) {
     return [];
@@ -1338,6 +1343,21 @@ export function extractFileEdits(content: string): FileEdit[] {
   // Require both opening and closing tags to avoid false positives on SVG/XML content
   if (content.includes('<path>') && content.includes('</path>')) {
     allEdits.push(...extractMalformedFileEdits(content));
+  }
+
+  // Format A — Special-token tool calls (<|tool_call_begin|> ... <|tool_call_end|>)
+  if (content.includes('<|tool_call_begin|>')) {
+    allEdits.push(...extractSpecialTokenToolCalls(content));
+  }
+
+  // Format B — Fenced batch_write (```javascript\nbatch_write([...])\n```)
+  if (content.includes('```') && /\bbatch_write|write_files|create_files/i.test(content)) {
+    allEdits.push(...extractFencedBatchWrite(content));
+  }
+
+  // Format C — ```tool_call fenced blocks
+  if (/```tool[-_]?call/i.test(content)) {
+    allEdits.push(...extractToolCallFencedBlock(content));
   }
 
   // Deduplicate by path (first occurrence wins)
@@ -1745,6 +1765,212 @@ export function extractFlatJsonToolCalls(content: string): FileEdit[] {
     }
   }
 
+  return edits;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// Format A — Special-token tool calls (<|tool_call_begin|> ... <|tool_call_end|>)
+// Format B — Fenced batch_write (```javascript\nbatch_write([...])\n```)
+// Format C — ```tool_call fenced blocks
+// ═══════════════════════════════════════════════════════════════════════════
+
+function findJsonEnd(text: string, start: number): number {
+  const opening = text[start];
+  if (opening !== '{' && opening !== '[') return -1;
+  const closing = opening === '{' ? '}' : ']';
+  let depth = 0, inStr = false, esc = false;
+  for (let i = start; i < text.length; i++) {
+    const ch = text[i];
+    if (esc) { esc = false; continue; }
+    if (ch === '\\' && inStr) { esc = true; continue; }
+    if (ch === '"') { inStr = !inStr; continue; }
+    if (inStr) continue;
+    if (ch === opening) depth++;
+    else if (ch === closing) { depth--; if (depth === 0) return i + 1; }
+  }
+  return -1;
+}
+
+function extractJsonString(source: string): { value: string; endOffset: number } | null {
+  if (!source.startsWith('"')) return null;
+  let i = 1, out = '', innerBrace = 0, innerBracket = 0;
+  while (i < source.length) {
+    const ch = source[i];
+    if (ch === '\\' && i + 1 < source.length) {
+      const next = source[i + 1];
+      switch (next) {
+        case 'n': out += '\n'; break; case 't': out += '\t'; break;
+        case 'r': out += '\r'; break; case '"': out += '"'; break;
+        case '\\': out += '\\'; break; case '/': out += '/'; break;
+        default: out += next; break;
+      }
+      i += 2; continue;
+    }
+    if (ch === '\n') { out += '\n'; i++; continue; }
+    if (ch === '\r') { i++; continue; }
+    if (ch === '{') innerBrace++; else if (ch === '}') innerBrace--;
+    else if (ch === '[') innerBracket++; else if (ch === ']') innerBracket--;
+    if (ch === '"' && innerBrace === 0 && innerBracket === 0) return { value: out, endOffset: i + 1 };
+    out += ch; i++;
+  }
+  return { value: out, endOffset: i };
+}
+
+function extractFilesRobust(body: string): Array<{ path: string; content: string }> {
+  const results: Array<{ path: string; content: string }> = [];
+  const pathRe = /"path"\s*:\s*"([^"]+)"/g;
+  let m: RegExpExecArray | null;
+  while ((m = pathRe.exec(body)) !== null) {
+    const path = m[1].trim();
+    if (!path) continue;
+    const contentKeyIdx = body.indexOf('"content"', m.index + m[0].length);
+    if (contentKeyIdx === -1) continue;
+    const afterColon = body.slice(contentKeyIdx + '"content"'.length).trimStart();
+    if (!afterColon.startsWith(':')) continue;
+    const val = afterColon.slice(1).trimStart();
+    let contentValue = '';
+    if (val.startsWith('"')) {
+      const extracted = extractJsonString(val);
+      if (extracted) contentValue = extracted.value;
+    } else if (val.startsWith('{') || val.startsWith('[')) {
+      const end = findJsonEnd(val, 0);
+      if (end !== -1) {
+        try { contentValue = JSON.stringify(JSON.parse(val.slice(0, end)), null, 2); } catch { contentValue = val.slice(0, end); }
+      }
+    }
+    if (contentValue) results.push({ path, content: contentValue });
+  }
+  return results;
+}
+
+function filesArrayToEdits(files: unknown[], out: FileEdit[], seenPaths: Set<string>): void {
+  for (const file of files) {
+    if (!file || typeof file !== 'object') continue;
+    const f = file as Record<string, unknown>;
+    const rawPath = f.path ?? f.file ?? f.filename;
+    if (typeof rawPath !== 'string' || !rawPath.trim()) continue;
+    const path = rawPath.trim();
+    if (!isValidExtractedPath(path)) continue;
+    if (seenPaths.has(path)) continue;
+    const rawContent = f.content ?? f.data ?? f.body ?? f.text ?? f.source;
+    let content: string;
+    if (typeof rawContent === 'string') { content = rawContent; }
+    else if (rawContent !== undefined && rawContent !== null) {
+      try { content = JSON.stringify(rawContent, null, 2); } catch { continue; }
+    } else { continue; }
+    if (!content.trim()) continue;
+    seenPaths.add(path);
+    out.push({ path, content });
+  }
+}
+
+export function extractSpecialTokenToolCalls(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  if (!content.includes('<|tool_call')) return edits;
+  const blockRe = /<\|tool_call_begin\|>\s*([\w.:-]+)\s*(?:<\|tool_call_argument_begin\|>)?\s*([\s\S]*?)<\|tool_call_end\|>/gi;
+  let block: RegExpExecArray | null;
+  while ((block = blockRe.exec(content)) !== null) {
+    const toolFull = block[1] ?? '';
+    const toolName = toolFull.replace(/^[^.]+\./, '').replace(/:\d+$/, '');
+    const body = (block[2] ?? '').trim();
+    if (!body) continue;
+    const firstBrace = body.search(/[{[]/);
+    if (firstBrace === -1) continue;
+    const seenPaths = new Set<string>();
+    const endIdx = findJsonEnd(body, firstBrace);
+    if (endIdx !== -1) {
+      try {
+        const parsed = JSON.parse(body.slice(firstBrace, endIdx)) as Record<string, unknown>;
+        const files = parsed.files ?? parsed.data ?? parsed.items;
+        if (Array.isArray(files)) { filesArrayToEdits(files, edits, seenPaths); continue; }
+        if (typeof parsed.path === 'string') { filesArrayToEdits([parsed], edits, seenPaths); continue; }
+        continue;
+      } catch { /* fall through */ }
+    }
+    const robustFiles = extractFilesRobust(body.slice(firstBrace));
+    for (const f of robustFiles) {
+      if (!isValidExtractedPath(f.path) || seenPaths.has(f.path)) continue;
+      seenPaths.add(f.path);
+      edits.push({ path: f.path, content: f.content });
+    }
+  }
+  return edits;
+}
+
+export function extractFencedBatchWrite(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  if (!content.includes('```')) return edits;
+  const BATCH_TOOL_RE = /\b(batch_write|write_files?|create_files?|batch_create)\s*\(\s*/gi;
+  if (!BATCH_TOOL_RE.test(content)) return edits;
+  BATCH_TOOL_RE.lastIndex = 0;
+  let pos = 0;
+  const FENCE = '```';
+  while (pos < content.length) {
+    const openIdx = content.indexOf(FENCE, pos);
+    if (openIdx === -1) break;
+    const bodyStart = content.indexOf('\n', openIdx + FENCE.length);
+    if (bodyStart === -1) break;
+    const closeIdx = content.indexOf(FENCE, bodyStart + 1);
+    if (closeIdx === -1) break;
+    const blockBody = content.slice(bodyStart + 1, closeIdx);
+    pos = closeIdx + FENCE.length;
+    BATCH_TOOL_RE.lastIndex = 0;
+    let callMatch: RegExpExecArray | null;
+    while ((callMatch = BATCH_TOOL_RE.exec(blockBody)) !== null) {
+      const afterParen = callMatch.index + callMatch[0].length;
+      const firstChar = blockBody[afterParen];
+      if (firstChar !== '[' && firstChar !== '{') continue;
+      const endIdx = findJsonEnd(blockBody, afterParen);
+      if (endIdx === -1) continue;
+      const argSlice = blockBody.slice(afterParen, endIdx);
+      let files: unknown[] | undefined;
+      try {
+        const parsed = JSON.parse(argSlice);
+        if (Array.isArray(parsed)) files = parsed;
+        else if (parsed && typeof parsed === 'object') {
+          const obj = parsed as Record<string, unknown>;
+          const inner = obj.files ?? obj.data ?? obj.items;
+          if (Array.isArray(inner)) files = inner;
+        }
+      } catch { /* skip */ }
+      if (files && files.length > 0) filesArrayToEdits(files, edits, new Set());
+    }
+  }
+  return edits;
+}
+
+export function extractToolCallFencedBlock(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+  const TOOL_CALL_FENCE_RE = /```(?:tool[-_]?call|TOOL[-_]?CALL)\s*\n/gi;
+  if (!TOOL_CALL_FENCE_RE.test(content)) return edits;
+  TOOL_CALL_FENCE_RE.lastIndex = 0;
+  const TOOL_NAME_KEYS = ['tool_name', 'toolName', 'name', 'tool', 'function', 'function_name'];
+  const ARGS_KEYS = ['parameters', 'arguments', 'args', 'params', 'input'];
+  let fenceMatch: RegExpExecArray | null;
+  while ((fenceMatch = TOOL_CALL_FENCE_RE.exec(content)) !== null) {
+    const bodyStart = fenceMatch.index + fenceMatch[0].length;
+    const closeIdx = content.indexOf('```', bodyStart);
+    if (closeIdx === -1) break;
+    const blockBody = content.slice(bodyStart, closeIdx).trim();
+    if (!blockBody.startsWith('{')) continue;
+    let parsed: Record<string, unknown> | undefined;
+    try { parsed = JSON.parse(blockBody) as Record<string, unknown>; }
+    catch { try { parsed = JSON.parse(blockBody.replace(/,(\s*[}\]])/g, '$1')) as Record<string, unknown>; } catch { continue; } }
+    if (!parsed || Array.isArray(parsed)) continue;
+    let toolName = '';
+    for (const key of TOOL_NAME_KEYS) { if (typeof parsed[key] === 'string') { toolName = parsed[key] as string; break; } }
+    if (!toolName) continue;
+    let args: Record<string, unknown> = parsed;
+    for (const key of ARGS_KEYS) {
+      if (parsed[key] && typeof parsed[key] === 'object' && !Array.isArray(parsed[key])) {
+        args = parsed[key] as Record<string, unknown>; break;
+      }
+    }
+    const rawFiles = args.files ?? args.items ?? args.data ?? (typeof args.path === 'string' ? [args] : null);
+    if (!rawFiles) continue;
+    const fileList = Array.isArray(rawFiles) ? rawFiles : [rawFiles];
+    filesArrayToEdits(fileList, edits, new Set());
+  }
   return edits;
 }
 
