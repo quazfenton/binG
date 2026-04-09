@@ -126,12 +126,17 @@ app.prepare().then(startup).then(() => {
 
     // Handle stream control WebSocket upgrade (LLM streaming control signals)
     if (isStreamControl) {
+      // Guard: socket may have been destroyed by a concurrent handler or timeout
+      if (socket.destroyed) return;
       try {
         const { handleStreamControlUpgrade } = await import('@/lib/streaming/stream-control-handler');
-        await handleStreamControlUpgrade(req, socket, head);
+        // Re-check socket after dynamic import
+        if (!socket.destroyed) {
+          await handleStreamControlUpgrade(req, socket, head);
+        }
       } catch (err: any) {
         logger.error('Stream control WebSocket upgrade failed', err);
-        socket.destroy();
+        if (!socket.destroyed) socket.destroy();
       }
       return;
     }

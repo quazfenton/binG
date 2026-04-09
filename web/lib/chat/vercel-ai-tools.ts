@@ -80,8 +80,8 @@ export interface ToolSet {
  * Capabilities use full Zod schemas (object, optional, describe, etc.) but Vercel AI
  * requires a ZodObject for the `parameters` field. This function:
  * 1. Passes through ZodObject schemas unchanged
- * 2. Wraps non-object schemas in a root object
- * 3. Falls back to z.object({}) for undefined/null schemas
+ * 2. Unwraps ZodEffects/ZodOptional/ZodLazy to find inner ZodObject
+ * 3. Falls back to z.object({}) for non-object schemas
  */
 function toToolParameters(schema: z.ZodSchema | undefined): z.ZodObject<z.ZodRawShape> {
   if (!schema) {
@@ -93,29 +93,46 @@ function toToolParameters(schema: z.ZodSchema | undefined): z.ZodObject<z.ZodRaw
     return schema;
   }
 
-  // ZodEffects (e.g., .optional(), .refine()) — unwrap to inner type
-  if (schema instanceof z.ZodEffects || schema instanceof z.ZodBranded) {
-    const inner = (schema as any)._def.schema || (schema as any).unwrap?.();
-    if (inner instanceof z.ZodObject) {
-      return inner;
-    }
-    // If inner is still wrapped, try recursively
-    if (inner && (inner instanceof z.ZodEffects || inner instanceof z.ZodOptional)) {
-      return toToolParameters(inner);
+  // Unwrap wrapper types recursively
+  const typeName = (schema as any)._def?.typeName;
+
+  // ZodOptional, ZodNullable — unwrap
+  if (typeName === 'ZodOptional' || typeName === 'ZodNullable') {
+    const inner = (schema as any).unwrap?.();
+    if (inner) return toToolParameters(inner);
+  }
+
+  // ZodEffects (includes .refine(), .transform(), .pipe(), branded)
+  if (typeName === 'ZodEffects') {
+    const inner = (schema as any)._def?.schema;
+    if (inner) return toToolParameters(inner);
+  }
+
+  // ZodLazy — evaluate and recurse
+  if (typeName === 'ZodLazy') {
+    try {
+      const inner = (schema as any)._def?.getter?.();
+      if (inner) return toToolParameters(inner);
+    } catch {
+      // Lazy getter failed, fall through
     }
   }
 
-  // ZodOptional wrapping an object
-  if (schema instanceof z.ZodOptional) {
-    const inner = schema.unwrap();
-    if (inner instanceof z.ZodObject) {
-      return inner;
-    }
+  // ZodDefault — use inner schema
+  if (typeName === 'ZodDefault') {
+    const inner = (schema as any)._def?.innerType;
+    if (inner) return toToolParameters(inner);
   }
 
-  // Fallback: empty object with warning
+  // ZodCatch — use inner schema
+  if (typeName === 'ZodCatch') {
+    const inner = (schema as any)._def?.innerType;
+    if (inner) return toToolParameters(inner);
+  }
+
+  // Fallback: not a ZodObject and not a known wrapper
   chatLogger.warn('Capability schema is not a ZodObject, using empty params', {
-    schemaType: schema._def?.typeName || schema.constructor?.name,
+    schemaType: typeName || schema.constructor?.name || 'unknown',
   });
   return z.object({}).describe('Parameters not available');
 }
@@ -230,18 +247,16 @@ async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<s
     for (const toolDef of mcpToolDefs) {
       const { name, description, parameters } = toolDef.function;
 
-      // Convert parameter schema if available — preserve it instead of falling back to z.any()
+      // Convert parameter schema — MCP tools typically pass JSON Schema objects,
+      // not Zod schemas. We preserve Zod schemas when present, otherwise use a
+      // descriptive empty object schema.
       let toolParams: z.ZodType<unknown>;
-      if (parameters && typeof parameters === 'object') {
-        // If parameters is already a Zod schema, use it
-        if (typeof (parameters as z.ZodType<unknown>)._def === 'object') {
-          toolParams = parameters as z.ZodType<unknown>;
-        } else {
-          // Otherwise, build an object schema from the JSON schema
-          toolParams = z.object({}).describe(description || name);
-        }
+      if (parameters && typeof parameters === 'object' && '_def' in parameters && 'parse' in parameters) {
+        // Looks like a Zod schema — use directly
+        toolParams = parameters as z.ZodType<unknown>;
       } else {
-        toolParams = z.object({}).describe(description || name);
+        // JSON Schema or undefined — use descriptive empty object
+        toolParams = z.object({}).describe(description || `MCP tool: ${name}`);
       }
 
       const isVFSTool = name.startsWith('write_') || name.startsWith('read_') || name.startsWith('list_') ||
@@ -394,8 +409,8 @@ export function createToolSet(
     }
   }
 
-  // Capability chain tool
-  if (includeCapabilityChain && priority.includes('capability-chain')) {
+  // Capability chain tool — always included when requested (it's a meta-tool, not a capability)
+  if (includeCapabilityChain) {
     sourceTools['capability-chain'] = createCapabilityChainTool(context);
   }
 
@@ -417,6 +432,15 @@ export function createToolSet(
         continue;
       }
       merged[name] = t;
+    }
+  }
+
+  // Add capability-chain tool if enabled (not subject to priority shadowing)
+  if (includeCapabilityChain && sourceTools['capability-chain']) {
+    for (const [name, t] of Object.entries(sourceTools['capability-chain'])) {
+      if (!merged[name]) {
+        merged[name] = t;
+      }
     }
   }
 

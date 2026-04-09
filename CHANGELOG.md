@@ -663,5 +663,72 @@ curl -X POST http://localhost:3000/api/filesystem/write \
 ### 🔌 Arcade SDK Scopes — Object Form
 
 - **`client.auth.start()` scopes format** — Updated to use object form `{ scopes: [...] }` instead of plain array. Matches Arcade SDK docs for Discord (`{ scopes: ["identify", "email", "guilds", "guilds.join"] }`), Google, and GitHub. Falls back to no-scopes call when scopes not provided.
-- **Discord + Reddit → Arcade** — Added to `ARCADE_PROVIDERS` set in IntegrationPanel so `getProviderAuthConfig()` returns `{ method: 'arcade' }` for these providers (Arcade SDK preferred over Nango).                              
+- **Discord + Reddit → Arcade** — Added to `ARCADE_PROVIDERS` set in IntegrationPanel so `getProviderAuthConfig()` returns `{ method: 'arcade' }` for these providers (Arcade SDK preferred over Nango).
 
+---
+
+## Streaming Improvements + Prompt Composer + Tool Adapter Refactor + Antigravity OAuth
+
+### 🎯 WebSocket Control Channel (No Extra Ports)
+- **Integrated into existing Next.js server** — Stream control WebSocket runs on the same port (3000) via path-based routing (`/stream-control`). No separate port, no firewall changes, no Docker config needed.
+- **`web/lib/streaming/stream-control-handler.ts`** — Handles WS upgrades for LLM control signals: `pause`, `resume`, `continue`, `abort`, `request_state`, `set_max_tokens`. Replaces the `[CONTINUE_REQUESTED]` text hack with structured bidirectional events.
+- **`web/lib/streaming/stream-state-manager.ts`** — Server-side stream state tracking: token counting, content capping (2MB), pause buffer (5MB cap), continuation promise system, abort safety. Supports concurrent streams with per-stream isolation.
+- **`web/hooks/use-stream-control.ts`** — Client hook that auto-connects when `streamId` arrives from SSE `init` event. Auto-reconnects with exponential backoff (5 attempts). Handles `need_more_turns` events for automatic continuation.
+- **`web/server.ts`** — Added `/stream-control` path to WS upgrade handler with async socket safety guards.
+
+### 🧩 Prompt Composer — Dynamic Tool Injection
+- **`packages/shared/agent/prompt-composer.ts`** (589 lines) — Decomposes 6500+ lines of monolithic prompts into composable sections. Parses at module load time, caches per role.
+- **Dynamic tool blocks** — `generateDynamicToolBlock()` reads from `ALL_CAPABILITIES` registry, replacing hardcoded `TOOL_CAPABILITIES` markdown. Tools always in sync with capability definitions.
+- **A/B testing** — Register alternate section versions via `registerSection()`, compose with `composeRole('coder', {directives: getSectionTemplate('directives.v2')})`.
+- **Three usage modes**: (1) Backwards compat: `SYSTEM_PROMPTS.coder` unchanged. (2) Dynamic tools: `composeRoleWithTools('coder', {availableTools: [...]})`. (3) A/B sections: `composeRole('coder', {directives: v2Section})`.
+
+### 🔧 Vercel AI Tool Adapter — Type Safety + Priority Filtering
+- **Eliminated all `(tool as any)` casts** — 6 unsafe type casts replaced with proper `tool({})` usage.
+- **Schema preservation** — `toToolParameters()` unwraps ZodEffects/ZodOptional/ZodLazy to preserve original Zod schemas. No more `z.record(z.any())` fallbacks.
+- **Real priority filtering** — `createToolSet({priority: ['vfs', 'capability', 'mcp']})` properly deduplicates: higher-priority sources shadow same-named tools from lower sources.
+- **`web/lib/chat/vercel-ai-tools.ts`** — Complete rewrite: `createToolSet()`, `getAllTools()`, `composeRoleWithTools()` for type-safe tool creation with proper error handling.
+
+### 🔐 Antigravity OAuth (Per-User + Master Account)
+- **`web/lib/llm/antigravity-provider.ts`** — Complete OAuth implementation with PKCE, token refresh, Google/Anthropic API routing. Uses Google's Antigravity OAuth credentials (same as upstream opencode-antigravity-auth plugin).
+- **Master + per-user accounts** — Users connect their own Google accounts via OAuth. Server-level master account (env var) acts as fallback. Account rotation on rate limits.
+- **`web/lib/database/antigravity-accounts.ts`** — SQLite storage with master account injection from env vars.
+- **Admin routes** — `/api/antigravity/admin/*` for master account setup. `/admin/antigravity/setup` page with secure token display (httpOnly cookie, not URL params).
+- **`web/lib/auth/admin.ts`** — Shared admin authentication helper with `ADMIN_USER_IDS` env var support.
+
+### ⬆️ Max Tokens Defaults
+- **`vercel-ai-streaming.ts`**: 4096 → **65536**
+- **`llm-providers.ts`**: 2000 → **65536**
+- **`parameter-optimizer.ts`**: complex 5000 → **32768**, simple 3000 → **8192**, content length cap 8000 → **65536**
+
+### 🧪 Tests Added
+- **`web/__tests__/stream-state-manager.test.ts`** — State lifecycle: create, append, pause/resume, abort, complete, continuation limits, content capping.
+- **`web/__tests__/prompt-composer.test.ts`** — Section parsing, tool block generation, tool hints, section registry, role composition.
+
+### 🗑️ Deleted
+- **`web/lib/streaming/stream-control-websocket.ts`** — Replaced by integrated `stream-control-handler.ts` (no separate port needed).
+
+---
+
+## [Unreleased] - Tool Telemetry, Smart Retries, Unified Context, Provider Hardening  
+- **Per-model tool execution tracking** - Each tool call (+1 success, -1 failure) is recorded to SQLite with model, provider, tool name, error details, and deduplication by `toolCallId`.  
+- **Smart retry model selection** - `getRetryModel()` uses gated selection: minimum 3 tool calls, �50% success rate, composite score (70% tool performance + 30% latency), prefers models different from the failed one.  
+- **Prevents bad retry choices** - Won't pick a model with 1 successful `read_file` but 10 failed writes; won't always choose the same expensive/rate-limited model; won't pick a known-broken model.  
+- **Deduplication** - Both `tool_invocation` stream handler and `onToolExecution` callback previously double-counted tool calls. Fixed by tracking `toolCallId` in a capped Set (max 10K entries).  
+  
+### ?? Structured Tool Results (P2 #7)  
+- **Replaced JSON.stringify blobs** - Tool results now use `ToolResult` interface with typed fields: `success`, `output`, `error` (with `type`, `message`, `suggestions`, `missingDependencies`), and `summary`.  
+- **Self-healing gets structured errors** - `classifyToolError()` detects dependency, filesystem, timeout, and validation errors with actionable suggestions instead of regex-on-stderr.  
+  
+### ?? Agent Orchestrator Hardening (P2 #9)  
+- **Replaced @ts-expect-error manual tool conversion** - Now uses `aiTool()` with typed Zod parameters.  
+- **Zod config validation** - `IterationConfigSchema` validates all env config with min/max bounds and sensible defaults.  
+- **Typed event payloads** - All `OrchestratorEvent` types are specific (no `any`).  
+  
+### ?? Unified Context Builder  
+- **Single token estimator** - `estimateTokens()` uses 3.8 chars/token ratio across ALL callers (was 3 separate ratios: 3.5, 4, bytes/4).  
+- **4 format serializers** - `buildContext()` now outputs markdown/xml/json/plain based on `opts.format` (default: json).  
+- **Post-budget re-counting** - After serialization, re-counts tokens on final text for accuracy.  
+- **`buildSystemPrompt()` adapts to format** - Different instructions for JSON vs XML vs markdown.  
+  
+### ?? Progressive Tree Pruning  
+- **Abbreviated trees** - `buildAbbreviatedTree()` shows only folders + referenced files; unrelated leaves become `... N more file(s)`.  

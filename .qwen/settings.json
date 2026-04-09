@@ -20,6 +20,9 @@
       "Bash(findstr *)",
       "Bash(curl *)",
       "Bash(fc *)"
+    ],
+"exclude": [
+      "Bash(git checkout)"
     ]
   },
   "$version": 3

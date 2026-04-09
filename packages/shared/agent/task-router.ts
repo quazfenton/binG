@@ -4,6 +4,11 @@
  * hardcoded keyword arrays.
  */
 
+import { createLogger } from '@/lib/utils/logger';
+
+// Create a logger instance for task-router
+const logger = createLogger('TaskRouter');
+
 /**
  * Map an intent match to a task type and routing target.
  * This replaces the old switch statement with a data-driven approach.
@@ -183,14 +188,15 @@ class TaskRouter {
       'show me', 'find', 'list', 'get', 'just',
     ];
     const lowerTask = task.toLowerCase();
-    
+
     // Has simple indicator but no action keywords
     const hasSimpleIndicator = simpleIndicators.some(i => lowerTask.includes(i));
-    const hasActionKeywords = this.scoreKeywords(lowerTask, [
+    const actionKeywords = [
       'build', 'create', 'implement', 'write', 'make', 'develop',
       'fix', 'refactor', 'deploy', 'run', 'execute', 'automate',
-    ]) > 0;
-    
+    ];
+    const hasActionKeywords = actionKeywords.some(k => lowerTask.includes(k));
+
     return hasSimpleIndicator && !hasActionKeywords;
   }
 
