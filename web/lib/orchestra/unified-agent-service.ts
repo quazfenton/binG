@@ -142,7 +142,7 @@ export interface StartupCapabilities {
  * remote agent modes when they're not even set up (causing 12-15 retries
  * before finally falling back to v1-api).
  */
-function checkStartupCapabilities(): StartupCapabilities {
+export function checkStartupCapabilities(): StartupCapabilities {
   const llmProvider = process.env.LLM_PROVIDER || '';
   const sandboxProvider = process.env.SANDBOX_PROVIDER || '';
   const containerized = process.env.OPENCODE_CONTAINERIZED === 'true';

@@ -38,7 +38,8 @@ export async function registerScheduleTools(
   config: BootstrapConfig
 ): Promise<number> {
   // Skip if basic schedule tools already registered by bootstrap-events.ts
-  if (basicScheduleRegistered) {
+  // FIX: Also check registry state — module-level guard persists across registry.clear() (e.g., tests)
+  if (basicScheduleRegistered && registry.getTool('task.schedule')) {
     logger.debug('Basic schedule tools already registered, skipping');
     return 0;
   }

@@ -73,7 +73,12 @@ export interface AgentQuota {
 }
 
 /**
- * Agent configuration
+ * Agent configuration for creating new agents
+ * @property type - Agent lifecycle type (ephemeral, persistent, daemon, worker)
+ * @property userId - Owner of the agent
+ * @property goal - Agent's objective/task
+ * @property priority - Execution priority (critical, high, normal, low)
+ * @property resources - Optional resource limits
  */
 export interface AgentConfig {
   id?: string;
@@ -88,6 +93,32 @@ export interface AgentConfig {
   checkpointInterval?: number;
   tools?: string[];
   context?: Record<string, unknown>;
+  metadata?: Record<string, unknown>;
+}
+
+/**
+ * Agent instance - represents a running agent in the kernel
+ * @property id - Unique identifier
+ * @property config - Agent configuration
+ * @property status - Current lifecycle state
+ * @property priority - Execution priority
+ */
+export interface Agent {
+  id: string;
+  config: AgentConfig;
+  status: AgentStatus;
+  priority: AgentPriority;
+  createdAt: number;
+  startedAt?: number;
+  completedAt?: number;
+  iterations: number;
+  quota: AgentQuota;
+  resources: AgentResources;
+  children: string[];
+  parent?: string;
+  checkpointId?: string;
+  result?: unknown;
+  error?: string;
   metadata?: Record<string, unknown>;
 }
 
@@ -216,9 +247,13 @@ export class AgentKernel extends EventEmitter {
   private memoryUsed = 0;
   
   // Scheduling config
-  private maxConcurrentAgents = parseInt(process.env.KERNEL_MAX_CONCURRENT_AGENTS || '8', 10);
-  private maxComputePerMinute = parseInt(process.env.KERNEL_MAX_COMPUTE_PER_MINUTE || '300000', 10);
-  private timeSlice = parseInt(process.env.KERNEL_TIME_SLICE || '60000', 10);
+  private maxConcurrentAgents = Math.max(1, parseInt(process.env.KERNEL_MAX_CONCURRENT_AGENTS || '8', 10) || 8);
+  private maxComputePerMinute = Math.max(1000, parseInt(process.env.KERNEL_MAX_COMPUTE_PER_MINUTE || '300000', 10) || 300000);
+  private timeSlice = Math.max(1000, parseInt(process.env.KERNEL_TIME_SLICE || '60000', 10) || 60000);
+  
+  // Rate limiting config
+  private maxAgentsPerUserPerMinute = Math.max(1, parseInt(process.env.KERNEL_MAX_AGENTS_PER_USER_PER_MINUTE || '10', 10) || 10);
+  private userAgentTimestamps = new Map<string, number[]>();
   
   // Self-healing config
   private maxRetries = 3;
@@ -295,6 +330,19 @@ export class AgentKernel extends EventEmitter {
    * Spawn a new agent (create and start)
    */
   async spawnAgent(config: AgentConfig): Promise<string> {
+    // Rate limiting: prevent agent spam per user
+    const now = Date.now();
+    const userId = config.userId;
+    const userTimestamps = this.userAgentTimestamps.get(userId) || [];
+    const recentTimestamps = userTimestamps.filter(ts => now - ts < 60000);
+    
+    if (recentTimestamps.length >= this.maxAgentsPerUserPerMinute) {
+      logger.warn('Agent creation rate limit exceeded', { userId, count: recentTimestamps.length });
+      throw new Error(`Rate limit exceeded: max ${this.maxAgentsPerUserPerMinute} agents per minute`);
+    }
+    
+    this.userAgentTimestamps.set(userId, [...recentTimestamps, now]);
+    
     const agentId = config.id || `agent-${randomUUID()}`;
     
     const defaultResources: AgentResources = {
@@ -435,7 +483,7 @@ export class AgentKernel extends EventEmitter {
 
   /**
    * Terminate an agent
-   */
+    */
   async terminateAgent(agentId: string, reason = 'manual'): Promise<boolean> {
     const agent = this.agents.get(agentId);
     if (!agent) return false;
@@ -447,6 +495,12 @@ export class AgentKernel extends EventEmitter {
     this.removeFromQueue(this.readyQueue, agentId);
     this.removeFromQueue(this.pendingQueue, agentId);
     this.removeFromQueue(this.pendingWork, agentId);
+    
+    const pendingTimeout = this.pendingTimeouts.get(agentId);
+    if (pendingTimeout) {
+      clearTimeout(pendingTimeout);
+      this.pendingTimeouts.delete(agentId);
+    }
     
     agent.status = 'terminated';
     agent.completedAt = Date.now();
@@ -575,6 +629,9 @@ export class AgentKernel extends EventEmitter {
   }
 
   private promotePendingAgents(): void {
+    const runningCount = Array.from(this.agents.values())
+      .filter(a => a.status === 'running').length;
+    
     const pending: string[] = [];
     
     for (const priority of ['critical', 'high', 'normal', 'low'] as AgentPriority[]) {
@@ -585,32 +642,36 @@ export class AgentKernel extends EventEmitter {
       const agent = this.agents.get(agentId);
       if (!agent) continue;
       
-      const runningCount = Array.from(this.agents.values())
+      const currentRunning = Array.from(this.agents.values())
         .filter(a => a.status === 'running').length;
       
-      if (runningCount < this.maxConcurrentAgents && this.checkResources(agent)) {
+      if (currentRunning < this.maxConcurrentAgents && this.checkResources(agent)) {
         this.removeFromQueue(this.pendingQueue, agentId);
         this.readyQueue.enqueue(agentId, agent.priority);
         agent.status = 'ready';
         
-        logger.debug('Agent promoted to ready', { agentId, runningCount });
+        logger.debug('Agent promoted to ready', { agentId, runningCount: currentRunning });
       }
     }
   }
 
   private dispatchReadyAgents(): void {
-    let runningCount = Array.from(this.agents.values())
+    const runningCount = Array.from(this.agents.values())
       .filter(a => a.status === 'running').length;
     
-    while (runningCount < this.maxConcurrentAgents) {
+    let dispatched = runningCount;
+    
+    while (dispatched < this.maxConcurrentAgents) {
       const agentId = this.readyQueue.dequeue();
       if (!agentId) break;
       
       const agent = this.agents.get(agentId);
       if (!agent || agent.status !== 'ready') continue;
       
-      this.executeAgent(agent);
-      runningCount++;
+      this.executeAgent(agent).catch(err => {
+        logger.error('Agent execution failed', { agentId: agent.id, error: err instanceof Error ? err.message : String(err) });
+      });
+      dispatched++;
     }
   }
 
@@ -663,9 +724,10 @@ export class AgentKernel extends EventEmitter {
       }
       
       this.emit('agent:executed', { agentId: agent.id, result, iterations: agent.iterations });
-      
-    } catch (error: unknown) {
-      agent.error = error instanceof Error ? error.message : String(error);
+      this.emit('agent:completed', { agentId: agent.id, result, iterations: agent.iterations });
+    } catch (error) {
+      const errorMessage = error instanceof Error ? error.message : String(error);
+      agent.error = errorMessage;
       
       const retryCount = (agent.metadata?.retryCount as number) || 0;
       
@@ -678,6 +740,13 @@ export class AgentKernel extends EventEmitter {
       } else {
         agent.status = 'failed';
         agent.completedAt = Date.now();
+        this.workQueue.delete(agent.id);
+        this.removeFromQueue(this.pendingWork, agent.id);
+        const pendingTimeout = this.pendingTimeouts.get(agent.id);
+        if (pendingTimeout) {
+          clearTimeout(pendingTimeout);
+          this.pendingTimeouts.delete(agent.id);
+        }
         
         logger.error('Agent failed permanently', { agentId: agent.id, error: agent.error });
         this.emit('agent:failed', { agentId: agent.id, error: agent.error });
@@ -690,8 +759,9 @@ export class AgentKernel extends EventEmitter {
    * Delegates to actual agent implementations based on agent config
    */
   private async runAgentIteration(agent: Agent, workPayload?: unknown): Promise<unknown> {
-    const prompt = (workPayload as { task?: string })?.task || agent.config.goal;
-    const context = agent.config.context || {};
+    const payloadObj = workPayload && typeof workPayload === 'object' ? workPayload as { task?: string } : null;
+    const prompt = payloadObj?.task || agent.config.goal;
+    const context = agent.config.context && typeof agent.config.context === 'object' ? agent.config.context as Record<string, unknown> : {};
     
     logger.info('Running agent iteration', { 
       agentId: agent.id, 
@@ -700,7 +770,7 @@ export class AgentKernel extends EventEmitter {
     });
 
     try {
-      const agentType = (context as { agentType?: string }).agentType || this.inferAgentType(agent.config.goal, workPayload);
+      const agentType = (context.agentType as string) || this.inferAgentType(agent.config.goal, workPayload);
       
       switch (agentType) {
         case 'nullclaw':
@@ -716,8 +786,9 @@ export class AgentKernel extends EventEmitter {
         default:
           return await this.runDefaultAgent(agent, workPayload);
       }
-    } catch (error: unknown) {
-      logger.error('Agent iteration failed', { agentId: agent.id, error });
+    } catch (error) {
+      const errorMsg = error instanceof Error ? error.message : String(error);
+      logger.error('Agent iteration failed', { agentId: agent.id, error: errorMsg });
       throw error;
     }
   }
@@ -727,31 +798,77 @@ export class AgentKernel extends EventEmitter {
     const payloadObj = payload as { task?: string } | undefined;
     const payloadLower = payloadObj?.task?.toLowerCase() || '';
     
+    // Confidence scoring - pick highest weighted match
+    const scores: Record<string, number> = {
+      research: 0,
+      'skill-builder': 0,
+      'dag-workflow': 0,
+      consensus: 0,
+      nullclaw: 0,
+      default: 1, // fallback baseline
+    };
+    
+    // Research keywords (weight: 3)
     if (goalLower.includes('research') || goalLower.includes('investigate') || goalLower.includes('analyze')) {
-      return 'research';
+      scores.research += 3;
     }
-    if (goalLower.includes('skill') || goalLower.includes('build') || goalLower.includes('create')) {
-      return 'skill-builder';
-    }
-    if (goalLower.includes('workflow') || goalLower.includes('pipeline') || goalLower.includes('dag')) {
-      return 'dag-workflow';
-    }
-    if (goalLower.includes('consensus') || goalLower.includes('vote') || goalLower.includes('agree')) {
-      return 'consensus';
-    }
-    if (goalLower.includes('message') || goalLower.includes('discord') || goalLower.includes('telegram') || goalLower.includes('notify') || payloadLower.includes('discord')) {
-      return 'nullclaw';
+    if (goalLower.includes('find information') || goalLower.includes('look up') || goalLower.includes('search for')) {
+      scores.research += 2;
     }
     
-    return 'default';
+    // Skill-builder keywords (weight: 3)
+    if (goalLower.includes('skill') || goalLower.includes('build') || goalLower.includes('create')) {
+      scores['skill-builder'] += 3;
+    }
+    if (goalLower.includes('teach') || goalLower.includes('learn') || goalLower.includes('train')) {
+      scores['skill-builder'] += 2;
+    }
+    
+    // DAG-workflow keywords (weight: 3)
+    if (goalLower.includes('workflow') || goalLower.includes('pipeline') || goalLower.includes('dag')) {
+      scores['dag-workflow'] += 3;
+    }
+    if (goalLower.includes('dependent') || goalLower.includes('chain') || goalLower.includes('sequential')) {
+      scores['dag-workflow'] += 2;
+    }
+    
+    // Consensus keywords (weight: 3)
+    if (goalLower.includes('consensus') || goalLower.includes('vote') || goalLower.includes('agree')) {
+      scores.consensus += 3;
+    }
+    if (goalLower.includes('multiple') || goalLower.includes('majority') || goalLower.includes('decision')) {
+      scores.consensus += 2;
+    }
+    
+    // Nullclaw keywords (weight: 3)
+    if (goalLower.includes('message') || goalLower.includes('discord') || goalLower.includes('telegram') || goalLower.includes('notify')) {
+      scores.nullclaw += 3;
+    }
+    if (payloadLower.includes('discord') || goalLower.includes('send to')) {
+      scores.nullclaw += 2;
+    }
+    
+    // Find highest score
+    let maxScore = 0;
+    let bestMatch = 'default';
+    for (const [type, score] of Object.entries(scores)) {
+      if (score > maxScore) {
+        maxScore = score;
+        bestMatch = type;
+      }
+    }
+    
+    return bestMatch;
   }
 
   /**
    * Run Nullclaw agent (messaging, automation)
    */
   private async runNullclawAgent(agent: Agent, workPayload?: unknown): Promise<unknown> {
+    let nullclaw: { isNullclawAvailable: () => boolean; executeNullclawTask: (...args: unknown[]) => Promise<unknown> };
+    
     try {
-      const nullclaw = await import('./nullclaw-integration');
+      nullclaw = await import('./nullclaw-integration');
       
       if (!nullclaw.isNullclawAvailable()) {
         logger.warn('Nullclaw not available, using fallback');
@@ -777,8 +894,8 @@ export class AgentKernel extends EventEmitter {
         result: result.result,
         taskId: result.id,
       };
-    } catch (error) {
-      logger.warn('Nullclaw execution failed, using default', { error });
+    } catch (importError) {
+      logger.warn('Nullclaw execution failed, using default', { error: importError instanceof Error ? importError.message : String(importError) });
       return this.runDefaultAgent(agent, workPayload);
     }
   }
@@ -920,6 +1037,11 @@ export class AgentKernel extends EventEmitter {
   /**
    * Run default agent (fallback)
    */
+  /**
+   * @deprecated Agent type runners should be externalized to separate modules
+   * e.g., runNullclawAgent -> import from './nullclaw-runner.ts'
+   * Current implementation couples agent logic to the kernel scheduling
+   */
   private async runDefaultAgent(agent: Agent, workPayload?: unknown): Promise<unknown> {
     const payload = workPayload as { task?: string } | undefined;
     const prompt = payload?.task || agent.config.goal;
@@ -1001,8 +1123,9 @@ export class AgentKernel extends EventEmitter {
       if (agent.status === 'running' && agent.startedAt) {
         const runningTime = Date.now() - agent.startedAt;
         if (runningTime > this.timeSlice * 2) {
-          logger.warn('Agent may be stuck', { agentId: agent.id, runningTime });
+          logger.warn('Agent may be stuck, attempting recovery', { agentId: agent.id, runningTime });
           this.emit('agent:health-warning', { agentId: agent.id, issue: 'stuck' });
+          this.attemptAgentRecovery(agent);
         }
       }
       
@@ -1011,6 +1134,18 @@ export class AgentKernel extends EventEmitter {
         logger.warn('Agent approaching max retries', { agentId: agent.id, retryCount });
         this.emit('agent:health-warning', { agentId: agent.id, issue: 'retry-exhausted' });
       }
+    }
+  }
+
+  private attemptAgentRecovery(agent: Agent): void {
+    const runningCount = Array.from(this.agents.values()).filter(a => a.status === 'running').length;
+    if (runningCount < this.maxConcurrentAgents) {
+      this.readyQueue.enqueue(agent.id, agent.priority);
+      agent.status = 'ready';
+      logger.info('Agent recovered via re-queue', { agentId: agent.id });
+    } else {
+      agent.status = 'suspended';
+      logger.info('Agent suspended due to stuck state', { agentId: agent.id });
     }
   }
 
@@ -1024,6 +1159,30 @@ export class AgentKernel extends EventEmitter {
       }
     }
   }
+}
+
+// ============================================================================
+// Type-Safe Event Contract
+// ============================================================================
+
+/**
+ * Type-safe event contract for AgentKernel
+ * Use with: kernel.on('agent:spawned', (agent) => { ... })
+ */
+export interface AgentKernelEvents {
+  'kernel:started': () => void;
+  'kernel:stopped': () => void;
+  'kernel:error': (error: { message: string }) => void;
+  'agent:spawned': (agent: Agent) => void;
+  'agent:ready': (data: { agentId: string }) => void;
+  'agent:executed': (data: { agentId: string; result: unknown; iterations: number }) => void;
+  'agent:completed': (data: { agentId: string; result: unknown; iterations: number }) => void;
+  'agent:failed': (data: { agentId: string; error: string }) => void;
+  'agent:suspended': (data: { agentId: string; reason: string }) => void;
+  'agent:resumed': (data: { agentId: string }) => void;
+  'agent:terminated': (data: { agentId: string; reason: string }) => void;
+  'agent:checkpointed': (data: { agentId: string; checkpointId: string }) => void;
+  'agent:health-warning': (data: { agentId: string; issue: string }) => void;
 }
 
 // ============================================================================

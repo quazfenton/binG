@@ -814,12 +814,15 @@ export class ArcadeService {
       }
 
       // Manual polling fallback — no SDK waitForCompletion
+      // FIX: Bypass the connection cache during polling to ensure we see newly authorized providers.
+      // getConnections() short-circuits to cached active connections; if a stale cache exists
+      // the polling loop won't see the new authorization and will time out incorrectly.
       const maxAttempts = Math.max(1, Math.floor(timeoutMs / 3000)); // poll every 3s
       for (let i = 0; i < maxAttempts; i++) {
         await new Promise(resolve => setTimeout(resolve, 3000));
 
-        // Check if connection now exists
-        const connections = await this.getConnections(userId);
+        // Force a fresh fetch from Arcade API, bypassing the in-memory cache
+        const connections = await this._fetchConnections(userId);
         const providerConn = connections.find(c =>
           c.provider.toLowerCase() === provider.toLowerCase() && c.status === 'active'
         );
@@ -902,8 +905,21 @@ export class ArcadeService {
       return { token: startResult.token };
     }
 
-    // User needs to complete OAuth in browser
+    // User needs to complete OAuth in browser — wait for them if caller allows
     if (startResult.status === 'pending' && startResult.url) {
+      // If timeoutMs is > 0, poll Arcade until the user completes the OAuth flow
+      if (timeoutMs > 0) {
+        const waitResult = await this.waitForProviderAuth(userId, provider, startResult, timeoutMs);
+        if (waitResult.status === 'completed' && waitResult.token) {
+          return { token: waitResult.token };
+        }
+        if (waitResult.status === 'timeout') {
+          return { requiresAuth: true, authUrl: startResult.url };
+        }
+        if (waitResult.status === 'error') {
+          return { error: waitResult.error };
+        }
+      }
       return {
         requiresAuth: true,
         authUrl: startResult.url,
@@ -911,6 +927,44 @@ export class ArcadeService {
     }
 
     return { error: 'Unexpected auth state' };
+  }
+
+  /**
+   * Fetch connections from Arcade API, bypassing the in-memory cache.
+   * Used during polling to detect newly authorized providers.
+   */
+  private async _fetchConnections(userId: string): Promise<ArcadeConnection[]> {
+    if (this.client?.connections) {
+      const connections = await this.client.connections.list({ userId });
+      return connections.map((c: any) => ({
+        id: c.id,
+        provider: c.provider,
+        userId: c.user_id,
+        status: c.status,
+        createdAt: new Date(c.created_at).getTime(),
+      }));
+    }
+
+    // HTTP fallback
+    const response = await fetch(
+      `${this.config.baseUrl || 'https://api.arcade.dev'}/v1/connections?user_id=${userId}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${this.config.apiKey}`,
+        },
+      }
+    );
+
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    return data.connections?.map((c: any) => ({
+      id: c.id,
+      provider: c.provider,
+      userId: c.user_id,
+      status: c.status,
+      createdAt: new Date(c.created_at).getTime(),
+    })) || [];
   }
 
   /**

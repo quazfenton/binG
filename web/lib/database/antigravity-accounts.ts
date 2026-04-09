@@ -87,12 +87,23 @@ export async function getAntigravityAccounts(
       ORDER BY last_used_at ASC
     `).all(userId) as AntigravityAccount[];
 
-    const userAccounts = rows.map(row => ({
-      ...row,
-      enabled: Boolean(row.enabled),
-      cachedQuota: row.cachedQuota ? JSON.parse(String(row.cachedQuota)) : undefined,
-      isMaster: false,
-    }));
+    const userAccounts = rows.map(row => {
+      let parsedQuota: Record<string, unknown> | undefined;
+      if (row.cachedQuota) {
+        try {
+          parsedQuota = JSON.parse(String(row.cachedQuota));
+        } catch {
+          // Malformed JSON — skip quota data but keep the account
+          console.warn('[Antigravity Accounts] Malformed cached_quota for account', row.id);
+        }
+      }
+      return {
+        ...row,
+        enabled: Boolean(row.enabled),
+        cachedQuota: parsedQuota,
+        isMaster: false,
+      };
+    });
 
     // Add master account as fallback if configured
     const masterAccount = getMasterAccount();

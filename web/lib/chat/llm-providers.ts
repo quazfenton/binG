@@ -1103,6 +1103,14 @@ class LLMService {
         return currentEnv.GITHUB_MODELS_API_KEY || currentEnv.AZURE_OPENAI_API_KEY || this.config.github?.apiKey || '';
       case 'zen':
         return currentEnv.ZEN_API_KEY || this.config.zen?.apiKey || '';
+      case 'nvidia':
+        return currentEnv.NVIDIA_API_KEY || '';
+      case 'groq':
+        return currentEnv.GROQ_API_KEY || '';
+      case 'deepinfra':
+        return currentEnv.DEEPINFRA_API_KEY || '';
+      case 'fireworks':
+        return currentEnv.FIREWORKS_API_KEY || '';
       default:
         return '';
     }
@@ -2007,6 +2015,12 @@ class LLMService {
           return false;
         case 'nvidia':
           return !!process.env.NVIDIA_API_KEY;
+        case 'groq':
+          return !!process.env.GROQ_API_KEY;
+        case 'deepinfra':
+          return !!process.env.DEEPINFRA_API_KEY;
+        case 'fireworks':
+          return !!process.env.FIREWORKS_API_KEY;
         case 'opencode':
           // OpenCode SDK - check if binary is available or server is running
           return true; // Always available as it's local

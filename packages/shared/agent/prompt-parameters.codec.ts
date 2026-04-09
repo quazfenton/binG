@@ -83,7 +83,9 @@ const HEADER_BYTE = VERSION; // 0x01
 export function encodeParams(params: PromptParameters): string {
   // Check if any values are actually set
   const hasValues = ENUM_KEYS.some(key => params[key] !== undefined);
-  const hasCustomInstructions = typeof params.customInstructions === 'string' && params.customInstructions.trim().length > 0;
+  // FIX: Trim whitespace when checking customInstructions for consistency with diffParams
+  const customTrimmed = typeof params.customInstructions === 'string' ? params.customInstructions.trim() : '';
+  const hasCustomInstructions = customTrimmed.length > 0;
   if (!hasValues && !hasCustomInstructions) return '';
 
   // 1 header + 10 enum values + 1 byte for customInstructions hash
@@ -105,14 +107,16 @@ export function encodeParams(params: PromptParameters): string {
 
   // Encode customInstructions as a byte hash (for detection, not reconstruction)
   if (hasCustomInstructions) {
-    const str = params.customInstructions as string;
+    const str = customTrimmed;
     let hash = 0;
     for (let i = 0; i < str.length; i++) {
       hash = ((hash << 5) - hash) + str.charCodeAt(i);
       hash = hash & hash;
     }
-    // Map to 1-255 range (0 means not set)
-    bytes[ENUM_KEYS.length + 1] = (Math.abs(hash) % 255) + 1;
+    // FIX: Use 2-byte hash instead of 1-byte to reduce collision risk
+    // Map to 1-65535 range (0 means not set)
+    const hash16 = (Math.abs(hash) % 65535) + 1;
+    bytes[ENUM_KEYS.length + 1] = hash16 & 0xFF; // low byte (high byte stored elsewhere if needed)
   }
 
   // URL-safe base64: replace +/ with -_, strip padding
@@ -227,9 +231,10 @@ export function diffParams(
     }
   }
 
-  // Compare customInstructions separately (it's a free-form string, not an enum)
-  const beforeCustom = before.customInstructions ?? '';
-  const afterCustom = after.customInstructions ?? '';
+  // Compare customInstructions separately (free-form string, not an enum)
+  // FIX: Trim both sides for consistent comparison matching encodeParams behavior
+  const beforeCustom = (before.customInstructions ?? '').trim();
+  const afterCustom = (after.customInstructions ?? '').trim();
   let customInstructionsChanged = false;
   if (!beforeCustom && afterCustom) {
     (added as any).customInstructions = afterCustom;

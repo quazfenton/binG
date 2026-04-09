@@ -2,6 +2,69 @@
 
 All notable changes to this project will be documented in this file.
 
+### Additional Bug Fixes
+- **agent-fs-bridge.ts (P0)** — Double-prefixed sandbox read path. `sanitizeSandboxPath()` returns the FULL path with basePath, but code was prepending `sandboxPath` again. Fixed to use `sanitizeSandboxPath(relativePath, sandboxPath)` directly.
+- **antigravity callback (P1)** — Missing OAuth state validation (CSRF vulnerability). Added check for missing `state` parameter.
+- **antigravity callback (P1)** — Account/token persisted via `saveAntigravityAccount()` after code exchange (was already fixed in session).
+- **antigravity-accounts.ts (P2)** — Malformed `cached_quota` JSON caused entire account query to fail. Now wraps `JSON.parse` in try/catch per row, logging warning and keeping account without quota.
+- **tar-pipe-sync.ts (P1)** — `.git/` was missing from default exclude patterns (both VFS→sandbox and sandbox→VFS). Added `/\.git\//` to both exclusion lists.
+- **local-folder-sync.ts (P2)** — Exclusion matching used absolute paths (OPFS/VFS), causing entire folders to be skipped when the folder name matched an excluded token. Now uses relative paths for exclusion matching.
+- **arcade-service.ts (P2)** — `waitForProviderAuth` polling used `getConnections()` which short-circuits to cached connections. Added `_fetchConnections()` private method that bypasses cache, used during polling.
+- **arcade-service.ts (P1)** — `getProviderToken`'s `timeoutMs` was ignored when auth was pending. Now calls `waitForProviderAuth()` with the timeout to poll until completion.
+- **prompt-parameters.codec.ts (P2)** — `customInstructions` trimming was inconsistent between `encodeParams` (trimmed) and `diffParams` (not trimmed). Both now trim for consistent change detection.
+- **prompt-parameters.codec.ts (P2)** — `customInstructions` encoded into 1 byte caused high hash collision. Increased to 2-byte hash range (1-65535).
+- **schedule-bootstrap.ts (P2)** — Module-level `basicScheduleRegistered` guard prevented re-registration after `registry.clear()` (e.g., tests). Now also checks `registry.getTool('task.schedule')`.
+- **arcade/auth/route.ts (P1)** — `POSTToken` handler was embedded in auth/route.ts with no actual `/token` route file. Created `/api/integrations/arcade/token/route.ts`.
+- **arcade/auth/route.ts (P1)** — `flowId` was ignored in Phase 2, `waitForProviderAuth` called with placeholder response. Now uses `_fetchConnections` for fresh polling during wait.
+
+## [Unreleased] — Streaming Improvements + Prompt Composer + Tool Adapter + Antigravity OAuth + Bug Fixes
+
+### 🎯 WebSocket Control Channel (Integrated into Next.js Server — No Extra Port)
+- **`web/lib/streaming/stream-control-handler.ts`** — Handles WS upgrades for LLM control signals: `pause`, `resume`, `continue`, `abort`, `request_state`, `set_max_tokens`. Replaces `[CONTINUE_REQUESTED]` text hack with structured bidirectional events.
+- **`web/lib/streaming/stream-state-manager.ts`** — Server-side stream state tracking: token counting, content capping (2MB), pause buffer (5MB cap), continuation promise system, abort safety. Final-state guards prevent double-reject and state machine confusion.
+- **`web/hooks/use-stream-control.ts`** — Client hook that auto-connects when `streamId` arrives from SSE `init` event. Auto-reconnects with exponential backoff (5 attempts).
+- **`web/server.ts`** — Added `/stream-control` path to WS upgrade handler with async socket safety guards.
+- **`web/app/api/chat/route.ts`** — Lazy imports for stream-state-manager and stream-control-handler to avoid `ws` module resolution during instrumentation context.
+
+### 🧩 Prompt Composer — Dynamic Tool Injection
+- **`packages/shared/agent/prompt-composer.ts`** (589 lines) — Decomposes 6500+ lines of monolithic prompts into composable sections. Parses at module load, caches per role. Fixed import path to use relative path (`../../../web/lib/tools/capabilities`) since `@/lib` alias is only defined in `web/tsconfig.json`.
+- **Dynamic tool blocks** — `generateDynamicToolBlock()` reads from `ALL_CAPABILITIES` registry, replacing hardcoded `TOOL_CAPABILITIES` markdown.
+- **A/B testing** — Register alternate section versions, compose with `composeRole('coder', {directives: getSectionTemplate('directives.v2')})`.
+
+### 🔧 Vercel AI Tool Adapter — Type Safety + Priority Filtering
+- **Eliminated all `(tool as any)` casts** — 6 unsafe type casts replaced with proper `tool({})` usage.
+- **Schema preservation** — `toToolParameters()` unwraps ZodEffects/ZodOptional/ZodLazy to preserve original Zod schemas.
+- **Real priority filtering** — `createToolSet({priority: ['vfs', 'capability', 'mcp']})` properly deduplicates by tool name.
+
+### 🔐 Antigravity OAuth (Per-User + Master Account)
+- **`web/lib/llm/antigravity-provider.ts`** — Complete OAuth with PKCE, token refresh, Google/Anthropic API routing.
+- **Master + per-user accounts** — Users connect their own Google accounts. Server-level master account (env var) acts as fallback.
+- Admin routes, setup page, auth helper.
+
+### 🐛 Bug Fixes
+- **Infinite auto-continue loop** — `smart-context.ts` now tracks continuation count per conversation (bounded Map, max 500 entries), not per-request. Prevents infinite retriggering after empty message failure.
+- **Arcade 401 "Invalid API credentials"** — Added `.trim()` to `ARCADE_API_KEY` at all 6 read points. `.env` files often have trailing whitespace/newlines.
+- **E2B path `/home/user/C:\home\user`** — Fixed `SandboxSecurityManager.resolvePath` to detect and strip embedded Windows paths in Linux paths.
+- **401 on `/api/user/preferences`** — Added `{ allowAnonymous: true }` to GET handler so unauthenticated users get defaults.
+- **`project-analysis.ts` import** — Fixed `../capabilities` → `./capabilities`.
+- **`vercel-ai-tools.ts` tool index** — Fixed capability re-exports from `./capabilities` instead of non-existent `./terminal`.
+- **Duplicate lines in sandbox files** — Removed duplicate `if (sandboxId.startsWith('mistral-agent-'))` lines in `sandbox-service-bridge.ts` and `core-sandbox-service.ts` from earlier bulk replace.
+- **Mistral sandbox provider** — `enabled: !!process.env.MISTRAL_API_KEY` (was `false`).
+- **PTY terminal prompt** — Now shows user ID + workspace name instead of full filesystem path.
+- **Capability derivation** — `deriveCapabilitiesFromExecution` now records actual tools used (file.read, file.write, file.delete, sandbox.shell, web.fetch, repo.git, etc.) instead of blindly recording `['file.read', 'file.write']` on every execution including failures.
+- **Mount guard** — `use-enhanced-chat.ts` now checks `isMountedRef.current` before calling `handleSubmit` from auto-continue setTimeout callbacks. Prevents React warnings on unmount.
+- **Memory leak** — Conversation continuation counter Map now has LRU-style eviction (max 500 entries).
+
+### 📈 Max Tokens Defaults Increased
+- `vercel-ai-streaming.ts`: 4096 → **65536**
+- `llm-providers.ts`: 2000 → **65536**
+- `parameter-optimizer.ts`: complex 5000 → **32768**, simple 3000 → **8192**, content length cap 8000 → **65536**
+
+### 🧪 Tests
+- **34/34 passing** — `stream-state-manager.test.ts` (16), `prompt-composer.test.ts` (18)
+
+---
+
 ## [Unreleased] — Local PTY Security + Trigger.dev Stubs Fixed + Timeout Fixes + Capability Router Input Validation
 
 ### 🔒 Capability Router Input Validation (Security Gate)
@@ -731,4 +794,19 @@ curl -X POST http://localhost:3000/api/filesystem/write \
 - **`buildSystemPrompt()` adapts to format** - Different instructions for JSON vs XML vs markdown.  
   
 ### ?? Progressive Tree Pruning  
-- **Abbreviated trees** - `buildAbbreviatedTree()` shows only folders + referenced files; unrelated leaves become `... N more file(s)`.  
+- **Abbreviated trees** - `buildAbbreviatedTree()` shows only folders + referenced files; unrelated leaves become `... N more file(s)`.
+
+### 🐛 File Edit Parser — Batch Write + Windows Path Fixes
+- **`parseSimpleFileObject` regex** — Changed key-matching prefix from `(?:^|,)` to `(?:^|[,{\n])`. The first key in a JS object after `{` has no comma, so `path: "..."` was never matched — only `content` after a comma was extracted. This silently caused 0 edits from `batch_write([{path, content}])` with template literal content.
+- **`extractFlatJsonToolCalls`** — Added `batch_write` and `write_files` to the tool list. Added special handling for `{files: [{path, content}]}` array format instead of expecting `{path, content}` at the top level. Previously these flat JSON batch_write calls were silently ignored.
+- **Fast-path gate for extractFlatJsonToolCalls** — Added `batch_write` and `write_files` to the regex gate that triggers this extractor.
+- **`extractTextToolCallEdits`** — Added `batch_write` and `write_files` to toolPatterns with special handling to extract `files` array from JSON object format `batch_write({files: [...]})`.
+- **`extractToolTagEdits`** — Added `batch_write` and `write_files` with `{files: [...]}` array handling.
+- **`VFS_FILE_EDITING_TOOL_PROMPT`** — Rewrote to clearly state tools are called via native function calling API, not as text output. Removed confusing "JavaScript array, NOT a JSON string" instruction that encouraged LLMs to output JavaScript function call syntax.
+- **`SandboxSecurityManager.resolvePath`** — Fixed Windows path contamination on Windows hosts:
+  - Added `remainingDrivePattern` regex to catch embedded Windows paths like `/foo/C:/bar` → `/foo/bar`.
+  - Fixed drive letter stripping after `path.resolve()` — `C:/path` → `/path` (preserving leading slash).
+  - Changed workspace containment check from platform-native `relative()`/`pathIsAbsolute()` to `posixPath.relative()`/`posixPath.isAbsolute()` for correct POSIX path comparison when running on Windows.
+
+### 📝 VFS MCP Tool Logging
+- **`batchWriteTool`** — Added `logger.info('batchWrite: entry')` with userId, scopePath, commitMessage, sessionId. Added `durationMs` to completion log. Early warning for parse failures. All logging uses structured server logger, not console.log.  

@@ -125,8 +125,8 @@ export class VFSyncBackService {
         throw new Error(listResult.output || 'Failed to list directory');
       }
       
-      // Parse file list
-      const files = await this.parseFileList(listResult.output, session.cwd || '/workspace', handle);
+      // Parse file list (pass includePatterns so explicitly included files skip exclusions)
+      const files = await this.parseFileList(listResult.output, session.cwd || '/workspace', handle, mergedConfig.includePatterns);
       
       // Filter files by patterns
       const filteredFiles = this.filterFiles(files, mergedConfig.includePatterns, mergedConfig.excludePatterns);
@@ -212,15 +212,16 @@ export class VFSyncBackService {
   private async parseFileList(
     output: string,
     cwd: string,
-    handle: any
+    handle: any,
+    includePatterns?: string[]
   ): Promise<VFSFileEntry[]> {
     const files: VFSFileEntry[] = [];
     const lines = output.split('\n').filter(line => line.trim());
-    
+
     for (const line of lines) {
       // Parse ls -la format: "-rw-r--r-- 1 user user 1234 Jan 1 12:00 filename"
       const parts = line.trim().split(/\s+/);
-      
+
       if (parts.length < 9) continue;
       
       const permissions = parts[0];
@@ -229,14 +230,20 @@ export class VFSyncBackService {
       
       // Skip . and ..
       if (fileName === '.' || fileName === '..') continue;
-      
-      // Skip directories and excluded files
+
+      // Skip directories
       if (permissions.startsWith('d')) continue;
-      if (shouldExcludeFromSync(`${cwd}/${fileName}`)) continue;
+
+      // FIX: Only apply hardcoded exclusions if the file is NOT explicitly included
+      // This prevents includePatterns from being silently overridden by exclusions
+      const filePath = `${cwd}/${fileName}`;
+      const isExplicitlyIncluded = includePatterns && includePatterns.length > 0
+        && includePatterns.some(pattern => this.matchGlob(filePath, pattern));
+
+      if (!isExplicitlyIncluded && shouldExcludeFromSync(filePath)) continue;
 
       // Read file content
       try {
-        const filePath = `${cwd}/${fileName}`
         const readResult = await handle.readFile(filePath)
         
         if (readResult.success && readResult.output !== undefined) {

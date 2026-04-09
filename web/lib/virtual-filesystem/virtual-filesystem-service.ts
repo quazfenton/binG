@@ -1035,12 +1035,14 @@ export class VirtualFilesystemService {
     // This one-time-per-owner fix updates any rows that still contain backslashes.
     try {
       const db = getDatabase();
+      // In JS template literals, '\\\\' → regex literal '%\\%' matches a literal backslash
+      // and REPLACE's '\\\\' → SQL literal '\\' → one literal backslash character
       const backslashCount = (db.prepare(
-        `SELECT COUNT(*) as cnt FROM vfs_workspace_files WHERE owner_id = ? AND path LIKE '%\\%'`
+        "SELECT COUNT(*) as cnt FROM vfs_workspace_files WHERE owner_id = ? AND path LIKE '%\\\\%'"
       ).get(normalizedOwnerId) as { cnt: number }).cnt;
       if (backslashCount > 0) {
         const normalizePaths = db.prepare(
-          `UPDATE vfs_workspace_files SET path = REPLACE(path, '\', '/') WHERE owner_id = ? AND path LIKE '%\\%'`
+          "UPDATE vfs_workspace_files SET path = REPLACE(path, '\\\\', '/') WHERE owner_id = ? AND path LIKE '%\\\\%'"
         );
         normalizePaths.run(normalizedOwnerId);
         console.log(`[VFS] Normalized ${backslashCount} backslash path(s) for owner ${normalizedOwnerId}`);
@@ -1050,18 +1052,8 @@ export class VirtualFilesystemService {
     } catch (err) {
       // Non-fatal — stale paths will still be caught by load-time normalization
     }
-  }
-          console.warn('[VFS] Workspace tables not yet available — workspace will be empty until migration runs');
-        } else {
-          console.error('[virtual-filesystem] Failed to load workspace from DB:', error);
-        }
-        workspace.files = new Map<string, VirtualFile>();
-        workspace.version = 0;
-        workspace.updatedAt = new Date().toISOString();
-      }
-      workspace.loaded = true;
-    }
 
+    workspace.loaded = true;
     return workspace;
   }
 
