@@ -562,81 +562,101 @@ class OpenCodeV2Provider implements CapabilityProvider {
           ? `run ${input.language} code: ${input.code}`
           : input.command;
 
-        // Build project context for smart command translation
-        const { buildProjectContext, resolveVfsPathToRealPath, translateNaturalLanguageToCommand, formatSmartContextAsMarkdown } = await import('../project-detection');
-
-        // Get file listing from VFS for project detection
-        let projectContext: Awaited<ReturnType<typeof buildProjectContext>> | null = null;
+        // Get project context for the system prompt (lightweight — just file listing)
+        let smartContextMd = '';
+        let projectRoot = '';
         try {
+          const { buildProjectContext, formatSmartContextAsMarkdown } = await import('../project-detection');
           const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
           const ownerId = context.userId || 'default';
           const workspace = await virtualFilesystem.exportWorkspace(ownerId);
           const filePaths = workspace.files.map(f => f.path);
 
-          // Read package.json if available
-          projectContext = await buildProjectContext(filePaths, async (path: string) => {
-            try {
-              const file = await virtualFilesystem.readFile(ownerId, path.replace(/^\//, ''));
-              return file.content;
-            } catch {
-              return null;
+          const projectContext = await buildProjectContext(filePaths, async (path: string) => {
+            if (path === 'package.json' || path === '/package.json') {
+              try {
+                const file = await virtualFilesystem.readFile(ownerId, path.replace(/^\//, ''));
+                return file.content;
+              } catch { return null; }
             }
+            return null;
           });
 
-          // Translate natural language command using detected project context
-          const translatedCommand = translateNaturalLanguageToCommand(command, projectContext);
-
-          // Add smart context to system prompt so LLM knows what it's working with
-          const smartContextMd = formatSmartContextAsMarkdown(projectContext.smartContext);
-          const systemPrompt = `${smartContextMd}\n\nWorking directory: ${input.cwd || projectContext.projectRoot || session.workspacePath || ''}`;
-
-          // Resolve cwd from VFS scoped path to real filesystem path
-          const cwdPath = input.cwd || (projectContext.projectRoot ? `${session.workspacePath || ''}/${projectContext.projectRoot}`.replace(/\/\//g, '/') : undefined);
-          let resolvedCwd: string | undefined;
-          if (cwdPath) {
-            resolvedCwd = resolveVfsPathToRealPath(cwdPath, session.workspacePath || process.cwd());
-          }
-
-          const result = await provider.runAgentLoop({
-            userMessage: translatedCommand,
-            tools: [],
-            systemPrompt,
-            maxSteps: 5,
-            executeTool: async () => ({ success: true, output: '', exitCode: 0 }),
-            cwd: resolvedCwd,
-            enableSelfHeal: true,
-          });
-
-          return {
-            success: true,
-            output: {
-              success: true,
-              output: result.response,
-              exitCode: 0,
-            },
-          };
-        } catch (projectCtxError: any) {
-          // Project detection failed, fall back to raw command
-          log.debug('Project detection failed, using raw command', projectCtxError.message);
-          const result = await provider.runAgentLoop({
-            userMessage: command,
-            tools: [],
-            systemPrompt: input.cwd ? `Working directory: ${input.cwd}` : '',
-            maxSteps: 5,
-            executeTool: async () => ({ success: true, output: '', exitCode: 0 }),
-            cwd: input.cwd ? resolveVfsPathToRealPath(input.cwd, session.workspacePath || process.cwd()) : undefined,
-            enableSelfHeal: true,
-          });
-
-          return {
-            success: true,
-            output: {
-              success: true,
-              output: result.response,
-              exitCode: 0,
-            },
-          };
+          smartContextMd = formatSmartContextAsMarkdown(projectContext.smartContext);
+          projectRoot = projectContext.projectRoot || '';
+        } catch {
+          // Project detection failed — LLM will work without it
         }
+
+        // Build the tool set for the LLM: extended sandbox tools including
+        // terminal sessions, project analysis, and port status.
+        const { EXTENDED_SANDBOX_TOOLS, mapToolToCapability } = await import('../sandbox/extended-sandbox-tools');
+
+        // Resolve cwd
+        let resolvedCwd: string | undefined;
+        if (input.cwd) {
+          try {
+            const { resolveVfsPathToRealPath } = await import('../project-detection');
+            resolvedCwd = resolveVfsPathToRealPath(input.cwd, session.workspacePath || process.cwd());
+          } catch {
+            resolvedCwd = input.cwd;
+          }
+        }
+
+        const systemPrompt = smartContextMd
+          ? `${smartContextMd}\n\nWorking directory: ${input.cwd || projectRoot || session.workspacePath || ''}\n\n` +
+            `Available tools: exec_shell, write_file, read_file, list_dir, project_analyze, ` +
+            `project_list_scripts, project_dependencies, project_structure, terminal_create_session, ` +
+            `terminal_send_input, terminal_get_output, port_status.\n` +
+            `If the command looks like natural language (e.g., "run the project"), ` +
+            `first call project_analyze to detect the framework and recommended commands.`
+          : `Working directory: ${input.cwd || session.workspacePath || ''}\n\n` +
+            `Available tools: exec_shell, write_file, read_file, list_dir, project_analyze, ` +
+            `project_list_scripts, project_dependencies, project_structure, terminal_create_session, ` +
+            `terminal_send_input, terminal_get_output, port_status.`;
+
+        const result = await provider.runAgentLoop({
+          userMessage: command,
+          tools: [...EXTENDED_SANDBOX_TOOLS] as any,
+          systemPrompt,
+          maxSteps: 8,
+          executeTool: async (name: string, args: Record<string, any>): Promise<any> => {
+            // exec_shell / sandbox.shell must NOT go through the capability router
+            // because that would route back to OpenCodeV2Provider → infinite recursion.
+            // Instead, execute directly on the provider.
+            if (name === 'exec_shell' || name === 'sandbox.shell' || name === 'sandbox.execute') {
+              const cmd = args.command || args.code || '';
+              const cwd = args.cwd || resolvedCwd;
+              const timeout = args.timeout || 30;
+              return provider.executeCommandDirect(cmd, cwd || '', timeout, true);
+            }
+
+            // All other tools go through the capability router
+            const capId = mapToolToCapability(name);
+            const router = getCapabilityRouter();
+            const routerResult = await router.execute(capId, args, {
+              userId: context.userId,
+              conversationId: context.conversationId || 'default',
+            });
+            return {
+              success: routerResult.success,
+              output: (routerResult as any).data || routerResult.output,
+              exitCode: (routerResult as any).exitCode ?? (routerResult.success ? 0 : 1),
+              error: routerResult.error,
+            };
+          },
+          cwd: resolvedCwd,
+          enableSelfHeal: true,
+        });
+
+        return {
+          success: true,
+          output: {
+            success: true,
+            output: result.response,
+            exitCode: 0,
+          },
+        };
       }
 
       return { success: false, error: `Unhandled capability: ${capabilityId}` };
@@ -1433,6 +1453,139 @@ class OAuthIntegrationProvider implements CapabilityProvider {
 }
 
 /**
+ * Terminal Provider — handles interactive terminal/PTY operations
+ *
+ * Provides:
+ * - terminal.create_session, terminal.send_input, terminal.get_output
+ * - terminal.resize, terminal.close_session, terminal.list_sessions
+ * - terminal.start_process, terminal.stop_process, terminal.list_processes
+ * - terminal.get_port_status
+ */
+class TerminalProvider implements CapabilityProvider {
+  readonly id = 'terminal';
+  readonly name = 'Terminal / PTY';
+  readonly capabilities = [
+    'terminal.create_session',
+    'terminal.send_input',
+    'terminal.get_output',
+    'terminal.resize',
+    'terminal.close_session',
+    'terminal.list_sessions',
+    'terminal.start_process',
+    'terminal.stop_process',
+    'terminal.list_processes',
+    'terminal.get_port_status',
+  ];
+
+  isAvailable(): boolean {
+    // Terminal manager is always available (in-memory singleton)
+    return true;
+  }
+
+  async execute(
+    capabilityId: string,
+    input: any,
+    context: ToolExecutionContext,
+  ): Promise<ToolExecutionResult> {
+    try {
+      const {
+        createTerminalSession,
+        sendTerminalInput,
+        getTerminalOutput,
+        resizeTerminal,
+        closeTerminalSession,
+        listTerminalSessions,
+        startProcess,
+        stopProcess,
+        listProcesses,
+        getPortStatus,
+      } = await import('./terminal');
+
+      const userId = context.userId || 'default';
+
+      switch (capabilityId) {
+        case 'terminal.create_session':
+          return { success: true, data: await createTerminalSession(userId, input) };
+
+        case 'terminal.send_input':
+          return {
+            success: true,
+            data: await sendTerminalInput(input.sessionId, input.input),
+          };
+
+        case 'terminal.get_output':
+          return {
+            success: true,
+            data: await getTerminalOutput(input.sessionId, {
+              lines: input.lines,
+              waitForPattern: input.waitForPattern,
+              timeoutMs: input.timeoutMs,
+            }),
+          };
+
+        case 'terminal.resize':
+          return {
+            success: true,
+            data: await resizeTerminal(input.sessionId, input.cols, input.rows),
+          };
+
+        case 'terminal.close_session':
+          return {
+            success: true,
+            data: await closeTerminalSession(input.sessionId),
+          };
+
+        case 'terminal.list_sessions':
+          return { success: true, data: await listTerminalSessions(userId) };
+
+        case 'terminal.start_process':
+          return {
+            success: true,
+            data: await startProcess(input.command, {
+              userId,
+              cwd: input.cwd,
+              env: input.env,
+              timeout: input.timeout,
+            }),
+          };
+
+        case 'terminal.stop_process':
+          return {
+            success: true,
+            data: await stopProcess(input.pid, {
+              userId,
+              signal: input.signal,
+            }),
+          };
+
+        case 'terminal.list_processes':
+          return {
+            success: true,
+            data: await listProcesses({ userId, filter: input.filter }),
+          };
+
+        case 'terminal.get_port_status':
+          return {
+            success: true,
+            data: await getPortStatus({ userId, port: input.port }),
+          };
+
+        default:
+          return {
+            success: false,
+            error: `Unknown terminal capability: ${capabilityId}`,
+          };
+      }
+    } catch (error: any) {
+      return {
+        success: false,
+        error: `Terminal provider error: ${error.message}`,
+      };
+    }
+  }
+}
+
+/**
  * Capability Router - selects and executes capabilities via providers
  */
 export class CapabilityRouter {
@@ -1478,6 +1631,8 @@ export class CapabilityRouter {
     this.registerProvider(new GitHelperProvider());
     // Register OAuth integration provider (Nango/Composio/Arcade)
     this.registerProvider(new OAuthIntegrationProvider());
+    // Register Terminal provider (PTY, process management, port status)
+    this.registerProvider(new TerminalProvider());
 
     this.initialized = true;
     logger.info(`[CapabilityRouter] Initialized with ${this.providers.size} providers`);
@@ -1559,6 +1714,7 @@ export class CapabilityRouter {
   /**
    * Execute a capability - routes to best available provider
    * Uses intelligent provider selection based on metadata scoring
+   * with self-healing retry on failure.
    */
   async execute(
     capabilityId: string,
@@ -1573,7 +1729,6 @@ export class CapabilityRouter {
     }
 
     // SECURITY: Validate input against the capability's Zod schema before forwarding.
-    // This prevents malformed LLM-generated inputs from reaching providers.
     const parsed = capability.inputSchema.safeParse(input);
     if (!parsed.success) {
       const fieldErrors = parsed.error.errors.map(e => `${e.path.join('.')}: ${e.message}`).join('; ');
@@ -1587,7 +1742,6 @@ export class CapabilityRouter {
       };
     }
 
-    // Use the parsed (and potentially default-enriched) input for providers
     const validatedInput = parsed.data;
 
     // Check permissions if specified
@@ -1601,14 +1755,71 @@ export class CapabilityRouter {
       }
     }
 
-    // Get scored and sorted providers
-    const providerScores = this.getScoredProviders(capability);
+    // Try execution with self-healing retry
+    return this.executeWithSelfHeal(capabilityId, validatedInput, context, capability);
+  }
 
-    // Try each provider in score order (highest first)
+  /**
+   * Execute a capability with LLM-based self-healing retry.
+   * If all providers fail, the LLM analyzes the error and suggests
+   * a fix, then retries with the corrected input.
+   */
+  private async executeWithSelfHeal(
+    capabilityId: string,
+    input: any,
+    context: ToolExecutionContext,
+    capability: CapabilityDefinition,
+    maxAttempts: number = 2,
+  ): Promise<ToolExecutionResult> {
+    let lastError = '';
+    let attempt = 0;
+
+    while (attempt < maxAttempts) {
+      attempt++;
+      const result = await this.tryAllProviders(capabilityId, input, context, capability);
+
+      if (result.success) return result;
+
+      lastError = result.error || 'Unknown error';
+
+      // Don't self-heal if auth required or input is invalid
+      if ((result as any).authRequired) return result;
+      if (lastError.startsWith('Invalid input')) return result;
+
+      // Last attempt — return the error
+      if (attempt >= maxAttempts) break;
+
+      // Try self-healing
+      const healed = await this.selfHealAttempt(capabilityId, input, lastError, capability);
+      if (!healed) {
+        logger.debug(`[CapabilityRouter] Self-healing failed for ${capabilityId} (attempt ${attempt})`);
+        break; // Can't heal — return original error
+      }
+
+      logger.info(`[CapabilityRouter] Self-healing ${capabilityId}: attempt ${attempt} → retrying with fixed input`);
+      input = healed;
+    }
+
+    return {
+      success: false,
+      error: lastError || `All providers failed for ${capabilityId}`,
+      fallbackChain: capability.providerPriority as any,
+    };
+  }
+
+  /**
+   * Try all providers in score order for a single attempt.
+   */
+  private async tryAllProviders(
+    capabilityId: string,
+    input: any,
+    context: ToolExecutionContext,
+    capability: CapabilityDefinition,
+  ): Promise<ToolExecutionResult> {
+    const providerScores = this.getScoredProviders(capability);
     const errors: string[] = [];
 
     for (const { providerId, provider, score } of providerScores) {
-      // Check availability
       let available = false;
       try {
         available = await Promise.resolve(provider.isAvailable());
@@ -1624,7 +1835,7 @@ export class CapabilityRouter {
       logger.debug(`[CapabilityRouter] Executing ${capabilityId} via ${provider.name} (score: ${score})`);
 
       try {
-        const result = await provider.execute(capabilityId, validatedInput, context);
+        const result = await provider.execute(capabilityId, input, context);
 
         if (result.success) {
           logger.debug(`[CapabilityRouter] ${capabilityId} succeeded via ${provider.name} (score: ${score})`);
@@ -1638,10 +1849,7 @@ export class CapabilityRouter {
           errors.push(`${provider.name}: ${result.error}`);
         }
 
-        // If auth required, don't try other providers
-        if (result.authRequired) {
-          return result;
-        }
+        if ((result as any).authRequired) return result;
       } catch (error: any) {
         errors.push(`${provider.name}: ${error.message}`);
         logger.debug(`[CapabilityRouter] Provider ${provider.name} failed:`, error.message);
@@ -1651,8 +1859,50 @@ export class CapabilityRouter {
     return {
       success: false,
       error: `All providers failed for ${capabilityId}: ${errors.join('; ')}`,
-      fallbackChain: capability.providerPriority as any,  // string[] → IntegrationProvider[]
+      fallbackChain: capability.providerPriority as any,
     };
+  }
+
+  /**
+   * LLM-based self-healing: analyze the error and produce fixed input.
+   * Uses a lightweight model for fast healing.
+   */
+  private async selfHealAttempt(
+    capabilityId: string,
+    originalInput: any,
+    error: string,
+    capability: CapabilityDefinition,
+  ): Promise<Record<string, unknown> | null> {
+    try {
+      const { generateObject } = await import('ai');
+
+      // Use a fast, cheap model for healing
+      const { createMistral } = await import('@ai-sdk/mistral');
+      const model = createMistral({ apiKey: process.env.MISTRAL_API_KEY || '' })('mistral-small-latest');
+
+      const { object } = await generateObject({
+        model,
+        prompt: `A tool call failed. Fix the input arguments.
+
+Capability: ${capabilityId}
+Description: ${capability.description}
+Original Input: ${JSON.stringify(originalInput, null, 2)}
+Error: ${error}
+
+Expected Schema:
+${JSON.stringify(capability.inputSchema, null, 2)}
+
+Return ONLY the corrected input object as JSON.`,
+        schema: capability.inputSchema,
+        maxTokens: 500,
+        temperature: 0.1,
+      });
+
+      return object as Record<string, unknown>;
+    } catch (healError: any) {
+      logger.debug(`[CapabilityRouter] Self-heal attempt failed for ${capabilityId}: ${healError.message}`);
+      return null;
+    }
   }
 
   /**

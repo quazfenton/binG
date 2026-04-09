@@ -11,8 +11,8 @@
  * overwhelming the indexer.
  */
 
-import { ProjectIndexer } from "../memory/indexer";
-import { watchDirectory, isDesktop, type FileChangeEvent } from "../memory/platform";
+import { ProjectIndexer } from "./indexer";
+import { watchDirectory, isDesktop, type FileChangeEvent } from "./platform";
 import { increment, trace } from "../agent/metrics";
 import { createLogger } from "@/lib/utils/logger";
 
@@ -84,7 +84,7 @@ export function watchAndReindex(
       try {
         if (change.type === "deleted") {
           // Deleted file: remove its symbols from the store
-          const { deleteFileSymbols } = await import("../memory/vectorStore");
+          const { deleteFileSymbols } = await import("./vectorStore");
           await deleteFileSymbols(projectId, path);
           increment("watcher-deleted", 1);
           logger.debug("Deleted file removed from index", { path });

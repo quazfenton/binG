@@ -276,7 +276,7 @@ class BackendService {
   }
 
   private async initializeWebSocket(): Promise<void> {
-    logger.info('Starting WebSocket terminal server...', { port: this.config.websocketPort });
+    logger.info('Starting WebSocket servers...', { port: this.config.websocketPort });
 
     const websocketRequired = process.env.WEBSOCKET_REQUIRED === 'true';
     try {

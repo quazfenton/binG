@@ -546,6 +546,9 @@ export const TOOL_CATEGORIES = {
   fileOps: ['sync_files', 'search_files'],
   process: ['start_process', 'stop_process', 'list_processes'],
   preview: ['get_previews', 'forward_port'],
+  terminal: ['terminal_create_session', 'terminal_send_input', 'terminal_get_output', 'terminal_resize', 'terminal_close_session', 'terminal_list_sessions'],
+  projectAnalysis: ['project_analyze', 'project_list_scripts', 'project_dependencies', 'project_structure'],
+  port: ['port_status'],
 }
 
 export type ToolName = typeof ENHANCED_SANDBOX_TOOLS[number]['name']

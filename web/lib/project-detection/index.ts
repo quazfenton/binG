@@ -871,6 +871,16 @@ export async function buildProjectContext(
 
 /**
  * Translate natural language task descriptions into shell commands.
+ *
+ * @deprecated This was the rule-based NL→command path. The primary path is now:
+ *   1. LLM receives the original command (not translated)
+ *   2. LLM has access to EXTENDED_SANDBOX_TOOLS (project_analyze, terminal_*, etc.)
+ *   3. LLM calls project_analyze to get structured project context
+ *   4. LLM decides what command to run based on that context
+ *
+ * This function is kept as a fallback for standalone code paths that don't
+ * have access to the extended tool system (e.g., opencode-cli.ts direct usage).
+ *
  * Uses detected project context to generate the correct command.
  */
 export function translateNaturalLanguageToCommand(

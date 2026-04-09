@@ -112,7 +112,7 @@ export async function runContextPipeline(
   if (opts.explicitFiles && opts.explicitFiles.length > 0) {
     results.push({
       source: "attached-files",
-      text: `Explicitly requested files: ${opts.explicitFiles.join(", ")}`,
+      text: `Explicitly requested files (${opts.explicitFiles.length}):\n${opts.explicitFiles.map(f => `- ${f}`).join("\n")}`,
       succeeded: true,
       durationMs: 0,
     });
@@ -178,9 +178,12 @@ async function withTimeout(
 /**
  * Merge context results, deduplicating by source and avoiding redundant text.
  * Priority: first succeeded source provides primary context, others appended.
+ * Limits total output to ~100KB to avoid overwhelming the LLM.
  */
 function mergeContextResults(results: ContextSourceResult[]): string {
   const parts: string[] = [];
+  const MAX_TOTAL_SIZE = 100_000; // ~25K tokens
+  let totalSize = 0;
 
   for (const result of results) {
     if (!result.succeeded || !result.text) continue;
@@ -193,7 +196,19 @@ function mergeContextResults(results: ContextSourceResult[]): string {
       continue;
     }
 
-    parts.push(`[${result.source}]\n${result.text}`);
+    // Check if adding this would exceed limit
+    const partText = `[${result.source}]\n${result.text}`;
+    if (totalSize + partText.length > MAX_TOTAL_SIZE) {
+      // Truncate to fit
+      const remaining = MAX_TOTAL_SIZE - totalSize;
+      if (remaining > 100) {
+        parts.push(`${partText.slice(0, remaining)}\n\n... (truncated, token limit reached)`);
+      }
+      break;
+    }
+
+    parts.push(partText);
+    totalSize += partText.length;
   }
 
   return parts.join("\n\n---\n\n");

@@ -1,14 +1,17 @@
 /**
  * Retrieval Pipeline
- * 
+ *
  * Combines vector search with keyword matching and
  * builds structured prompts for LLM injection.
- * 
+ *
+ * Uses the unified contextBuilder for token estimation and formatting.
+ *
  * @module vector-memory/retrieval
  */
 
 import type { VectorStore, SearchResult, EmbeddingProvider, VectorFilter } from './types';
 import { createLogger } from '@/lib/utils/logger';
+import { estimateTokens } from '@/lib/context/contextBuilder';
 
 const logger = createLogger('Retrieval');
 
@@ -58,7 +61,8 @@ export class RetrievalPipeline {
     const selected: SearchResult[] = [];
 
     for (const result of results) {
-      const cost = this.estimateTokens(result.entry.text);
+      // Use unified token estimator for consistency
+      const cost = estimateTokens(result.entry.text);
       if (tokenEstimate + cost > maxTokens) break;
       selected.push(result);
       tokenEstimate += cost;
@@ -119,9 +123,5 @@ export class RetrievalPipeline {
         return [header, fileInfo, '', r.entry.text].filter(Boolean).join('\n');
       })
       .join('\n\n---\n\n');
-  }
-
-  private estimateTokens(text: string): number {
-    return Math.ceil(text.length / 4);
   }
 }

@@ -26,6 +26,8 @@ import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared
 import { VFS_FILE_EDITING_TOOL_PROMPT } from '@bing/shared/agent/system-prompts';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
+import { streamStateManager } from '@/lib/streaming/stream-state-manager';
+import { notifyNeedMoreTurns, notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { getRecentMcpFileEdits, clearRecentMcpFileEdits } from '@/lib/virtual-filesystem/file-events';
 import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/orchestration-mode-handler';
@@ -346,6 +348,7 @@ export async function POST(request: NextRequest) {
       filesystemContext,
       contextPack,
       autoAttachFiles,
+      retryContext,
     } = body as {
       messages: LLMMessage[];
       provider: string;
@@ -368,9 +371,62 @@ export async function POST(request: NextRequest) {
       };
       /** Auto-attach relevant files to subsequent LLM calls as agent discovers areas to edit */
       autoAttachFiles?: boolean;
+      /** Client-side empty response retry context */
+      retryContext?: {
+        isEmptyResponseRetry: boolean;
+        originalProvider?: string;
+        originalModel?: string;
+        toolExecutionSummary?: string;
+        failedToolCalls?: Array<{ name: string; error: string; args?: any }>;
+        filesystemChanges?: { applied: number; failed: number; failedDetails: any[] };
+      };
     };
     provider = requestedProvider;
     model = requestedModel;
+
+    // Handle client-side empty response retry context
+    // Inject tool execution feedback and failed call details into system message
+    let processedMessages = messages;
+    if (retryContext?.isEmptyResponseRetry) {
+      chatLogger.info('Client-side empty response retry detected', {
+        requestId,
+        originalProvider: retryContext.originalProvider,
+        originalModel: retryContext.originalModel,
+        toolSummary: retryContext.toolExecutionSummary,
+        failedToolCalls: retryContext.failedToolCalls?.length,
+      });
+
+      // Build retry enhancement message
+      const retryEnhancementParts: string[] = [];
+
+      if (retryContext.toolExecutionSummary) {
+        retryEnhancementParts.push(`\n[RETRY CONTEXT] ${retryContext.toolExecutionSummary}`);
+      }
+
+      if (retryContext.failedToolCalls && retryContext.failedToolCalls.length > 0) {
+        const failedDetails = retryContext.failedToolCalls
+          .slice(0, 5)
+          .map(tc => `  - ${tc.name}(${tc.args ? JSON.stringify(tc.args).slice(0, 100) : ''}) → ${tc.error}`)
+          .join('\n');
+        retryEnhancementParts.push(`\n[FAILED TOOL CALLS]\n${failedDetails}`);
+      }
+
+      if (retryContext.filesystemChanges) {
+        const { applied, failed, failedDetails } = retryContext.filesystemChanges;
+        if (applied > 0) retryEnhancementParts.push(`\n[FILE EDITS] ${applied} applied successfully`);
+        if (failed > 0 && failedDetails.length > 0) {
+          retryEnhancementParts.push(`\n[FAILED FILE EDITS]\n${failedDetails.map(f => `  - ${f.path}: ${f.error}`).join('\n')}`);
+        }
+      }
+
+      if (retryEnhancementParts.length > 0) {
+        // Inject as system message at the start
+        processedMessages = [
+          { role: 'system' as const, content: retryEnhancementParts.join('\n') },
+          ...messages,
+        ];
+      }
+    }
 
     // Log request start
     await chatRequestLogger.logRequestStart(
@@ -378,7 +434,7 @@ export async function POST(request: NextRequest) {
       userId,
       provider,
       model,
-      messages,
+      processedMessages,
       stream
     );
 
@@ -441,7 +497,7 @@ export async function POST(request: NextRequest) {
     const attachedFilesystemFiles = normalizeFilesystemContext(filesystemContext?.attachedFiles);
 
     // Extract @mentions from the last user message to prioritize files
-    const lastUserMessage = [...messages].reverse().find(m => m.role === 'user');
+    const lastUserMessage = [...processedMessages].reverse().find(m => m.role === 'user');
     const lastUserText = typeof lastUserMessage?.content === 'string' ? lastUserMessage.content : '';
     const atMentionPattern = /@([\w\-/.]+\.(?:tsx?|jsx?|py|rs|go|java|css|scss|json|md|yaml|yml|toml|sh|bash|html|sql|graphql|proto|tf|hcl))/gi;
     const explicitFilesFromMentions: string[] = [];
@@ -481,7 +537,7 @@ export async function POST(request: NextRequest) {
     // This avoids re-scanning messages with regex on every context generation
     try {
       const { trackSessionFiles } = await import('@/lib/virtual-filesystem/session-file-tracker');
-      await trackSessionFiles(resolvedConversationId, messages);
+      await trackSessionFiles(resolvedConversationId, processedMessages);
     } catch (error: any) {
       // Don't fail the request if tracking fails
       chatLogger.debug('Session file tracking failed (non-critical)', { error: error.message });
@@ -519,13 +575,13 @@ export async function POST(request: NextRequest) {
 
     // Calculate these BEFORE parallel execution since they're dependencies
     const enableFilesystemEdits = shouldHandleFilesystemEdits(
-      messages,
+      processedMessages,
       attachedFilesystemFiles,
       filesystemContext,
     );
-    const useContextPack = shouldUseContextPack(messages);
+    const useContextPack = shouldUseContextPack(processedMessages);
     // Use multi-factor task classifier instead of regex-based detection
-    const classification = await classifyRequest(messages, attachedFilesystemFiles);
+    const classification = await classifyRequest(processedMessages, attachedFilesystemFiles);
     const isCodeRequest = classification.isCodeRequest;
     const useContextPackForAgentic = enableFilesystemEdits && isCodeRequest;
     const shouldUseContextPackFinal = useContextPack || useContextPackForAgentic;
@@ -577,7 +633,7 @@ export async function POST(request: NextRequest) {
     }
     
     const contextualMessages = appendFilesystemContextMessages(
-      messages,
+      processedMessages,
       attachedFilesystemFiles,
       enableFilesystemEdits,
       denialContext,
@@ -619,7 +675,7 @@ export async function POST(request: NextRequest) {
     chatLogger.debug('Validation passed, routing through priority chain', { requestId, provider, model });
 
     // NEW: Add tool/sandbox detection
-    const requestType = detectRequestType(messages);
+    const requestType = detectRequestType(processedMessages);
     const authenticatedUserId =
       authResult.success && authResult.source !== 'anonymous' ? authResult.userId : undefined;
 
@@ -733,7 +789,7 @@ export async function POST(request: NextRequest) {
     // Agentic pipeline (non-V2) for code-centric requests
     // Only route to agentic pipeline if it's actually an integration request (OAuth needed)
     // Regular coding requests should use V2 (handled above) or regular chat
-    const isIntegrationRequest = requiresThirdPartyOAuth(messages);
+    const isIntegrationRequest = requiresThirdPartyOAuth(processedMessages);
     if (isCodeRequest && !isIntegrationRequest && CHAT_AGENTIC_PIPELINE !== 'off') {
       // For non-integration code requests that don't want V2, fall through to regular chat
       // This allows "code a nextjs app" to get regular LLM response instead of agentic pipeline
@@ -1857,8 +1913,30 @@ export async function POST(request: NextRequest) {
 
               // Send initial 'init' event to establish stream connection immediately
               // This helps client-side rendering detect the stream has started
+              const abortController = request.signal ? { abort: () => request.signal!.abort(), signal: request.signal } : new AbortController();
+
+              // Create stream state for tracking and WebSocket control channel
+              let streamStateCreated = false;
+              try {
+                streamStateManager.create({
+                  streamId: streamRequestId,
+                  userId: userId || 'anonymous',
+                  provider: actualProvider,
+                  model: actualModel,
+                  maxTokens: clientResponse.usage?.total_tokens || 65536,
+                  abortController,
+                });
+                streamStateCreated = true;
+              } catch (e) {
+                chatLogger.warn('Failed to create stream state', {
+                  streamRequestId,
+                  error: e instanceof Error ? e.message : String(e),
+                });
+              }
+
               realEmit('init', {
                 requestId: streamRequestId,
+                streamId: streamRequestId, // For WebSocket control channel (same port, path-based routing)
                 timestamp: Date.now(),
               });
 
@@ -1877,6 +1955,8 @@ export async function POST(request: NextRequest) {
 
               if (request.signal) {
                 request.signal.addEventListener('abort', () => {
+                  streamStateManager.abort(streamRequestId);
+                  notifyStreamComplete(streamRequestId);
                   cleanup();
                   chatLogger.warn('LLM stream cancelled by client', { requestId: streamRequestId });
                 });
@@ -1897,6 +1977,12 @@ export async function POST(request: NextRequest) {
                       timestamp: Date.now(),
                       type: 'token'
                     });
+                    // Track tokens in stream state (non-fatal if it fails)
+                    try {
+                      streamStateManager.appendToken(streamRequestId, tokenBuffer);
+                    } catch (e) {
+                      // Non-fatal — stream state tracking shouldn't break the main stream
+                    }
                     tokenBuffer = '';
                     lastTokenEmitTime = Date.now();
                   }
@@ -2264,6 +2350,17 @@ export async function POST(request: NextRequest) {
 
                     // Emit any remaining buffered tokens before done event
                     emitBufferedTokens();
+
+                    // Update stream state and notify WebSocket control channel (non-fatal)
+                    try {
+                      streamStateManager.complete(streamRequestId, doneEventData.finishReason);
+                      notifyStreamComplete(streamRequestId);
+                    } catch (e) {
+                      chatLogger.warn('Failed to update stream state on completion', {
+                        streamRequestId,
+                        error: e instanceof Error ? e.message : String(e),
+                      });
+                    }
 
                     realEmit('done', doneEventData);
 
@@ -3772,8 +3869,22 @@ async function buildHybridWorkspaceContext(
       return '';
     }
 
+    // Log token usage for monitoring
+    console.debug('[Chat] Hybrid workspace context built', {
+      source: result.source,
+      symbolCount: result.symbolCount,
+      filesIncluded: result.filesIncluded,
+      estimatedTokens: result.estimatedTokens,
+      treeMode: result.treeMode,
+      budgetTier: result.budgetTier,
+      warnings: result.warnings.length > 0 ? result.warnings.join('; ') : undefined,
+    });
+
+    // For JSON format, prepend the tree so the LLM sees workspace structure
+    const treeSection = result.tree ? `Workspace structure:\n\`\`\`\n${result.tree}\n\`\`\`\n\n` : '';
+
     return [
-      `=== WORKSPACE CONTEXT (${result.source === 'symbol-retrieval' ? 'AST Symbols' : 'Smart Context'}) ===`,
+      `${treeSection}=== WORKSPACE CONTEXT (${result.source === 'symbol-retrieval' ? 'AST Symbols' : 'Smart Context'}) ===`,
       `Files: ${result.filesIncluded}`,
       result.symbolCount > 0 ? `Symbols: ${result.symbolCount}` : '',
       `Estimated Tokens: ${result.estimatedTokens}`,

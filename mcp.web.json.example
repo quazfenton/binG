@@ -1,0 +1,35 @@
+{
+  "mcpServers": {
+    "github": {
+      "description": "GitHub MCP Server - repositories, issues, PRs",
+      "transport": {
+        "type": "http",
+        "url": "https://github-mcp.example.com/mcp",
+        "apiKey": ""
+      }
+    },
+    "slack": {
+      "description": "Slack MCP Server - channels, messages, threads",
+      "transport": {
+        "type": "http",
+        "url": "https://slack-mcp.example.com/mcp",
+        "bearerToken": ""
+      }
+    },
+    "postgres": {
+      "description": "PostgreSQL MCP Server - database queries",
+      "transport": {
+        "type": "http",
+        "url": "https://postgres-mcp.example.com/mcp",
+        "headers": {
+          "X-API-Key": ""
+        }
+      }
+    }
+  },
+  "mcpSettings": {
+    "autoConnect": true,
+    "connectionTimeout": 30000,
+    "toolCallTimeout": 60000
+  }
+}

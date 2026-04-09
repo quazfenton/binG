@@ -1,24 +1,36 @@
+/**
+ * Request Type Detector — Two-Stage Intent Classification
+ *
+ * Stage 1: Fast regex + keyword scoring using the declarative intent schema.
+ * Stage 2: LLM-based disambiguation for ambiguous inputs (when stage 1 confidence is low).
+ *
+ * Replaces the old hardcoded pattern arrays with a data-driven schema that can be
+ * extended without code changes.
+ *
+ * @example
+ * ```typescript
+ * const { classifyIntent } = await import('@bing/shared/agent/intent-schema');
+ * const match = await classifyIntent(userMessage, { minConfidence: 0.5 });
+ * // match.intent.routingTarget → 'opencode' | 'nullclaw' | 'chat' | 'advanced'
+ * // match.confidence → 0.0-1.0
+ * // match.stage → 1 (regex) | 2 (LLM)
+ * ```
+ */
+
 import type { LLMMessage } from '@/lib/chat/llm-providers';
 import { createHash } from 'crypto';
 
-// LOW PRIORITY FIX: Cache for request type detection to avoid repeated analysis
-const detectionCache = new Map<string, 'tool' | 'sandbox' | 'chat'>();
+// Cache for stage 1 results (fast path — no LLM cost)
+const detectionCache = new Map<string, { type: 'tool' | 'sandbox' | 'chat'; confidence: number }>();
 const CACHE_MAX_SIZE = 1000;
 
-/**
- * Create cache key from messages
- */
 function createCacheKey(messages: LLMMessage[]): string {
   const content = messages.map(m => `${m.role}:${JSON.stringify(m.content)}`).join('|');
   return createHash('sha256').update(content).digest('hex').slice(0, 16);
 }
 
-/**
- * Cleanup cache if too large
- */
 function cleanupCache(): void {
   if (detectionCache.size > CACHE_MAX_SIZE) {
-    // Remove oldest entries (first 10%)
     const toRemove = Math.floor(CACHE_MAX_SIZE * 0.1);
     const keys = Array.from(detectionCache.keys()).slice(0, toRemove);
     for (const key of keys) {
@@ -28,22 +40,43 @@ function cleanupCache(): void {
 }
 
 /**
- * Detect the type of request based on the messages
- * @param messages The conversation messages
- * @returns The detected request type: 'tool', 'sandbox', or 'chat'
+ * Map intent routing targets to legacy request types.
  */
-export function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 'chat' {
+function intentToRequestType(target: string): 'tool' | 'sandbox' | 'chat' {
+  switch (target) {
+    case 'nullclaw':
+    case 'tool':
+      return 'tool';
+    case 'opencode':
+    case 'advanced':
+    case 'sandbox':
+      return 'sandbox';
+    default:
+      return 'chat';
+  }
+}
+
+/**
+ * Detect the type of request using the two-stage intent classifier.
+ *
+ * Stage 1 (fast): Regex + keyword scoring from the declarative intent schema.
+ * Stage 2 (LLM): Only when stage 1 confidence is below threshold.
+ */
+export async function detectRequestType(messages: LLMMessage[]): Promise<{
+  type: 'tool' | 'sandbox' | 'chat';
+  confidence: number;
+  stage: 1 | 2;
+}> {
   // Check cache first
   const cacheKey = createCacheKey(messages);
   const cached = detectionCache.get(cacheKey);
-  if (cached !== undefined) {
-    return cached;
+  if (cached) {
+    return { ...cached, stage: 1 };
   }
-  
+
   const userMessages = messages.filter(m => m.role === 'user');
   const lastUserContent = userMessages[userMessages.length - 1]?.content;
 
-  // Extract text from content (handle both string and multimodal array formats)
   const extractText = (value: any): string => {
     if (!value) return '';
     if (typeof value === 'string') return value;
@@ -64,160 +97,67 @@ export function detectRequestType(messages: LLMMessage[]): 'tool' | 'sandbox' | 
     return '';
   };
 
-  // Include recent user context (last 2 messages) for better follow-up detection
-  const recentUserMessages = userMessages.slice(-2);
-  const recentContext = recentUserMessages
-    .map(m => extractText(m.content))
-    .join(' ')
-    .toLowerCase();
-
   const text = extractText(lastUserContent).trim();
-  if (!text) return 'chat';
+  if (!text) return { type: 'chat', confidence: 0, stage: 1 };
 
-  const lowerText = text.toLowerCase();
+  // Import the two-stage intent classifier
+  const { classifyIntent, getAllStage1Scores, INTENT_SCHEMA } = await import('@bing/shared/agent/intent-schema');
 
-  // IMPROVED: Use weighted scoring instead of simple pattern matching
-  // This prevents adversarial bypasses and provides more accurate intent detection
-  const scores = {
-    tool: 0,
-    sandbox: 0,
-    chat: 0,
+  // Try stage 1 first (fast, no LLM cost)
+  const stage1Result = classifyIntent(text, { minConfidence: 0.5, enableStage2: false });
+
+  if (stage1Result.confidence >= 0.5) {
+    const requestType = intentToRequestType(stage1Result.intent.routingTarget);
+    const result = { type: requestType, confidence: stage1Result.confidence, stage: 1 as const };
+
+    // Cache the result
+    detectionCache.set(cacheKey, { type: result.type, confidence: result.confidence });
+    cleanupCache();
+
+    return result;
+  }
+
+  // Stage 1 was ambiguous — try stage 2 (LLM-based)
+  const stage2Result = await classifyIntent(text, { minConfidence: 0.3, enableStage2: true });
+  const requestType = intentToRequestType(stage2Result.intent.routingTarget);
+
+  return {
+    type: requestType,
+    confidence: stage2Result.confidence,
+    stage: stage2Result.stage,
+  };
+}
+
+/**
+ * Synchronous fallback for environments where async imports aren't available.
+ * Uses only stage 1 (regex + keyword scoring).
+ */
+export function detectRequestTypeSync(messages: LLMMessage[]): 'tool' | 'sandbox' | 'chat' {
+  const userMessages = messages.filter(m => m.role === 'user');
+  const lastUserContent = userMessages[userMessages.length - 1]?.content;
+
+  const extractText = (value: any): string => {
+    if (!value) return '';
+    if (typeof value === 'string') return value;
+    if (Array.isArray(value)) {
+      return value.map((part: any) => typeof part === 'string' ? part : part?.text || '').join(' ');
+    }
+    if (typeof value?.text === 'string') return value.text;
+    if (typeof value?.content === 'string') return value.content;
+    return '';
   };
 
-  // Knowledge/advice requests should remain plain chat
-  const KNOWLEDGE_PATTERNS = [
-    /^\s*(how|what|why|when|where|can|could|would|should|is|are|do|does)\b/i,
-    /\b(explain|guide|tutorial|docs|documentation|example|examples|best practice|overview)\b/i,
-    /\b(how to use|how do i use|how can i use|how does)\b/i,
-  ];
-  
-  // Action patterns that indicate tool/sandbox intent
-  const ACTION_PATTERNS = [
-    /\b(send|draft|compose|create|post|upload|deploy|open|start|launch|execute|run)\b/i,
-    /\bfor me\b/i,
-    /\bnow\b/i,
-  ];
-  
-  const looksLikeKnowledgeRequest = KNOWLEDGE_PATTERNS.some((p) => p.test(lowerText));
-  const explicitlyActionable = ACTION_PATTERNS.some((p) => p.test(lowerText));
-  
-  // Check recent context for follow-up patterns that indicate tool/sandbox continuation
-  const followUpPatterns = [
-    { pattern: /\b(yes|yeah|sure|ok|okay|go ahead|please do|do it|execute|run it|go for it)\b/i, weight: 2 },
-    { pattern: /\b(make it|create it|build it|write it|send it|post it)\b/i, weight: 2 },
-    { pattern: /\b(that|this|those)\s+(one|file|code|command)/i, weight: 1 },
-  ];
-  
-  // If we have recent context and the current message looks like a follow-up, boost tool/sandbox
-  if (recentContext.length > 10) {
-    const hasRecentAction = followUpPatterns.some(({ pattern, weight }) => {
-      if (pattern.test(lowerText)) {
-        // Check if recent context has action indicators
-        const contextHasAction = /\b(run|execute|create|send|post|build|write|open|start|deploy)\b/i.test(recentContext);
-        if (contextHasAction) {
-          scores.tool += weight;
-          scores.sandbox += weight;
-        }
-        return true;
-      }
-      return false;
-    });
-    
-    // Short confirmations like "yes", "ok" with recent context strongly indicate continuation
-    if (/^\s*(yes|yeah|sure|ok|okay)\s*$/i.test(lowerText) && recentContext.length > 20) {
-      scores.tool += 3;
-      scores.sandbox += 3;
-    }
-  }
-  
-  // Knowledge requests without explicit action are chat
-  if (looksLikeKnowledgeRequest && !explicitlyActionable) {
-    scores.chat += 3;
+  const text = extractText(lastUserContent).trim().toLowerCase();
+  if (!text) return 'chat';
+
+  // Quick intent matching using the schema's patterns (no LLM)
+  const { INTENT_SCHEMA } = require('@bing/shared/agent/intent-schema');
+  const { getAllStage1Scores } = require('@bing/shared/agent/intent-schema');
+  const scores = getAllStage1Scores(text);
+
+  if (scores.length > 0) {
+    return intentToRequestType(scores[0].intent.routingTarget);
   }
 
-  // Tool intent patterns (third-party service actions) - weighted scoring
-  const TOOL_PATTERNS = [
-    { pattern: /\b(use|using)\s+(a\s+)?tools?\b/i, weight: 3 },
-    { pattern: /\b(tool|function)\s+(call|use|execution)\b/i, weight: 2 },
-    { pattern: /\b(send|draft|compose)\s+(an?\s+)?email\b/i, weight: 3 },
-    { pattern: /\bgmail\b/i, weight: 2 },
-    { pattern: /\bemail\s+to\b/i, weight: 3 },
-    { pattern: /\bcalendar\b/i, weight: 2 },
-    { pattern: /\bgithub\b/i, weight: 2 },
-    { pattern: /\bslack\b/i, weight: 2 },
-    { pattern: /send\s+(an?\s+)?email/i, weight: 3 },
-    { pattern: /read\s+(my\s+)?emails?/i, weight: 2 },
-    { pattern: /create\s+(a\s+)?calendar\s+event/i, weight: 3 },
-    { pattern: /add\s+to\s+(my\s+)?calendar/i, weight: 3 },
-    { pattern: /post\s+(to|on)\s+(twitter|x|reddit|slack|discord)/i, weight: 3 },
-    { pattern: /send\s+(a\s+)?(text|sms|message)/i, weight: 3 },
-    { pattern: /make\s+a\s+call/i, weight: 3 },
-    { pattern: /create\s+(a\s+)?(github|git)\s+(issue|pr|pull)/i, weight: 3 },
-    { pattern: /search\s+(with\s+)?exa/i, weight: 2 },
-    { pattern: /play\s+(on\s+)?spotify/i, weight: 2 },
-    { pattern: /upload\s+to\s+(drive|dropbox)/i, weight: 3 },
-    { pattern: /create\s+(a\s+)?notion/i, weight: 2 },
-    { pattern: /deploy\s+(to|on)\s+(vercel|railway)/i, weight: 3 },
-    { pattern: /create\s+(a\s+)?google\s+(doc|sheet|slide)/i, weight: 3 },
-  ];
-
-  // Sandbox intent patterns (code EXECUTION, not file creation) - weighted scoring
-  // NOTE: File creation (write/create a file) is handled by VFS MCP tools and should
-  // remain 'chat', NOT 'sandbox'. Only patterns with explicit execution intent belong here.
-  const SANDBOX_PATTERNS = [
-    { pattern: /\b(run|execute|compile)\s+(this|the|my)?\s*(code|script|program)/i, weight: 3 },
-    { pattern: /\b(build|create|write)\s+(a\s+)?(server|api|app|script|program)\s+(and|then)\s+(run|execute|start)/i, weight: 3 },
-    { pattern: /\bnpm\s+(install|init|run|start)/i, weight: 2 },
-    { pattern: /\bpip\s+install/i, weight: 2 },
-    { pattern: /\b(install|setup)\s+(packages?|dependencies)/i, weight: 2 },
-    { pattern: /\brun\s+.*\.(py|js|ts|sh|rb)/i, weight: 3 },
-    { pattern: /\b(open|start|launch)\s+(a\s+)?(terminal|shell|sandbox)/i, weight: 2 },
-  ];
-
-  // Apply weighted scoring for tool patterns
-  for (const { pattern, weight } of TOOL_PATTERNS) {
-    if (pattern.test(lowerText)) {
-      scores.tool += weight;
-    }
-  }
-
-  // Apply weighted scoring for sandbox patterns
-  for (const { pattern, weight } of SANDBOX_PATTERNS) {
-    if (pattern.test(lowerText)) {
-      scores.sandbox += weight;
-    }
-  }
-
-  // "for me" strongly indicates action (boost tool score)
-  if (/\bfor me\b/i.test(lowerText)) {
-    scores.tool += 3;
-  }
-
-  // Code execution strongly indicates sandbox
-  if (/\bcode\s+(execution|run|execute)\b/i.test(lowerText)) {
-    scores.sandbox += 3;
-  }
-
-  // Determine result based on highest score with confidence threshold
-  const maxScore = Math.max(scores.tool, scores.sandbox, scores.chat);
-  const totalScore = scores.tool + scores.sandbox + scores.chat;
-  const confidence = totalScore > 0 ? maxScore / totalScore : 0;
-
-  // If confidence is too low, default to chat
-  let result: 'tool' | 'sandbox' | 'chat';
-  if (confidence < 0.3 || maxScore === 0) {
-    result = 'chat';
-  } else if (scores.tool === maxScore) {
-    result = 'tool';
-  } else if (scores.sandbox === maxScore) {
-    result = 'sandbox';
-  } else {
-    result = 'chat';
-  }
-  
-  // Cache the result
-  detectionCache.set(cacheKey, result);
-  cleanupCache();
-  
-  return result;
+  return 'chat';
 }

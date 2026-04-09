@@ -61,11 +61,11 @@ export {
 // Desktop MCP Manager - server-only, import directly from './desktop-mcp-manager'
 // Do NOT re-export here to avoid pulling Node.js deps into client bundles.
 
-// CLI Server (NEW)
+// HTTP Server (NEW)
 export {
   createMCPServerForCLI,
   shutdownMCPServer,
-} from './mcp-cli-server'
+} from './mcp-http-server'
 
 export {
   mcporterIntegration,

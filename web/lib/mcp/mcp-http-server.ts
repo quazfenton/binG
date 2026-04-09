@@ -16,22 +16,22 @@ const logger = createLogger('MCP:CLI-Server')
 
 let httpServer: Server | null = null
 
-// SECURITY: Authentication token for MCP CLI server
+// SECURITY: Authentication token for MCP HTTP server
 // Required for all endpoints to prevent unauthorized tool execution
-const MCP_CLI_AUTH_TOKEN = process.env.MCP_CLI_AUTH_TOKEN;
+const MCP_HTTP_AUTH_TOKEN = process.env.MCP_HTTP_AUTH_TOKEN;
 
 /**
  * Validate authentication token from request
  */
 function validateAuthToken(req: any): boolean {
-  if (!MCP_CLI_AUTH_TOKEN) {
+  if (!MCP_HTTP_AUTH_TOKEN) {
     // If no token configured, allow localhost only (dev mode)
     const host = req.headers.host || '';
     return host.startsWith('localhost') || host.startsWith('127.0.0.1');
   }
-  
+
   const authHeader = req.headers.authorization || '';
-  return authHeader === `Bearer ${MCP_CLI_AUTH_TOKEN}`;
+  return authHeader === `Bearer ${MCP_HTTP_AUTH_TOKEN}`;
 }
 
 /**
@@ -108,7 +108,7 @@ export async function createMCPServerForCLI(port: number = 8888): Promise<void> 
       // SECURITY: Bind to localhost only (not all interfaces)
       server.listen(port, '127.0.0.1', () => {
         logger.info(`MCP CLI server listening on 127.0.0.1:${port}`)
-        logger.warn('MCP CLI server requires authentication. Set MCP_CLI_AUTH_TOKEN environment variable.')
+        logger.warn('MCP HTTP server requires authentication. Set MCP_HTTP_AUTH_TOKEN environment variable.')
         httpServer = server
         resolve()
       })
