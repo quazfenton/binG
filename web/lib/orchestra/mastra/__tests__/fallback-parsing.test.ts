@@ -31,7 +31,7 @@ describe('Fallback Text-Based Tool Call Parsing', () => {
       
       const text = 'I will create a file for you: write_file({ "path": "hello.py", "content": "print(\"Hello World\")" })';
       
-      const toolCalls = parseTextToolCalls(text);
+      const toolCalls = await parseTextToolCalls(text);
       
       expect(toolCalls).toHaveLength(1);
       expect(toolCalls[0].name).toBe('write_file');
@@ -46,7 +46,7 @@ describe('Fallback Text-Based Tool Call Parsing', () => {
       
       const text = '[Tool: write_file] { "path": "test.js", "content": "console.log(\"test\")" }';
       
-      const toolCalls = parseTextToolCalls(text);
+      const toolCalls = await parseTextToolCalls(text);
       
       expect(toolCalls).toHaveLength(1);
       expect(toolCalls[0].name).toBe('write_file');
@@ -60,7 +60,7 @@ describe('Fallback Text-Based Tool Call Parsing', () => {
       
       const text = '{ "tool": "read_file", "path": "src/index.js" }';
       
-      const toolCalls = parseTextToolCalls(text);
+      const toolCalls = await parseTextToolCalls(text);
       
       expect(toolCalls).toHaveLength(1);
       expect(toolCalls[0].name).toBe('read_file');
@@ -76,7 +76,7 @@ describe('Fallback Text-Based Tool Call Parsing', () => {
 write_file({ "path": "package.json", "content": "{}" })
 write_file({ "path": "index.js", "content": "console.log(\"hello\")" })`;
       
-      const toolCalls = parseTextToolCalls(text);
+      const toolCalls = await parseTextToolCalls(text);
       
       expect(toolCalls).toHaveLength(2);
       expect(toolCalls[0].name).toBe('write_file');
@@ -92,7 +92,7 @@ write_file({ "path": "index.js", "content": "console.log(\"hello\")" })`;
       
       const text = 'Hello! How can I help you today?';
       
-      const toolCalls = parseTextToolCalls(text);
+      const toolCalls = await parseTextToolCalls(text);
       
       expect(toolCalls).toHaveLength(0);
     });
@@ -104,7 +104,7 @@ write_file({ "path": "index.js", "content": "console.log(\"hello\")" })`;
       
       const text = 'Let me check the directory: list_directory({ "path": "src" })';
       
-      const toolCalls = parseTextToolCalls(text);
+      const toolCalls = await parseTextToolCalls(text);
       
       expect(toolCalls).toHaveLength(1);
       expect(toolCalls[0].name).toBe('list_directory');
@@ -118,7 +118,7 @@ write_file({ "path": "index.js", "content": "console.log(\"hello\")" })`;
       
       const text = 'Creating directory: create_directory({ "path": "src/components" })';
       
-      const toolCalls = parseTextToolCalls(text);
+      const toolCalls = await parseTextToolCalls(text);
       
       expect(toolCalls).toHaveLength(1);
       expect(toolCalls[0].name).toBe('create_directory');
@@ -132,7 +132,7 @@ write_file({ "path": "index.js", "content": "console.log(\"hello\")" })`;
       
       const text = 'Removing old file: delete_file({ "path": "old.txt" })';
       
-      const toolCalls = parseTextToolCalls(text);
+      const toolCalls = await parseTextToolCalls(text);
       
       expect(toolCalls).toHaveLength(1);
       expect(toolCalls[0].name).toBe('delete_file');

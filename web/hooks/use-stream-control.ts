@@ -117,14 +117,13 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
     // Path-based routing: /stream-control is handled by server.ts upgrade handler
     const protocol = typeof window !== 'undefined' && window.location.protocol === 'https:' ? 'wss' : 'ws';
     const wsHost = typeof window !== 'undefined' ? window.location.host : `localhost:${DEFAULT_WS_PORT}`;
-    const wsUrl = `${protocol}://${wsHost}/stream-control?streamId=${encodeURIComponent(streamId)}`;
+    // FIX: Browser WebSocket API does NOT support custom headers.
+    // Pass auth token via query parameter instead (server already supports this).
+    const tokenParam = authToken ? `&token=${encodeURIComponent(authToken)}` : '';
+    const wsUrl = `${protocol}://${wsHost}/stream-control?streamId=${encodeURIComponent(streamId)}${tokenParam}`;
 
     try {
-      const ws = new WebSocket(wsUrl, {
-        headers: {
-          Authorization: `Bearer ${authToken}`,
-        },
-      } as any);
+      const ws = new WebSocket(wsUrl);
 
       wsRef.current = ws;
 

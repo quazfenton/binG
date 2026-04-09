@@ -304,19 +304,19 @@ server.registerTool(
 server.registerTool(
   'file.search',
   {
-    description: 'Search files by name pattern or content pattern.',
+    description: 'Search files by name pattern, content, or metadata.',
     inputSchema: {
+      query: z.string().describe('Search query (filename pattern or content regex)'),
       path: z.string().optional().default('.').describe('Directory to search in'),
-      namePattern: z.string().optional().describe('Glob pattern for file names (e.g., "*.ts")'),
-      contentPattern: z.string().optional().describe('Regex pattern to search within files'),
-      maxResults: z.number().optional().default(20),
+      type: z.enum(['name', 'content', 'both']).optional().default('name').describe('Search type: name pattern, content regex, or both'),
+      maxResults: z.number().optional().default(50),
     },
   },
-  async ({ path, namePattern, contentPattern, maxResults }) => {
-    logger.debug('file.search requested', { path, namePattern, contentPattern });
+  async ({ query, path, type, maxResults }) => {
+    logger.debug('file.search requested', { query, path, type, maxResults });
     const result = await executeCapability({
       capabilityId: 'file.search',
-      input: { path, namePattern, contentPattern, maxResults },
+      input: { query, path, type, maxResults },
       userId: MCP_USER_ID,
     });
     return result.isError
@@ -712,7 +712,7 @@ server.registerTool(
 // ============================================================================
 
 try {
-  const { registerMultiAgentTools } = await import('./multi-agent-tools');
+  const { registerMultiAgentTools } = await import('../../../web/lib/mcp/multi-agent-tools');
   registerMultiAgentTools(server);
   logger.info('Registered multi-agent tools');
 } catch (error: any) {

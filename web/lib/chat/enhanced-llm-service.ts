@@ -234,8 +234,17 @@ export class EnhancedLLMService {
     // Use centralized fallback chains from provider-fallback-chains.ts
     // This ensures all paths (enhanced-llm-service, unified-agent, etc.)
     // use the same fallback provider order.
+    // Filter to providers supported by llmService.generateResponse (non-streaming path)
+    const nonStreamingSupportedProviders = [
+      'openai', 'anthropic', 'google', 'cohere', 'together', 'replicate',
+      'portkey', 'openrouter', 'chutes', 'mistral', 'github', 'zen',
+      'opencode', 'antigravity'
+    ];
     for (const [provider, chain] of Object.entries(PROVIDER_FALLBACK_CHAINS)) {
-      this.fallbackChains.set(provider, chain);
+      const compatibleChain = chain.filter(fallbackProvider =>
+        nonStreamingSupportedProviders.includes(fallbackProvider)
+      );
+      this.fallbackChains.set(provider, compatibleChain);
     }
   }
 
@@ -322,7 +331,8 @@ export class EnhancedLLMService {
       ];
       // Prepend context pack to first system message or add as new system message
       const systemMsgIdx = processedMessages.findIndex(m => m.role === 'system');
-      const contextPrefix = `\n\n--- WORKSPACE CONTEXT (JSON) ---\n${contextPackBundle}\n--- END CONTEXT ---\n`;
+      const contextFormat = contextPack?.format?.toUpperCase() || 'JSON';
+      const contextPrefix = `\n\n--- WORKSPACE CONTEXT (${contextFormat}) ---\n${contextPackBundle}\n--- END CONTEXT ---\n`;
       if (systemMsgIdx >= 0) {
         const sysMsg = processedMessages[systemMsgIdx];
         processedMessages[systemMsgIdx] = {
@@ -658,7 +668,8 @@ export class EnhancedLLMService {
     let processedMessages = llmRequest.messages;
     if (contextPackBundle) {
       const systemMsgIdx = processedMessages.findIndex(m => m.role === 'system');
-      const contextPrefix = `\n\n--- WORKSPACE CONTEXT (JSON) ---\n${contextPackBundle}\n--- END CONTEXT ---\n`;
+      const contextFormat = contextPack.format?.toUpperCase() || 'JSON';
+      const contextPrefix = `\n\n--- WORKSPACE CONTEXT (${contextFormat}) ---\n${contextPackBundle}\n--- END CONTEXT ---\n`;
       if (systemMsgIdx >= 0) {
         const sysMsg = processedMessages[systemMsgIdx];
         processedMessages = processedMessages.map((m, i) =>
@@ -710,7 +721,7 @@ export class EnhancedLLMService {
         let vercelTools: Record<string, any> | undefined;
         if (request.enableTools && request.userId) {
           try {
-            const { getAllTools, extractPublicUrls } = await import('./vercel-ai-tools');
+            const { getAllTools } = await import('./vercel-ai-tools');
             // Compute session-aware scopePath for VFS tools
             const sessionIdFromConv = normalizeSessionId(request.conversationId || '');
             const computedScopePath = (request as any).scopePath 
@@ -807,8 +818,10 @@ export class EnhancedLLMService {
             const lastText = typeof lastUserMsg?.content === 'string'
               ? lastUserMsg.content
               : (lastUserMsg?.content as any[])?.find?.((c: any) => c.type === 'text')?.text || '';
-            const detectedUrls = extractPublicUrls(lastText);
-            if (detectedUrls.length > 0 && vercelTools['web_fetch']) {
+            // Skip URL detection - extractPublicUrls not currently available
+            const urlRegex = /https?:\/\/[^\s]+/g;
+            const detectedUrls = lastText.match(urlRegex) || [];
+            if (detectedUrls.length > 0 && vercelTools?.['web_fetch']) {
               llmRequest.messages = [
                 ...llmRequest.messages,
                 {

@@ -97,38 +97,9 @@ export async function processEvent(eventId: string): Promise<void> {
   logger.info(`Event ${eventId} processed successfully`);
 }
 
-/**
- * Trigger.dev v3 task definition
- * When Trigger.dev SDK is available, this task is registered and invoked
- * by the event bus for each emitted event.
- *
- * To register this task in your Trigger.dev project, add to trigger.config.ts:
- *
- * ```typescript
- * import { defineConfig } from "@trigger.dev/sdk/v3";
- *
- * export default defineConfig({
- *   project: "your-project-id",
- *   dirs: ["./web/lib/events/trigger"],
- * });
- * ```
- */
-export const eventWorker = {
-  id: 'event-worker',
-  name: 'Event Worker',
-  description: 'Process a single pending event with durable execution',
-
-  /**
-   * Execute the event worker.
-   * Called by Trigger.dev when an event is dispatched, or can be called directly.
-   */
-  async run(payload: { eventId: string }): Promise<{ eventId: string; status: string }> {
-    await processEvent(payload.eventId);
-    return { eventId: payload.eventId, status: 'completed' };
-  },
-};
-
-// Start worker if run directly (local polling mode)
+// Local polling mode — processes events periodically when Trigger.dev
+// is not configured. This runs independently of the Trigger.dev task
+// defined in web/trigger/event-worker.ts.
 if (require.main === module) {
   const timer = startEventWorker();
   logger.info('Event worker started directly (local polling mode)');

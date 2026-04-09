@@ -190,16 +190,27 @@ class WindowControl {
    */
   async openUrl(url: string, target: '_blank' | '_self' = '_blank'): Promise<void> {
     if (isDesktopMode()) {
+      // Tauri v2 desktop: try plugin-opener first, fall back to window.open
       try {
         const { open } = await import('@tauri-apps/plugin-opener');
         await open(url);
-      } catch (error) {
-        console.warn('[WindowControl] Tauri opener failed, falling back to window.open:', error);
-        const openedWindow = window.open(url, target, 'noopener,noreferrer');
-        if (openedWindow) {
-          openedWindow.opener = null;
+        return;
+      } catch {
+        // Plugin not installed — use built-in Tauri shell fallback
+        try {
+          const { invoke } = await import('@tauri-apps/api/core');
+          await invoke('plugin:opener|open_url', { path: url });
+          return;
+        } catch {
+          // Shell invoke also failed — use window.open
         }
       }
+      // Built-in Tauri fallback: open via <a> tag click simulation
+      const a = document.createElement('a');
+      a.href = url;
+      a.target = '_blank';
+      a.rel = 'noopener noreferrer';
+      a.click();
     } else {
       const openedWindow = window.open(url, target, 'noopener,noreferrer');
       if (openedWindow) {

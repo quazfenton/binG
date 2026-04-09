@@ -133,8 +133,11 @@ class ContextPackService {
 
     // Index new/changed files into project's vector store (contentHash avoids re-embedding)
     // DEFERRED: Run async in background so slow embedding doesn't block context generation
-    this.indexFilesToVectorStore(projectServices, files, warnings).catch(e => {
-      // Non-failure: warnings are already collected, logging is sufficient
+    // Use a separate warnings array — the background job mutates this after the result
+    // is returned, so returned warnings remain deterministic.
+    const indexingWarnings: string[] = [];
+    this.indexFilesToVectorStore(projectServices, files, indexingWarnings).catch(e => {
+      // Non-failure: warnings are already collected in indexingWarnings, logging is sufficient
       console.warn('[ContextPack] Background indexing failed:', e instanceof Error ? e.message : String(e));
     });
     

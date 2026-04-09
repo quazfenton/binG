@@ -185,18 +185,20 @@ export function classifyIntentStage1(
       }
     }
 
-    if (score > 0) {
+if (score > 0) {
       // Normalize: max possible score for this intent
       const maxPossible = intent.patterns.reduce((s, p) => s + p.weight, 0)
         + intent.keywords.reduce((s, k) => s + k.weight, 0);
       const normalizedScore = maxPossible > 0 ? score / maxPossible : 0;
-      const confidence = Math.max(normalizedScore, intent.baseConfidence * (score > 0 ? 1 : 0));
+      // Only apply baseConfidence boost if regex actually matched (not keyword-only)
+      const confidence = matchedPatterns.length > 0
+        ? Math.max(normalizedScore, intent.baseConfidence)
+        : normalizedScore;
 
       scores.push({ intent, score: confidence, matchedPatterns, matchedKeywords });
     }
-  }
 
-  if (scores.length === 0) return null;
+    if (scores.length === 0) return null;
 
   // Sort by score descending
   scores.sort((a, b) => b.score - a.score);
@@ -259,9 +261,14 @@ Return ONLY a JSON object with:
       const parsed = JSON.parse(jsonMatch[0]);
       const intent = INTENT_SCHEMA.find(i => i.id === parsed.intent_id);
       if (intent) {
+        // Validate and clamp confidence to numeric range
+        const parsedConfidence = Number(parsed.confidence);
+        const confidence = Number.isFinite(parsedConfidence)
+          ? Math.min(1, Math.max(0, parsedConfidence))
+          : 0.5;
         return {
           intent,
-          confidence: parsed.confidence ?? 0.5,
+          confidence,
           stage: 2,
         };
       }
@@ -283,15 +290,16 @@ Return ONLY a JSON object with:
 /**
  * Full two-stage intent classification.
  * Stage 1 is always tried first. Stage 2 only runs if stage 1 is ambiguous.
+ * Always returns Promise for consistent API - use enableStage2: false for fast sync-like behavior.
  */
-export async function classifyIntent(
+export function classifyIntent(
   text: string,
   options?: { minConfidence?: number; enableStage2?: boolean },
 ): Promise<IntentMatch> {
   const enableStage2 = options?.enableStage2 ?? true;
   const stage1Result = classifyIntentStage1(text, options);
 
-  if (stage1Result) return stage1Result;
+  if (stage1Result) return Promise.resolve(stage1Result);
 
   if (enableStage2) {
     // Get all stage 1 scores for fallback
@@ -301,13 +309,14 @@ export async function classifyIntent(
 
   // No stage 2 — return best stage 1 or default to chat
   const allStage1 = getAllStage1Scores(text);
-  return allStage1.length > 0
+  const result = allStage1.length > 0
     ? allStage1[0]
     : {
         intent: INTENT_SCHEMA.find(i => i.id === 'chat')!,
         confidence: 0.1,
         stage: 1,
       };
+  return Promise.resolve(result);
 }
 
 /**
@@ -319,8 +328,12 @@ export function getAllStage1Scores(text: string): IntentMatch[] {
 
   for (const intent of INTENT_SCHEMA) {
     let score = 0;
+    let hasRegexMatch = false;
     for (const { regex, weight } of intent.patterns) {
-      if (regex.test(lowerText)) score += weight;
+      if (regex.test(lowerText)) {
+        score += weight;
+        hasRegexMatch = true;
+      }
     }
     for (const { word, weight } of intent.keywords) {
       if (lowerText.includes(word)) score += weight;
@@ -329,7 +342,9 @@ export function getAllStage1Scores(text: string): IntentMatch[] {
       const maxPossible = intent.patterns.reduce((s, p) => s + p.weight, 0)
         + intent.keywords.reduce((s, k) => s + k.weight, 0);
       const normalizedScore = maxPossible > 0 ? score / maxPossible : 0;
-      results.push({ intent, score: Math.max(normalizedScore, intent.baseConfidence) });
+      // Only apply baseConfidence boost if regex actually matched
+      const finalScore = hasRegexMatch ? Math.max(normalizedScore, intent.baseConfidence) : normalizedScore;
+      results.push({ intent, score: finalScore });
     }
   }
 
