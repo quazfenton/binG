@@ -74,7 +74,7 @@ function parseBatchWriteFiles(files: unknown): Array<{ path: string; content: st
   /**
    * Parse and validate a JSON string, returning a filtered array or null.
    */
-  function parseAndValidate(text: string): Array<{ path?: string; content?: string }> | null {
+  function parseAndValidate(text: string): Array<{ path: string; content: string }> | null {
     const parsed = tryParseJson(text, true);
     if (Array.isArray(parsed)) {
       return filterValidFiles(parsed);

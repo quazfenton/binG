@@ -17,6 +17,7 @@ import { MCPClient } from './client'
 import type {
   MCPServerConfig,
   MCPTransportConfig,
+  MCPTransportType,
   MCPTool,
   MCPToolResult,
 } from './types'

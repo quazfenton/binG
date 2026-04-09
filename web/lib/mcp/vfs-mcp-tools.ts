@@ -452,6 +452,25 @@ export const applyDiffTool = (tool as any)({
 });
 
 /**
+ * Reverse-normalize a scoped VFS path back to the simple form the AI expects.
+ * E.g. "project/sessions/001/src/app.ts" → "/src/app.ts" (if AI sent "/src/app.ts")
+ * or "src/app.ts" (if AI sent "src/app.ts")
+ */
+function reverseNormalizePath(originalPath: string, scopedPath: string): string {
+  const context = getToolContext();
+  const scopePath = context.scopePath || 'project/sessions/000';
+
+  // If scoped path starts with the scope, strip it to get the relative part
+  if (scopedPath.startsWith(`${scopePath}/`)) {
+    const relative = scopedPath.substring(scopePath.length + 1);
+    return originalPath.startsWith('/') ? `/${relative}` : relative;
+  }
+
+  // Fallback: return original path unchanged
+  return originalPath;
+}
+
+/**
  * read_file - Read the current content of a file
  * Critical for the agent to see what exists before editing
  */
@@ -481,7 +500,7 @@ export const readFileTool = (tool as any)({
 
   return {
     success: true,
-    path: f.path,
+    path: reverseNormalizePath(path, scopedPath),
     content: f.content,
     language: f.language,
     size: f.size,
@@ -520,16 +539,16 @@ export const readFilesTool = (tool as any)({
         scopePath: context.scopePath,
       });
 
-      const results = await Promise.all(paths.map(async (path: string) => {
+      const results = await Promise.all(paths.map(async (originalPath: string) => {
         try {
-          if (!path || typeof path !== 'string') {
-            return { path, success: false, error: 'Path is required' } as any;
+          if (!originalPath || typeof originalPath !== 'string') {
+            return { path: originalPath, success: false, error: 'Path is required' } as any;
           }
-          const scopedPath = resolveScopedPath(path);
+          const scopedPath = resolveScopedPath(originalPath);
           const file = await virtualFilesystem.readFile(context.userId, scopedPath);
           const f = file as any;
           return {
-            path: f.path,
+            path: reverseNormalizePath(originalPath, scopedPath),
             content: f.content,
             language: f.language,
             size: f.size,
@@ -537,7 +556,7 @@ export const readFilesTool = (tool as any)({
             success: true,
           };
         } catch (err: any) {
-          return { path, success: false, error: err.message };
+          return { path: originalPath, success: false, error: err.message };
         }
       }));
 

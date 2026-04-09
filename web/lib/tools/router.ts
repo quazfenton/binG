@@ -1477,18 +1477,18 @@ class TerminalProvider implements CapabilityProvider {
 
       switch (capabilityId) {
         case 'terminal.create_session':
-          return { success: true, data: await createTerminalSession(userId, input) };
+          return { success: true, output: await createTerminalSession(userId, input) };
 
         case 'terminal.send_input':
           return {
             success: true,
-            data: await sendTerminalInput(input.sessionId, input.input),
+            output: await sendTerminalInput(input.sessionId, input.input),
           };
 
         case 'terminal.get_output':
           return {
             success: true,
-            data: await getTerminalOutput(input.sessionId, {
+            output: await getTerminalOutput(input.sessionId, {
               lines: input.lines,
               waitForPattern: input.waitForPattern,
               timeoutMs: input.timeoutMs,
@@ -1498,22 +1498,22 @@ class TerminalProvider implements CapabilityProvider {
         case 'terminal.resize':
           return {
             success: true,
-            data: await resizeTerminal(input.sessionId, input.cols, input.rows),
+            output: await resizeTerminal(input.sessionId, input.cols, input.rows),
           };
 
         case 'terminal.close_session':
           return {
             success: true,
-            data: await closeTerminalSession(input.sessionId),
+            output: await closeTerminalSession(input.sessionId),
           };
 
         case 'terminal.list_sessions':
-          return { success: true, data: await listTerminalSessions(userId) };
+          return { success: true, output: await listTerminalSessions(userId) };
 
         case 'terminal.start_process':
           return {
             success: true,
-            data: await startProcess(input.command, {
+            output: await startProcess(input.command, {
               userId,
               cwd: input.cwd,
               env: input.env,
@@ -1524,7 +1524,7 @@ class TerminalProvider implements CapabilityProvider {
         case 'terminal.stop_process':
           return {
             success: true,
-            data: await stopProcess(input.pid, {
+            output: await stopProcess(input.pid, {
               userId,
               signal: input.signal,
             }),
@@ -1533,13 +1533,13 @@ class TerminalProvider implements CapabilityProvider {
         case 'terminal.list_processes':
           return {
             success: true,
-            data: await listProcesses({ userId, filter: input.filter }),
+            output: await listProcesses({ userId, filter: input.filter }),
           };
 
         case 'terminal.get_port_status':
           return {
             success: true,
-            data: await getPortStatus({ userId, port: input.port }),
+            output: await getPortStatus({ userId, port: input.port }),
           };
 
         default:

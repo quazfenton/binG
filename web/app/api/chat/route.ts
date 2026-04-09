@@ -2951,6 +2951,13 @@ export async function POST(request: NextRequest) {
                   // Same as regular LLM path (line ~1755)
                   allEdits = filesystemEdits;
                   const streamedContent = finalContent;
+                  
+                  // LOG what's being captured
+                  chatLogger.info('[STREAM] Final content for parsing', {
+                    streamedContentLength: streamedContent?.length || 0,
+                    streamedContentPreview: (streamedContent || '').slice(0, 300),
+                  });
+                  
                   if (enableFilesystemEdits && streamedContent.trim()) {
                     try {
                       // Enable batch mode to prevent circular Git commits
@@ -4524,7 +4531,7 @@ export async function applyFilesystemEditsFromResponse(input: {
   const folderCreateOps = extractFolderCreateTags(input.responseContent || '');
 
   // DIAGNOSTIC: Log what edits were found by the parser
-  chatLogger.debug('applyFilesystemEditsFromResponse — parse results', {
+  chatLogger.info('[PARSER] applyFilesystemEditsFromResponse — parse results', {
     writesFound: parsedResponse.writes.length,
     diffsFound: parsedResponse.diffs.length,
     applyDiffsFound: parsedResponse.applyDiffs.length,
@@ -4532,6 +4539,7 @@ export async function applyFilesystemEditsFromResponse(input: {
     foldersFound: parsedResponse.folders.length,
     forceExtract: input.forceExtract,
     responseContentLength: input.responseContent?.length || 0,
+    responsePreview: (input.responseContent || '').slice(0, 200),
   });
   if (parsedResponse.writes.length > 0) {
     chatLogger.debug('Parsed write edits', {

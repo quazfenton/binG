@@ -23,6 +23,7 @@ export interface FileEntry {
 /** Read a file by path */
 export async function readFile(path: string): Promise<string> {
   if (isDesktop) {
+    // @ts-ignore - Tauri API only available in desktop builds
     const { readTextFile } = await import("@tauri-apps/api/fs");
     return readTextFile(path);
   }
@@ -32,6 +33,7 @@ export async function readFile(path: string): Promise<string> {
 /** Write a file by path */
 export async function writeFile(path: string, content: string): Promise<void> {
   if (isDesktop) {
+    // @ts-ignore - Tauri API only available in desktop builds
     const { writeTextFile } = await import("@tauri-apps/api/fs");
     return writeTextFile(path, content);
   }
@@ -54,6 +56,7 @@ export async function readDirectory(
     throw new Error("readDirectory is only available on desktop");
   }
 
+  // @ts-ignore - Tauri API only available in desktop builds
   const { invoke } = await import("@tauri-apps/api/tauri");
   const files: Array<{ path: string; content: string }> = await invoke(
     "read_directory_files",
@@ -87,7 +90,9 @@ export async function watchDirectory(
     return () => {};
   }
 
+  // @ts-ignore - Tauri API only available in desktop builds
   const { appWindow } = await import("@tauri-apps/api/window");
+  // @ts-ignore - Tauri API only available in desktop builds
   const { invoke } = await import("@tauri-apps/api/tauri");
 
   // Start the Rust watcher
@@ -128,6 +133,7 @@ export async function grepFiles(
   const contextLines = opts.contextLines ?? 2;
 
   if (isDesktop && opts.rootPath) {
+    // @ts-ignore - Tauri API only available in desktop builds
     const { invoke } = await import("@tauri-apps/api/tauri");
     return invoke<GrepMatch[]>("grep_search", {
       root: opts.rootPath,
@@ -164,6 +170,7 @@ export async function grepFiles(
 export async function pickFolder(): Promise<string | null> {
   if (!isDesktop) return null;
 
+  // @ts-ignore - Tauri API only available in desktop builds
   const { open } = await import("@tauri-apps/api/dialog");
   const result = await open({ directory: true, multiple: false });
   return typeof result === "string" ? result : null;

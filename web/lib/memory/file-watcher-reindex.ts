@@ -90,6 +90,7 @@ export function watchAndReindex(
           logger.debug("Deleted file removed from index", { path });
         } else {
           // Modified or created: read content and reindex
+          // @ts-ignore - Tauri API only available in desktop builds
           const { readTextFile } = await import("@tauri-apps/api/fs");
           const content = await readTextFile(path);
 
@@ -164,6 +165,7 @@ function startPollingFallback(
       // This is a no-op on web.
       if (!isDesktop) return;
 
+      // @ts-ignore - Tauri API only available in desktop builds
       const { invoke } = await import("@tauri-apps/api/tauri");
       const files: Array<{ path: string; mtime: number }> = await invoke(
         "list_file_mtimes",

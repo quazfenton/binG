@@ -149,7 +149,7 @@ export async function createTerminalSession(
   message: string;
 }> {
   const { terminalManager } = await import('@/lib/terminal/terminal-manager');
-  const { coreSandboxService } = await import('@/lib/sandbox/core-sandbox-service');
+  const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
 
   // Resolve sandbox ID
   let sandboxId = options?.sandboxId;
@@ -170,8 +170,8 @@ export async function createTerminalSession(
   if (!sandboxId) {
     try {
       // Create a new sandbox session
-      const session = await coreSandboxService.getOrCreateSession(userId);
-      sandboxId = session.id;
+      const session = await sandboxBridge.getOrCreateSession(userId);
+      sandboxId = session.sandboxId;
       logger.debug('Created new sandbox session', { userId, sandboxId });
     } catch (error: any) {
       logger.error('Failed to create sandbox session', error.message);
@@ -206,7 +206,7 @@ export async function createTerminalSession(
       (previewInfo) => {
         logger.debug('Port detected on terminal session', { sessionId, port: previewInfo });
       },
-      { cols, rows, cwd: options?.cwd },
+      { cols, rows },
       userId,
     );
 
@@ -465,7 +465,7 @@ export async function listTerminalSessions(
       cols: s.cols || 120,
       rows: s.rows || 30,
       cwd: s.cwd || '/',
-      status: s.status || 'active',
+      status: (s.status === 'suspended' || s.status === 'deleted' ? 'idle' : s.status) || 'active',
       detectedPorts,
     });
   }
@@ -791,10 +791,11 @@ function getTailLines(text: string, n: number): string {
  */
 async function resolveSandboxHandle(sandboxId?: string, userId?: string) {
   const { coreSandboxService } = await import('@/lib/sandbox/core-sandbox-service');
+  const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
 
   if (sandboxId) {
     try {
-      const handle = await (coreSandboxService as any).getSandbox(sandboxId);
+      const handle = await coreSandboxService.getSandbox(sandboxId);
       if (handle) return handle;
     } catch (error: any) {
       logger.warn('Failed to get sandbox by ID', { sandboxId, error: error.message });
@@ -803,8 +804,11 @@ async function resolveSandboxHandle(sandboxId?: string, userId?: string) {
 
   if (userId) {
     try {
-      const session = await coreSandboxService.getOrCreateSession(userId);
-      if (session?.sandboxHandle) return session.sandboxHandle;
+      const session = await sandboxBridge.getOrCreateSession(userId);
+      if (session?.sandboxId) {
+        const handle = await coreSandboxService.getSandbox(session.sandboxId);
+        return handle;
+      }
     } catch (error: any) {
       logger.warn('Failed to get/create sandbox session for user', { userId, error: error.message });
     }

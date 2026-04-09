@@ -87,7 +87,7 @@ export class SandboxOrchestrator {
       return existingSession;
     }
 
-    const routing = taskRouter.analyzeTask(task);
+    const routing = await taskRouter.analyzeTask(task);
     const policy = this.normalizePolicyForSandbox(explicitPolicy || risk.recommendedPolicy);
     const providerContext = this.buildTaskContext(routing.type, policy);
     const provider = await providerRouter.selectOptimalProvider(providerContext);

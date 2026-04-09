@@ -185,7 +185,7 @@ export function classifyIntentStage1(
       }
     }
 
-if (score > 0) {
+    if (score > 0) {
       // Normalize: max possible score for this intent
       const maxPossible = intent.patterns.reduce((s, p) => s + p.weight, 0)
         + intent.keywords.reduce((s, k) => s + k.weight, 0);
@@ -197,8 +197,9 @@ if (score > 0) {
 
       scores.push({ intent, score: confidence, matchedPatterns, matchedKeywords });
     }
+  }
 
-    if (scores.length === 0) return null;
+  if (scores.length === 0) return null;
 
   // Sort by score descending
   scores.sort((a, b) => b.score - a.score);
@@ -309,7 +310,7 @@ export function classifyIntent(
 
   // No stage 2 — return best stage 1 or default to chat
   const allStage1 = getAllStage1Scores(text);
-  const result = allStage1.length > 0
+  const result: IntentMatch = allStage1.length > 0
     ? allStage1[0]
     : {
         intent: INTENT_SCHEMA.find(i => i.id === 'chat')!,

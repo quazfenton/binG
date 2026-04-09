@@ -21,7 +21,7 @@ import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
 
 import { runAgentLoop as runV2AgentLoop } from './agent-loop';
-import { getFallbackChain } from '../chat/provider-fallback-chains';
+import { getConfiguredFallbackChain } from '../chat/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
 import {
   createOpenCodeEngine,
@@ -223,6 +223,26 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   // Desktop mode takes priority when enabled
   if (startupCaps.desktop) {
     return { mode: 'desktop' };
+  }
+
+  // AGENT_EXECUTION_ENGINE: Explicit control over which execution engine to use.
+  // - 'v1-api'       → Vercel AI SDK with tool calling (streamWithVercelAI + tools)
+  // - 'agent-loop'   → OpenCode-based agent loop (agent-loop.ts)
+  // - 'auto'         → Use task classifier + capability detection (default)
+  const engine = process.env.AGENT_EXECUTION_ENGINE || 'auto';
+
+  if (engine === 'v1-api') {
+    log.info('AGENT_EXECUTION_ENGINE=v1-api, using Vercel AI SDK execution path');
+    return { mode: 'v1-api' as const, classification: null as any };
+  }
+  if (engine === 'agent-loop') {
+    log.info('AGENT_EXECUTION_ENGINE=agent-loop, using OpenCode agent loop execution path');
+    return { mode: 'v2-native' as const, classification: null as any };
+  }
+  // Legacy support: DISABLE_V2_MODE still works
+  if (process.env.DISABLE_V2_MODE !== 'false' && engine === 'auto') {
+    log.info('V2 modes disabled by DISABLE_V2_MODE, forcing v1-api');
+    return { mode: 'v1-api' as const, classification: null as any };
   }
 
   // Mastra workflow: only if explicitly requested AND available
@@ -771,23 +791,22 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
   ];
 
 
-  // Get LLM provider
-  const llmProvider = getLLMProvider();
-
   // Ensure tool system is initialized before using capabilities
   if (!isToolSystemReady()) {
     await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
   }
 
-  // Check if provider supports tools
-  const supportsTools = 'supportsTools' in llmProvider && (llmProvider as any).supportsTools();
+  const hasExecutableTools =
+    Array.isArray(config.tools) &&
+    config.tools.length > 0 &&
+    typeof config.executeTool === 'function';
 
-  if (supportsTools && config.tools && config.tools.length > 0 && config.executeTool) {
+  if (hasExecutableTools) {
     // Use agent loop with tools
-    return await runV1ApiWithTools(config, messages, llmProvider, startTime);
+    return await runV1ApiWithTools(config, messages, startTime);
   } else {
     // Simple completion without tools
-    return await runV1ApiCompletion(config, messages, llmProvider, startTime);
+    return await runV1ApiCompletion(config, messages, getLLMProvider(), startTime);
   }
 }
 
@@ -900,7 +919,6 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
 async function runV1ApiWithTools(
   config: UnifiedAgentConfig,
   messages: Array<{ role: string; content: string }>,
-  llmProvider: LLMProvider,
   startTime: number
 ): Promise<UnifiedAgentResult> {
   // Ensure tool system is initialized for capability-based execution
@@ -910,53 +928,190 @@ async function runV1ApiWithTools(
 
   // Use the shared capability-based tool executor (avoids code duplication)
   const capabilityExecuteTool = createCapabilityToolExecutor(config);
+  const primaryProvider = config.provider || process.env.LLM_PROVIDER || 'mistral';
+  const primaryModel = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
+  const requestId = `unified-v1-tools-${Date.now()}`;
 
-  // Use the agent loop from sandbox
-  const options = {
-    userMessage: config.userMessage,
-    // FIX: Use conversationId for VFS session scoping, fallback to sandboxId
-    sandboxId: config.conversationId || config.sandboxId || 'default',
-    systemPrompt:
-      config.systemPrompt ||
-      'You are a helpful software engineering assistant. Prefer exact, minimal edits; inspect files before changing them; use diff-style self-healing by re-reading stale files and correcting only the smallest failing region.',
-    tools: config.tools || [],
-    maxSteps: config.maxSteps || 15,
-    executeTool: capabilityExecuteTool,
-    onToolExecution: config.onToolExecution,
-    onStreamChunk: config.onStreamChunk,
+  // FIX: Same model-per-provider mapping as runV1ApiCompletion
+  const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
+    openai: 'gpt-4o',
+    anthropic: 'claude-sonnet-4-6-20250514',
+    google: 'gemini-2.5-flash',
+    mistral: 'mistral-small-latest',
+    openrouter: 'mistralai/mistral-small-latest',
+    github: 'gpt-4o',
+    nvidia: 'meta/llama-3.3-70b-instruct',
+    groq: 'llama-3.3-70b-versatile',
+    together: 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
+    zen: 'zen',
+    portkey: 'openrouter/auto',
+    chutes: 'deepseek-ai/DeepSeek-R1-0528',
+    fireworks: 'accounts/fireworks/models/llama-v3p1-70b-instruct',
+    deepinfra: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
+    anyscale: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
+    lepton: 'llama3-70b',
   };
 
-  
-  const result = await runV2AgentLoop(options);
+  function getModelForProvider(providerName: string): string {
+    if (config.model) return config.model;
+    return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
+  }
 
-  const provider = config.provider || process.env.LLM_PROVIDER || 'mistral';
-  const model = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
+  // Build provider fallback chain — only include providers with API keys set
+  const fallbackChain = getConfiguredFallbackChain(primaryProvider);
+  const providersToTry = [primaryProvider, ...fallbackChain];
+  const uniqueProviders = [...new Set(providersToTry)];
+
+  log.debug(`V1 API (with tools): Provider fallback chain`, {
+    primaryProvider,
+    fallbackChain,
+    uniqueProviders,
+  });
+
+  let lastError: Error | null = null;
+
+  // Try each provider in order
+  for (const providerName of uniqueProviders) {
+    const modelForProvider = getModelForProvider(providerName);
+
+    const toolInvocations: Array<{
+      toolCallId: string;
+      toolName: string;
+      args: Record<string, any>;
+      result: any;
+    }> = [];
+
+    const aiSdkTools = Object.fromEntries(
+      (config.tools || []).map((toolDef: any) => [
+        toolDef.name,
+        {
+          description: toolDef.description,
+          parameters: toolDef.parameters,
+          execute: async (args: Record<string, any>) => {
+            const toolResult = await capabilityExecuteTool(toolDef.name, args);
+            config.onToolExecution?.(toolDef.name, args, toolResult);
+            return {
+              success: toolResult.success,
+              output: toolResult.output,
+              exitCode: toolResult.exitCode,
+              error: toolResult.error,
+            };
+          },
+        },
+      ]),
+    );
+
+    const llmMessages: any[] = [];
+    if (config.systemPrompt) {
+      llmMessages.push({ role: 'system', content: config.systemPrompt });
+    }
+    llmMessages.push(...messages);
+
+    let response = '';
+
+    try {
+      const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
+
+      for await (const chunk of streamWithVercelAI({
+        provider: providerName,
+        model: modelForProvider,
+        messages: llmMessages,
+        temperature: config.temperature || 0.7,
+        maxTokens: config.maxTokens || 65536,
+        maxSteps: config.maxSteps || 15,
+        tools: aiSdkTools,
+        toolCallStreaming: true,
+      })) {
+        if (chunk.content) {
+          response += chunk.content;
+          config.onStreamChunk?.(chunk.content);
+        }
+
+        if (chunk.toolInvocations) {
+          for (const invocation of chunk.toolInvocations) {
+            if (invocation.state !== 'result') continue;
+            toolInvocations.push({
+              toolCallId: invocation.toolCallId,
+              toolName: invocation.toolName,
+              args: (invocation.args as Record<string, any>) || {},
+              result: invocation.result,
+            });
+          }
+        }
+      }
+
+      const duration = Date.now() - startTime;
+      const steps = toolInvocations.map((invocation) => ({
+        toolName: invocation.toolName,
+        args: invocation.args,
+        result: {
+          success: invocation.result?.success !== false,
+          output: invocation.result?.output ?? invocation.result?.error ?? JSON.stringify(invocation.result ?? {}),
+          exitCode: invocation.result?.exitCode ?? (invocation.result?.success === false ? 1 : 0),
+        },
+      }));
+
+      if (providerName !== primaryProvider) {
+        log.info(`V1 API (with tools): Fallback provider succeeded`, {
+          primaryProvider,
+          primaryModel,
+          fallbackProvider: providerName,
+          fallbackModel: modelForProvider,
+        });
+      }
+
+      chatRequestLogger.logRequestComplete(
+        requestId,
+        true,
+        undefined,
+        undefined,
+        duration,
+        undefined,
+        providerName,
+        modelForProvider,
+      ).catch(() => {});
+
+      return {
+        success: true,
+        response: response || 'No response generated',
+        steps,
+        totalSteps: steps.length,
+        mode: 'v1-api',
+        metadata: {
+          provider: providerName,
+          model: modelForProvider,
+          duration,
+          toolInvocations,
+          fallbackChain: providerName !== primaryProvider
+            ? uniqueProviders.slice(0, uniqueProviders.indexOf(providerName) + 1)
+            : [],
+        },
+      };
+    } catch (error: any) {
+      lastError = error;
+      log.warn(`V1 API (with tools): Provider ${providerName} failed, trying next`, {
+        provider: providerName,
+        model: modelForProvider,
+        error: error.message,
+      });
+    }
+  }
+
+  // All providers failed
   const duration = Date.now() - startTime;
 
-  // FIX: Record telemetry for v1-api-with-tools path
   chatRequestLogger.logRequestComplete(
-    `unified-v1-tools-${Date.now()}`,
-    result.success,
+    requestId,
+    false,
     undefined,
     undefined,
     duration,
-    result.success ? undefined : (result as any).error,
-    provider,
-    model,
+    lastError?.message || 'V1 API tool loop failed',
+    primaryProvider,
+    primaryModel,
   ).catch(() => {});
 
-  return {
-    success: true,
-    response: result.response || 'No response generated',
-    steps: result.steps,
-    totalSteps: result.totalSteps,
-    mode: 'v1-api',
-    metadata: {
-      provider,
-      model,
-      duration,
-    },
-  };
+  throw lastError || new Error('V1 API tool loop failed');
 }
 
 /**
@@ -1087,11 +1242,45 @@ async function runV1ApiCompletion(
   const primaryModel = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
   const requestId = `unified-v1-${Date.now()}`;
 
-  // Build list of providers to try: primary + fallback chain
-  const fallbackChain = getFallbackChain(primaryProvider);
+  // FIX: Map each provider to a model that supports tool calling / function calling.
+  // mistral-small-latest is text-only — use NVIDIA Nemotron, OpenRouter Llama, GitHub, etc.
+  const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
+    openai: 'gpt-4o',
+    anthropic: 'claude-sonnet-4-6-20250514',
+    google: 'gemini-2.5-flash',
+    mistral: 'mistral-large-latest',  // Large supports tools, small doesn't
+    openrouter: 'meta-llama/llama-3.3-70b-instruct',
+    github: 'llama-3.3-70b-instruct',
+    nvidia: 'nvidia/nemotron-4-340b-instruct',
+    groq: 'llama-3.3-70b-versatile',
+    together: 'meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo',
+    zen: 'zen',
+    portkey: 'openrouter/auto',
+    chutes: 'meta-llama/Llama-3.3-70B-Instruct',
+    fireworks: 'accounts/fireworks/models/llama-v3p1-70b-instruct',
+    deepinfra: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
+    anyscale: 'meta-llama/Meta-Llama-3.1-70B-Instruct',
+    lepton: 'llama3-70b',
+  };
+
+  function getModelForProvider(providerName: string): string {
+    // If user explicitly set a model, use it (they may know what they're doing)
+    if (config.model) return config.model;
+    // Otherwise use provider-specific default
+    return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
+  }
+
+  // Build list of providers to try: primary + fallback chain (only configured ones)
+  const fallbackChain = getConfiguredFallbackChain(primaryProvider);
   const providersToTry = [primaryProvider, ...fallbackChain];
   // Deduplicate while preserving order
   const uniqueProviders = [...new Set(providersToTry)];
+
+  log.debug(`V1 API (completion): Provider fallback chain`, {
+    primaryProvider,
+    fallbackChain,
+    uniqueProviders,
+  });
 
   let lastError: Error | null = null;
 
@@ -1100,10 +1289,11 @@ async function runV1ApiCompletion(
     try {
       const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
 
+      const modelForProvider = getModelForProvider(providerName);
       let content = '';
       const streamOpts = {
         provider: providerName,
-        model: primaryModel,
+        model: modelForProvider,
         messages: messages as any[],
         temperature: config.temperature || 0.7,
         maxTokens: config.maxTokens || 4096,
@@ -1129,7 +1319,9 @@ async function runV1ApiCompletion(
       if (providerName !== primaryProvider) {
         log.info(`V1 API: Fallback provider succeeded`, {
           primaryProvider,
+          primaryModel,
           fallbackProvider: providerName,
+          fallbackModel: modelForProvider,
         });
       }
 
@@ -1143,8 +1335,12 @@ async function runV1ApiCompletion(
         latencyMs,
         undefined,
         providerName,
-        primaryModel,
+        modelForProvider,
       ).catch(() => {});
+
+      const fallbackChainUsed = providerName !== primaryProvider
+        ? uniqueProviders.slice(0, uniqueProviders.indexOf(providerName) + 1)
+        : [];
 
       return {
         success: true,
@@ -1152,15 +1348,16 @@ async function runV1ApiCompletion(
         mode: 'v1-api',
         metadata: {
           provider: providerName,
-          model: primaryModel,
+          model: modelForProvider,
           duration: latencyMs,
-          fallbackChain: providerName !== primaryProvider ? [primaryProvider, providerName] : [],
+          fallbackChain: fallbackChainUsed,
         },
       };
     } catch (error: any) {
       lastError = error;
-      log.warn(`V1 API: Provider ${providerName} failed`, {
+      log.warn(`V1 API: Provider ${providerName} failed, trying next`, {
         provider: providerName,
+        model: modelForProvider,
         error: error.message,
       });
     }
@@ -1218,18 +1415,24 @@ async function attemptFallback(
     isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(rawTask);
   }
 
+  // TEMP: If v2 is disabled globally, skip all v2 fallbacks
+  const v2Disabled = process.env.DISABLE_V2_MODE !== 'false';
+  const engine = process.env.AGENT_EXECUTION_ENGINE || 'auto';
+  const forceV1 = v2Disabled || engine === 'v1-api';
+  const forceAgentLoop = engine === 'agent-loop';
+
   // Try fallback chain based on what failed, excluding already tried modes
   // Only include modes that were available at startup
   // Priority: V2 Native (with StatefulAgent for complex) → V2 Containerized → V2 Local → V1 API
   const fallbackOrder: Array<'v2-native' | 'v2-containerized' | 'v2-local' | 'v1-api'> = [];
 
-  if (!visitedModes.has('v2-native') && failedMode !== 'v2-native' && caps.v2Native) {
+  if (!forceV1 && !forceAgentLoop && !visitedModes.has('v2-native') && failedMode !== 'v2-native' && caps.v2Native) {
     fallbackOrder.push('v2-native');
   }
-  if (!visitedModes.has('v2-containerized') && failedMode !== 'v2-containerized' && caps.v2Containerized) {
+  if (!forceV1 && !forceAgentLoop && !visitedModes.has('v2-containerized') && failedMode !== 'v2-containerized' && caps.v2Containerized) {
     fallbackOrder.push('v2-containerized');
   }
-  if (!visitedModes.has('v2-local') && failedMode !== 'v2-local' && caps.v2Local) {
+  if (!forceV1 && !forceAgentLoop && !visitedModes.has('v2-local') && failedMode !== 'v2-local' && caps.v2Local) {
     fallbackOrder.push('v2-local');
   }
   if (!visitedModes.has('v1-api') && failedMode !== 'v1-api' && caps.v1Api) {

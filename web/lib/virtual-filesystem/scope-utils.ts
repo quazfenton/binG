@@ -33,7 +33,8 @@ export function stripWorkspacePrefixes(rawPath: string): string {
   }
 
   // Remove accumulated sandbox / workspace prefixes
-  // Only strip /sessions/ when it's a simple session ID (no ownerId prefix)
+  // Only strip /sessions/ when it follows other sandbox prefixes
+  // NEVER strip /sessions/ when it's the primary path component
   path = path
     .replace(/^(\/tmp\/workspaces\/)+/gi, '')
     .replace(/^(tmp\/workspaces\/)+/gi, '')
@@ -41,10 +42,11 @@ export function stripWorkspacePrefixes(rawPath: string): string {
     .replace(/^(workspace\/)+/gi, '')
     .replace(/^(\/home\/[^/]+\/workspace\/)+/gi, '')
     .replace(/^(home\/[^/]+\/workspace\/)+/gi, '')
-    // FIX: Only strip /sessions/ prefix if it's NOT followed by ownerId:sessionId composite
-    // Use negative lookahead to preserve patterns like "1:005"
-    .replace(/^(\/sessions\/(?![a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+))+/gi, '')
-    .replace(/^(sessions\/(?![a-zA-Z0-9_-]+:[a-zA-Z0-9_-]+))+/gi, '');
+    // Only strip /sessions/ when it follows other sandbox prefixes
+    .replace(/^(\/tmp\/workspaces\/[^/]*\/sessions\/)/gi, '')
+    .replace(/^(\/workspace\/[^/]*\/sessions\/)/gi, '');
+  // NOTE: Removed the sessions/ strip regex — sessions/ is a real directory
+  // and must never be stripped. /sessions/001 → sessions/001 (preserved).
 
   // Remove any remaining leading slashes
   path = path.replace(/^\/+/, '');
