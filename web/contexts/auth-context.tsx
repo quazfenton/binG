@@ -223,6 +223,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
         setStoredToken(data.token);
       }
 
+      // Clear anonymous session identity — user is now authenticated
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem('anonymous_session_id');
+        } catch {}
+      }
+
       // Convert date strings to Date objects
       const user = {
         ...data.user,
@@ -317,6 +324,13 @@ export function AuthProvider({ children }: { children: ReactNode }) {
       // Store token if provided (for backward compatibility)
       if (data.token) {
         setStoredToken(data.token);
+      }
+
+      // Clear anonymous session identity — user is now authenticated
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.removeItem('anonymous_session_id');
+        } catch {}
       }
 
       // Convert date strings to Date objects

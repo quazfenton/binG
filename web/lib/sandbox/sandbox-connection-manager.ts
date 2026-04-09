@@ -367,7 +367,7 @@ export class SandboxConnectionManager {
     if (lowerId.startsWith('sprite-') || lowerId.startsWith('sprite_') || lowerId.startsWith('bing-')) return 'sprites'
     if (lowerId.startsWith('codesandbox-') || lowerId.startsWith('csb-')) return 'codesandbox'
     if (lowerId.startsWith('vercel-') || lowerId.startsWith('vc-')) return 'vercel-sandbox'
-    if (lowerId.startsWith('mistral-')) return 'mistral-agent'
+    if (lowerId.startsWith('mistral-agent-')) return 'mistral-agent'
     if (lowerId.startsWith('blaxel-')) return 'blaxel'
     if (lowerId.startsWith('micro-')) return 'microsandbox'
     

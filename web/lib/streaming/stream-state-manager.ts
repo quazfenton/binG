@@ -316,6 +316,8 @@ class StreamStateManager {
   complete(streamId: string, finishReason?: string): void {
     const state = this.states.get(streamId);
     if (!state) return;
+    // Prevent transition from already-final states
+    if (state.status === 'aborted' || state.status === 'error') return;
 
     state.status = 'complete';
     state.isComplete = true;
@@ -346,6 +348,8 @@ class StreamStateManager {
   error(streamId: string, errorMessage: string): void {
     const state = this.states.get(streamId);
     if (!state) return;
+    // Prevent transition from already-final states (abort already rejected the promise)
+    if (state.status === 'aborted' || state.status === 'error') return;
 
     state.status = 'error';
     state.isComplete = true;

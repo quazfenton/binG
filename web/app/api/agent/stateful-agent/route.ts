@@ -236,6 +236,7 @@ export async function POST(request: NextRequest) {
 
       const result = await runStatefulAgent(userMessage, {
         sessionId,
+        userId,
         sandboxHandle,
         enforcePlanActVerify,
         maxSelfHealAttempts: parseInt(

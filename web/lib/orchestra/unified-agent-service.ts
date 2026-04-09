@@ -21,7 +21,8 @@ import { getLLMProvider } from '../sandbox/providers/llm-factory';
 import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemReady } from '@/lib/tools';
 
 import { runAgentLoop as runV2AgentLoop } from './agent-loop';
-import { llmService, type LLMRequest } from '../chat/llm-providers';
+import { getFallbackChain } from '../chat/provider-fallback-chains';
+import { chatRequestLogger } from '../chat/chat-request-logger';
 import {
   createOpenCodeEngine,
   type OpenCodeEngineResult,
@@ -123,90 +124,69 @@ export interface UnifiedAgentResult {
 }
 
 
-export interface ProviderHealth {
-  v2Containerized: boolean;
-  v2Local: boolean;
-  v2Native: boolean;  // OpenCode CLI directly (new primary engine)
-  v1Api: boolean;
-  desktop: boolean;   // Tauri desktop local execution
-  preferredMode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'desktop';
-}
-
-/**
- * Agent mode capability flags — determined at startup by checking
- * whether each mode's dependencies (env vars, CLI availability, services)
- * are actually configured. If a mode is disabled, routing skips it entirely
- * instead of trying it and failing repeatedly.
- */
-export interface AgentCapabilityFlags {
-  v2Native: boolean;       // OpenCode CLI installed and enabled
-  v2Containerized: boolean; // Containerized sandbox with API key configured
+export interface StartupCapabilities {
+  v2Native: boolean;       // OpenCode CLI available and enabled
+  v2Containerized: boolean; // Container sandbox configured
   v2Local: boolean;         // Local OpenCode with LLM_PROVIDER=opencode
-  statefulAgent: boolean;   // StatefulAgent enabled and configured
-  desktop: boolean;         // Tauri desktop mode enabled
+  statefulAgent: boolean;   // StatefulAgent enabled
   mastraWorkflows: boolean; // Mastra workflow engine configured
-  nullclaw: boolean;        // Nullclaw remote agent configured
-  v1Api: boolean;           // V1 API with at least one provider API key
+  desktop: boolean;         // Tauri desktop mode enabled
+  v1Api: boolean;           // At least one LLM provider API key configured
 }
 
 /**
- * Startup health check — determines which agent modes are actually
- * available/enabled based on env vars, CLI availability, and service config.
- * Called once at module load; result is cached for routing decisions.
+ * Startup health check — determines which agent modes are actually available.
+ * Called once at module load; result is cached.
  *
  * This prevents the system from attempting v2-native, containerized, or
  * remote agent modes when they're not even set up (causing 12-15 retries
  * before finally falling back to v1-api).
  */
-export function checkAgentCapabilities(): AgentCapabilityFlags {
+function checkStartupCapabilities(): StartupCapabilities {
   const llmProvider = process.env.LLM_PROVIDER || '';
   const sandboxProvider = process.env.SANDBOX_PROVIDER || '';
   const containerized = process.env.OPENCODE_CONTAINERIZED === 'true';
+  const opencodeEnabled = llmProvider === 'opencode';
+
+  // V2 Native: only if explicitly enabled (LLM_PROVIDER=opencode)
+  const v2Native = opencodeEnabled;
+
+  // V2 Containerized: requires containerized flag + sandbox provider + API key
+  const v2Containerized = containerized
+    && !!sandboxProvider
+    && !!process.env[`${sandboxProvider.toUpperCase()}_API_KEY`];
+
+  // V2 Local: only if LLM_PROVIDER=opencode and not containerized
+  const v2Local = opencodeEnabled && !containerized;
+
+  // StatefulAgent: enabled unless explicitly disabled
+  const statefulAgent = process.env.ENABLE_STATEFUL_AGENT !== 'false'
+    && process.env.STATEFUL_AGENT_DISABLED !== 'true';
+
+  // Mastra workflows: explicitly enabled
+  const mastraWorkflows = process.env.MASTRA_ENABLED === 'true'
+    || !!process.env.DEFAULT_WORKFLOW_ID;
 
   // Desktop mode
   const desktop = process.env.DESKTOP_MODE === 'true'
     || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
 
-  // V2 Containerized: explicitly enabled + sandbox provider + API key
-  const v2Containerized = containerized
-    && !!sandboxProvider
-    && !!process.env[`${sandboxProvider.toUpperCase()}_API_KEY`];
-
-  // V2 Local: explicitly set LLM_PROVIDER=opencode (not just env var presence)
-  const v2Local = !containerized && llmProvider === 'opencode';
-
-  // V2 Native: requires explicit opt-in (LLM_PROVIDER=opencode) OR containerized setup
-  const v2Native = v2Local || v2Containerized;
-
-  // StatefulAgent: explicitly enabled (not disabled)
-  const statefulAgent = process.env.ENABLE_STATEFUL_AGENT !== 'false'
-    && process.env.STATEFUL_AGENT_DISABLED !== 'true';
-
-  // Mastra workflows: explicitly enabled with workflow IDs configured
-  const mastraWorkflows = process.env.MASTRA_ENABLED === 'true'
-    || !!process.env.DEFAULT_WORKFLOW_ID;
-
-  // Nullclaw remote agent: explicitly configured
-  const nullclaw = !!process.env.NULLCLAW_HOST
-    || !!process.env.NULLCLAW_URL
-    || !!process.env.NULLCLAW_API_KEY;
-
-  // V1 API: at least one LLM provider has an API key
-  const providerKey = process.env[`${llmProvider.toUpperCase()}_API_KEY`];
+  // V1 API: at least one provider has an API key
+  const providerKey = llmProvider ? process.env[`${llmProvider.toUpperCase()}_API_KEY`] : undefined;
   const v1Api = !!providerKey || !!process.env.OPENROUTER_API_KEY;
 
   // Log startup capabilities for observability
-  log.info('Agent capabilities at startup', {
+  log.info('Agent mode capabilities at startup', {
     v2Native,
     v2Containerized,
     v2Local,
     statefulAgent,
-    desktop,
     mastraWorkflows,
-    nullclaw,
+    desktop,
     v1Api,
-    llmProvider: llmProvider || '(default)',
+    llmProvider: llmProvider || '(none)',
     sandboxProvider: sandboxProvider || '(none)',
+    containerized,
   });
 
   return {
@@ -214,15 +194,14 @@ export function checkAgentCapabilities(): AgentCapabilityFlags {
     v2Containerized,
     v2Local,
     statefulAgent,
-    desktop,
     mastraWorkflows,
-    nullclaw,
+    desktop,
     v1Api,
   };
 }
 
-// Cache capabilities at module load — no need to re-check env vars every request
-const startupCapabilities = checkAgentCapabilities();
+// Cache at module load — these don't change at runtime
+const startupCaps = checkStartupCapabilities();
 
 /**
  * Determine which mode to use based on config and task classification.
@@ -241,12 +220,12 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   }
 
   // Desktop mode takes priority when enabled
-  if (startupCapabilities.desktop) {
+  if (startupCaps.desktop) {
     return { mode: 'desktop' };
   }
 
   // Mastra workflow: only if explicitly requested AND available
-  if (config.enableMastraWorkflows !== false && config.workflowId && startupCapabilities.mastraWorkflows) {
+  if (config.enableMastraWorkflows !== false && config.workflowId && startupCaps.mastraWorkflows) {
     return { mode: 'mastra-workflow' };
   }
 
@@ -270,16 +249,16 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
     });
 
     // Map classifier recommendation to actual mode
-    // Use startupCapabilities — if a mode isn't available, skip it entirely
+    // Use startupCaps — if a mode isn't available at startup, skip it entirely
     let mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow';
 
     if (classification.recommendedMode === 'stateful-agent') {
       // StatefulAgent: only use if v2 modes are available at startup
-      mode = startupCapabilities.v2Native ? 'v2-native'
-        : startupCapabilities.v2Containerized ? 'v2-containerized'
-        : startupCapabilities.v2Local ? 'v2-local'
+      mode = startupCaps.v2Native ? 'v2-native'
+        : startupCaps.v2Containerized ? 'v2-containerized'
+        : startupCaps.v2Local ? 'v2-local'
         : 'v1-api';
-    } else if (classification.recommendedMode === 'mastra-workflow' && startupCapabilities.mastraWorkflows) {
+    } else if (classification.recommendedMode === 'mastra-workflow' && startupCaps.mastraWorkflows) {
       mode = 'mastra-workflow';
     } else {
       // v1-api or v2-native from classifier
@@ -287,13 +266,13 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
     }
 
     // Use startup capability flags — skip unavailable modes entirely
-    if (mode === 'v2-native' && !startupCapabilities.v2Native) {
-      mode = startupCapabilities.v2Containerized ? 'v2-containerized'
-        : startupCapabilities.v2Local ? 'v2-local'
+    if (mode === 'v2-native' && !startupCaps.v2Native) {
+      mode = startupCaps.v2Containerized ? 'v2-containerized'
+        : startupCaps.v2Local ? 'v2-local'
         : 'v1-api';
-    } else if (mode === 'v2-containerized' && !startupCapabilities.v2Containerized) {
-      mode = startupCapabilities.v2Local ? 'v2-local' : 'v1-api';
-    } else if (mode === 'v2-local' && !startupCapabilities.v2Local) {
+    } else if (mode === 'v2-containerized' && !startupCaps.v2Containerized) {
+      mode = startupCaps.v2Local ? 'v2-local' : 'v1-api';
+    } else if (mode === 'v2-local' && !startupCaps.v2Local) {
       mode = 'v1-api';
     }
 
@@ -302,12 +281,12 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
       classification,
     };
   } catch (error) {
-    log.warn('Task classification failed, using startup capabilities fallback', error);
+    log.warn('Task classification failed, using startup capability fallback', error);
     // Fallback: use whatever is available at startup
     return {
-      mode: startupCapabilities.v2Native ? 'v2-native'
-        : startupCapabilities.v2Containerized ? 'v2-containerized'
-        : startupCapabilities.v2Local ? 'v2-local'
+      mode: startupCaps.v2Native ? 'v2-native'
+        : startupCaps.v2Containerized ? 'v2-containerized'
+        : startupCaps.v2Local ? 'v2-local'
         : 'v1-api',
     };
   }
@@ -458,7 +437,7 @@ async function runV2Native(
     });
   }
 
-  if (shouldUseStatefulAgent && process.env.ENABLE_STATEFUL_AGENT !== 'false') {
+  if (shouldUseStatefulAgent && startupCaps.statefulAgent) {
     log.info('Complex task detected, using StatefulAgent for Plan-Act-Verify workflow', {
       classification: classification?.complexity,
       confidence: classification?.confidence,
@@ -789,7 +768,7 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
 
   // Ensure tool system is initialized before using capabilities
   if (!isToolSystemReady()) {
-    await initToolSystem({ userId: (config as any).userId || 'system', enableMCP: true, enableSandbox: true });
+    await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
   }
 
   // Check if provider supports tools
@@ -818,7 +797,7 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
     // Execute workflow via Mastra integration
     const workflowResult = await mastraWorkflowIntegration.executeWorkflow(workflowId, {
       task: config.userMessage,
-      ownerId: config.sandboxId || 'default',
+      ownerId: config.userId || config.sandboxId || 'default',
       systemPrompt: config.systemPrompt,
       maxSteps: config.maxSteps,
     });
@@ -887,7 +866,7 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
     if (hasToolCapability(capabilityId)) {
       log.debug('Executing tool via capability', { tool: name, capability: capabilityId });
       const result = await executeToolCapability(capabilityId, args, {
-        userId: config.sandboxId || 'system',
+        userId: config.userId || 'system',
         workspaceId: config.projectContext?.id,
       });
       return { success: result.success, output: (result.output as string) || result.error, exitCode: result.exitCode };
@@ -913,7 +892,7 @@ async function runV1ApiWithTools(
 ): Promise<UnifiedAgentResult> {
   // Ensure tool system is initialized for capability-based execution
   if (!isToolSystemReady()) {
-    await initToolSystem({ userId: (config as any).userId || 'system', enableMCP: true, enableSandbox: true });
+    await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
   }
 
   // Use the shared capability-based tool executor (avoids code duplication)
@@ -938,6 +917,19 @@ async function runV1ApiWithTools(
 
   const provider = config.provider || process.env.LLM_PROVIDER || 'mistral';
   const model = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
+  const duration = Date.now() - startTime;
+
+  // FIX: Record telemetry for v1-api-with-tools path
+  chatRequestLogger.logRequestComplete(
+    `unified-v1-tools-${Date.now()}`,
+    result.success,
+    undefined,
+    undefined,
+    duration,
+    result.success ? undefined : (result as any).error,
+    provider,
+    model,
+  ).catch(() => {});
 
   return {
     success: true,
@@ -948,7 +940,7 @@ async function runV1ApiWithTools(
     metadata: {
       provider,
       model,
-      duration: Date.now() - startTime,
+      duration,
     },
   };
 }
@@ -963,7 +955,7 @@ async function runV1Orchestrated(
 ): Promise<UnifiedAgentResult> {
   // Ensure tool system is initialized
   if (!isToolSystemReady()) {
-    await initToolSystem({ userId: (config as any).userId || 'system', enableMCP: true, enableSandbox: true });
+    await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
   }
 
   // Use shared capability-based tool executor (avoids code duplication)
@@ -1010,6 +1002,22 @@ async function runV1Orchestrated(
       }
     }
 
+    const provider = config.provider || process.env.LLM_PROVIDER || 'mistral';
+    const model = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
+    const duration = Date.now() - startTime;
+
+    // FIX: Record telemetry for v1-orchestrator path
+    chatRequestLogger.logRequestComplete(
+      `unified-v1-orch-${Date.now()}`,
+      true,
+      undefined,
+      undefined,
+      duration,
+      undefined,
+      provider,
+      model,
+    ).catch(() => {});
+
     return {
       success: true,
       response: content,
@@ -1017,18 +1025,35 @@ async function runV1Orchestrated(
       totalSteps: stepsCount,
       mode: 'v1-api',
       metadata: {
-        provider: process.env.LLM_PROVIDER || 'unknown',
-        duration: Date.now() - startTime,
+        provider,
+        model,
+        duration,
         orchestrator: true,
       },
     };
   } catch (err: any) {
+    const provider = config.provider || process.env.LLM_PROVIDER || 'mistral';
+    const model = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
+    const duration = Date.now() - startTime;
+
+    // FIX: Record failure telemetry for v1-orchestrator path
+    chatRequestLogger.logRequestComplete(
+      `unified-v1-orch-${Date.now()}`,
+      false,
+      undefined,
+      undefined,
+      duration,
+      err.message,
+      provider,
+      model,
+    ).catch(() => {});
+
     return {
       success: false,
       response: content || 'Orchestration failed',
       mode: 'v1-api',
       error: err.message,
-      metadata: { duration: Date.now() - startTime },
+      metadata: { duration, provider, model },
     };
   }
 }
@@ -1044,96 +1069,102 @@ async function runV1ApiCompletion(
   }
 
   // Use config provider/model if specified, otherwise fall back to env defaults
-  const provider = config.provider || process.env.LLM_PROVIDER || 'mistral';
-  const model = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
+  const primaryProvider = config.provider || process.env.LLM_PROVIDER || 'mistral';
+  const primaryModel = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
+  const requestId = `unified-v1-${Date.now()}`;
 
-  // Use Vercel AI SDK streaming for all providers (supports nvidia, openrouter, etc.)
-  // The old llmService.generateStreamingResponse only supported hardcoded providers
-  try {
-    const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
+  // Build list of providers to try: primary + fallback chain
+  const fallbackChain = getFallbackChain(primaryProvider);
+  const providersToTry = [primaryProvider, ...fallbackChain];
+  // Deduplicate while preserving order
+  const uniqueProviders = [...new Set(providersToTry)];
 
-    const streamOpts = {
-      provider,
-      model,
-      messages: messages as any[],
-      temperature: config.temperature || 0.7,
-      maxTokens: config.maxTokens || 4096,
-      maxRetries: 2,
-      timeoutMs: 120000,
-    };
+  let lastError: Error | null = null;
 
-    let content = '';
+  // Try each provider in order using same pattern as enhanced-llm-service.ts
+  for (const providerName of uniqueProviders) {
+    try {
+      const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
 
-    if (config.onStreamChunk) {
-      // Streaming mode
-      for await (const chunk of streamWithVercelAI(streamOpts)) {
-        if (chunk.content) {
-          content += chunk.content;
-          config.onStreamChunk(chunk.content);
+      let content = '';
+      const streamOpts = {
+        provider: providerName,
+        model: primaryModel,
+        messages: messages as any[],
+        temperature: config.temperature || 0.7,
+        maxTokens: config.maxTokens || 4096,
+        maxRetries: 0,
+        maxSteps: 1,
+      };
+
+      if (config.onStreamChunk) {
+        for await (const chunk of streamWithVercelAI(streamOpts)) {
+          if (chunk.content) {
+            content += chunk.content;
+            config.onStreamChunk(chunk.content);
+          }
+        }
+      } else {
+        for await (const chunk of streamWithVercelAI(streamOpts)) {
+          if (chunk.content) {
+            content += chunk.content;
+          }
         }
       }
-    } else {
-      // Non-streaming: collect tokens from stream
-      for await (const chunk of streamWithVercelAI(streamOpts)) {
-        if (chunk.content) {
-          content += chunk.content;
-        }
+
+      if (providerName !== primaryProvider) {
+        log.info(`V1 API: Fallback provider succeeded`, {
+          primaryProvider,
+          fallbackProvider: providerName,
+        });
       }
+
+      // FIX: Record telemetry with the ACTUAL provider/model (handles fallbacks)
+      const latencyMs = Date.now() - startTime;
+      chatRequestLogger.logRequestComplete(
+        requestId,
+        true,
+        undefined,
+        undefined,
+        latencyMs,
+        undefined,
+        providerName,
+        primaryModel,
+      ).catch(() => {});
+
+      return {
+        success: true,
+        response: content || 'No response generated',
+        mode: 'v1-api',
+        metadata: {
+          provider: providerName,
+          model: primaryModel,
+          duration: latencyMs,
+          fallbackChain: providerName !== primaryProvider ? [primaryProvider, providerName] : [],
+        },
+      };
+    } catch (error: any) {
+      lastError = error;
+      log.warn(`V1 API: Provider ${providerName} failed`, {
+        provider: providerName,
+        error: error.message,
+      });
     }
-
-    return {
-      success: true,
-      response: content || 'No response generated',
-      mode: 'v1-api',
-      metadata: {
-        provider,
-        model,
-        duration: Date.now() - startTime,
-      },
-    };
-  } catch (error: any) {
-    log.warn('Vercel AI SDK streaming failed, falling back to llmService', {
-      provider,
-      model,
-      error: error.message,
-    });
-
-    // Fallback to old llmService for providers not supported by Vercel AI SDK
-    const llmRequest: LLMRequest = {
-      messages: messages as any,
-      model,
-      provider,
-      temperature: config.temperature || 0.7,
-      maxTokens: config.maxTokens || 4096,
-      stream: !!config.onStreamChunk,
-    };
-
-    let content = '';
-
-    if (config.onStreamChunk) {
-      const stream = llmService.generateStreamingResponse(llmRequest);
-      for await (const chunk of stream) {
-        if (chunk.content) {
-          content += chunk.content;
-          config.onStreamChunk(chunk.content);
-        }
-      }
-    } else {
-      const response = await llmService.generateResponse(llmRequest);
-      content = response.content;
-    }
-
-    return {
-      success: true,
-      response: content || 'No response generated',
-      mode: 'v1-api',
-      metadata: {
-        provider,
-        model,
-        duration: Date.now() - startTime,
-      },
-    };
   }
+
+  // All providers failed
+  const latencyMs = Date.now() - startTime;
+  chatRequestLogger.logRequestComplete(
+    requestId,
+    false,
+    undefined,
+    undefined,
+    latencyMs,
+    lastError?.message || 'V1 API completion failed unexpectedly',
+    primaryProvider,
+    primaryModel,
+  ).catch(() => {});
+  throw lastError || new Error('V1 API completion failed unexpectedly');
 }
 
 /**
@@ -1154,7 +1185,7 @@ async function attemptFallback(
   visitedModes.add(failedMode);
 
   // Use startup capabilities — don't try modes that weren't available at startup
-  const caps = startupCapabilities;
+  const caps = startupCaps;
 
   // Use task classifier for complexity detection (with regex fallback)
   // IMPORTANT: Only classify the raw user task, not the full context-augmented message
@@ -1197,7 +1228,7 @@ async function attemptFallback(
       console.log(`[UnifiedAgent] Falling back to ${fallbackMode} after ${failedMode} failed`);
 
       // For complex tasks, try StatefulAgent first in v2-native mode
-      if (fallbackMode === 'v2-native' && isComplexTask && process.env.ENABLE_STATEFUL_AGENT !== 'false') {
+      if (fallbackMode === 'v2-native' && isComplexTask && caps.statefulAgent) {
         log.info(`Fallback: Complex task detected, using StatefulAgent in ${fallbackMode}`);
         const result = await runStatefulAgentMode(config);
         if (result.success) {
@@ -1257,7 +1288,7 @@ async function attemptFallback(
 }
 
 /**
- * Get available modes based on current configuration
+ * Get available modes based on startup capabilities
  */
 export function getAvailableModes(): Array<{
   mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native';
@@ -1266,33 +1297,31 @@ export function getAvailableModes(): Array<{
   available: boolean;
   recommended?: boolean;
 }> {
-  const health = checkProviderHealth();
-
   return [
     {
       mode: 'v2-native',
       name: 'OpenCode Engine (Recommended)',
       description: 'Full agentic capabilities with native bash, file ops, and tool execution',
-      available: health.v2Native,
+      available: startupCaps.v2Native,
       recommended: true,
     },
     {
       mode: 'v2-containerized',
       name: 'OpenCode Containerized',
       description: 'OpenCode CLI in isolated sandbox (production-ready)',
-      available: health.v2Containerized,
+      available: startupCaps.v2Containerized,
     },
     {
       mode: 'v2-local',
       name: 'OpenCode Local',
       description: 'OpenCode CLI on your local machine',
-      available: health.v2Local,
+      available: startupCaps.v2Local,
     },
     {
       mode: 'v1-api',
       name: 'LLM API (Fallback)',
       description: 'Cloud LLM APIs - simple chat only, no agentic capabilities',
-      available: health.v1Api,
+      available: startupCaps.v1Api,
     },
   ];
 }

@@ -66,11 +66,6 @@ export const dynamic = 'force-dynamic';
 // Ensure route is compiled at build time
 export const dynamicParams = true;
 
-// LLM Agent Tools Configuration
-const LLM_AGENT_TOOLS_ENABLED = process.env.LLM_AGENT_TOOLS_ENABLED !== 'false';
-const LLM_AGENT_TOOLS_MAX_ITERATIONS = parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '10', 10);
-const LLM_AGENT_TOOLS_TIMEOUT_MS = parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '30000', 10);
-
 // Note: Fast-Agent now has dedicated endpoint at /api/agent
 // This route uses priority router which includes Fast-Agent as Priority 1
 
@@ -651,6 +646,11 @@ export async function POST(request: NextRequest) {
       attachedFilesystemFiles,
       filesystemContext,
     );
+    chatLogger.debug('Filesystem edits gate', {
+      enableFilesystemEdits,
+      attachedFilesCount: attachedFilesystemFiles.length,
+      applyFileEditsFlag: filesystemContext?.applyFileEdits,
+    });
     const useContextPack = shouldUseContextPack(messages);
     // Use multi-factor task classifier instead of regex-based detection
     // IMPORTANT: classify on original messages (user's actual input), not processedMessages
@@ -1226,13 +1226,13 @@ export async function POST(request: NextRequest) {
                         count: appliedEdits.applied.length
                       });
 
-                      // CRITICAL FIX Bug #2: Emit filesystem-updated CustomEvent for ToolLoopAgent path
+                      // CRITICAL FIX Bug #2: Emit filesystem-updated CustomEvent for agent tool path
                       // This ensures components listening to CustomEvent update (not just SSE recipients)
                       emitFilesystemUpdated({
                         scopePath: requestedScopePath,
                         sessionId: resolvedConversationId,
                         applied: appliedEdits.applied,
-                        source: 'toolLoopAgent',
+                        source: 'agent-tool',
                       });
 
                       // CRITICAL: Add fallback message if content is empty but files were applied
@@ -1540,7 +1540,7 @@ export async function POST(request: NextRequest) {
 
       // Spec amplification only works with V1 mode (regular LLM calls)
       // V2 agent mode has its own planning system
-      // CRITICAL: Use standard routing - spec amplification handled post-stream for ToolLoopAgent
+      // CRITICAL: Use standard routing - spec amplification handled post-stream
       if (agentMode === 'v2') {
         chatLogger.debug('V2 agent mode, using standard routing without spec amplification', { requestId })
         unifiedResponse = await responseRouter.routeAndFormat(routerRequest)
@@ -1605,8 +1605,8 @@ export async function POST(request: NextRequest) {
       // This is assigned inside the stream completion handler and used in spec amp check
       let streamedEdits: Awaited<ReturnType<typeof applyFilesystemEditsFromResponse>> | null = null;
       
-      // CRITICAL FIX: Declare finalContent at function scope for ToolLoopAgent streaming path
-      // This is assigned inside the ToolLoopAgent stream and used in spec amp check
+      // CRITICAL FIX: Declare finalContent at function scope for streaming path
+      // This is assigned inside the stream and used in spec amp check
       let finalContent: string = '';
       
       // CRITICAL FIX: Declare allEdits at function scope for both streaming paths
@@ -1616,7 +1616,7 @@ export async function POST(request: NextRequest) {
       // CRITICAL FIX: Declare clientResponse early to avoid "used before declaration" errors
       // It's needed for spec amplification checks that run before the build call
       let clientResponse: any = null;
-      
+
       const lastUserMessage =
         [...messages].reverse().find((m) => m.role === 'user')?.content;
       const v1AgentTask = typeof lastUserMessage === 'string'
@@ -1632,7 +1632,7 @@ export async function POST(request: NextRequest) {
       // V1 agentic tools: reuse existing Mastra tool loop for coding/tool requests.
       let agentToolResults = null;
       let agentToolStreamingResult: any = null;
-      
+
       const shouldRunV1AgentLoop =
         LLM_AGENT_TOOLS_ENABLED &&
         enableFilesystemEdits &&
@@ -1681,11 +1681,11 @@ export async function POST(request: NextRequest) {
 
           // Check if agent supports streaming (ToolLoopAgent integration)
           const supportsStreaming = 'executeTaskStreaming' in agentLoop;
-          
+
           if (supportsStreaming && stream) {
             // Use streaming execution for real-time tool invocations and reasoning
             chatLogger.info('Using ToolLoopAgent streaming execution', { requestId, provider: actualProvider, model: actualModel });
-            
+
             // Store streaming result for later processing in stream handler
             agentToolStreamingResult = {
               agentLoop,
@@ -2290,11 +2290,45 @@ export async function POST(request: NextRequest) {
                     }
                   }
 
+                  // Handle auto-continue events from streamWithAutoContinue
+                  // These are yielded when the LLM stopped after list_files or requested continuation
+                  const streamChunkType = (streamChunk as any).type;
+                  if (streamChunkType === 'auto-continue' || streamChunkType === 'next') {
+                    realEmit(streamChunkType, {
+                      content: streamChunk.content || '',
+                      reason: (streamChunk as any).metadata?.reason,
+                      listedPath: (streamChunk as any).metadata?.listedPath,
+                      recursive: (streamChunk as any).metadata?.recursive,
+                      continuationCount: (streamChunk as any).metadata?.continuationCount,
+                      maxContinuations: (streamChunk as any).metadata?.maxContinuations,
+                      toolSummary: (streamChunk as any).toolSummary,
+                      contextHint: (streamChunk as any).contextHint,
+                      implicitFiles: (streamChunk as any).metadata?.implicitFiles,
+                      timestamp: Date.now(),
+                    });
+                    chatLogger.info('Emitted auto-continue/next event to client', {
+                      type: streamChunkType,
+                      reason: (streamChunk as any).metadata?.reason,
+                      continuationCount: (streamChunk as any).metadata?.continuationCount,
+                    });
+                  }
+
                   // Handle finish reason at end of stream
                   if (streamChunk.isComplete) {
                     // Post-processing: run filesystem edits on accumulated stream content
                     // This ensures WRITE/APPLY_DIFF from streamed output reaches the VFS
                     const streamedContent = streamingContentBuffer;
+
+                    // DIAGNOSTIC: Log why VFS writes may or may not happen
+                    chatLogger.debug('Stream complete — filesystem edit gate check', {
+                      enableFilesystemEdits,
+                      contentLength: streamedContent.length,
+                      contentTrimmed: streamedContent.trim().length,
+                      filesystemOwnerId,
+                      requestedScopePath,
+                      hasCommands: !!unifiedResponse.commands,
+                    });
+
                     if (enableFilesystemEdits && streamedContent.trim()) {
                       try {
                         // Enable batch mode to prevent circular Git commits
@@ -2908,6 +2942,18 @@ export async function POST(request: NextRequest) {
                   latencyMs: streamDuration,
                 });
 
+                // FIX: Record telemetry with the ACTUAL provider/model (handles fallbacks)
+                chatRequestLogger.logRequestComplete(
+                  streamRequestId,
+                  true,
+                  undefined,
+                  undefined,
+                  streamDuration,
+                  undefined,
+                  actualProvider,
+                  actualModel,
+                ).catch(() => {}); // fire-and-forget — don't block stream
+
                 // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
                 if (isMem0Configured()) {
                   storeConversationInMem0(messages, finalContent, filesystemOwnerId, streamRequestId).catch(() => {});
@@ -3321,6 +3367,19 @@ export async function POST(request: NextRequest) {
                 model: actualModel,
               });
 
+              // FIX: Record telemetry with the ACTUAL provider/model (not the originally requested one)
+              // This ensures fallback model latency is tracked under the correct model name
+              chatRequestLogger.logRequestComplete(
+                streamRequestId,
+                true,
+                undefined,
+                undefined,
+                streamDuration,
+                undefined,
+                actualProvider,
+                actualModel,
+              ).catch(() => {}); // fire-and-forget — don't block stream
+
               if (!SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED) {
                 streamClosed = true;
                 controller.close();
@@ -3409,6 +3468,18 @@ export async function POST(request: NextRequest) {
         contentLength: clientResponse.content?.length || 0,
         success: clientResponse.success,
       });
+
+      // FIX: Record telemetry with the ACTUAL provider/model (handles fallbacks)
+      chatRequestLogger.logRequestComplete(
+        requestId,
+        clientResponse.success,
+        undefined,
+        undefined,
+        responseLatency,
+        clientResponse.success ? undefined : (clientResponse.error || 'Non-streaming response failed'),
+        actualProvider,
+        actualModel,
+      ).catch(() => {}); // fire-and-forget
 
       // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
       // This runs after the response is sent to not delay the client
@@ -4305,6 +4376,22 @@ export async function applyFilesystemEditsFromResponse(input: {
     : parseFilesystemResponse(input.responseContent || '', input.forceExtract ?? false);
   const folderCreateOps = extractFolderCreateTags(input.responseContent || '');
 
+  // DIAGNOSTIC: Log what edits were found by the parser
+  chatLogger.debug('applyFilesystemEditsFromResponse — parse results', {
+    writesFound: parsedResponse.writes.length,
+    diffsFound: parsedResponse.diffs.length,
+    applyDiffsFound: parsedResponse.applyDiffs.length,
+    deletesFound: parsedResponse.deletes.length,
+    foldersFound: parsedResponse.folders.length,
+    forceExtract: input.forceExtract,
+    responseContentLength: input.responseContent?.length || 0,
+  });
+  if (parsedResponse.writes.length > 0) {
+    chatLogger.debug('Parsed write edits', {
+      paths: parsedResponse.writes.map(w => w.path),
+    });
+  }
+
   // Track invalid paths to detect when ALL paths are invalid (prevents infinite retry loops)
   const invalidPathErrors: string[] = [];
 
@@ -4383,11 +4470,19 @@ export async function applyFilesystemEditsFromResponse(input: {
   }).filter((p): p is string => !!p);
 
   // CRITICAL FIX: If ALL paths were invalid, return explicit error to prevent infinite retry loop
-  const totalRequestedPaths = parsedResponse.writes.length + parsedResponse.diffs.length + 
+  const totalRequestedPaths = parsedResponse.writes.length + parsedResponse.diffs.length +
                                parsedResponse.applyDiffs.length + parsedResponse.deletes.length;
-  const totalValidPaths = combinedWriteEdits.length + combinedDiffOperations.length + 
+  const totalValidPaths = combinedWriteEdits.length + combinedDiffOperations.length +
                           applyDiffOperations.length + deleteTargets.length;
-  
+
+  // DIAGNOSTIC: Log path validation results
+  chatLogger.debug('applyFilesystemEditsFromResponse — path validation', {
+    requestedPaths: totalRequestedPaths,
+    validPaths: totalValidPaths,
+    rejectedPaths: invalidPathErrors.length,
+    sampleErrors: invalidPathErrors.slice(0, 3),
+  });
+
   if (totalRequestedPaths > 0 && totalValidPaths === 0 && invalidPathErrors.length > 0) {
     chatLogger.error('[applyFilesystemEdits] ALL paths were invalid - returning explicit error to prevent infinite retry', {
       requestId: input.requestId,
@@ -4463,6 +4558,12 @@ export async function applyFilesystemEditsFromResponse(input: {
         }
 
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, edit.content);
+        chatLogger.debug('VFS write completed', {
+          ownerId: input.ownerId,
+          requestedPath: edit.path,
+          resolvedPath: targetPath,
+          contentLength: edit.content?.length || 0,
+        });
         result.applied.push({
           path: file.path,
           operation: 'write',
@@ -4891,6 +4992,15 @@ export async function applyFilesystemEditsFromResponse(input: {
     }
   }
 
+  // DIAGNOSTIC: Log final result of VFS edit application
+  chatLogger.info('applyFilesystemEditsFromResponse — final result', {
+    applied: result.applied.length,
+    appliedPaths: result.applied.map(a => a.path),
+    errors: result.errors.length,
+    errorMessages: result.errors.slice(0, 3),
+    status: result.status,
+  });
+
   return result;
 }
 
@@ -4953,16 +5063,18 @@ async function handleError(
   requestStartTime: number
 ) {
   const latencyMs = Date.now() - requestStartTime;
-  
+
   await chatRequestLogger.logRequestComplete(
     requestId,
     false,
     undefined,
     undefined,
     latencyMs,
-    error.message
+    error.message,
+    provider,
+    model,
   );
-  
+
   return errorHandler.processError(error instanceof Error ? error : new Error(error.message), {
     operation: 'chat_api',
     provider,
