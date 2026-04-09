@@ -386,7 +386,10 @@ export async function POST(request: NextRequest) {
 
     // Handle client-side empty response retry context
     // Inject tool execution feedback and failed call details into system message
+    // Also record failed tool calls in telemetry for smart retry model selection
     let processedMessages = messages;
+    let selectedRetryModel: { provider: string; model: string } | null = null;
+
     if (retryContext?.isEmptyResponseRetry) {
       chatLogger.info('Client-side empty response retry detected', {
         requestId,
@@ -395,6 +398,51 @@ export async function POST(request: NextRequest) {
         toolSummary: retryContext.toolExecutionSummary,
         failedToolCalls: retryContext.failedToolCalls?.length,
       });
+
+      // Record failed tool calls in telemetry for model ranking
+      if (retryContext.failedToolCalls && retryContext.failedToolCalls.length > 0 && retryContext.originalModel) {
+        const { toolCallTracker } = await import('@/lib/chat/tool-call-tracker');
+        const timestamp = Date.now();
+
+        const failedRecords = retryContext.failedToolCalls.map(tc => ({
+          model: retryContext.originalModel!,
+          provider: retryContext.originalProvider || 'unknown',
+          toolName: tc.name,
+          success: false,
+          error: tc.error,
+          timestamp,
+          conversationId,
+        }));
+
+        await toolCallTracker.recordToolCalls(failedRecords);
+        chatLogger.debug('Recorded failed tool calls in telemetry', {
+          count: failedRecords.length,
+          model: retryContext.originalModel,
+        });
+      }
+
+      // Select optimal retry model based on tool execution telemetry
+      if (retryContext.originalModel) {
+        try {
+          const { getRetryModel } = await import('@/lib/models/model-ranker');
+          const retryModel = await getRetryModel({
+            failedModel: retryContext.originalModel,
+            failedProvider: retryContext.originalProvider,
+          });
+
+          if (retryModel && (retryModel.model !== retryContext.originalModel || retryModel.provider !== retryContext.originalProvider)) {
+            selectedRetryModel = { provider: retryModel.provider, model: retryModel.model };
+            chatLogger.info('Switching to better tool-handling model for retry', {
+              from: `${retryContext.originalProvider}:${retryContext.originalModel}`,
+              to: `${retryModel.provider}:${retryModel.model}`,
+              avgToolScore: retryModel.avgToolScore,
+              toolSuccessRate: retryModel.toolSuccessRate,
+            });
+          }
+        } catch (error) {
+          chatLogger.warn('Failed to select retry model, using original', error);
+        }
+      }
 
       // Build retry enhancement message
       const retryEnhancementParts: string[] = [];
@@ -419,6 +467,10 @@ export async function POST(request: NextRequest) {
         }
       }
 
+      if (selectedRetryModel) {
+        retryEnhancementParts.push(`\n[MODEL SWITCH] Retrying with ${selectedRetryModel.provider}:${selectedRetryModel.model} (better tool handling)`);
+      }
+
       if (retryEnhancementParts.length > 0) {
         // Inject as system message at the start
         processedMessages = [
@@ -426,6 +478,12 @@ export async function POST(request: NextRequest) {
           ...messages,
         ];
       }
+    }
+
+    // Apply retry model override if selected
+    if (selectedRetryModel) {
+      provider = selectedRetryModel.provider;
+      model = selectedRetryModel.model;
     }
 
     // Log request start
@@ -786,109 +844,100 @@ export async function POST(request: NextRequest) {
       chatLogger.info('Using v1 fallback path after V2 failure', { requestId, provider, model });
     }
 
-    // Agentic pipeline (non-V2) for code-centric requests
-    // Only route to agentic pipeline if it's actually an integration request (OAuth needed)
-    // Regular coding requests should use V2 (handled above) or regular chat
-    const isIntegrationRequest = requiresThirdPartyOAuth(processedMessages);
-    if (isCodeRequest && !isIntegrationRequest && CHAT_AGENTIC_PIPELINE !== 'off') {
-      // For non-integration code requests that don't want V2, fall through to regular chat
-      // This allows "code a nextjs app" to get regular LLM response instead of agentic pipeline
-    } else if (isCodeRequest && isIntegrationRequest && CHAT_AGENTIC_PIPELINE !== 'off') {
-      // This is an integration request that needs OAuth
-      if (!authenticatedUserId) {
-        return NextResponse.json({
-          success: false,
-          status: 'auth_required',
-          authUrl: '/api/auth/signin', // Site login for integration OAuth
-          toolName: 'integration',
-          provider: 'integration',
-          error: {
-            type: 'auth_required',
-            message: 'This request requires connecting to an external service. Please log in.',
-          },
-        }, { status: 401 });
-      }
+    // ─── Integration/OAuth Detection — NON-BLOCKING ──────────────────
+    //
+    // OLD BEHAVIOR (REMOVED): If user message contained "gmail" or "slack",
+    // the regex detector (requiresThirdPartyOAuth) would intercept the request
+    // and either:
+    //   1. Return a JSON error blocking the LLM entirely (if unauthenticated)
+    //   2. Spawn the agentic pipeline which could take 30+ seconds
+    // This caused the conversation to freeze with no LLM response at all.
+    //
+    // NEW BEHAVIOR: The LLM ALWAYS responds first. OAuth/integration needs
+    // are handled AFTER the LLM responds via:
+    //   1. Generic `integration_connect` tool the LLM can call when it determines
+    //      an integration is needed (the LLM decides, not a regex)
+    //   2. Post-response parsing: if the LLM mentions connecting a service,
+    //      we emit an SSE event with the OAuth button alongside the response
+    //   3. The conversation never blocks — the user always gets a reply
+    //
+    // This means "send me an email via gmail" gets a conversational LLM
+    // response AND an OAuth trigger — not a frozen screen with just a button.
+    const isIntegrationRequest = false; // No longer blocks responses
 
-      const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content;
-      const task = typeof lastUserMessage === 'string'
-        ? lastUserMessage
-        : JSON.stringify(lastUserMessage || '');
+    // The old agentic pipeline that was gated behind isIntegrationRequest is removed.
+    // OAuth detection no longer blocks responses. The LLM always responds.
+  }
 
-      const context = buildAgenticContext(contextualMessages);
+  // ─── Regular Chat Path (ALWAYS used now) ────────────────────────────
+  // Build unified agent config for the chat path
+  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content;
+  const task = typeof lastUserMessage === 'string'
+    ? lastUserMessage
+    : JSON.stringify(lastUserMessage || '');
 
-      if (WORKFORCE_ENABLED && /parallel|multi-agent|agents|crew|swarm/i.test(task)) {
-        await workforceManager.spawnTask(authenticatedUserId, resolvedConversationId, {
-          title: 'Research & context gathering',
-          description: `Gather context and research for: ${task}`,
-          agent: 'nullclaw',
-        });
-        await workforceManager.spawnTask(authenticatedUserId, resolvedConversationId, {
-          title: 'Implementation',
-          description: task,
-          agent: 'opencode',
-        });
-      }
+  const context = buildAgenticContext(contextualMessages);
 
-      // Build system prompt with optional response style modifiers
-      const baseSystemPrompt = process.env.OPENCODE_SYSTEM_PROMPT || '';
-      const promptParams: PromptParameters = {
-        responseDepth: body.responseDepth as any,
-        expertiseLevel: body.expertiseLevel as any,
-        reasoningMode: body.reasoningMode as any,
-        tone: body.tone as any,
-        creativityLevel: body.creativityLevel as any,
-        citationStrictness: body.citationStrictness as any,
-        outputFormat: body.outputFormat as any,
-        selfCorrection: body.selfCorrection as any,
-      };
-      let promptSuffix = '';
-      if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
-        const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
-        promptSuffix = applyPromptModifiers({ ...preset, ...promptParams });
-      } else if (Object.values(promptParams).some(v => v !== undefined)) {
-        promptSuffix = applyPromptModifiers(promptParams);
-      }
-      const systemPrompt = promptSuffix ? baseSystemPrompt + promptSuffix : baseSystemPrompt;
+  // Build system prompt with optional response style modifiers
+  const baseSystemPrompt = process.env.OPENCODE_SYSTEM_PROMPT || '';
+  const promptParams: PromptParameters = {
+    responseDepth: body.responseDepth as any,
+    expertiseLevel: body.expertiseLevel as any,
+    reasoningMode: body.reasoningMode as any,
+    tone: body.tone as any,
+    creativityLevel: body.creativityLevel as any,
+    citationStrictness: body.citationStrictness as any,
+    outputFormat: body.outputFormat as any,
+    selfCorrection: body.selfCorrection as any,
+  };
+  let promptSuffix = '';
+  if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
+    const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
+    promptSuffix = applyPromptModifiers({ ...preset, ...promptParams });
+  } else if (Object.values(promptParams).some(v => v !== undefined)) {
+    promptSuffix = applyPromptModifiers(promptParams);
+  }
+  const systemPrompt = promptSuffix ? baseSystemPrompt + promptSuffix : baseSystemPrompt;
 
-      // Emit telemetry event for analytics (non-blocking, fire-and-forget)
-      emitTelemetryEvent(promptParams, body.presetKey || null);
+  // Emit telemetry event for analytics (non-blocking, fire-and-forget)
+  emitTelemetryEvent(promptParams, body.presetKey || null);
 
-      // Log active response style for debugging
-      const debugHeaderValue = generateDebugHeaderValue(promptParams, body.presetKey || null);
-      if (debugHeaderValue !== 'default') {
-        chatLogger.debug('Response style active', { requestId }, { style: debugHeaderValue });
-      }
+  // Log active response style for debugging
+  const debugHeaderValue = generateDebugHeaderValue(promptParams, body.presetKey || null);
+  if (debugHeaderValue !== 'default') {
+    chatLogger.debug('Response style active', { requestId }, { style: debugHeaderValue });
+  }
 
-      const config: UnifiedAgentConfig = {
-        userMessage: context ? `${context}\n\nTASK:\n${task}` : task,
-        conversationHistory: contextualMessages.map((m) => ({
-          role: m.role,
-          content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-        })),
-        systemPrompt,
-        maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
-        temperature,
-        maxTokens,
-        mode: 'auto',
-      };
+  const config: UnifiedAgentConfig = {
+    userMessage: context ? `${context}\n\nTASK:\n${task}` : task,
+    conversationHistory: contextualMessages.map((m) => ({
+      role: m.role,
+      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+    })),
+    systemPrompt,
+    maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
+    temperature,
+    maxTokens,
+    mode: 'auto',
+  };
 
-      const tools = await getMCPToolsForAI_SDK(authenticatedUserId);
-      config.tools = tools.map(t => ({
-        name: t.function.name,
-        description: t.function.description,
-        parameters: t.function.parameters,
-      }));
-      config.executeTool = async (name: string, args: Record<string, any>) => {
-        const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId);
-        return {
-          success: result.success,
-          output: result.output,
-          exitCode: result.success ? 0 : 1,
-        };
-      };
+  const tools = await getMCPToolsForAI_SDK(authenticatedUserId);
+  config.tools = tools.map(t => ({
+    name: t.function.name,
+    description: t.function.description,
+    parameters: t.function.parameters,
+  }));
+  config.executeTool = async (name: string, args: Record<string, any>) => {
+    const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId);
+    return {
+      success: result.success,
+      output: result.output,
+      exitCode: result.success ? 0 : 1,
+    };
+  };
 
-      if (stream) {
-        const streamBody = new ReadableStream({
+  if (stream) {
+    const streamBody = new ReadableStream({
           async start(controller) {
             const emit = createSSEEmitter(controller);
             const processingSteps: Array<{
@@ -975,6 +1024,23 @@ export async function POST(request: NextRequest) {
                   result,
                   timestamp: Date.now(),
                 });
+
+                // Track tool call success/failure in telemetry for model ranking
+                // Uses generated toolCallId for deduplication
+                if (toolName) {
+                  import('@/lib/chat/tool-call-tracker').then(({ toolCallTracker }) => {
+                    toolCallTracker.recordToolCall({
+                      model: actualModel,
+                      provider: actualProvider,
+                      toolName,
+                      success: result?.success !== false,
+                      error: result?.error,
+                      timestamp: Date.now(),
+                      conversationId,
+                      toolCallId: `agent-${toolName}-${Date.now()}`,
+                    });
+                  }).catch(() => {});
+                }
               };
 
               const result = await processUnifiedAgentRequest(config);
@@ -2126,6 +2192,26 @@ export async function POST(request: NextRequest) {
                           result: toolInvocation.result,
                           timestamp: Date.now(),
                         });
+
+                        // Track tool call success/failure in telemetry for model ranking
+                        // Deduplication handled by toolCallTracker using toolCallId
+                        if (toolInvocation.state === 'result' && toolInvocation.toolName) {
+                          const toolCallTracker = (await import('@/lib/chat/tool-call-tracker')).toolCallTracker;
+                          const isSuccess = toolInvocation.result && toolInvocation.result.output !== undefined;
+                          const errorMsg = toolInvocation.result?.error;
+
+                          // Record the tool call for model ranking
+                          await toolCallTracker.recordToolCall({
+                            model: actualModel,
+                            provider: actualProvider,
+                            toolName: toolInvocation.toolName,
+                            success: isSuccess,
+                            error: errorMsg,
+                            timestamp: Date.now(),
+                            conversationId,
+                            toolCallId: toolInvocation.toolCallId,
+                          });
+                        }
                       }
                     }
                   }

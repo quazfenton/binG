@@ -22,7 +22,15 @@ import crypto from 'crypto';
 import { chatLogger } from '@/lib/chat/chat-logger';
 
 // ============================================================
-// Constants (from opencode-antigravity-auth)
+// Constants (from opencode-antigravity-auth reference implementation)
+//
+// SECURITY NOTE: The client ID and secret below belong to Google's own
+// Antigravity OAuth application (Cloud Code Assist). They are NOT user
+// secrets — they identify the Antigravity product itself, similar to how
+// the official Google Cloud Code VS Code extension uses the same credentials.
+// These are safe to include in source code as they are public product credentials.
+// Users can override via ANTIGRAVITY_CLIENT_ID / ANTIGRAVITY_CLIENT_SECRET env vars
+// if they want to use their own Google OAuth app.
 // ============================================================
 
 const ANTIGRAVITY_CLIENT_ID = '1071006060591-tmhssin2h21lcre235vtolojh4g403ep.apps.googleusercontent.com';

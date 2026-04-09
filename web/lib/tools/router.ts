@@ -56,6 +56,9 @@ export interface CapabilityProvider {
 
 /**
  * VFS Provider - handles file operations via Virtual Filesystem
+ *
+ * Uses a declarative method map instead of a switch statement.
+ * Each capability is a typed method with input/output schemas.
  */
 class VFSProvider implements CapabilityProvider {
   readonly id = 'vfs';
@@ -63,167 +66,136 @@ class VFSProvider implements CapabilityProvider {
   readonly capabilities = ['file.read', 'file.write', 'file.append', 'file.delete', 'file.list', 'file.search', 'memory.context', 'workspace.getChanges'];
 
   isAvailable(): boolean {
-    // VFS is available by default (works with default config)
-    // It's always available since virtualFilesystem service initializes with defaults
     return true;
   }
+
+  // ─── Declarative Method Map ──────────────────────────────────────────────
+
+  private readonly methods: Record<string, (ownerId: string, input: any) => Promise<any>> = {
+    'file.read': async (ownerId, input) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const file = await virtualFilesystem.readFile(ownerId, input.path);
+      return {
+        content: file.content,
+        path: file.path,
+        language: file.language,
+        size: file.size,
+        version: file.version,
+        lastModified: file.lastModified,
+      };
+    },
+
+    'file.write': async (ownerId, input) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const file = await virtualFilesystem.writeFile(
+        ownerId,
+        input.path,
+        input.content,
+        input.language,
+        input.append
+          ? { failIfExists: false, append: true }
+          : input.failIfExists
+            ? { failIfExists: true }
+            : undefined
+      );
+      return { success: true, path: file.path, bytesWritten: file.size };
+    },
+
+    'file.append': async (ownerId, input) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const file = await virtualFilesystem.writeFile(
+        ownerId,
+        input.path,
+        input.content,
+        input.language,
+        { failIfExists: false, append: true }
+      );
+      return { success: true, path: file.path, bytesWritten: file.size };
+    },
+
+    'file.delete': async (ownerId, input) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const result = await virtualFilesystem.deletePath(ownerId, input.path);
+      return { deletedCount: result.deletedCount, path: input.path };
+    },
+
+    'file.list': async (ownerId, input) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const listing = await virtualFilesystem.listDirectory(ownerId, input.path || 'project');
+      return {
+        path: listing.path,
+        nodes: listing.nodes.map(node => ({
+          name: node.name,
+          path: node.path,
+          type: node.type,
+          language: node.language,
+          size: node.size,
+          lastModified: node.lastModified,
+        })),
+      };
+    },
+
+    'file.search': async (ownerId, input) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const results = await virtualFilesystem.search(ownerId, input.query, {
+        path: input.path,
+        limit: input.limit,
+      });
+      return {
+        results: results.map(r => ({
+          path: r.path,
+          name: r.name,
+          language: r.language,
+          score: r.score,
+          snippet: r.snippet,
+          lastModified: r.lastModified,
+        })),
+        total: results.length,
+      };
+    },
+
+    'workspace.getChanges': async (ownerId, input) => {
+      const { diffTracker } = await import('../virtual-filesystem/filesystem-diffs');
+      const changedFiles = diffTracker.getChangedFilesForSync(ownerId, input.maxFiles || 50);
+      return { ownerId, count: changedFiles.length, files: changedFiles };
+    },
+
+    'memory.context': async (ownerId) => {
+      const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
+      const workspace = await virtualFilesystem.exportWorkspace(ownerId);
+      return {
+        root: workspace.root,
+        version: workspace.version,
+        fileCount: workspace.files.length,
+        files: workspace.files.map(f => ({
+          path: f.path,
+          language: f.language,
+          size: f.size,
+          lastModified: f.lastModified,
+        })),
+      };
+    },
+  };
 
   async execute(
     capabilityId: string,
     input: any,
     context: ToolExecutionContext
   ): Promise<ToolExecutionResult> {
-    const { virtualFilesystem } = await import('../virtual-filesystem/virtual-filesystem-service');
     const ownerId = input.ownerId || context.userId || 'default';
 
-    // Input validation
     if (!ownerId) {
       return { success: false, error: 'Missing ownerId/userId' };
     }
 
+    const handler = this.methods[capabilityId];
+    if (!handler) {
+      return { success: false, error: `Unknown capability: ${capabilityId}` };
+    }
+
     try {
-      switch (capabilityId) {
-        case 'file.read': {
-          const file = await virtualFilesystem.readFile(ownerId, input.path);
-          return {
-            success: true,
-            output: {
-              content: file.content,
-              path: file.path,
-              language: file.language,
-              size: file.size,
-              version: file.version,
-              lastModified: file.lastModified,
-            },
-          };
-        }
-
-        case 'file.write': {
-          const file = await virtualFilesystem.writeFile(
-            ownerId,
-            input.path,
-            input.content,
-            input.language,
-            input.append
-              ? { failIfExists: false, append: true }
-              : input.failIfExists
-                ? { failIfExists: true }
-                : undefined
-          );
-          return {
-            success: true,
-            output: {
-              success: true,
-              path: file.path,
-              bytesWritten: file.size,
-            },
-          };
-        }
-
-        case 'file.append': {
-          const file = await virtualFilesystem.writeFile(
-            ownerId,
-            input.path,
-            input.content,
-            input.language,
-            { failIfExists: false, append: true }
-          );
-          return {
-            success: true,
-            output: {
-              success: true,
-              path: file.path,
-              bytesWritten: file.size,
-            },
-          };
-        }
-
-        case 'file.delete': {
-          const result = await virtualFilesystem.deletePath(ownerId, input.path);
-          return {
-            success: true,
-            output: {
-              deletedCount: result.deletedCount,
-              path: input.path,
-            },
-          };
-        }
-
-        case 'file.list': {
-          const listing = await virtualFilesystem.listDirectory(ownerId, input.path || 'project');
-          return {
-            success: true,
-            output: {
-              path: listing.path,
-              nodes: listing.nodes.map(node => ({
-                name: node.name,
-                path: node.path,
-                type: node.type,
-                language: node.language,
-                size: node.size,
-                lastModified: node.lastModified,
-              })),
-            },
-          };
-        }
-
-        case 'file.search': {
-          const results = await virtualFilesystem.search(ownerId, input.query, {
-            path: input.path,
-            limit: input.limit,
-          });
-          return {
-            success: true,
-            output: {
-              results: results.map(r => ({
-                path: r.path,
-                name: r.name,
-                language: r.language,
-                score: r.score,
-                snippet: r.snippet,
-                lastModified: r.lastModified,
-              })),
-              total: results.length,
-            },
-          };
-        }
-
-        case 'workspace.getChanges': {
-          // Get git-style diffs for client sync
-          const { diffTracker } = await import('../virtual-filesystem/filesystem-diffs');
-          const changedFiles = diffTracker.getChangedFilesForSync(ownerId, input.maxFiles || 50);
-          return {
-            success: true,
-            output: {
-              ownerId,
-              count: changedFiles.length,
-              files: changedFiles,
-            },
-          };
-        }
-
-        case 'memory.context': {
-          // Get workspace state for context
-          const workspace = await virtualFilesystem.exportWorkspace(ownerId);
-          return {
-            success: true,
-            output: {
-              root: workspace.root,
-              version: workspace.version,
-              fileCount: workspace.files.length,
-              files: workspace.files.map(f => ({
-                path: f.path,
-                language: f.language,
-                size: f.size,
-                lastModified: f.lastModified,
-              })),
-            },
-          };
-        }
-
-        default:
-          return { success: false, error: `Unknown capability: ${capabilityId}` };
-      }
+      const output = await handler(ownerId, input);
+      return { success: true, output };
     } catch (error: any) {
       return { success: false, error: error.message };
     }
@@ -1586,6 +1558,51 @@ class TerminalProvider implements CapabilityProvider {
 }
 
 /**
+ * Provider ID Enum - Type-safe provider identifiers.
+ * Using this enum instead of string[] prevents typos from silently failing.
+ */
+export enum ProviderId {
+  VFS = 'vfs',
+  LOCAL_FS = 'local-fs',
+  MCP_FILESYSTEM = 'mcp-filesystem',
+  OPENCODE_V2 = 'opencode-v2',
+  NULLCLAW = 'nullclaw',
+  BLAXEL = 'blaxel',
+  MEMORY_SERVICE = 'memory-service',
+  RIPGREP = 'ripgrep',
+  CONTEXT_PACK = 'context-pack',
+  EMBEDDING_SEARCH = 'embedding-search',
+  GIT_HELPER = 'git-helper',
+  OAUTH_INTEGRATION = 'oauth-integration',
+  TERMINAL = 'terminal',
+  PROJECT_ANALYSIS = 'project-analysis',
+  CUSTOM = 'custom', // For dynamically registered providers
+}
+
+/**
+ * Dynamic provider registration options.
+ * Allows runtime registration of custom providers with full control over capabilities.
+ */
+export interface ProviderRegistrationOptions {
+  /** Unique provider ID (use ProviderId.CUSTOM for auto-generated ID) */
+  id?: string;
+  /** Human-readable name */
+  name: string;
+  /** Capabilities this provider supports */
+  capabilities: string[];
+  /** Availability check function */
+  isAvailable: () => boolean | Promise<boolean>;
+  /** Execution function for capability calls */
+  execute: (
+    capabilityId: string,
+    input: any,
+    context: ToolExecutionContext
+  ) => Promise<ToolExecutionResult>;
+  /** Priority in provider list (higher = checked first) */
+  priority?: number;
+}
+
+/**
  * Capability Router - selects and executes capabilities via providers
  */
 export class CapabilityRouter {
@@ -1609,6 +1626,47 @@ export class CapabilityRouter {
   registerProvider(provider: CapabilityProvider): void {
     this.providers.set(provider.id, provider);
     logger.info(`[CapabilityRouter] Registered provider: ${provider.name} (${provider.id})`);
+  }
+
+  /**
+   * Dynamically register a custom provider at runtime.
+   * Returns the provider ID for use in capability definitions.
+   */
+  async registerCustomProvider(options: ProviderRegistrationOptions): Promise<string> {
+    const providerId = options.id || `custom-${options.name.toLowerCase().replace(/\s+/g, '-')}-${Date.now()}`;
+
+    const customProvider: CapabilityProvider = {
+      id: providerId,
+      name: options.name,
+      capabilities: options.capabilities,
+      isAvailable: options.isAvailable,
+      execute: options.execute,
+    };
+
+    this.registerProvider(customProvider);
+    return providerId;
+  }
+
+  /**
+   * Unregister a provider by ID.
+   * Returns true if provider was found and removed.
+   */
+  unregisterProvider(providerId: string): boolean {
+    return this.providers.delete(providerId);
+  }
+
+  /**
+   * Get list of registered provider IDs.
+   */
+  getProviderIds(): string[] {
+    return Array.from(this.providers.keys());
+  }
+
+  /**
+   * Get a provider by ID.
+   */
+  getProvider<T extends CapabilityProvider = CapabilityProvider>(providerId: string): T | undefined {
+    return this.providers.get(providerId) as T | undefined;
   }
 
   /**

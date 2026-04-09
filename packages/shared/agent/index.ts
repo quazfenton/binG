@@ -64,10 +64,21 @@ export {
   type TaskRoutingResult,
 } from './task-router';
 
+// Intent Schema — Declarative intent definitions for two-stage classification
+export {
+  INTENT_SCHEMA,
+  classifyIntent,
+  classifyIntentStage1,
+  classifyIntentStage2,
+  getAllStage1Scores,
+  type IntentDefinition,
+  type IntentMatch,
+} from './intent-schema';
+
 // Unified Router (PRIMARY — replaces scattered routing logic)
 export {
   routeChatRequest,
-  classifyTask,
+  classifyTask as unifiedClassifyTask,
   checkProviderHealth,
   type ChatRequest,
   type ChatResponse,

@@ -12,7 +12,8 @@
  * 4. Streaming: Native SSE event emission at every state transition.
  */
 
-import { generateText, type Tool } from 'ai';
+import { generateText, tool as aiTool, type Tool } from 'ai';
+import { z } from 'zod';
 import { verifyChanges } from '@/lib/orchestra/stateful-agent/agents/verification';
 import { SelfHealingExecutor } from '@/lib/crewai/runtime/self-healing';
 import { getVercelModel } from '@/lib/chat/vercel-ai-streaming';
@@ -20,22 +21,240 @@ import { createLogger } from '@/lib/utils/logger';
 
 const log = createLogger('AgentOrchestrator');
 
-// Message type — use local definition since AI SDK types vary by version
+// ─── Typed Configuration ─────────────────────────────────────────────────────
+
+/** Iteration budget configuration with validation and defaults */
+const IterationConfigSchema = z.object({
+  maxIterations: z.number().min(1).max(100).default(20),
+  maxTokens: z.number().min(100).max(1_000_000).default(100_000),
+  maxDurationMs: z.number().min(1000).max(600_000).default(300_000), // 5 min default
+  provider: z.string().default('openai'),
+  model: z.string().default('gpt-4o'),
+});
+
+export type IterationConfigInput = z.input<typeof IterationConfigSchema>;
+export interface IterationConfig extends z.infer<typeof IterationConfigSchema> {}
+
+// ─── Message type — use local definition since AI SDK types vary by version ──
+
 type AgentMessage = {
   role: 'system' | 'user' | 'assistant' | 'tool';
-  content: string;
+  content: string | any[];
   toolCallId?: string;
+  toolName?: string;
 };
 
-export interface IterationConfig {
-  maxIterations: number;
-  maxTokens: number;
-  maxDurationMs: number;
-  /** LLM provider name (openai, anthropic, google, mistral, openrouter, etc.) */
-  provider?: string;
-  /** Model name (gpt-4o, claude-sonnet-4-5, etc.) */
-  model?: string;
+// ─── Structured Tool Result Interface (P2 #7) ────────────────────────────────
+
+/**
+ * Structured tool result passed into conversation history.
+ * Replaces JSON.stringify blobs with typed fields the LLM can reason about.
+ */
+export interface ToolResult {
+  /** Whether the tool call succeeded */
+  success: boolean;
+  /** Tool name that was called */
+  toolName: string;
+  /** Arguments that were passed to the tool */
+  args?: Record<string, any>;
+  /** Structured output on success */
+  output?: Record<string, any>;
+  /** Structured error context on failure */
+  error?: ToolError;
+  /** Human-readable summary for the LLM */
+  summary: string;
 }
+
+/**
+ * Structured error context — self-healing gets typed fields instead of
+ * regex-on-stderr-text.
+ */
+export interface ToolError {
+  /** Error type classification */
+  type:
+    | 'execution'        // Runtime crash / exception
+    | 'validation'       // Input validation failed
+    | 'filesystem'       // Path not found, permission denied
+    | 'dependency'       // Missing dependency / module
+    | 'timeout'          // Tool call timed out
+    | 'unknown';
+  /** Human-readable message */
+  message: string;
+  /** Exit code (for shell/tool processes) */
+  exitCode?: number;
+  /** stderr / raw error output */
+  stderr?: string;
+  /** stdout (partial) before failure */
+  stdout?: string;
+  /** Suggested remediation for self-healing */
+  suggestions?: string[];
+  /** Missing dependencies detected */
+  missingDependencies?: string[];
+}
+
+/** Parse a raw tool execution result into a structured ToolResult */
+function buildToolResult(
+  toolName: string,
+  args: Record<string, any>,
+  rawResult: any,
+  error?: Error
+): ToolResult {
+  if (error) {
+    const errMsg = error.message || 'Unknown error';
+    const structuredError: ToolError = classifyToolError(toolName, errMsg, rawResult);
+    return {
+      success: false,
+      toolName,
+      args,
+      error: structuredError,
+      summary: `Tool '${toolName}' failed: ${structuredError.message}${structuredError.suggestions?.length ? '. Suggestions: ' + structuredError.suggestions.join('; ') : ''}`,
+    };
+  }
+
+  // Success path
+  const output = typeof rawResult === 'object' && rawResult !== null ? rawResult : { value: rawResult };
+  const summary = buildToolSuccessSummary(toolName, output);
+
+  return {
+    success: true,
+    toolName,
+    args,
+    output,
+    summary,
+  };
+}
+
+/**
+ * Classify a tool error into a structured ToolError.
+ * Self-healing logic uses the typed fields instead of regex on stderr.
+ */
+function classifyToolError(
+  toolName: string,
+  message: string,
+  rawResult?: any
+): ToolError {
+  const lower = message.toLowerCase();
+  const stderr = typeof rawResult?.stderr === 'string' ? rawResult.stderr : undefined;
+  const stdout = typeof rawResult?.stdout === 'string' ? rawResult.stdout : undefined;
+
+  // Missing dependency
+  if (lower.includes('module not found') || lower.includes('cannot find module') || lower.includes('no such file')) {
+    const missingMatch = message.match(/(?:module|file|package)\s+['"]?([^'"\s]+)['"]?/i);
+    return {
+      type: 'dependency',
+      message,
+      suggestions: [
+        `Install the missing dependency: npm install ${missingMatch?.[1] || 'the missing package'}`,
+        'Check import paths and package.json',
+      ],
+      missingDependencies: missingMatch ? [missingMatch[1]] : undefined,
+      stderr,
+      stdout,
+    };
+  }
+
+  // Filesystem error
+  if (lower.includes('enoent') || lower.includes('permission denied') || lower.includes('eacces') || lower.includes('path not found')) {
+    return {
+      type: 'filesystem',
+      message,
+      exitCode: rawResult?.exitCode,
+      suggestions: [
+        'Verify the file path exists and is accessible',
+        'Check file permissions',
+      ],
+      stderr,
+      stdout,
+    };
+  }
+
+  // Timeout
+  if (lower.includes('timeout') || lower.includes('timed out') || lower.includes('etimedout')) {
+    return {
+      type: 'timeout',
+      message,
+      suggestions: [
+        'Increase the timeout duration',
+        'Break the operation into smaller chunks',
+      ],
+    };
+  }
+
+  // Validation
+  if (lower.includes('validation') || lower.includes('invalid') || lower.includes('required')) {
+    return {
+      type: 'validation',
+      message,
+      suggestions: ['Check the tool arguments match the expected schema'],
+    };
+  }
+
+  // Generic execution error
+  return {
+    type: 'execution',
+    message,
+    exitCode: rawResult?.exitCode,
+    suggestions: ['Review the tool usage and error message'],
+    stderr,
+    stdout,
+  };
+}
+
+/** Build a concise summary for successful tool execution */
+function buildToolSuccessSummary(toolName: string, output: Record<string, any>): string {
+  switch (toolName) {
+    case 'readFile':
+    case 'file.read':
+      return `Read file: ${output.path || 'unknown'} (${output.size || output.content?.length || 0} bytes)`;
+    case 'writeFile':
+    case 'file.write':
+      return `Wrote file: ${output.path || output.file || 'unknown'} (${output.bytesWritten || output.content?.length || 0} bytes)`;
+    case 'applyDiff':
+      return `Applied diff to: ${output.path || output.file || 'unknown'}`;
+    case 'listFiles':
+    case 'file.list':
+      return `Listed directory: ${output.path || 'unknown'} (${output.count || output.nodes?.length || 0} entries)`;
+    case 'deleteFile':
+    case 'file.delete':
+      return `Deleted: ${output.path || output.file || 'unknown'}`;
+    case 'executeShell':
+    case 'exec_shell':
+      return `Shell command executed (exit code: ${output.exitCode ?? 'unknown'})`;
+    default:
+      return `Tool '${toolName}' executed successfully`;
+  }
+}
+
+// ─── Typed Event Payloads (P2 #9) ────────────────────────────────────────────
+
+export type OrchestratorEvent =
+  | { type: 'phase_change'; phase: 'planning' | 'acting' | 'verifying' | 'responding' }
+  | { type: 'plan_created'; plan: Array<{ action: string; tool?: string }> }
+  | { type: 'iteration_start'; iteration: number }
+  | { type: 'tool_call'; tool: string; args: Record<string, any> }
+  | { type: 'tool_result'; tool: string; result: ToolResult }
+  | { type: 'tool_error'; tool: string; error: ToolError }
+  | { type: 'token'; content: string }
+  | { type: 'verification_failed'; errors: Array<{ file: string; message: string; suggestion?: string }> }
+  | { type: 'verification_passed' }
+  | { type: 'warning'; message: string }
+  | { type: 'done'; response: string; stats: { iterations: number; tokensUsed: number; durationMs: number } };
+
+// ─── Orchestrator Config (P2 #9 — typed) ─────────────────────────────────────
+
+export interface OrchestratorToolDefinition {
+  name: string;
+  description: string;
+  parameters: z.ZodType<any>;
+}
+
+export interface OrchestratorConfig {
+  iterationConfig: IterationConfigInput;
+  tools: OrchestratorToolDefinition[];
+  executeTool: (name: string, args: any) => Promise<any>;
+}
+
+// ─── Iteration Controller ────────────────────────────────────────────────────
 
 export class IterationController {
   private iterations = 0;
@@ -74,44 +293,27 @@ export class IterationController {
   }
 }
 
-export interface OrchestratorConfig {
-  iterationConfig: IterationConfig;
-  tools: any[];
-  executeTool: (name: string, args: any) => Promise<any>;
-}
-
-export type OrchestratorEvent =
-  | { type: 'phase_change'; phase: 'planning' | 'acting' | 'verifying' | 'responding' }
-  | { type: 'plan_created'; plan: any }
-  | { type: 'iteration_start'; iteration: number }
-  | { type: 'tool_call'; tool: string; args: any }
-  | { type: 'tool_result'; tool: string; result: any }
-  | { type: 'tool_error'; tool: string; error: string }
-  | { type: 'token'; content: string }
-  | { type: 'verification_failed'; errors: any[] }
-  | { type: 'verification_passed' }
-  | { type: 'warning'; message: string }
-  | { type: 'done'; response: string; stats: any };
+// ─── Agent Orchestrator ──────────────────────────────────────────────────────
 
 export class AgentOrchestrator {
-  /** Convert internal tools to Vercel AI SDK tool format */
+  private validatedConfig: IterationConfig;
+  /** SDK tools built via proper adapter (no @ts-expect-error) — P2 #9 */
   private sdkTools: Record<string, Tool> = {};
 
   constructor(private config: OrchestratorConfig) {
-    // Convert tools to Vercel AI SDK format
-    for (const tool of config.tools) {
-      const toolName = tool.name || tool.function?.name;
+    // Validate and normalize configuration with Zod — P2 #9
+    this.validatedConfig = IterationConfigSchema.parse(config.iterationConfig);
+
+    // Build SDK tools via proper adapter — P2 #9
+    // Uses aiTool() with typed Zod parameters instead of manual conversion + @ts-expect-error
+    for (const toolDef of config.tools) {
+      const toolName = toolDef.name;
       if (!toolName) continue;
 
-      const parameters = tool.parameters || tool.function?.parameters;
-      this.sdkTools[toolName] = {
-        description: tool.description || tool.function?.description || '',
-        // Vercel AI SDK Tool expects parameters as JSON schema
-        // @ts-expect-error - parameters shape varies by SDK version
-        parameters: parameters && typeof parameters === 'object' && 'type' in parameters
-          ? parameters
-          : { type: 'object', properties: {}, additionalProperties: false },
-        execute: async (args: any) => {
+      this.sdkTools[toolName] = aiTool({
+        description: toolDef.description || `Execute ${toolName}`,
+        parameters: toolDef.parameters,
+        execute: async (args) => {
           try {
             return await config.executeTool(toolName, args);
           } catch (error: any) {
@@ -119,7 +321,7 @@ export class AgentOrchestrator {
             throw error;
           }
         },
-      };
+      });
     }
   }
 
@@ -128,7 +330,7 @@ export class AgentOrchestrator {
    * Yields SSE-compatible events for UI rendering.
    */
   async *execute(task: string, initialContext: any[]): AsyncGenerator<OrchestratorEvent, void, unknown> {
-    const controller = new IterationController(this.config.iterationConfig);
+    const controller = new IterationController(this.validatedConfig);
     const conversationHistory = [...initialContext];
 
     yield { type: 'phase_change', phase: 'planning' };
@@ -165,23 +367,30 @@ export class AgentOrchestrator {
       for (const call of llmResponse.toolCalls) {
         yield { type: 'tool_call', tool: call.name, args: call.arguments };
 
-        let toolResult;
+        let structuredResult: ToolResult;
         try {
-          toolResult = await this.executeToolWithHealing(call.name, call.arguments);
-          yield { type: 'tool_result', tool: call.name, result: toolResult };
+          const rawResult = await this.executeToolWithHealing(call.name, call.arguments);
+          // P2 #7: Build structured ToolResult instead of JSON.stringify blob
+          structuredResult = buildToolResult(call.name, call.arguments, rawResult);
+          yield { type: 'tool_result', tool: call.name, result: structuredResult };
 
           if (call.name === 'writeFile' || call.name === 'applyDiff') {
             modifiedFiles.push(call.arguments.path || call.arguments.file);
           }
         } catch (error: any) {
-          toolResult = { error: error.message };
-          yield { type: 'tool_error', tool: call.name, error: error.message };
+          // P2 #7: Build structured ToolResult for errors too
+          structuredResult = buildToolResult(call.name, call.arguments, undefined, error);
+          yield { type: 'tool_error', tool: call.name, error: structuredResult.error! };
         }
 
+        // P2 #7: Pass structured ToolResult into conversation history
+        // The LLM gets structured fields (success, output, error.type, suggestions, etc.)
+        // instead of a raw JSON string blob
         conversationHistory.push({
           role: 'tool',
-          content: JSON.stringify(toolResult),
+          content: JSON.stringify(structuredResult),
           toolCallId: call.id,
+          toolName: call.name,
         } as AgentMessage);
       }
 
@@ -193,6 +402,7 @@ export class AgentOrchestrator {
          if (!verificationResult.passed) {
            yield { type: 'verification_failed', errors: verificationResult.errors };
            // Feed errors back to the ACT loop for self-healing
+           // P2 #7: Use structured error context
            conversationHistory.push({
              role: 'system',
              content: `Verification failed. Please fix these errors in the next step: ${JSON.stringify(verificationResult.errors)}`
@@ -203,7 +413,7 @@ export class AgentOrchestrator {
       }
     }
 
-    // 4. RESPOND PHASE (with budget check - do not exceed budgets even for summarization)
+    // 4. RESPOND PHASE (with budget check - do not exceed budget even for summarization)
     yield { type: 'phase_change', phase: 'responding' };
 
     // Check budgets before final summarization call to prevent budget bypass
@@ -246,11 +456,11 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
 
   /**
    * Call LLM using Vercel AI SDK generateText.
-   * Replaces the old llmService.generateResponse() with unified provider support.
+   * P2 #9: Uses typed provider config with validated defaults.
+   * P2 #9: Uses properly adapted sdkTools (no @ts-expect-error).
    */
   private async callLLM(prompt: string, history: AgentMessage[]) {
-    const provider = this.config.iterationConfig.provider || process.env.LLM_PROVIDER || 'openai';
-    const model = this.config.iterationConfig.model || process.env.LLM_MODEL || process.env.DEFAULT_MODEL || 'gpt-4o';
+    const { provider, model } = this.validatedConfig;
 
     try {
       let vercelModel: any;
@@ -298,13 +508,43 @@ Output ONLY a JSON array of steps: [{"action": "Description", "tool": "ToolName"
     // Basic self-healing wrapper
     const maxRetries = 2;
     let attempt = 0;
+    const toolCallId = `orch-${name}-${Date.now()}`;
 
     while (attempt <= maxRetries) {
       try {
-        return await this.config.executeTool(name, args);
+        const result = await this.config.executeTool(name, args);
+
+        // Record successful tool call in telemetry
+        import('@/lib/chat/tool-call-tracker').then(({ toolCallTracker }) => {
+          const structuredResult = buildToolResult(name, args, result);
+          toolCallTracker.recordToolCall({
+            model: this.validatedConfig.model,
+            provider: this.validatedConfig.provider,
+            toolName: name,
+            success: true,
+            timestamp: Date.now(),
+            toolCallId,
+          });
+        }).catch(() => {});
+
+        return result;
       } catch (error: any) {
         attempt++;
         if (attempt > maxRetries) {
+          // Record failed tool call in telemetry
+          import('@/lib/chat/tool-call-tracker').then(({ toolCallTracker }) => {
+            const structuredResult = buildToolResult(name, args, undefined, error);
+            toolCallTracker.recordToolCall({
+              model: this.validatedConfig.model,
+              provider: this.validatedConfig.provider,
+              toolName: name,
+              success: false,
+              error: error.message,
+              timestamp: Date.now(),
+              toolCallId,
+            });
+          }).catch(() => {});
+
           throw new Error(`Tool ${name} failed after ${maxRetries} retries: ${error.message}`);
         }
         // Small exponential backoff for transient issues
