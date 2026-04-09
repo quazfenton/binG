@@ -15,8 +15,8 @@ import type { IncomingMessage } from 'http';
 import type { Duplex } from 'stream';
 import * as jsonwebtoken from 'jsonwebtoken';
 import { streamStateManager } from './stream-state-manager';
-import { getJwtSecret } from './auth/jwt';
-import { chatLogger } from './chat/chat-logger';
+import { getJwtSecret } from '../auth/jwt';
+import { chatLogger } from '../chat/chat-logger';
 
 const logger = chatLogger.child({ component: 'stream-control-ws' });
 

@@ -60,7 +60,7 @@ export interface CapabilityDefinition {
   /** Output schema for capability */
   outputSchema?: z.ZodSchema;
   /** Priority list of providers (first available is used) */
-  providerPriority: string[];
+  providerPriority: Array<string>;
   /** Whether this capability requires authentication */
   requiresAuth?: boolean;
   /** Tags for discovery */
@@ -70,6 +70,34 @@ export interface CapabilityDefinition {
   /** Required permissions for this capability */
   permissions?: string[];
 }
+
+// ─── Provider ID Constants (type-safe alternatives to string literals) ──────
+// Re-exported from router.ts which owns the canonical ProviderId enum.
+// Using these constants prevents typos that silently fail at runtime.
+export { ProviderId } from './router';
+
+/**
+ * Provider ID string literals for use in capability definitions.
+ * Type-checked against ProviderId enum.
+ */
+export const PROVIDER = {
+  VFS: 'vfs' as const,
+  LOCAL_FS: 'local-fs' as const,
+  MCP_FILESYSTEM: 'mcp-filesystem' as const,
+  OPENCODE_V2: 'opencode-v2' as const,
+  NULLCLAW: 'nullclaw' as const,
+  BLAXEL: 'blaxel' as const,
+  MEMORY_SERVICE: 'memory-service' as const,
+  RIPGREP: 'ripgrep' as const,
+  CONTEXT_PACK: 'context-pack' as const,
+  EMBEDDING_SEARCH: 'embedding-search' as const,
+  GIT_HELPER: 'git-helper' as const,
+  OAUTH_INTEGRATION: 'oauth-integration' as const,
+  TERMINAL: 'terminal' as const,
+  PROJECT_ANALYSIS: 'project-analysis' as const,
+} as const;
+
+export type ProviderIdString = typeof PROVIDER[keyof typeof PROVIDER];
 
 // ============================================================================
 // File Capabilities
