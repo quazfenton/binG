@@ -279,7 +279,7 @@ class ParameterOptimizer {
 
     // Adjust for content length
     if (context.contentLength > 500) {
-      adjusted.maxTokens = Math.min(adjusted.maxTokens * 1.5, 8000);
+      adjusted.maxTokens = Math.min(adjusted.maxTokens * 1.5, 65536);
       adjusted.timeoutMultiplier *= 1.2;
     }
 
@@ -319,7 +319,7 @@ class ParameterOptimizer {
   private getDefaultParameters(context: OptimizationContext): OptimizationProfile['parameters'] {
     return {
       temperature: context.complexity === 'simple' ? 0.5 : 0.3,
-      maxTokens: context.complexity === 'complex' ? 5000 : 3000,
+      maxTokens: context.complexity === 'complex' ? 32768 : 8192,
       qualityMode: context.complexity === 'complex' ? 'enhanced' : 'standard',
       enableReflection: context.complexity === 'complex',
       stepByStep: context.complexity !== 'simple',

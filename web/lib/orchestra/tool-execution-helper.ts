@@ -38,7 +38,7 @@ export async function initializeToolSystem(userId: string = 'system'): Promise<v
     initPromise = bootstrapToolSystem({
       userId,
       enableMCP: true,
-      enableComposio: false,
+      enableComposio: true,
       enableSandbox: true,
       enableNullclaw: false,
       enableOAuth: true,

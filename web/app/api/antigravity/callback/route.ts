@@ -7,6 +7,7 @@
 
 import { NextRequest, NextResponse } from 'next/server';
 import { exchangeCodeForTokens } from '@/lib/llm/antigravity-provider';
+import { saveAntigravityAccount } from '@/lib/database/antigravity-accounts';
 import { verifyAuth } from '@/lib/auth/jwt';
 
 export async function GET(req: NextRequest) {
@@ -27,15 +28,13 @@ export async function GET(req: NextRequest) {
     const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/antigravity/callback`;
     const tokens = await exchangeCodeForTokens(code, redirectUri);
 
-    // Store the account — in production, save to your database here
-    // For now, we return the account details to the client
-    // TODO: Replace with actual DB insert:
-    // await db.antigravityAccounts.create({
-    //   userId: authResult.userId,
-    //   email: tokens.email,
-    //   refreshToken: tokens.refreshToken,
-    //   projectId: tokens.projectId,
-    // });
+    // Save the account to database
+    await saveAntigravityAccount({
+      userId: authResult.userId,
+      email: tokens.email,
+      refreshToken: tokens.refreshToken,
+      projectId: tokens.projectId,
+    });
 
     // Redirect back to app with success
     const redirectUrl = new URL('/settings', req.url);

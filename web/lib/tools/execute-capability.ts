@@ -50,7 +50,7 @@ export async function initToolSystem(config?: BootstrapConfig): Promise<Bootstra
     initPromise = bootstrapToolSystem(config || {
       userId: 'system',
       enableMCP: true,
-      enableComposio: false,
+      enableComposio: true,
       enableSandbox: true,
       enableNullclaw: false,
       enableOAuth: true,

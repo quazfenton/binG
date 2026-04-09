@@ -260,16 +260,19 @@ export type MCPTransportType = 'stdio' | 'sse' | 'websocket' | 'http'
  */
 export interface MCPTransportConfig {
   type: MCPTransportType
-  
+
   // For stdio transport
   command?: string
   args?: string[]
   env?: Record<string, string>
   cwd?: string
-  
-  // For SSE transport
+
+  // For SSE / HTTP transport
   url?: string
-  
+  apiKey?: string
+  bearerToken?: string
+  headers?: Record<string, string>
+
   // For websocket transport
   wsUrl?: string
 }

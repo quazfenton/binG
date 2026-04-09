@@ -14,6 +14,7 @@
 
 import { resourceTelemetry } from '@/lib/management/resource-telemetry'
 import { chatRequestLogger } from '@/lib/chat/chat-request-logger'
+import { toolCallTracker } from '@/lib/chat/tool-call-tracker'
 import { createLogger } from '@/lib/utils/logger'
 
 const logger = createLogger('Model:Ranker')
@@ -26,6 +27,12 @@ export interface ModelStats {
   lastUpdated: number
   totalCalls: number
   successRate: number
+  /** Cumulative tool call score: +1 per success, -1 per failure */
+  toolCallScore?: number
+  /** Tool call success rate (0-1) */
+  toolSuccessRate?: number
+  /** Average tool score per call (-1 to +1) */
+  avgToolScore?: number
 }
 
 export interface RankedModel extends ModelStats {
@@ -148,16 +155,34 @@ async function getModelStatsFromChatLogger(): Promise<ModelStats[]> {
   try {
     // Use the new getModelPerformance method
     const performance = await chatRequestLogger.getModelPerformance(10)
-    
-    return performance.map(p => ({
-      provider: p.provider,
-      model: p.model,
-      avgLatency: p.avgLatency,
-      failureRate: p.failureRate,
-      lastUpdated: p.lastUpdated,
-      totalCalls: p.totalCalls,
-      successRate: p.successRate,
-    }))
+
+    // Get tool call stats
+    const toolStats = await toolCallTracker.getModelToolStats(10)
+    const toolStatsMap = new Map<string, { toolCallScore: number; toolSuccessRate: number; avgToolScore: number }>()
+    for (const ts of toolStats) {
+      toolStatsMap.set(`${ts.provider}:${ts.model}`, {
+        toolCallScore: ts.toolCallScore,
+        toolSuccessRate: ts.toolSuccessRate,
+        avgToolScore: ts.avgToolScore,
+      })
+    }
+
+    return performance.map(p => {
+      const key = `${p.provider}:${p.model}`
+      const toolData = toolStatsMap.get(key)
+      return {
+        provider: p.provider,
+        model: p.model,
+        avgLatency: p.avgLatency,
+        failureRate: p.failureRate,
+        lastUpdated: p.lastUpdated,
+        totalCalls: p.totalCalls,
+        successRate: p.successRate,
+        toolCallScore: toolData?.toolCallScore,
+        toolSuccessRate: toolData?.toolSuccessRate,
+        avgToolScore: toolData?.avgToolScore,
+      }
+    })
   } catch (error) {
     logger.error('Failed to get model stats from chat logger', error)
     return []

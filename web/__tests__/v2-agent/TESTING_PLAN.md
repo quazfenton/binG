@@ -45,7 +45,7 @@ NULLCLAW_ENABLED=true
 NULLCLAW_URL=http://localhost:3001
 MCP_ENABLED=true
 MCP_CLI_PORT=8888
-MCP_CLI_AUTH_TOKEN=your-secure-token
+MCP_HTTP_AUTH_TOKEN=your-secure-token
 ```
 
 ### Services Required
@@ -468,7 +468,7 @@ docker-compose restart nullclaw
 curl http://localhost:8888/health
 
 # Verify auth token
-curl -H "Authorization: Bearer $MCP_CLI_AUTH_TOKEN" http://localhost:8888/tools
+curl -H "Authorization: Bearer $MCP_HTTP_AUTH_TOKEN" http://localhost:8888/tools
 
 # Restart MCP server
 npm run mcp:start

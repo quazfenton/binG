@@ -191,6 +191,29 @@ export {
   type AgentRoleConfig,
 } from './system-prompts';
 
+// Prompt Composer — Structured, dynamic prompt composition with tool injection
+export {
+  // Composition API
+  composeRole,
+  composeRoleWithTools,
+  composeMultiRole,
+  // Section management
+  getRoleSections,
+  parseSections,
+  registerSection,
+  getSectionTemplate,
+  invalidateSectionCache,
+  // Dynamic tool generation
+  generateDynamicToolBlock,
+  generateToolHints,
+  // Types
+  type PromptSection,
+  type RoleSections,
+  type PromptContext,
+  type ComposeRoleOptions,
+  type DynamicToolBlockOptions,
+} from './prompt-composer';
+
 // Supplementary System Prompts — Specialized roles
 export {
   SUPPLEMENTARY_PROMPTS,

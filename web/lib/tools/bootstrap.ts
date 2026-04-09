@@ -109,6 +109,17 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     errors.push(`Built-in capabilities: ${error.message}`);
   }
 
+  // Register project analysis tools (always enabled — replaces shallow buildProjectContext)
+  try {
+    const { registerProjectAnalysisTools } = await import('./bootstrap/bootstrap-project-analysis');
+    const count = await registerProjectAnalysisTools(registry, config);
+    capabilityCount += count;
+    logger.info(`Registered ${count} project analysis tools/capabilities`);
+  } catch (error: any) {
+    logger.error('Failed to register project analysis tools', error);
+    errors.push(`Project analysis: ${error.message}`);
+  }
+
   // Register MCP tools (if enabled)
   if (config.enableMCP !== false) {
     try {

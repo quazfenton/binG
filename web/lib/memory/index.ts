@@ -11,7 +11,7 @@ export { Orchestrator } from "../agent/orchestrator"; // backward compat alias
 export type { RetrievalConfig, OrchestratorConfig } from "../agent/orchestrator";
 
 // ─── Indexing ─────────────────────────────────────────────────────────────────
-export { ProjectIndexer, projectIdFromPath } from "../memory/indexer";
+export { ProjectIndexer, projectIdFromPath } from "./indexer";
 
 // ─── Memory / Vector Store ────────────────────────────────────────────────────
 export {
@@ -24,15 +24,15 @@ export {
   deleteProject,
   listProjects,
   upsertProject,
-} from "../memory/vectorStore";
-export type { VectorEntry, EdgeEntry, ProjectMeta } from "../memory/vectorStore";
+} from "./vectorStore";
+export type { VectorEntry, EdgeEntry, ProjectMeta } from "./vectorStore";
 
 // ─── Embeddings ───────────────────────────────────────────────────────────────
-export { embed, embedBatch, buildSymbolEmbedInput, clearEmbedCache, EMBED_CACHE } from "../memory/embeddings";
+export { embed, embedBatch, buildSymbolEmbedInput, clearEmbedCache, EMBED_CACHE } from "./embeddings";
 
 // ─── Chunking ─────────────────────────────────────────────────────────────────
-export { chunkText, chunkByLines, chunkBySections } from "../memory/chunk";
-export type { Chunk } from "../memory/chunk";
+export { chunkText, chunkByLines, chunkBySections } from "./chunk";
+export type { Chunk } from "./chunk";
 
 // ─── Retrieval ────────────────────────────────────────────────────────────────
 export { search, getTabMemory, updateTabMemory, recordSymbolAccess } from "../retrieval/search";
@@ -94,8 +94,8 @@ export {
   watchDirectory,
   grepFiles,
   pickFolder,
-} from "../memory/platform";
-export type { FileEntry, FileChangeEvent, GrepMatch } from "../memory/platform";
+} from "./platform";
+export type { FileEntry, FileChangeEvent, GrepMatch } from "./platform";
 
 // ─── Plugins ──────────────────────────────────────────────────────────────────
 export {
@@ -115,5 +115,5 @@ export { runValidatedAgentLoop } from "../agent/validated-agent-loop";
 export type { ValidatedAgentLoopOptions, ValidatedAgentResult } from "../agent/validated-agent-loop";
 
 // ─── File Watcher → Auto-Reindex ──────────────────────────────────────────────
-export { watchAndReindex } from "../memory/file-watcher-reindex";
-export type { WatcherReindexOptions, WatcherHandle } from "../memory/file-watcher-reindex";
+export { watchAndReindex } from "./file-watcher-reindex";
+export type { WatcherReindexOptions, WatcherHandle } from "./file-watcher-reindex";

@@ -18,7 +18,8 @@
       "Bash(cargo check *)",
       "Bash(npx *)",
       "Bash(findstr *)",
-      "Bash(curl *)"
+      "Bash(curl *)",
+      "Bash(fc *)"
     ]
   },
   "$version": 3

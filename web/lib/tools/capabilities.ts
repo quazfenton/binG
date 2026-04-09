@@ -1197,6 +1197,217 @@ export const PROCESS_LIST_CAPABILITY: CapabilityDefinition = {
 };
 
 // ============================================================================
+// Terminal / PTY Capabilities
+// ============================================================================
+
+export const TERMINAL_CREATE_SESSION_CAPABILITY: CapabilityDefinition = {
+  id: 'terminal.create_session',
+  name: 'Create Terminal Session',
+  category: 'sandbox',
+  description: 'Create a new interactive terminal session (PTY if available, command-mode fallback). ' +
+    'Use for interactive tasks: running dev servers, navigating TUIs, monitoring long-running processes.',
+  inputSchema: z.object({
+    cols: z.number().optional().default(120).describe('Terminal width in columns'),
+    rows: z.number().optional().default(30).describe('Terminal height in rows'),
+    cwd: z.string().optional().describe('Initial working directory'),
+  }),
+  outputSchema: z.object({
+    sessionId: z.string(),
+    mode: z.enum(['pty', 'command-mode']),
+    cols: z.number(),
+    rows: z.number(),
+    message: z.string(),
+  }),
+  providerPriority: ['terminal'],
+  tags: ['terminal', 'pty', 'session', 'interactive'],
+};
+
+export const TERMINAL_SEND_INPUT_CAPABILITY: CapabilityDefinition = {
+  id: 'terminal.send_input',
+  name: 'Send Terminal Input',
+  category: 'sandbox',
+  description: 'Send keystrokes or input to an active terminal session. ' +
+    'Use for interactive programs: answering prompts, navigating menus, sending Ctrl+C.',
+  inputSchema: z.object({
+    sessionId: z.string().describe('Terminal session ID'),
+    input: z.string().describe('Input to send (include \\n for Enter)'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    message: z.string(),
+  }),
+  providerPriority: ['terminal'],
+  tags: ['terminal', 'input', 'interactive'],
+};
+
+export const TERMINAL_GET_OUTPUT_CAPABILITY: CapabilityDefinition = {
+  id: 'terminal.get_output',
+  name: 'Get Terminal Output',
+  category: 'sandbox',
+  description: 'Read recent output from a terminal session. ' +
+    'Can wait for a specific pattern to appear (e.g., "listening on port 3000").',
+  inputSchema: z.object({
+    sessionId: z.string().describe('Terminal session ID'),
+    lines: z.number().optional().default(100).describe('Number of recent lines to retrieve'),
+    waitForPattern: z.string().optional().describe('Wait until this pattern appears in output'),
+    timeoutMs: z.number().optional().default(30000).describe('Max wait time for pattern (ms)'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    output: z.string(),
+    lineCount: z.number(),
+    message: z.string(),
+  }),
+  providerPriority: ['terminal'],
+  tags: ['terminal', 'output', 'read'],
+};
+
+export const TERMINAL_RESIZE_CAPABILITY: CapabilityDefinition = {
+  id: 'terminal.resize',
+  name: 'Resize Terminal',
+  category: 'sandbox',
+  description: 'Resize a terminal session dimensions.',
+  inputSchema: z.object({
+    sessionId: z.string().describe('Terminal session ID'),
+    cols: z.number().describe('New width in columns'),
+    rows: z.number().describe('New height in rows'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    message: z.string(),
+  }),
+  providerPriority: ['terminal'],
+  tags: ['terminal', 'resize'],
+};
+
+export const TERMINAL_CLOSE_SESSION_CAPABILITY: CapabilityDefinition = {
+  id: 'terminal.close_session',
+  name: 'Close Terminal Session',
+  category: 'sandbox',
+  description: 'Close/terminate an active terminal session.',
+  inputSchema: z.object({
+    sessionId: z.string().describe('Terminal session ID to close'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    message: z.string(),
+  }),
+  providerPriority: ['terminal'],
+  tags: ['terminal', 'close', 'disconnect'],
+};
+
+export const TERMINAL_LIST_SESSIONS_CAPABILITY: CapabilityDefinition = {
+  id: 'terminal.list_sessions',
+  name: 'List Terminal Sessions',
+  category: 'sandbox',
+  description: 'List all active terminal sessions.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    sessions: z.array(z.object({
+      sessionId: z.string(),
+      sandboxId: z.string(),
+      mode: z.enum(['pty', 'command-mode']),
+      cols: z.number(),
+      rows: z.number(),
+      cwd: z.string(),
+      status: z.string(),
+      detectedPorts: z.array(z.number()),
+    })),
+    count: z.number(),
+  }),
+  providerPriority: ['terminal'],
+  tags: ['terminal', 'list', 'sessions'],
+};
+
+export const TERMINAL_START_PROCESS_CAPABILITY: CapabilityDefinition = {
+  id: 'terminal.start_process',
+  name: 'Start Process',
+  category: 'sandbox',
+  description: 'Start a background process in the sandbox. ' +
+    'Use for non-interactive long-running tasks: dev servers, build watchers, database servers.',
+  inputSchema: z.object({
+    command: z.string().describe('Command to execute'),
+    cwd: z.string().optional().describe('Working directory'),
+    env: z.record(z.string()).optional().describe('Environment variables'),
+    timeout: z.number().optional().default(60000).describe('Execution timeout in ms'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    output: z.string(),
+    exitCode: z.number().nullable(),
+    message: z.string(),
+  }),
+  providerPriority: ['terminal', 'opencode-v2', 'daytona'],
+  tags: ['terminal', 'process', 'background', 'start'],
+};
+
+export const TERMINAL_STOP_PROCESS_CAPABILITY: CapabilityDefinition = {
+  id: 'terminal.stop_process',
+  name: 'Stop Process',
+  category: 'sandbox',
+  description: 'Stop a running process by PID. Sends SIGTERM by default.',
+  inputSchema: z.object({
+    pid: z.number().describe('Process ID to stop'),
+    signal: z.enum(['SIGTERM', 'SIGKILL', 'SIGINT']).optional().default('SIGTERM'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    message: z.string(),
+  }),
+  providerPriority: ['terminal', 'opencode-v2', 'daytona'],
+  tags: ['terminal', 'process', 'stop', 'kill'],
+};
+
+export const TERMINAL_LIST_PROCESSES_CAPABILITY: CapabilityDefinition = {
+  id: 'terminal.list_processes',
+  name: 'List Processes',
+  category: 'sandbox',
+  description: 'List running processes with PID, user, CPU, memory, and command. ' +
+    'Optionally filter by process name.',
+  inputSchema: z.object({
+    filter: z.string().optional().describe('Filter by process name'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    processes: z.array(z.object({
+      pid: z.number(),
+      user: z.string().optional(),
+      cpu: z.string().optional(),
+      memory: z.string().optional(),
+      command: z.string(),
+      startTime: z.string().optional(),
+    })),
+    message: z.string(),
+  }),
+  providerPriority: ['terminal', 'opencode-v2', 'daytona'],
+  tags: ['terminal', 'process', 'list', 'ps'],
+};
+
+export const TERMINAL_GET_PORT_STATUS_CAPABILITY: CapabilityDefinition = {
+  id: 'terminal.get_port_status',
+  name: 'Get Port Status',
+  category: 'sandbox',
+  description: 'Check which ports are listening and what processes own them. ' +
+    'Optionally check a specific port.',
+  inputSchema: z.object({
+    port: z.number().optional().describe('Specific port to check (omit for all)'),
+  }),
+  outputSchema: z.object({
+    success: z.boolean(),
+    ports: z.array(z.object({
+      port: z.number(),
+      protocol: z.enum(['tcp', 'udp']),
+      state: z.string(),
+      pid: z.number().optional(),
+      command: z.string().optional(),
+    })),
+    message: z.string(),
+  }),
+  providerPriority: ['terminal', 'opencode-v2', 'daytona'],
+  tags: ['terminal', 'port', 'network', 'listening'],
+};
+
+// ============================================================================
 // Preview / Port Capabilities
 // ============================================================================
 
@@ -1499,6 +1710,112 @@ export const WORKFLOW_REQUEST_APPROVAL_CAPABILITY: CapabilityDefinition = {
 // Export All Capabilities
 // ============================================================================
 
+// ============================================================================
+// Project Analysis Capabilities (Queryable MCP-style tools)
+// ============================================================================
+
+export const PROJECT_ANALYZE_CAPABILITY: CapabilityDefinition = {
+  id: 'project.analyze',
+  name: 'Analyze Project',
+  category: 'repo',
+  description: 'Deep analysis of a project: detects framework, package manager, ' +
+    'entry points, configuration files, dependencies, and generates recommended ' +
+    'commands for install/run/test/build. Returns structured JSON.',
+  inputSchema: z.object({
+    includeDependencies: z.boolean().optional().default(false)
+      .describe('Include full dependency list (default: false)'),
+  }),
+  outputSchema: z.object({
+    framework: z.string(),
+    packageManager: z.string(),
+    runtimeMode: z.string(),
+    entryFile: z.string().nullable(),
+    projectRoot: z.string(),
+    scripts: z.array(z.string()),
+    recommendedCommands: z.object({
+      install: z.string(),
+      run: z.string().optional(),
+      test: z.string().optional(),
+      build: z.string().optional(),
+    }),
+    configFiles: z.array(z.string()),
+    hints: z.array(z.string()),
+    potentialIssues: z.array(z.string()),
+    fileCount: z.number(),
+    topDirs: z.array(z.string()),
+  }),
+  providerPriority: ['project-analysis'],
+  tags: ['project', 'analyze', 'detection', 'context'],
+};
+
+export const PROJECT_LIST_SCRIPTS_CAPABILITY: CapabilityDefinition = {
+  id: 'project.list_scripts',
+  name: 'List Scripts',
+  category: 'repo',
+  description: 'List all runnable scripts/tasks in the project. Includes npm scripts, ' +
+    'Makefile targets, pyproject.toml tasks, deno tasks, cargo commands, go tasks, ' +
+    'turbo and nx tasks.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    scripts: z.array(z.object({
+      name: z.string(),
+      command: z.string(),
+      source: z.string(),
+    })),
+  }),
+  providerPriority: ['project-analysis'],
+  tags: ['project', 'scripts', 'tasks', 'commands'],
+};
+
+export const PROJECT_DEPENDENCIES_CAPABILITY: CapabilityDefinition = {
+  id: 'project.dependencies',
+  name: 'Get Dependencies',
+  category: 'repo',
+  description: 'List installed dependencies and detect issues like missing packages, ' +
+    'version conflicts, missing lock files, or unresolved workspace references.',
+  inputSchema: z.object({}),
+  outputSchema: z.object({
+    dependencies: z.record(z.string()),
+    devDependencies: z.record(z.string()),
+    issues: z.array(z.object({
+      type: z.string(),
+      severity: z.string(),
+      message: z.string(),
+    })),
+    lockFile: z.object({
+      type: z.string().nullable(),
+      exists: z.boolean(),
+    }),
+    packageManager: z.string(),
+  }),
+  providerPriority: ['project-analysis'],
+  tags: ['project', 'dependencies', 'packages', 'issues'],
+};
+
+export const PROJECT_STRUCTURE_CAPABILITY: CapabilityDefinition = {
+  id: 'project.structure',
+  name: 'Get Project Structure',
+  category: 'repo',
+  description: 'Get the file tree of the project with semantic understanding. ' +
+    'Returns a structured tree object, file type counts, a text summary, ' +
+    'and notable files (config files, entry points, documentation).',
+  inputSchema: z.object({
+    maxDepth: z.number().optional().default(5)
+      .describe('Maximum tree depth (default: 5)'),
+    summaryOnly: z.boolean().optional().default(false)
+      .describe('Return only the text summary, not the full tree (default: false)'),
+  }),
+  outputSchema: z.object({
+    fileCount: z.number(),
+    dirCount: z.number(),
+    fileTypes: z.record(z.number()),
+    summary: z.string().describe('Text summary of top-level structure'),
+    notableItems: z.array(z.string()),
+  }),
+  providerPriority: ['project-analysis'],
+  tags: ['project', 'structure', 'tree', 'files'],
+};
+
 export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   // File
   FILE_READ_CAPABILITY,
@@ -1524,6 +1841,17 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   PROCESS_START_CAPABILITY,
   PROCESS_STOP_CAPABILITY,
   PROCESS_LIST_CAPABILITY,
+  // Terminal / PTY
+  TERMINAL_CREATE_SESSION_CAPABILITY,
+  TERMINAL_SEND_INPUT_CAPABILITY,
+  TERMINAL_GET_OUTPUT_CAPABILITY,
+  TERMINAL_RESIZE_CAPABILITY,
+  TERMINAL_CLOSE_SESSION_CAPABILITY,
+  TERMINAL_LIST_SESSIONS_CAPABILITY,
+  TERMINAL_START_PROCESS_CAPABILITY,
+  TERMINAL_STOP_PROCESS_CAPABILITY,
+  TERMINAL_LIST_PROCESSES_CAPABILITY,
+  TERMINAL_GET_PORT_STATUS_CAPABILITY,
   // Preview
   PREVIEW_GET_CAPABILITY,
   PREVIEW_FORWARD_PORT_CAPABILITY,
@@ -1574,6 +1902,11 @@ export const ALL_CAPABILITIES: CapabilityDefinition[] = [
   WORKFLOW_ROLLBACK_CAPABILITY,
   WORKFLOW_HISTORY_CAPABILITY,
   WORKFLOW_REQUEST_APPROVAL_CAPABILITY,
+  // Project Analysis (Queryable MCP-style tools)
+  PROJECT_ANALYZE_CAPABILITY,
+  PROJECT_LIST_SCRIPTS_CAPABILITY,
+  PROJECT_DEPENDENCIES_CAPABILITY,
+  PROJECT_STRUCTURE_CAPABILITY,
 ];
 
 // ============================================================================

@@ -325,7 +325,7 @@ import { getOrCreateAnonymousSessionId } from "@/lib/utils";
 import type { Message } from "@/types";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import MultiModelComparison from "@/components/multi-model-comparison";
-import type { LLMProvider } from "@/lib/chat/providers";
+import type { LLMProvider } from "@/lib/chat/llm-providers";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { buildApiHeaders } from "@/lib/utils";
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer";
@@ -337,7 +337,7 @@ import { NewsPanel } from "@/components/news-panel";
 import { CronJobsPanel } from "@/components/cron-jobs-panel";
 import FrontierFeedPlugin from "@/components/plugins/frontier-feed-plugin";
 import CommandDeckPlugin from "@/components/plugins/command-deck-plugin";
-import { PROVIDERS } from "@/lib/chat/providers";
+import { PROVIDERS } from "@/lib/chat/llm-providers";
 
 // ---------------------------------------------------------------------------
 // Tab definitions - single source of truth for the workspace tab bar

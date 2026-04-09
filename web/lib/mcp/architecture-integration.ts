@@ -284,7 +284,7 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
     }
 
     // Separate HTTP (remote) from stdio (local) server configs
-    const httpServers: Array<{ name: string; url: string; apiKey?: string }> = []
+    const httpServers: Array<{ name: string; url: string; apiKey?: string; bearerToken?: string; headers?: Record<string, string> }> = []
     const stdioConfigs: typeof configs = []
 
     for (const config of configs) {
@@ -295,6 +295,9 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
         httpServers.push({
           name: config.name,
           url: parsedUrl,
+          apiKey: config.transport?.apiKey,
+          bearerToken: config.transport?.bearerToken,
+          headers: config.transport?.headers,
         })
         logger.info(`Remote MCP server detected: ${config.name} at ${parsedUrl}`)
       } else {
@@ -327,6 +330,8 @@ export async function initializeMCPForArchitecture1(): Promise<void> {
           const transport = createHTTPTransport({
             url: server.url,
             apiKey: server.apiKey,
+            bearerToken: server.bearerToken,
+            headers: server.headers,
             transportType: 'streamable-http',
           })
           // Test connection by listing tools
@@ -1019,7 +1024,7 @@ export async function initializeMCPForArchitecture2(port: number = 8888): Promis
     await initializeMCPForArchitecture1()
     
     // Start HTTP server for CLI agent to call
-    const { createMCPServerForCLI } = await import('./mcp-cli-server')
+    const { createMCPServerForCLI } = await import('./mcp-http-server')
     await createMCPServerForCLI(port)
     
     logger.info(`MCP HTTP server for CLI agent running on http://localhost:${port}`)
