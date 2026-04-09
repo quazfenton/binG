@@ -289,7 +289,7 @@ export interface EndpointConfig {
   enabled: boolean;
   service: any;
   healthCheck: () => Promise<boolean>;
-  canHandle: (request: any) => boolean;
+  canHandle: (request: any) => boolean | Promise<boolean>;
   processRequest: (request: any) => Promise<any>;
 }
 
@@ -437,8 +437,8 @@ class PriorityRequestRouter {
         service: enhancedLLMService,
         healthCheck: async () => true, // Always available
         // Do not handle tool/sandbox requests - let specialized endpoints handle those
-        canHandle: (req) => {
-          const requestType = detectRequestType(req.messages);
+        canHandle: async (req) => {
+          const requestType = (await detectRequestType(req.messages)).type;
           // Skip if this is a tool request and tools are enabled
           if (requestType === 'tool' && (req.enableTools !== false || req.enableComposio !== false)) {
             return false;
@@ -451,8 +451,8 @@ class PriorityRequestRouter {
         },
         processRequest: async (req) => {
           // Convert request with all required fields including tool/sandbox flags
-          const requestType = detectRequestType(req.messages);
-          const enhancedRequest = this.convertToEnhancedLLMRequest(req);
+          const requestType = (await detectRequestType(req.messages)).type;
+          const enhancedRequest = await this.convertToEnhancedLLMRequest(req);
           // Always enable tools — VFS tools (write_file, read_file, apply_diff) are
           // always available and the LLM should use them for file operations.
           enhancedRequest.enableTools = req.enableTools !== false;
@@ -499,9 +499,9 @@ class PriorityRequestRouter {
           if (!this.composioService) return false;
           return this.composioService.healthCheck();
         },
-        canHandle: (req) => {
+        canHandle: async (req) => {
           return !!this.composioService && !!req.userId && req.enableComposio !== false
-            && detectRequestType(req.messages) === 'tool'
+            && (await detectRequestType(req.messages)).type === 'tool'
             && quotaManager.isAvailable('composio');
         },
         processRequest: async (req) => {
@@ -523,8 +523,8 @@ class PriorityRequestRouter {
             return false;
           }
         },
-        canHandle: (req) => {
-          return detectRequestType(req.messages) === 'tool' && !!req.userId && req.enableTools !== false
+        canHandle: async (req) => {
+          return (await detectRequestType(req.messages)).type === 'tool' && !!req.userId && req.enableTools !== false
             && (quotaManager.isAvailable('arcade') || quotaManager.isAvailable('nango'));
         },
         processRequest: async (req) => {
@@ -542,9 +542,9 @@ class PriorityRequestRouter {
           // Check if sandbox provider is configured
           return !!(process.env.SANDBOX_PROVIDER);
         },
-        canHandle: (req) => {
+        canHandle: async (req) => {
           const sandboxProvider = (process.env.SANDBOX_PROVIDER || 'daytona') as string;
-          return detectRequestType(req.messages) === 'sandbox' && !!req.userId && req.enableSandbox !== false
+          return (await detectRequestType(req.messages)).type === 'sandbox' && !!req.userId && req.enableSandbox !== false
             && quotaManager.isAvailable(sandboxProvider);
         },
         processRequest: async (req) => {
@@ -567,7 +567,7 @@ class PriorityRequestRouter {
     const errors: Array<{ endpoint: string; error: Error }> = [];
     const fallbackChain: string[] = [];
     const startTime = Date.now();
-    const requestType = detectRequestType(request.messages);
+    const requestType = (await detectRequestType(request.messages)).type;
     const preferSpecialized = !!request.userId && (
       (requestType === 'tool' && (request.enableComposio !== false || request.enableTools !== false)) ||
       (requestType === 'sandbox' && request.enableSandbox !== false)
@@ -615,7 +615,7 @@ class PriorityRequestRouter {
         }
 
         // Check if endpoint can handle this request
-        if (!endpoint.canHandle(request)) {
+        if (!await endpoint.canHandle(request)) {
           console.log(`[Router] ${endpoint.name} cannot handle this request type, skipping`);
           continue;
         }
@@ -915,8 +915,8 @@ class PriorityRequestRouter {
   /**
    * Convert router request to enhanced LLM format
    */
-  private convertToEnhancedLLMRequest(request: RouterRequest): EnhancedLLMRequest {
-    const requestType = detectRequestType(request.messages);
+  private async convertToEnhancedLLMRequest(request: RouterRequest): Promise<EnhancedLLMRequest> {
+    const requestType = (await detectRequestType(request.messages)).type;
     return {
       messages: request.messages,
       provider: request.provider,

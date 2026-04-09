@@ -7,10 +7,10 @@ import type { LLMMessage } from './llm-providers';
 
 export type RequestIntent = 'tool' | 'sandbox' | 'chat';
 
-export function isToolIntent(messages: LLMMessage[]): boolean {
-  return detectRequestType(messages) === 'tool';
+export async function isToolIntent(messages: LLMMessage[]): Promise<boolean> {
+  return (await detectRequestType(messages)).type === 'tool';
 }
 
-export function isSandboxIntent(messages: LLMMessage[]): boolean {
-  return detectRequestType(messages) === 'sandbox';
+export async function isSandboxIntent(messages: LLMMessage[]): Promise<boolean> {
+  return (await detectRequestType(messages)).type === 'sandbox';
 }

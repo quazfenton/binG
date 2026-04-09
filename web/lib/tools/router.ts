@@ -1952,7 +1952,7 @@ ${JSON.stringify(capability.inputSchema, null, 2)}
 
 Return ONLY the corrected input object as JSON.`,
         schema: capability.inputSchema,
-        maxTokens: 500,
+        maxOutputTokens: 500,
         temperature: 0.1,
       });
 

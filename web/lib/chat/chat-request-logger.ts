@@ -1,8 +1,8 @@
 /**
- * Chat API Request Logging
+ * Chat API Request Logging with Comprehensive Telemetry
  *
  * Provides comprehensive request/response logging for the chat API.
- * Useful for debugging, analytics, and compliance.
+ * Useful for debugging, analytics, compliance, and model ranking.
  *
  * Features:
  * - SQLite persistence for request logs
@@ -10,9 +10,28 @@
  * - Token usage tracking
  * - Latency metrics
  * - Error tracking
+ * - Tool execution telemetry (calls, args, results, success rate)
+ * - Telemetry scoring (latency, token efficiency, tool success, overall)
  */
 
 import { getDatabase } from '@/lib/database/connection';
+
+export interface ToolCallTelemetry {
+  toolCallId: string;
+  toolName: string;
+  state: 'call' | 'result';
+  args?: Record<string, any>;
+  result?: any;
+  latencyMs?: number;
+  success?: boolean;
+}
+
+export interface TelemetryScores {
+  latencyScore: number;      // 0-1, lower latency = higher score (exponential decay)
+  tokenEfficiency: number;   // 0-1, tokens per content char ratio
+  toolSuccessRate: number;   // 0-1, tool call success rate
+  overallScore: number;      // 0-1, weighted composite (40% latency, 30% efficiency, 30% tools)
+}
 
 export interface ChatRequestLog {
   id: string;
@@ -33,6 +52,13 @@ export interface ChatRequestLog {
   error?: string;
   createdAt: string;
   metadata?: Record<string, any>;
+  // Tool execution telemetry
+  toolCalls?: ToolCallTelemetry[];
+  toolCallCount?: number;
+  toolCallSuccessCount?: number;
+  toolCallFailCount?: number;
+  // Telemetry scores
+  telemetryScores?: TelemetryScores;
 }
 
 export interface ChatLogQuery {
@@ -68,7 +94,7 @@ export class ChatRequestLogger {
 
     try {
       this.db = getDatabase();
-      
+
       // Create request log table
       this.db.exec(`
         CREATE TABLE IF NOT EXISTS chat_request_logs (
@@ -133,7 +159,7 @@ export class ChatRequestLogger {
     requestId: string,
     userId: string,
     provider: string,
-    model: string | undefined,  // Make model optional
+    model: string | undefined,
     messages: any[],
     streaming: boolean,
     metadata?: Record<string, any>
@@ -142,7 +168,6 @@ export class ChatRequestLogger {
     if (!this.db) return;
 
     try {
-      // Use INSERT OR IGNORE to avoid duplicate requestIds (first write wins)
       const stmt = this.db.prepare(`
         INSERT OR IGNORE INTO chat_request_logs
         (id, user_id, provider, model, message_count, request_size, streaming, created_at, metadata)
@@ -155,14 +180,13 @@ export class ChatRequestLogger {
         requestId,
         userId,
         provider,
-        model || 'unknown',  // Default to 'unknown' if model is undefined
+        model || 'unknown',
         messages.length,
         requestSize,
         streaming ? 1 : 0,
         metadata ? JSON.stringify(metadata) : null
       );
     } catch (error: any) {
-      // Silently ignore UNIQUE constraint errors (already logged with INSERT OR REPLACE)
       if (error?.code !== 'SQLITE_CONSTRAINT_PRIMARYKEY') {
         console.error('[ChatRequestLogger] Failed to log request start:', error);
       }
@@ -170,7 +194,7 @@ export class ChatRequestLogger {
   }
 
   /**
-   * Log a chat request completion
+   * Log a chat request completion with comprehensive telemetry
    */
   async logRequestComplete(
     requestId: string,
@@ -179,11 +203,41 @@ export class ChatRequestLogger {
     tokenUsage?: { prompt: number; completion: number; total: number },
     latencyMs?: number,
     error?: string,
-    actualProvider?: string,  // FIX: Track actual provider if it differs from original (fallback)
-    actualModel?: string,     // FIX: Track actual model if it differs from original (fallback)
+    actualProvider?: string,
+    actualModel?: string,
+    // Tool execution telemetry
+    toolCalls?: ToolCallTelemetry[],
+    contentLength?: number,
   ): Promise<void> {
     await this.initialize();
     if (!this.db) return;
+
+    // Detect model-not-found errors — penalize ALL telemetry scores by -10
+    // so the model never gets selected again for fastModel or tool-capable routing
+    const isModelNotFoundError = error && /not found|invalid.*model|model.*invalid|does not exist|unknown model|404/i.test(error);
+
+    // Compute telemetry scores
+    let telemetryScores = this.computeTelemetryScores({
+      latencyMs: latencyMs || 0,
+      tokenUsage,
+      toolCalls,
+      contentLength: contentLength || 0,
+    });
+
+    // Apply -10 penalty across ALL scores for model-not-found errors
+    if (isModelNotFoundError) {
+      telemetryScores = {
+        latencyScore: -10,
+        tokenEfficiency: -10,
+        toolSuccessRate: -10,
+        overallScore: -10,
+      };
+    }
+
+    // Aggregate tool call stats
+    const toolCallCount = toolCalls?.length || 0;
+    const toolCallSuccessCount = toolCalls?.filter(t => t.success !== false).length || 0;
+    const toolCallFailCount = toolCalls?.filter(t => t.success === false).length || 0;
 
     try {
       const stmt = this.db.prepare(`
@@ -196,9 +250,33 @@ export class ChatRequestLogger {
             success = ?,
             error = ?,
             provider = COALESCE(?, provider),
-            model = COALESCE(?, model)
+            model = COALESCE(?, model),
+            metadata = json_patch(
+              COALESCE(json(metadata), '{}'),
+              json(?)
+            )
         WHERE id = ?
       `);
+
+      // Merge tool telemetry into metadata (truncate args/result for storage)
+      const metadataExtension: Record<string, any> = {};
+      if (toolCalls && toolCalls.length > 0) {
+        metadataExtension.toolCalls = toolCalls.map(t => ({
+          toolCallId: t.toolCallId,
+          toolName: t.toolName,
+          state: t.state,
+          args: t.args ? JSON.stringify(t.args).slice(0, 500) : undefined,
+          result: t.result ? JSON.stringify(t.result).slice(0, 500) : undefined,
+          latencyMs: t.latencyMs,
+          success: t.success,
+        }));
+        metadataExtension.toolCallCount = toolCallCount;
+        metadataExtension.toolCallSuccessCount = toolCallSuccessCount;
+        metadataExtension.toolCallFailCount = toolCallFailCount;
+      }
+      if (telemetryScores) {
+        metadataExtension.telemetryScores = telemetryScores;
+      }
 
       stmt.run(
         responseSize || null,
@@ -208,13 +286,69 @@ export class ChatRequestLogger {
         latencyMs || null,
         success ? 1 : 0,
         error || null,
-        actualProvider || null,  // Only override if provided
-        actualModel || null,     // Only override if provided
+        actualProvider || null,
+        actualModel || null,
+        Object.keys(metadataExtension).length > 0 ? JSON.stringify(metadataExtension) : '{}',
         requestId
       );
+
+      // Log telemetry summary to console for real-time monitoring
+      if (toolCalls && toolCalls.length > 0) {
+        console.log(
+          `[Telemetry] ${requestId}: ${toolCallCount} tools (${toolCallSuccessCount}✓/${toolCallFailCount}✗), ` +
+          `scores: latency=${(telemetryScores?.latencyScore || 0).toFixed(2)} ` +
+          `efficiency=${(telemetryScores?.tokenEfficiency || 0).toFixed(2)} ` +
+          `tools=${(telemetryScores?.toolSuccessRate || 0).toFixed(2)} ` +
+          `overall=${(telemetryScores?.overallScore || 0).toFixed(2)}`
+        );
+      }
     } catch (error) {
       console.error('[ChatRequestLogger] Failed to log request complete:', error);
     }
+  }
+
+  /**
+   * Compute telemetry scores for a completed request
+   */
+  private computeTelemetryScores(options: {
+    latencyMs: number;
+    tokenUsage?: { prompt: number; completion: number; total: number };
+    toolCalls?: Array<{ success?: boolean }>;
+    contentLength: number;
+  }): TelemetryScores {
+    const { latencyMs, tokenUsage, toolCalls, contentLength } = options;
+
+    // Latency score: 0-1, exponential decay
+    // < 2s = 1.0, 5s = 0.6, 10s = 0.37, 20s = 0.14, 30s+ = 0.05
+    const latencyScore = Math.exp(-latencyMs / 5000);
+
+    // Token efficiency: tokens per content character
+    // Good ratio: ~0.3-0.5 tokens per char (efficient)
+    // Bad ratio: > 2.0 tokens per char (wasteful)
+    let tokenEfficiency = 0.5; // default
+    if (tokenUsage && contentLength > 0) {
+      const tokensPerChar = tokenUsage.total / contentLength;
+      // Score: 1.0 at 0.3 tpc, 0.5 at 1.0 tpc, 0.1 at 3.0+ tpc
+      tokenEfficiency = Math.max(0.05, Math.min(1.0, 1.0 / (1 + tokensPerChar * 0.7)));
+    }
+
+    // Tool success rate
+    let toolSuccessRate = 1.0; // default if no tools
+    if (toolCalls && toolCalls.length > 0) {
+      const successCount = toolCalls.filter(t => t.success !== false).length;
+      toolSuccessRate = successCount / toolCalls.length;
+    }
+
+    // Overall score: weighted composite
+    // 40% latency, 30% token efficiency, 30% tool success
+    const overallScore = 0.4 * latencyScore + 0.3 * tokenEfficiency + 0.3 * toolSuccessRate;
+
+    return {
+      latencyScore: Math.round(latencyScore * 100) / 100,
+      tokenEfficiency: Math.round(tokenEfficiency * 100) / 100,
+      toolSuccessRate: Math.round(toolSuccessRate * 100) / 100,
+      overallScore: Math.round(overallScore * 100) / 100,
+    };
   }
 
   /**
@@ -316,7 +450,6 @@ export class ChatRequestLogger {
         params.push(endDate);
       }
 
-      // Get counts
       const totalStmt = this.db.prepare(`SELECT COUNT(*) as count FROM chat_request_logs ${whereClause}`);
       const successStmt = this.db.prepare(`SELECT COUNT(*) as count FROM chat_request_logs ${whereClause} AND success = 1`);
       const failedStmt = this.db.prepare(`SELECT COUNT(*) as count FROM chat_request_logs ${whereClause} AND success = 0`);
@@ -366,23 +499,27 @@ export class ChatRequestLogger {
     successRate: number;
   }>> {
     await this.initialize();
-    if (!this.db) {
-      return [];
-    }
+    if (!this.db) return [];
 
     try {
-      // Match SQLite datetime format (YYYY-MM-DD HH:MM:SS)
       const cutoffTime = new Date(Date.now() - minutesBack * 60 * 1000).toISOString().slice(0, 19).replace('T', ' ');
 
       const stmt = this.db.prepare(`
-        SELECT 
+        SELECT
           provider,
           model,
           COUNT(*) as totalCalls,
           AVG(latency_ms) as avgLatency,
           SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) as failures,
           MAX(created_at) as lastUpdated,
-          AVG(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successRate
+          AVG(CASE WHEN success = 1 THEN 1 ELSE 0 END) as successRate,
+          MIN(
+            CASE
+              WHEN json_extract(metadata, '$.telemetryScores.overallScore') IS NOT NULL
+              THEN json_extract(metadata, '$.telemetryScores.overallScore')
+              ELSE NULL
+            END
+          ) as minTelemetryScore
         FROM chat_request_logs
         WHERE created_at >= ?
         GROUP BY provider, model
@@ -392,15 +529,24 @@ export class ChatRequestLogger {
 
       const results = stmt.all(cutoffTime) as any[];
 
-      return results.map(row => ({
-        provider: row.provider,
-        model: row.model,
-        avgLatency: Math.round(row.avgLatency || 0),
-        failureRate: row.totalCalls > 0 ? row.failures / row.totalCalls : 0,
-        lastUpdated: new Date(row.lastUpdated).getTime(),
-        totalCalls: row.totalCalls,
-        successRate: row.successRate || 1 - (row.failures / row.totalCalls),
-      }));
+      return results.map(row => {
+        const rawFailureRate = row.totalCalls > 0 ? row.failures / row.totalCalls : 0;
+        const minTelemetryScore = row.minTelemetryScore;
+
+        // If any request had a -10 telemetry score (model-not-found), propagate it
+        // by setting failureRate to -10 and successRate to -10
+        const isPenalized = minTelemetryScore !== null && minTelemetryScore < 0;
+
+        return {
+          provider: row.provider,
+          model: row.model,
+          avgLatency: Math.round(row.avgLatency || 0),
+          failureRate: isPenalized ? -10 : rawFailureRate,
+          lastUpdated: new Date(row.lastUpdated).getTime(),
+          totalCalls: row.totalCalls,
+          successRate: isPenalized ? -10 : (row.successRate || 1 - rawFailureRate),
+        };
+      });
     } catch (error) {
       console.error('[ChatRequestLogger] Failed to get model performance:', error);
       return [];

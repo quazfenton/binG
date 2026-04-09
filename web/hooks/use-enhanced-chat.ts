@@ -877,7 +877,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         abortControllerRef.current = retryAbortController;
                         currentMessageRef.current = retryAssistantMessage;
 
-                        // Re-fetch with same options
+                        // Re-fetch with ROTATED provider/model for better reliability
                         try {
                           // Build retry message history WITHOUT the empty assistant response
                           const messagesWithoutEmpty = currentMessages.filter(
@@ -887,14 +887,85 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           const resolvedBody = typeof options.body === 'function'
                             ? options.body()
                             : (options.body || {});
+
+                          // Select a rotated provider/model for retry:
+                          // Retry 1: Next model from same provider
+                          // Retry 2+: Next provider in fallback chain
+                          const origProvider = doneMetadata.provider;
+                          const origModel = doneMetadata.model;
+                          let selectedProvider = origProvider;
+                          let selectedModel = origModel;
+
+                          // Lightweight client-side provider model map (avoids importing server-only llm-providers.ts)
+                          const PROVIDER_MODELS: Record<string, string[]> = {
+                            mistral: ['mistral-small-latest', 'mistral-large-latest', 'codestral-latest', 'mistral-medium-latest', 'ministral-3b-latest', 'ministral-8b-latest'],
+                            google: ['gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro', 'gemini-1.5-flash', 'gemini-2.5-pro'],
+                            openai: ['gpt-4o', 'gpt-4o-mini', 'gpt-4-turbo', 'gpt-3.5-turbo'],
+                            anthropic: ['claude-sonnet-4-20250514', 'claude-opus-4-20250514', 'claude-3-5-sonnet-latest', 'claude-3-5-haiku-latest'],
+                            github: ['gpt-4o', 'llama-3.3-70b-instruct', 'phi-4', 'mistral-large-2407', 'mistral-small-2402', 'cohere-command-r-plus-08-2024'],
+                            nvidia: ['meta/llama-3.3-70b-instruct', 'meta/llama-3.1-405b-instruct', 'nvidia/nemotron-4-340b-instruct', 'mistralai/mistral-large-2-instruct', 'mistralai/mistral-large-3-675b-instruct-2512', 'deepseek-ai/deepseek-r1'],
+                            openrouter: ['mistralai/mistral-small-latest', 'meta-llama/llama-3.3-70b-instruct', 'google/gemini-2.5-flash', 'anthropic/claude-3.5-sonnet', 'openai/gpt-4o'],
+                            groq: ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant', 'mixtral-8x7b-32768', 'gemma2-9b-it'],
+                            together: ['meta-llama/Meta-Llama-3.1-70B-Instruct-Turbo', 'mistralai/Mixtral-8x7B-Instruct-v0.1'],
+                            zen: ['zen'],
+                            chutes: ['deepseek-ai/DeepSeek-R1-0528', 'meta-llama/Llama-3.3-70B-Instruct'],
+                            fireworks: ['accounts/fireworks/models/llama-v3p1-70b-instruct'],
+                            deepinfra: ['meta-llama/Meta-Llama-3.1-70B-Instruct', 'mistralai/Mixtral-8x7B-Instruct-v0.1'],
+                          };
+
+                          if (retryCount === 0) {
+                            // First retry: try next model from same provider
+                            const providerModels = PROVIDER_MODELS[origProvider?.toLowerCase()];
+                            if (providerModels && providerModels.length > 1) {
+                              const currentIdx = providerModels.indexOf(origModel);
+                              const nextIdx = currentIdx >= 0
+                                ? (currentIdx + 1) % providerModels.length
+                                : 0;
+                              selectedModel = providerModels[nextIdx];
+                              console.warn(`[Chat] Rotating to next model from same provider: ${selectedProvider}/${selectedModel}`);
+                            }
+
+                            // If model didn't change, use fallback chain's first provider
+                            if (selectedProvider === origProvider && selectedModel === origModel) {
+                              try {
+                                const { getConfiguredFallbackChain } = await import('@/lib/chat/provider-fallback-chains');
+                                const fallbackChain = getConfiguredFallbackChain(origProvider);
+                                if (fallbackChain.length > 0) {
+                                  selectedProvider = fallbackChain[0];
+                                  const fallbackModels = PROVIDER_MODELS[selectedProvider.toLowerCase()];
+                                  selectedModel = fallbackModels?.[0] || 'mistral-small-latest';
+                                  console.warn(`[Chat] Falling back to provider: ${selectedProvider}/${selectedModel}`);
+                                }
+                              } catch {}
+                            }
+                          } else {
+                            // Subsequent retries: rotate through fallback providers
+                            try {
+                              const { getConfiguredFallbackChain } = await import('@/lib/chat/provider-fallback-chains');
+                              const fallbackChain = getConfiguredFallbackChain(origProvider);
+                              if (fallbackChain.length > 0) {
+                                const providerIdx = (retryCount - 1) % fallbackChain.length;
+                                selectedProvider = fallbackChain[providerIdx];
+                                const fallbackModels = PROVIDER_MODELS[selectedProvider.toLowerCase()];
+                                selectedModel = fallbackModels?.[0] || 'mistral-small-latest';
+                                console.warn(`[Chat] Rotating to fallback provider: ${selectedProvider}/${selectedModel} (retry ${retryCount + 1})`);
+                              }
+                            } catch {}
+                          }
+
                           const retryRequestBody = {
                             messages: [...messagesWithoutEmpty, lastUserMsg],
                             ...resolvedBody,
+                            // Override provider/model for retry rotation
+                            provider: selectedProvider,
+                            model: selectedModel,
                             // Server-side retry context for enhanced handling
                             retryContext: {
                               isEmptyResponseRetry: true,
-                              originalProvider: doneMetadata.provider,
-                              originalModel: doneMetadata.model,
+                              originalProvider: origProvider,
+                              originalModel: origModel,
+                              retryProvider: selectedProvider,
+                              retryModel: selectedModel,
                               toolExecutionSummary: toolContext.summary,
                               failedToolCalls: toolContext.failedToolCalls,
                               filesystemChanges: toolContext.filesystemChanges,

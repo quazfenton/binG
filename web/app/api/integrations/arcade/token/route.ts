@@ -38,7 +38,7 @@ async function resolveArcadeUserId(appUserId: string): Promise<string> {
 
   if (strategy === 'email') {
     try {
-      const user = await authService.getUserById(appUserId);
+      const user = await authService.getUserById(parseInt(appUserId, 10));
       if (user?.email) return user.email;
     } catch {
       // fall through
