@@ -77,6 +77,20 @@ const CHAT_RATE_LIMIT_MAX_ANONYMOUS = 10;
 const CHAT_AGENTIC_PIPELINE = (process.env.CHAT_AGENTIC_PIPELINE || 'auto').toLowerCase();
 const WORKFORCE_ENABLED = process.env.WORKFORCE_ENABLED === 'true';
 
+// AGENT_EXECUTION_ENGINE: Controls which execution engine handles agent tasks
+// - 'auto'           → Use unified-agent service (default)
+// - 'v1-api'         → Unified-agent V1 path (Vercel AI SDK with tool calling, provider fallback)
+// - 'v1-agent-loop'  → Direct Mastra/ToolLoopAgent path (createAgentLoop from mastra/agent-loop.ts)
+// - 'agent-loop'     → OpenCode-based agent loop (agent-loop.ts)
+const AGENT_EXECUTION_ENGINE = (process.env.AGENT_EXECUTION_ENGINE || 'auto').toLowerCase();
+
+// V1 agent-loop tools config (only used when AGENT_EXECUTION_ENGINE='v1-agent-loop')
+const LLM_AGENT_TOOLS_ENABLED = AGENT_EXECUTION_ENGINE === 'v1-agent-loop'
+  ? true
+  : process.env.LLM_AGENT_TOOLS_ENABLED === 'true';
+const LLM_AGENT_TOOLS_MAX_ITERATIONS = parseInt(process.env.LLM_AGENT_TOOLS_MAX_ITERATIONS || '10', 10);
+const LLM_AGENT_TOOLS_TIMEOUT_MS = parseInt(process.env.LLM_AGENT_TOOLS_TIMEOUT_MS || '60000', 10);
+
 // Provider/model validation cache to reduce repeated lookups
 const validationCache = new Map<string, { provider: string; isValid: boolean; timestamp: number }>();
 const VALIDATION_CACHE_TTL_MS = 30000;
@@ -385,6 +399,8 @@ export async function POST(request: NextRequest) {
         isEmptyResponseRetry: boolean;
         originalProvider?: string;
         originalModel?: string;
+        retryProvider?: string;  // Client-requested provider for rotation
+        retryModel?: string;      // Client-requested model for rotation
         toolExecutionSummary?: string;
         failedToolCalls?: Array<{ name: string; error: string; args?: any }>;
         filesystemChanges?: { applied: number; failed: number; failedDetails: any[] };
@@ -398,12 +414,15 @@ export async function POST(request: NextRequest) {
     // Also record failed tool calls in telemetry for smart retry model selection
     let processedMessages = messages;
     let selectedRetryModel: { provider: string; model: string } | null = null;
+    let retrySource = 'none'; // 'client-rotation', 'telemetry-ranker', or 'none'
 
     if (retryContext?.isEmptyResponseRetry) {
       chatLogger.info('Client-side empty response retry detected', {
         requestId,
         originalProvider: retryContext.originalProvider,
         originalModel: retryContext.originalModel,
+        clientRetryProvider: retryContext.retryProvider,
+        clientRetryModel: retryContext.retryModel,
         toolSummary: retryContext.toolExecutionSummary,
         failedToolCalls: retryContext.failedToolCalls?.length,
       });
@@ -430,8 +449,29 @@ export async function POST(request: NextRequest) {
         });
       }
 
-      // Select optimal retry model based on tool execution telemetry
-      if (retryContext.originalModel) {
+      // PRIORITY 1: Use client-requested provider/model rotation if set
+      // The client has already computed which provider/model to retry with
+      // based on its rotation strategy (next model → fallback provider chain)
+      if (retryContext.retryProvider && retryContext.retryModel) {
+        const isDifferentFromOriginal =
+          retryContext.retryProvider !== retryContext.originalProvider ||
+          retryContext.retryModel !== retryContext.originalModel;
+
+        if (isDifferentFromOriginal) {
+          selectedRetryModel = {
+            provider: retryContext.retryProvider,
+            model: retryContext.retryModel,
+          };
+          retrySource = 'client-rotation';
+          chatLogger.info('Using client-requested provider rotation for retry', {
+            from: `${retryContext.originalProvider}:${retryContext.originalModel}`,
+            to: `${retryContext.retryProvider}:${retryContext.retryModel}`,
+          });
+        }
+      }
+
+      // PRIORITY 2: Fall back to telemetry-based model ranker if client didn't rotate
+      if (!selectedRetryModel && retryContext.originalModel) {
         try {
           const { getRetryModel } = await import('@/lib/models/model-ranker');
           const retryModel = await getRetryModel({
@@ -441,7 +481,8 @@ export async function POST(request: NextRequest) {
 
           if (retryModel && (retryModel.model !== retryContext.originalModel || retryModel.provider !== retryContext.originalProvider)) {
             selectedRetryModel = { provider: retryModel.provider, model: retryModel.model };
-            chatLogger.info('Switching to better tool-handling model for retry', {
+            retrySource = 'telemetry-ranker';
+            chatLogger.info('Using telemetry-based model ranking for retry', {
               from: `${retryContext.originalProvider}:${retryContext.originalModel}`,
               to: `${retryModel.provider}:${retryModel.model}`,
               avgToolScore: retryModel.avgToolScore,
@@ -477,7 +518,8 @@ export async function POST(request: NextRequest) {
       }
 
       if (selectedRetryModel) {
-        retryEnhancementParts.push(`\n[MODEL SWITCH] Retrying with ${selectedRetryModel.provider}:${selectedRetryModel.model} (better tool handling)`);
+        const sourceLabel = retrySource === 'client-rotation' ? 'client provider rotation' : 'telemetry model ranking';
+        retryEnhancementParts.push(`\n[MODEL SWITCH] Retrying with ${selectedRetryModel.provider}:${selectedRetryModel.model} (${sourceLabel})`);
       }
 
       if (retryEnhancementParts.length > 0) {
@@ -732,9 +774,9 @@ export async function POST(request: NextRequest) {
     let v1PromptSuffix = '';
     if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
       const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
-      v1PromptSuffix = applyPromptModifiers({ ...preset, ...v1PromptParams });
+      v1PromptSuffix = await applyPromptModifiers({ ...preset, ...v1PromptParams });
     } else if (Object.values(v1PromptParams).some(v => v !== undefined)) {
-      v1PromptSuffix = applyPromptModifiers(v1PromptParams);
+      v1PromptSuffix = await applyPromptModifiers(v1PromptParams);
     }
     if (v1PromptSuffix) {
       // Append as system message — the LLM provider will prepend it to existing system messages
@@ -749,7 +791,7 @@ export async function POST(request: NextRequest) {
     chatLogger.debug('Validation passed, routing through priority chain', { requestId, provider, model });
 
     // NEW: Add tool/sandbox detection
-    const requestType = detectRequestType(processedMessages);
+    const requestType = (await detectRequestType(processedMessages)).type;
     const authenticatedUserId =
       authResult.success && authResult.source !== 'anonymous' ? authResult.userId : undefined;
 
@@ -868,7 +910,7 @@ export async function POST(request: NextRequest) {
           } else {
             // FIX: Apply file edits from V2 local execution response before returning
             try {
-              const v2Response = typeof v2Result.response === 'string' ? v2Result.response : '';
+              const v2Response = v2Result.content || v2Result.rawContent || '';
               if (v2Response) {
                 await applyFilesystemEditsFromResponse({
                   ownerId: filesystemOwnerId,
@@ -948,9 +990,9 @@ export async function POST(request: NextRequest) {
     let promptSuffix = '';
     if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
       const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
-      promptSuffix = applyPromptModifiers({ ...preset, ...promptParams });
+      promptSuffix = await applyPromptModifiers({ ...preset, ...promptParams });
     } else if (Object.values(promptParams).some(v => v !== undefined)) {
-      promptSuffix = applyPromptModifiers(promptParams);
+      promptSuffix = await applyPromptModifiers(promptParams);
     }
     const systemPrompt = promptSuffix ? baseSystemPrompt + promptSuffix : baseSystemPrompt;
 
@@ -996,7 +1038,11 @@ export async function POST(request: NextRequest) {
       };
     };
 
-    if (stream) {
+    // FIX: When AGENT_EXECUTION_ENGINE='v1-agent-loop', skip unified-agent streaming
+    // and fall through to the direct Mastra/ToolLoopAgent path (createAgentLoop)
+    const useUnifiedAgentStream = stream && AGENT_EXECUTION_ENGINE !== 'v1-agent-loop';
+
+    if (useUnifiedAgentStream) {
       const streamBody = new ReadableStream({
           async start(controller) {
             const emit = createSSEEmitter(controller);
@@ -1522,12 +1568,15 @@ export async function POST(request: NextRequest) {
 
       // Default: Use existing unified agent flow (task-router mode)
       // This is the fallback when no custom orchestration mode is selected
-      const result = await processUnifiedAgentRequest(config);
-      return NextResponse.json({
-        success: result.success,
-        content: result.response,
-        data: result,
-      });
+      // FIX: Skip when AGENT_EXECUTION_ENGINE='v1-agent-loop' — fall through to direct Mastra path
+      if (AGENT_EXECUTION_ENGINE !== 'v1-agent-loop') {
+        const result = await processUnifiedAgentRequest(config);
+        return NextResponse.json({
+          success: result.success,
+          content: result.response,
+          data: result,
+        });
+      }
 
     // Sandbox actions require authenticated user identity for authorization and ownership checks.
     // VFS MCP tools are handled inline via Vercel AI SDK tool calling and don't need this gate.
@@ -1745,7 +1794,10 @@ export async function POST(request: NextRequest) {
         LLM_AGENT_TOOLS_ENABLED &&
         enableFilesystemEdits &&
         !!v1AgentTask &&
-        (requestType === 'tool' || (agentMode !== 'v2' && isCodeRequest));
+        // When AGENT_EXECUTION_ENGINE='v1-agent-loop', always run the v1 agent-loop path
+        // regardless of requestType/agentMode/isCodeRequest detection
+        (AGENT_EXECUTION_ENGINE === 'v1-agent-loop' ||
+          requestType === 'tool' || (agentMode !== 'v2' && isCodeRequest));
 
       if (shouldRunV1AgentLoop) {
         try {
@@ -2094,6 +2146,18 @@ export async function POST(request: NextRequest) {
           let streamingContentBuffer = '';
           const fileEditParserState = createIncrementalParser();
 
+          // Track tool invocations for telemetry
+          const toolCallTracker = new Map<string, { toolName: string; args?: Record<string, any>; startTime: number }>();
+          const completedToolCalls: Array<{
+            toolCallId: string;
+            toolName: string;
+            state: 'call' | 'result';
+            args?: Record<string, any>;
+            result?: any;
+            latencyMs?: number;
+            success?: boolean;
+          }> = [];
+
           const readableStream = new ReadableStream({
             async start(controller) {
               const realEmit = (eventType: string, data: any) => {
@@ -2133,7 +2197,6 @@ export async function POST(request: NextRequest) {
                     provider: actualProvider,
                     model: actualModel,
                     maxTokens: clientResponse.usage?.total_tokens || 65536,
-                    abortSignal,
                   });
                   streamStateCreated = true;
                 } catch (e) {
@@ -2355,24 +2418,45 @@ export async function POST(request: NextRequest) {
                           timestamp: Date.now(),
                         });
 
-                        // Track tool call success/failure in telemetry for model ranking
-                        // Deduplication handled by toolCallTracker using toolCallId
-                        if (toolInvocation.state === 'result' && toolInvocation.toolName) {
-                          const toolCallTracker = (await import('@/lib/chat/tool-call-tracker')).toolCallTracker;
-                          const isSuccess = toolInvocation.result && toolInvocation.result.output !== undefined;
+                        // Track tool call for telemetry + real-time model ranking
+                        if (toolInvocation.state === 'call') {
+                          toolCallTracker.set(toolInvocation.toolCallId, {
+                            toolName: toolInvocation.toolName,
+                            args: finalArgs,
+                            startTime: Date.now(),
+                          });
+                        } else if (toolInvocation.state === 'result') {
+                          const tracked = toolCallTracker.get(toolInvocation.toolCallId);
+                          const isSuccess = toolInvocation.result && toolInvocation.result.output !== undefined && toolInvocation.result.output !== null;
                           const errorMsg = toolInvocation.result?.error;
 
-                          // Record the tool call for model ranking
-                          await toolCallTracker.recordToolCall({
-                            model: actualModel,
-                            provider: actualProvider,
-                            toolName: toolInvocation.toolName,
-                            success: isSuccess,
-                            error: errorMsg,
-                            timestamp: Date.now(),
-                            conversationId,
+                          completedToolCalls.push({
                             toolCallId: toolInvocation.toolCallId,
+                            toolName: toolInvocation.toolName,
+                            state: 'result',
+                            args: tracked?.args || finalArgs,
+                            result: toolInvocation.result,
+                            latencyMs: tracked ? Date.now() - tracked.startTime : undefined,
+                            success: isSuccess,
                           });
+                          toolCallTracker.delete(toolInvocation.toolCallId);
+
+                          // Real-time: Record tool call for model ranking telemetry
+                          try {
+                            const { toolCallTracker: realTimeTracker } = await import('@/lib/chat/tool-call-tracker');
+                            await realTimeTracker.recordToolCall({
+                              model: actualModel,
+                              provider: actualProvider,
+                              toolName: toolInvocation.toolName,
+                              success: isSuccess,
+                              error: errorMsg,
+                              timestamp: Date.now(),
+                              conversationId,
+                              toolCallId: toolInvocation.toolCallId,
+                            });
+                          } catch {
+                            // Non-critical — don't break stream if tracker fails
+                          }
                         }
                       }
                     }
@@ -2521,7 +2605,7 @@ export async function POST(request: NextRequest) {
                             // didn't emit structured function calls (e.g., minimax/m2.5:free)
                             // Use correct tool based on operation type (write vs patch)
                             const editDiff = edit.diff || (isPatch ? edit.content : '');
-                            const toolCallId = edit.commitId || (isPatch ? `apply_diff-${Date.now()}-${edit.path}` : `write_file-${Date.now()}-${edit.path}`);
+                            const toolCallId = streamedEdits?.commitId || (isPatch ? `apply_diff-${Date.now()}-${edit.path}` : `write_file-${Date.now()}-${edit.path}`);
                             let toolName: string;
                             let toolArgs: Record<string, any>;
                             
@@ -2769,6 +2853,21 @@ export async function POST(request: NextRequest) {
                 // Clear tracker after check to prevent stale data
                 clearRecentMcpFileEdits(resolvedConversationId);
 
+                // Record comprehensive telemetry for stream completion
+                const streamDuration = Date.now() - streamStartTime;
+                chatRequestLogger.logRequestComplete(
+                  streamRequestId,
+                  true,
+                  streamingContentBuffer.length,
+                  undefined,
+                  streamDuration,
+                  undefined,
+                  actualProvider,
+                  actualModel,
+                  completedToolCalls.length > 0 ? completedToolCalls : undefined,
+                  streamingContentBuffer.length,
+                ).catch(() => {});
+
                 cleanup();
               } catch (streamError) {
                 chatLogger.error('LLM stream error', { requestId: streamRequestId }, {
@@ -2923,6 +3022,31 @@ export async function POST(request: NextRequest) {
                       })}\n\n`;
                       controller.enqueue(encoderRef.encode(toolEvent));
                       chunkCount++;
+
+                      // Real-time: Track tool call for model ranking telemetry
+                      if (chunk.toolInvocation.state === 'result') {
+                        const toolName = chunk.toolInvocation.toolName;
+                        const isSuccess = chunk.toolInvocation.result &&
+                          chunk.toolInvocation.result.output !== undefined &&
+                          chunk.toolInvocation.result.output !== null;
+                        const errorMsg = chunk.toolInvocation.result?.error;
+
+                        try {
+                          const { toolCallTracker: realTimeTracker } = await import('@/lib/chat/tool-call-tracker');
+                          await realTimeTracker.recordToolCall({
+                            model: actualModel,
+                            provider: actualProvider,
+                            toolName,
+                            success: isSuccess,
+                            error: errorMsg,
+                            timestamp: Date.now(),
+                            conversationId,
+                            toolCallId: chunk.toolInvocation.toolCallId,
+                          });
+                        } catch {
+                          // Non-critical
+                        }
+                      }
                     } else if (chunk.type === 'reasoning') {
                       const reasoningEvent = `event: reasoning\ndata: ${JSON.stringify({
                         requestId: streamRequestId,
@@ -3094,9 +3218,11 @@ export async function POST(request: NextRequest) {
                 chatLogger.info('ToolLoopAgent stream completed', { requestId: streamRequestId }, {
                   chunkCount,
                   latencyMs: streamDuration,
+                  contentLength: finalContent?.length || 0,
                 });
 
                 // FIX: Record telemetry with the ACTUAL provider/model (handles fallbacks)
+                // Include content length for token efficiency scoring
                 chatRequestLogger.logRequestComplete(
                   streamRequestId,
                   true,
@@ -3106,6 +3232,8 @@ export async function POST(request: NextRequest) {
                   undefined,
                   actualProvider,
                   actualModel,
+                  undefined, // ToolLoopAgent tools tracked separately
+                  finalContent?.length || 0,
                 ).catch(() => {}); // fire-and-forget — don't block stream
 
                 // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
@@ -3532,6 +3660,8 @@ export async function POST(request: NextRequest) {
                 undefined,
                 actualProvider,
                 actualModel,
+                undefined, // Tool calls tracked separately in agentic path
+                clientResponse.content?.length || 0,
               ).catch(() => {}); // fire-and-forget — don't block stream
 
               if (!SPEC_AMPLIFICATION_STREAM_EVENTS_ENABLED) {
@@ -3624,6 +3754,7 @@ export async function POST(request: NextRequest) {
       });
 
       // FIX: Record telemetry with the ACTUAL provider/model (handles fallbacks)
+      // Include content length for token efficiency scoring
       chatRequestLogger.logRequestComplete(
         requestId,
         clientResponse.success,
@@ -3633,6 +3764,8 @@ export async function POST(request: NextRequest) {
         clientResponse.success ? undefined : (clientResponse.error || 'Non-streaming response failed'),
         actualProvider,
         actualModel,
+        undefined, // No tool calls in non-streaming path
+        clientResponse.content?.length || 0,
       ).catch(() => {}); // fire-and-forget
 
       // Store conversation in mem0 for persistent memory (fire-and-forget, non-blocking)
@@ -5228,6 +5361,8 @@ async function handleError(
     error.message,
     provider,
     model,
+    undefined, // No tool calls on error path
+    0, // No content on error
   );
 
   return errorHandler.processError(error instanceof Error ? error : new Error(error.message), {

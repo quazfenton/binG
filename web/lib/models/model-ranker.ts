@@ -52,20 +52,27 @@ const FAILURE_WEIGHT_SCORE = 0.4
 /**
  * Calculate composite score for a model
  * Lower score = better (faster + more reliable)
+ * Models with negative scores (e.g., -10 for model-not-found) are permanently deprioritized.
  */
 export function scoreModel(m: ModelStats): number {
+  // Models with negative telemetry scores (model-not-found penalty) get a very high composite score
+  // so they're effectively excluded from ranking
+  if (m.failureRate < 0 || m.successRate < 0) {
+    return Infinity; // Exclude from ranking entirely
+  }
+
   const age = Date.now() - m.lastUpdated
   const staleFactor = age > MAX_AGE_MS ? STALENESS_PENALTY : 1
-  
+
   // Normalize latency (0-1 scale, assuming max 10s latency)
   const normalizedLatency = Math.min(m.avgLatency / 10000, 1)
-  
+
   // Calculate composite score
   const score = (
     normalizedLatency * LATENCY_WEIGHT +
     m.failureRate * FAILURE_WEIGHT_SCORE
   ) * staleFactor
-  
+
   return score
 }
 

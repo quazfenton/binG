@@ -790,12 +790,13 @@ function getTailLines(text: string, n: number): string {
  * Resolve a sandbox handle from sandbox ID or user ID.
  */
 async function resolveSandboxHandle(sandboxId?: string, userId?: string) {
-  const { coreSandboxService } = await import('@/lib/sandbox/core-sandbox-service');
+  const { SandboxService } = await import('@/lib/sandbox/core-sandbox-service');
   const { sandboxBridge } = await import('@/lib/sandbox/sandbox-service-bridge');
 
   if (sandboxId) {
     try {
-      const handle = await coreSandboxService.getSandbox(sandboxId);
+      const service = new SandboxService();
+      const handle = await service.getSandbox(sandboxId);
       if (handle) return handle;
     } catch (error: any) {
       logger.warn('Failed to get sandbox by ID', { sandboxId, error: error.message });
@@ -806,7 +807,8 @@ async function resolveSandboxHandle(sandboxId?: string, userId?: string) {
     try {
       const session = await sandboxBridge.getOrCreateSession(userId);
       if (session?.sandboxId) {
-        const handle = await coreSandboxService.getSandbox(session.sandboxId);
+        const service = new SandboxService();
+        const handle = await service.getSandbox(session.sandboxId);
         return handle;
       }
     } catch (error: any) {

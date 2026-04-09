@@ -108,7 +108,7 @@ export async function scheduleAgentLoop(
         agentId: payload.agentId,
         schedule: payload.schedule,
       },
-    });
+    }, payload.userId || 'system');
 
     return { scheduled: true, jobId: event.id };
   } catch (error: any) {

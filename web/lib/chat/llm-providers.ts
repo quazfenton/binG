@@ -2059,7 +2059,21 @@ class LLMService {
     requestId?: string
   ): Promise<LLMResponse> {
     const { sendAntigravityChat, ANTIGRAVITY_MODELS } = await import('@/lib/llm/antigravity-provider');
-    const { getAntigravityAccounts } = await import('@/lib/database/antigravity-accounts');
+
+    // FIX: Guard server-only import behind runtime check to prevent webpack
+    // from bundling better-sqlite3 into client components.
+    // We use a dynamic import with a runtime guard — this prevents webpack's
+    // static analysis from pulling the entire server-only dependency chain
+    // (antigravity-accounts → connection → better-sqlite3) into the client bundle.
+    if (typeof window !== 'undefined') {
+      throw new Error('Antigravity provider is server-only');
+    }
+
+    // Dynamic import with runtime-only resolution (webpack can't statically analyze eval)
+    // This is safe because we've already verified we're on the server (typeof window === 'undefined')
+    // eslint-disable-next-line no-eval
+    const antigravityModule = await eval(`import('@/lib/database/antigravity-accounts')`);
+    const { getAntigravityAccounts } = antigravityModule as { getAntigravityAccounts: Function };
 
     const modelConfig = ANTIGRAVITY_MODELS[model];
     if (!modelConfig) {
@@ -2117,7 +2131,15 @@ class LLMService {
     maxTokens: number
   ): AsyncGenerator<StreamingResponse> {
     const { sendAntigravityChat, ANTIGRAVITY_MODELS } = await import('@/lib/llm/antigravity-provider');
-    const { getAntigravityAccounts } = await import('@/lib/database/antigravity-accounts');
+
+    // FIX: Same server-only guard as generateAntigravityResponse
+    if (typeof window !== 'undefined') {
+      throw new Error('Antigravity provider is server-only');
+    }
+
+    // eslint-disable-next-line no-eval
+    const antigravityModule = await eval(`import('@/lib/database/antigravity-accounts')`);
+    const { getAntigravityAccounts } = antigravityModule as { getAntigravityAccounts: Function };
 
     const modelConfig = ANTIGRAVITY_MODELS[model];
     if (!modelConfig) {

@@ -506,6 +506,9 @@ class TaskRouter {
       // FIX (Bug 11): Catch the scheduleTask promise to prevent unhandled rejections
       try {
         const scheduledTask = await scheduleTask({
+          task: fallbackConfig.payload.prompt || task,
+          userId,
+          conversationId: sessionId || 'default',
           taskType: fallbackConfig.taskType,
           schedule: fallbackConfig.schedule,
           payload: { ...fallbackConfig.payload, prompt: fallbackConfig.payload.prompt || task },
@@ -513,7 +516,6 @@ class TaskRouter {
             ...fallbackConfig.metadata,
             eventId: eventResult.eventId,
           },
-          userId,
         });
 
         return scheduledTask;

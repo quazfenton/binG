@@ -131,7 +131,7 @@ export function useStreamControl(options: StreamControlOptions): UseStreamContro
         setConnected(true);
         reconnectAttemptsRef.current = 0;
         updateState('streaming');
-        console.log('[StreamControl] Connected', { streamId, port });
+        console.log('[StreamControl] Connected', { streamId });
       };
 
       ws.onmessage = (event) => {

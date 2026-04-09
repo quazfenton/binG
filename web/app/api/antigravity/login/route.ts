@@ -18,7 +18,7 @@ export async function GET(req: NextRequest) {
     const url = new URL(req.url);
     const projectId = url.searchParams.get('projectId') || '';
 
-    const oauthUrl = getAntigravityOAuthUrl(projectId);
+    const oauthUrl = await getAntigravityOAuthUrl(projectId);
     return NextResponse.redirect(oauthUrl);
   } catch (error: any) {
     return NextResponse.json(

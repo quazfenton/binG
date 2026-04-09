@@ -1579,11 +1579,11 @@ export function WorkspacePanel() {
                   break;
 
                 case SSE_EVENT_TYPES.TOOL_INVOCATION:
-                  // Track tool calls with deduplication by toolCallId
-                  if (data.data?.toolCallId) {
+                  // Track tool calls with deduplication by id
+                  if (data.data?.id) {
                     setAgentActivity((prev) => {
                       // Skip if already exists (prevent duplicates)
-                      const exists = prev.toolInvocations.some(t => t.toolCallId === data.data.toolCallId);
+                      const exists = prev.toolInvocations.some(t => t.id === data.data.id);
                       if (exists) return prev;
                       return {
                         ...prev,

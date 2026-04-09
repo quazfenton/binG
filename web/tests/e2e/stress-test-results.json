@@ -1,0 +1,202 @@
+{
+  "summary": {
+    "passed": 21,
+    "failed": 0,
+    "total": 21,
+    "duration": 758177
+  },
+  "categories": {
+    "Fallback": {
+      "passed": 6,
+      "total": 6
+    },
+    "Workspace Scoping": {
+      "passed": 1,
+      "total": 1
+    },
+    "Repeated Diff": {
+      "passed": 1,
+      "total": 1
+    },
+    "Context Bundling": {
+      "passed": 1,
+      "total": 1
+    },
+    "Multi-folder Selection": {
+      "passed": 1,
+      "total": 1
+    },
+    "VFS MCP Tool Args": {
+      "passed": 1,
+      "total": 1
+    },
+    "Auto-continue": {
+      "passed": 1,
+      "total": 1
+    },
+    "No Infinite Loops": {
+      "passed": 1,
+      "total": 1
+    },
+    "Shell/PTY": {
+      "passed": 1,
+      "total": 1
+    },
+    "Preview URL": {
+      "passed": 1,
+      "total": 1
+    },
+    "Self-Healing": {
+      "passed": 1,
+      "total": 1
+    },
+    "Large App Generation": {
+      "passed": 1,
+      "total": 1
+    },
+    "Error Recovery": {
+      "passed": 1,
+      "total": 1
+    },
+    "Tool Choice": {
+      "passed": 1,
+      "total": 1
+    },
+    "Nested Directories": {
+      "passed": 1,
+      "total": 1
+    },
+    "Implicit Paths": {
+      "passed": 1,
+      "total": 1
+    }
+  },
+  "details": [
+    {
+      "test": "Fallback: Compact file_edit",
+      "passed": true,
+      "details": "Detected",
+      "duration": 16693
+    },
+    {
+      "test": "Fallback: Fenced diff",
+      "passed": true,
+      "details": "Detected",
+      "duration": 41884
+    },
+    {
+      "test": "Fallback: Bash heredoc",
+      "passed": true,
+      "details": "Detected",
+      "duration": 52646
+    },
+    {
+      "test": "Fallback: batch_write",
+      "passed": true,
+      "details": "Detected",
+      "duration": 72679
+    },
+    {
+      "test": "Fallback: Special token",
+      "passed": true,
+      "details": "Detected",
+      "duration": 81145
+    },
+    {
+      "test": "Fallback: ```tool_call",
+      "passed": true,
+      "details": "Detected",
+      "duration": 90450
+    },
+    {
+      "test": "Workspace Scoping",
+      "passed": true,
+      "details": "Sessions isolated",
+      "duration": 10519
+    },
+    {
+      "test": "Repeated Diff",
+      "passed": true,
+      "details": "Modification detected",
+      "duration": 13373
+    },
+    {
+      "test": "Context Bundling",
+      "passed": true,
+      "details": "Context maintained",
+      "duration": 24738
+    },
+    {
+      "test": "Multi-folder Selection",
+      "passed": true,
+      "details": "Backend: true, Both files: true",
+      "duration": 8811
+    },
+    {
+      "test": "VFS MCP Tool Args",
+      "passed": true,
+      "details": "List: true, Create: true",
+      "duration": 7613
+    },
+    {
+      "test": "Auto-continue",
+      "passed": true,
+      "details": "Multiple files: true, Continue marker: false",
+      "duration": 89097
+    },
+    {
+      "test": "No Infinite Loops",
+      "passed": true,
+      "details": "Completed in 51s",
+      "duration": 51262
+    },
+    {
+      "test": "Shell/PTY",
+      "passed": true,
+      "details": "Create: true, Exec: true",
+      "duration": 7417
+    },
+    {
+      "test": "Preview URL",
+      "passed": true,
+      "details": "HTML: true, Preview refs: true",
+      "duration": 8140
+    },
+    {
+      "test": "Self-Healing",
+      "passed": true,
+      "details": "Fix detected",
+      "duration": 40500
+    },
+    {
+      "test": "Large App Generation",
+      "passed": true,
+      "details": "Found 7/7 files: package.json, index.html, index.js, App.js, TodoList, TodoItem, styles.css",
+      "duration": 62983
+    },
+    {
+      "test": "Error Recovery",
+      "passed": true,
+      "details": "Handled (742 chars)",
+      "duration": 14047
+    },
+    {
+      "test": "Tool Choice",
+      "passed": true,
+      "details": "Dir: true, File: true",
+      "duration": 11363
+    },
+    {
+      "test": "Nested Directories",
+      "passed": true,
+      "details": "All paths detected",
+      "duration": 19340
+    },
+    {
+      "test": "Implicit Paths",
+      "passed": true,
+      "details": "Files referenced",
+      "duration": 33477
+    }
+  ]
+}

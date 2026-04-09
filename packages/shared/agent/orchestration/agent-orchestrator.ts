@@ -312,7 +312,7 @@ export class AgentOrchestrator {
 
       this.sdkTools[toolName] = aiTool({
         description: toolDef.description || `Execute ${toolName}`,
-        parameters: toolDef.parameters,
+        parameters: toolDef.parameters as any,
         execute: async (args: Record<string, unknown>) => {
           try {
             return await config.executeTool(toolName, args);

@@ -112,7 +112,7 @@ export interface UnifiedAgentResult {
     result: ToolResult;
   }>;
   totalSteps?: number;
-  mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop';
+  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop';
   error?: string;
   metadata?: {
     model?: string;
@@ -212,7 +212,7 @@ const startupCaps = checkStartupCapabilities();
  * Returns both mode and classification for logging/metrics.
  */
 async function determineMode(config: UnifiedAgentConfig): Promise<{
-  mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop';
+  mode: 'v1-api' | 'v1-agent-loop' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop';
   classification?: TaskClassification;
 }> {
   // Explicit mode override
@@ -226,24 +226,28 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   }
 
   // AGENT_EXECUTION_ENGINE: Explicit control over which execution engine to use.
-  // - 'v1-api'       → Vercel AI SDK with tool calling (streamWithVercelAI + tools)
-  // - 'agent-loop'   → OpenCode-based agent loop (agent-loop.ts)
-  // - 'auto'         → Use task classifier + capability detection (default)
+  // - 'v1-api'        → Vercel AI SDK with tool calling (streamWithVercelAI + tools, provider fallback)
+  // - 'v1-agent-loop' → Direct Mastra/ToolLoopAgent path (createAgentLoop from mastra/agent-loop.ts)
+  // - 'auto'          → Auto-rotate between the two v1 modes based on task complexity
   const engine = process.env.AGENT_EXECUTION_ENGINE || 'auto';
 
   if (engine === 'v1-api') {
     log.info('AGENT_EXECUTION_ENGINE=v1-api, using Vercel AI SDK execution path');
     return { mode: 'v1-api' as const, classification: null as any };
   }
+  if (engine === 'v1-agent-loop') {
+    log.info('AGENT_EXECUTION_ENGINE=v1-agent-loop, using direct Mastra/ToolLoopAgent path (route.ts will bypass unified-agent)');
+    return { mode: 'v1-agent-loop' as const, classification: null as any };
+  }
   if (engine === 'agent-loop') {
     log.info('AGENT_EXECUTION_ENGINE=agent-loop, using OpenCode agent loop execution path');
     return { mode: 'v2-native' as const, classification: null as any };
   }
-  // Legacy support: DISABLE_V2_MODE still works
-  if (process.env.DISABLE_V2_MODE !== 'false' && engine === 'auto') {
-    log.info('V2 modes disabled by DISABLE_V2_MODE, forcing v1-api');
-    return { mode: 'v1-api' as const, classification: null as any };
-  }
+
+  // AUTO mode: Rotate between v1-api and v1-agent-loop based on task complexity
+  // - Simple tasks → v1-api (fast, no tool loop overhead)
+  // - Complex tasks → v1-agent-loop (Mastra ToolLoopAgent with multi-step tool execution)
+  // V2 modes are NEVER used in auto rotation.
 
   // Mastra workflow: only if explicitly requested AND available
   if (config.enableMastraWorkflows !== false && config.workflowId && startupCaps.mastraWorkflows) {
@@ -270,46 +274,23 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
     });
 
     // Map classifier recommendation to actual mode
-    // Use startupCaps — if a mode isn't available at startup, skip it entirely
-    let mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow';
-
-    if (classification.recommendedMode === 'stateful-agent') {
-      // StatefulAgent: only use if v2 modes are available at startup
-      mode = startupCaps.v2Native ? 'v2-native'
-        : startupCaps.v2Containerized ? 'v2-containerized'
-        : startupCaps.v2Local ? 'v2-local'
-        : 'v1-api';
-    } else if (classification.recommendedMode === 'mastra-workflow' && startupCaps.mastraWorkflows) {
-      mode = 'mastra-workflow';
-    } else {
-      // v1-api or v2-native from classifier
-      mode = classification.recommendedMode;
+    // For auto rotation: complex/code tasks go to v1-agent-loop, simple tasks go to v1-api
+    const isComplex = classification.complexity === 'complex';
+    if (isComplex) {
+      log.info('Auto-rotation: complex task → v1-agent-loop path', {
+        recommendedMode: classification.recommendedMode,
+        confidence: classification.confidence,
+      });
+      return { mode: 'v1-agent-loop' as const, classification };
     }
-
-    // Use startup capability flags — skip unavailable modes entirely
-    if (mode === 'v2-native' && !startupCaps.v2Native) {
-      mode = startupCaps.v2Containerized ? 'v2-containerized'
-        : startupCaps.v2Local ? 'v2-local'
-        : 'v1-api';
-    } else if (mode === 'v2-containerized' && !startupCaps.v2Containerized) {
-      mode = startupCaps.v2Local ? 'v2-local' : 'v1-api';
-    } else if (mode === 'v2-local' && !startupCaps.v2Local) {
-      mode = 'v1-api';
-    }
-
-    return {
-      mode,
-      classification,
-    };
+    log.info('Auto-rotation: simple task → v1-api path', {
+      recommendedMode: classification.recommendedMode,
+      confidence: classification.confidence,
+    });
+    return { mode: 'v1-api' as const, classification };
   } catch (error) {
-    log.warn('Task classification failed, using startup capability fallback', error);
-    // Fallback: use whatever is available at startup
-    return {
-      mode: startupCaps.v2Native ? 'v2-native'
-        : startupCaps.v2Containerized ? 'v2-containerized'
-        : startupCaps.v2Local ? 'v2-local'
-        : 'v1-api',
-    };
+    log.warn('Task classification failed, defaulting to v1-api', error);
+    return { mode: 'v1-api' as const };
   }
 }
 
@@ -355,6 +336,13 @@ export async function processUnifiedAgentRequest(
     switch (mode) {
       case 'desktop':
         return await runDesktopMode(config, classification);
+
+      case 'v1-agent-loop':
+        // This mode is handled by route.ts (bypasses unified-agent entirely).
+        // Should never reach here via processUnifiedAgentRequest.
+        // Fall back to v1-api if somehow called.
+        log.warn('v1-agent-loop mode reached via unified-agent, falling back to v1-api');
+        return await runV1Api(config);
 
       case 'v2-native':
         return await runV2Native(config, classification);
@@ -932,7 +920,11 @@ async function runV1ApiWithTools(
   const primaryModel = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
   const requestId = `unified-v1-tools-${Date.now()}`;
 
-  // FIX: Same model-per-provider mapping as runV1ApiCompletion
+  // FIX: Model normalization — when falling back to a different provider,
+  // the original model name may not be valid for the fallback provider.
+  // Check if the model is in the provider's supported models list; if not,
+  // use the provider's default instead.
+  const { PROVIDERS } = await import('../chat/llm-providers');
   const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
     openai: 'gpt-4o',
     anthropic: 'claude-sonnet-4-6-20250514',
@@ -953,8 +945,20 @@ async function runV1ApiWithTools(
   };
 
   function getModelForProvider(providerName: string): string {
-    if (config.model) return config.model;
-    return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
+    // If no explicit model set, use provider default
+    if (!config.model) return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
+
+    // Check if the model is valid for this provider
+    const provider = PROVIDERS[providerName.toLowerCase()];
+    if (provider?.models && provider.models.length > 0) {
+      if (provider.models.includes(config.model)) return config.model;
+      // Model not in provider's list — use provider default
+      log.debug(`Model "${config.model}" not in ${providerName} models list, using default`);
+      return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
+    }
+
+    // Unknown provider — trust the config model
+    return config.model;
   }
 
   // Build provider fallback chain — only include providers with API keys set
@@ -1243,7 +1247,8 @@ async function runV1ApiCompletion(
   const requestId = `unified-v1-${Date.now()}`;
 
   // FIX: Map each provider to a model that supports tool calling / function calling.
-  // mistral-small-latest is text-only — use NVIDIA Nemotron, OpenRouter Llama, GitHub, etc.
+  // Also: when falling back, check if the model is valid for the target provider.
+  const { PROVIDERS } = await import('../chat/llm-providers');
   const PROVIDER_DEFAULT_MODELS: Record<string, string> = {
     openai: 'gpt-4o',
     anthropic: 'claude-sonnet-4-6-20250514',
@@ -1264,10 +1269,20 @@ async function runV1ApiCompletion(
   };
 
   function getModelForProvider(providerName: string): string {
-    // If user explicitly set a model, use it (they may know what they're doing)
-    if (config.model) return config.model;
-    // Otherwise use provider-specific default
-    return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
+    // If no explicit model set, use provider default
+    if (!config.model) return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
+
+    // Check if the model is valid for this provider
+    const provider = PROVIDERS[providerName.toLowerCase()];
+    if (provider?.models && provider.models.length > 0) {
+      if (provider.models.includes(config.model)) return config.model;
+      // Model not in provider's list — use provider default
+      log.debug(`Model "${config.model}" not in ${providerName} models list, using default`);
+      return PROVIDER_DEFAULT_MODELS[providerName] || primaryModel;
+    }
+
+    // Unknown provider — trust the config model
+    return config.model;
   }
 
   // Build list of providers to try: primary + fallback chain (only configured ones)
@@ -1286,10 +1301,10 @@ async function runV1ApiCompletion(
 
   // Try each provider in order using same pattern as enhanced-llm-service.ts
   for (const providerName of uniqueProviders) {
+    const modelForProvider = getModelForProvider(providerName);
     try {
       const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
 
-      const modelForProvider = getModelForProvider(providerName);
       let content = '';
       const streamOpts = {
         provider: providerName,
