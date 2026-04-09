@@ -145,12 +145,31 @@ export function getBlacklistStats(): { size: number } {
 
 export async function verifyAuth(request: NextRequest): Promise<AuthResult> {
   try {
+    let token: string | null = null;
+
+    // Check Authorization header first
     const authHeader = request.headers.get('authorization');
-    if (!authHeader || !authHeader.startsWith('Bearer ')) {
-      return { success: false, error: 'No authorization header' };
+    if (authHeader && authHeader.startsWith('Bearer ')) {
+      token = authHeader.substring(7);
     }
 
-    const token = authHeader.substring(7);
+    // Fall back to session cookie if no Bearer token
+    if (!token) {
+      const cookieHeader = request.headers.get('cookie');
+      if (cookieHeader) {
+        const cookies = Object.fromEntries(
+          cookieHeader.split(';').map(c => {
+            const [k, ...v] = c.trim().split('=');
+            return [k, v.join('=')];
+          })
+        );
+        token = cookies['session_id'] || cookies['auth-token'] || cookies['token'] || null;
+      }
+    }
+
+    if (!token) {
+      return { success: false, error: 'No authorization header or session cookie' };
+    }
 
     try {
       const jwt = getJwtModule();

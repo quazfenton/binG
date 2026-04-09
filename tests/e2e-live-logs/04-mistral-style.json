@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-09T18:10:53.632Z",
+  "timestamp": "2026-04-09T21:04:37.564Z",
   "url": "http://localhost:3000/api/filesystem/read",
   "method": "POST",
   "status": 404,
@@ -11,7 +11,7 @@
     "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
     "content-type": "application/json",
     "cross-origin-resource-policy": "cross-origin",
-    "date": "Thu, 09 Apr 2026 18:10:53 GMT",
+    "date": "Thu, 09 Apr 2026 21:04:37 GMT",
     "keep-alive": "timeout=5",
     "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
     "referrer-policy": "strict-origin-when-cross-origin",
@@ -19,10 +19,10 @@
     "transfer-encoding": "chunked",
     "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
     "x-content-type-options": "nosniff",
-    "x-csp-nonce-script": "B57tC6Nx6cpud4gz6isHXuWZPmwmbHCEu9T5vOjjKZY",
-    "x-csp-nonce-style": "YUJY06UgojOlhXinuprF8zcAusxbExbvGpP4SmdoVBU",
+    "x-csp-nonce-script": "LiVd-KNfPhKUhUHQ6D2rMFWpsV7JRUrvG2WEY_Y0iLA",
+    "x-csp-nonce-style": "gt_qk_jrKFHeGQ_Cd5O_eFsYybGNoJ3p53fl3vkPqYk",
     "x-frame-options": "SAMEORIGIN",
-    "x-request-id": "req_1775758253623_jyz6jqvkrv",
+    "x-request-id": "req_1775768677549_sy4djzrkq8r",
     "x-xss-protection": "1; mode=block"
   },
   "body": {
@@ -34,6 +34,6 @@
     "error": "File not found"
   },
   "cookies": {
-    "anon-session-id": "anon_1775758253308_1fdcdee77f9bdd0af5"
+    "anon-session-id": "anon_1775768677383_20a33d618f6de4ed75"
   }
 }

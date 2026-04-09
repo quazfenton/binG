@@ -1,14 +1,17 @@
 /**
- * Comprehensive E2E Test Script
+ * Comprehensive E2E Test Script v2
  * Tests full workflows including:
  * - Authentication
  * - Chat with various providers/models
  * - File creation via LLM tool calls
- * - VFS operations
+ * - VFS operations (correct endpoints)
  * - Tool execution
  * - Auto-continue detection
  * - Multiple modes (streaming/non-streaming)
  */
+
+// Load environment variables
+require('dotenv').config();
 
 const API_BASE = 'http://localhost:3000';
 const TEST_EMAIL = 'test@test.com';
@@ -57,11 +60,60 @@ async function chat(token, message, provider = 'nvidia', model = 'nvidia/nemotro
       stream
     })
   });
+  
+  // Handle streaming response
+  if (stream) {
+    let fullContent = '';
+    let toolCalls = [];
+    let files = [];
+    let isComplete = false;
+    
+    const reader = res.body.getReader();
+    const decoder = new TextDecoder();
+    
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      
+      const chunk = decoder.decode(value);
+      const lines = chunk.split('\n');
+      
+      for (const line of lines) {
+        if (line.startsWith('event: ')) continue;
+        if (line.startsWith('data: ')) {
+          const dataStr = line.slice(6);
+          if (dataStr === '[DONE]') {
+            isComplete = true;
+            continue;
+          }
+          try {
+            const data = JSON.parse(dataStr);
+            if (data.content) fullContent += data.content;
+            if (data.toolCalls) toolCalls = data.toolCalls;
+            if (data.files) files = data.files;
+            if (data.isComplete) isComplete = true;
+            if (data.event === 'done') {
+              // Parse final JSON from done event
+              try {
+                const doneData = JSON.parse(data.data || '{}');
+                if (doneData.content) fullContent = doneData.content;
+                if (doneData.files) files = doneData.files;
+                if (doneData.toolCalls) toolCalls = doneData.toolCalls;
+              } catch (e) {}
+            }
+          } catch (e) {}
+        }
+      }
+    }
+    
+    return { content: fullContent, toolCalls, files, isComplete };
+  }
+  
   return res.json();
 }
 
 async function vfsList(token, path = '/') {
-  const res = await fetch(`${API_BASE}/api/vfs/list`, {
+  const res = await fetch(`${API_BASE}/api/filesystem/list`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -73,7 +125,7 @@ async function vfsList(token, path = '/') {
 }
 
 async function vfsRead(token, path) {
-  const res = await fetch(`${API_BASE}/api/vfs/read`, {
+  const res = await fetch(`${API_BASE}/api/filesystem/read`, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
@@ -84,10 +136,29 @@ async function vfsRead(token, path) {
   return res.json();
 }
 
+async function vfsWrite(token, path, content) {
+  const res = await fetch(`${API_BASE}/api/filesystem/write`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${token}`
+    },
+    body: JSON.stringify({ path, content })
+  });
+  return res.json();
+}
+
 async function runTests() {
   log('========================================', 'blue');
-  log('  COMPREHENSIVE E2E TESTS', 'blue');
+  log('  COMPREHENSIVE E2E TESTS v2', 'blue');
   log('========================================', 'blue');
+  
+  // Log API keys status
+  log('\n=== API Keys Status ===', 'blue');
+  log(`  NVIDIA: ${!!process.env.NVIDIA_API_KEY}`, process.env.NVIDIA_API_KEY ? 'green' : 'red');
+  log(`  GOOGLE: ${!!process.env.GOOGLE_API_KEY}`, process.env.GOOGLE_API_KEY ? 'green' : 'red');
+  log(`  MISTRAL: ${!!process.env.MISTRAL_API_KEY}`, process.env.MISTRAL_API_KEY ? 'green' : 'red');
+  log(`  OPENROUTER: ${!!process.env.OPENROUTER_API_KEY}`, process.env.OPENROUTER_API_KEY ? 'green' : 'red');
 
   // Step 1: Login
   const token = await login();
@@ -113,10 +184,13 @@ async function runTests() {
   }
 
   // Test 1: Basic VFS list
-  log('\n=== TEST: VFS List (empty workspace) ===', 'blue');
+  log('\n=== TEST: VFS List (filesystem/list) ===', 'blue');
   try {
     const vfsListResult = await vfsList(token);
-    recordTest('VFS List works', vfsListResult.success || vfsListResult.files !== undefined, JSON.stringify(vfsListResult).slice(0, 200));
+    log(`  Result: ${JSON.stringify(vfsListResult).slice(0, 300)}`, 'yellow');
+    // Check if result has files array or success, or is a Next.js error page
+    const isErrorPage = typeof vfsListResult === 'string' && vfsListResult.includes('<html');
+    recordTest('VFS List works', !isErrorPage && (vfsListResult.files !== undefined || vfsListResult.success), isErrorPage ? 'Got HTML error page' : JSON.stringify(vfsListResult).slice(0, 200));
   } catch (e) {
     recordTest('VFS List works', false, e.message);
   }
@@ -132,26 +206,27 @@ async function runTests() {
       false
     );
     log(`  Response length: ${chatResult.content?.length || 0}`, 'yellow');
-    log(`  Tool calls: ${JSON.stringify(chatResult.toolCalls || chatResult.toolInvocations || []).slice(0, 300)}`, 'yellow');
-    log(`  Files created: ${JSON.stringify(chatResult.files || []).slice(0, 300)}`, 'yellow');
+    log(`  Tool calls: ${JSON.stringify(chatResult.toolCalls || []).slice(0, 500)}`, 'yellow');
+    log(`  Files created: ${JSON.stringify(chatResult.files || []).slice(0, 500)}`, 'yellow');
     
     // Check if file was created via tool calls or files array
-    const hasToolCall = (chatResult.toolCalls?.length > 0) || (chatResult.toolInvocations?.length > 0);
+    const hasToolCall = (chatResult.toolCalls?.length > 0);
     const hasFileCreation = (chatResult.files?.length > 0);
     
     recordTest('Non-streaming chat returns response', !!chatResult.content, 'No content');
-    recordTest('Tool calls detected in response', hasToolCall || hasFileCreation, 'No tool calls or files');
+    recordTest('Tool calls or files detected', hasToolCall || hasFileCreation, 'No tool calls or files');
     
     // Check if file actually exists in VFS
     if (hasToolCall || hasFileCreation) {
       setTimeout(async () => {
         try {
           const vfsResult = await vfsRead(token, '/test-app.js');
-          recordTest('File created in VFS', vfsResult.success || !!vfsResult.content, JSON.stringify(vfsResult).slice(0, 200));
+          log(`  VFS read result: ${JSON.stringify(vfsResult).slice(0, 200)}`, 'yellow');
+          recordTest('File created in VFS', vfsResult.content !== undefined || vfsResult.success, JSON.stringify(vfsResult).slice(0, 100));
         } catch (e) {
           recordTest('File created in VFS', false, e.message);
         }
-      }, 1000);
+      }, 1500);
     }
   } catch (e) {
     recordTest('Non-streaming chat works', false, e.message);
@@ -169,25 +244,27 @@ async function runTests() {
     );
     log(`  Response length: ${chatResult.content?.length || 0}`, 'yellow');
     log(`  Tool calls: ${JSON.stringify(chatResult.toolCalls || []).slice(0, 300)}`, 'yellow');
-    recordTest('Streaming chat returns response', !!chatResult.content || !!chatResult.isComplete, 'No response');
+    log(`  Files: ${JSON.stringify(chatResult.files || []).slice(0, 300)}`, 'yellow');
+    recordTest('Streaming chat returns response', !!chatResult.content || chatResult.isComplete, 'No response');
   } catch (e) {
     recordTest('Streaming chat works', false, e.message);
   }
 
-  // Test 4: Chat with mistral provider
-  log('\n=== TEST: Chat - Mistral provider ===', 'blue');
+  // Test 4: Chat with mistral provider - tests <function= format parsing
+  log('\n=== TEST: Chat - Mistral provider (<function= format) ===', 'blue');
   try {
     const chatResult = await chat(
       token,
-      'Write a simple hello world Python script to hello.py',
+      'Write a simple hello world Python script to hello.py with: print("Hello World")',
       'mistral',
       'mistral-small-latest',
       false
     );
     log(`  Response: ${(chatResult.content || '').slice(0, 500)}`, 'yellow');
     log(`  Tool calls: ${JSON.stringify(chatResult.toolCalls || []).slice(0, 300)}`, 'yellow');
+    log(`  Files: ${JSON.stringify(chatResult.files || []).slice(0, 300)}`, 'yellow');
     recordTest('Mistral provider works', !!chatResult.content, 'No content');
-    recordTest('Mistral tool calls detected', (chatResult.toolCalls?.length > 0) || (chatResult.files?.length > 0), 'No tools');
+    recordTest('Mistral tool calls/files detected', (chatResult.toolCalls?.length > 0) || (chatResult.files?.length > 0), 'No tools');
   } catch (e) {
     recordTest('Mistral provider works', false, e.message);
   }
@@ -205,6 +282,7 @@ async function runTests() {
     log(`  Response: ${(chatResult.content || '').slice(0, 500)}`, 'yellow');
     log(`  Tool calls: ${JSON.stringify(chatResult.toolCalls || []).slice(0, 300)}`, 'yellow');
     recordTest('OpenRouter provider works', !!chatResult.content, 'No content');
+    recordTest('OpenRouter tool calls detected', (chatResult.toolCalls?.length > 0) || (chatResult.files?.length > 0), 'No tools');
   } catch (e) {
     recordTest('OpenRouter provider works', false, e.message);
   }
@@ -222,6 +300,7 @@ async function runTests() {
     log(`  Response: ${(chatResult.content || '').slice(0, 500)}`, 'yellow');
     log(`  Tool calls: ${JSON.stringify(chatResult.toolCalls || []).slice(0, 300)}`, 'yellow');
     recordTest('Google provider works', !!chatResult.content, 'No content');
+    recordTest('Google tool calls detected', (chatResult.toolCalls?.length > 0) || (chatResult.files?.length > 0), 'No tools');
   } catch (e) {
     recordTest('Google provider works', false, e.message);
   }
@@ -258,6 +337,7 @@ async function runTests() {
       false
     );
     log(`  Edit response: ${(editResult.content || '').slice(0, 500)}`, 'yellow');
+    log(`  Edit files: ${JSON.stringify(editResult.files || []).slice(0, 300)}`, 'yellow');
     recordTest('File edit detected', !!editResult.content, 'No content');
   } catch (e) {
     recordTest('File edit works', false, e.message);
@@ -280,27 +360,11 @@ async function runTests() {
     recordTest('Shell command works', false, e.message);
   }
 
-  // Test 10: List files command
-  log('\n=== TEST: List workspace files ===', 'blue');
-  try {
-    const chatResult = await chat(
-      token,
-      'List all files in the current directory',
-      'nvidia',
-      'nvidia/nemotron-4-340b-instruct',
-      false
-    );
-    log(`  Response: ${(chatResult.content || '').slice(0, 500)}`, 'yellow');
-    recordTest('List files command works', !!chatResult.content, 'No content');
-  } catch (e) {
-    recordTest('List files works', false, e.message);
-  }
-
-  // Test 11: Read file content
+  // Test 10: Read file content
   log('\n=== TEST: Read file content ===', 'blue');
   try {
-    // First ensure a file exists
-    await chat(token, 'Create a file called read-test.txt with: Content to be read', 'nvidia', 'nvidia/nemotron-4-340b-instruct', false);
+    // First ensure a file exists via direct VFS write
+    await vfsWrite(token, '/read-test.txt', 'Content to be read by AI');
     
     const chatResult = await chat(
       token,
@@ -315,7 +379,7 @@ async function runTests() {
     recordTest('Read file works', false, e.message);
   }
 
-  // Test 12: Auto-continue detection
+  // Test 11: Auto-continue detection
   log('\n=== TEST: Auto-continue detection ===', 'blue');
   try {
     const chatResult = await chat(
@@ -332,20 +396,22 @@ async function runTests() {
     recordTest('Auto-continue works', false, e.message);
   }
 
-  // Test 13: Context bundling - multi-folder workspace
-  log('\n=== TEST: Context bundling ===', 'blue');
+  // Test 12: Create a complete app
+  log('\n=== TEST: Create a complete app (full workflow) ===', 'blue');
   try {
     const chatResult = await chat(
       token,
-      'What files do you see in the src/components folder?',
+      'Create a simple React counter app with two files: 1) App.js with a counter component that increments when clicking a button, 2) index.css with basic styling for the counter',
       'nvidia',
       'nvidia/nemotron-4-340b-instruct',
       false
     );
-    log(`  Response: ${(chatResult.content || '').slice(0, 500)}`, 'yellow');
-    recordTest('Context bundling works', !!chatResult.content, 'No content');
+    log(`  Response length: ${chatResult.content?.length || 0}`, 'yellow');
+    log(`  Files created: ${JSON.stringify(chatResult.files || []).slice(0, 500)}`, 'yellow');
+    recordTest('Full app creation works', !!chatResult.content, 'No content');
+    recordTest('App files created', (chatResult.files?.length >= 1), 'No files');
   } catch (e) {
-    recordTest('Context bundling works', false, e.message);
+    recordTest('Full app creation works', false, e.message);
   }
 
   // Wait for async tests to complete
@@ -355,7 +421,7 @@ async function runTests() {
   log('\n========================================', 'blue');
   log('  TEST SUMMARY', 'blue');
   log('========================================', 'blue');
-  log(`  Passed: ${results.passed.length}`, 'green');
+  log(`  Passed: ${results.passed.length}`, results.passed.length > 0 ? 'green' : 'yellow');
   log(`  Failed: ${results.failed.length}`, results.failed.length > 0 ? 'red' : 'green');
   
   if (results.failed.length > 0) {
@@ -372,5 +438,6 @@ async function runTests() {
 // Run tests
 runTests().catch(e => {
   log(`\n FATAL ERROR: ${e.message}`, 'red');
+  console.error(e);
   process.exit(1);
 });

@@ -18,7 +18,7 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { useChatHistory } from "@/hooks/use-chat-history";
 import { voiceService } from "@/lib/voice/voice-service";
 import { toast } from "sonner";
-import type { LLMProvider } from "@/lib/chat/llm-providers";
+import type { LLMProvider } from "@/lib/chat/llm-providers-types";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
 import { useAuth } from "@/contexts/auth-context";
@@ -218,35 +218,49 @@ export default function ConversationInterface() {
   });
   // Generate initial session ID using new naming system
   // Always start fresh to prevent stale session IDs like "002" from being reused
-  const [filesystemSessionId, setFilesystemSessionId] = useState<string>('');
+  const [compositeSessionId, setCompositeSessionId] = useState<string>('');
 
   // Generate session name on mount (always fresh, never restored)
+  // FIX: Use composite userId$sessionId format for ALL users (logged-in + anonymous)
+  // Anonymous users get "anon$001" format - their data is local-only until they sign up
+  // Logged-in users get "12345$001" format - their data persists in the database
   useEffect(() => {
     let cancelled = false;
-    if (!filesystemSessionId) {
+    if (!compositeSessionId) {
       // Clear ANY stale sessionStorage to prevent old session IDs from persisting
       if (typeof window !== 'undefined') {
-        sessionStorage.removeItem('current_filesystem_session_id');
+        sessionStorage.removeItem('current_composite_session_id');
         sessionStorage.removeItem('current_conversation_id');
       }
-      // Generate fresh session name starting from 000
+
       generateSessionName(undefined, true, false).then((newId) => {
         if (!cancelled) {
-          setFilesystemSessionId(newId);
+          if (user?.id) {
+            // Logged-in user: composite format "userId$sessionNumber" (e.g., "12345$001")
+            const compositeId = `${user.id}$${newId}`;
+            setCompositeSessionId(compositeId);
+            console.log('[ConversationInterface] Using composite session ID (authenticated):', compositeId);
+          } else {
+            // Anonymous user: composite format "anon$sessionNumber" (e.g., "anon$001")
+            // Data is local-only until user signs up to migrate it
+            const compositeId = `anon$${newId}`;
+            setCompositeSessionId(compositeId);
+            console.log('[ConversationInterface] Using composite session ID (anonymous):', compositeId);
+          }
         }
       });
     }
     return () => {
       cancelled = true;
     };
-  }, [filesystemSessionId]); // Re-run when filesystemSessionId is cleared to regenerate
+  }, [compositeSessionId, user?.id]); // Re-run when compositeSessionId is cleared or user logs in
 
-  // Persist filesystemSessionId to sessionStorage so page refresh restores it
+  // Persist compositeSessionId to sessionStorage so page refresh restores it
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      sessionStorage.setItem('current_filesystem_session_id', filesystemSessionId);
+      sessionStorage.setItem('current_composite_session_id', compositeSessionId);
     }
-  }, [filesystemSessionId]);
+  }, [compositeSessionId]);
   
   // Project name for simpler terminal paths (e.g., "webGame" instead of long session ID)
   const [projectName, setProjectName] = useState<string>('workspace');

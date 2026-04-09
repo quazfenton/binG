@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-09T18:11:36.228Z",
+  "timestamp": "2026-04-09T21:05:48.744Z",
   "body": {
     "messages": [
       {
@@ -22,7 +22,7 @@
     "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
     "content-type": "text/event-stream",
     "cross-origin-resource-policy": "cross-origin",
-    "date": "Thu, 09 Apr 2026 18:11:25 GMT",
+    "date": "Thu, 09 Apr 2026 21:05:35 GMT",
     "expires": "0",
     "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
     "pragma": "no-cache",
@@ -32,23 +32,23 @@
     "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
     "x-accel-buffering": "no",
     "x-content-type-options": "nosniff",
-    "x-csp-nonce-script": "DvpPK5WB4NLQFgij_ru1o1gTHa0srFB1n-bquyOUcwM",
-    "x-csp-nonce-style": "H4cW3afRcFv3wRf7ky3FkH8t5DJ2UTngRDCGitGZkTQ",
+    "x-csp-nonce-script": "WvSsiwGZxXsWm5VnoaBBa3VNKTRNPn08pMWDvHNUNWY",
+    "x-csp-nonce-style": "2bNjHZjeoB-4bp5fGjZEKyGkD2zNY2MWC8ZvoMrg0oQ",
     "x-frame-options": "SAMEORIGIN",
-    "x-request-id": "req_1775758278755_9twarppa1vu",
+    "x-request-id": "req_1775768718051_q6tyodn8fv",
     "x-xss-protection": "1; mode=block"
   },
-  "raw": "event: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775758285523,\"stepIndex\":0}\n\nevent: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775758296227,\"stepIndex\":1}\n\nevent: done\ndata: {\"success\":true,\"content\":\"No response generated\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775758285523,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775758296227,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"No response generated\",\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"google\",\"model\":\"gemini-2.5-flash-lite\",\"duration\":3477,\"fallbackChain\":[],\"fallbackFrom\":\"v2-containerized\",\"triedModes\":[\"v2-containerized\",\"v1-api\"],\"classification\":{\"complexity\":\"moderate\",\"confidence\":0.6}}}}\n\n",
+  "raw": "event: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775768735115,\"stepIndex\":0}\n\nevent: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"failed\",\"timestamp\":1775768748742,\"stepIndex\":1}\n\nevent: done\ndata: {\"success\":false,\"content\":\"\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775768735115,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"failed\",\"timestamp\":1775768748742,\"stepIndex\":1}]},\"data\":{\"success\":false,\"response\":\"\",\"mode\":\"v1-api\",\"error\":\"mode is not defined\",\"metadata\":{\"duration\":13627,\"classification\":{\"complexity\":\"moderate\",\"confidence\":0.54}}}}\n\n",
   "eventCount": 3,
   "tokenText": "",
   "toolEvents": [],
   "fileEvents": [],
   "done": {
     "event": "done",
-    "rawData": "{\"success\":true,\"content\":\"No response generated\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775758285523,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775758296227,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"No response generated\",\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"google\",\"model\":\"gemini-2.5-flash-lite\",\"duration\":3477,\"fallbackChain\":[],\"fallbackFrom\":\"v2-containerized\",\"triedModes\":[\"v2-containerized\",\"v1-api\"],\"classification\":{\"complexity\":\"moderate\",\"confidence\":0.6}}}}",
+    "rawData": "{\"success\":false,\"content\":\"\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775768735115,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"failed\",\"timestamp\":1775768748742,\"stepIndex\":1}]},\"data\":{\"success\":false,\"response\":\"\",\"mode\":\"v1-api\",\"error\":\"mode is not defined\",\"metadata\":{\"duration\":13627,\"classification\":{\"complexity\":\"moderate\",\"confidence\":0.54}}}}",
     "data": {
-      "success": true,
-      "content": "No response generated",
+      "success": false,
+      "content": "",
       "messageMetadata": {
         "agent": "unified",
         "mode": "v1-api",
@@ -56,34 +56,27 @@
           {
             "step": "Start agentic pipeline",
             "status": "started",
-            "timestamp": 1775758285523,
+            "timestamp": 1775768735115,
             "stepIndex": 0
           },
           {
             "step": "Start agentic pipeline",
-            "status": "completed",
-            "timestamp": 1775758296227,
+            "status": "failed",
+            "timestamp": 1775768748742,
             "stepIndex": 1
           }
         ]
       },
       "data": {
-        "success": true,
-        "response": "No response generated",
+        "success": false,
+        "response": "",
         "mode": "v1-api",
+        "error": "mode is not defined",
         "metadata": {
-          "provider": "google",
-          "model": "gemini-2.5-flash-lite",
-          "duration": 3477,
-          "fallbackChain": [],
-          "fallbackFrom": "v2-containerized",
-          "triedModes": [
-            "v2-containerized",
-            "v1-api"
-          ],
+          "duration": 13627,
           "classification": {
             "complexity": "moderate",
-            "confidence": 0.6
+            "confidence": 0.54
           }
         }
       }

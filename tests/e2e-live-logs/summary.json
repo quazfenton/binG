@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-09T18:11:55.143Z",
+  "timestamp": "2026-04-09T21:06:49.763Z",
   "baseUrl": "http://localhost:3000",
   "scenarios": [
     {
@@ -7,7 +7,7 @@
       "passed": true,
       "status": 200,
       "failurePoint": null,
-      "responseSnippet": "{\"success\":true,\"user\":{\"id\":1,\"email\":\"test@test.com\",\"username\":null,\"createdAt\":\"2026-04-09T10:12:37.000Z\",\"lastLogin\":\"2026-04-09T22:08:28.000Z\",\"isActive\":true,\"subscriptionTier\":\"free\",\"emailVerified\":false},\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIxIiwiZW1haWwiOiJ0ZXN0QHRl"
+      "responseSnippet": "{\"success\":true,\"user\":{\"id\":1,\"email\":\"test@test.com\",\"username\":null,\"createdAt\":\"2026-04-09T10:12:37.000Z\",\"lastLogin\":\"2026-04-10T01:01:09.000Z\",\"isActive\":true,\"subscriptionTier\":\"free\",\"emailVerified\":false},\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIxIiwiZW1haWwiOiJ0ZXN0QHRl"
     },
     {
       "name": "chat_nonstream_probe",
@@ -20,7 +20,7 @@
       "name": "chat_stream_baseline",
       "passed": true,
       "status": 200,
-      "tokenLength": 9,
+      "tokenLength": 12,
       "doneEvent": true,
       "toolEventCount": 0,
       "fileEventCount": 0

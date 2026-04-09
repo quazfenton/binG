@@ -79,16 +79,28 @@ export async function POST(request: NextRequest) {
         sameSite: 'lax',
         maxAge: 7 * 24 * 60 * 60 // 7 days
       });
-      // Clear anonymous session cookie — authenticated users should NOT
-      // fall back to their old anonymous workspace identity
-      response.cookies.set('anon-session-id', '', {
+    }
+
+    // Set JWT token as auth-token cookie for admin auth and server components
+    if (result.token) {
+      response.cookies.set('auth-token', result.token, {
         httpOnly: true,
         secure: process.env.NODE_ENV === 'production',
         sameSite: 'lax',
-        maxAge: 0,
+        maxAge: 7 * 24 * 60 * 60, // 7 days
         path: '/',
       });
     }
+
+    // Clear anonymous session cookie — authenticated users should NOT
+    // fall back to their old anonymous workspace identity
+    response.cookies.set('anon-session-id', '', {
+      httpOnly: true,
+      secure: process.env.NODE_ENV === 'production',
+      sameSite: 'lax',
+      maxAge: 0,
+      path: '/',
+    });
 
     return response;
 

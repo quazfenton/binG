@@ -19,7 +19,7 @@ import {
   Sparkles,
   Trash2
 } from 'lucide-react';
-import type { LLMProvider } from '../lib/chat/llm-providers';
+import type { LLMProvider } from '../lib/chat/llm-providers-types';
 import { useMultiRotatingStatements } from '@/hooks/use-rotating-statements';
 import { clipboard } from "@bing/platform/clipboard";
 
