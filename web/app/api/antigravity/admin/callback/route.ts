@@ -27,8 +27,13 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Missing authorization code' }, { status: 400 });
     }
 
-    const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/antigravity/admin/callback`;
-    const tokens = await exchangeCodeForTokens(code, redirectUri);
+    if (!state) {
+      return NextResponse.json({ error: 'Missing OAuth state parameter' }, { status: 400 });
+    }
+
+    // exchangeCodeForTokens expects the OAuth state (which carries the PKCE verifier),
+    // NOT the redirect URI. The redirect URI is built internally via getOAuthConfig().
+    const tokens = await exchangeCodeForTokens(code, state);
 
     // Set the tokens in a secure httpOnly cookie for the display page
     // The cookie is short-lived (5 min) and only readable by server

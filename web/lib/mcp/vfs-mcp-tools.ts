@@ -467,7 +467,7 @@ export const readFileTool = (tool as any)({
   }
   const context = getToolContext();
   const scopedPath = resolveScopedPath(path);
-  
+
   // ENHANCED: Log VFS tool invocation
   logger.info('[VFS-TOOL] readFile invoked', {
     originalPath: path,
@@ -497,6 +497,60 @@ export const readFileTool = (tool as any)({
     error: error.message,
     exists: false,
   };
+    }
+  },
+});
+
+/**
+ * read_files - Read multiple files in one operation
+ * Efficient for the AI to fetch several files at once without
+ * multiple round-trips. Returns each file's content or error.
+ */
+export const readFilesTool = (tool as any)({
+  description: 'Read multiple files at once from the Virtual File System. More efficient than calling read_file repeatedly when you need several files.',
+  parameters: z.object({
+    paths: z.array(z.string()).min(1).max(20, 'Cannot read more than 20 files at once').describe('Array of file paths to read'),
+  }),
+  execute: async ({ paths }) => {
+    try {
+      const context = getToolContext();
+      logger.info('[VFS-TOOL] readFiles invoked', {
+        pathCount: paths.length,
+        userId: context.userId,
+        scopePath: context.scopePath,
+      });
+
+      const results = await Promise.all(paths.map(async (path: string) => {
+        try {
+          if (!path || typeof path !== 'string') {
+            return { path, success: false, error: 'Path is required' } as any;
+          }
+          const scopedPath = resolveScopedPath(path);
+          const file = await virtualFilesystem.readFile(context.userId, scopedPath);
+          const f = file as any;
+          return {
+            path: f.path,
+            content: f.content,
+            language: f.language,
+            size: f.size,
+            version: f.version ?? 1,
+            success: true,
+          };
+        } catch (err: any) {
+          return { path, success: false, error: err.message };
+        }
+      }));
+
+      const successCount = results.filter((r: any) => r.success).length;
+      return {
+        success: successCount > 0,
+        files: results,
+        totalRequested: paths.length,
+        totalRead: successCount,
+      };
+    } catch (error: any) {
+      logger.error('readFiles failed', { error: error.message });
+      return { success: false, error: error.message, files: [] };
     }
   },
 });
@@ -941,6 +995,7 @@ export const vfsTools = {
   write_file: writeFileTool as any as VFSExtendedTool,
   apply_diff: applyDiffTool as any as VFSExtendedTool,
   read_file: readFileTool as any as VFSExtendedTool,
+  read_files: readFilesTool as any as VFSExtendedTool,
   list_files: listFilesTool as any as VFSExtendedTool,
   search_files: searchFilesTool as any as VFSExtendedTool,
   batch_write: batchWriteTool as any as VFSExtendedTool,
@@ -975,6 +1030,12 @@ const TOOL_META: Record<string, { description: string; parameters: z.ZodType }> 
     description: readFileTool.description,
     parameters: z.object({
   path: z.string().describe('Full path to the file'),
+    }),
+  },
+  read_files: {
+    description: readFilesTool.description,
+    parameters: z.object({
+  paths: z.array(z.string()).min(1).max(20).describe('Array of file paths to read'),
     }),
   },
   list_files: {

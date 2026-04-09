@@ -8,9 +8,14 @@
  * 1. Per-user OAuth account (user connected their own Google account)
  * 2. Master server account (configured via env vars, shared by all users)
  *
+ * SECURITY: Refresh tokens are encrypted with AES-256-GCM before storage.
+ * Set ANTIGRAVITY_TOKEN_KEY (32-byte hex or string) in env to enable encryption.
+ * If no key is set, tokens are stored plaintext (development mode only).
+ *
  * Used by LLM provider for multi-account rate-limit rotation.
  */
 
+import crypto from 'crypto';
 import { getDatabase } from '@/lib/database/connection';
 
 export interface AntigravityAccount {
@@ -24,6 +29,63 @@ export interface AntigravityAccount {
   quotaUpdatedAt: number;
   cachedQuota?: Record<string, unknown>;
   isMaster?: boolean; // Flag to identify master account
+}
+
+// ============================================================================
+// Token Encryption (AES-256-GCM)
+// ============================================================================
+
+function getEncryptionKey(): Buffer | null {
+  const raw = process.env.ANTIGRAVITY_TOKEN_KEY;
+  if (!raw) return null;
+  // Accept 32-byte hex string or raw string (padded/truncated to 32 bytes)
+  if (/^[0-9a-fA-F]{64}$/.test(raw)) {
+    return Buffer.from(raw, 'hex');
+  }
+  const key = Buffer.alloc(32, 0);
+  Buffer.from(raw).copy(key);
+  return key;
+}
+
+/**
+ * Encrypt a refresh token. Returns `iv:encrypted:authTag` (all base64).
+ * If no encryption key is set, returns the plaintext token (dev mode).
+ */
+function encryptToken(token: string): string {
+  const key = getEncryptionKey();
+  if (!key) return token; // Dev mode — no encryption
+
+  const iv = crypto.randomBytes(16);
+  const cipher = crypto.createCipheriv('aes-256-gcm', key, iv);
+  let encrypted = cipher.update(token, 'utf8', 'base64');
+  encrypted += cipher.final('base64');
+  const authTag = cipher.getAuthTag();
+  return `${iv.toString('base64')}:${encrypted}:${authTag.toString('base64')}`;
+}
+
+/**
+ * Decrypt a refresh token. If no encryption key is set, assumes plaintext.
+ */
+function decryptToken(encrypted: string): string {
+  const key = getEncryptionKey();
+  if (!key) return encrypted; // Dev mode — no encryption
+
+  const parts = encrypted.split(':');
+  if (parts.length !== 3) {
+    // Might be a legacy plaintext token — return as-is
+    console.warn('[Antigravity Accounts] Token not encrypted, returning as-is');
+    return encrypted;
+  }
+
+  const iv = Buffer.from(parts[0], 'base64');
+  const encryptedData = parts[1];
+  const authTag = Buffer.from(parts[2], 'base64');
+
+  const decipher = crypto.createDecipheriv('aes-256-gcm', key, iv);
+  decipher.setAuthTag(authTag);
+  let decrypted = decipher.update(encryptedData, 'base64', 'utf8');
+  decrypted += decipher.final('utf8');
+  return decrypted;
 }
 
 /**
@@ -97,8 +159,11 @@ export async function getAntigravityAccounts(
           console.warn('[Antigravity Accounts] Malformed cached_quota for account', row.id);
         }
       }
+      // FIX: Decrypt the refresh token on read
+      const decryptedToken = decryptToken(row.refreshToken);
       return {
         ...row,
+        refreshToken: decryptedToken,
         enabled: Boolean(row.enabled),
         cachedQuota: parsedQuota,
         isMaster: false,
@@ -146,10 +211,12 @@ export async function saveAntigravityAccount(account: {
   `);
 
   const id = `antigravity-${Date.now()}-${Math.random().toString(36).slice(2, 8)}`;
+  // FIX: Encrypt the refresh token before storing in the database
+  const encryptedToken = encryptToken(account.refreshToken);
   db.prepare(`
     INSERT INTO antigravity_accounts (id, user_id, email, refresh_token, project_id)
     VALUES (?, ?, ?, ?, ?)
-  `).run(id, account.userId, account.email, account.refreshToken, account.projectId);
+  `).run(id, account.userId, account.email, encryptedToken, account.projectId);
 }
 
 /**

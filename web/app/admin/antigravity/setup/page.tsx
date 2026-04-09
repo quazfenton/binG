@@ -10,6 +10,7 @@
 import { cookies } from 'next/headers';
 import { redirect } from 'next/navigation';
 import { requireAdminPage } from '@/lib/auth/admin';
+import { CopyButton } from './CopyButton';
 
 export default async function AntigravitySetupPage() {
   // Require admin access — redirects to login or access_denied if not authorized
@@ -58,12 +59,7 @@ export default async function AntigravitySetupPage() {
               <pre className="bg-gray-900 text-green-400 p-4 rounded-lg text-sm overflow-x-auto break-all font-mono">
                 {tokens.refreshToken}
               </pre>
-              <button
-                onClick={() => navigator.clipboard.writeText(tokens.refreshToken)}
-                className="absolute top-2 right-2 px-3 py-1 text-xs bg-gray-700 hover:bg-gray-600 text-white rounded"
-              >
-                Copy
-              </button>
+              <CopyButton text={tokens.refreshToken} />
             </div>
           </div>
 

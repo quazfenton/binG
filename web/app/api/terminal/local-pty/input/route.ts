@@ -100,13 +100,9 @@ export async function POST(req: NextRequest) {
       );
     }
 
-    // Verify session ownership
-    if (session.userId !== authResult.userId) {
-      return NextResponse.json(
-        { error: 'Unauthorized: session does not belong to this user' },
-        { status: 403 }
-      );
-    }
+    // Verify session ownership (handles both authenticated and anonymous users)
+    const ownershipError = await verifySessionOwnership(req, session);
+    if (ownershipError) return ownershipError;
 
     // Check if PTY has exited
     if (session.exited) {

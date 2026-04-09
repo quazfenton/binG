@@ -22,6 +22,8 @@ function request(method, url, body, timeoutMs = 60000) {
       if (data) reqOpts.headers['Content-Length'] = Buffer.byteLength(data);
     }
     if (sessionCookie) reqOpts.headers['Cookie'] = sessionCookie;
+    // FIX: timer at function scope so error handler can clear it
+    let timer;
     const req = http.request(reqOpts, res => {
       const sc = res.headers['set-cookie'];
       if (sc) {
@@ -54,6 +56,8 @@ function streamChat(url, body, timeoutMs = 90000) {
       timeout: timeoutMs, headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(data) }
     };
     if (sessionCookie) reqOpts.headers['Cookie'] = sessionCookie;
+    // FIX: timer at function scope so error handler can clear it
+    let timer;
     const req = http.request(reqOpts, res => {
       const sc = res.headers['set-cookie'];
       if (sc) {
@@ -66,7 +70,7 @@ function streamChat(url, body, timeoutMs = 90000) {
       let autoContinueData = null;
       let isComplete = false;
       let errorDuringStream = null;
-      const timer = setTimeout(() => {
+      timer = setTimeout(() => {
         req.destroy();
         reject(new Error('Stream timeout after ' + timeoutMs + 'ms'));
       }, timeoutMs);
@@ -343,7 +347,7 @@ async function main() {
     const list = await get('/api/filesystem/list?path=project/sessions');
     report('List OK', list.status === 200, 'status=' + list.status);
     const nodes = list.body.data?.nodes || [];
-    report('Has nodes', nodes.length >= 0, 'count=' + nodes.length);
+    report('Has nodes', nodes.length > 0, 'count=' + nodes.length);
   } catch (e) { report('List', false, e.message); }
 
   // 3.3 Create file endpoint (direct API)
@@ -664,7 +668,7 @@ async function main() {
     const rootFiles = files.filter(f => !f.path.includes('sessions'));
     report('No root files', rootFiles.length === 0, 'root=' + rootFiles.length);
     const sessionFiles = files.filter(f => f.path.includes('sessions'));
-    report('Session files present', sessionFiles.length >= 0, 'count=' + sessionFiles.length);
+    report('Session files present', sessionFiles.length > 0, 'count=' + sessionFiles.length);
   } catch (e) { report('Filesystem scoping', false, e.message); }
 
   // 7.3 Rate limiting
@@ -808,7 +812,9 @@ async function main() {
   };
 
   Object.entries(sections).forEach(([section, count]) => {
-    const sectionPassed = results.filter(r => r.pass && r.test.toLowerCase().includes(section.toLowerCase().split(' ')[0])).length;
+    // Match section name keywords - use more flexible matching
+    const sectionKeywords = section.toLowerCase().split(/[\s\/,.-]+/).filter(Boolean);
+    const sectionPassed = results.filter(r => r.pass && sectionKeywords.some(k => r.test.toLowerCase().includes(k))).length;
     console.log(`  ${section}: ${sectionPassed}/${count}`);
   });
 

@@ -3,29 +3,13 @@
  *
  * Converts capability definitions and MCP tools into Vercel AI SDK format
  * with proper schema preservation, type safety, and priority-based filtering.
- *
- * Problems Solved:
- * - Eliminates (tool as any) casts throughout
- * - Preserves Zod schemas from capability.inputSchema (no z.record(z.any()) fallbacks)
- * - Real priority-based tool filtering — not just spread order
- * - Proper error handling with structured error responses
- *
- * Usage:
- * ```ts
- * const toolSet = createToolSet(context, {
- *   priority: ['vfs', 'capability', 'mcp'],  // evaluated in order
- *   allowedCapabilities: ['file.read', 'file.write'],
- *   excludedTools: ['automation.discord'],
- * });
- *
- * const result = await streamText({ model, messages, tools: toolSet.tools });
- * ```
  */
 
 import { tool, type Tool, type ToolCallOptions } from 'ai';
 import { z } from 'zod';
 import { chatLogger } from './chat-logger';
 import type { ToolExecutionContext } from './vercel-ai-streaming';
+import type { ToolExecutionContext as RouterToolContext } from '@/lib/tools/tool-integration/types';
 import { isMCPAvailable, vfsTools as mcpVFSTools, toolContextStore, getMCPToolsForAI_SDK, callMCPToolFromAI_SDK } from '@/lib/mcp';
 import { ALL_CAPABILITIES, type CapabilityDefinition } from '@/lib/tools/capabilities';
 import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
@@ -35,33 +19,18 @@ import { getCapabilityRouter } from '@/lib/tools/router';
 // Types
 // ============================================================================
 
-/** Tool source — where a tool comes from */
 export type ToolSource = 'vfs' | 'capability' | 'capability-chain' | 'mcp';
-
-/** Priority levels for tool selection */
 export type ToolPriority = ToolSource | 'none';
 
-/** Filter options for tool set creation */
 export interface ToolSetOptions {
-  /**
-   * Priority order of tool sources.
-   * Tools from higher-priority sources are included; duplicates from lower
-   * sources are excluded. Default: ['vfs', 'capability', 'mcp'].
-   */
   priority?: ToolPriority[];
-  /** Only include these capability IDs. Empty = all available. */
   allowedCapabilities?: string[];
-  /** Explicitly exclude these tool IDs (any source). */
   excludedTools?: string[];
-  /** Include the capability chain tool for multi-step workflows. Default: true. */
   includeCapabilityChain?: boolean;
 }
 
-/** Result from createToolSet */
 export interface ToolSet {
-  /** All tools ready for streamText() */
   tools: Record<string, Tool>;
-  /** Metadata about what was included/excluded */
   stats: {
     vfs: number;
     capability: number;
@@ -75,72 +44,36 @@ export interface ToolSet {
 // Schema Conversion
 // ============================================================================
 
-/**
- * Convert a Zod schema from a capability definition to a Vercel AI tool parameter.
- *
- * Capabilities use full Zod schemas (object, optional, describe, etc.) but Vercel AI
- * requires a ZodObject for the `parameters` field. This function:
- * 1. Passes through ZodObject schemas unchanged
- * 2. Unwraps ZodEffects/ZodOptional/ZodLazy to find inner ZodObject
- * 3. Falls back to z.object({}) for non-object schemas
- */
 function toToolParameters(schema: z.ZodSchema | undefined): z.ZodObject<z.ZodRawShape> {
-  if (!schema) {
-    return z.object({}).describe('No parameters required');
-  }
+  if (!schema) return z.object({}).describe('No parameters required');
+  if (schema instanceof z.ZodObject) return schema;
 
-  // Already a ZodObject — use directly
-  if (schema instanceof z.ZodObject) {
-    return schema;
-  }
-
-  // Unwrap wrapper types recursively
   const typeName = (schema as any)._def?.typeName;
-
-  // ZodOptional, ZodNullable — unwrap
   if (typeName === 'ZodOptional' || typeName === 'ZodNullable') {
     const inner = (schema as any).unwrap?.();
     if (inner) return toToolParameters(inner);
   }
-
-  // ZodEffects (includes .refine(), .transform(), .pipe(), branded)
   if (typeName === 'ZodEffects') {
     const inner = (schema as any)._def?.schema;
     if (inner) return toToolParameters(inner);
   }
-
-  // ZodLazy — evaluate and recurse
   if (typeName === 'ZodLazy') {
     try {
       const inner = (schema as any)._def?.getter?.();
       if (inner) return toToolParameters(inner);
-    } catch {
-      // Lazy getter failed, fall through
-    }
+    } catch { /* fall through */ }
   }
-
-  // ZodDefault — use inner schema
-  if (typeName === 'ZodDefault') {
+  if (typeName === 'ZodDefault' || typeName === 'ZodCatch') {
     const inner = (schema as any)._def?.innerType;
     if (inner) return toToolParameters(inner);
   }
 
-  // ZodCatch — use inner schema
-  if (typeName === 'ZodCatch') {
-    const inner = (schema as any)._def?.innerType;
-    if (inner) return toToolParameters(inner);
-  }
-
-  // Fallback: not a ZodObject and not a known wrapper
   chatLogger.warn('Capability schema is not a ZodObject, using empty params', {
     schemaType: typeName || schema.constructor?.name || 'unknown',
   });
   return z.object({}).describe('Parameters not available');
 }
 
-/**
- * Sanitize arguments for logging (remove sensitive data)
- */
 function sanitizeArgs(args: unknown): unknown {
   if (!args || typeof args !== 'object') return args;
   const sensitiveKeys = ['apikey', 'password', 'secret', 'token', 'authorization', 'credential'];
@@ -159,10 +92,6 @@ function sanitizeArgs(args: unknown): unknown {
 // Tool Builders
 // ============================================================================
 
-/**
- * Create a Vercel AI tool from a capability definition.
- * Type-safe — no (tool as any) casts needed.
- */
 function createCapabilityTool(
   capability: CapabilityDefinition,
   context: ToolExecutionContext
@@ -175,41 +104,25 @@ function createCapabilityTool(
     description: capability.description,
     inputSchema: parameters,
     execute: async (args, execOptions: ToolCallOptions) => {
-      const execContext = {
-        userId: context.userId,
-        conversationId: context.conversationId,
-        sessionId: context.sessionId,
-        scopePath: context.scopePath,
-        ...(execOptions?.toolCallId ? { toolCallId: execOptions.toolCallId } : {}),
-      };
-
       try {
-        chatLogger.debug('Capability tool executing', {
-          tool: capability.id,
-          args: sanitizeArgs(args),
-        });
-
-        const result = await router.execute(capability.id, args as Record<string, unknown>, execContext);
-
-        if (result.success) {
-          return result.output;
-        }
+        chatLogger.debug('Capability tool executing', { tool: capability.id, args: sanitizeArgs(args) });
+        const routerContext: RouterToolContext = {
+          userId: context.userId || 'system',
+          conversationId: context.conversationId,
+          scopePath: context.scopePath,
+        };
+        const result = await router.execute(capability.id, args as Record<string, unknown>, routerContext);
+        if (result.success) return result.output;
         throw new Error(result.error || `${capability.id} execution failed`);
       } catch (error: unknown) {
         const message = error instanceof Error ? error.message : String(error);
-        chatLogger.error('Capability tool failed', {
-          tool: capability.id,
-          error: message,
-        });
+        chatLogger.error('Capability tool failed', { tool: capability.id, error: message });
         throw error;
       }
     },
   });
 }
 
-/**
- * Create VFS MCP tools with proper context propagation.
- */
 function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {
   const userId = context.userId || 'default';
   const sessionId = context.sessionId || normalizeSessionId(context.conversationId || '');
@@ -217,8 +130,8 @@ function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {
   const tools: Record<string, Tool> = {};
 
   for (const [name, vfsTool] of Object.entries(mcpVFSTools)) {
-    const baseTool = vfsTool as Tool & { execute?: (args: unknown, opts?: ToolCallOptions) => Promise<unknown> };
-    const originalExecute = baseTool.execute;
+    const baseTool = vfsTool as unknown as Tool;
+    const originalExecute = (baseTool as any).execute as ((args: unknown, opts?: ToolCallOptions) => Promise<unknown>) | undefined;
 
     tools[name] = {
       ...baseTool,
@@ -234,12 +147,8 @@ function createVFSToolSet(context: ToolExecutionContext): Record<string, Tool> {
   return tools;
 }
 
-/**
- * Create MCP server tools with proper error handling.
- */
 async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<string, Tool>> {
   const tools: Record<string, Tool> = {};
-
   if (!isMCPAvailable()) return tools;
 
   try {
@@ -248,15 +157,10 @@ async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<s
     for (const toolDef of mcpToolDefs) {
       const { name, description, parameters } = toolDef.function;
 
-      // Convert parameter schema — MCP tools typically pass JSON Schema objects,
-      // not Zod schemas. We preserve Zod schemas when present, otherwise use a
-      // descriptive empty object schema.
       let toolParams: z.ZodType<unknown>;
       if (parameters && typeof parameters === 'object' && '_def' in parameters && 'parse' in parameters) {
-        // Looks like a Zod schema — use directly
         toolParams = parameters as z.ZodType<unknown>;
       } else {
-        // JSON Schema or undefined — use descriptive empty object
         toolParams = z.object({}).describe(description || `MCP tool: ${name}`);
       }
 
@@ -269,19 +173,12 @@ async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<s
         inputSchema: toolParams,
         execute: async (args: unknown) => {
           if (isVFSTool) {
-            chatLogger.info('[VFS MCP] Tool invoked', {
-              tool: name,
-              userId: context.userId,
-              args: typeof args === 'object' && args ? Object.keys(args as Record<string, unknown>) : [],
-            });
+            chatLogger.info('[VFS MCP] Tool invoked', { tool: name, userId: context.userId, args: typeof args === 'object' && args ? Object.keys(args as Record<string, unknown>) : [] });
           }
-
           try {
             const result = await callMCPToolFromAI_SDK(name, args as Record<string, unknown>, context.userId || '');
             if (result.success) {
-              if (isVFSTool) {
-                chatLogger.info('[VFS MCP] Tool completed', { tool: name, userId: context.userId });
-              }
+              if (isVFSTool) chatLogger.info('[VFS MCP] Tool completed', { tool: name, userId: context.userId });
               return result.output;
             }
             return { success: false, error: result.error || 'Tool execution failed' };
@@ -301,9 +198,6 @@ async function createMCPToolSet(context: ToolExecutionContext): Promise<Record<s
   return tools;
 }
 
-/**
- * Create capability chain tool for multi-step workflows.
- */
 function createCapabilityChainTool(context: ToolExecutionContext): Record<string, Tool> {
   const router = getCapabilityRouter();
   const availableCaps = ALL_CAPABILITIES.map(c => c.id).join(', ');
@@ -314,7 +208,7 @@ function createCapabilityChainTool(context: ToolExecutionContext): Record<string
       inputSchema: z.object({
         name: z.string().describe('Chain name/description'),
         steps: z.array(z.object({
-          capability: z.string().describe('Capability ID (e.g., "file.read", "sandbox.shell")'),
+          capability: z.string().describe('Capability ID'),
           args: z.record(z.unknown()).describe('Arguments for this step'),
         })).describe('Ordered capabilities to execute'),
         stop_on_failure: z.boolean().optional().default(false).describe('Stop chain on first failure'),
@@ -322,28 +216,23 @@ function createCapabilityChainTool(context: ToolExecutionContext): Record<string
       execute: async (args) => {
         try {
           const { createCapabilityChain } = await import('@bing/shared/agent/capability-chain');
-
           const chain = createCapabilityChain({
             name: args.name,
             enableParallel: false,
             stopOnFailure: args.stop_on_failure ?? false,
           });
-
           for (const step of args.steps) {
             chain.addStep(step.capability, step.args);
           }
-
           const result = await chain.execute({
             execute: async (capName: string, config: unknown) => {
               return router.execute(capName, config as Record<string, unknown>, {
-                userId: context.userId,
+                userId: context.userId || 'system',
                 conversationId: context.conversationId,
-                sessionId: context.sessionId,
                 scopePath: context.scopePath,
               });
             },
           });
-
           return {
             success: result.success,
             results: Object.fromEntries(result.results.entries()),
@@ -365,15 +254,6 @@ function createCapabilityChainTool(context: ToolExecutionContext): Record<string
 // Priority-Based Tool Set Builder
 // ============================================================================
 
-/**
- * Create a tool set with priority-based filtering.
- *
- * Tools from higher-priority sources take precedence. If a tool name exists
- * in a higher-priority source, the lower-priority version is excluded.
- *
- * Example: if 'vfs' has priority over 'capability', and both provide
- * 'read_file', only the VFS version is included.
- */
 export function createToolSet(
   context: ToolExecutionContext,
   options: ToolSetOptions = {}
@@ -385,51 +265,35 @@ export function createToolSet(
     includeCapabilityChain = true,
   } = options;
 
-  // Build tool sets by source
   const sourceTools: Record<string, Record<string, Tool>> = {
-    vfs: {},
-    capability: {},
-    'capability-chain': {},
-    mcp: {},
+    vfs: {}, capability: {}, 'capability-chain': {}, mcp: {},
   };
 
-  // VFS tools (synchronous)
   if (priority.includes('vfs')) {
     sourceTools.vfs = createVFSToolSet(context);
   }
 
-  // Capability tools (synchronous)
   if (priority.includes('capability')) {
     for (const cap of ALL_CAPABILITIES) {
-      // Filter by allowed capabilities
       if (allowedCapabilities.length > 0 && !allowedCapabilities.includes(cap.id)) continue;
-      // Filter by excluded tools
       if (excludedTools.includes(cap.id) || excludedTools.includes(cap.id.replace(/\./g, '_'))) continue;
-
       const toolName = cap.id.replace(/\./g, '_');
       sourceTools.capability[toolName] = createCapabilityTool(cap, context);
     }
   }
 
-  // Capability chain tool — always included when requested (it's a meta-tool, not a capability)
   if (includeCapabilityChain) {
     sourceTools['capability-chain'] = createCapabilityChainTool(context);
   }
 
-  // Note: MCP tools are async — handled separately in getAllTools
-  // For now, createToolSet returns synchronous tools only
-
-  // Merge with priority order
   const merged: Record<string, Tool> = {};
   const excluded: string[] = [];
 
   for (const source of priority) {
     const tools = sourceTools[source];
     if (!tools) continue;
-
     for (const [name, t] of Object.entries(tools)) {
       if (merged[name]) {
-        // Already provided by higher-priority source
         excluded.push(`${name} (shadowed by ${source})`);
         continue;
       }
@@ -437,12 +301,9 @@ export function createToolSet(
     }
   }
 
-  // Add capability-chain tool if enabled (not subject to priority shadowing)
   if (includeCapabilityChain && sourceTools['capability-chain']) {
     for (const [name, t] of Object.entries(sourceTools['capability-chain'])) {
-      if (!merged[name]) {
-        merged[name] = t;
-      }
+      if (!merged[name]) merged[name] = t;
     }
   }
 
@@ -458,10 +319,6 @@ export function createToolSet(
   };
 }
 
-/**
- * Get all tools including async MCP tools, with priority-based filtering.
- * This is the main entry point for production use.
- */
 export async function getAllTools(
   context: ToolExecutionContext,
   options: ToolSetOptions = {}
@@ -473,89 +330,21 @@ export async function getAllTools(
     includeCapabilityChain = true,
   } = options;
 
-  // Build synchronous tool set
-  const syncSet = createToolSet(context, {
-    priority,
-    allowedCapabilities,
-    excludedTools,
-    includeCapabilityChain,
-  });
-
+  const syncSet = createToolSet(context, { priority, allowedCapabilities, excludedTools, includeCapabilityChain });
   const result = { ...syncSet.tools };
 
-  // Add MCP server tools (async) if in priority list
   if (priority.includes('mcp')) {
     const mcpTools = await createMCPToolSet(context);
     for (const [name, t] of Object.entries(mcpTools)) {
-      // Don't shadow higher-priority tools
       if (!result[name] && !excludedTools.includes(name)) {
         result[name] = t;
       }
     }
   }
 
-  chatLogger.info('Tool set created', {
-    total: Object.keys(result).length,
-    priority,
-    stats: syncSet.stats,
-  });
-
+  chatLogger.info('Tool set created', { total: Object.keys(result).length, priority, stats: syncSet.stats });
   return result;
 }
 
-// ============================================================================
-// Backwards Compatibility
-// ============================================================================
-
-/**
- * @deprecated Use getAllTools() or createToolSet() instead.
- * This function is kept for backwards compatibility but has no priority filtering.
- */
-export async function convertCapabilitiesToTools(
-  capabilityIds: string[],
-  context: ToolExecutionContext
-): Promise<Record<string, Tool>> {
-  return getAllTools(context, {
-    allowedCapabilities: capabilityIds,
-    priority: ['vfs', 'capability', 'mcp'],
-  });
-}
-
-/**
- * @deprecated Use createToolFromCapabilitySafe() instead.
- */
-export function createToolFromCapability(
-  capabilityId: string,
-  executeFn: (args: unknown, context: ToolExecutionContext) => Promise<unknown>,
-  options?: { description?: string; parameters?: z.ZodSchema }
-): Tool {
-  const capability = ALL_CAPABILITIES.find(c => c.id === capabilityId);
-  if (!capability) {
-    chatLogger.warn('Unknown capability, using fallback', { capabilityId });
-  }
-
-  return tool({
-    description: options?.description || capability?.description || `Execute ${capabilityId}`,
-    parameters: options?.parameters ? toToolParameters(options.parameters) : z.object({}).describe('No parameters defined'),
-    execute: async (args: unknown) => {
-      const execContext: ToolExecutionContext = {};
-      try {
-        return await executeFn(args, execContext);
-      } catch (error: unknown) {
-        const message = error instanceof Error ? error.message : String(error);
-        chatLogger.error('Capability execution failed', { capabilityId, error: message });
-        throw error;
-      }
-    },
-  });
-}
-
-/**
- * Sanitize arguments for logging (public for external use)
- */
 export { sanitizeArgs };
-
-/**
- * Re-export types for external use
- */
 export type { ToolExecutionContext } from './vercel-ai-streaming';
