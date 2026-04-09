@@ -15,6 +15,16 @@ import { CopyButton } from './CopyButton';
 export default async function AntigravitySetupPage() {
   // Require admin access — redirects to login or access_denied if not authorized
   const admin = await requireAdminPage();
+  const isAdmin = !!admin;
+
+  if (!isAdmin) {
+    return (
+      <div className="max-w-2xl mx-auto p-8">
+        <h1 className="text-2xl font-bold mb-4">Unauthorized</h1>
+        <p className="text-red-600">You must be logged in as an admin to access this page.</p>
+      </div>
+    );
+  }
 
   const cookieStore = await cookies();
   const tokensCookie = cookieStore.get('antigravity-admin-tokens');

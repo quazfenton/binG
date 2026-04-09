@@ -1,5 +1,5 @@
 {
-  "timestamp": "2026-04-09T18:11:18.706Z",
+  "timestamp": "2026-04-09T21:05:17.993Z",
   "body": {
     "messages": [
       {
@@ -22,7 +22,7 @@
     "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
     "content-type": "text/event-stream",
     "cross-origin-resource-policy": "cross-origin",
-    "date": "Thu, 09 Apr 2026 18:11:15 GMT",
+    "date": "Thu, 09 Apr 2026 21:05:10 GMT",
     "expires": "0",
     "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
     "pragma": "no-cache",
@@ -32,23 +32,23 @@
     "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
     "x-accel-buffering": "no",
     "x-content-type-options": "nosniff",
-    "x-csp-nonce-script": "MWbALGVTd62FRAofZqgDSNtlA4amw8uBMeguMAZVZLw",
-    "x-csp-nonce-style": "qWZ9stz41XW4sUZEals_XW983mCCN-86Y7TxGImZKkc",
+    "x-csp-nonce-script": "KX-JjUZohx6xbtU1cERGME1UhzS3RW4w0ICBl0JGYj4",
+    "x-csp-nonce-style": "v7cQYLe-j2HfxGMtI9XwjxC7GCYtSyNgWLtXfamgVDA",
     "x-frame-options": "SAMEORIGIN",
-    "x-request-id": "req_1775758268388_6mlmb6bqfi8",
+    "x-request-id": "req_1775768697735_q9fol0bzvvg",
     "x-xss-protection": "1; mode=block"
   },
-  "raw": "event: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775758275277,\"stepIndex\":0}\n\nevent: token\ndata: {\"content\":\"I'll \",\"timestamp\":1775758278224}\n\nevent: token\ndata: {\"content\":\"create \",\"timestamp\":1775758278240}\n\nevent: token\ndata: {\"content\":\"the \",\"timestamp\":1775758278258}\n\nevent: token\ndata: {\"content\":\"`hello.py` \",\"timestamp\":1775758278274}\n\nevent: token\ndata: {\"content\":\"file \",\"timestamp\":1775758278289}\n\nevent: token\ndata: {\"content\":\"and \",\"timestamp\":1775758278305}\n\nevent: token\ndata: {\"content\":\"then \",\"timestamp\":1775758278327}\n\nevent: token\ndata: {\"content\":\"run \",\"timestamp\":1775758278344}\n\nevent: token\ndata: {\"content\":\"it \",\"timestamp\":1775758278360}\n\nevent: token\ndata: {\"content\":\"to \",\"timestamp\":1775758278376}\n\nevent: token\ndata: {\"content\":\"show \",\"timestamp\":1775758278406}\n\nevent: token\ndata: {\"content\":\"the \",\"timestamp\":1775758278431}\n\nevent: token\ndata: {\"content\":\"output. \",\"timestamp\":1775758278451}\n\nevent: token\ndata: {\"content\":\"Let \",\"timestamp\":1775758278482}\n\nevent: token\ndata: {\"content\":\"me \",\"timestamp\":1775758278512}\n\nevent: token\ndata: {\"content\":\"start \",\"timestamp\":1775758278528}\n\nevent: token\ndata: {\"content\":\"by \",\"timestamp\":1775758278558}\n\nevent: token\ndata: {\"content\":\"creating \",\"timestamp\":1775758278589}\n\nevent: token\ndata: {\"content\":\"the \",\"timestamp\":1775758278604}\n\nevent: token\ndata: {\"content\":\"file \",\"timestamp\":1775758278620}\n\nevent: token\ndata: {\"content\":\"with \",\"timestamp\":1775758278635}\n\nevent: token\ndata: {\"content\":\"the \",\"timestamp\":1775758278650}\n\nevent: token\ndata: {\"content\":\"correct \",\"timestamp\":1775758278681}\n\nevent: token\ndata: {\"content\":\"content.\",\"timestamp\":1775758278696}\n\nevent: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775758278703,\"stepIndex\":1}\n\nevent: done\ndata: {\"success\":true,\"content\":\"I'll create the `hello.py` file and then run it to show the output. Let me start by creating the file with the correct content.\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775758275277,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775758278703,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"I'll create the `hello.py` file and then run it to show the output. Let me start by creating the file with the correct content.\",\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":824,\"fallbackChain\":[]}}}\n\n",
-  "eventCount": 27,
-  "tokenText": "I'll create the `hello.py` file and then run it to show the output. Let me start by creating the file with the correct content.",
+  "raw": "event: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775768710597,\"stepIndex\":0}\n\nevent: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775768717987,\"stepIndex\":1}\n\nevent: done\ndata: {\"success\":true,\"content\":\"No response generated\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775768710597,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775768717987,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"No response generated\",\"steps\":[],\"totalSteps\":0,\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":753,\"toolInvocations\":[],\"fallbackChain\":[]}}}\n\n",
+  "eventCount": 3,
+  "tokenText": "",
   "toolEvents": [],
   "fileEvents": [],
   "done": {
     "event": "done",
-    "rawData": "{\"success\":true,\"content\":\"I'll create the `hello.py` file and then run it to show the output. Let me start by creating the file with the correct content.\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775758275277,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775758278703,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"I'll create the `hello.py` file and then run it to show the output. Let me start by creating the file with the correct content.\",\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":824,\"fallbackChain\":[]}}}",
+    "rawData": "{\"success\":true,\"content\":\"No response generated\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775768710597,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775768717987,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"No response generated\",\"steps\":[],\"totalSteps\":0,\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":753,\"toolInvocations\":[],\"fallbackChain\":[]}}}",
     "data": {
       "success": true,
-      "content": "I'll create the `hello.py` file and then run it to show the output. Let me start by creating the file with the correct content.",
+      "content": "No response generated",
       "messageMetadata": {
         "agent": "unified",
         "mode": "v1-api",
@@ -56,25 +56,28 @@
           {
             "step": "Start agentic pipeline",
             "status": "started",
-            "timestamp": 1775758275277,
+            "timestamp": 1775768710597,
             "stepIndex": 0
           },
           {
             "step": "Start agentic pipeline",
             "status": "completed",
-            "timestamp": 1775758278703,
+            "timestamp": 1775768717987,
             "stepIndex": 1
           }
         ]
       },
       "data": {
         "success": true,
-        "response": "I'll create the `hello.py` file and then run it to show the output. Let me start by creating the file with the correct content.",
+        "response": "No response generated",
+        "steps": [],
+        "totalSteps": 0,
         "mode": "v1-api",
         "metadata": {
           "provider": "mistral",
           "model": "mistral-small-latest",
-          "duration": 824,
+          "duration": 753,
+          "toolInvocations": [],
           "fallbackChain": []
         }
       }

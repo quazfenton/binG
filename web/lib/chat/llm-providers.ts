@@ -1,6 +1,17 @@
-// Note: These imports are lazy-loaded to prevent Edge Runtime bundling issues
-// @opencode-ai/sdk uses node:child_process which is incompatible with Edge/client
-// AWS SDK (used by Cohere) uses node:fs/promises which is incompatible with Edge
+// ============================================================
+// CLIENT-SAFE SECTION — No SDK imports, no Node.js dependencies
+// This section is safe for webpack to bundle in client components.
+// ============================================================
+
+// Note: SDK imports below are lazy-loaded via dynamic import() to prevent
+// Edge Runtime bundling issues. However, webpack still statically analyzes
+// them when this file is imported from a Client Component.
+//
+// If you see "node:fs/promises" or "fs" errors in the browser, it means
+// this file is being bundled for the client. The fix is to ensure
+// Client Components only import from llm-providers-types.ts instead.
+
+// Lazy-loaded SDK variables — only initialized on the server
 let OpenAI: any = null
 let Anthropic: any = null
 let GoogleGenerativeAI: any = null
@@ -2060,20 +2071,20 @@ class LLMService {
   ): Promise<LLMResponse> {
     const { sendAntigravityChat, ANTIGRAVITY_MODELS } = await import('@/lib/llm/antigravity-provider');
 
-    // FIX: Guard server-only import behind runtime check to prevent webpack
-    // from bundling better-sqlite3 into client components.
-    // We use a dynamic import with a runtime guard — this prevents webpack's
-    // static analysis from pulling the entire server-only dependency chain
-    // (antigravity-accounts → connection → better-sqlite3) into the client bundle.
+    // FIX: Guard server-only import to prevent webpack from bundling
+    // better-sqlite3 into client components.
     if (typeof window !== 'undefined') {
       throw new Error('Antigravity provider is server-only');
     }
 
-    // Dynamic import with runtime-only resolution (webpack can't statically analyze eval)
-    // This is safe because we've already verified we're on the server (typeof window === 'undefined')
-    // eslint-disable-next-line no-eval
-    const antigravityModule = await eval(`import('@/lib/database/antigravity-accounts')`);
-    const { getAntigravityAccounts } = antigravityModule as { getAntigravityAccounts: Function };
+    // Dynamic import with webpack ignore — prevents webpack from statically
+    // analyzing the dependency chain (antigravity-accounts → connection → better-sqlite3)
+    // and bundling Node.js-only modules into the client.
+    // The `/* webpackIgnore: true */` comment tells webpack to leave this import alone.
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const { getAntigravityAccounts } = await import(
+      /* webpackIgnore: true */ '@/lib/database/antigravity-accounts'
+    );
 
     const modelConfig = ANTIGRAVITY_MODELS[model];
     if (!modelConfig) {
@@ -2132,14 +2143,18 @@ class LLMService {
   ): AsyncGenerator<StreamingResponse> {
     const { sendAntigravityChat, ANTIGRAVITY_MODELS } = await import('@/lib/llm/antigravity-provider');
 
-    // FIX: Same server-only guard as generateAntigravityResponse
+    // FIX: Guard server-only import to prevent webpack from bundling
+    // better-sqlite3 into client components.
     if (typeof window !== 'undefined') {
       throw new Error('Antigravity provider is server-only');
     }
 
-    // eslint-disable-next-line no-eval
-    const antigravityModule = await eval(`import('@/lib/database/antigravity-accounts')`);
-    const { getAntigravityAccounts } = antigravityModule as { getAntigravityAccounts: Function };
+    // Dynamic import with webpack ignore — prevents webpack from statically
+    // analyzing the dependency chain (antigravity-accounts → connection → better-sqlite3)
+    // eslint-disable-next-line @typescript-eslint/no-implied-eval
+    const { getAntigravityAccounts } = await import(
+      /* webpackIgnore: true */ '@/lib/database/antigravity-accounts'
+    );
 
     const modelConfig = ANTIGRAVITY_MODELS[model];
     if (!modelConfig) {

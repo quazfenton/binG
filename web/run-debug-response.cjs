@@ -31,6 +31,7 @@ async function test() {
       stream: true,
       provider: 'google',
       model: 'gemini-2.5-flash-lite',
+      mode: 'task-router',
       enableTools: true,
     }),
   });

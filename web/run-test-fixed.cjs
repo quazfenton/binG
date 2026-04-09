@@ -44,7 +44,7 @@ async function test() {
       stream: true,
       provider: 'google',
       model: 'gemini-2.5-flash-lite',
-      env: { AGENT_EXECUTION_ENGINE: 'v1-agent-loop' },
+      agentMode: 'v1',
       enableTools: true,
     }),
   });

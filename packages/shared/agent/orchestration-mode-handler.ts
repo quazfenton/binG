@@ -810,14 +810,32 @@ export async function executeWithOrchestrationMode(
         throw new Error(`Unknown orchestration mode: ${modeNever}`);
       }
     }
-    
-    // Log successful execution with timing
+
+    // FIX: Log orchestration completion with comprehensive telemetry
+    const duration = Date.now() - startTime;
+    const taskHash = await hashTask(request.task);
+
     logger.info('Orchestration mode completed', {
       mode,
       success: result.success,
-      duration: Date.now() - startTime,
+      duration,
+      taskHash,
+      responseLength: result.response?.length || 0,
+      steps: result.steps?.length || 0,
     });
-    
+
+    // Record telemetry for all orchestration modes
+    // NOTE: Cannot import chatRequestLogger from here (packages/shared has no
+    // access to web/ modules). The actual chat-request-logger is called by the
+    // inner execution paths (runV1ApiWithTools, runV1ApiCompletion, etc.)
+    // which DO have the @/ alias and record full telemetry with tool calls,
+    // scores, and console output. This is just a summary log.
+    console.log(
+      `[Telemetry-Orchestration] ${mode}: ${result.success ? '✓' : '✗'} ` +
+      `${duration}ms, ${result.response?.length || 0} chars, ` +
+      `provider=${result.metadata?.provider || 'n/a'}, model=${result.metadata?.model || 'n/a'}`
+    );
+
     return result;
     
   } catch (error: any) {

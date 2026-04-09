@@ -177,8 +177,11 @@ async function listVfs(path = 'project') {
 }
 
 async function readVfs(path) {
-  const url = `${BASE_URL}/api/filesystem/read?path=${encodeURIComponent(path)}`;
-  return request(url, { headers: { 'Cookie': sessionCookie } });
+  return request(`${BASE_URL}/api/filesystem/read`, {
+    method: 'POST',
+    headers: authHeaders(),
+    body: JSON.stringify({ path }),
+  });
 }
 
 async function createVfs(path, content) {

@@ -322,10 +322,11 @@ function ThreadListSidebar({
 }
 
 import { getOrCreateAnonymousSessionId } from "@/lib/utils";
+import { useAuth } from "@/contexts/auth-context";
 import type { Message } from "@/types";
 import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import MultiModelComparison from "@/components/multi-model-comparison";
-import type { LLMProvider } from "@/lib/chat/llm-providers";
+import type { LLMProviderConfig } from "@/lib/chat/llm-providers-types";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 import { buildApiHeaders } from "@/lib/utils";
 import { EnhancedDiffViewer } from "@/components/enhanced-diff-viewer";
@@ -337,7 +338,7 @@ import { NewsPanel } from "@/components/news-panel";
 import { CronJobsPanel } from "@/components/cron-jobs-panel";
 import FrontierFeedPlugin from "@/components/plugins/frontier-feed-plugin";
 import CommandDeckPlugin from "@/components/plugins/command-deck-plugin";
-import { PROVIDERS } from "@/lib/chat/llm-providers";
+import { PROVIDERS } from "@/lib/chat/llm-providers-types";
 
 // ---------------------------------------------------------------------------
 // Tab definitions - single source of truth for the workspace tab bar
@@ -1210,7 +1211,12 @@ export function WorkspacePanel() {
       ? (window as any).__agentActivity || { agentActivity: undefined, setAgentActivity: undefined }
       : { agentActivity: undefined, setAgentActivity: undefined };
 
-  const vfs = useVirtualFilesystem();
+  // Get authenticated user ID for VFS ownership
+  const { user } = useAuth();
+
+  const vfs = useVirtualFilesystem(undefined, {
+    userId: user?.id?.toString(),  // Use authenticated userId as ownerId for VFS
+  });
   const {
     currentPath,
     nodes,
@@ -1250,7 +1256,7 @@ export function WorkspacePanel() {
   } | null>(null);
 
   // Available LLM providers for comparison
-  const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>([]);
+  const [availableProviders, setAvailableProviders] = useState<LLMProviderConfig[]>([]);
 
   // Load available LLM providers from API and pre-warm chat
   useEffect(() => {
@@ -1265,7 +1271,7 @@ export function WorkspacePanel() {
           if (data.success && data.data?.providers) {
             setAvailableProviders(data.data.providers);
             // Set default provider/model to first available
-            const available = data.data.providers.filter((p: LLMProvider) => p.isAvailable !== false);
+            const available = data.data.providers.filter((p: LLMProviderConfig) => p.isAvailable !== false);
             if (available.length > 0 && !chatProvider) {
               setChatProvider(available[0].id);
               if (available[0].models?.[0]) {

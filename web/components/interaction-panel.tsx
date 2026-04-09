@@ -86,7 +86,7 @@ import BookOpen from "lucide-react/dist/esm/icons/book-open";
 import Archive from "lucide-react/dist/esm/icons/archive";
 import Monitor from "lucide-react/dist/esm/icons/monitor";
 import VNCConnectionTab from "./vnc-connection-tab";
-import type { LLMProvider } from "../lib/chat/llm-providers";
+import type { LLMProvider } from "../lib/chat/llm-providers-types";
 import MultiModelComparison from "./multi-model-comparison";
 import PluginManager, { type Plugin } from "./plugins/plugin-manager";
 import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";

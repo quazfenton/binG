@@ -3,7 +3,7 @@
     "passed": 21,
     "failed": 0,
     "total": 21,
-    "duration": 758177
+    "duration": 710427
   },
   "categories": {
     "Fallback": {
@@ -76,127 +76,127 @@
       "test": "Fallback: Compact file_edit",
       "passed": true,
       "details": "Detected",
-      "duration": 16693
+      "duration": 11271
     },
     {
       "test": "Fallback: Fenced diff",
       "passed": true,
       "details": "Detected",
-      "duration": 41884
+      "duration": 25053
     },
     {
       "test": "Fallback: Bash heredoc",
       "passed": true,
       "details": "Detected",
-      "duration": 52646
+      "duration": 31692
     },
     {
       "test": "Fallback: batch_write",
       "passed": true,
       "details": "Detected",
-      "duration": 72679
+      "duration": 53726
     },
     {
       "test": "Fallback: Special token",
       "passed": true,
       "details": "Detected",
-      "duration": 81145
+      "duration": 65213
     },
     {
       "test": "Fallback: ```tool_call",
       "passed": true,
       "details": "Detected",
-      "duration": 90450
+      "duration": 77818
     },
     {
       "test": "Workspace Scoping",
       "passed": true,
       "details": "Sessions isolated",
-      "duration": 10519
+      "duration": 22267
     },
     {
       "test": "Repeated Diff",
       "passed": true,
       "details": "Modification detected",
-      "duration": 13373
+      "duration": 27315
     },
     {
       "test": "Context Bundling",
       "passed": true,
       "details": "Context maintained",
-      "duration": 24738
+      "duration": 37404
     },
     {
       "test": "Multi-folder Selection",
       "passed": true,
       "details": "Backend: true, Both files: true",
-      "duration": 8811
+      "duration": 14340
     },
     {
       "test": "VFS MCP Tool Args",
       "passed": true,
       "details": "List: true, Create: true",
-      "duration": 7613
+      "duration": 20451
     },
     {
       "test": "Auto-continue",
       "passed": true,
       "details": "Multiple files: true, Continue marker: false",
-      "duration": 89097
+      "duration": 44423
     },
     {
       "test": "No Infinite Loops",
       "passed": true,
-      "details": "Completed in 51s",
-      "duration": 51262
+      "details": "Completed in 65s",
+      "duration": 64982
     },
     {
       "test": "Shell/PTY",
       "passed": true,
       "details": "Create: true, Exec: true",
-      "duration": 7417
+      "duration": 6992
     },
     {
       "test": "Preview URL",
       "passed": true,
       "details": "HTML: true, Preview refs: true",
-      "duration": 8140
+      "duration": 18498
     },
     {
       "test": "Self-Healing",
       "passed": true,
       "details": "Fix detected",
-      "duration": 40500
+      "duration": 36394
     },
     {
       "test": "Large App Generation",
       "passed": true,
       "details": "Found 7/7 files: package.json, index.html, index.js, App.js, TodoList, TodoItem, styles.css",
-      "duration": 62983
+      "duration": 60622
     },
     {
       "test": "Error Recovery",
       "passed": true,
-      "details": "Handled (742 chars)",
-      "duration": 14047
+      "details": "Handled (676 chars)",
+      "duration": 13559
     },
     {
       "test": "Tool Choice",
       "passed": true,
       "details": "Dir: true, File: true",
-      "duration": 11363
+      "duration": 12234
     },
     {
       "test": "Nested Directories",
       "passed": true,
       "details": "All paths detected",
-      "duration": 19340
+      "duration": 25311
     },
     {
       "test": "Implicit Paths",
       "passed": true,
       "details": "Files referenced",
-      "duration": 33477
+      "duration": 40862
     }
   ]
 }

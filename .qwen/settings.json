@@ -21,7 +21,8 @@
       "Bash(curl *)",
       "Bash(fc *)",
       "Bash(ren *)",
-      "Bash(type *)"
+      "Bash(type *)",
+      "Bash(timeout *)"
     ],
     "exclude": [
       "Bash(git checkout)"

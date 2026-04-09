@@ -1,0 +1,74 @@
+[
+  {
+    "test": "Parser Direct: Compact file_edit",
+    "passed": true,
+    "details": "Found 1/1: direct-test.txt",
+    "rawResponse": "{\n  \"inputLength\": 75,\n  \"editCount\": 1,\n  \"edits\": [\n    {\n      \"path\": \"direct-test.txt\",\n      \"content\": \"Hello World\"\n    }\n  ]\n}"
+  },
+  {
+    "test": "Parser Direct: Fenced diff",
+    "passed": false,
+    "details": "Found 0 edits. Input: ```diff package.json\n+ \"name\": \"test\"\n- \"name\": \"old\"\n```",
+    "rawResponse": "{\n  \"inputLength\": 57,\n  \"editCount\": 0,\n  \"edits\": []\n}"
+  },
+  {
+    "test": "Parser Direct: Bash heredoc",
+    "passed": true,
+    "details": "Found 1/1: test.sh",
+    "rawResponse": "{\n  \"inputLength\": 37,\n  \"editCount\": 1,\n  \"edits\": [\n    {\n      \"path\": \"test.sh\",\n      \"content\": \"echo hello\",\n      \"action\": \"write\"\n    }\n  ]\n}"
+  },
+  {
+    "test": "Parser Direct: batch_write fenced",
+    "passed": true,
+    "details": "Found 2/2: bw-1.js, bw-2.js",
+    "rawResponse": "{\n  \"inputLength\": 141,\n  \"editCount\": 2,\n  \"edits\": [\n    {\n      \"path\": \"bw-1.js\",\n      \"content\": \"console.log(1)\",\n      \"action\": \"write\"\n    },\n    {\n      \"path\": \"bw-2.js\",\n      \"content\": \"console.log(2)\",\n      \"action\": \"write\"\n    }\n  ]\n}"
+  },
+  {
+    "test": "Parser Direct: Special token",
+    "passed": true,
+    "details": "Found 1/1: special.txt",
+    "rawResponse": "{\n  \"inputLength\": 133,\n  \"editCount\": 1,\n  \"edits\": [\n    {\n      \"path\": \"special.txt\",\n      \"content\": \"hello\"\n    }\n  ]\n}"
+  },
+  {
+    "test": "Parser Direct: Tool call fenced",
+    "passed": true,
+    "details": "Found 1/1: toolcall.md",
+    "rawResponse": "{\n  \"inputLength\": 124,\n  \"editCount\": 1,\n  \"edits\": [\n    {\n      \"path\": \"toolcall.md\",\n      \"content\": \"# Test\"\n    }\n  ]\n}"
+  },
+  {
+    "test": "LLM Chat: Create single file",
+    "passed": true,
+    "details": "Found 1/1 files",
+    "rawResponse": "To create a file called `chat-test-1.txt` with the content \"Hello from chat test\", you can follow these steps depending on your operating system:\n\n### For Windows:\n1. Open Notepad or any text editor of your choice.\n2. Type: `Hello from chat test`\n3. Click on `File` -> `Save As...`\n4. In the `Save as type` field, select `All Files`\n5. Name the file `chat-test-1.txt`\n6. Choose a location to save the file, such as your desktop or documents folder.\n7. Click `Save`\n\n### For macOS (using TextEdit):\n1. Open TextEdit, which is the default text editor on macOS.\n2. Type: `Hello from chat test`\n3. Go to `File` -> `Save...`\n4. Name the file `chat-test-1.txt`\n5. Make sure the file format is set to `Plain Text` (if prompted).\n6. Choose a location to save the file, such as your desktop or documents folder.\n7. Click `Save`\n\n### For Linux (using Terminal):\n1. Open the Terminal application.\n2. Navigate to the directory where you want to create the file using the `cd` command. For example, to save to your desktop, you might use:\n   ```\n   cd ~/Desktop\n   ```\n3. Use the `echo` command followed by redirection to create the file:\n   ```\n   echo \"Hello from chat test\" > chat-test-1.txt\n   ```\n4. Press Enter to execute the command. The file `chat-test-1.txt` will be created in the specified directory with the content \"Hello from chat test\".\n\nAfter following these steps, you should have a file named `chat-test-1.txt` containing the text \"Hello from chat test\"."
+  },
+  {
+    "test": "LLM Chat: Create with file_edit format",
+    "passed": true,
+    "details": "Found 1/1 files",
+    "rawResponse": "<file_edit path=\"chat-test-2.txt\">Hello from file_edit</file_edit>"
+  },
+  {
+    "test": "LLM Chat: Create multiple files",
+    "passed": true,
+    "details": "Found 2/2 files",
+    "rawResponse": "Here are the two files you requested:\n\n1. **multi-1.js**\n```javascript\nconsole.log(1);\n```\n\n2. **multi-2.js**\n```javascript\nconsole.log(2);\n```\n\nYou can create these files in your project directory and run them individually with Node.js (e.g., `node multi-1.js` or `node multi-2.js`)."
+  },
+  {
+    "test": "LLM Chat: Batch write format",
+    "passed": true,
+    "details": "Found 2/2 files",
+    "rawResponse": "```javascript\nconst fs = require('fs');\nconst path = require('path');\n\nfunction batchWrite(files) {\n  files.forEach((file) => {\n    const filePath = path.join(__dirname, file.path);\n    fs.writeFileSync(filePath, file.content);\n  });\n}\n\nbatchWrite([\n  { path: \"batch-chat-1.js\", content: \"console.log(1)\" },\n  { path: \"batch-chat-2.js\", content: \"console.log(2)\" }\n]);\n```"
+  },
+  {
+    "test": "Provider: Mistral",
+    "passed": true,
+    "details": "File referenced",
+    "rawResponse": "Here's how you can create the `provider-test.txt` file with the content \"Provider test content\":\n\n### On Linux/macOS (Terminal):\n```bash\necho \"Provider test content\" > provider-test.txt\n```\n\n### On Windows (Command Prompt):\n```cmd\necho Provider test content > provider-test.txt\n```\n\n### On Windows (PowerShell):\n```powershell\n\"Provider test content\" | Out-File -FilePath provider-test.txt\n```\n\n### Verification:\nAfter running the command, you can verify the content with:\n```bash\ncat provider-test.txt  # Linux/macOS\ntype provider-test.txt # Windows Command Prompt\nGet-Content provider-test.txt # PowerShell\n```"
+  },
+  {
+    "test": "Provider: Nvidia",
+    "passed": true,
+    "details": "File referenced",
+    "rawResponse": "Here's how you can create the `provider-test.txt` file with the content \"Provider test content\":\n\n### On Linux/macOS (Terminal):\n```bash\necho \"Provider test content\" > provider-test.txt\n```\n\n### On Windows (Command Prompt):\n```cmd\necho Provider test content > provider-test.txt\n```\n\n### On Windows (PowerShell):\n```powershell\n\"Provider test content\" | Out-File -FilePath provider-test.txt\n```\n\n### Alternative (using a text editor):\n1. Open any text editor (Notepad, VS Code, etc.)\n2. Type: `Provider test content`\n3. Save the file as `provider-test.txt`"
+  }
+]

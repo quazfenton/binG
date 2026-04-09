@@ -1,0 +1,33 @@
+event: step
+data: {"step":"Start agentic pipeline","status":"started","timestamp":1775772453731,"stepIndex":0}
+
+event: token
+data: {"content":"Hello! ","timestamp":1775772454864}
+
+event: token
+data: {"content":"😊 ","timestamp":1775772454880}
+
+event: token
+data: {"content":"How ","timestamp":1775772455076}
+
+event: token
+data: {"content":"can ","timestamp":1775772455091}
+
+event: token
+data: {"content":"I ","timestamp":1775772455114}
+
+event: token
+data: {"content":"assist ","timestamp":1775772455139}
+
+event: token
+data: {"content":"you ","timestamp":1775772455155}
+
+event: token
+data: {"content":"today?","timestamp":1775772455185}
+
+event: step
+data: {"step":"Start agentic pipeline","status":"completed","timestamp":1775772455195,"stepIndex":1}
+
+event: done
+data: {"success":true,"content":"Hello! 😊 How can I assist you today?","messageMetadata":{"agent":"unified","mode":"v1-api","processingSteps":[{"step":"Start agentic pipeline","status":"started","timestamp":1775772453731,"stepIndex":0},{"step":"Start agentic pipeline","status":"completed","timestamp":1775772455195,"stepIndex":1}]},"data":{"success":true,"response":"Hello! 😊 How can I assist you today?","steps":[],"totalSteps":0,"mode":"v1-api","metadata":{"provider":"mistral","model":"mistral-small-latest","duration":759,"toolInvocations":[],"fallbackChain":[]}}}
+

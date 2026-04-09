@@ -248,6 +248,10 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   // - Simple tasks → v1-api (fast, no tool loop overhead)
   // - Complex tasks → v1-agent-loop (Mastra ToolLoopAgent with multi-step tool execution)
   // V2 modes are NEVER used in auto rotation.
+  log.info('[AutoMode] Entering auto rotation logic', {
+    engine,
+    disableV2: process.env.DISABLE_V2_MODE !== 'false',
+  });
 
   // Mastra workflow: only if explicitly requested AND available
   if (config.enableMastraWorkflows !== false && config.workflowId && startupCaps.mastraWorkflows) {
@@ -330,42 +334,91 @@ export async function processUnifiedAgentRequest(
   config: UnifiedAgentConfig
 ): Promise<UnifiedAgentResult> {
   const startTime = Date.now();
+
+  log.info('═══════════════════════════════════════════════');
+  log.info('[UnifiedAgent] ┌─ REQUEST ENTRY ──────────────────────────');
+  log.info('[UnifiedAgent] │ provider:', config.provider || process.env.LLM_PROVIDER || 'mistral');
+  log.info('[UnifiedAgent] │ model:', config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest');
+  log.info('[UnifiedAgent] │ mode config:', config.mode || 'auto');
+  log.info('[UnifiedAgent] │ AGENT_EXECUTION_ENGINE:', process.env.AGENT_EXECUTION_ENGINE || 'auto');
+  log.info('[UnifiedAgent] │ DISABLE_V2_MODE:', process.env.DISABLE_V2_MODE || 'unset');
+  log.info('[UnifiedAgent] │ messageLength:', config.userMessage?.length || 0);
+  log.info('[UnifiedAgent] │ tools:', Array.isArray(config.tools) ? config.tools.length : 0);
+  log.info('[UnifiedAgent] └──────────────────────────────────────────');
+
   const { mode, classification } = await determineMode(config);
 
+  log.info('[UnifiedAgent] ┌─ MODE SELECTED ──────────────────────────');
+  log.info('[UnifiedAgent] │ resolvedMode:', mode);
+  log.info('[UnifiedAgent] │ complexity:', classification?.complexity || 'n/a');
+  log.info('[UnifiedAgent] │ confidence:', classification?.confidence?.toFixed(2) || 'n/a');
+  log.info('[UnifiedAgent] │ engine:', process.env.AGENT_EXECUTION_ENGINE || 'auto');
+  log.info('[UnifiedAgent] │ disableV2:', process.env.DISABLE_V2_MODE !== 'false');
+  log.info('[UnifiedAgent] └──────────────────────────────────────────');
+
+  // Verify mode is v1-only when in auto mode
+  if (process.env.AGENT_EXECUTION_ENGINE === 'auto' && !['v1-api', 'v1-agent-loop'].includes(mode)) {
+    log.error('[BUG] Auto mode selected non-v1 mode!', {
+      mode,
+      engine: process.env.AGENT_EXECUTION_ENGINE,
+      disableV2: process.env.DISABLE_V2_MODE !== 'false',
+    });
+  }
+
   try {
+    log.info('[UnifiedAgent] ┌─ EXECUTING MODE ───────────────────────');
+    log.info('[UnifiedAgent] │ switching on:', mode);
+    log.info('[UnifiedAgent] └──────────────────────────────────────────');
+
     switch (mode) {
       case 'desktop':
+        log.info('[UnifiedAgent] → desktop mode');
         return await runDesktopMode(config, classification);
 
       case 'v1-agent-loop':
+        log.info('[UnifiedAgent] → v1-agent-loop mode (falling back to v1-api)');
         // This mode is handled by route.ts (bypasses unified-agent entirely).
         // Should never reach here via processUnifiedAgentRequest.
         // Fall back to v1-api if somehow called.
-        log.warn('v1-agent-loop mode reached via unified-agent, falling back to v1-api');
         return await runV1Api(config);
 
       case 'v2-native':
+        log.warn('[UnifiedAgent] → v2-native mode (OPENCODE)');
         return await runV2Native(config, classification);
 
       case 'v2-containerized':
+        log.warn('[UnifiedAgent] → v2-containerized mode (SANDBOX)');
         return await runV2Containerized(config);
 
       case 'v2-local':
+        log.warn('[UnifiedAgent] → v2-local mode (LOCAL OPENCODE)');
         return await runV2Local(config);
 
       case 'mastra-workflow':
+        log.info('[UnifiedAgent] → mastra-workflow mode');
         return await runMastraWorkflow(config);
 
       case 'v1-api':
       default:
+        log.info('[UnifiedAgent] → v1-api mode (VERCEL AI SDK)');
         return await runV1Api(config);
     }
   } catch (error) {
+    log.error('[UnifiedAgent] ✗ EXECUTION FAILED', {
+      mode,
+      error: error instanceof Error ? error.message : String(error),
+    });
     // Attempt fallback on error
     const triedModes = new Set<string>([mode]);
     const fallbackResult = await attemptFallback(config, mode, error, triedModes);
 
     if (fallbackResult) {
+      log.info('[UnifiedAgent] ✓ FALLBACK SUCCEEDED', {
+        fallbackFrom: mode,
+        fallbackTo: fallbackResult.mode,
+        fallbackProvider: fallbackResult.metadata?.provider,
+        fallbackModel: fallbackResult.metadata?.model,
+      });
       return {
         ...fallbackResult,
         metadata: {
@@ -380,6 +433,9 @@ export async function processUnifiedAgentRequest(
     }
 
     // All modes failed
+    log.error('[UnifiedAgent] ✗ ALL MODES FAILED', {
+      triedModes: Array.from(triedModes),
+    });
     return {
       success: false,
       response: '',
@@ -784,12 +840,21 @@ async function runV1Api(config: UnifiedAgentConfig): Promise<UnifiedAgentResult>
     await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
   }
 
-  const hasExecutableTools =
+  // Check if tools are available for agent loop execution
+  const hasToolsForAgent =
     Array.isArray(config.tools) &&
     config.tools.length > 0 &&
     typeof config.executeTool === 'function';
 
-  if (hasExecutableTools) {
+  log.info('[V1-API] ┌─ DISPATCH ─────────────────────────────────');
+  log.info('[V1-API] │ hasTools:', hasToolsForAgent);
+  log.info('[V1-API] │ toolCount:', config.tools?.length || 0);
+  log.info('[V1-API] │ hasExecuteFn:', typeof config.executeTool === 'function');
+  log.info('[V1-API] │ tools:', config.tools?.map(t => t.name).join(', ') || 'none');
+  log.info('[V1-API] │ will use:', hasToolsForAgent ? 'runV1ApiWithTools' : 'runV1ApiCompletion');
+  log.info('[V1-API] └─────────────────────────────────────────────');
+
+  if (hasToolsForAgent) {
     // Use agent loop with tools
     return await runV1ApiWithTools(config, messages, startTime);
   } else {
@@ -914,11 +979,21 @@ async function runV1ApiWithTools(
     await initToolSystem({ userId: config.userId || 'system', enableMCP: true, enableSandbox: true });
   }
 
+  log.info('[V1-API-WITH-TOOLS] ┌─ ENTRY ──────────────────────────');
+
   // Use the shared capability-based tool executor (avoids code duplication)
   const capabilityExecuteTool = createCapabilityToolExecutor(config);
   const primaryProvider = config.provider || process.env.LLM_PROVIDER || 'mistral';
   const primaryModel = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
   const requestId = `unified-v1-tools-${Date.now()}`;
+
+  log.info('[V1-API-WITH-TOOLS] │ primaryProvider:', primaryProvider);
+  log.info('[V1-API-WITH-TOOLS] │ primaryModel:', primaryModel);
+  log.info('[V1-API-WITH-TOOLS] │ requestId:', requestId);
+  log.info('[V1-API-WITH-TOOLS] │ toolCount:', config.tools?.length || 0);
+  log.info('[V1-API-WITH-TOOLS] │ maxSteps:', config.maxSteps || 15);
+  log.info('[V1-API-WITH-TOOLS] │ maxTokens:', config.maxTokens || 65536);
+  log.info('[V1-API-WITH-TOOLS] └────────────────────────────────────');
 
   // FIX: Model normalization — when falling back to a different provider,
   // the original model name may not be valid for the fallback provider.
@@ -966,17 +1041,23 @@ async function runV1ApiWithTools(
   const providersToTry = [primaryProvider, ...fallbackChain];
   const uniqueProviders = [...new Set(providersToTry)];
 
-  log.debug(`V1 API (with tools): Provider fallback chain`, {
-    primaryProvider,
-    fallbackChain,
-    uniqueProviders,
-  });
+  log.info('[V1-API-WITH-TOOLS] ┌─ PROVIDER FALLBACK CHAIN ────────');
+  log.info('[V1-API-WITH-TOOLS] │ primary:', primaryProvider, '/', primaryModel);
+  log.info('[V1-API-WITH-TOOLS] │ configured fallbacks:', fallbackChain);
+  log.info('[V1-API-WITH-TOOLS] │ will try (deduped):', uniqueProviders);
+  log.info('[V1-API-WITH-TOOLS] └────────────────────────────────────');
 
   let lastError: Error | null = null;
 
   // Try each provider in order
   for (const providerName of uniqueProviders) {
     const modelForProvider = getModelForProvider(providerName);
+
+    log.info('[V1-API-WITH-TOOLS] ┌─ ATTEMPT ─────────────────────');
+    log.info('[V1-API-WITH-TOOLS] │ provider:', providerName);
+    log.info('[V1-API-WITH-TOOLS] │ model:', modelForProvider);
+    log.info('[V1-API-WITH-TOOLS] │ isFirst:', providerName === primaryProvider);
+    log.info('[V1-API-WITH-TOOLS] └────────────────────────────────');
 
     const toolInvocations: Array<{
       toolCallId: string;
@@ -1014,6 +1095,7 @@ async function runV1ApiWithTools(
     let response = '';
 
     try {
+      log.info('[V1-API-WITH-TOOLS] Calling streamWithVercelAI...');
       const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
 
       for await (const chunk of streamWithVercelAI({
@@ -1055,6 +1137,15 @@ async function runV1ApiWithTools(
         },
       }));
 
+      log.info('[V1-API-WITH-TOOLS] ┌─ STREAM COMPLETE ────────────');
+      log.info('[V1-API-WITH-TOOLS] │ provider:', providerName);
+      log.info('[V1-API-WITH-TOOLS] │ model:', modelForProvider);
+      log.info('[V1-API-WITH-TOOLS] │ duration:', duration, 'ms');
+      log.info('[V1-API-WITH-TOOLS] │ responseLength:', response.length);
+      log.info('[V1-API-WITH-TOOLS] │ toolInvocations:', toolInvocations.length);
+      log.info('[V1-API-WITH-TOOLS] │ tools:', toolInvocations.map(t => t.toolName).join(', ') || 'none');
+      log.info('[V1-API-WITH-TOOLS] └────────────────────────────────');
+
       if (providerName !== primaryProvider) {
         log.info(`V1 API (with tools): Fallback provider succeeded`, {
           primaryProvider,
@@ -1063,6 +1154,25 @@ async function runV1ApiWithTools(
           fallbackModel: modelForProvider,
         });
       }
+
+      // FIX: Record comprehensive telemetry with tool execution data
+      const toolCallTelemetry = toolInvocations.map(inv => ({
+        toolCallId: inv.toolCallId,
+        toolName: inv.toolName,
+        state: 'result' as const,
+        args: inv.args,
+        result: inv.result,
+        success: inv.result?.success !== false,
+      }));
+
+      log.info('[Telemetry-v1Api] Recording completion', {
+        requestId,
+        provider: providerName,
+        model: modelForProvider,
+        duration,
+        toolCount: toolCallTelemetry.length,
+        responseLength: response.length,
+      });
 
       chatRequestLogger.logRequestComplete(
         requestId,
@@ -1073,7 +1183,17 @@ async function runV1ApiWithTools(
         undefined,
         providerName,
         modelForProvider,
-      ).catch(() => {});
+        toolCallTelemetry.length > 0 ? toolCallTelemetry : undefined,
+        response.length,
+      ).catch((err) => {
+        log.error('[Telemetry-v1Api] logRequestComplete failed', { error: err?.message || err });
+      });
+
+      // Log telemetry summary to console
+      if (toolCallTelemetry.length > 0) {
+        const successCount = toolCallTelemetry.filter(t => t.success).length;
+        log.info(`[Telemetry] ${requestId}: ${toolCallTelemetry.length} tools (${successCount}✓/${toolCallTelemetry.length - successCount}✗)`);
+      }
 
       return {
         success: true,
@@ -1313,10 +1433,12 @@ async function runV1ApiCompletion(
         temperature: config.temperature || 0.7,
         maxTokens: config.maxTokens || 4096,
         maxRetries: 0,
-        maxSteps: 1,
+        maxSteps: 10,  // Allow tool execution
+        tools: config.tools?.length ? config.tools : undefined,
       };
 
       if (config.onStreamChunk) {
+        console.log('[ORCHESTRATOR] Passing tools to streamWithVercelAI:', config.tools?.map(t => t.name));
         for await (const chunk of streamWithVercelAI(streamOpts)) {
           if (chunk.content) {
             content += chunk.content;
@@ -1435,19 +1557,22 @@ async function attemptFallback(
   const engine = process.env.AGENT_EXECUTION_ENGINE || 'auto';
   const forceV1 = v2Disabled || engine === 'v1-api';
   const forceAgentLoop = engine === 'agent-loop';
+  // FIX: When engine is 'auto', we want v1-only rotation (v1-api + v1-agent-loop).
+  // Don't allow fallback to v2 modes unless engine is explicitly unset.
+  const forceV1Auto = engine === 'auto' || forceV1;
 
   // Try fallback chain based on what failed, excluding already tried modes
   // Only include modes that were available at startup
   // Priority: V2 Native (with StatefulAgent for complex) → V2 Containerized → V2 Local → V1 API
   const fallbackOrder: Array<'v2-native' | 'v2-containerized' | 'v2-local' | 'v1-api'> = [];
 
-  if (!forceV1 && !forceAgentLoop && !visitedModes.has('v2-native') && failedMode !== 'v2-native' && caps.v2Native) {
+  if (!forceV1Auto && !forceAgentLoop && !visitedModes.has('v2-native') && failedMode !== 'v2-native' && caps.v2Native) {
     fallbackOrder.push('v2-native');
   }
-  if (!forceV1 && !forceAgentLoop && !visitedModes.has('v2-containerized') && failedMode !== 'v2-containerized' && caps.v2Containerized) {
+  if (!forceV1Auto && !forceAgentLoop && !visitedModes.has('v2-containerized') && failedMode !== 'v2-containerized' && caps.v2Containerized) {
     fallbackOrder.push('v2-containerized');
   }
-  if (!forceV1 && !forceAgentLoop && !visitedModes.has('v2-local') && failedMode !== 'v2-local' && caps.v2Local) {
+  if (!forceV1Auto && !forceAgentLoop && !visitedModes.has('v2-local') && failedMode !== 'v2-local' && caps.v2Local) {
     fallbackOrder.push('v2-local');
   }
   if (!visitedModes.has('v1-api') && failedMode !== 'v1-api' && caps.v1Api) {
