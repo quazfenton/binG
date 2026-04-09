@@ -1,0 +1,84 @@
+{
+  "timestamp": "2026-04-09T18:11:45.887Z",
+  "body": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Create these files in the current session root with complete contents: src/main.js containing const TARGET = \"frontend-original\"; server/main.js containing const TARGET = \"server-original\"; Keep them as separate files in those two folders."
+      }
+    ],
+    "provider": "mistral",
+    "model": "mistral-small-latest",
+    "stream": true,
+    "conversationId": "e2e-ambiguous-target"
+  },
+  "status": 200,
+  "headers": {
+    "access-control-allow-headers": "Content-Type, Authorization",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "cache-control": "no-cache, no-store, must-revalidate",
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "text/event-stream",
+    "cross-origin-resource-policy": "cross-origin",
+    "date": "Thu, 09 Apr 2026 18:11:44 GMT",
+    "expires": "0",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "pragma": "no-cache",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-accel-buffering": "no",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "S3AnoODY1IoFrngkMpxRffO5VhleIuX_Lf8xrhrR0mI",
+    "x-csp-nonce-style": "6r_X9G-tqOQ9uQQRnyAa3D5wIHimtGnH7-YLZolBKBk",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1775758296277_8fe5icpar6h",
+    "x-xss-protection": "1; mode=block"
+  },
+  "raw": "event: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775758304333,\"stepIndex\":0}\n\nevent: token\ndata: {\"content\":\"I'll \",\"timestamp\":1775758305278}\n\nevent: token\ndata: {\"content\":\"create \",\"timestamp\":1775758305296}\n\nevent: token\ndata: {\"content\":\"these \",\"timestamp\":1775758305315}\n\nevent: token\ndata: {\"content\":\"files \",\"timestamp\":1775758305334}\n\nevent: token\ndata: {\"content\":\"in \",\"timestamp\":1775758305349}\n\nevent: token\ndata: {\"content\":\"the \",\"timestamp\":1775758305380}\n\nevent: token\ndata: {\"content\":\"specified \",\"timestamp\":1775758305396}\n\nevent: token\ndata: {\"content\":\"directories \",\"timestamp\":1775758305422}\n\nevent: token\ndata: {\"content\":\"with \",\"timestamp\":1775758305441}\n\nevent: token\ndata: {\"content\":\"the \",\"timestamp\":1775758305457}\n\nevent: token\ndata: {\"content\":\"given \",\"timestamp\":1775758305488}\n\nevent: token\ndata: {\"content\":\"contents. \",\"timestamp\":1775758305507}\n\nevent: token\ndata: {\"content\":\"Let \",\"timestamp\":1775758305533}\n\nevent: token\ndata: {\"content\":\"me \",\"timestamp\":1775758305548}\n\nevent: token\ndata: {\"content\":\"use \",\"timestamp\":1775758305563}\n\nevent: token\ndata: {\"content\":\"the \",\"timestamp\":1775758305580}\n\nevent: token\ndata: {\"content\":\"batch_write \",\"timestamp\":1775758305610}\n\nevent: token\ndata: {\"content\":\"tool \",\"timestamp\":1775758305626}\n\nevent: token\ndata: {\"content\":\"to \",\"timestamp\":1775758305656}\n\nevent: token\ndata: {\"content\":\"create \",\"timestamp\":1775758305671}\n\nevent: token\ndata: {\"content\":\"both \",\"timestamp\":1775758305702}\n\nevent: token\ndata: {\"content\":\"files \",\"timestamp\":1775758305717}\n\nevent: token\ndata: {\"content\":\"in \",\"timestamp\":1775758305732}\n\nevent: token\ndata: {\"content\":\"a \",\"timestamp\":1775758305763}\n\nevent: token\ndata: {\"content\":\"single \",\"timestamp\":1775758305778}\n\nevent: token\ndata: {\"content\":\"operation.\",\"timestamp\":1775758305876}\n\nevent: step\ndata: {\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775758305883,\"stepIndex\":1}\n\nevent: done\ndata: {\"success\":true,\"content\":\"I'll create these files in the specified directories with the given contents. Let me use the batch_write tool to create both files in a single operation.\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775758304333,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775758305883,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"I'll create these files in the specified directories with the given contents. Let me use the batch_write tool to create both files in a single operation.\",\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":949,\"fallbackChain\":[]}}}\n\n",
+  "eventCount": 29,
+  "tokenText": "I'll create these files in the specified directories with the given contents. Let me use the batch_write tool to create both files in a single operation.",
+  "toolEvents": [],
+  "fileEvents": [],
+  "done": {
+    "event": "done",
+    "rawData": "{\"success\":true,\"content\":\"I'll create these files in the specified directories with the given contents. Let me use the batch_write tool to create both files in a single operation.\",\"messageMetadata\":{\"agent\":\"unified\",\"mode\":\"v1-api\",\"processingSteps\":[{\"step\":\"Start agentic pipeline\",\"status\":\"started\",\"timestamp\":1775758304333,\"stepIndex\":0},{\"step\":\"Start agentic pipeline\",\"status\":\"completed\",\"timestamp\":1775758305883,\"stepIndex\":1}]},\"data\":{\"success\":true,\"response\":\"I'll create these files in the specified directories with the given contents. Let me use the batch_write tool to create both files in a single operation.\",\"mode\":\"v1-api\",\"metadata\":{\"provider\":\"mistral\",\"model\":\"mistral-small-latest\",\"duration\":949,\"fallbackChain\":[]}}}",
+    "data": {
+      "success": true,
+      "content": "I'll create these files in the specified directories with the given contents. Let me use the batch_write tool to create both files in a single operation.",
+      "messageMetadata": {
+        "agent": "unified",
+        "mode": "v1-api",
+        "processingSteps": [
+          {
+            "step": "Start agentic pipeline",
+            "status": "started",
+            "timestamp": 1775758304333,
+            "stepIndex": 0
+          },
+          {
+            "step": "Start agentic pipeline",
+            "status": "completed",
+            "timestamp": 1775758305883,
+            "stepIndex": 1
+          }
+        ]
+      },
+      "data": {
+        "success": true,
+        "response": "I'll create these files in the specified directories with the given contents. Let me use the batch_write tool to create both files in a single operation.",
+        "mode": "v1-api",
+        "metadata": {
+          "provider": "mistral",
+          "model": "mistral-small-latest",
+          "duration": 949,
+          "fallbackChain": []
+        }
+      }
+    }
+  },
+  "cookies": {}
+}

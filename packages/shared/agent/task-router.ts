@@ -5,6 +5,53 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
+import type { IntentMatch } from './intent-schema';
+import type { AgentPriority, AgentType } from './agent-kernel';
+import { getAgentKernel } from './agent-kernel';
+import { determineExecutionPolicy } from '@/lib/sandbox/types';
+import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
+import { emitEvent } from '@/lib/events/bus';
+import { AnyEvent as EventTypes } from '@/lib/events/schema';
+
+/** Task type - what kind of task this is */
+export type TaskType = 'coding' | 'automation' | 'messaging' | 'advanced' | 'unknown';
+
+/** Advanced task type - specific types of complex tasks */
+export type AdvancedTaskType =
+  | 'agent-loop'
+  | 'research'
+  | 'dag-workflow'
+  | 'skill-build'
+  | 'consensus'
+  | 'reflection'
+  | 'tool-discover'
+  | 'cross-agent';
+
+/** Routing target type - which system handles the task */
+export type RoutingTarget = 'opencode' | 'nullclaw' | 'chat' | 'advanced' | 'cli';
+
+/** Task request interface */
+export interface TaskRequest {
+  task: string;
+  userId: string;
+  conversationId: string;
+  executionPolicy?: string;
+  [key: string]: any;
+}
+
+/** Task routing result */
+export interface TaskRoutingResult {
+  type: TaskType;
+  target: RoutingTarget;
+  confidence: number;
+  reasoning: string;
+  intentMatch?: IntentMatch;
+}
+
+// Stub for scheduleTask - import from task-scheduler when available
+async function scheduleTask(_request: TaskRequest): Promise<any> {
+  throw new Error('scheduleTask not implemented');
+}
 
 // Create a logger instance for task-router
 const logger = createLogger('TaskRouter');
@@ -607,8 +654,8 @@ class TaskRouter {
     }
 
     // First, do basic routing to determine task type
-    const routing = this.analyzeTask(request.task);
-    
+    const routing = await this.analyzeTask(request.task);
+
     // END OF ROUTING TREE: Check for advanced tasks (mid-to-long term goals)
     // Only route to advanced tasks if:
     // 1. Task has explicit advanced task keywords
@@ -631,7 +678,7 @@ class TaskRouter {
   private async dispatchToTarget(target: RoutingTarget, request: TaskRequest): Promise<any> {
     switch (target) {
       case 'opencode': return this.executeWithOpenCode(request);
-      case 'nullclaw': return this.executeWithNullclaw(request, this.analyzeTask(request.task).type);
+      case 'nullclaw': return this.executeWithNullclaw(request, (await this.analyzeTask(request.task)).type);
       case 'cli':      return this.executeWithCliAgent(request);
       case 'advanced': {
         // END OF ROUTING TREE: Execute advanced task via event system

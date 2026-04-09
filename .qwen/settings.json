@@ -20,7 +20,8 @@
       "Bash(findstr *)",
       "Bash(curl *)",
       "Bash(fc *)",
-      "Bash(ren *)"
+      "Bash(ren *)",
+      "Bash(type *)"
     ],
     "exclude": [
       "Bash(git checkout)"

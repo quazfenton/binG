@@ -389,7 +389,7 @@ export interface DependencyAnalysisResult {
 }
 
 export interface DependencyIssue {
-  type: 'missing-lockfile' | 'conflict' | 'outdated' | 'missing' | 'unresolved' | 'circular';
+  type: 'missing-lockfile' | 'conflict' | 'outdated' | 'missing' | 'unresolved' | 'circular' | 'info';
   severity: 'error' | 'warning' | 'info';
   message: string;
   affectedPackages?: string[];

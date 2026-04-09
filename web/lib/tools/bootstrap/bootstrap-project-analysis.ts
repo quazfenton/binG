@@ -11,7 +11,7 @@
  * with queryable, structured MCP tools that the LLM can call on demand.
  */
 
-import type { ToolRegistry } from '../registry';
+import type { ToolRegistry, RegisteredTool } from '../registry';
 import type { BootstrapConfig } from '../bootstrap';
 import {
   PROJECT_ANALYZE_CAPABILITY,
@@ -54,7 +54,7 @@ export async function registerProjectAnalysisTools(
   }
 
   // Register tool implementations
-  const tools = [
+  const tools: Array<Omit<RegisteredTool, 'inputSchema' | 'outputSchema'>> = [
     {
       name: 'project-analysis:analyze',
       capability: 'project.analyze',

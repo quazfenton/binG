@@ -1,0 +1,41 @@
+{
+  "timestamp": "2026-04-09T18:10:53.310Z",
+  "url": "http://localhost:3000/api/filesystem/list?path=project%2Fsessions%2Fe2e-mistral-app",
+  "method": "GET",
+  "status": 200,
+  "headers": {
+    "access-control-allow-headers": "Content-Type, Authorization",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "application/json",
+    "cross-origin-resource-policy": "cross-origin",
+    "date": "Thu, 09 Apr 2026 18:10:53 GMT",
+    "keep-alive": "timeout=5",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "set-cookie": "anon-session-id=anon_1775758253308_1fdcdee77f9bdd0af5; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-anonymous-session-id": "anon_1775758253308_1fdcdee77f9bdd0af5",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "YzaOPhRrR23eIsOzxFr2ydgYt_eeLw4o9_BD_lDh-kQ",
+    "x-csp-nonce-style": "hDW4hHjQ6ERiLiFv9PuqvJzSlYcc-fgxi-ZkLQBIN9E",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1775758253302_dz64ykvi6s",
+    "x-xss-protection": "1; mode=block"
+  },
+  "responseText": "{\"success\":true,\"data\":{\"path\":\"project/sessions/e2e-mistral-app\",\"nodes\":[]}}",
+  "responseJson": {
+    "success": true,
+    "data": {
+      "path": "project/sessions/e2e-mistral-app",
+      "nodes": []
+    }
+  },
+  "cookies": {
+    "anon-session-id": "anon_1775758253308_1fdcdee77f9bdd0af5"
+  }
+}

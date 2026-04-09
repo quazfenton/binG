@@ -197,7 +197,7 @@ export function getDockerCommands(mode: RuntimeMode): { up: string; down: string
 
 export type AppFramework =
   | 'next' | 'react' | 'vite-react' | 'vue' | 'nuxt' | 'svelte' | 'angular'
-  | 'solid' | 'astro' | 'qwik' | 'vite' | 'vanilla' | 'node'
+  | 'solid' | 'astro' | 'qwik' | 'vite' | 'vanilla' | 'node' | 'remix' | 'gatsby'
   | 'gradio' | 'streamlit' | 'flask' | 'fastapi' | 'django' | 'rust' | 'go'
   | 'python' | 'unknown';
 

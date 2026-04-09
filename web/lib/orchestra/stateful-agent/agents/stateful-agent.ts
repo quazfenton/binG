@@ -578,7 +578,10 @@ export class StatefulAgent {
     // instead of hardcoding openai() which only works for OpenAI-compatible providers
     const modelString = process.env.DEFAULT_MODEL || 'gpt-4o';
     try {
-      return getVercelModel(modelString);
+      const [provider, modelName] = modelString.includes(':')
+        ? modelString.split(':', 2)
+        : ['openai', modelString];
+      return getVercelModel(provider, modelName);
     } catch {
       // Fallback to openai if provider not recognized by vercel-ai-streaming
       const { openai } = require('@ai-sdk/openai');
@@ -1037,7 +1040,7 @@ Use 'createFile' for new files.`;
           for (const edit of textEdits) {
             try {
               // Map action to tool name
-              let toolName = edit.action;
+              let toolName: string = edit.action;
               if (edit.action === 'write') toolName = 'createFile';
               else if (edit.action === 'patch') toolName = 'applyDiff';
               else if (edit.action === 'delete') toolName = 'delete_file';
@@ -1494,7 +1497,10 @@ export async function* runStatefulAgentStreaming(
 
   // Get the model — use getVercelModel for all provider support
   const modelString = process.env.DEFAULT_MODEL || 'gpt-4o';
-  const model = getVercelModel(modelString);
+  const [provider, modelName] = modelString.includes(':')
+    ? modelString.split(':', 2)
+    : ['openai', modelString];
+  const model = getVercelModel(provider, modelName);
 
   // Initialize tools from vercel-ai-tools
   const { getAllTools } = await import('@/lib/chat/vercel-ai-tools');
@@ -1577,7 +1583,7 @@ export async function* runStatefulAgentStreaming(
           log.info(`StatefulAgent streaming: No native tool calls, found ${textEdits.length} text-based tool calls, executing fallback`);
           for (const edit of textEdits) {
             try {
-              let toolName = edit.action;
+              let toolName: string = edit.action;
               if (edit.action === 'write') toolName = 'createFile';
               else if (edit.action === 'patch') toolName = 'applyDiff';
               else if (edit.action === 'delete') toolName = 'delete_file';

@@ -64,6 +64,7 @@ interface AgentLoopResult {
   response: string
   steps: Array<{ toolName: string; args: Record<string, any>; result: ToolResult }>
   totalSteps: number
+  success?: boolean
 }
 
 export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoopResult> {

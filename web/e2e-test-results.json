@@ -1,0 +1,252 @@
+[
+  {
+    "test": "Authentication - Login",
+    "pass": true,
+    "message": "Login status=200"
+  },
+  {
+    "test": "Authentication - Login",
+    "pass": true,
+    "message": "Login should succeed"
+  },
+  {
+    "test": "Authentication - Login",
+    "pass": true,
+    "message": "User ID should be returned (got userId=1)"
+  },
+  {
+    "test": "Authentication - Login",
+    "pass": true,
+    "message": "JWT token should be returned"
+  },
+  {
+    "test": "Chat - Basic health check",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - Basic health check",
+    "pass": true,
+    "message": "Stream should complete with done event"
+  },
+  {
+    "test": "Chat - Basic health check",
+    "pass": true,
+    "message": "Should have content"
+  },
+  {
+    "test": "Chat - Basic health check",
+    "pass": true,
+    "message": "Should have meaningful content"
+  },
+  {
+    "test": "Chat - Generates code for \"create a calculator\"",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - Generates code for \"create a calculator\"",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "Chat - Generates code for \"create a calculator\"",
+    "pass": true,
+    "message": "Response should contain calculator code"
+  },
+  {
+    "test": "Chat - Generates code for \"create a calculator\"",
+    "pass": false,
+    "message": "Should mention math operations"
+  },
+  {
+    "test": "Chat - LLM uses write_file tool to create files",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - LLM uses write_file tool to create files",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "Chat - LLM uses write_file tool to create files",
+    "pass": false,
+    "message": "Should generate meaningful content"
+  },
+  {
+    "test": "Chat - LLM uses write_file tool to create files",
+    "pass": false,
+    "message": "Should contain formatName function"
+  },
+  {
+    "test": "Chat - LLM creates multiple files in one conversation",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - LLM creates multiple files in one conversation",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "Chat - LLM creates multiple files in one conversation",
+    "pass": false,
+    "message": "Should reference config"
+  },
+  {
+    "test": "Chat - LLM creates multiple files in one conversation",
+    "pass": false,
+    "message": "Should reference README"
+  },
+  {
+    "test": "Chat - Auto-continue triggers for complex tasks",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - Auto-continue triggers for complex tasks",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "Chat - Natural language \"run this code\" triggers shell execution",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - Natural language \"run this code\" triggers shell execution",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "Chat - Natural language \"run this code\" triggers shell execution",
+    "pass": true,
+    "message": "Should attempt or reference shell execution"
+  },
+  {
+    "test": "Chat - LLM updates an existing file with modifications",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - LLM updates an existing file with modifications",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "Chat - LLM updates an existing file with modifications",
+    "pass": true,
+    "message": "Response should include /status endpoint or status reference"
+  },
+  {
+    "test": "Chat - LLM handles errors gracefully",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - LLM handles errors gracefully",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "Chat - LLM handles errors gracefully",
+    "pass": true,
+    "message": "LLM should acknowledge the error or missing file"
+  },
+  {
+    "test": "Chat - Complex multi-file app generation",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - Complex multi-file app generation",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "Chat - Complex multi-file app generation",
+    "pass": true,
+    "message": "Complex prompt should generate substantial response"
+  },
+  {
+    "test": "Chat - Complex multi-file app generation",
+    "pass": true,
+    "message": "Should reference todo/routes/app"
+  },
+  {
+    "test": "File Edit Parser - Detects code blocks as file edits",
+    "pass": true,
+    "message": "Skipped in .cjs context (TypeScript module requires Next.js compilation)"
+  },
+  {
+    "test": "Chat - LLM correctly scopes to specified workspace",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - LLM correctly scopes to specified workspace",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "Chat - LLM correctly scopes to specified workspace",
+    "pass": true,
+    "message": "Should generate some content"
+  },
+  {
+    "test": "Chat - LLM makes tool calls during conversation",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - LLM makes tool calls during conversation",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "Chat - LLM makes tool calls during conversation",
+    "pass": true,
+    "message": "Should have some response"
+  },
+  {
+    "test": "Chat - No infinite loop on long responses",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - No infinite loop on long responses",
+    "pass": true,
+    "message": "Stream should complete (not loop forever)"
+  },
+  {
+    "test": "Chat - No infinite loop on long responses",
+    "pass": true,
+    "message": "Should have completed, not looped"
+  },
+  {
+    "test": "Chat - Handles minimal prompt gracefully",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - Handles minimal prompt gracefully",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "Chat - Handles unicode content correctly",
+    "pass": true,
+    "message": "Stream should not error"
+  },
+  {
+    "test": "Chat - Handles unicode content correctly",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "Chat - Handles unicode content correctly",
+    "pass": true,
+    "message": "Should handle or reference Chinese content"
+  }
+]

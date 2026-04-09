@@ -12,6 +12,7 @@ export { EMBED_CACHE };
 /**
  * Embeds a text string by calling your Next.js API route.
  * The route should call OpenAI text-embedding-3-small (or equivalent local model).
+ * Works both client-side (relative URL) and server-side (absolute URL).
  */
 export async function embed(text: string): Promise<number[]> {
   // Use full text as cache key — trimming alone could cause collisions
@@ -22,7 +23,15 @@ export async function embed(text: string): Promise<number[]> {
     return EMBED_CACHE.get(key)!;
   }
 
-  const res = await fetch("/api/embed", {
+  // Determine base URL based on environment
+  // Client-side: relative URL works
+  // Server-side: need absolute URL
+  const isServer = typeof window === 'undefined';
+  const baseUrl = isServer
+    ? (process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000')
+    : '';
+
+  const res = await fetch(`${baseUrl}/api/embed`, {
     method: "POST",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ text }),

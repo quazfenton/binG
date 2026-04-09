@@ -888,11 +888,12 @@ export class AgentKernel extends EventEmitter {
         agent.id
       );
 
+      const typedResult = result as { status: string; result: any; id: string };
       return {
-        success: result.status === 'completed',
+        success: typedResult.status === 'completed',
         type: 'nullclaw',
-        result: result.result,
-        taskId: result.id,
+        result: typedResult.result,
+        taskId: typedResult.id,
       };
     } catch (importError) {
       logger.warn('Nullclaw execution failed, using default', { error: importError instanceof Error ? importError.message : String(importError) });
