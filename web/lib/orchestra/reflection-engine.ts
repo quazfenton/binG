@@ -1,12 +1,11 @@
 /**
  * Multi-threaded Reflection Engine for Quality Enhancement
  * Provides parallel processing and perspective-based improvement
- * 
+ *
  * Now with ACTUAL LLM integration (no longer mock)
  */
 
 import { secureRandom } from '../utils';
-import { createOpenAI } from '@ai-sdk/openai';
 import { generateObject } from 'ai';
 import { z } from 'zod';
 
@@ -72,20 +71,64 @@ class ReflectionEngine {
   }
 
   /**
-   * Initialize LLM model lazily
+   * Initialize LLM model lazily.
+   * Uses the same fast-model selection as spec amplification (telemetry-based
+   * latency ranking with mistral-small-latest fallback) instead of hardcoding
+   * OPENAI_API_KEY.
    */
   private async ensureModel(): Promise<any> {
     if (this.model) return this.model;
-    
-    const apiKey = process.env.OPENAI_API_KEY;
-    if (!apiKey) {
-      console.warn('[ReflectionEngine] OPENAI_API_KEY not set, reflection disabled');
-      return null;
+
+    let provider = process.env.FAST_AGENT_REFLECTION_PROVIDER;
+    let modelName = process.env.FAST_AGENT_REFLECTION_MODEL;
+
+    // If no explicit provider/model, use the same selection as spec amplification
+    if (!provider || !modelName) {
+      try {
+        const { getSpecGenerationModel } = await import('@/lib/models/model-ranker');
+        const ranked = await getSpecGenerationModel();
+        if (ranked) {
+          provider = ranked.provider;
+          modelName = ranked.model;
+        }
+      } catch {
+        // Ranker unavailable — fall back to defaults below
+      }
     }
-    
+
+    // Final fallback: mistral-small-latest (no env var needed beyond MISTRAL_API_KEY)
+    if (!provider || !modelName) {
+      provider = 'mistral';
+      modelName = 'mistral-small-latest';
+    }
+
+    const { createMistral } = await import('@ai-sdk/mistral');
+    const { createOpenAI } = await import('@ai-sdk/openai');
+    const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
+
     try {
-      const openai = createOpenAI({ apiKey });
-      this.model = openai(this.config.model!);
+      let apiKey: string;
+      switch (provider) {
+        case 'openai':
+          apiKey = process.env.OPENAI_API_KEY || '';
+          this.model = createOpenAI({ apiKey })(modelName);
+          break;
+        case 'openrouter':
+          apiKey = process.env.OPENROUTER_API_KEY || '';
+          this.model = createOpenAI({ apiKey, baseURL: 'https://openrouter.ai/api/v1' })(modelName);
+          break;
+        case 'google':
+          apiKey = process.env.GOOGLE_API_KEY || '';
+          this.model = createGoogleGenerativeAI({ apiKey })(modelName);
+          break;
+        default:
+          // Default to Mistral — works for mistral-small-latest out of the box
+          apiKey = process.env.MISTRAL_API_KEY || '';
+          if (provider !== 'mistral') {
+            console.warn(`[ReflectionEngine] Provider '${provider}' not supported, using mistral-small-latest`);
+          }
+          this.model = createMistral({ apiKey })('mistral-small-latest');
+      }
       return this.model;
     } catch (error: any) {
       console.error('[ReflectionEngine] Failed to initialize model:', error);

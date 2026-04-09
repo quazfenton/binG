@@ -57,7 +57,9 @@ let WasmtimeEngine: any, WasmtimeStore: any, WasmtimeModule: any,
 
 try {
   // @ts-expect-error wasmtime is an optional dependency
-  const wt = await import('wasmtime')
+  // webpackIgnore: true prevents the "Module not found" warning
+  // @ts-ignore - webpack comment
+  const wt = await import(/* webpackIgnore: true */ 'wasmtime')
   WasmtimeEngine   = wt.Engine
   WasmtimeStore    = wt.Store
   WasmtimeModule   = wt.Module

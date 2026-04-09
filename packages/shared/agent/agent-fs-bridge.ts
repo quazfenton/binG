@@ -182,7 +182,6 @@ class AgentFSBridge {
             continue;
           }
 
-          const relativePath = sandboxFile.replace(`${sandboxPath}/`, '');
           const vfsFilePath = `${vfsPath}/${relativePath}`;
 
           await virtualFilesystem.writeFile(userId, vfsFilePath, readResult.output);

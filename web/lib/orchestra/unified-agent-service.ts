@@ -71,6 +71,7 @@ export interface UnifiedAgentConfig {
   sandboxId?: string;
   systemPrompt?: string;
   conversationHistory?: Array<{ role: string; content: string }>;
+  userId?: string;  // Authenticated user ID — passed to BootstrappedAgency for VFS scoping
 
   // Project isolation (provides project-scoped vector memory and retrieval)
   projectContext?: ProjectContext;
@@ -87,6 +88,10 @@ export interface UnifiedAgentConfig {
   maxSteps?: number;
   temperature?: number;
   maxTokens?: number;
+
+  // Provider and model override (uses env defaults if not specified)
+  provider?: string;
+  model?: string;
 
   // Mode override (optional - auto-detected from env if not specified)
   mode?: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow' | 'desktop' | 'auto';
@@ -128,57 +133,102 @@ export interface ProviderHealth {
 }
 
 /**
- * Check provider health and availability
+ * Agent mode capability flags — determined at startup by checking
+ * whether each mode's dependencies (env vars, CLI availability, services)
+ * are actually configured. If a mode is disabled, routing skips it entirely
+ * instead of trying it and failing repeatedly.
  */
-export function checkProviderHealth(): ProviderHealth {
-  const containerized = process.env.OPENCODE_CONTAINERIZED === 'true';
-  const sandboxProvider = process.env.SANDBOX_PROVIDER || 'daytona';
-  const sandboxKey = process.env[`${sandboxProvider.toUpperCase()}_API_KEY`];
-
-  // Desktop: Tauri desktop mode with local execution
-  const desktop = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
-
-  // V2 Containerized: requires sandbox provider + API key + opencode
-  const v2Containerized = containerized && !!sandboxKey;
-
-  // V2 Local: requires opencode CLI installed
-  const v2Local = !containerized && process.env.LLM_PROVIDER === 'opencode';
-
-  // V2 Native: OpenCode CLI available (primary agentic engine)
-  const v2Native = v2Local || v2Containerized;
-
-  // V1 API: requires API key for configured provider (fallback)
-  const llmProvider = process.env.LLM_PROVIDER || 'mistral';
-  const apiKeyEnv = `${llmProvider.toUpperCase()}_API_KEY`;
-  const v1Api = !!process.env[apiKeyEnv] || !!process.env.OPENROUTER_API_KEY;
-
-  // Determine preferred mode - Desktop takes priority when enabled
-  let preferredMode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'desktop' = 'v1-api';
-
-  if (desktop) {
-    preferredMode = 'desktop';
-  } else if (v2Native) {
-    // OpenCode engine is primary for agentic tasks
-    preferredMode = containerized ? 'v2-containerized' : (v2Local ? 'v2-local' : 'v2-native');
-  } else if (v1Api) {
-    // Fallback to V1 API for simple chat
-    preferredMode = 'v1-api';
-  }
-
-  return {
-    v2Containerized,
-    v2Local,
-    v2Native,
-    v1Api,
-    desktop,
-    preferredMode,
-  };
+export interface AgentCapabilityFlags {
+  v2Native: boolean;       // OpenCode CLI installed and enabled
+  v2Containerized: boolean; // Containerized sandbox with API key configured
+  v2Local: boolean;         // Local OpenCode with LLM_PROVIDER=opencode
+  statefulAgent: boolean;   // StatefulAgent enabled and configured
+  desktop: boolean;         // Tauri desktop mode enabled
+  mastraWorkflows: boolean; // Mastra workflow engine configured
+  nullclaw: boolean;        // Nullclaw remote agent configured
+  v1Api: boolean;           // V1 API with at least one provider API key
 }
 
 /**
- * Determine which mode to use based on config and task classification
- * 
- * Uses multi-factor task classifier instead of fragile regex matching.
+ * Startup health check — determines which agent modes are actually
+ * available/enabled based on env vars, CLI availability, and service config.
+ * Called once at module load; result is cached for routing decisions.
+ *
+ * This prevents the system from attempting v2-native, containerized, or
+ * remote agent modes when they're not even set up (causing 12-15 retries
+ * before finally falling back to v1-api).
+ */
+export function checkAgentCapabilities(): AgentCapabilityFlags {
+  const llmProvider = process.env.LLM_PROVIDER || '';
+  const sandboxProvider = process.env.SANDBOX_PROVIDER || '';
+  const containerized = process.env.OPENCODE_CONTAINERIZED === 'true';
+
+  // Desktop mode
+  const desktop = process.env.DESKTOP_MODE === 'true'
+    || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+
+  // V2 Containerized: explicitly enabled + sandbox provider + API key
+  const v2Containerized = containerized
+    && !!sandboxProvider
+    && !!process.env[`${sandboxProvider.toUpperCase()}_API_KEY`];
+
+  // V2 Local: explicitly set LLM_PROVIDER=opencode (not just env var presence)
+  const v2Local = !containerized && llmProvider === 'opencode';
+
+  // V2 Native: requires explicit opt-in (LLM_PROVIDER=opencode) OR containerized setup
+  const v2Native = v2Local || v2Containerized;
+
+  // StatefulAgent: explicitly enabled (not disabled)
+  const statefulAgent = process.env.ENABLE_STATEFUL_AGENT !== 'false'
+    && process.env.STATEFUL_AGENT_DISABLED !== 'true';
+
+  // Mastra workflows: explicitly enabled with workflow IDs configured
+  const mastraWorkflows = process.env.MASTRA_ENABLED === 'true'
+    || !!process.env.DEFAULT_WORKFLOW_ID;
+
+  // Nullclaw remote agent: explicitly configured
+  const nullclaw = !!process.env.NULLCLAW_HOST
+    || !!process.env.NULLCLAW_URL
+    || !!process.env.NULLCLAW_API_KEY;
+
+  // V1 API: at least one LLM provider has an API key
+  const providerKey = process.env[`${llmProvider.toUpperCase()}_API_KEY`];
+  const v1Api = !!providerKey || !!process.env.OPENROUTER_API_KEY;
+
+  // Log startup capabilities for observability
+  log.info('Agent capabilities at startup', {
+    v2Native,
+    v2Containerized,
+    v2Local,
+    statefulAgent,
+    desktop,
+    mastraWorkflows,
+    nullclaw,
+    v1Api,
+    llmProvider: llmProvider || '(default)',
+    sandboxProvider: sandboxProvider || '(none)',
+  });
+
+  return {
+    v2Native,
+    v2Containerized,
+    v2Local,
+    statefulAgent,
+    desktop,
+    mastraWorkflows,
+    nullclaw,
+    v1Api,
+  };
+}
+
+// Cache capabilities at module load — no need to re-check env vars every request
+const startupCapabilities = checkAgentCapabilities();
+
+/**
+ * Determine which mode to use based on config and task classification.
+ *
+ * Uses startup capability flags (checked once at module load) to skip
+ * unavailable modes entirely — no retries, no fallback loops.
  * Returns both mode and classification for logging/metrics.
  */
 async function determineMode(config: UnifiedAgentConfig): Promise<{
@@ -191,19 +241,23 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   }
 
   // Desktop mode takes priority when enabled
-  const health = checkProviderHealth();
-  if (health.desktop) {
+  if (startupCapabilities.desktop) {
     return { mode: 'desktop' };
   }
 
-  // Check if Mastra workflow should be used
-  if (config.enableMastraWorkflows !== false && config.workflowId) {
+  // Mastra workflow: only if explicitly requested AND available
+  if (config.enableMastraWorkflows !== false && config.workflowId && startupCapabilities.mastraWorkflows) {
     return { mode: 'mastra-workflow' };
   }
 
   // Use task classifier for intelligent routing
+  // IMPORTANT: Only classify the raw user task, NOT the full userMessage
+  // which may include context/workspace/memory prepended (see route.ts buildAgenticContext).
+  // Classifying the full context would inflate sentence counts, technical terms, etc.
+  // and produce bogus complexity scores.
   try {
-    const classification = await taskClassifier.classify(config.userMessage, {
+    const rawUserTask = extractRawUserTask(config.userMessage);
+    const classification = await taskClassifier.classify(rawUserTask, {
       projectSize: process.env.PROJECT_SIZE as any,
       userPreference: process.env.AGENT_PREFERENCE as any,
     });
@@ -216,39 +270,72 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
     });
 
     // Map classifier recommendation to actual mode
-    // Note: classifier may return 'stateful-agent' but we need to map to valid execution modes
-    const health = checkProviderHealth();
+    // Use startupCapabilities — if a mode isn't available, skip it entirely
     let mode: 'v1-api' | 'v2-containerized' | 'v2-local' | 'v2-native' | 'mastra-workflow';
-    
+
     if (classification.recommendedMode === 'stateful-agent') {
-      // StatefulAgent runs as v2-native mode
-      mode = health.v2Native ? 'v2-native' : health.v2Containerized ? 'v2-containerized' : health.v2Local ? 'v2-local' : 'v1-api';
-    } else if (classification.recommendedMode === 'mastra-workflow') {
+      // StatefulAgent: only use if v2 modes are available at startup
+      mode = startupCapabilities.v2Native ? 'v2-native'
+        : startupCapabilities.v2Containerized ? 'v2-containerized'
+        : startupCapabilities.v2Local ? 'v2-local'
+        : 'v1-api';
+    } else if (classification.recommendedMode === 'mastra-workflow' && startupCapabilities.mastraWorkflows) {
       mode = 'mastra-workflow';
     } else {
       // v1-api or v2-native from classifier
       mode = classification.recommendedMode;
     }
-    
-    // Final health check - ensure mode is available
-    if (mode === 'v2-native' && !health.v2Native) {
-      mode = health.v2Containerized ? 'v2-containerized' : health.v2Local ? 'v2-local' : 'v1-api';
-    } else if (mode === 'v2-containerized' && !health.v2Containerized) {
-      mode = health.v2Local ? 'v2-local' : 'v1-api';
-    } else if (mode === 'v2-local' && !health.v2Local) {
+
+    // Use startup capability flags — skip unavailable modes entirely
+    if (mode === 'v2-native' && !startupCapabilities.v2Native) {
+      mode = startupCapabilities.v2Containerized ? 'v2-containerized'
+        : startupCapabilities.v2Local ? 'v2-local'
+        : 'v1-api';
+    } else if (mode === 'v2-containerized' && !startupCapabilities.v2Containerized) {
+      mode = startupCapabilities.v2Local ? 'v2-local' : 'v1-api';
+    } else if (mode === 'v2-local' && !startupCapabilities.v2Local) {
       mode = 'v1-api';
     }
 
-    return { 
+    return {
       mode,
       classification,
     };
   } catch (error) {
-    log.warn('Task classification failed, using health-based fallback', error);
-    // Fallback to health-based detection
-    const health = checkProviderHealth();
-    return { mode: health.preferredMode };
+    log.warn('Task classification failed, using startup capabilities fallback', error);
+    // Fallback: use whatever is available at startup
+    return {
+      mode: startupCapabilities.v2Native ? 'v2-native'
+        : startupCapabilities.v2Containerized ? 'v2-containerized'
+        : startupCapabilities.v2Local ? 'v2-local'
+        : 'v1-api',
+    };
   }
+}
+
+/**
+ * Extract the raw user task from a potentially context-augmented userMessage.
+ * The route prepends context (workspace state, memory, system prompt) before
+ * the actual user task via `buildAgenticContext`. We strip all that to
+ * classify ONLY the user's intent.
+ */
+function extractRawUserTask(userMessage: string): string {
+  let task = userMessage;
+
+  // If the message has a "TASK:" separator (added by route.ts), take only what's after it
+  const taskMarker = '\n\nTASK:\n';
+  const taskIdx = task.indexOf(taskMarker);
+  if (taskIdx >= 0) {
+    task = task.slice(taskIdx + taskMarker.length).trim();
+  }
+
+  // If still too long, cap it
+  const MAX_TASK_CHARS = 4000;
+  if (task.length > MAX_TASK_CHARS) {
+    task = task.slice(0, MAX_TASK_CHARS);
+  }
+
+  return task || userMessage.slice(0, 200);
 }
 
 /**
@@ -357,9 +444,11 @@ async function runV2Native(
     });
   } else {
     // Fallback to regex-based detection (backward compatibility)
-    const isComplexTask = /(create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page|dashboard|authentication|database|integration|deployment|setup|initialize|scaffold|generate|boilerplate)/i.test(config.userMessage);
-    const hasMultipleSteps = /\b(and|then|after|before|first|next|finally|also|plus)\b/i.test(config.userMessage);
-    const mentionsFiles = /\b(file|files|folder|directory|component|page|module|service|api)\b/i.test(config.userMessage);
+    // IMPORTANT: Only test against the raw user task, not the full context-augmented message
+    const rawTask = extractRawUserTask(config.userMessage);
+    const isComplexTask = /(create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page|dashboard|authentication|database|integration|deployment|setup|initialize|scaffold|generate|boilerplate)/i.test(rawTask);
+    const hasMultipleSteps = /\b(and|then|after|before|first|next|finally|also|plus)\b/i.test(rawTask);
+    const mentionsFiles = /\b(file|files|folder|directory|component|page|module|service|api)\b/i.test(rawTask);
     shouldUseStatefulAgent = isComplexTask || (hasMultipleSteps && mentionsFiles);
     
     log.info('Using fallback regex-based task detection', {
@@ -456,9 +545,11 @@ async function runDesktopMode(
 
   // Desktop mode uses the StatefulAgent with a desktop sandbox provider
   // for complex tasks, or the OpenCode engine for simple tasks
+  // IMPORTANT: Only test against the raw user task, not the full context-augmented message
+  const desktopRawTask = extractRawUserTask(config.userMessage);
   const shouldUseStatefulAgent = classification
     ? classification.complexity === 'complex' || classification.recommendedMode === 'stateful-agent'
-    : /(create|build|implement|refactor|migrate)/i.test(config.userMessage);
+    : /(create|build|implement|refactor|migrate)/i.test(desktopRawTask);
 
   if (shouldUseStatefulAgent && process.env.ENABLE_STATEFUL_AGENT !== 'false') {
     log.info('Desktop: Complex task, routing to StatefulAgent with desktop provider');
@@ -543,6 +634,7 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
   try {
     const agentOptions: StatefulAgentOptions = {
       sessionId: config.projectContext?.id || `unified-${Date.now()}`,
+      userId: config.userId,  // Pass authenticated user ID to BootstrappedAgency
       maxSelfHealAttempts: parseInt(process.env.STATEFUL_AGENT_MAX_SELF_HEAL_ATTEMPTS || '3'),
       enforcePlanActVerify: true,
       enableReflection: process.env.STATEFUL_AGENT_ENABLE_REFLECTION !== 'false',
@@ -843,7 +935,10 @@ async function runV1ApiWithTools(
 
   
   const result = await runV2AgentLoop(options);
-  
+
+  const provider = config.provider || process.env.LLM_PROVIDER || 'mistral';
+  const model = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
+
   return {
     success: true,
     response: result.response || 'No response generated',
@@ -851,7 +946,8 @@ async function runV1ApiWithTools(
     totalSteps: result.totalSteps,
     mode: 'v1-api',
     metadata: {
-      provider: process.env.LLM_PROVIDER || 'unknown',
+      provider,
+      model,
       duration: Date.now() - startTime,
     },
   };
@@ -947,43 +1043,97 @@ async function runV1ApiCompletion(
     return runV1Orchestrated(config, messages, startTime);
   }
 
-  const llmRequest: LLMRequest = {
-    messages: messages as any,
-    model: process.env.LLM_MODEL || 'gpt-4o',
-    temperature: config.temperature || 0.7,
+  // Use config provider/model if specified, otherwise fall back to env defaults
+  const provider = config.provider || process.env.LLM_PROVIDER || 'mistral';
+  const model = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
 
-    maxTokens: config.maxTokens || 4096,
-    stream: !!config.onStreamChunk,
-  };
-  
-  let content = '';
-  
-  if (config.onStreamChunk) {
-    // Stream response
-    const stream = llmService.generateStreamingResponse(llmRequest);
-    
-    for await (const chunk of stream) {
+  // Use Vercel AI SDK streaming for all providers (supports nvidia, openrouter, etc.)
+  // The old llmService.generateStreamingResponse only supported hardcoded providers
+  try {
+    const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
 
-      if (chunk.content) {
-        content += chunk.content;
-        config.onStreamChunk(chunk.content);
+    const streamOpts = {
+      provider,
+      model,
+      messages: messages as any[],
+      temperature: config.temperature || 0.7,
+      maxTokens: config.maxTokens || 4096,
+      maxRetries: 2,
+      timeoutMs: 120000,
+    };
+
+    let content = '';
+
+    if (config.onStreamChunk) {
+      // Streaming mode
+      for await (const chunk of streamWithVercelAI(streamOpts)) {
+        if (chunk.content) {
+          content += chunk.content;
+          config.onStreamChunk(chunk.content);
+        }
+      }
+    } else {
+      // Non-streaming: collect tokens from stream
+      for await (const chunk of streamWithVercelAI(streamOpts)) {
+        if (chunk.content) {
+          content += chunk.content;
+        }
       }
     }
-  } else {
-    // Non-streaming
-    const response = await llmService.generateResponse(llmRequest);
-    content = response.content;
+
+    return {
+      success: true,
+      response: content || 'No response generated',
+      mode: 'v1-api',
+      metadata: {
+        provider,
+        model,
+        duration: Date.now() - startTime,
+      },
+    };
+  } catch (error: any) {
+    log.warn('Vercel AI SDK streaming failed, falling back to llmService', {
+      provider,
+      model,
+      error: error.message,
+    });
+
+    // Fallback to old llmService for providers not supported by Vercel AI SDK
+    const llmRequest: LLMRequest = {
+      messages: messages as any,
+      model,
+      provider,
+      temperature: config.temperature || 0.7,
+      maxTokens: config.maxTokens || 4096,
+      stream: !!config.onStreamChunk,
+    };
+
+    let content = '';
+
+    if (config.onStreamChunk) {
+      const stream = llmService.generateStreamingResponse(llmRequest);
+      for await (const chunk of stream) {
+        if (chunk.content) {
+          content += chunk.content;
+          config.onStreamChunk(chunk.content);
+        }
+      }
+    } else {
+      const response = await llmService.generateResponse(llmRequest);
+      content = response.content;
+    }
+
+    return {
+      success: true,
+      response: content || 'No response generated',
+      mode: 'v1-api',
+      metadata: {
+        provider,
+        model,
+        duration: Date.now() - startTime,
+      },
+    };
   }
-  
-  return {
-    success: true,
-    response: content || 'No response generated',
-    mode: 'v1-api',
-    metadata: {
-      provider: process.env.LLM_PROVIDER || 'unknown',
-      duration: Date.now() - startTime,
-    },
-  };
 }
 
 /**
@@ -1003,12 +1153,15 @@ async function attemptFallback(
   const visitedModes = new Set(triedModes);
   visitedModes.add(failedMode);
 
-  const health = checkProviderHealth();
+  // Use startup capabilities — don't try modes that weren't available at startup
+  const caps = startupCapabilities;
 
   // Use task classifier for complexity detection (with regex fallback)
+  // IMPORTANT: Only classify the raw user task, not the full context-augmented message
   let isComplexTask = false;
   try {
-    const classification = await taskClassifier.classify(config.userMessage);
+    const rawTask = extractRawUserTask(config.userMessage);
+    const classification = await taskClassifier.classify(rawTask);
     isComplexTask = classification.complexity === 'complex' || classification.complexity === 'moderate';
     log.debug('Fallback classification', {
       complexity: classification.complexity,
@@ -1016,23 +1169,25 @@ async function attemptFallback(
     });
   } catch {
     // Fallback to regex
-    isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(config.userMessage);
+    const rawTask = extractRawUserTask(config.userMessage);
+    isComplexTask = /create|build|implement|refactor|migrate|add feature|new file|multiple files|project structure|full-stack|application|service|api|component|page/i.test(rawTask);
   }
 
   // Try fallback chain based on what failed, excluding already tried modes
+  // Only include modes that were available at startup
   // Priority: V2 Native (with StatefulAgent for complex) → V2 Containerized → V2 Local → V1 API
   const fallbackOrder: Array<'v2-native' | 'v2-containerized' | 'v2-local' | 'v1-api'> = [];
 
-  if (!visitedModes.has('v2-native') && failedMode !== 'v2-native' && health.v2Native) {
+  if (!visitedModes.has('v2-native') && failedMode !== 'v2-native' && caps.v2Native) {
     fallbackOrder.push('v2-native');
   }
-  if (!visitedModes.has('v2-containerized') && failedMode !== 'v2-containerized' && health.v2Containerized) {
+  if (!visitedModes.has('v2-containerized') && failedMode !== 'v2-containerized' && caps.v2Containerized) {
     fallbackOrder.push('v2-containerized');
   }
-  if (!visitedModes.has('v2-local') && failedMode !== 'v2-local' && health.v2Local) {
+  if (!visitedModes.has('v2-local') && failedMode !== 'v2-local' && caps.v2Local) {
     fallbackOrder.push('v2-local');
   }
-  if (!visitedModes.has('v1-api') && failedMode !== 'v1-api' && health.v1Api) {
+  if (!visitedModes.has('v1-api') && failedMode !== 'v1-api' && caps.v1Api) {
     fallbackOrder.push('v1-api');
   }
 

@@ -250,7 +250,6 @@ Return ONLY a JSON object with:
     const { text: response } = await generateText({
       model,
       prompt,
-      maxTokens: 200,
       temperature: 0.1,
     });
 

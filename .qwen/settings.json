@@ -19,9 +19,10 @@
       "Bash(npx *)",
       "Bash(findstr *)",
       "Bash(curl *)",
-      "Bash(fc *)"
+      "Bash(fc *)",
+      "Bash(ren *)"
     ],
-"exclude": [
+    "exclude": [
       "Bash(git checkout)"
     ]
   },

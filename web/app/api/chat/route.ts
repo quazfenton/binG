@@ -1,4 +1,4 @@
-import { NextRequest, NextResponse } from "next/server";
+﻿import { NextRequest, NextResponse } from "next/server";
 import { PROVIDERS } from "@/lib/chat/llm-providers";
 import { errorHandler } from "@/lib/chat/error-handler";
 import { responseRouter } from "@/lib/api/response-router";
@@ -26,8 +26,9 @@ import { createTaskClassifier as createTaskClassifierShared } from '@bing/shared
 import { VFS_FILE_EDITING_TOOL_PROMPT } from '@bing/shared/agent/system-prompts';
 import { mem0Search, buildMem0SystemPrompt, isMem0Configured, mem0Add } from '@/lib/powers/mem0-power';
 import { createSSEEmitter, SSE_RESPONSE_HEADERS, SSE_EVENT_TYPES } from '@/lib/streaming/sse-event-schema';
-import { streamStateManager } from '@/lib/streaming/stream-state-manager';
-import { notifyNeedMoreTurns, notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
+// Lazy imports — avoid 'ws' module resolution during instrumentation context
+// import { streamStateManager } from '@/lib/streaming/stream-state-manager';
+// import { notifyNeedMoreTurns, notifyStreamComplete } from '@/lib/streaming/stream-control-handler';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import { getRecentMcpFileEdits, clearRecentMcpFileEdits } from '@/lib/virtual-filesystem/file-events';
 import { getOrchestrationModeFromRequest, executeWithOrchestrationMode } from '@bing/shared/agent/orchestration-mode-handler';
@@ -127,6 +128,10 @@ function getTaskClassifier() {
 /**
  * Classify request using multi-factor task classifier.
  * Falls back to regex-based detection if classifier fails.
+ *
+ * IMPORTANT: Receives original `messages` from the request body — NOT
+ * processedMessages which has system prompts, workspace context, and memory
+ * prepended. This ensures the classifier only sees the user's actual input.
  */
 async function classifyRequest(
   messages: LLMMessage[],
@@ -137,8 +142,9 @@ async function classifyRequest(
     return { isCodeRequest: true, complexity: 'moderate', confidence: 0.9, recommendedMode: 'v2-native' };
   }
 
+  // Extract the last user message text only
   const lastUser = [...messages].reverse().find(m => m.role === 'user');
-  const content = typeof lastUser?.content === 'string' ? lastUser.content : JSON.stringify(lastUser?.content || '');
+  const content = typeof lastUser?.content === 'string' ? lastUser.content : '';
 
   // Empty content — treat as simple query
   if (!content || content.trim().length === 0) {
@@ -149,6 +155,14 @@ async function classifyRequest(
     const classifier = getTaskClassifier();
     const result = await classifier.classify(content, {
       projectSize: process.env.PROJECT_SIZE as any,
+    });
+
+    chatLogger.debug('Task classification result', {
+      complexity: result.complexity,
+      confidence: result.confidence,
+      recommendedMode: result.recommendedMode,
+      contentLength: content.length,
+      reasoning: result.reasoning?.slice(0, 2),
     });
 
     // Code/agentic request if classifier recommends v2-native or stateful-agent,
@@ -637,9 +651,11 @@ export async function POST(request: NextRequest) {
       attachedFilesystemFiles,
       filesystemContext,
     );
-    const useContextPack = shouldUseContextPack(processedMessages);
+    const useContextPack = shouldUseContextPack(messages);
     // Use multi-factor task classifier instead of regex-based detection
-    const classification = await classifyRequest(processedMessages, attachedFilesystemFiles);
+    // IMPORTANT: classify on original messages (user's actual input), not processedMessages
+    // which has system prompts, workspace context, memory, etc. prepended
+    const classification = await classifyRequest(messages, attachedFilesystemFiles);
     const isCodeRequest = classification.isCodeRequest;
     const useContextPackForAgentic = enableFilesystemEdits && isCodeRequest;
     const shouldUseContextPackFinal = useContextPack || useContextPackForAgentic;
@@ -867,77 +883,80 @@ export async function POST(request: NextRequest) {
 
     // The old agentic pipeline that was gated behind isIntegrationRequest is removed.
     // OAuth detection no longer blocks responses. The LLM always responds.
-  }
 
-  // ─── Regular Chat Path (ALWAYS used now) ────────────────────────────
-  // Build unified agent config for the chat path
-  const lastUserMessage = [...messages].reverse().find((m) => m.role === 'user')?.content;
-  const task = typeof lastUserMessage === 'string'
-    ? lastUserMessage
-    : JSON.stringify(lastUserMessage || '');
+    // ─── Regular Chat Path (ALWAYS used now) ────────────────────────────
+    // Build unified agent config for the chat path
+    const lastUserMsgContent = [...messages].reverse().find((m) => m.role === 'user')?.content;
+    const task = typeof lastUserMsgContent === 'string'
+      ? lastUserMsgContent
+      : JSON.stringify(lastUserMsgContent || '');
 
-  const context = buildAgenticContext(contextualMessages);
+    const context = buildAgenticContext(contextualMessages);
 
-  // Build system prompt with optional response style modifiers
-  const baseSystemPrompt = process.env.OPENCODE_SYSTEM_PROMPT || '';
-  const promptParams: PromptParameters = {
-    responseDepth: body.responseDepth as any,
-    expertiseLevel: body.expertiseLevel as any,
-    reasoningMode: body.reasoningMode as any,
-    tone: body.tone as any,
-    creativityLevel: body.creativityLevel as any,
-    citationStrictness: body.citationStrictness as any,
-    outputFormat: body.outputFormat as any,
-    selfCorrection: body.selfCorrection as any,
-  };
-  let promptSuffix = '';
-  if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
-    const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
-    promptSuffix = applyPromptModifiers({ ...preset, ...promptParams });
-  } else if (Object.values(promptParams).some(v => v !== undefined)) {
-    promptSuffix = applyPromptModifiers(promptParams);
-  }
-  const systemPrompt = promptSuffix ? baseSystemPrompt + promptSuffix : baseSystemPrompt;
-
-  // Emit telemetry event for analytics (non-blocking, fire-and-forget)
-  emitTelemetryEvent(promptParams, body.presetKey || null);
-
-  // Log active response style for debugging
-  const debugHeaderValue = generateDebugHeaderValue(promptParams, body.presetKey || null);
-  if (debugHeaderValue !== 'default') {
-    chatLogger.debug('Response style active', { requestId }, { style: debugHeaderValue });
-  }
-
-  const config: UnifiedAgentConfig = {
-    userMessage: context ? `${context}\n\nTASK:\n${task}` : task,
-    conversationHistory: contextualMessages.map((m) => ({
-      role: m.role,
-      content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
-    })),
-    systemPrompt,
-    maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
-    temperature,
-    maxTokens,
-    mode: 'auto',
-  };
-
-  const tools = await getMCPToolsForAI_SDK(authenticatedUserId);
-  config.tools = tools.map(t => ({
-    name: t.function.name,
-    description: t.function.description,
-    parameters: t.function.parameters,
-  }));
-  config.executeTool = async (name: string, args: Record<string, any>) => {
-    const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId);
-    return {
-      success: result.success,
-      output: result.output,
-      exitCode: result.success ? 0 : 1,
+    // Build system prompt with optional response style modifiers
+    const baseSystemPrompt = process.env.OPENCODE_SYSTEM_PROMPT || '';
+    const promptParams: PromptParameters = {
+      responseDepth: body.responseDepth as any,
+      expertiseLevel: body.expertiseLevel as any,
+      reasoningMode: body.reasoningMode as any,
+      tone: body.tone as any,
+      creativityLevel: body.creativityLevel as any,
+      citationStrictness: body.citationStrictness as any,
+      outputFormat: body.outputFormat as any,
+      selfCorrection: body.selfCorrection as any,
     };
-  };
+    let promptSuffix = '';
+    if (body.presetKey && body.presetKey in PROMPT_PRESETS) {
+      const preset = getPreset(body.presetKey as keyof typeof PROMPT_PRESETS);
+      promptSuffix = applyPromptModifiers({ ...preset, ...promptParams });
+    } else if (Object.values(promptParams).some(v => v !== undefined)) {
+      promptSuffix = applyPromptModifiers(promptParams);
+    }
+    const systemPrompt = promptSuffix ? baseSystemPrompt + promptSuffix : baseSystemPrompt;
 
-  if (stream) {
-    const streamBody = new ReadableStream({
+    // Emit telemetry event for analytics (non-blocking, fire-and-forget)
+    emitTelemetryEvent(promptParams, body.presetKey || null);
+
+    // Log active response style for debugging
+    const debugHeaderValue = generateDebugHeaderValue(promptParams, body.presetKey || null);
+    if (debugHeaderValue !== 'default') {
+      chatLogger.debug('Response style active', { requestId }, { style: debugHeaderValue });
+    }
+
+    const config: UnifiedAgentConfig = {
+      userMessage: task,  // User message only — NOT the filesystem context
+      userId: authenticatedUserId || filesystemOwnerId,  // Pass real user ID for VFS scoping
+      conversationHistory: contextualMessages.map((m) => ({
+        role: m.role,
+        content: typeof m.content === 'string' ? m.content : JSON.stringify(m.content),
+      })),
+      systemPrompt,
+      maxSteps: parseInt(process.env.AI_SDK_MAX_STEPS || '15', 10),
+      temperature,
+      maxTokens,
+      mode: 'auto',
+      // Pass user-selected provider and model to unified agent
+      provider,
+      model: normalizedModel,
+    };
+
+    const tools = await getMCPToolsForAI_SDK(authenticatedUserId);
+    config.tools = tools.map(t => ({
+      name: t.function.name,
+      description: t.function.description,
+      parameters: t.function.parameters,
+    }));
+    config.executeTool = async (name: string, args: Record<string, any>) => {
+      const result = await callMCPToolFromAI_SDK(name, args, authenticatedUserId);
+      return {
+        success: result.success,
+        output: result.output,
+        exitCode: result.success ? 0 : 1,
+      };
+    };
+
+    if (stream) {
+      const streamBody = new ReadableStream({
           async start(controller) {
             const emit = createSSEEmitter(controller);
             const processingSteps: Array<{
@@ -1335,7 +1354,7 @@ export async function POST(request: NextRequest) {
         });
 
         const orchestrationResult = await executeWithOrchestrationMode(orchestrationMode, {
-          task: context ? `${context}\n\nTASK:\n${task}` : task,
+          task: task,  // User task only — filesystem context already in conversationHistory
           sessionId: resolvedConversationId,
           ownerId: authenticatedUserId,
           stream: stream === true,
@@ -1405,7 +1424,6 @@ export async function POST(request: NextRequest) {
         content: result.response,
         data: result,
       });
-    }
 
     // Sandbox actions require authenticated user identity for authorization and ownership checks.
     // VFS MCP tools are handled inline via Vercel AI SDK tool calling and don't need this gate.
@@ -1605,9 +1623,11 @@ export async function POST(request: NextRequest) {
         ? lastUserMessage
         : JSON.stringify(lastUserMessage || '');
       const v1AgentContext = buildAgenticContext(contextualMessages);
-      const v1AgentPrompt = v1AgentContext
-        ? `${v1AgentContext}\n\nTASK:\n${v1AgentTask}`
-        : v1AgentTask;
+      // FIX: Do NOT prepend filesystem context to the task — the LLM already sees it
+      // via contextualMessages in conversationHistory. Prepending it caused the
+      // StatefulAgent/BootstrappedAgency to receive the system prompt as the task,
+      // leading it to write "SYSTEM: Virtual filesystem tools..." to a file.
+      const v1AgentPrompt = v1AgentTask;
 
       // V1 agentic tools: reuse existing Mastra tool loop for coding/tool requests.
       let agentToolResults = null;
@@ -1982,22 +2002,37 @@ export async function POST(request: NextRequest) {
               const abortController = request.signal ? { abort: () => request.signal!.abort(), signal: request.signal } : new AbortController();
 
               // Create stream state for tracking and WebSocket control channel
+              // Lazy import to avoid 'ws' module resolution during instrumentation
+              const { streamStateManager: ssm, notifyStreamComplete: nsc } = await (async () => {
+                try {
+                  const [ssm, sc] = await Promise.all([
+                    import('@/lib/streaming/stream-state-manager'),
+                    import('@/lib/streaming/stream-control-handler'),
+                  ]);
+                  return { streamStateManager: ssm.streamStateManager, notifyStreamComplete: sc.notifyStreamComplete };
+                } catch {
+                  return { streamStateManager: null, notifyStreamComplete: null };
+                }
+              })();
+
               let streamStateCreated = false;
-              try {
-                streamStateManager.create({
-                  streamId: streamRequestId,
-                  userId: userId || 'anonymous',
-                  provider: actualProvider,
-                  model: actualModel,
-                  maxTokens: clientResponse.usage?.total_tokens || 65536,
-                  abortController,
-                });
-                streamStateCreated = true;
-              } catch (e) {
-                chatLogger.warn('Failed to create stream state', {
-                  streamRequestId,
-                  error: e instanceof Error ? e.message : String(e),
-                });
+              if (ssm) {
+                try {
+                  ssm.create({
+                    streamId: streamRequestId,
+                    userId: userId || 'anonymous',
+                    provider: actualProvider,
+                    model: actualModel,
+                    maxTokens: clientResponse.usage?.total_tokens || 65536,
+                    abortController,
+                  });
+                  streamStateCreated = true;
+                } catch (e) {
+                  chatLogger.warn('Failed to create stream state', {
+                    streamRequestId,
+                    error: e instanceof Error ? e.message : String(e),
+                  });
+                }
               }
 
               realEmit('init', {
@@ -2021,8 +2056,8 @@ export async function POST(request: NextRequest) {
 
               if (request.signal) {
                 request.signal.addEventListener('abort', () => {
-                  streamStateManager.abort(streamRequestId);
-                  notifyStreamComplete(streamRequestId);
+                  if (ssm) ssm.abort(streamRequestId);
+                  if (nsc) nsc(streamRequestId);
                   cleanup();
                   chatLogger.warn('LLM stream cancelled by client', { requestId: streamRequestId });
                 });
@@ -2045,7 +2080,7 @@ export async function POST(request: NextRequest) {
                     });
                     // Track tokens in stream state (non-fatal if it fails)
                     try {
-                      streamStateManager.appendToken(streamRequestId, tokenBuffer);
+                      if (ssm) ssm.appendToken(streamRequestId, tokenBuffer);
                     } catch (e) {
                       // Non-fatal — stream state tracking shouldn't break the main stream
                     }
@@ -2439,8 +2474,8 @@ export async function POST(request: NextRequest) {
 
                     // Update stream state and notify WebSocket control channel (non-fatal)
                     try {
-                      streamStateManager.complete(streamRequestId, doneEventData.finishReason);
-                      notifyStreamComplete(streamRequestId);
+                      if (ssm) ssm.complete(streamRequestId, doneEventData.finishReason);
+                      if (nsc) nsc(streamRequestId);
                     } catch (e) {
                       chatLogger.warn('Failed to update stream state on completion', {
                         streamRequestId,
@@ -3435,8 +3470,7 @@ export async function POST(request: NextRequest) {
         emitRef.current = null;
       }
     }
-  }
-  catch (error) {
+  } catch (error) {
     const errorLatency = Date.now() - requestStartTime;
     const errorMessage = error instanceof Error ? error.message : String(error);
     const isNotConfiguredError = errorMessage.includes('not configured');

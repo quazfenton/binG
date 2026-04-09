@@ -1237,7 +1237,7 @@ export default function TerminalPanel({
       inputBatchRef.current[sessionId] = '';
 
       try {
-        await fetch('/api/sandbox/terminal/input', {
+        const resp = await fetch('/api/sandbox/terminal/input', {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1246,6 +1246,11 @@ export default function TerminalPanel({
           credentials: 'include',
           body: JSON.stringify({ sessionId, data: batch }),
         });
+        // If terminal session is not ready (503), don't retry — the terminal isn't active yet
+        if (resp.status === 503) {
+          // Silently drop — the PTY hasn't started yet, sending input makes no sense
+          return;
+        }
       } catch {}
     }, 50);
   }, []);

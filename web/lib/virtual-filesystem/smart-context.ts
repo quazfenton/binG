@@ -1451,23 +1451,60 @@ export async function autoContinueWithFiles(options: {
 /**
  * Wrap a streaming generator to detect file read requests and auto-continue
  * This intercepts the stream, collects the full response, then yields auto-continue context if needed
+ *
+ * Guards against infinite loops:
+ * - Max 3 continuation attempts
+ * - Won't re-trigger if response already contains [AUTO-CONTINUE]
+ * - Won't re-trigger if response already contains [CONTINUE_REQUESTED]
  */
+// Track continuation count per conversation to prevent infinite loops across requests
+const conversationContinuationCount = new Map<string, number>();
+
+/** Reset conversation continuation counters (for testing) */
+export function resetContinuationCounters(): void {
+  conversationContinuationCount.clear();
+}
+
+/** Get current continuation count for a conversation */
+export function getConversationContinuationCount(conversationId: string): number {
+  return conversationContinuationCount.get(conversationId) || 0;
+}
+
 export async function* streamWithAutoContinue(
   generator: AsyncGenerator<any>,
   options: {
     userId: string;
     conversationId?: string;
     enableAutoContinue?: boolean;
+    /** Max auto-continuation attempts (default: 3) */
+    maxContinuations?: number;
+    /** Current continuation count (passed from caller to track across yields) */
+    continuationCount?: number;
   }
 ): AsyncGenerator<any> {
-  const { userId, conversationId, enableAutoContinue = true } = options;
-  
+  const {
+    userId,
+    conversationId,
+    enableAutoContinue = true,
+    maxContinuations = 3,
+    continuationCount: explicitCount,
+  } = options;
+
+  // FIX: Use conversation-level continuation count to prevent infinite loops across requests
+  // If conversationId is provided, use the persistent counter
+  let continuationCount = explicitCount;
+  if (conversationId && explicitCount === undefined) {
+    continuationCount = conversationContinuationCount.get(conversationId) || 0;
+  } else if (continuationCount === undefined) {
+    continuationCount = 0;
+  }
+
   if (!enableAutoContinue) {
     // Just pass through
     yield* generator;
     return;
   }
-  
+
   // Collect all chunks to reconstruct full response
   let fullResponse = '';
   const allToolCalls: any[] = [];
@@ -1475,17 +1512,17 @@ export async function* streamWithAutoContinue(
 
   for await (const chunk of generator) {
     yield chunk; // Pass through to caller
-    
+
     // Track completion state
     if (chunk.isComplete === true) {
       isComplete = true;
     }
-    
+
     // Accumulate text content
     if (chunk.content && typeof chunk.content === 'string') {
       fullResponse += chunk.content;
     }
-    
+
     // Collect tool calls
     if (chunk.toolCalls && Array.isArray(chunk.toolCalls)) {
       allToolCalls.push(...chunk.toolCalls);
@@ -1502,7 +1539,23 @@ export async function* streamWithAutoContinue(
       }
     }
   }
-  
+
+  // Guard: Don't auto-continue if we've already hit the max
+  if (continuationCount >= maxContinuations) {
+    logger.debug('Auto-continue: max continuations reached, skipping', {
+      continuationCount,
+      maxContinuations,
+    });
+    return;
+  }
+
+  // Guard: Don't auto-continue if response already has continuation markers
+  // (prevents infinite loop if previous continuation already triggered)
+  if (fullResponse.includes('[CONTINUE_REQUESTED]') || fullResponse.includes('[AUTO-CONTINUE]')) {
+    logger.debug('Auto-continue: response already contains continuation markers, skipping');
+    return;
+  }
+
   // After stream completes, check if LLM requested files OR continuation
   // Only auto-continue if we got a complete response
   if (isComplete && (fullResponse.trim() || allToolCalls.length > 0)) {
@@ -1532,7 +1585,15 @@ export async function* streamWithAutoContinue(
           toolSummary,
           fileRequestConfidence: fileDetection.confidence,
           implicitFiles: implicitFiles || 'none',
+          continuationCount: continuationCount + 1,
+          maxContinuations,
+          conversationId,
         });
+
+        // FIX: Update conversation-level counter to prevent infinite loops across requests
+        if (conversationId) {
+          conversationContinuationCount.set(conversationId, continuationCount + 1);
+        }
 
         // Yield a structured event — NOT content — so the client knows
         // to auto-submit a new message with context, not append to current response
@@ -1547,6 +1608,8 @@ export async function* streamWithAutoContinue(
             autoContinue: true,
             continuationRequested: true,
             toolCount: allToolCalls.length,
+            continuationCount: continuationCount + 1,
+            maxContinuations,
             fileRequestConfidence: fileDetection.confidence,
             implicitFiles: fileDetection.files,
           },
@@ -1559,26 +1622,46 @@ export async function* streamWithAutoContinue(
         llmResponse: fullResponse,
         toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         conversationId,
+        maxContinuations,
       });
 
       if (autoContinue && autoContinue.shouldContinue) {
         logger.info('Auto-continuing with requested files', {
           fileCount: autoContinue.requestedFiles.length,
           files: autoContinue.requestedFiles,
+          continuationCount: continuationCount + 1,
+          maxContinuations,
+          conversationId,
         });
+
+        // FIX: Update conversation-level counter to prevent infinite loops across requests
+        if (conversationId) {
+          conversationContinuationCount.set(conversationId, continuationCount + 1);
+        }
 
         // Yield a system-like message with the requested files
         yield {
           content: `\n\n[AUTO-CONTINUE] Automatically attaching requested files: ${autoContinue.requestedFiles.join(', ')}\n\n${autoContinue.contextPack}`,
           isComplete: false,
           timestamp: new Date(),
-          metadata: { autoContinue: true, requestedFiles: autoContinue.requestedFiles },
+          metadata: {
+            autoContinue: true,
+            requestedFiles: autoContinue.requestedFiles,
+            continuationCount: continuationCount + 1,
+            maxContinuations,
+          },
         };
       }
     } catch (error: any) {
       logger.warn('Auto-continue check failed', { error: error.message });
       // Don't fail the stream if auto-continue fails
     }
+  }
+
+  // FIX: Reset conversation-level counter on successful completion (no auto-continue)
+  // This ensures fresh requests start from 0 again
+  if (conversationId && continuationCount > 0) {
+    conversationContinuationCount.delete(conversationId);
   }
 }
 

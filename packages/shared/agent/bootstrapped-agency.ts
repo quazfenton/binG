@@ -52,6 +52,8 @@ export interface ExecutionRecord {
 
 export interface AgencyConfig {
   sessionId: string;
+  /** User ID for VFS scoping — MUST be the authenticated user or filesystem owner */
+  userId?: string;
   /** Enable learning from executions (default: true) */
   enableLearning?: boolean;
   /** Max history to keep (default: 1000) */
@@ -327,7 +329,7 @@ export class BootstrappedAgency {
           // packages/shared/agent → web/lib/tools/router
           const { getCapabilityRouter } = await import('../../../web/lib/tools/router');
           const router = getCapabilityRouter();
-          const context = { userId: 'agency', sessionId: this.config.sessionId };
+          const context = { userId: this.config.userId || this.config.sessionId, sessionId: this.config.sessionId };
 
           const results = new Map<string, any>();
           let allSuccess = true;
@@ -414,7 +416,7 @@ export class BootstrappedAgency {
         try {
           const { getCapabilityRouter } = await import('@/lib/tools/router');
           const router = getCapabilityRouter();
-          const context = { userId: 'agency', sessionId: this.config.sessionId };
+          const context = { userId: this.config.userId || this.config.sessionId, sessionId: this.config.sessionId };
           // Build structured input from the task description
           const input = await this.buildCapabilityInput(capability, task);
           const result = await router.execute(capability, input, context);

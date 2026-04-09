@@ -36,6 +36,142 @@ const logger = createLogger('LocalPTY');
 export const runtime = 'nodejs';
 
 // ============================================================
+// Path Traversal Prevention
+// ============================================================
+
+/**
+ * Create a shell initialization script that prevents `cd` from escaping
+ * the workspace directory.
+ *
+ * On Windows: creates a PowerShell profile that overrides Set-Location.
+ * On Unix: creates a bash init file that overrides the cd builtin.
+ */
+async function createSafeShellWrapper(workspaceDir: string, shellPath: string): Promise<{ cmd: string; args: string[] } | null> {
+  const isWindows = process.platform === 'win32';
+  const wrapperDir = path.join(workspaceDir, '.binG-temp');
+  const wrapperPath = isWindows
+    ? path.join(wrapperDir, '_safe_profile.ps1')
+    : path.join(wrapperDir, '_safe_shell_init.sh');
+
+  try {
+    await fs.promises.mkdir(wrapperDir, { recursive: true });
+
+    if (isWindows) {
+      // PowerShell: Create a profile script that overrides Set-Location
+      const psProfile = [
+        '# Safe PowerShell profile - prevent Set-Location from escaping workspace',
+        `$script:WorkspaceRoot = '${workspaceDir.replace(/'/g, "''")}'`,
+        '',
+        'function global:Set-Location {',
+        '    param([Parameter(ValueFromRemainingArguments=$true)][string]$Path)',
+        '    if ($null -eq $Path -or $Path -eq \'\') {',
+        '        Microsoft.PowerShell.Management\\Set-Location $Path',
+        '        return',
+        '    }',
+        '    # Resolve the target path',
+        '    $resolved = $Path',
+        '    if (![System.IO.Path]::IsPathRooted($Path)) {',
+        '        $resolved = Join-Path (Get-Location).Path $Path',
+        '    }',
+        '    try {',
+        '        $resolved = Resolve-Path $resolved -ErrorAction Stop',
+        '    } catch {',
+        '        # Path doesn\'t exist - do a string-based check',
+        '        $checkPath = (Join-Path (Get-Location).Path $Path).Replace(\'/\', \'\\\')',
+        '        $rootPath = $script:WorkspaceRoot.Replace(\'/\', \'\\\')',
+        '        if (!$checkPath.StartsWith($rootPath + \'\\\', \'CurrentCultureIgnoreCase\') -and $checkPath -ne $rootPath) {',
+        '            Write-Warning "cd: Path traversal blocked - must stay within workspace"',
+        '            return',
+        '        }',
+        '        Microsoft.PowerShell.Management\\Set-Location $Path',
+        '        return',
+        '    }',
+        '    $realPath = $resolved.ProviderPath',
+        '    $rootPath = $script:WorkspaceRoot',
+        '    if (!$realPath.StartsWith($rootPath, \'CurrentCultureIgnoreCase\') -and $realPath -ne $rootPath) {',
+        '        Write-Warning "cd: Path traversal blocked - must stay within workspace"',
+        '        return',
+        '    }',
+        '    Microsoft.PowerShell.Management\\Set-Location $Path',
+        '}',
+        '',
+        'Set-Alias -Name cd -Value global:Set-Location -Scope Global -Force',
+        `Set-Location '${workspaceDir.replace(/'/g, "''")}'`,
+      ].join('\n');
+      await fs.promises.writeFile(wrapperPath, psProfile, 'utf-8');
+
+      return {
+        cmd: shellPath,
+        args: ['-NoExit', '-NoLogo', '-NoProfile', '-Command', `& { . '${wrapperPath.replace(/'/g, "''")}' }`],
+      };
+    } else {
+      // Bash: Create an init file that overrides cd builtin
+      const escapedWorkspaceDir = workspaceDir.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
+      const shellScript = `# Safe shell init - prevent cd from escaping workspace
+WORKSPACE_ROOT="${escapedWorkspaceDir}"
+
+# Override cd builtin
+cd() {
+    local target="$1"
+    if [ -z "$target" ]; then
+        builtin cd "$WORKSPACE_ROOT"
+        return $?
+    fi
+    # Resolve the full path
+    local resolved
+    if [[ "$target" = /* ]]; then
+        resolved="$target"
+    else
+        resolved="$(pwd)/$target"
+    fi
+    # Canonicalize (remove /./../ etc)
+    resolved="$(cd "$resolved" 2>/dev/null && pwd -P)" || resolved=""
+    if [ -z "$resolved" ]; then
+        # Target doesn't exist - do a basic prefix check on the string
+        local check="$(pwd)/$target"
+        case "$check" in
+            "$WORKSPACE_ROOT"/*) builtin cd "$target"; return $? ;;
+            "$WORKSPACE_ROOT") builtin cd "$target"; return $? ;;
+            *) echo "cd: Path traversal blocked - must stay within workspace" >&2; return 1 ;;
+        esac
+    fi
+    if [[ "$resolved" != "$WORKSPACE_ROOT" && "$resolved" != "$WORKSPACE_ROOT"/* ]]; then
+        echo "cd: Path traversal blocked - must stay within workspace" >&2
+        return 1
+    fi
+    builtin cd "$resolved"
+}
+
+# Override pushd
+pushd() {
+    local target="$1"
+    local resolved="$(cd "$target" 2>/dev/null && pwd -P)" || resolved=""
+    if [[ "$resolved" != "$WORKSPACE_ROOT" && "$resolved" != "$WORKSPACE_ROOT"/* ]]; then
+        echo "pushd: Path traversal blocked - must stay within workspace" >&2
+        return 1
+    fi
+    builtin pushd "$target"
+}
+
+# Set initial directory
+cd "$WORKSPACE_ROOT" 2>/dev/null || true
+`;
+      await fs.promises.writeFile(wrapperPath, shellScript, { mode: 0o755 });
+
+      return {
+        cmd: shellPath,
+        args: ['--init-file', wrapperPath, '-i'],
+      };
+    }
+  } catch (err: any) {
+    logger.warn('[Local PTY] Failed to create safe shell wrapper, falling back to direct spawn', {
+      error: err.message,
+    });
+    return null;
+  }
+}
+
+// ============================================================
 // Session Store (singleton across HMR via globalThis)
 // ============================================================
 
@@ -175,9 +311,10 @@ async function cleanupSession(id: string, session: LocalPtySession): Promise<voi
 }
 
 async function cleanupDockerContainer(containerId: string): Promise<void> {
-  const { exec } = await import('child_process');
+  const { execFile } = await import('child_process');
   return new Promise<void>((resolve) => {
-    exec(`docker rm -f ${containerId} 2>/dev/null`, (err) => {
+    // SECURITY: Use execFile (not exec) to prevent command injection
+    execFile('docker', ['rm', '-f', containerId], { timeout: 10000 }, (err) => {
       if (err) {
         console.warn(`[Local PTY] Docker cleanup failed ${containerId}:`, err.message);
       }
@@ -229,8 +366,14 @@ function getUserSessionCount(userId: string): number {
 // Helper: Sanitize environment variables (remove secrets)
 // ============================================================
 
-function getCleanEnv(): NodeJS.ProcessEnv {
-  const cleanEnv: NodeJS.ProcessEnv = {};
+/**
+ * Build a sanitized environment for the PTY session.
+ * - Removes secrets and sensitive variables
+ * - Masks the real filesystem path (shows 'workspace/' instead)
+ * - Sets custom shell prompt with masked path
+ */
+function getSafeEnv(workspaceDir: string): Record<string, string> {
+  const cleanEnv: Record<string, string> = {};
   // Match full secret-like variable names, avoiding false positives
   // like PRIMARY_KEY, CACHE_KEY, etc.
   const secretPatterns = [
@@ -245,12 +388,26 @@ function getCleanEnv(): NodeJS.ProcessEnv {
     /^.*_AUTH_KEY$/,
     /^.*_PRIVATE_KEY$/,
     /^.*_SIGNING_KEY$/,
-    /^.*_ACCESS_KEY$/,        // AWS_ACCESS_KEY_ID
+    /^.*_ACCESS_KEY.*$/,      // AWS_ACCESS_KEY_ID (fixed: was ^.*_ACCESS_KEY$ missing _ID)
     /^.*_SECRET_KEY$/,        // STRIPE_SECRET_KEY
     /^DATABASE_URL$/,
     /^REDIS_URL$/,
     /^.*_ENCRYPTION_KEY$/,    // Encryption keys
     /^.*_SESSION_SECRET$/,    // Session secrets
+    // Code injection vectors — these let spawned processes load arbitrary code
+    /^NODE_OPTIONS$/,         // --require arbitrary modules
+    /^NODE_PATH$/,            // module resolution override
+    /^LD_PRELOAD$/,           // shared library injection (Linux)
+    /^LD_LIBRARY_PATH$/,      // library search path (Linux)
+    /^DYLD_INSERT_LIBRARIES$/, // shared library injection (macOS)
+    /^DYLD_LIBRARY_PATH$/,    // library search path (macOS)
+    /^PYTHONPATH$/,           // Python module search path
+    /^RUBYLIB$/,              // Ruby module search path
+    /^PERL5LIB$/,             // Perl module search path
+    /^PERL5OPT$/,             // Perl module auto-load
+    // Agent access
+    /^SSH_AUTH_SOCK$/,        // grants access to user's SSH agent
+    /^GPG_AGENT_INFO$/,       // grants access to GPG agent
   ];
 
   for (const [key, value] of Object.entries(process.env)) {
@@ -260,19 +417,35 @@ function getCleanEnv(): NodeJS.ProcessEnv {
     }
   }
 
-  // Platform-specific defaults
   const isWindows = process.platform === 'win32';
+  // Normalize workspace dir for display (forward slashes)
+  const displayPath = workspaceDir.replace(/\\/g, '/').split('/').slice(-2).join('/');
 
   return {
     ...cleanEnv,
-    // TERM is needed for xterm.js color rendering; PowerShell ignores it (harmless)
     TERM: 'xterm-256color',
-    // HOME: Windows uses USERPROFILE, Unix uses HOME
-    HOME: process.env.HOME || (isWindows ? (process.env.USERPROFILE || process.cwd()) : '/home/node'),
+    // HOME: Set to workspace so tilde expansion resolves inside workspace
+    HOME: workspaceDir,
     // PATH: NEVER override on Windows — PowerShell needs the system PATH
-    // On Unix, use a sensible default if PATH is empty
     PATH: isWindows ? (process.env.PATH || 'C:\\Windows\\System32;C:\\Windows') : (process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'),
     // LANG: Only set on Unix; Windows PowerShell doesn't use it
+    ...(isWindows ? {} : { LANG: 'en_US.UTF-8' }),
+    // PATH MASKING: Set custom prompt to show 'workspace/' instead of real path
+    // For bash/zsh: PS1 with literal text instead of \w (which shows real cwd)
+    ...(isWindows ? {} : {
+      PS1: '\\[\\033[1;32m\\]➜\\[\\033[0m\\] \\[\\033[36m\\]\\u\\[\\033[0m\\]@\\[\\033[33m\\]workspace\\[\\033[0m\\] \\W \\$ ',
+    }),
+  };
+}
+
+// Legacy alias for backward compatibility
+function getCleanEnv(): Record<string, string> {
+  // Fallback when workspaceDir is unknown — use minimal safe env
+  const isWindows = process.platform === 'win32';
+  return {
+    TERM: 'xterm-256color',
+    HOME: process.env.HOME || (isWindows ? (process.env.USERPROFILE || process.cwd()) : '/home/node'),
+    PATH: isWindows ? (process.env.PATH || 'C:\\Windows\\System32;C:\\Windows') : (process.env.PATH || '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin'),
     ...(isWindows ? {} : { LANG: 'en_US.UTF-8' }),
   };
 }
@@ -347,7 +520,15 @@ export async function POST(req: NextRequest) {
       return addAnonSessionCookie(NextResponse.json({ error: 'Unauthorized' }, { status: 401 }));
     }
 
-    // Parse body
+    // Parse body — SECURITY: limit body size to prevent memory exhaustion
+    const MAX_BODY_SIZE = 64 * 1024; // 64KB
+    const contentLength = parseInt(req.headers.get('content-length') || '0', 10);
+    if (contentLength > MAX_BODY_SIZE) {
+      return addAnonSessionCookie(NextResponse.json(
+        { error: 'Request body too large', mode: 'sandbox' },
+        { status: 413 }
+      ));
+    }
     const body = await req.json().catch(() => ({}));
     const { cols: rawCols = 80, rows: rawRows = 24, cwd, shell, checkOnly } = body;
 
@@ -398,11 +579,24 @@ export async function POST(req: NextRequest) {
       ));
     }
 
-    // Determine shell
+    // Determine shell — SECURITY: validate against allowlist to prevent arbitrary binary execution
+    const ALLOWED_SHELLS: string[] = process.platform === 'win32'
+      ? ['powershell.exe', 'cmd.exe', 'pwsh.exe', 'pwsh']
+      : ['/bin/bash', '/bin/sh', '/bin/zsh', '/bin/fish', '/usr/bin/bash', '/usr/bin/zsh', '/usr/bin/fish'];
     const defaultShell = process.platform === 'win32'
       ? 'powershell.exe'
       : (process.env.SHELL && process.env.SHELL.length > 0) ? process.env.SHELL : '/bin/bash';
-    const ptyShell = (shell && shell.length > 0) ? shell : defaultShell;
+    let ptyShell = defaultShell;
+    if (shell && shell.length > 0) {
+      const resolvedShell = path.isAbsolute(shell) ? shell : path.resolve('/usr/bin', shell);
+      if (!ALLOWED_SHELLS.includes(resolvedShell) && !ALLOWED_SHELLS.includes(shell)) {
+        return addAnonSessionCookie(NextResponse.json(
+          { error: `Shell not allowed: '${shell}'. Allowed: ${ALLOWED_SHELLS.join(', ')}` },
+          { status: 400 }
+        ));
+      }
+      ptyShell = shell;
+    }
     const sessionId = randomUUID();
 
     // === Isolation mode: unshare (Linux user namespaces) ===
@@ -496,8 +690,12 @@ async function createDirectPtySession(
   const safeCols = Math.max(1, Math.min(cols, 500));
   const safeRows = Math.max(1, Math.min(rows, 200));
 
+  // PATH TRAVERSAL PREVENTION: Safe PowerShell profile (Windows only, null on Unix)
+  const safeShell = await createSafeShellWrapper(workspaceDir, ptyShell);
+
   logger.info('[Local PTY] Spawning PTY process', {
-    shell: ptyShell,
+    shell: safeShell?.cmd ?? ptyShell,
+    args: safeShell?.args ?? [],
     cols: safeCols,
     rows: safeRows,
     workspaceDir,
@@ -506,18 +704,22 @@ async function createDirectPtySession(
 
   let pty: IPty;
   try {
-    pty = nodePty.spawn(ptyShell, [], {
+    pty = nodePty.spawn(
+      safeShell?.cmd ?? ptyShell,
+      safeShell?.args ?? [],
+      {
       name: 'xterm-256color',
       cols: safeCols,
       rows: safeRows,
       cwd: workspaceDir,
-      env: getCleanEnv(),
+      env: getSafeEnv(workspaceDir),
     });
   } catch (spawnError: any) {
     // Spawn failed — stop the file watcher to avoid leaks
     vfsWatcher.stop();
     logger.error('[Local PTY] Failed to spawn shell process', {
-      shell: ptyShell,
+      shell: safeShell.cmd,
+      args: safeShell.args,
       error: spawnError.message,
       platform: process.platform,
     });
@@ -525,7 +727,7 @@ async function createDirectPtySession(
       {
         error: `Failed to start shell: ${spawnError.message}`,
         hint: process.platform === 'win32'
-          ? 'Ensure PowerShell is available. Check that the shell path is correct.'
+          ? 'Ensure PowerShell is available.'
           : `Ensure ${ptyShell} is installed and accessible.`,
         mode: 'sandbox',
       },
@@ -571,6 +773,10 @@ async function createUnsharePtySession(
   // --mount: new mount namespace (isolated filesystem view)
   // --pid: new PID namespace (can't see other processes)
   // --fork: required for PID namespace with unshare
+  const workspaceDir = await resolveWorkspaceDir(userId);
+
+  // PATH TRAVERSAL PREVENTION: Create safe shell wrapper that overrides cd
+  const safeShell = await createSafeShellWrapper(workspaceDir, ptyShell);
   const unshareArgs = [
     '--user',
     '--map-root-user',
@@ -578,19 +784,19 @@ async function createUnsharePtySession(
     '--pid',
     '--fork',
     '--mount-proc', // Mount a new proc filesystem in the new namespace
-    ptyShell,
+    safeShell.cmd,
+    ...safeShell.args,
   ];
 
   try {
     const safeCols = Math.max(1, Math.min(cols, 500));
     const safeRows = Math.max(1, Math.min(rows, 200));
-    const workspaceDir = await resolveWorkspaceDir(userId);
     const pty = nodePty.spawn('unshare', unshareArgs, {
       name: 'xterm-256color',
       cols: safeCols,
       rows: safeRows,
       cwd: workspaceDir,
-      env: getCleanEnv(),
+      env: getSafeEnv(workspaceDir),
     });
 
     // Get the PID of the unshare process for cleanup
@@ -708,13 +914,13 @@ async function createDockerPtySession(
       console.log(`[Local PTY] Docker container started: ${containerId}`);
 
       // Wait for container to be fully ready (shell may not be available immediately)
-      const { exec: execSync } = await import('child_process');
+      const { execFile } = await import('child_process');
       let ready = false;
       for (let attempt = 0; attempt < 10; attempt++) {
         try {
           await new Promise<void>((resolve, reject) => {
-            // Try multiple shells since some containers may not have /bin/sh
-            execSync(`docker exec ${containerId} ls /workspace >/dev/null 2>&1`, (err) => {
+            // SECURITY: Use execFile (not exec/shell) to prevent command injection via containerId
+            execFile('docker', ['exec', containerId, 'ls', '/workspace'], { timeout: 5000 }, (err) => {
               if (err) reject(err);
               else resolve();
             });
@@ -723,7 +929,7 @@ async function createDockerPtySession(
           break;
         } catch {
           // Container not ready yet, wait and retry
-          await new Promise(r => setTimeout(r, 200 * (attempt + 1))); // Backoff: 200ms, 400ms, 600ms...
+          await new Promise(r => setTimeout(r, 200 * (attempt + 1)));
         }
       }
 
@@ -747,12 +953,68 @@ async function createDockerPtySession(
       // Now use node-pty to exec into the container
       const safeCols = Math.max(1, Math.min(cols, 500));
       const safeRows = Math.max(1, Math.min(rows, 200));
+
+      // PATH TRAVERSAL + PATH MASKING for Docker mode:
+      // Create a safe shell init script in the workspace (already bind-mounted into container)
+      const dockerSafeShellPath = path.join(workspaceDir, '.binG-temp', '_safe_docker_init.sh');
+      try {
+        await fs.promises.mkdir(path.dirname(dockerSafeShellPath), { recursive: true });
+        const dockerShellScript = `# Safe shell init inside Docker - prevent cd from escaping /workspace
+WORKSPACE_ROOT="/workspace"
+
+# Override cd builtin
+cd() {
+    local target="$1"
+    if [ -z "$target" ]; then
+        builtin cd "$WORKSPACE_ROOT"
+        return $?
+    fi
+    local resolved
+    if [[ "$target" = /* ]]; then
+        resolved="$target"
+    else
+        resolved="$(pwd)/$target"
+    fi
+    resolved="$(cd "$resolved" 2>/dev/null && pwd -P)" || resolved=""
+    if [ -z "$resolved" ]; then
+        local check="$(pwd)/$target"
+        case "$check" in
+            "$WORKSPACE_ROOT"/*) builtin cd "$target"; return $? ;;
+            "$WORKSPACE_ROOT") builtin cd "$target"; return $? ;;
+            *) echo "cd: Path traversal blocked - must stay within workspace" >&2; return 1 ;;
+        esac
+    fi
+    if [[ "$resolved" != "$WORKSPACE_ROOT" && "$resolved" != "$WORKSPACE_ROOT"/* ]]; then
+        echo "cd: Path traversal blocked - must stay within workspace" >&2
+        return 1
+    fi
+    builtin cd "$resolved"
+}
+
+pushd() {
+    local target="$1"
+    local resolved="$(cd "$target" 2>/dev/null && pwd -P)" || resolved=""
+    if [[ "$resolved" != "$WORKSPACE_ROOT" && "$resolved" != "$WORKSPACE_ROOT"/* ]]; then
+        echo "pushd: Path traversal blocked - must stay within workspace" >&2
+        return 1
+    fi
+    builtin pushd "$target"
+}
+
+cd "$WORKSPACE_ROOT" 2>/dev/null || true
+`;
+        await fs.promises.writeFile(dockerSafeShellPath, dockerShellScript, { mode: 0o755 });
+      } catch (err: any) {
+        logger.warn('[Local PTY] Failed to create Docker safe shell init script', { error: err.message });
+      }
+
       const pty = nodePty.spawn('docker', [
         'exec',
         '-i',
         containerId,
-        ptyShell,
-        '-l',
+        'bash',
+        '--init-file', '/workspace/.binG-temp/_safe_docker_init.sh',
+        '-i',
       ], {
         name: 'xterm-256color',
         cols: safeCols,
@@ -763,6 +1025,8 @@ async function createDockerPtySession(
           HOME: '/workspace',
           PATH: '/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin',
           LANG: 'en_US.UTF-8',
+          // PATH MASKING: Custom PS1 to show 'workspace' instead of real path
+          PS1: '\\[\\033[1;32m\\]➜\\[\\033[0m\\] \\[\\033[36m\\]\\u\\[\\033[0m\\]@\\[\\033[33m\\]workspace\\[\\033[0m\\] \\W \\$ ',
         },
       });
 
@@ -1084,6 +1348,9 @@ async function createOracleVMPtySession(
           term: 'xterm-256color',
           cols: safeCols,
           rows: safeRows,
+          env: {
+            PS1: '\\[\\033[1;32m\\]➜\\[\\033[0m\\] \\[\\033[36m\\]\\u\\[\\033[0m\\]@\\[\\033[33m\\]workspace\\[\\033[0m\\] \\W \\$ ',
+          },
         },
         (err: any, stream: any) => {
           if (err) {
@@ -1285,12 +1552,21 @@ export async function GET(req: NextRequest) {
   const stream = new ReadableStream({
     start(controller) {
       const encoder = new TextEncoder();
+      let streamClosed = false;
+
+      const closeStream = () => {
+        if (streamClosed) return;
+        streamClosed = true;
+        try { controller.close(); } catch { /* already closed */ }
+      };
 
       const send = (payload: object) => {
+        if (streamClosed) return;
         try {
           controller.enqueue(encoder.encode(`data: ${JSON.stringify(payload)}\n\n`));
         } catch {
           // Stream closed — ignore
+          streamClosed = true;
         }
       };
 
@@ -1304,7 +1580,7 @@ export async function GET(req: NextRequest) {
           // Session was cleaned up — send disconnect with whatever exit code we can find
           send({ type: 'disconnected', data: { exitCode: session.exitCode ?? null } });
           clearInterval(pollInterval);
-          controller.close();
+          closeStream();
           return;
         }
 
@@ -1319,7 +1595,7 @@ export async function GET(req: NextRequest) {
         if (s.exited) {
           send({ type: 'disconnected', data: { exitCode: s.exitCode } });
           clearInterval(pollInterval);
-          controller.close();
+          closeStream();
         }
       }, 30); // Poll every 30ms for lower latency
 

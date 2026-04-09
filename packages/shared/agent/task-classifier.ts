@@ -253,17 +253,72 @@ export class TaskClassifier {
   }
 
   /**
-   * Semantic analysis using lightweight LLM call
+   * Semantic analysis using lightweight LLM call.
+   * Uses the same fast-model selection as spec amplification (telemetry-based
+   * latency ranking, with Mistral Small fallback) — NOT process.env.FAST_MODEL.
+   * Gracefully skips when no model can be obtained.
    */
   private async analyzeSemantics(message: string, reasoning: string[]): Promise<number> {
     try {
+      // Use model ranker for fast model selection (same as spec amplification)
+      let fastModelProvider: string | undefined;
+      let fastModelName: string | undefined;
+
+      try {
+        const { getSpecGenerationModel } = await import('@/lib/models/model-ranker');
+        const ranked = await getSpecGenerationModel();
+        if (ranked) {
+          fastModelProvider = ranked.provider;
+          fastModelName = ranked.model;
+        }
+      } catch {
+        // Model ranker unavailable — will fall back to default below
+      }
+
+      // Fallback: If model ranker unavailable or telemetry is empty, use Mistral Small
+      if (!fastModelProvider || !fastModelName) {
+        fastModelProvider = 'mistral';
+        fastModelName = 'mistral-small-latest';
+      }
+
       // Quick LLM-based scope estimation
-      // Uses fast model with minimal tokens
       const { generateObject } = await import('ai');
       const { z } = await import('zod');
-      
+      const { createMistral } = await import('@ai-sdk/mistral');
+      const { createOpenAI } = await import('@ai-sdk/openai');
+      const { createGoogleGenerativeAI } = await import('@ai-sdk/google');
+
+      // Build model from the ranked provider
+      // Use explicit cases — unknown providers fall back safely to mistral-small-latest
+      // rather than trying createMistral('claude-3-5-sonnet') which would crash.
+      let model: any;
+      switch (fastModelProvider) {
+        case 'openai':
+          model = createOpenAI({ apiKey: process.env.OPENAI_API_KEY || '' })(fastModelName);
+          break;
+        case 'openrouter':
+          model = createOpenAI({
+            apiKey: process.env.OPENROUTER_API_KEY || '',
+            baseURL: 'https://openrouter.ai/api/v1',
+          })(fastModelName);
+          break;
+        case 'google':
+          model = createGoogleGenerativeAI({ apiKey: process.env.GOOGLE_API_KEY || '' })(fastModelName);
+          break;
+        case 'mistral':
+          model = createMistral({ apiKey: process.env.MISTRAL_API_KEY || '' })(fastModelName);
+          break;
+        default:
+          // Unknown provider (e.g., anthropic, chutes, groq) — safely fallback to Mistral Small
+          // instead of crashing with createMistral('unknown-model-name')
+          if (fastModelProvider !== 'mistral') {
+            console.warn(`[TaskClassifier] Provider '${fastModelProvider}' not supported for semantics, using mistral-small-latest`);
+          }
+          model = createMistral({ apiKey: process.env.MISTRAL_API_KEY || '' })('mistral-small-latest');
+      }
+
       const result = await generateObject({
-        model: process.env.FAST_MODEL || 'gpt-3.5-turbo',
+        model,
         prompt: `Estimate task scope. Respond with JSON:
 {
   "estimatedFiles": <number of files likely to be modified>,
