@@ -444,3 +444,248 @@ class TestModuleConstants:
             for path in paths:
                 assert isinstance(path, str)
                 assert path.startswith("/"), f"Path {path!r} should start with /"
+
+    def test_allowed_schemes_contains_http_and_https(self):
+        assert "http" in m.ALLOWED_SCHEMES
+        assert "https" in m.ALLOWED_SCHEMES
+
+    def test_allowed_host_is_docs_mem0_ai(self):
+        assert m.ALLOWED_HOST == "docs.mem0.ai"
+
+
+# ---------------------------------------------------------------------------
+# fetch_page — security / SSRF protection
+# ---------------------------------------------------------------------------
+
+class TestFetchPageSecurity:
+    def test_disallowed_host_returns_error(self):
+        """fetch_page must reject absolute URLs pointing at non-docs.mem0.ai hosts."""
+        result = m.fetch_page("https://evil.com/steal")
+        assert "error" in result
+        assert "evil.com" in result["error"] or "docs.mem0.ai" in result["error"]
+
+    def test_disallowed_scheme_file_returns_error(self):
+        """fetch_page must reject file:// URIs (local filesystem read)."""
+        result = m.fetch_page("file:///etc/passwd")
+        assert "error" in result
+
+    def test_disallowed_scheme_ftp_returns_error(self):
+        """fetch_page must reject ftp:// URIs."""
+        result = m.fetch_page("ftp://docs.mem0.ai/secrets")
+        assert "error" in result
+
+    def test_path_without_leading_slash_returns_error(self):
+        """Relative paths missing leading '/' must be rejected."""
+        result = m.fetch_page("platform/overview")
+        assert "error" in result
+        assert "'/'" in result["error"] or "/" in result["error"]
+
+    def test_allowed_absolute_docs_url_succeeds(self):
+        """An absolute https://docs.mem0.ai/... URL should pass validation and be fetched."""
+        target = "https://docs.mem0.ai/platform/overview"
+        with patch.object(m, "fetch_url", return_value="content") as mock_fetch:
+            result = m.fetch_page(target)
+        mock_fetch.assert_called_once_with(target)
+        assert result["url"] == target
+        assert "error" not in result
+
+    def test_http_absolute_docs_url_allowed(self):
+        """http:// on docs.mem0.ai is also in ALLOWED_SCHEMES."""
+        target = "http://docs.mem0.ai/platform/overview"
+        with patch.object(m, "fetch_url", return_value="data") as mock_fetch:
+            result = m.fetch_page(target)
+        mock_fetch.assert_called_once_with(target)
+        assert "error" not in result
+
+    def test_ssrf_internal_host_rejected(self):
+        """Attempt to reach an internal host is rejected by SSRF check."""
+        result = m.fetch_page("https://169.254.169.254/latest/meta-data/")
+        assert "error" in result
+
+    def test_disallowed_host_message_mentions_allowed_host(self):
+        result = m.fetch_page("https://attacker.example.com/data")
+        assert m.ALLOWED_HOST in result["error"]
+
+
+# ---------------------------------------------------------------------------
+# search_docs — network error / fallback path
+# ---------------------------------------------------------------------------
+
+class TestSearchDocsNetworkErrors:
+    def test_urlerror_triggers_fallback_to_llms_txt(self):
+        """When Mintlify API raises URLError, fall back to llms.txt index."""
+        llms = "\n".join([
+            "https://docs.mem0.ai/platform/features/webhooks",
+            "https://docs.mem0.ai/platform/overview",
+        ])
+
+        def side_effect(url):
+            if "api/search" in url:
+                raise urllib.error.URLError("connection refused")
+            return llms
+
+        with patch.object(m, "fetch_url", side_effect=side_effect):
+            result = m.search_docs("webhooks")
+        assert result["source"] == "llms_txt_index"
+        assert any("webhooks" in u for u in result["matching_urls"])
+
+    def test_oserror_triggers_fallback_to_llms_txt(self):
+        """When an OSError is raised during Mintlify search, fall back."""
+        llms = "https://docs.mem0.ai/platform/overview overview"
+
+        def side_effect(url):
+            if "api/search" in url:
+                raise OSError("network unreachable")
+            return llms
+
+        with patch.object(m, "fetch_url", side_effect=side_effect):
+            result = m.search_docs("overview")
+        assert result["source"] == "llms_txt_index"
+
+    def test_fallback_index_http_error_returns_error_dict(self):
+        """If llms.txt fallback also fails with an HTTP error, return error dict."""
+        def side_effect(url):
+            if "api/search" in url:
+                raise urllib.error.URLError("down")
+            return "HTTP Error 503: Service Unavailable"
+
+        with patch.object(m, "fetch_url", side_effect=side_effect):
+            result = m.search_docs("anything")
+        assert "error" in result
+        assert "suggestion" in result
+
+    def test_fallback_index_url_error_returns_error_dict(self):
+        """If llms.txt fallback returns a URL Error string, return error dict."""
+        def side_effect(url):
+            if "api/search" in url:
+                raise urllib.error.URLError("down")
+            return "URL Error: nodename not resolved"
+
+        with patch.object(m, "fetch_url", side_effect=side_effect):
+            result = m.search_docs("anything")
+        assert "error" in result
+
+    def test_no_matching_urls_in_llms_txt(self):
+        """Query that matches nothing in llms.txt returns empty matching_urls list."""
+        llms = "\n".join([
+            "https://docs.mem0.ai/platform/overview",
+            "https://docs.mem0.ai/sdks/python",
+        ])
+
+        def side_effect(url):
+            if "api/search" in url:
+                raise urllib.error.URLError("down")
+            return llms
+
+        with patch.object(m, "fetch_url", side_effect=side_effect):
+            result = m.search_docs("xyzzy-no-match-at-all")
+        assert result["source"] == "llms_txt_index"
+        assert result["matching_urls"] == []
+
+    def test_unknown_section_skips_section_filter_gracefully(self):
+        """An unknown section name is ignored; all llms.txt matches are returned."""
+        llms = "https://docs.mem0.ai/platform/overview"
+
+        def side_effect(url):
+            if "api/search" in url:
+                raise urllib.error.URLError("down")
+            return llms
+
+        with patch.object(m, "fetch_url", side_effect=side_effect):
+            # "unknown-section" is not in SECTION_MAP, so filter is skipped
+            result = m.search_docs("overview", section="unknown-section")
+        assert result["source"] == "llms_txt_index"
+        assert any("overview" in u for u in result["matching_urls"])
+
+
+# ---------------------------------------------------------------------------
+# get_index — error handling
+# ---------------------------------------------------------------------------
+
+class TestGetIndexErrors:
+    def test_http_error_from_llms_txt_returns_error_dict(self):
+        with patch.object(m, "fetch_url", return_value="HTTP Error 404: Not Found"):
+            result = m.get_index()
+        assert "error" in result
+        assert "404" in result["error"]
+
+    def test_url_error_from_llms_txt_returns_error_dict(self):
+        with patch.object(m, "fetch_url", return_value="URL Error: Name or service not known"):
+            result = m.get_index()
+        assert "error" in result
+        assert "URL Error" in result["error"]
+
+    def test_empty_index_returns_zero_pages(self):
+        """An empty llms.txt (no URLs) returns total_pages == 0."""
+        with patch.object(m, "fetch_url", return_value="# just comments\n\n"):
+            result = m.get_index()
+        assert result["total_pages"] == 0
+        assert result["urls"] == []
+
+
+# ---------------------------------------------------------------------------
+# main() — additional edge cases
+# ---------------------------------------------------------------------------
+
+class TestMainAdditional:
+    def test_search_result_with_no_description_prints_without_crash(self):
+        """mintlify_search results without 'description' field should not raise."""
+        fake_result = {
+            "source": "mintlify_search",
+            "results": [{"title": "SDK Guide", "url": "/sdks/python"}],
+        }
+        with patch("sys.argv", ["mem0_doc_search.py", "--query", "sdk"]):
+            with patch.object(m, "search_docs", return_value=fake_result):
+                captured = io.StringIO()
+                with patch("sys.stdout", captured):
+                    m.main()
+        assert "SDK Guide" in captured.getvalue()
+
+    def test_search_returns_empty_mintlify_results_prints_source(self):
+        """mintlify_search with empty results list should still print source."""
+        fake_result = {"source": "mintlify_search", "results": []}
+        with patch("sys.argv", ["mem0_doc_search.py", "--query", "nothing"]):
+            with patch.object(m, "search_docs", return_value=fake_result):
+                captured = io.StringIO()
+                with patch("sys.stdout", captured):
+                    m.main()
+        assert "mintlify_search" in captured.getvalue()
+
+    def test_index_shows_truncation_notice_for_large_result(self):
+        """main() prints '... and N more' when index has more than 30 pages."""
+        urls = [f"https://docs.mem0.ai/page/{i}" for i in range(35)]
+        fake_result = {"total_pages": 35, "urls": urls, "sections": ["platform"]}
+        with patch("sys.argv", ["mem0_doc_search.py", "--index"]):
+            with patch.object(m, "get_index", return_value=fake_result):
+                captured = io.StringIO()
+                with patch("sys.stdout", captured):
+                    m.main()
+        out = captured.getvalue()
+        assert "5 more" in out
+
+    def test_page_not_truncated_shows_no_truncation_notice(self):
+        """When page is not truncated, no truncation notice should appear."""
+        fake_result = {
+            "url": "https://docs.mem0.ai/platform/overview",
+            "content": "short content",
+            "truncated": False,
+        }
+        with patch("sys.argv", ["mem0_doc_search.py", "--page", "/platform/overview"]):
+            with patch.object(m, "fetch_page", return_value=fake_result):
+                captured = io.StringIO()
+                with patch("sys.stdout", captured):
+                    m.main()
+        out = captured.getvalue()
+        assert "truncated" not in out.lower()
+        assert "short content" in out
+
+    def test_json_output_for_error_result(self):
+        """--json flag should serialize error results to valid JSON."""
+        fake_result = {"error": "some failure", "available": ["platform"]}
+        with patch("sys.argv", ["mem0_doc_search.py", "--section", "bad", "--json"]):
+            with patch.object(m, "list_section", return_value=fake_result):
+                captured = io.StringIO()
+                with patch("sys.stdout", captured):
+                    m.main()
+        parsed = json.loads(captured.getvalue())
+        assert parsed["error"] == "some failure"
