@@ -13,6 +13,7 @@
 
 import { enhancedAPIClient, type RequestConfig, type APIResponse } from './enhanced-api-client';
 import { llmService, type LLMRequest, type LLMResponse, type StreamingResponse, type LLMMessage, PROVIDERS } from './llm-providers';
+import { PROVIDER_FALLBACK_CHAINS } from './provider-fallback-chains';
 import { toolContextManager } from '../tools/tool-context-manager';
 import { getToolManager, TOOL_REGISTRY } from '../tools';
 import { sandboxBridge } from '../sandbox';
@@ -201,24 +202,12 @@ export class EnhancedLLMService {
   }
 
   private setupFallbackChains(): void {
-    // OpenRouter moved to last position in all chains (use as final fallback only)
-    this.fallbackChains.set('openrouter', ['nvidia', 'mistral', 'google', 'github', 'groq', 'zen']);
-    this.fallbackChains.set('chutes', ['anthropic', 'google', 'mistral', 'github', 'nvidia', 'openrouter']);
-    this.fallbackChains.set('anthropic', ['nvidia', 'github', 'mistral', 'google', 'openrouter']);
-    this.fallbackChains.set('google', ['mistral', 'openai', 'github', 'nvidia', 'groq', 'openrouter']);
-    this.fallbackChains.set('mistral', ['google', 'openai', 'github', 'nvidia', 'groq', 'openrouter']);
-    this.fallbackChains.set('github', ['nvidia', 'mistral', 'google', 'groq', 'zen', 'openrouter']);
-    this.fallbackChains.set('portkey', ['google', 'mistral', 'github', 'nvidia', 'openrouter']);
-    this.fallbackChains.set('zen', ['mistral', 'google', 'github', 'nvidia', 'groq', 'openrouter']);
-    this.fallbackChains.set('nvidia', ['google', 'mistral', 'groq', 'together', 'deepinfra', 'fireworks', 'openrouter']);
-    this.fallbackChains.set('groq', ['nvidia', 'together', 'fireworks', 'deepinfra', 'mistral', 'openrouter']);
-    this.fallbackChains.set('together', ['nvidia', 'groq', 'fireworks', 'deepinfra', 'mistral', 'openrouter']);
-    this.fallbackChains.set('fireworks', ['nvidia', 'groq', 'together', 'deepinfra', 'mistral', 'openrouter']);
-    this.fallbackChains.set('deepinfra', ['nvidia', 'groq', 'together', 'fireworks', 'mistral', 'openrouter']);
-    this.fallbackChains.set('anyscale', ['nvidia', 'groq', 'together', 'mistral', 'google', 'openrouter']);
-    this.fallbackChains.set('lepton', ['nvidia', 'groq', 'together', 'mistral', 'google', 'openrouter']);
-    this.fallbackChains.set('openai', ['google', 'mistral', 'github', 'nvidia', 'groq', 'openrouter']);
-
+    // Use centralized fallback chains from provider-fallback-chains.ts
+    // This ensures all paths (enhanced-llm-service, unified-agent, etc.)
+    // use the same fallback provider order.
+    for (const [provider, chain] of Object.entries(PROVIDER_FALLBACK_CHAINS)) {
+      this.fallbackChains.set(provider, chain);
+    }
   }
 
   private startHealthMonitoring(): void {
@@ -438,16 +427,18 @@ export class EnhancedLLMService {
 
       const result = await postProcessToolCalls(enhancedResponse)
       
-      // Record telemetry for model ranking
+      // Record telemetry for model ranking — use ACTUAL provider/model (handles fallbacks)
       await chatRequestLogger.logRequestComplete(
         requestId || `llm-${Date.now()}`,
         true,  // success
         undefined,  // responseSize
-        typeof response.tokensUsed === 'number' 
+        typeof response.tokensUsed === 'number'
           ? { prompt: 0, completion: 0, total: response.tokensUsed }
           : response.tokensUsed,
         latency,
-        undefined  // error
+        undefined,  // error
+        actualProvider,
+        actualModel,
       )
       
       return result
@@ -525,6 +516,20 @@ export class EnhancedLLMService {
             attempt: attemptIndex + 1,
             tokensUsed: response.tokensUsed,
           });
+
+          // FIX: Record fallback model telemetry under its ACTUAL name
+          await chatRequestLogger.logRequestComplete(
+            requestId || `llm-${Date.now()}`,
+            true,
+            undefined,
+            typeof response.tokensUsed === 'number'
+              ? { prompt: 0, completion: 0, total: response.tokensUsed }
+              : response.tokensUsed,
+            fallbackLatency,
+            undefined,
+            fallbackProvider,
+            supportedModel,
+          ).catch(() => {}); // don't throw on telemetry failure
 
           // Build successful fallback response with full metadata
           const fallbackResponse = {

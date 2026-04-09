@@ -87,7 +87,6 @@ export class SandboxService {
     if (sandboxId.startsWith('agentfs-')) return 'agentfs'
     if (sandboxId.startsWith('modal-')) return 'modal'
     if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent'
-    if (sandboxId.startsWith('mistral-')) return 'mistral'
     // Check specific blaxel-mcp prefix BEFORE the general blaxel- prefix
     if (sandboxId.startsWith('blaxel-mcp-')) return 'blaxel-mcp'
     if (sandboxId.startsWith('blaxel-')) return 'blaxel'
@@ -231,7 +230,7 @@ export class SandboxService {
       'opensandbox-agent',
       'microsandbox',
       'e2b',
-      'mistral',
+      'mistral-agent',
       'vercel-sandbox'
     ]
     const configuredProviders: SandboxProviderType[] = []

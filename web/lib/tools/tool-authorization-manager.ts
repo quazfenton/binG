@@ -446,9 +446,9 @@ export class ToolAuthorizationManager {
   ): Promise<OAuthExecuteResult> {
     try {
       const { default: Arcade } = await import('@arcadeai/arcadejs');
-      
+
       const arcade = new Arcade({
-        apiKey: process.env.ARCADE_API_KEY || '',
+        apiKey: (process.env.ARCADE_API_KEY || '').trim(),
       });
 
       // Get user's email for Arcade user ID

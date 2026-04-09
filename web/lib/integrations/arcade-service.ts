@@ -1060,10 +1060,11 @@ let arcadeServiceInstance: ArcadeService | null = null;
  */
 export function getArcadeService(): ArcadeService | null {
   if (!arcadeServiceInstance) {
-    const apiKey = process.env.ARCADE_API_KEY;
+    const apiKey = process.env.ARCADE_API_KEY?.trim();
     if (!apiKey) {
       return null;
     }
+    console.log(`[ArcadeService] Initializing with key: ${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`);
 
     arcadeServiceInstance = createArcadeService({
       apiKey,
@@ -1082,10 +1083,11 @@ export function initializeArcadeService(config?: Partial<ArcadeConfig>): ArcadeS
     return arcadeServiceInstance;
   }
 
-  const apiKey = config?.apiKey || process.env.ARCADE_API_KEY;
+  const apiKey = (config?.apiKey || process.env.ARCADE_API_KEY)?.trim();
   if (!apiKey) {
     return null;
   }
+  console.log(`[ArcadeService] Initializing with key: ${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`);
 
   arcadeServiceInstance = createArcadeService({
     apiKey,

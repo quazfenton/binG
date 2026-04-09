@@ -42,7 +42,7 @@ interface SessionOutputBuffer {
 const outputBuffers = new Map<string, SessionOutputBuffer>();
 const DEFAULT_MAX_LINES = 5000;
 const DEFAULT_MAX_RAW_BYTES = 2 * 1024 * 1024; // 2 MB
-const BUFFER_IDLE_TIMEOUT_MS = 30 * 60 * 1000; // 30 min
+const BUFFER_IDLE_TIMEOUT_MS = 5 * 60 * 1000; // 5 min
 
 /**
  * Get or create an output buffer for a session.

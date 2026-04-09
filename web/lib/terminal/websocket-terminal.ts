@@ -37,7 +37,7 @@ export class WebSocketTerminalServer extends EventEmitter {
     config: { idleTimeout?: number; maxSessions?: number } = {}
   ) {
     super();
-    this.idleTimeout = config.idleTimeout || 30 * 60 * 1000; // 30 minutes
+    this.idleTimeout = config.idleTimeout || 5 * 60 * 1000; // 5 minutes
     this.maxSessions = config.maxSessions || 100;
   }
 

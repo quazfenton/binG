@@ -159,7 +159,7 @@ export function getToolManager(): ToolIntegrationManager {
 
     _toolManager = new ToolIntegrationManager({
       arcade: {
-        apiKey: process.env.ARCADE_API_KEY || '',
+        apiKey: (process.env.ARCADE_API_KEY || '').trim(),
       },
       nango: {
         apiKey: nangoKey,

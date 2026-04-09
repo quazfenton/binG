@@ -1458,7 +1458,18 @@ export async function autoContinueWithFiles(options: {
  * - Won't re-trigger if response already contains [CONTINUE_REQUESTED]
  */
 // Track continuation count per conversation to prevent infinite loops across requests
-const conversationContinuationCount = new Map<string, number>();
+// LRU-style bounded Map to prevent memory leak
+const MAX_CONTINUATION_ENTRIES = 500;
+const conversationContinuationCount = new Map<string, { count: number; lastAccess: number }>();
+
+function trackConversation(id: string, count: number): void {
+  // Evict oldest entries if Map is full
+  if (conversationContinuationCount.size >= MAX_CONTINUATION_ENTRIES) {
+    const firstKey = conversationContinuationCount.keys().next().value;
+    if (firstKey) conversationContinuationCount.delete(firstKey);
+  }
+  conversationContinuationCount.set(id, { count, lastAccess: Date.now() });
+}
 
 /** Reset conversation continuation counters (for testing) */
 export function resetContinuationCounters(): void {
@@ -1467,7 +1478,8 @@ export function resetContinuationCounters(): void {
 
 /** Get current continuation count for a conversation */
 export function getConversationContinuationCount(conversationId: string): number {
-  return conversationContinuationCount.get(conversationId) || 0;
+  const entry = conversationContinuationCount.get(conversationId);
+  return entry?.count || 0;
 }
 
 export async function* streamWithAutoContinue(
@@ -1494,7 +1506,7 @@ export async function* streamWithAutoContinue(
   // If conversationId is provided, use the persistent counter
   let continuationCount = explicitCount;
   if (conversationId && explicitCount === undefined) {
-    continuationCount = conversationContinuationCount.get(conversationId) || 0;
+    continuationCount = getConversationContinuationCount(conversationId);
   } else if (continuationCount === undefined) {
     continuationCount = 0;
   }
@@ -1551,7 +1563,7 @@ export async function* streamWithAutoContinue(
 
   // Guard: Don't auto-continue if response already has continuation markers
   // (prevents infinite loop if previous continuation already triggered)
-  if (fullResponse.includes('[CONTINUE_REQUESTED]') || fullResponse.includes('[AUTO-CONTINUE]')) {
+  if (fullResponse.includes('[CONTINUE_REQUESTED]') || fullResponse.includes('[AUTO-CONTINUE]') || fullResponse.includes('[NEXT]')) {
     logger.debug('Auto-continue: response already contains continuation markers, skipping');
     return;
   }
@@ -1592,7 +1604,7 @@ export async function* streamWithAutoContinue(
 
         // FIX: Update conversation-level counter to prevent infinite loops across requests
         if (conversationId) {
-          conversationContinuationCount.set(conversationId, continuationCount + 1);
+          trackConversation(conversationId, continuationCount + 1);
         }
 
         // Yield a structured event — NOT content — so the client knows
@@ -1636,7 +1648,7 @@ export async function* streamWithAutoContinue(
 
         // FIX: Update conversation-level counter to prevent infinite loops across requests
         if (conversationId) {
-          conversationContinuationCount.set(conversationId, continuationCount + 1);
+          trackConversation(conversationId, continuationCount + 1);
         }
 
         // Yield a system-like message with the requested files
@@ -1651,6 +1663,48 @@ export async function* streamWithAutoContinue(
             maxContinuations,
           },
         };
+        return;
+      }
+
+      // Auto-continue for list_files: LLM often stops after listing a directory
+      // instead of proceeding to read/modify files. Detect this and nudge it forward.
+      const lastToolCall = allToolCalls[allToolCalls.length - 1];
+      const isListFilesLast = lastToolCall
+        && (lastToolCall.name === 'list_files' || lastToolCall.name === 'listFiles' || lastToolCall.name === 'list_directory')
+        && allToolCalls.filter(tc => tc.name === 'list_files' || tc.name === 'listFiles' || tc.name === 'list_directory').length === allToolCalls.length;
+
+      if (isListFilesLast && !fullResponse.includes('[NEXT]') && !fullResponse.includes('[CONTINUE]')) {
+        const listArgs = lastToolCall.arguments || {};
+        const listedPath = listArgs.path || listArgs.directory || 'current directory';
+        const recursive = listArgs.recursive ? ' (recursive)' : '';
+
+        logger.info('Auto-continuing: LLM stopped after list_files, prompting to proceed', {
+          path: listedPath,
+          recursive,
+          continuationCount: continuationCount + 1,
+          maxContinuations,
+          conversationId,
+        });
+
+        // FIX: Update conversation-level counter
+        if (conversationId) {
+          trackConversation(conversationId, continuationCount + 1);
+        }
+
+        yield {
+          content: `\n\n[NEXT] The directory listing for \`${listedPath}\`${recursive} is complete. Please proceed with the task — read relevant files, analyze the code, or make the necessary changes based on what you found.`,
+          isComplete: false,
+          timestamp: new Date(),
+          metadata: {
+            autoContinue: true,
+            reason: 'list_files_completed',
+            listedPath,
+            recursive,
+            continuationCount: continuationCount + 1,
+            maxContinuations,
+          },
+        };
+        return;
       }
     } catch (error: any) {
       logger.warn('Auto-continue check failed', { error: error.message });

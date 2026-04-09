@@ -46,7 +46,7 @@ export const runtime = 'nodejs';
  * On Windows: creates a PowerShell profile that overrides Set-Location.
  * On Unix: creates a bash init file that overrides the cd builtin.
  */
-async function createSafeShellWrapper(workspaceDir: string, shellPath: string): Promise<{ cmd: string; args: string[] } | null> {
+async function createSafeShellWrapper(workspaceDir: string, shellPath: string): Promise<{ cmd: string; args: string[]; env?: Record<string, string> } | null> {
   const isWindows = process.platform === 'win32';
   const wrapperDir = path.join(workspaceDir, '.binG-temp');
   const wrapperPath = isWindows
@@ -62,11 +62,20 @@ async function createSafeShellWrapper(workspaceDir: string, shellPath: string): 
         '# Safe PowerShell profile - prevent Set-Location from escaping workspace',
         `$script:WorkspaceRoot = '${workspaceDir.replace(/'/g, "''")}'`,
         '',
-        'function global:Set-Location {',
+        // Define a global 'cd' function that shadows the built-in 'cd' alias.
+        // A function takes precedence over an alias with AllScope, so no
+        // Set-Alias is needed (which would fail with AllScope aliases).
+        'function global:cd {',
         '    param([Parameter(ValueFromRemainingArguments=$true)][string]$Path)',
         '    if ($null -eq $Path -or $Path -eq \'\') {',
-        '        Microsoft.PowerShell.Management\\Set-Location $Path',
+        '        Microsoft.PowerShell.Management\\Set-Location $script:WorkspaceRoot',
         '        return',
+        '    }',
+        '    # Expand tilde (~) to user home BEFORE validation',
+        '    if ($Path.StartsWith(\'~\')) {',
+        '        $homeDir = [Environment]::GetFolderPath(\'UserProfile\')',
+        '        $tail = $Path.Substring(1)',
+        '        $Path = Join-Path $homeDir $tail',
         '    }',
         '    # Resolve the target path',
         '    $resolved = $Path',
@@ -77,7 +86,11 @@ async function createSafeShellWrapper(workspaceDir: string, shellPath: string): 
         '        $resolved = Resolve-Path $resolved -ErrorAction Stop',
         '    } catch {',
         '        # Path doesn\'t exist - do a string-based check',
-        '        $checkPath = (Join-Path (Get-Location).Path $Path).Replace(\'/\', \'\\\')',
+        '        $resolvedStr = $Path',
+        '        if (![System.IO.Path]::IsPathRooted($resolvedStr)) {',
+        '            $resolvedStr = Join-Path (Get-Location).Path $resolvedStr',
+        '        }',
+        '        $checkPath = $resolvedStr.Replace(\'/\', \'\\\')',
         '        $rootPath = $script:WorkspaceRoot.Replace(\'/\', \'\\\')',
         '        if (!$checkPath.StartsWith($rootPath + \'\\\', \'CurrentCultureIgnoreCase\') -and $checkPath -ne $rootPath) {',
         '            Write-Warning "cd: Path traversal blocked - must stay within workspace"',
@@ -95,7 +108,6 @@ async function createSafeShellWrapper(workspaceDir: string, shellPath: string): 
         '    Microsoft.PowerShell.Management\\Set-Location $Path',
         '}',
         '',
-        'Set-Alias -Name cd -Value global:Set-Location -Scope Global -Force',
         `Set-Location '${workspaceDir.replace(/'/g, "''")}'`,
       ].join('\n');
       await fs.promises.writeFile(wrapperPath, psProfile, 'utf-8');
@@ -105,18 +117,24 @@ async function createSafeShellWrapper(workspaceDir: string, shellPath: string): 
         args: ['-NoExit', '-NoLogo', '-NoProfile', '-Command', `& { . '${wrapperPath.replace(/'/g, "''")}' }`],
       };
     } else {
-      // Bash: Create an init file that overrides cd builtin
+      // Unix: Create POSIX-compatible cd override init script
+      // Uses ENV variable (sh/dash/ash), --init-file (bash), or -c sourcing (zsh/fish)
       const escapedWorkspaceDir = workspaceDir.replace(/\\/g, '\\\\').replace(/"/g, '\\"');
       const shellScript = `# Safe shell init - prevent cd from escaping workspace
 WORKSPACE_ROOT="${escapedWorkspaceDir}"
 
-# Override cd builtin
+# Override cd builtin — blocks path traversal including ~/ (home dir)
 cd() {
     local target="$1"
     if [ -z "$target" ]; then
         builtin cd "$WORKSPACE_ROOT"
         return $?
     fi
+    # Expand tilde to home directory BEFORE validation
+    case "$target" in
+        ~) target="$HOME" ;;
+        ~/*) target="$HOME/$(printf '%s' "$target" | cut -c3-)" ;;
+    esac
     # Resolve the full path
     local resolved
     if [[ "$target" = /* ]]; then
@@ -128,7 +146,10 @@ cd() {
     resolved="$(cd "$resolved" 2>/dev/null && pwd -P)" || resolved=""
     if [ -z "$resolved" ]; then
         # Target doesn't exist - do a basic prefix check on the string
-        local check="$(pwd)/$target"
+        local check="$target"
+        if [[ "$check" != /* ]]; then
+            check="$(pwd)/$check"
+        fi
         case "$check" in
             "$WORKSPACE_ROOT"/*) builtin cd "$target"; return $? ;;
             "$WORKSPACE_ROOT") builtin cd "$target"; return $? ;;
@@ -142,11 +163,16 @@ cd() {
     builtin cd "$resolved"
 }
 
-# Override pushd
+# Override pushd — also block ~/
 pushd() {
     local target="$1"
+    # Expand tilde to home directory BEFORE validation
+    case "$target" in
+        ~) target="$HOME" ;;
+        ~/*) target="$HOME/$(printf '%s' "$target" | cut -c3-)" ;;
+    esac
     local resolved="$(cd "$target" 2>/dev/null && pwd -P)" || resolved=""
-    if [[ "$resolved" != "$WORKSPACE_ROOT" && "$resolved" != "$WORKSPACE_ROOT"/* ]]; then
+    if [[ -z "$resolved" || ( "$resolved" != "$WORKSPACE_ROOT" && "$resolved" != "$WORKSPACE_ROOT"/* ) ]]; then
         echo "pushd: Path traversal blocked - must stay within workspace" >&2
         return 1
     fi
@@ -158,10 +184,34 @@ cd "$WORKSPACE_ROOT" 2>/dev/null || true
 `;
       await fs.promises.writeFile(wrapperPath, shellScript, { mode: 0o755 });
 
-      return {
-        cmd: shellPath,
-        args: ['--init-file', wrapperPath, '-i'],
-      };
+      // Detect shell type and use the correct init mechanism
+      const shellBasename = path.basename(shellPath).toLowerCase();
+      if (shellBasename === 'bash' || shellBasename.endsWith('-bash')) {
+        // bash: use --init-file
+        return {
+          cmd: shellPath,
+          args: ['--init-file', wrapperPath, '-i'],
+        };
+      } else if (shellBasename === 'zsh') {
+        // zsh: source the init script then exec interactive zsh
+        return {
+          cmd: shellPath,
+          args: ['-c', `source '${wrapperPath}' && exec ${shellPath} -i`],
+        };
+      } else if (shellBasename === 'fish') {
+        // fish: use fish's init file mechanism
+        return {
+          cmd: shellPath,
+          args: ['--init-command', `source '${wrapperPath}'`],
+        };
+      } else {
+        // sh/dash/ash/unknown: use ENV environment variable
+        return {
+          cmd: shellPath,
+          args: ['-i'],
+          env: { ENV: wrapperPath },
+        };
+      }
     }
   } catch (err: any) {
     logger.warn('[Local PTY] Failed to create safe shell wrapper, falling back to direct spawn', {
@@ -704,6 +754,12 @@ async function createDirectPtySession(
 
   let pty: IPty;
   try {
+    // Merge safe shell env overrides (e.g. ENV for sh/dash) with the sanitized env
+    const mergedEnv: Record<string, string> = {
+      ...getSafeEnv(workspaceDir),
+      ...safeShell?.env,
+    };
+
     pty = nodePty.spawn(
       safeShell?.cmd ?? ptyShell,
       safeShell?.args ?? [],
@@ -712,7 +768,7 @@ async function createDirectPtySession(
       cols: safeCols,
       rows: safeRows,
       cwd: workspaceDir,
-      env: getSafeEnv(workspaceDir),
+      env: mergedEnv,
     });
   } catch (spawnError: any) {
     // Spawn failed — stop the file watcher to avoid leaks
@@ -740,7 +796,15 @@ async function createDirectPtySession(
     workspaceDir,
   });
 
-  return NextResponse.json({ sessionId, mode: 'direct', workspaceDir });
+  return NextResponse.json({
+    sessionId,
+    mode: 'direct',
+    workspaceDir,
+    // SECURITY WARNING: Direct spawn has no isolation
+    warning: process.env.NODE_ENV !== 'production'
+      ? undefined
+      : 'Direct spawn mode provides no process or filesystem isolation. Use Docker or unshare mode for production.',
+  });
 }
 
 // ============================================================
@@ -1343,77 +1407,138 @@ async function createOracleVMPtySession(
     }
 
     client.on('ready', () => {
-      client.shell(
-        {
-          term: 'xterm-256color',
-          cols: safeCols,
-          rows: safeRows,
-          env: {
-            PS1: '\\[\\033[1;32m\\]➜\\[\\033[0m\\] \\[\\033[36m\\]\\u\\[\\033[0m\\]@\\[\\033[33m\\]workspace\\[\\033[0m\\] \\W \\$ ',
-          },
-        },
-        (err: any, stream: any) => {
-          if (err) {
-            client.end();
-            logger.error('[Local PTY] Oracle VM shell failed', { error: err.message });
-            return resolve(NextResponse.json(
-              { error: `Failed to open shell: ${err.message}`, mode: 'sandbox' },
-              { status: 500 }
-            ));
-          }
+      // STEP 1: Create cd-override script on the remote VM
+      const remoteInitPath = `${workspace}/.binG-temp/_safe_oracle_init.sh`;
+      const mkdirCmd = `mkdir -p '${workspace}/.binG-temp'`;
+      const cdOverrideScript = `#!/bin/bash
+# Safe shell init inside Oracle VM - prevent cd from escaping workspace
+WORKSPACE_ROOT="${workspace}"
 
-          // Create a pseudo-IPty adapter so our existing architecture works
-          const sshPty = {
-            pid: 0,
-            onData: (cb: (data: string) => void) => {
-              stream.on('data', (data: Buffer) => cb(data.toString()));
-            },
-            onExit: (cb: (info: { exitCode: number; signal?: string }) => void) => {
-              stream.on('close', (code: number) => cb({ exitCode: code }));
-            },
-            write: (data: string) => stream.write(data),
-            resize: (c: number, r: number) => {
-              try { stream.setWindow(r, c); } catch { /* ignore */ }
-            },
-            kill: () => {
-              try { stream.end(); } catch { /* ignore */ }
-              try { client.end(); } catch { /* ignore */ }
-            },
-            waitForConnection: async () => { /* already connected */ },
-            disconnect: async () => {
-              try { stream.end(); } catch { /* ignore */ }
-              try { client.end(); } catch { /* ignore */ }
-            },
-            wait: async () => ({ exitCode: 0 }),
-            sendInput: async (data: string) => stream.write(data),
-          } as unknown as IPty;
+# Custom PS1 to show 'workspace' instead of real path
+PS1='\\[\\033[1;32m\\]➜\\[\\033[0m\\] \\[\\033[36m\\]\\u\\[\\033[0m\\]@\\[\\033[33m\\]workspace\\[\\033[0m\\] \\W \\$ '
 
-          // Start remote VFS sync — polls the Oracle VM workspace for file changes
-          // and syncs them back to the VFS database
-          const remoteVfsSync = startRemoteVfsSync(
-            client,
-            userId,
-            workspace,
-            sessionId
-          );
+# Override cd builtin
+cd() {
+    local target="$1"
+    if [ -z "$target" ]; then
+        builtin cd "$WORKSPACE_ROOT"
+        return $?
+    fi
+    local resolved
+    if [[ "$target" = /* ]]; then
+        resolved="$target"
+    else
+        resolved="$(pwd)/$target"
+    fi
+    resolved="$(cd "$resolved" 2>/dev/null && pwd -P)" || resolved=""
+    if [ -z "$resolved" ]; then
+        local check="$(pwd)/$target"
+        case "$check" in
+            "$WORKSPACE_ROOT"/*) builtin cd "$target"; return $? ;;
+            "$WORKSPACE_ROOT") builtin cd "$target"; return $? ;;
+            *) echo "cd: Path traversal blocked - must stay within workspace" >&2; return 1 ;;
+        esac
+    fi
+    if [[ "$resolved" != "$WORKSPACE_ROOT" && "$resolved" != "$WORKSPACE_ROOT"/* ]]; then
+        echo "cd: Path traversal blocked - must stay within workspace" >&2
+        return 1
+    fi
+    builtin cd "$resolved"
+}
 
-          registerSession(sessionId, userId, sshPty, {
-            sshClient: client,
-            vfsWatcher: remoteVfsSync,
-            workspaceDir: workspace,
-          });
+pushd() {
+    local target="$1"
+    local resolved="$(cd "$target" 2>/dev/null && pwd -P)" || resolved=""
+    if [[ "$resolved" != "$WORKSPACE_ROOT" && "$resolved" != "$WORKSPACE_ROOT"/* ]]; then
+        echo "pushd: Path traversal blocked - must stay within workspace" >&2
+        return 1
+    fi
+    builtin pushd "$target"
+}
 
-          logger.info('[Local PTY] Oracle VM SSH session created', {
-            sessionId,
-            host,
-            username,
-            cols: safeCols,
-            rows: safeRows,
-          });
+cd "$WORKSPACE_ROOT" 2>/dev/null || true
+`;
 
-          resolve(NextResponse.json({ sessionId, mode: 'oracle-vm', workspaceDir: workspace }));
+      // Heredoc with single-quoted delimiter passes content literally (no expansion)
+      client.exec(`${mkdirCmd} && cat > '${remoteInitPath}' << 'ENDOFSCRIPT'
+${cdOverrideScript}
+ENDOFSCRIPT
+chmod +x '${remoteInitPath}'`, (err: any, setupStream: any) => {
+        if (err) {
+          logger.warn('[Local PTY] Failed to create cd-override script on Oracle VM', { error: err.message });
+          // Continue anyway — cd protection won't be active but shell still works
         }
-      );
+        // Consume setup stream output and wait for close
+        setupStream.on('close', () => {
+          // STEP 2: Open interactive shell via exec with cd protection
+          // Use --rcfile to source our init script, -i for interactive
+          client.exec(
+            `bash --rcfile '${remoteInitPath}' -i`,
+            { pty: { term: 'xterm-256color', cols: safeCols, rows: safeRows } },
+            (err: any, stream: any) => {
+              if (err) {
+                client.end();
+                logger.error('[Local PTY] Oracle VM shell failed', { error: err.message });
+                return resolve(NextResponse.json(
+                  { error: `Failed to open shell: ${err.message}`, mode: 'sandbox' },
+                  { status: 500 }
+                ));
+              }
+
+              // Create a pseudo-IPty adapter so our existing architecture works
+              const sshPty = {
+                pid: 0,
+                onData: (cb: (data: string) => void) => {
+                  stream.on('data', (data: Buffer) => cb(data.toString()));
+                },
+                onExit: (cb: (info: { exitCode: number; signal?: string }) => void) => {
+                  stream.on('close', (code: number) => cb({ exitCode: code }));
+                },
+                write: (data: string) => stream.write(data),
+                resize: (c: number, r: number) => {
+                  try { stream.setWindow(r, c); } catch { /* ignore */ }
+                },
+                kill: () => {
+                  try { stream.end(); } catch { /* ignore */ }
+                  try { client.end(); } catch { /* ignore */ }
+                },
+                waitForConnection: async () => { /* already connected */ },
+                disconnect: async () => {
+                  try { stream.end(); } catch { /* ignore */ }
+                  try { client.end(); } catch { /* ignore */ }
+                },
+                wait: async () => ({ exitCode: 0 }),
+                sendInput: async (data: string) => stream.write(data),
+              } as unknown as IPty;
+
+              // Start remote VFS sync — polls the Oracle VM workspace for file changes
+              // and syncs them back to the VFS database
+              const remoteVfsSync = startRemoteVfsSync(
+                client,
+                userId,
+                workspace,
+                sessionId
+              );
+
+              registerSession(sessionId, userId, sshPty, {
+                sshClient: client,
+                vfsWatcher: remoteVfsSync,
+                workspaceDir: workspace,
+              });
+
+              logger.info('[Local PTY] Oracle VM SSH session created', {
+                sessionId,
+                host,
+                username,
+                cols: safeCols,
+                rows: safeRows,
+              });
+
+              resolve(NextResponse.json({ sessionId, mode: 'oracle-vm', workspaceDir: workspace }));
+            }
+          );
+        });
+      });
     });
 
     client.on('error', (err: any) => {

@@ -29,7 +29,7 @@
  * ```
  */
 
-import { ALL_CAPABILITIES, type CapabilityDefinition } from '@/lib/tools/capabilities';
+import { ALL_CAPABILITIES, type CapabilityDefinition } from '../../../web/lib/tools/capabilities';
 import { SYSTEM_PROMPTS, type AgentRole } from './system-prompts';
 
 // ============================================================================

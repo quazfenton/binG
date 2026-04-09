@@ -50,6 +50,10 @@ export const SSE_EVENT_TYPES = {
   INIT: 'init',
   /** Orchestration progress update (agent nodes, steps, HITL, etc.) */
   ORCHESTRATION_PROGRESS: 'orchestration_progress',
+  /** Auto-continue: LLM requested more turns or stopped after tool call */
+  AUTO_CONTINUE: 'auto-continue',
+  /** Next nudge: LLM stopped after list_files, prompt to proceed */
+  NEXT: 'next',
 } as const;
 
 export type SSEEventTypeName = typeof SSE_EVENT_TYPES[keyof typeof SSE_EVENT_TYPES];
@@ -302,6 +306,29 @@ export interface SSEOrchestrationProgressPayload {
   timestamp: number;
 }
 
+/** Auto-continue: LLM requested more turns or stopped after tool call */
+export interface SSEAutoContinuePayload {
+  content: string;
+  toolSummary?: string;
+  contextHint?: string;
+  implicitFiles?: string[];
+  fileRequestConfidence?: string;
+  continuationCount?: number;
+  maxContinuations?: number;
+  timestamp: number;
+}
+
+/** Next nudge: LLM stopped after list_files, prompt to proceed */
+export interface SSENexPayload {
+  content: string;
+  reason?: string;
+  listedPath?: string;
+  recursive?: string;
+  continuationCount?: number;
+  maxContinuations?: number;
+  timestamp: number;
+}
+
 // ---------------------------------------------------------------------------
 // Discriminated union (useful on the consumer side)
 // ---------------------------------------------------------------------------
@@ -323,7 +350,9 @@ export type SSEEvent =
   | { type: typeof SSE_EVENT_TYPES.INIT; data: SSEInitPayload }
   | { type: typeof SSE_EVENT_TYPES.DONE; data: SSEDonePayload }
   | { type: typeof SSE_EVENT_TYPES.ERROR; data: SSEErrorPayload }
-  | { type: typeof SSE_EVENT_TYPES.HEARTBEAT; data: Record<string, unknown> };
+  | { type: typeof SSE_EVENT_TYPES.HEARTBEAT; data: Record<string, unknown> }
+  | { type: typeof SSE_EVENT_TYPES.AUTO_CONTINUE; data: SSEAutoContinuePayload }
+  | { type: typeof SSE_EVENT_TYPES.NEXT; data: SSENexPayload };
 
 // ---------------------------------------------------------------------------
 // Encoder helpers (backend)

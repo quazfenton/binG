@@ -12,6 +12,7 @@ import { detectTemplate, templateToTaskGraph, type TemplateType } from './templa
 import { createLoopDetector, type LoopDetectionResult } from '@bing/shared/agent/loop-detection';
 import { createCapabilityChain, type CapabilityChain } from '@bing/shared/agent/capability-chain';
 import { createBootstrappedAgency, type BootstrappedAgency } from '@bing/shared/agent/bootstrapped-agency';
+import { chatRequestLogger } from '../../../chat/chat-request-logger';
 
 const log = createLogger('StatefulAgent');
 
@@ -536,8 +537,16 @@ export class StatefulAgent {
   }
 
   private getModel() {
-    const modelString = (process.env.DEFAULT_MODEL || 'gpt-4o').replace('openai:', '');
-    return openai(modelString) as any;
+    // Use getVercelModel() which handles all provider variations (openai, nvidia, mistral, openrouter, etc.)
+    // instead of hardcoding openai() which only works for OpenAI-compatible providers
+    const modelString = process.env.DEFAULT_MODEL || 'gpt-4o';
+    try {
+      return getVercelModel(modelString);
+    } catch {
+      // Fallback to openai if provider not recognized by vercel-ai-streaming
+      const { openai } = require('@ai-sdk/openai');
+      return openai(modelString.replace('openai:', '')) as any;
+    }
   }
 
   private async runDiscoveryPhase(userMessage: string) {
@@ -1444,9 +1453,9 @@ export async function* runStatefulAgentStreaming(
   const errors: Array<{ step: number; message: string; path?: string }> = [];
   const vfs: Record<string, string> = {};
 
-  // Get the model
-  const modelString = (process.env.DEFAULT_MODEL || 'gpt-4o').replace('openai:', '');
-  const model = openai(modelString);
+  // Get the model — use getVercelModel for all provider support
+  const modelString = process.env.DEFAULT_MODEL || 'gpt-4o';
+  const model = getVercelModel(modelString);
 
   // Initialize tools from vercel-ai-tools
   const { getAllTools } = await import('@/lib/chat/vercel-ai-tools');

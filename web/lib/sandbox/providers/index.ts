@@ -339,7 +339,7 @@ function initializeRegistry() {
   providerRegistry.set('mistral', {
     provider: null as any as any,
     priority: 3,
-    enabled: false, // Disabled by default, use mistral-agent instead
+    enabled: false,
     available: false,
     healthy: false,
     initializing: false,

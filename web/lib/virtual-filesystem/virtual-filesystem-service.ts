@@ -999,16 +999,21 @@ export class VirtualFilesystemService {
         }>;
 
         if (rows.length > 0 || meta) {
-          workspace.files = new Map(rows.map(row => [row.path, {
-            path: row.path,
-            content: row.content,
-            language: row.language,
-            size: row.size,
-            version: row.version,
-            lastModified: row.updated_at,
-            createdAt: row.created_at,
-            isDirectoryMarker: row.path.endsWith('/.directory'),
-          } as VirtualFile]));
+          workspace.files = new Map(rows.map(row => {
+            // FIX: Normalize backslashes to forward slashes when loading from DB.
+            // Stale entries from Windows may contain backslashes that break path matching.
+            const normalizedPath = row.path.replace(/\\/g, '/');
+            return [normalizedPath, {
+              path: normalizedPath,
+              content: row.content,
+              language: row.language,
+              size: row.size,
+              version: row.version,
+              lastModified: row.updated_at,
+              createdAt: row.created_at,
+              isDirectoryMarker: normalizedPath.endsWith('/.directory'),
+            } as VirtualFile];
+          }));
 
           workspace.version = meta?.version ?? rows.length;
           workspace.updatedAt = meta?.updated_at ?? new Date().toISOString();
@@ -1018,6 +1023,34 @@ export class VirtualFilesystemService {
         const msg = error instanceof Error ? error.message : String(error);
         // Table not yet created — migration hasn't run. Start empty, will populate on write.
         if (msg.includes('no such table') || msg.includes('SQLITE_ERROR')) {
+          // No-op — workspace stays empty
+        } else {
+          console.warn(`[VFS] Failed to load workspace for ${normalizedOwnerId}:`, msg);
+        }
+      }
+    }
+
+    // BACKGROUND FIX: Normalize any stale backslash paths in the database.
+    // Windows writes paths like `foo\bar`, but VFS expects `foo/bar`.
+    // This one-time-per-owner fix updates any rows that still contain backslashes.
+    try {
+      const db = getDatabase();
+      const backslashCount = (db.prepare(
+        `SELECT COUNT(*) as cnt FROM vfs_workspace_files WHERE owner_id = ? AND path LIKE '%\\%'`
+      ).get(normalizedOwnerId) as { cnt: number }).cnt;
+      if (backslashCount > 0) {
+        const normalizePaths = db.prepare(
+          `UPDATE vfs_workspace_files SET path = REPLACE(path, '\', '/') WHERE owner_id = ? AND path LIKE '%\\%'`
+        );
+        normalizePaths.run(normalizedOwnerId);
+        console.log(`[VFS] Normalized ${backslashCount} backslash path(s) for owner ${normalizedOwnerId}`);
+        // Invalidate in-memory cache so reload picks up corrected paths
+        this.workspaces.delete(normalizedOwnerId);
+      }
+    } catch (err) {
+      // Non-fatal — stale paths will still be caught by load-time normalization
+    }
+  }
           console.warn('[VFS] Workspace tables not yet available — workspace will be empty until migration runs');
         } else {
           console.error('[virtual-filesystem] Failed to load workspace from DB:', error);
@@ -1145,6 +1178,99 @@ export class VirtualFilesystemService {
       deletedFiles,
       errors,
     };
+  }
+
+  /**
+   * Transfer all VFS data from one owner to another.
+   * Used when an anonymous user creates an account — their anonymous
+   * workspace files, conversations, etc. move to the new authenticated user.
+   */
+  async transferOwnership(fromOwnerId: string, toOwnerId: string): Promise<{ transferredFiles: number }> {
+    const normalizedFrom = this.sanitizeOwnerId(fromOwnerId);
+    const normalizedTo = this.sanitizeOwnerId(toOwnerId);
+
+    if (normalizedFrom === normalizedTo) {
+      return { transferredFiles: 0 };
+    }
+
+    const db = getDatabase();
+
+    // Check if source has any data to transfer
+    const fileCount = (db.prepare('SELECT COUNT(*) as cnt FROM vfs_workspace_files WHERE owner_id = ?').get(normalizedFrom) as { cnt: number }).cnt;
+    if (fileCount === 0) {
+      return { transferredFiles: 0 };
+    }
+
+    const now = new Date().toISOString();
+
+    const transferTx = db.transaction(() => {
+      // 1. If target already has data, merge (skip conflicts) or replace?
+      // Strategy: overwrite — the authenticated user's new workspace takes precedence,
+      // but anonymous data fills in any gaps. First check what target already has.
+      const existingTargetPaths = db.prepare(
+        'SELECT path FROM vfs_workspace_files WHERE owner_id = ?'
+      ).all(normalizedTo) as Array<{ path: string }>;
+      const existingPaths = new Set(existingTargetPaths.map(r => r.path));
+
+      // 2. Transfer files that don't conflict
+      const transferFile = db.prepare(
+        `INSERT OR IGNORE INTO vfs_workspace_files
+         (id, owner_id, path, content, language, size, version, created_at, updated_at)
+         SELECT ?, ?, path, content, language, size, version, created_at, updated_at
+         FROM vfs_workspace_files WHERE owner_id = ? AND path = ?`
+      );
+
+      // 3. Transfer meta if target has none
+      const targetHasMeta = db.prepare(
+        'SELECT owner_id FROM vfs_workspace_meta WHERE owner_id = ?'
+      ).get(normalizedTo);
+
+      let transferredCount = 0;
+
+      // Get all source files
+      const sourceFiles = db.prepare(
+        'SELECT path, content, language, size, version, created_at, updated_at FROM vfs_workspace_files WHERE owner_id = ?'
+      ).all(normalizedFrom) as Array<{
+        path: string; content: string; language: string; size: number; version: number; created_at: string; updated_at: string;
+      }>;
+
+      for (const file of sourceFiles) {
+        if (!existingPaths.has(file.path)) {
+          const id = `${normalizedTo}:${file.path}`;
+          transferFile.run(id, normalizedTo, normalizedFrom, file.path);
+          transferredCount++;
+        }
+      }
+
+      // 4. Transfer meta only if target has none and source has it
+      if (!targetHasMeta) {
+        const sourceMeta = db.prepare(
+          'SELECT version, root, updated_at FROM vfs_workspace_meta WHERE owner_id = ?'
+        ).get(normalizedFrom) as { version: number; root: string; updated_at: string } | undefined;
+        if (sourceMeta) {
+          db.prepare(
+            'INSERT OR REPLACE INTO vfs_workspace_meta (owner_id, version, root, updated_at) VALUES (?, ?, ?, ?)'
+          ).run(normalizedTo, sourceMeta.version, sourceMeta.root, now);
+        }
+      }
+
+      // 5. Delete source data
+      db.prepare('DELETE FROM vfs_workspace_files WHERE owner_id = ?').run(normalizedFrom);
+      db.prepare('DELETE FROM vfs_workspace_meta WHERE owner_id = ?').run(normalizedFrom);
+
+      // 6. Clean up in-memory state
+      this.workspaces.delete(normalizedFrom);
+      diffTracker.clear(normalizedFrom);
+
+      // 7. Invalidate target's in-memory cache so it reloads from DB
+      this.workspaces.delete(normalizedTo);
+
+      return transferredCount;
+    });
+
+    const transferredCount = transferTx();
+
+    return { transferredFiles: transferredCount };
   }
 
   /**
@@ -1438,6 +1564,13 @@ class GitBackedVFSProxy {
   async clearWorkspace(ownerId: string): Promise<void> {
     // Delegate to the proper clear (wipes in-memory map + diff tracker + disk file)
     await (this as any).vfs.clearWorkspace(ownerId);
+  }
+
+  /**
+   * Transfer VFS ownership from one owner to another (e.g. anon → authenticated user)
+   */
+  async transferOwnership(fromOwnerId: string, toOwnerId: string): Promise<{ transferredFiles: number }> {
+    return this.vfs.transferOwnership(fromOwnerId, toOwnerId);
   }
 }
 

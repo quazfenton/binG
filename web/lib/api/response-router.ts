@@ -74,6 +74,7 @@ import {
   recordQuotaUsage,
   recordToolExecution,
 } from './response-router-telemetry'
+import { chatRequestLogger } from '@/lib/chat/chat-request-logger'
 
 const logger = createLogger('API:ResponseRouter')
 
@@ -2048,7 +2049,20 @@ export class ResponseRouter {
         ? lastUserMsg.content 
         : JSON.stringify(lastUserMsg?.content || '')
       
-      logger.debug('Building spec prompt', { 
+      const specStartTime = Date.now();
+      
+      // FIX: Log spec amplification request start so telemetry row exists for completion update
+      await chatRequestLogger.logRequestStart(
+        specRequestId,
+        request.userId || 'anonymous',
+        fastModel.provider,
+        fastModel.model,
+        [], // Spec amplification doesn't need message history for telemetry
+        false,
+        { type: 'spec-amplification', primaryRequestId: request.requestId },
+      );
+      
+      logger.debug('Building spec prompt', {
         userContentLength: userContent.length,
         specRequestId,
       })
@@ -2067,11 +2081,39 @@ export class ResponseRouter {
       })
 
       // Wrap spec promise to match expected type for runBackgroundRefinement
-      const wrappedSpecPromise = specPromise.then(response => ({
-        success: true,
-        data: response,
-        error: null,
-      })).catch(err => {
+      const wrappedSpecPromise = specPromise.then(response => {
+        // FIX: Record fast model telemetry for spec amplification under its ACTUAL name
+        const specLatency = Date.now() - specStartTime;
+        chatRequestLogger.logRequestComplete(
+          specRequestId,
+          true,
+          undefined,
+          undefined,
+          specLatency,
+          undefined,
+          fastModel.provider,
+          fastModel.model,
+        ).catch(() => {});
+
+        return {
+          success: true,
+          data: response,
+          error: null,
+        };
+      }).catch(err => {
+        // FIX: Record failed fast model call under its ACTUAL name
+        const specLatency = Date.now() - specStartTime;
+        chatRequestLogger.logRequestComplete(
+          specRequestId,
+          false,
+          undefined,
+          undefined,
+          specLatency,
+          err?.message || 'Spec generation failed',
+          fastModel.provider,
+          fastModel.model,
+        ).catch(() => {});
+
         // LLM provider unavailable - graceful degradation
         logger.debug('Spec generation LLM call failed, continuing without refinement', {
           error: err?.message,
