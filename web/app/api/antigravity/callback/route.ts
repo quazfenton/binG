@@ -25,6 +25,11 @@ export async function GET(req: NextRequest) {
       return NextResponse.json({ error: 'Missing authorization code' }, { status: 400 });
     }
 
+    // FIX: Validate OAuth state parameter to prevent CSRF attacks
+    if (!state) {
+      return NextResponse.json({ error: 'Missing OAuth state parameter' }, { status: 400 });
+    }
+
     const redirectUri = `${process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000'}/api/antigravity/callback`;
     const tokens = await exchangeCodeForTokens(code, redirectUri);
 

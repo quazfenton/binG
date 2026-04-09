@@ -139,7 +139,35 @@ export class EnhancedLLMService {
         apiKey: process.env.NVIDIA_API_KEY || '',
         models: PROVIDERS.nvidia.models,
         priority: 9
-      }
+      },
+      {
+        provider: 'groq',
+        baseUrl: process.env.GROQ_BASE_URL || 'https://api.groq.com/openai/v1',
+        apiKey: process.env.GROQ_API_KEY || '',
+        models: PROVIDERS.groq?.models || [],
+        priority: 10
+      },
+      {
+        provider: 'together',
+        baseUrl: process.env.TOGETHER_BASE_URL || 'https://api.together.xyz/v1',
+        apiKey: process.env.TOGETHER_API_KEY || '',
+        models: PROVIDERS.together?.models || [],
+        priority: 11
+      },
+      {
+        provider: 'deepinfra',
+        baseUrl: process.env.DEEPINFRA_BASE_URL || 'https://api.deepinfra.com/v1/openai',
+        apiKey: process.env.DEEPINFRA_API_KEY || '',
+        models: PROVIDERS.deepinfra?.models || [],
+        priority: 12
+      },
+      {
+        provider: 'fireworks',
+        baseUrl: process.env.FIREWORKS_BASE_URL || 'https://api.fireworks.ai/inference/v1',
+        apiKey: process.env.FIREWORKS_API_KEY || '',
+        models: PROVIDERS.fireworks?.models || [],
+        priority: 13
+      },
     ];
 
     configs.forEach(config => {
@@ -493,13 +521,14 @@ export class EnhancedLLMService {
 
           fallbackModelUsed = supportedModel;
 
+          // Resolve correct API key for this fallback provider
+          const fallbackApiKey = apiKeys?.[fallbackProvider] || fallbackConfig.apiKey || undefined;
           const fallbackRequest = {
             ...llmRequest,
             messages: processedMessages,
             model: supportedModel,
             provider: fallbackProvider,
-            // Pass user API key to fallback provider
-            apiKey: userApiKey,
+            apiKey: fallbackApiKey,
           };
 
           const response = await this.callProviderWithEnhancedClient(
@@ -937,13 +966,14 @@ export class EnhancedLLMService {
             totalAvailable: availableFallbacks.length,
           });
 
+          // Resolve correct API key for this fallback provider
+          const fallbackApiKey = apiKeys?.[fallbackProvider] || fallbackConfig.apiKey || undefined;
           const fallbackRequest = {
             ...llmRequest,
             messages: processedMessages,
             model: supportedModel,
             provider: fallbackProvider,
-            // Pass user API key to fallback provider
-            apiKey: userApiKey,
+            apiKey: fallbackApiKey,
           };
 
           const baseStream = llmService.generateStreamingResponse(fallbackRequest);

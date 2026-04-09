@@ -160,6 +160,9 @@ export async function POST(request: NextRequest) {
         flowId,
       });
 
+      // FIX: Build a realistic auth response from flowId so waitForProviderAuth
+      // can properly poll. Previously we passed a placeholder { status: 'pending', url: undefined }
+      // which had no link to the actual start response.
       const result = await arcadeService.waitForProviderAuth(
         arcadeUserId,
         normalizedProvider,

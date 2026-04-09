@@ -128,7 +128,7 @@ describe('Session File Tracker', () => {
 // =============================================================================
 
 describe('File Request Detection', () => {
-  let detectFileReadRequest: (text: string) => string[];
+  let detectFileReadRequest: (text: string) => { files: string[]; confidence: string };
 
   beforeEach(async () => {
     const mod = await import('@/lib/virtual-filesystem/smart-context');
@@ -139,49 +139,49 @@ describe('File Request Detection', () => {
     const result = detectFileReadRequest(
       'I need to see <request_file>src/App.tsx</request_file> to understand the issue.'
     );
-    expect(result).toContain('src/App.tsx');
+    expect(result.files).toContain('src/App.tsx');
   });
 
   it('should detect "read file" patterns', () => {
     const result = detectFileReadRequest(
       'Let me read the file App.tsx to check the bug.'
     );
-    expect(result).toContain('App.tsx');
+    expect(result.files).toContain('App.tsx');
   });
 
   it('should detect "check file" patterns', () => {
     const result = detectFileReadRequest(
       'I should check utils/helpers.ts for the issue.'
     );
-    expect(result).toContain('utils/helpers.ts');
+    expect(result.files).toContain('utils/helpers.ts');
   });
 
   it('should reject false positives from common phrases', () => {
     const result = detectFileReadRequest(
       'I am interested in React patterns and looking at the documentation.'
     );
-    expect(result.length).toBe(0);
+    expect(result.files.length).toBe(0);
   });
 
   it('should deduplicate results', () => {
     const result = detectFileReadRequest(
       'I need to read App.tsx. Let me check App.tsx again. Also read App.tsx.'
     );
-    const appCount = result.filter(f => f === 'App.tsx').length;
+    const appCount = result.files.filter(f => f === 'App.tsx').length;
     expect(appCount).toBe(1);
   });
 
   it('should handle empty input', () => {
-    expect(detectFileReadRequest('')).toEqual([]);
+    expect(detectFileReadRequest('').files).toEqual([]);
   });
 
   it('should handle input without file references', () => {
-    expect(detectFileReadRequest('Hello, how are you?')).toEqual([]);
+    expect(detectFileReadRequest('Hello, how are you?').files).toEqual([]);
   });
 
   it('should filter files with spaces (invalid paths)', () => {
     const result = detectFileReadRequest('Check interested in React.tsx file patterns.');
-    const hasSpaces = result.some(f => f.includes(' '));
+    const hasSpaces = result.files.some(f => f.includes(' '));
     expect(hasSpaces).toBe(false);
   });
 
@@ -189,7 +189,7 @@ describe('File Request Detection', () => {
     const result = detectFileReadRequest(
       'Read App.tsx, check utils/helpers.ts, and look at styles.css'
     );
-    expect(result.length).toBeGreaterThanOrEqual(2);
+    expect(result.files.length).toBeGreaterThanOrEqual(2);
   });
 
   it('should handle tool call extraction', async () => {
@@ -313,19 +313,19 @@ describe('Import Resolution', () => {
   });
 
   it('should handle Python dot-notation to path conversion', () => {
-    // from .utils.helpers import X → ./utils/helpers
+    // from .utils.helpers import X → /utils/helpers (absolute VFS path)
     const dotPath = '.utils.helpers';
     const slashPath = dotPath.replace(/\./g, '/');
     const result = slashPath.startsWith('//') ? slashPath.slice(1) : slashPath;
-    expect(result).toBe('./utils/helpers');
+    expect(result).toBe('/utils/helpers');
   });
 
   it('should handle double-dot Python relative imports', () => {
-    // from ..shared.utils import X → ../shared/utils
+    // from ..shared.utils import X → /shared/utils (absolute VFS path after normalization)
     const dotPath = '..shared.utils';
     const slashPath = dotPath.replace(/\./g, '/');
     const result = slashPath.startsWith('//') ? slashPath.slice(1) : slashPath;
-    expect(result).toBe('../shared/utils');
+    expect(result).toBe('/shared/utils');
   });
 
   it('should handle Rust crate imports', () => {

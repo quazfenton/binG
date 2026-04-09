@@ -71,6 +71,7 @@ export async function syncVFSToSandbox(
 
   // Use caller-provided patterns, or fall back to comprehensive defaults
   const excludePatterns = exclude ?? [
+    /\.git\//,
     /node_modules\//, /\.next\//, /\.nuxt\//, /dist\//, /build\//, /out\//,
     /\.cache\//, /\.parcel-cache\//, /\.turbo\//, /\.vite\//,
     /__pycache__\//, /\.venv\//, /venv\//, /\.virtualenv\//, /site-packages\//,
@@ -220,6 +221,7 @@ export async function syncSandboxToVFS(
 
   // Use caller-provided patterns, or fall back to comprehensive defaults
   const excludePatternsBack = exclude ?? [
+    /\.git\//,
     /node_modules\//, /\.next\//, /\.nuxt\//, /dist\//, /build\//, /out\//,
     /\.cache\//, /\.parcel-cache\//, /\.turbo\//, /\.vite\//,
     /__pycache__\//, /\.venv\//, /venv\//, /\.virtualenv\//, /site-packages\//,

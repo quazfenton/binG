@@ -173,8 +173,9 @@ class AgentFSBridge {
             ? normalizedSandboxFile.slice(sandboxRoot.length + 1)
             : normalizedSandboxFile;
 
-          const sanitizedRelative = sanitizeSandboxPath(relativePath);
-          const sanitizedFilePath = `${sandboxPath}/${sanitizedRelative}`;
+          // FIX: sanitizeSandboxPath already returns the FULL sanitized path (with basePath).
+          // Don't double-prefix by prepending sandboxPath again.
+          const sanitizedFilePath = sanitizeSandboxPath(relativePath, sandboxPath);
           const readResult = await session.sandboxHandle.readFile(sanitizedFilePath);
           
           if (!readResult.success) {
