@@ -1040,7 +1040,7 @@ Use 'createFile' for new files.`;
               let toolName = edit.action;
               if (edit.action === 'write') toolName = 'createFile';
               else if (edit.action === 'patch') toolName = 'applyDiff';
-              else if (edit.action === 'delete') toolName = 'deleteFile';
+              else if (edit.action === 'delete') toolName = 'delete_file';
 
               const callArgs: any = { path: edit.path };
               if (edit.content) callArgs.content = edit.content;
@@ -1050,8 +1050,8 @@ Use 'createFile' for new files.`;
 
               // Update VFS for successful file operations
               if (execResult.success && edit.path) {
-                this.vfs[edit.path] = typeof edit.content === 'string' ? edit.content : '';
-                await this.addMemoryNode('file', edit.content || '', edit.path);
+                this.vfs[edit.path] = typeof execResult.content === 'string' ? execResult.content : (this.vfs[edit.path] || '');
+                await this.addMemoryNode('file', this.vfs[edit.path], edit.path);
               }
             } catch (err: any) {
               log.warn(`Text-based tool execution failed: ${edit.action}`, err.message);
@@ -1580,7 +1580,7 @@ export async function* runStatefulAgentStreaming(
               let toolName = edit.action;
               if (edit.action === 'write') toolName = 'createFile';
               else if (edit.action === 'patch') toolName = 'applyDiff';
-              else if (edit.action === 'delete') toolName = 'deleteFile';
+              else if (edit.action === 'delete') toolName = 'delete_file';
 
               const callArgs: any = { path: edit.path };
               if (edit.content) callArgs.content = edit.content;
@@ -1589,7 +1589,7 @@ export async function* runStatefulAgentStreaming(
               const execResult = await agent['toolExecutor'].execute(toolName, callArgs);
 
               if (execResult.success && edit.path) {
-                vfs[edit.path] = typeof edit.content === 'string' ? edit.content : '';
+                vfs[edit.path] = typeof execResult.content === 'string' ? execResult.content : (vfs[edit.path] || '');
                 options?.onToolExecution?.(toolName, callArgs, execResult);
               }
             } catch (err: any) {

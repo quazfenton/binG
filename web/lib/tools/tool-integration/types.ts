@@ -15,6 +15,7 @@ export interface ToolConfig {
 export interface ToolExecutionContext {
   userId: string;
   conversationId?: string;
+  scopePath?: string;  // VFS scope path for session-scoped file operations
   metadata?: Record<string, any>;
 }
 

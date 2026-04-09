@@ -1019,6 +1019,7 @@ When task is complete, just respond naturally with your final answer.
       if (edit.action === 'write') toolName = 'write_file';
       else if (edit.action === 'patch') toolName = 'apply_diff';
       else if (edit.action === 'mkdir') toolName = 'create_directory';
+      else if (edit.action === 'delete') toolName = 'delete_file';
 
       // Deduplicate by tool name + path
       if (toolCalls.some(t => t.name === toolName && t.arguments.path === edit.path)) continue;

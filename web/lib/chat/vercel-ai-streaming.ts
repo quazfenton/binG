@@ -28,8 +28,6 @@ import { createMistral } from '@ai-sdk/mistral';
 import type { StreamingResponse, LLMMessage } from './llm-providers';
 import { chatLogger } from './chat-logger';
 
-// Cache for tool call arguments - needed because AI SDK doesn't repeat args in tool-result
-const toolCallArgsCache = new Map<string, any>();
 import { getProviderForModel } from './openai-compat-wrapper';
 import { tokenTracker } from './ai-caching';
 import { createReasoningMiddleware, withRetry, createSmoothStream, isTokenLimitError, handleTokenLimitError } from './ai-middleware';
@@ -402,6 +400,8 @@ export async function* streamWithVercelAI(
 
   const startTime = Date.now();
   const requestId = `vercel-ai-${Date.now()}`;
+  // Cache for tool call arguments - scoped to this stream invocation to prevent cross-request leaks
+  const toolCallArgsCache = new Map<string, any>();
   let useCompatibilityFallback = false;
 
   // Time-to-first-token timeout: only cancels if NO content arrives within timeoutMs
@@ -550,15 +550,25 @@ export async function* streamWithVercelAI(
     }
 
     // Add tools if provided
+    // Log the initial tools status
+    const toolCount = tools ? Object.keys(tools).length : 0;
+    chatLogger.info('[TOOLS-INIT] Tools configured for request', {
+      provider,
+      model: modelName,
+      toolCount,
+      toolNames: tools ? Object.keys(tools) : [],
+    });
+
     if (tools && Object.keys(tools).length > 0) {
       streamOptions.tools = tools;
     } else {
       // Log when tools are NOT provided (different from FC check)
-      chatLogger.warn('[TOOLS] No tools provided to stream - file operations will use text parsing only', {
+      chatLogger.warn('[TOOLS] ⚠ No tools provided to stream - file operations will use text parsing only', {
         provider,
         model: modelName,
         hasToolsArg: !!tools,
         toolsKeys: tools ? Object.keys(tools) : [],
+        implications: 'LLM will not use function calling - must rely on text-based tool parsing',
       });
     }
 
@@ -578,17 +588,23 @@ export async function* streamWithVercelAI(
         toolNames: Object.keys(streamOptions.tools),
       });
       if (supportsFC === false) {
-        chatLogger.warn('[FC-GATE] Model does NOT support function calling — using text-mode fallback', {
+        // FC BYPASS - model doesn't support function calling, stripping tools
+        chatLogger.error('[FC-GATE] ✗ FC BYPASSED - Model does NOT support function calling', {
           provider,
           model: modelName,
           toolCount,
+          severity: 'HIGH',
+          action: 'Stripping tools and using text-mode fallback',
+          textModeFormats: ['```file: path\ncontent```', '```diff: path\n...```', '```mkdir: path```', '```delete: path```'],
         });
         // EXPLICITLY STRIP TOOLS - model doesn't support FC
         chatLogger.warn('[TOOLS-STRIP] Explicitly stripping tools from request (FC not supported)', {
           provider,
           model: modelName,
           strippedToolCount: toolCount,
+          strippedTools: Object.keys(streamOptions.tools || {}),
           reason: 'model does not support function calling',
+          fallbackMode: 'text-mode tool instructions injected into system prompt',
         });
         delete streamOptions.tools;
 
@@ -777,20 +793,33 @@ RULES:
             const hasArgs = !!callArgs && Object.keys(callArgs).length > 0;
             const toolName = (chunk as any).toolName;
             const toolCallId = (chunk as any).toolCallId;
+            const argsCount = Object.keys(callArgs).length;
             
             // ENHANCED: Log tool call with detailed args info
             if (hasArgs) {
-              chatLogger.info('[TOOL-CALL] Received tool call with args', {
+              chatLogger.info('[TOOL-CALL] ✓ Tool invoked', {
                 toolCallId,
                 toolName,
+                argsCount,
                 argsKeys: Object.keys(callArgs),
-                argsPreview: JSON.stringify(callArgs).slice(0, 200),
+                // Show first 500 chars of args for debugging
+                argsPreview: JSON.stringify(callArgs).slice(0, 500),
+                // Log internal data structure
+                argsTypes: Object.fromEntries(Object.entries(callArgs).map(([k, v]) => [k, typeof v])),
               });
             } else {
-              chatLogger.warn('[TOOL-CALL] Received tool call with EMPTY args (may fail)', {
+              // EMPTY ARGS - log with emphasis since this often causes tool failures
+              chatLogger.error('[TOOL-CALL] ✗ EMPTY args detected - tool likely to fail', {
                 toolCallId,
                 toolName,
-                warning: 'Tool may execute with empty args - check if model streaming completed',
+                severity: 'HIGH',
+                warning: 'Tool will execute with empty args - check if model streaming was truncated or incomplete',
+                possibleCauses: [
+                  'Model response was truncated',
+                  'Function calling args not properly serialized',
+                  'Model stopped before sending complete args',
+                  'Multi-step tool call args split across chunks',
+                ],
               });
             }
 
@@ -814,14 +843,27 @@ RULES:
           const resultToolCallId = (chunk as any).toolCallId;
           const cachedArgs = toolCallArgsCache.get(resultToolCallId);
           const finalArgs = cachedArgs || (chunk as any).args || (chunk as any).arguments || {};
+          const toolResult = (chunk as any).result;
+          const resultSuccess = toolResult?.success ?? (toolResult?.error === undefined);
           
-          // ENHANCED: Log tool result
-          chatLogger.info('[TOOL-RESULT] Tool execution completed', {
-            toolCallId: resultToolCallId,
-            toolName: (chunk as any).toolName,
-            hasCachedArgs: !!cachedArgs,
-            hasResultArgs: !!((chunk as any).args || (chunk as any).arguments),
-          });
+          // ENHANCED: Log tool result with detailed info
+          if (resultSuccess) {
+            chatLogger.info('[TOOL-RESULT] ✓ Tool succeeded', {
+              toolCallId: resultToolCallId,
+              toolName: (chunk as any).toolName,
+              hasCachedArgs: !!cachedArgs,
+              argsUsed: Object.keys(finalArgs),
+              resultKeys: toolResult ? Object.keys(toolResult) : [],
+            });
+          } else {
+            chatLogger.error('[TOOL-RESULT] ✗ Tool failed', {
+              toolCallId: resultToolCallId,
+              toolName: (chunk as any).toolName,
+              hasCachedArgs: !!cachedArgs,
+              error: toolResult?.error || 'Unknown error',
+              argsUsed: Object.keys(finalArgs),
+            });
+          }
           yield {
             content: '',
             isComplete: false,

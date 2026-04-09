@@ -23,6 +23,14 @@ export async function GET(req: NextRequest) {
     process.env.ANTIGRAVITY_DEFAULT_PROJECT_ID ||
     'rising-fact-p41fc';
 
-  const oauthUrl = await getAntigravityOAuthUrl(projectId);
-  return NextResponse.redirect(oauthUrl);
+  // Generate OAuth URL. Note: getAntigravityOAuthUrl defaults to the user callback,
+  // so we must override the redirect_uri for the admin flow.
+  const oauthUrl = new URL(await getAntigravityOAuthUrl(projectId));
+  const appUrl = process.env.NEXT_PUBLIC_APP_URL || url.origin;
+  oauthUrl.searchParams.set(
+    'redirect_uri',
+    `${appUrl}/api/antigravity/admin/callback`,
+  );
+
+  return NextResponse.redirect(oauthUrl.toString());
 }

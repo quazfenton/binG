@@ -1673,7 +1673,7 @@ export function extractFlatJsonToolCalls(content: string): FileEdit[] {
       if (!jsonStr.includes('"tool"') && !jsonStr.includes('"name"')) continue;
 
       const parsed = JSON.parse(jsonStr);
-      const toolName = parsed.tool || parsed.name;
+      const toolName = (parsed.tool || parsed.name || '').toLowerCase();
       if (!fileEditTools.includes(toolName)) continue;
 
       // Handle batch_write / write_files: { files: [{ path, content }, ...] }
@@ -1735,7 +1735,7 @@ export function extractToolTagEdits(content: string): FileEdit[] {
   let m: RegExpExecArray | null;
 
   while ((m = pattern.exec(content)) !== null) {
-    const toolName = m[1];
+    const toolName = (m[1] || '').toLowerCase();
     if (!fileEditTools.includes(toolName)) continue;
 
     try {

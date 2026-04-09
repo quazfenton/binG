@@ -538,8 +538,10 @@ export function composeMultiRole(
   if (!primary) return SYSTEM_PROMPTS[primaryRole] || '';
 
   // Merge directives from all roles
-  const allDirectives = [primary.directives, ...secondaryRoles.map(r => getRoleSections(r)?.directives).filter(Boolean)];
-  const mergedDirectives = allDirectives.join('\n\n');
+  const allDirectives = [primary.directives, ...secondaryRoles.map(r => getRoleSections(r)?.directives).filter((d): d is PromptSection => Boolean(d))];
+  const mergedDirectives = allDirectives
+    .map(d => renderSection(d, { availableTools: [], roleName: primaryRole }))
+    .join('\n\n');
 
   // Merge tool strategies (deduplicated)
   const allToolSections = [primary.toolStrategy, ...secondaryRoles.map(r => getRoleSections(r)?.toolStrategy).filter(Boolean)];

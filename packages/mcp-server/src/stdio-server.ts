@@ -305,8 +305,28 @@ server.tool(
     try {
       const validatedPath = validatePath(path);
 
+      // Resolve the real path to prevent symlink escapes
+      const realPath = normalize(await fs.realpath(validatedPath));
+      const workspaceRoot = normalize(config.workspaceRoot);
+      const workspacePrefix = workspaceRoot.endsWith(sep)
+        ? workspaceRoot
+        : `${workspaceRoot}${sep}`;
+
+      // Re-check that the real path still stays inside the workspace root
+      if (realPath !== workspaceRoot && !realPath.startsWith(workspacePrefix)) {
+        return {
+          content: [
+            {
+              type: 'text' as const,
+              text: `Error: Path traversal detected: "${path}" resolves outside workspace`,
+            },
+          ],
+          isError: true,
+        };
+      }
+
       // Check if path exists and is a directory
-      const stat = await fs.stat(validatedPath);
+      const stat = await fs.stat(realPath);
       if (!stat.isDirectory()) {
         return {
           content: [{ type: 'text' as const, text: `Error: "${path}" is not a directory` }],
@@ -315,7 +335,7 @@ server.tool(
       }
 
       // Read directory
-      const entries = await fs.readdir(validatedPath, { withFileTypes: true });
+      const entries = await fs.readdir(realPath, { withFileTypes: true });
 
       // Get metadata for each entry
       const lines: string[] = [];
@@ -323,7 +343,7 @@ server.tool(
         // Skip hidden files/directories
         if (entry.name.startsWith('.')) continue;
 
-        const entryPath = join(validatedPath, entry.name);
+        const entryPath = join(realPath, entry.name);
         try {
           const entryStat = await fs.stat(entryPath);
           const type = entry.isDirectory() ? 'dir' : 'file';
@@ -397,6 +417,27 @@ server.tool(
       let cwd = config.workspaceRoot;
       if (workingDir) {
         cwd = validatePath(workingDir);
+
+        // Resolve the real path to prevent symlink escapes
+        const realCwd = normalize(await fs.realpath(cwd));
+        const workspaceRoot = normalize(config.workspaceRoot);
+        const workspacePrefix = workspaceRoot.endsWith(sep)
+          ? workspaceRoot
+          : `${workspaceRoot}${sep}`;
+
+        // Re-check that the real path still stays inside the workspace root
+        if (realCwd !== workspaceRoot && !realCwd.startsWith(workspacePrefix)) {
+          return {
+            content: [
+              {
+                type: 'text' as const,
+                text: `Error: Path traversal detected: "${workingDir}" resolves outside workspace`,
+              },
+            ],
+            isError: true,
+          };
+        }
+        cwd = realCwd;
 
         // Verify directory exists
         const stat = await fs.stat(cwd);

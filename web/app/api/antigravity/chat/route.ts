@@ -43,16 +43,13 @@ export async function POST(req: NextRequest) {
     const accounts = await getAntigravityAccounts(authResult.userId);
 
     if (!accounts.length) {
-      const masterConfigured = isMasterAccountConfigured();
       return NextResponse.json(
         {
-          error: masterConfigured
-            ? 'No personal Antigravity account connected. Using master account.'
-            : 'No Antigravity accounts connected. Visit /api/antigravity/login to authenticate.',
+          error: 'No Antigravity accounts connected. Visit /api/antigravity/login to authenticate.',
           connectUrl: '/api/antigravity/login',
           availableModels: Object.keys(ANTIGRAVITY_MODELS),
         },
-        { status: masterConfigured ? 200 : 400 }
+        { status: 400 }
       );
     }
 

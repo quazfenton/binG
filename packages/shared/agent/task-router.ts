@@ -56,7 +56,8 @@ class TaskRouter {
   async analyzeTask(task: string): Promise<TaskRoutingResult> {
     // Try fast path first (stage 1 only — no LLM cost)
     const { classifyIntent, getAllStage1Scores } = await import('./intent-schema');
-    const stage1Result = classifyIntent(task, { minConfidence: 0.5, enableStage2: false });
+    // stage-1-only returns sync, stage-2 returns Promise
+    const stage1Result = await classifyIntent(task, { minConfidence: 0.5, enableStage2: false });
 
     let intentMatch: IntentMatch;
 

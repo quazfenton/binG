@@ -73,25 +73,20 @@ export async function POST(req: NextRequest) {
     }
 
     // Verify session ownership (same logic as input route)
+    // Note: After auth check above, authResult.success is guaranteed true
     const anonCookie = req.cookies.get('anon-session-id')?.value;
-    if (authResult.success && !authResult.userId.startsWith('anon:')) {
+    if (!authResult.userId.startsWith('anon:')) {
+      // Non-anonymous user: verify exact userId match
       if (session.userId !== authResult.userId) {
         return NextResponse.json({ error: 'Unauthorized: session does not belong to this user' }, { status: 403 });
       }
-    } else if (authResult.success && authResult.userId.startsWith('anon:')) {
+    } else {
+      // Anonymous user: verify anon ID matches cookie
       const sessionAnonId = session.userId.replace(/^anon:/, '');
       const cookieAnonId = anonCookie?.replace(/^anon_?/, '') || '';
       if (sessionAnonId !== cookieAnonId) {
         return NextResponse.json({ error: 'Unauthorized: session does not belong to this user' }, { status: 403 });
       }
-    } else if (anonCookie) {
-      const sessionAnonId = session.userId.replace(/^anon:/, '');
-      const cookieAnonId = anonCookie.replace(/^anon_?/, '');
-      if (sessionAnonId !== cookieAnonId) {
-        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
-      }
-    } else {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
     // Check if PTY has exited
