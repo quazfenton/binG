@@ -476,6 +476,21 @@ export class StatefulAgent {
           skillBootstrapTriggered: success && this.transactionLog.length > 0,
         });
 
+        // FIX: Record telemetry for StatefulAgent LLM calls
+        const modelString = process.env.DEFAULT_MODEL || 'gpt-4o';
+        const actualProvider = modelString.includes('/') ? modelString.split('/')[0] : 'openai';
+        const actualModel = modelString.includes('/') ? modelString.split('/').slice(1).join('/') : modelString;
+        chatRequestLogger.logRequestComplete(
+          `stateful-${this.sessionId}-${Date.now()}`,
+          result.success,
+          undefined,
+          undefined,
+          duration,
+          result.success ? undefined : result.errors.map(e => e.message).join('; '),
+          actualProvider,
+          actualModel,
+        ).catch(() => {});
+
         return result;
       } catch (error: any) {
         this.status = 'error';
@@ -494,6 +509,21 @@ export class StatefulAgent {
           errors: this.errors.length,
           duration: `${Math.round(duration / 1000)}s`,
         });
+
+        // FIX: Record failure telemetry for StatefulAgent
+        const modelString = process.env.DEFAULT_MODEL || 'gpt-4o';
+        const actualProvider = modelString.includes('/') ? modelString.split('/')[0] : 'openai';
+        const actualModel = modelString.includes('/') ? modelString.split('/').slice(1).join('/') : modelString;
+        chatRequestLogger.logRequestComplete(
+          `stateful-${this.sessionId}-${Date.now()}`,
+          false,
+          undefined,
+          undefined,
+          duration,
+          error.message || 'StatefulAgent execution failed',
+          actualProvider,
+          actualModel,
+        ).catch(() => {});
 
         return {
           success: false,

@@ -215,8 +215,13 @@ export class LocalFolderSyncService {
       
       for (const entry of entries) {
         if (entry.type === 'file') {
-          // === EXCLUSION CHECK: Skip node_modules, venvs, caches, build outputs, etc. ===
-          if (shouldExcludeFromSync(entry.path)) {
+          // === EXCLUSION CHECK: Use relative path to prevent false matches ===
+          // e.g., if opfsRoot is "/opfs/build" and entry.path is "/opfs/build/app.js",
+          // we should match "app.js" not "/opfs/build/app.js" which could contain "build"
+          const relativePath = entry.path.startsWith(folder.opfsRoot)
+            ? entry.path.slice(folder.opfsRoot.length)
+            : entry.path;
+          if (shouldExcludeFromSync(relativePath)) {
             continue;
           }
 
@@ -303,8 +308,11 @@ export class LocalFolderSyncService {
       
       for (const node of listing.data.nodes) {
         if (node.type === 'file') {
-          // === EXCLUSION CHECK: Skip node_modules, venvs, caches, build outputs, etc. ===
-          if (shouldExcludeFromSync(node.path)) {
+          // === EXCLUSION CHECK: Use relative VFS path to prevent false matches ===
+          const relativePath = node.path.startsWith(folder.vfsPath)
+            ? node.path.slice(folder.vfsPath.length)
+            : node.path;
+          if (shouldExcludeFromSync(relativePath)) {
             continue;
           }
 

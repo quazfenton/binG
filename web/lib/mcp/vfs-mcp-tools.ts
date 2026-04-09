@@ -586,18 +586,35 @@ export const batchWriteTool = (tool as any)({
   execute: async ({ files, commitMessage = 'Batch write via MCP tool' }) => {
     try {
       const context = getToolContext();
-      
+      const startTime = Date.now();
+
+      logger.info('batchWrite: entry', {
+        userId: context.userId,
+        scopePath: context.scopePath,
+        commitMessage,
+        sessionId: context.sessionId,
+      });
+
       // Parse files argument - handles string format from LLM
       const filesArray = parseBatchWriteFiles(files);
-      
-      logger.debug('batchWrite: after parsing', { 
+
+      if (!filesArray || !Array.isArray(filesArray)) {
+        logger.warn('batchWrite: failed to parse files array', { filesType: typeof files });
+        return {
+          success: false,
+          error: 'Failed to parse files argument. Expected an array of {path, content} objects.',
+          results: [],
+        };
+      }
+
+      logger.debug('batchWrite: after parsing', {
         filesArrayType: typeof filesArray,
         filesArrayIsArray: Array.isArray(filesArray),
         filesArrayLength: filesArray?.length
       });
 
     // DEBUG: Log full context and args at entry
-    logger.debug('batchWrite: entry', {
+    logger.debug('batchWrite: entry details', {
   filesType: typeof files,
   filesIsArray: Array.isArray(filesArray),
   filesLength: filesArray?.length ?? 'null/undefined',
@@ -701,12 +718,15 @@ export const batchWriteTool = (tool as any)({
 
   const successCount = results.filter(r => r.success).length;
   const failCount = results.filter(r => !r.success).length;
-  
+  const durationMs = Date.now() - startTime;
+
   logger.info('batchWrite: completed', {
     userId: context.userId,
-    total: files.length,
+    scopePath: context.scopePath,
+    total: filesArray.length,
     successCount,
     failCount,
+    durationMs,
     scopedPaths: scopedFiles.map(f => f.scopedPath),
   });
 

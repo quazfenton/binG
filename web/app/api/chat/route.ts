@@ -1114,6 +1114,69 @@ export async function POST(request: NextRequest) {
                   }
                 }
 
+                // VFS WRITE: Actually write extracted file edits to the virtual filesystem
+                // This mirrors the streaming path at line ~2340 — without this, edits are
+                // only emitted as SSE events (status: 'detected') but NEVER persisted to VFS.
+                const fullResponse = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
+                if (enableFilesystemEdits && fullResponse.trim() && filesystemOwnerId) {
+                  try {
+                    const { enableVFSBatchMode, flushVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
+                    enableVFSBatchMode(filesystemOwnerId);
+
+                    const appliedEdits = await applyFilesystemEditsFromResponse({
+                      ownerId: filesystemOwnerId,
+                      conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+                      requestId: requestId,
+                      scopePath: requestedScopePath,
+                      lastUserMessage: (() => {
+                        const c = [...messages].reverse().find((m) => m.role === 'user')?.content;
+                        return typeof c === 'string' ? c : '';
+                      })(),
+                      attachedPaths: attachedFilesystemFiles.map((file) => file.path),
+                      responseContent: fullResponse,
+                      commands: {},
+                      forceExtract: true,
+                    });
+
+                    await flushVFSBatchMode(filesystemOwnerId);
+
+                    // Emit applied file edit events so UI shows status: 'applied'
+                    if (appliedEdits?.applied?.length) {
+                      for (const edit of appliedEdits.applied) {
+                        if (!isValidFilePath(edit.path)) continue;
+                        const editContent = edit.content || edit.diff || '';
+                        if (!editContent || editContent.trim().length === 0) continue;
+                        const hasDiff = !!edit.diff;
+                        const isPatch = edit.operation === 'patch' || hasDiff;
+                        emit(SSE_EVENT_TYPES.FILE_EDIT, {
+                          path: edit.path,
+                          status: 'applied',
+                          operation: isPatch ? 'patch' : (edit.operation || 'write'),
+                          timestamp: Date.now(),
+                          content: edit.content || '',
+                          diff: isPatch ? (edit.diff || '') : undefined,
+                        });
+                        chatLogger.debug('VFS file edit applied (agentic path)', {
+                          path: edit.path,
+                          operation: isPatch ? 'patch' : 'write',
+                        });
+                      }
+                      chatLogger.info('Agentic path: filesystem edits applied to VFS', {
+                        editCount: appliedEdits.applied.length,
+                        paths: appliedEdits.applied.map(e => e.path).join(', '),
+                      });
+                    } else if (appliedEdits?.errors?.length) {
+                      chatLogger.warn('Agentic path: VFS write errors', {
+                        errors: appliedEdits.errors.slice(0, 5),
+                      });
+                    }
+                  } catch (e) {
+                    chatLogger.warn('Agentic path: VFS write failed (non-fatal)', {
+                      error: e instanceof Error ? e.message : String(e),
+                    });
+                  }
+                }
+
                 // SESSION NAMING: Detect if this is a new single-folder project
                 // If so, rename the session folder to match the project folder
                 const responseContent = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
@@ -1617,6 +1680,10 @@ export async function POST(request: NextRequest) {
       // It's needed for spec amplification checks that run before the build call
       let clientResponse: any = null;
 
+      // CRITICAL FIX: Declare streamRequestId at function scope to avoid TDZ errors
+      // in nested closures (agentic path, fallback streaming path)
+      let streamRequestId: string = requestId || '';
+
       const lastUserMessage =
         [...messages].reverse().find((m) => m.role === 'user')?.content;
       const v1AgentTask = typeof lastUserMessage === 'string'
@@ -1948,7 +2015,7 @@ export async function POST(request: NextRequest) {
       // Handle streaming response
       chatLogger.debug('Checking streaming conditions', { requestId, stream, supportsStreaming: selectedProvider.supportsStreaming });
       if (stream && selectedProvider.supportsStreaming) {
-        const streamRequestId = requestId || generateSecureId('stream');
+        streamRequestId = requestId || generateSecureId('stream');
         const streamStartTime = Date.now();
         let chunkCount = 0;
 
