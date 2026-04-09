@@ -1,0 +1,238 @@
+{
+  "timestamp": "2026-04-09T18:27:16.575Z",
+  "provider": "mistral",
+  "model": "mistral-small-latest",
+  "total": 38,
+  "passed": 35,
+  "failed": 3,
+  "tests": [
+    {
+      "name": "Login succeeds",
+      "pass": true,
+      "detail": "status=200",
+      "timestamp": 1775759178557
+    },
+    {
+      "name": "Auth token received",
+      "pass": true,
+      "detail": "token_len=280",
+      "timestamp": 1775759178558
+    },
+    {
+      "name": "Session cookie received",
+      "pass": true,
+      "detail": "anon-session-id=; Path=/; Max-Age=0; Htt...",
+      "timestamp": 1775759178558
+    },
+    {
+      "name": "List project directory",
+      "pass": true,
+      "detail": "status=200",
+      "timestamp": 1775759180087
+    },
+    {
+      "name": "List returns nodes array",
+      "pass": true,
+      "detail": "nodes=14",
+      "timestamp": 1775759180087
+    },
+    {
+      "name": "Sessions directory exists",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759180087
+    },
+    {
+      "name": "Chat streams tokens",
+      "pass": true,
+      "detail": "tokens=1",
+      "timestamp": 1775759189623
+    },
+    {
+      "name": "Chat completes",
+      "pass": true,
+      "detail": "success",
+      "timestamp": 1775759189624
+    },
+    {
+      "name": "Response contains answer",
+      "pass": true,
+      "detail": "text=\"Four\"",
+      "timestamp": 1775759189624
+    },
+    {
+      "name": "LLM responds with content",
+      "pass": true,
+      "detail": "chars=21",
+      "timestamp": 1775759203470
+    },
+    {
+      "name": "Request completes",
+      "pass": true,
+      "detail": "success",
+      "timestamp": 1775759203470
+    },
+    {
+      "name": "LLM attempts file writes",
+      "pass": false,
+      "detail": "toolCalls=0, fileEdits=0",
+      "timestamp": 1775759203470
+    },
+    {
+      "name": "Response mentions expected files",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775759203470
+    },
+    {
+      "name": "Filesystem accessible after chat",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759206503
+    },
+    {
+      "name": "Session files exist",
+      "pass": true,
+      "detail": "nodes=2",
+      "timestamp": 1775759206503
+    },
+    {
+      "name": "Write file A",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759208045
+    },
+    {
+      "name": "Write file B",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759208071
+    },
+    {
+      "name": "List multi dir",
+      "pass": true,
+      "detail": "nodes=2",
+      "timestamp": 1775759208089
+    },
+    {
+      "name": "Both files present",
+      "pass": true,
+      "detail": "actual=2",
+      "timestamp": 1775759208090
+    },
+    {
+      "name": "Nested path write",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759209616
+    },
+    {
+      "name": "Leading slash write",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759209639
+    },
+    {
+      "name": "Traversal rejected",
+      "pass": true,
+      "detail": "status=400, success=false",
+      "timestamp": 1775759209655
+    },
+    {
+      "name": "File overwrite",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759211214
+    },
+    {
+      "name": "Read diff dir",
+      "pass": true,
+      "detail": "nodes=0",
+      "timestamp": 1775759211231
+    },
+    {
+      "name": "Chat with FS context responds",
+      "pass": true,
+      "detail": "chars=21",
+      "timestamp": 1775759220716
+    },
+    {
+      "name": "Chat completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759220717
+    },
+    {
+      "name": "MCP tools/list responds",
+      "pass": true,
+      "detail": "status=200",
+      "timestamp": 1775759222237
+    },
+    {
+      "name": "MCP has tools array",
+      "pass": true,
+      "detail": "count=10",
+      "timestamp": 1775759222237
+    },
+    {
+      "name": "read_file available",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759222237
+    },
+    {
+      "name": "write_file available",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759222237
+    },
+    {
+      "name": "list_files available",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759222237
+    },
+    {
+      "name": "batch_write available",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759222237
+    },
+    {
+      "name": "read_files available",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759222237
+    },
+    {
+      "name": "apply_diff available",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775759222238
+    },
+    {
+      "name": "Write 3 files sequentially",
+      "pass": true,
+      "detail": "success=3/3",
+      "timestamp": 1775759223810
+    },
+    {
+      "name": "Batch dir lists 3 files",
+      "pass": true,
+      "detail": "nodes=3",
+      "timestamp": 1775759223828
+    },
+    {
+      "name": "Context bundling chat responds",
+      "pass": true,
+      "detail": "chars=21",
+      "timestamp": 1775759233528
+    },
+    {
+      "name": "Image gen endpoint reachable",
+      "pass": false,
+      "detail": "status=403",
+      "timestamp": 1775759235062
+    }
+  ]
+}

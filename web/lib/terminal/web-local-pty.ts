@@ -130,6 +130,7 @@ export async function createWebLocalPty(
     let outputCallback: ((data: string) => void) | null = null;
     let closeCallback: (() => void) | null = null;
     let eventSource: EventSource | null = null;
+    let sseTimeout: ReturnType<typeof setTimeout> | undefined;
     let isClosed = false;
 
     // Connect SSE for output streaming

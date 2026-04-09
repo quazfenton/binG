@@ -68,8 +68,8 @@ export class AdvancedToolCallDispatcher {
 
   private resolveMode(): ToolCallingMode {
     const configured = (process.env.TOOL_CALLING_MODE || 'auto').trim().toLowerCase();
-    if (configured === 'native' || configured === 'content' || configured === 'xml' || configured === 'auto') {
-      return configured;
+    if (configured === 'native' || configured === 'grammar' || configured === 'xml' || configured === 'auto') {
+      return configured as ToolCallingMode;
     }
     return 'auto';
   }
@@ -93,7 +93,7 @@ function editsToToolCalls(edits: Array<{ path: string; content?: string; action?
       ...(edit.content ? { content: edit.content } : {}),
       ...(edit.diff ? { diff: edit.diff } : {}),
     },
-    source: 'content' as const,
+    source: 'grammar' as const,
   }));
 }
 

@@ -847,7 +847,7 @@ export class OpencodeV2Provider implements LLMProvider {
 
     // Only auto-fix truly trivial cases
     if (errorInfo.autoFixable && attempt === 1) {
-      log.debug(`[OpencodeV2Provider] [AUTO-FIX] ${errorInfo.reason}`);
+      logger.debug(`[OpencodeV2Provider] [AUTO-FIX] ${errorInfo.reason}`);
       const retry = await this.executeCommandDirect(errorInfo.fixCommand!, cwd, timeoutSeconds, false);
       if (retry.success) {
         return {
@@ -924,6 +924,7 @@ export class OpencodeV2Provider implements LLMProvider {
           `Check if the tool name is correct`,
         ],
         autoFixable: false,
+        reason: `Command "${cmd}" not found in PATH`,
       };
     }
 
@@ -941,6 +942,7 @@ export class OpencodeV2Provider implements LLMProvider {
           `Use a different port`,
         ],
         autoFixable: false,
+        reason: `Port ${port} already in use`,
       };
     }
 
@@ -956,6 +958,7 @@ export class OpencodeV2Provider implements LLMProvider {
           'Create the file or directory if needed',
         ],
         autoFixable: false,
+        reason: 'File or directory not found',
       };
     }
 
@@ -971,6 +974,7 @@ export class OpencodeV2Provider implements LLMProvider {
           'Avoid running commands that require root access',
         ],
         autoFixable: false,
+        reason: 'Permission denied',
       };
     }
 
@@ -985,6 +989,7 @@ export class OpencodeV2Provider implements LLMProvider {
           'Check for missing brackets, quotes, or semicolons',
         ],
         autoFixable: false,
+        reason: 'Syntax or parse error',
       };
     }
 
@@ -999,6 +1004,7 @@ export class OpencodeV2Provider implements LLMProvider {
           'Fix the code errors and retry',
         ],
         autoFixable: false,
+        reason: 'Build or compilation failed',
       };
     }
 
@@ -1014,6 +1020,7 @@ export class OpencodeV2Provider implements LLMProvider {
           'Run "ps aux" to check for hung processes',
         ],
         autoFixable: false,
+        reason: 'Command timed out',
       };
     }
 
@@ -1029,6 +1036,7 @@ export class OpencodeV2Provider implements LLMProvider {
           'Check for memory leaks in the code',
         ],
         autoFixable: false,
+        reason: 'Out of memory',
       };
     }
 
@@ -1042,6 +1050,7 @@ export class OpencodeV2Provider implements LLMProvider {
         'Try running the command manually to understand the issue',
       ],
       autoFixable: false,
+      reason: 'Unrecognized error',
     };
   }
 

@@ -32,7 +32,7 @@ function getJwtModule() {
 /**
  * Get JWT secret (lazy-loaded to avoid build failures)
  */
-function getJwtSecret(): string {
+export function getJwtSecret(): string {
   if (jwtSecret) return jwtSecret;
 
   const env: any = typeof process !== 'undefined' ? process.env : {};

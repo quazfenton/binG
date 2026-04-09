@@ -73,6 +73,7 @@ async function createRetrieval(projectPath: string): Promise<Retrieval> {
     // Write file — platform-aware
     writeFile: async (path, content) => {
       if (isDesktop) {
+        // @ts-ignore - Tauri API only available in desktop builds
         const { writeTextFile } = await import("@tauri-apps/api/fs");
         await writeTextFile(path, content);
       } else {
@@ -126,6 +127,7 @@ async function startWatcher(retrieval: Retrieval, projectPath: string) {
     console.log(`File changed: ${event.path}`);
 
     if (isDesktop) {
+      // @ts-ignore - Tauri API only available in desktop builds
       const { readTextFile } = await import("@tauri-apps/api/fs");
       const content = await readTextFile(event.path);
       await retrieval.indexFile(event.path, content);
@@ -181,6 +183,7 @@ async function setupPlugins(projectId: string, projectPath: string) {
     projectPath,
     exec: isDesktop
       ? async (cmd) => {
+          // @ts-ignore - Tauri API only available in desktop builds
           const { Command } = await import("@tauri-apps/api/shell");
           const output = await Command.create("sh", ["-c", cmd]).execute();
           return {

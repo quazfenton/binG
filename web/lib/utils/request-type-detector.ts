@@ -104,7 +104,7 @@ export async function detectRequestType(messages: LLMMessage[]): Promise<{
   const { classifyIntent, getAllStage1Scores, INTENT_SCHEMA } = await import('@bing/shared/agent/intent-schema');
 
   // Try stage 1 first (fast, no LLM cost)
-  const stage1Result = classifyIntent(text, { minConfidence: 0.5, enableStage2: false });
+  const stage1Result = await classifyIntent(text, { minConfidence: 0.5, enableStage2: false });
 
   if (stage1Result.confidence >= 0.5) {
     const requestType = intentToRequestType(stage1Result.intent.routingTarget);

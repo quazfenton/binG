@@ -305,16 +305,15 @@ export class AgentOrchestrator {
     this.validatedConfig = IterationConfigSchema.parse(config.iterationConfig);
 
     // Build SDK tools via proper adapter — P2 #9
-    // Uses aiTool() with typed Zod parameters instead of manual conversion + @ts-expect-error
+    // Uses aiTool() with typed Zod parameters instead of manual conversion
     for (const toolDef of config.tools) {
       const toolName = toolDef.name;
       if (!toolName) continue;
 
-      // @ts-expect-error - AI SDK 6.x tool execute type mismatch with current parameters type
       this.sdkTools[toolName] = aiTool({
         description: toolDef.description || `Execute ${toolName}`,
         parameters: toolDef.parameters,
-        execute: async (args) => {
+        execute: async (args: Record<string, unknown>) => {
           try {
             return await config.executeTool(toolName, args);
           } catch (error: any) {
@@ -322,7 +321,7 @@ export class AgentOrchestrator {
             throw error;
           }
         },
-      });
+      }) as any;
     }
   }
 
@@ -401,7 +400,7 @@ export class AgentOrchestrator {
          const verificationResult = await this.runVerification(modifiedFiles);
 
          if (!verificationResult.passed) {
-           yield { type: 'verification_failed', errors: verificationResult.errors };
+           yield { type: 'verification_failed', errors: verificationResult.errors.map(e => ({ file: (e as any).path || 'unknown', message: (e as any).error || String(e), suggestion: undefined })) };
            // Feed errors back to the ACT loop for self-healing
            // P2 #7: Use structured error context
            conversationHistory.push({
