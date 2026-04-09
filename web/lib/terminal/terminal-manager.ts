@@ -64,7 +64,7 @@ const websocketConnections = new Map<string, WebSocketConnection>()
 // ✅ FIX: Connection limits to prevent resource exhaustion
 const MAX_PTY_CONNECTIONS = 50
 const MAX_WEBSOCKET_CONNECTIONS = 100
-const CONNECTION_IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
+const CONNECTION_IDLE_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
 
 // Legacy port patterns (kept for backward compatibility)
 const LEGACY_PORT_PATTERNS = [
@@ -115,7 +115,7 @@ setInterval(() => {
 
 export class TerminalManager {
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
-    if (sandboxId.startsWith('mistral-')) return 'mistral'
+    if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent'
     if (sandboxId.startsWith('blaxel-mcp-')) return 'blaxel-mcp'
     if (sandboxId.startsWith('blaxel-') || sandboxId.includes('-blaxel-')) return 'blaxel'
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-') || sandboxId.includes('-sprites-')) return 'sprites'
@@ -195,7 +195,7 @@ export class TerminalManager {
 
     // Try all known providers to locate the sandbox (supports quota-based fallbacks)
     // This is critical because sandbox-service can create sandboxes on any provider via fallback
-    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'blaxel-mcp', 'sprites', 'codesandbox', 'webcontainer', 'webcontainer-filesystem', 'webcontainer-spawn', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral', 'vercel-sandbox']
+    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'blaxel-mcp', 'sprites', 'codesandbox', 'webcontainer', 'webcontainer-filesystem', 'webcontainer-spawn', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral-agent', 'vercel-sandbox']
     log.info(`[Terminal] Primary provider failed, trying all known providers for sandbox ${sandboxId}`)
     for (const providerType of allProviders) {
       const result = await tryProvider(providerType)

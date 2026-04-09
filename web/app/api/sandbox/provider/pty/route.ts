@@ -25,7 +25,7 @@ function detectProviderType(sandboxId: string): string | null {
   if (lowerId.startsWith('sprite-') || lowerId.startsWith('sprite_') || lowerId.startsWith('bing-')) return 'sprites';
   if (lowerId.startsWith('codesandbox-') || lowerId.startsWith('csb-')) return 'codesandbox';
   if (lowerId.startsWith('vercel-') || lowerId.startsWith('vc-')) return 'vercel-sandbox';
-  if (lowerId.startsWith('mistral-')) return 'mistral-agent';
+  if (lowerId.startsWith('mistral-agent-')) return 'mistral-agent';
   if (lowerId.startsWith('blaxel-')) return 'blaxel';
   if (lowerId.startsWith('micro-')) return 'microsandbox';
   
@@ -216,20 +216,20 @@ export async function POST(req: NextRequest) {
     logger.debug('Provider type detection', {
       sandboxId,
       detectedType: providerType,
-      prefixes: ['e2b-', 'daytona-', 'sprite-', 'codesandbox-', 'csb-', 'vercel-', 'mistral-', 'blaxel-', 'micro-']
+      prefixes: ['e2b-', 'daytona-', 'sprite-', 'codesandbox-', 'csb-', 'vercel-', 'mistral-agent-', 'blaxel-', 'micro-']
     });
 
     if (!providerType) {
       logger.warn('Unknown provider type for PTY request', {
         sandboxId,
         sessionId,
-        hint: 'Sandbox ID must start with one of: e2b-, daytona-, sprite-, csb-, codesandbox-, vercel-, mistral-, blaxel-, micro-'
+        hint: 'Sandbox ID must start with one of: e2b-, daytona-, sprite-, csb-, codesandbox-, vercel-, mistral-agent-, blaxel-, micro-'
       });
       return NextResponse.json(
         { 
           error: 'Unknown provider type. Sandbox ID must have provider prefix (e2b-, daytona-, sprite-, csb-, vercel-, etc.)',
           providedSandboxId: sandboxId,
-          supportedPrefixes: ['e2b-', 'daytona-', 'sprite-', 'csb-', 'codesandbox-', 'vercel-', 'mistral-', 'blaxel-', 'micro-']
+          supportedPrefixes: ['e2b-', 'daytona-', 'sprite-', 'csb-', 'codesandbox-', 'vercel-', 'mistral-agent-', 'blaxel-', 'micro-']
         },
         { status: 400 }
       );

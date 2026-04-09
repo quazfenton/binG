@@ -167,12 +167,15 @@ export function getVercelModel(
 ) {
   const currentEnv: any = typeof process !== 'undefined' ? process.env : {};
 
+  // Guard against undefined/null model — use env default
+  const modelName = model || currentEnv.DEFAULT_MODEL || 'gpt-4o';
+
   // Validate model name - catch common mistakes where provider is passed as model
   const providerNames = ['openai', 'anthropic', 'google', 'mistral', 'openrouter', 'groq', 'together', 'chutes'];
-  if (providerNames.includes(model.toLowerCase())) {
+  if (providerNames.includes(modelName.toLowerCase())) {
     chatLogger.error('Model name appears to be a provider name', {
       provider,
-      model,
+      model: modelName,
       hint: `Did you mean to use a specific model like 'gpt-4o', 'claude-sonnet-4-5', or 'mistral-large-latest'?`,
     });
     // Don't throw - let it fail naturally if the provider accepts it

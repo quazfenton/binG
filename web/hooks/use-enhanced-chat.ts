@@ -174,6 +174,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentMessageRef = useRef<Message | null>(null);
   const messagesRef = useRef<Message[]>([]);
+  const isMountedRef = useRef(true);
+
+  // Track mount state to prevent stale callbacks
+  useEffect(() => {
+    isMountedRef.current = true;
+    return () => {
+      isMountedRef.current = false;
+    };
+  }, []);
 
   // Stream control WebSocket state
   const [streamId, setStreamId] = useState<string | null>(null);
@@ -208,7 +217,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
         : 'Please continue with the remaining tasks.';
 
       setInput(continuationPrompt);
-      setTimeout(() => {
+      setTimeout(() => { if (!isMountedRef.current) return;
         const fakeEvent = { preventDefault: () => {}, currentTarget: { reset: () => {} } } as React.FormEvent<HTMLFormElement>;
         handleSubmit(fakeEvent);
       }, 100);
@@ -492,7 +501,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     const streamingToolInvocations: Array<{ toolCallId: string; toolName: string; state: string }> = [];
 
     // Set up a timeout to ensure we don't get stuck
-    const timeoutId = setTimeout(() => {
+    const timeoutId = setTimeout(() => { if (!isMountedRef.current) return;
       console.warn('[Chat] Streaming timeout after 3min, finalizing with accumulated content', {
         accumulatedContentLength: accumulatedContent?.length,
         tokenCount,
@@ -768,16 +777,17 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   }
 
                   // CRITICAL FIX: Auto-retry empty responses
-                  // This handles cases where providers return empty content with no tools/filesystem edits
-                  // Mark the original message as failed, then create a NEW bubble with loading state
-                  // NOTE: Only retry ONCE. If the retry also returns empty, stop retrying to prevent infinite loops.
+                  // On the FIRST retry, create a NEW bubble. On subsequent retries,
+                  // reuse the same bubble and just keep it in loading state — no
+                  // endless bubble spam.
                   if (isEmptyResponse) {
                     const retryCount = (doneMetadata.retryCount || 0);
-                    const maxRetries = 1; // Only 1 retry to prevent infinite loops
+                    const maxRetries = 3;
 
                     if (retryCount < maxRetries) {
+                      const isFirstRetry = retryCount === 0;
+
                       // Find the last user message content
-                      // Safe to use messagesRef here since user messages don't change during streaming
                       const currentMessages = messagesRef.current;
                       const lastUserMsg = currentMessages.findLast(
                         msg => msg.role === 'user' && msg.id !== assistantMessage.id
@@ -786,10 +796,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                       if (lastUserMsg?.content) {
                         console.warn(`[Chat] Empty response detected, auto-retrying (attempt ${retryCount + 1}/${maxRetries})`);
 
-                        // CRITICAL: Clear the timeout from current stream before starting retry
                         clearTimeout(timeoutId);
 
-                        // Build diagnostic context for the retry
                         const toolContext = buildEmptyResponseRetryContext({
                           toolInvocations: streamingToolInvocations,
                           filesystemEdits: eventData.filesystem,
@@ -799,54 +807,72 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           finishReason: eventData.finishReason,
                         });
 
-                        // Build retry message history WITHOUT the empty assistant response
-                        const messagesWithoutEmpty = currentMessages.filter(
-                          msg => msg.id !== assistantMessage.id
-                        );
+                        // Determine which assistant message to retry.
+                        // First retry → retry the original.
+                        // Subsequent retries → reuse the same retry bubble.
+                        let retryAssistantMessage: Message;
+                        if (isFirstRetry) {
+                          // Mark the ORIGINAL as failed (keeps tool invocations visible)
+                          setMessages(prev => prev.map(msg =>
+                            msg.id === assistantMessage.id
+                              ? {
+                                  ...msg,
+                                  content: doneContent || '_Response returned empty content_',
+                                  metadata: {
+                                    ...(msg.metadata || {}),
+                                    ...doneMetadata,
+                                    isEmptyResponse: true,
+                                    emptyResponseAttempt: retryCount + 1,
+                                    toolInvocations: streamingToolInvocations.length > 0
+                                      ? streamingToolInvocations
+                                      : (msg.metadata as any)?.toolInvocations,
+                                  },
+                                }
+                              : msg
+                          ));
 
-                        // Mark the ORIGINAL message as failed (keeps tool invocations visible)
-                        // Use locally tracked streamingToolInvocations (messagesRef is stale for the current assistant message)
-                        setMessages(prev => prev.map(msg =>
-                          msg.id === assistantMessage.id
-                            ? {
-                                ...msg,
-                                content: doneContent || '_Response returned empty content_',
-                                metadata: {
-                                  ...(msg.metadata || {}),
-                                  ...doneMetadata,
-                                  isEmptyResponse: true,
-                                  emptyResponseAttempt: retryCount + 1,
-                                  // Preserve tool invocations from local tracking
-                                  toolInvocations: streamingToolInvocations.length > 0
-                                    ? streamingToolInvocations
-                                    : (msg.metadata as any)?.toolInvocations,
-                                },
-                              }
-                            : msg
-                        ));
+                          retryAssistantMessage = {
+                            id: `assistant-retry-${Date.now()}`,
+                            role: 'assistant',
+                            content: '',
+                            metadata: {
+                              isRetry: true,
+                              retryCount: retryCount + 1,
+                              originalProvider: doneMetadata.provider,
+                              originalModel: doneMetadata.model,
+                              retryContext: toolContext,
+                            },
+                          };
+                          setMessages(prev => [...prev, retryAssistantMessage]);
+                        } else {
+                          // Reuse the existing retry bubble — just clear its content
+                          // and bump the retryCount. No new bubble.
+                          retryAssistantMessage = {
+                            id: assistantMessage.id,
+                            role: 'assistant',
+                            content: '',
+                            metadata: {
+                              ...(assistantMessage.metadata || {}),
+                              retryCount: retryCount + 1,
+                              isEmptyResponse: true,
+                              emptyResponseAttempt: retryCount + 1,
+                              retryContext: toolContext,
+                            },
+                          };
+                          setMessages(prev => prev.map(msg =>
+                            msg.id === assistantMessage.id
+                              ? {
+                                  ...msg,
+                                  content: '',
+                                  metadata: retryAssistantMessage.metadata,
+                                }
+                              : msg
+                          ));
+                        }
 
-                        // Create a NEW assistant message bubble for the retry (with loading state)
-                        const retryAssistantMessage: Message = {
-                          id: `assistant-retry-${Date.now()}-${retryCount}`,
-                          role: 'assistant',
-                          content: '',
-                          metadata: {
-                            isRetry: true,
-                            retryCount: retryCount + 1,
-                            originalProvider: doneMetadata.provider,
-                            originalModel: doneMetadata.model,
-                            retryContext: toolContext,
-                          },
-                        };
-
-                        // Add the new retry message
-                        setMessages(prev => [...prev, retryAssistantMessage]);
-
-                        // Set loading state back to true for the NEW bubble
                         setIsLoading(true);
                         setAgentStatus('thinking');
 
-                        // Create new abort controller
                         const retryAbortController = new AbortController();
                         abortControllerRef.current = retryAbortController;
                         currentMessageRef.current = retryAssistantMessage;
@@ -910,7 +936,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         }
                       }
                     } else {
-                      // Max retries reached OR this is already a retry that returned empty
+                      // Max retries reached — update the SAME bubble, don't create a new one
                       console.warn('[Chat] Empty response after retry, stopping retries');
                       setMessages(prev => prev.map(msg =>
                         msg.id === assistantMessage.id
@@ -1789,7 +1815,42 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
                   // Set the input and submit after state settles
                   setInput(continuationPrompt);
-                  setTimeout(() => {
+                  setTimeout(() => { if (!isMountedRef.current) return;
+                    handleSubmit(
+                      {
+                        preventDefault: () => {},
+                        currentTarget: { reset: () => {} },
+                      } as React.FormEvent<HTMLFormElement>
+                    );
+                  }, 100);
+                  break;
+                }
+
+                // List-files auto-continue: LLM stopped after listing a directory
+                // Server detected this and sent a [NEXT] nudge to proceed
+                case 'next': {
+                  const nextContent = eventData.content || '';
+                  const reason = eventData.reason || '';
+                  const listedPath = eventData.listedPath || '';
+
+                  console.log('[Auto-continue] List-files completed, nudging LLM to proceed', {
+                    reason,
+                    listedPath,
+                    continuationCount: eventData.continuationCount,
+                  });
+
+                  // Append the [NEXT] nudge to the assistant message
+                  setMessages(prev => prev.map(msg => {
+                    if (msg.id !== assistantMessage.id) return msg;
+                    return {
+                      ...msg,
+                      content: msg.content + nextContent,
+                    };
+                  }));
+
+                  // Auto-submit with the [NEXT] content appended
+                  setInput(nextContent);
+                  setTimeout(() => { if (!isMountedRef.current) return;
                     handleSubmit(
                       {
                         preventDefault: () => {},
@@ -1972,7 +2033,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     let accumulatedContent = '';
     
     // Set up a timeout
-    const timeoutId = setTimeout(() => {
+    const timeoutId = setTimeout(() => { if (!isMountedRef.current) return;
       if (accumulatedContent.trim()) {
         setMessages(prev => prev.map(msg =>
           msg.id === assistantMessage.id

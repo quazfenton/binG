@@ -34,7 +34,7 @@ import type {
   AgentUpdate,
   ConversationEntry,
   WorkspaceState,
-} from './mistral-types'
+} from './mistral-agent-types'
 
 // Session store
 const mistralSessions = new Map<string, MistralSession>()
@@ -103,8 +103,8 @@ export class MistralAgentProvider implements SandboxProvider {
     this.config = {
       apiKey,
       serverURL: process.env.MISTRAL_BASE_URL || 'https://api.mistral.ai/v1',
-      model: process.env.MISTRAL_AGENT_MODEL || 'mistral-medium-2505',
-      codeInterpreterModel: process.env.MISTRAL_CODE_INTERPRETER_MODEL || 'mistral-medium-2505',
+      model: process.env.MISTRAL_AGENT_MODEL || 'mistral-agent-medium-2505',
+      codeInterpreterModel: process.env.MISTRAL_CODE_INTERPRETER_MODEL || 'mistral-agent-medium-2505',
       defaultTemperature: parseFloat(process.env.MISTRAL_AGENT_TEMPERATURE || '0.3'),
       defaultTopP: parseFloat(process.env.MISTRAL_AGENT_TOP_P || '0.95'),
       maxRetries: parseInt(process.env.MISTRAL_CODE_EXECUTION_MAX_RETRIES || '3', 10),

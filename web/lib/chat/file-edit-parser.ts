@@ -1295,7 +1295,7 @@ export function extractFileEdits(content: string): FileEdit[] {
   // Handle flat JSON tool calls: { "tool": "write_file", "path": "...", "content": "..." }
   // (no "arguments" wrapper — distinct from extractJsonToolCalls which expects nested "arguments")
   // Fast gate: must have both "tool" key and a file-edit tool name
-  if (content.includes('"tool"') && /"write_file"|"create_file"|"delete_file"|"apply_diff"|"mkdir"/i.test(content)) {
+  if (content.includes('"tool"') && /"write_file"|"create_file"|"write_files"|"batch_write"|"delete_file"|"apply_diff"|"mkdir"/i.test(content)) {
     allEdits.push(...extractFlatJsonToolCalls(content));
   }
 
@@ -1515,7 +1515,10 @@ function parseSimpleFileObject(objStr: string): { path?: string; content?: strin
   const result: { path?: string; content?: string; diff?: string } = {};
 
   // Match key-value pairs: "key": "value" or key: "value" or key: `value`
-  const kvRegex = /(?:^|,)\s*["']?(path|content|diff)["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/gs;
+  // FIX: (?:^|[,{\n]) — keys can appear at start-of-string, after {, or after comma/newline.
+  // JS ^ only matches start-of-string, not start-of-line. The first key after `{` has no
+  // comma prefix, so we must also match `{` and `\n` as valid key-start positions.
+  const kvRegex = /(?:^|[,{\n])\s*["']?(path|content|diff)["']?\s*:\s*("(?:[^"\\]|\\.)*"|'(?:[^'\\]|\\.)*'|`(?:[^`\\]|\\.)*`)/gs;
   let match: RegExpExecArray | null;
 
   while ((match = kvRegex.exec(objStr)) !== null) {
@@ -1645,7 +1648,7 @@ export function extractTextToolCallEdits(content: string): FileEdit[] {
  */
 export function extractFlatJsonToolCalls(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
-  const fileEditTools = ['write_file', 'create_file', 'writeToFile', 'delete_file', 'apply_diff', 'mkdir'];
+  const fileEditTools = ['write_file', 'create_file', 'writeToFile', 'write_files', 'batch_write', 'delete_file', 'apply_diff', 'mkdir'];
   const patternStart = /\{/g;
   let m: RegExpExecArray | null;
 
@@ -1672,6 +1675,24 @@ export function extractFlatJsonToolCalls(content: string): FileEdit[] {
       const parsed = JSON.parse(jsonStr);
       const toolName = parsed.tool || parsed.name;
       if (!fileEditTools.includes(toolName)) continue;
+
+      // Handle batch_write / write_files: { files: [{ path, content }, ...] }
+      if (toolName === 'batch_write' || toolName === 'write_files') {
+        const files = parsed.files;
+        if (Array.isArray(files)) {
+          for (const file of files) {
+            const path = file.path;
+            const fileContent = file.content;
+            if (typeof path === 'string' && path.trim() && typeof fileContent === 'string' && fileContent.trim()) {
+              const trimmedPath = path.trim();
+              if (isValidExtractedPath(trimmedPath) && !edits.some(e => e.path === trimmedPath)) {
+                edits.push({ path: trimmedPath, content: fileContent });
+              }
+            }
+          }
+        }
+        continue;
+      }
 
       const pathVal = parsed.path;
       if (!pathVal || !String(pathVal).trim()) continue;
@@ -1709,7 +1730,7 @@ export function extractFlatJsonToolCalls(content: string): FileEdit[] {
  */
 export function extractToolTagEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
-  const fileEditTools = ['write_file', 'create_file', 'writeToFile', 'delete_file', 'apply_diff', 'mkdir'];
+  const fileEditTools = ['write_file', 'create_file', 'writeToFile', 'write_files', 'batch_write', 'delete_file', 'apply_diff', 'mkdir'];
   const pattern = /\[\s*Tool:\s*(\w+)\s*\]/gi;
   let m: RegExpExecArray | null;
 
@@ -1740,6 +1761,26 @@ export function extractToolTagEdits(content: string): FileEdit[] {
       if (jsonStr.trim() === '{}') continue;
 
       const parsed = JSON.parse(jsonStr);
+      if (jsonStr.trim() === '{}') continue;
+
+      // Handle batch_write / write_files: { files: [{ path, content }, ...] }
+      if (toolName === 'batch_write' || toolName === 'write_files') {
+        const files = parsed.files;
+        if (Array.isArray(files)) {
+          for (const file of files) {
+            const path = file.path;
+            const fileContent = file.content;
+            if (typeof path === 'string' && path.trim() && typeof fileContent === 'string' && fileContent.trim()) {
+              const trimmedPath = path.trim();
+              if (isValidExtractedPath(trimmedPath) && !edits.some(e => e.path === trimmedPath)) {
+                edits.push({ path: trimmedPath, content: fileContent });
+              }
+            }
+          }
+        }
+        continue;
+      }
+
       const pathVal = parsed.path;
       if (!pathVal || !String(pathVal).trim()) continue;
       const trimmedPath = String(pathVal).trim();

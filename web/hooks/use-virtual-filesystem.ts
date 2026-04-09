@@ -661,7 +661,7 @@ export function useVirtualFilesystem(
     // OPFS-first strategy
     if (useOPFS) {
       try {
-        const opfsFile = await opfsAdapter.readFile('current-user', normalizedPath);
+        const opfsFile = await opfsAdapter.readFile(getSessionId(), normalizedPath);
         log(`readFile: OPFS cache hit for "${normalizedPath}"`);
         return opfsFile;
       } catch (err) {
@@ -688,7 +688,7 @@ export function useVirtualFilesystem(
     // then also write to server so listDirectory (server-backed) stays in sync
     if (useOPFS && !offlineMode) {
       // Write to OPFS instantly for local cache
-      const opfsFile = await opfsAdapter.writeFile('current-user', normalizedPath, content);
+      const opfsFile = await opfsAdapter.writeFile(getSessionId(), normalizedPath, content);
       log(`writeFile: OPFS write complete for "${normalizedPath}", version=${opfsFile.version}`);
 
       // Also write to server so list/snapshot APIs reflect the change

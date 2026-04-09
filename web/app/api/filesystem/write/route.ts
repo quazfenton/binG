@@ -8,7 +8,7 @@ import { fileContentSchema, languageSchema } from '@/lib/validation/schemas';
 import { resolveFilesystemOwnerWithFallback } from '../utils';
 import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events';
 import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve-filesystem-owner';
-import type { AuthResult } from '@/lib/auth/auth-service';
+import type { ResolvedRequestAuth } from '@/lib/auth/auth-cache';
 
 export const runtime = 'nodejs';
 
@@ -46,14 +46,14 @@ const MAX_WRITE_BODY_BYTES = 110 * 1024 * 1024; // 110MB (slightly above 100MB f
 
 export async function POST(req: NextRequest) {
   let filesystemOwnerResolution: FilesystemOwnerResolution | undefined;
-  let authResult: AuthResult | undefined;
+  let authResult: ResolvedRequestAuth | undefined;
   let ownerId: string | undefined;
 
   try {
-    // Resolve owner: authenticated users via JWT/session, anonymous via x-anonymous-session-id header
+    // Resolve owner: authenticated users via JWT/session, anonymous via anon-session-id cookie
     authResult = await resolveRequestAuth(req, { allowAnonymous: true });
 
-    if (!authResult.success || !authResult.user?.id) {
+    if (!authResult.success || !authResult.userId) {
       // Fallback: resolve via resolveFilesystemOwner (checks header + cookie)
       filesystemOwnerResolution = await resolveFilesystemOwnerWithFallback(req, {
         route: 'write',
@@ -68,7 +68,7 @@ export async function POST(req: NextRequest) {
       }
       ownerId = filesystemOwnerResolution.ownerId;
     } else {
-      ownerId = String(authResult.user?.id);
+      ownerId = authResult.userId;
     }
 
     // SECURITY: O(1) body size check BEFORE buffering into memory via req.json()
@@ -80,7 +80,7 @@ export async function POST(req: NextRequest) {
       );
       return withAnonSessionCookie(errorResponse, filesystemOwnerResolution || {
         ownerId,
-        source: (authResult.source as any) || 'jwt',
+        source: authResult.source || 'jwt',
         isAuthenticated: true,
       });
     }
@@ -96,7 +96,7 @@ export async function POST(req: NextRequest) {
       );
       return withAnonSessionCookie(errorResponse, filesystemOwnerResolution || {
         ownerId,
-        source: (authResult.source as any) || 'jwt',
+        source: authResult.source || 'jwt',
         isAuthenticated: true,
       });
     }
@@ -117,7 +117,7 @@ export async function POST(req: NextRequest) {
       );
       return withAnonSessionCookie(errorResponse, filesystemOwnerResolution || {
         ownerId,
-        source: (authResult.source as any) || 'jwt',
+        source: authResult.source || 'jwt',
         isAuthenticated: true,
       });
     }

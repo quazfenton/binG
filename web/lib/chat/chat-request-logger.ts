@@ -56,7 +56,7 @@ export interface ChatLogStats {
   successRate: number;
 }
 
-class ChatRequestLogger {
+export class ChatRequestLogger {
   private db: any = null;
   private initialized = false;
 
@@ -178,7 +178,9 @@ class ChatRequestLogger {
     responseSize?: number,
     tokenUsage?: { prompt: number; completion: number; total: number },
     latencyMs?: number,
-    error?: string
+    error?: string,
+    actualProvider?: string,  // FIX: Track actual provider if it differs from original (fallback)
+    actualModel?: string,     // FIX: Track actual model if it differs from original (fallback)
   ): Promise<void> {
     await this.initialize();
     if (!this.db) return;
@@ -192,7 +194,9 @@ class ChatRequestLogger {
             token_usage_total = ?,
             latency_ms = ?,
             success = ?,
-            error = ?
+            error = ?,
+            provider = COALESCE(?, provider),
+            model = COALESCE(?, model)
         WHERE id = ?
       `);
 
@@ -204,6 +208,8 @@ class ChatRequestLogger {
         latencyMs || null,
         success ? 1 : 0,
         error || null,
+        actualProvider || null,  // Only override if provided
+        actualModel || null,     // Only override if provided
         requestId
       );
     } catch (error) {

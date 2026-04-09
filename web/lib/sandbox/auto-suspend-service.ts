@@ -88,7 +88,7 @@ export class AutoSuspendService extends EventEmitter {
   private constructor(config?: Partial<AutoSuspendConfig>) {
     super();
     this.config = {
-      idleTimeout: 30 * 60 * 1000, // 30 minutes
+      idleTimeout: 5 * 60 * 1000, // 5 minutes
       checkInterval: 5 * 60 * 1000, // 5 minutes
       minActive: 2,
       maxActive: 10,

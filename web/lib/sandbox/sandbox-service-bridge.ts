@@ -162,7 +162,7 @@ export class SandboxServiceBridge {
       const autoSuspend = AutoSuspendService.getInstance();
       // Register all available providers with the suspend service
       const { getSandboxProvider } = await import('./providers');
-      const providerTypes: string[] = ['daytona', 'e2b', 'codesandbox', 'blaxel', 'runloop', 'modal', 'mistral', 'agentfs', 'terminaluse', 'desktop'];
+      const providerTypes: string[] = ['daytona', 'e2b', 'codesandbox', 'blaxel', 'runloop', 'modal', 'mistral-agent', 'agentfs', 'terminaluse', 'desktop'];
       for (const pt of providerTypes) {
         try {
           const p = await getSandboxProvider(pt as any);
@@ -307,7 +307,7 @@ export class SandboxServiceBridge {
    * - Blaxel: 6-char code or 'blaxel-' prefix
    * - Runloop: 6-char code or 'runloop-' prefix
    * - Modal: 'modal-{timestamp}-{random}'
-   * - Mistral: 6-char code or 'mistral-' prefix
+   * - Mistral: 6-char code or 'mistral-agent-' prefix
    * - AgentFS: 'agentfs-{timestamp}'
    * - TerminalUse: 'local-{timestamp}'
    * - Desktop: 'desktop-{hash}'
@@ -328,7 +328,6 @@ export class SandboxServiceBridge {
     if (sandboxId.startsWith('runloop-')) return 'runloop';
     if (sandboxId.startsWith('modal-')) return 'modal';
     if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent';
-    if (sandboxId.startsWith('mistral-')) return 'mistral';
     if (sandboxId.startsWith('agentfs-')) return 'agentfs';
     if (sandboxId.startsWith('local-')) return 'terminaluse'; // TerminalUse uses local-{timestamp}
     if (sandboxId.startsWith('desktop-')) return 'desktop';
@@ -468,7 +467,7 @@ export const sandboxBridge = new SandboxServiceBridge();
   try {
     const { AutoSuspendService } = await import('./auto-suspend-service');
     const service = AutoSuspendService.getInstance({
-      idleTimeout: parseInt(process.env.SANDBOX_IDLE_TIMEOUT_MS || '1800000', 10), // 30 min default
+      idleTimeout: parseInt(process.env.SANDBOX_IDLE_TIMEOUT_MS || '300000', 10), // 5 min default
       checkInterval: parseInt(process.env.SANDBOX_CHECK_INTERVAL_MS || '300000', 10), // 5 min default
       preserveState: process.env.SANDBOX_PRESERVE_STATE !== 'false',
       restoreState: process.env.SANDBOX_RESTORE_STATE !== 'false',
@@ -476,7 +475,7 @@ export const sandboxBridge = new SandboxServiceBridge();
 
     // Register all providers
     const { getSandboxProvider } = await import('./providers');
-    const providerTypes: string[] = ['daytona', 'e2b', 'codesandbox', 'blaxel', 'runloop', 'modal', 'mistral', 'agentfs', 'terminaluse', 'desktop'];
+    const providerTypes: string[] = ['daytona', 'e2b', 'codesandbox', 'blaxel', 'runloop', 'modal', 'mistral-agent', 'agentfs', 'terminaluse', 'desktop'];
     for (const pt of providerTypes) {
       try {
         const p = await getSandboxProvider(pt as any);

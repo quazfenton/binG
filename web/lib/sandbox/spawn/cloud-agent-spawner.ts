@@ -80,7 +80,7 @@ interface AgentMetrics {
 
 const DEFAULT_CONFIG = {
   maxAgents: 10,
-  idleTimeout: 30 * 60 * 1000, // 30 minutes
+  idleTimeout: 5 * 60 * 1000, // 5 minutes
   maxUptime: 60 * 60 * 1000, // 1 hour
 };
 
