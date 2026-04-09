@@ -348,10 +348,10 @@ describe('MCP CLI Server', () => {
   );
 
   it.skipIf(!isMcpEnabled)(
-    'should require authentication token when MCP_CLI_AUTH_TOKEN is set',
+    'should require authentication token when MCP_HTTP_AUTH_TOKEN is set',
     async () => {
-      if (!process.env.MCP_CLI_AUTH_TOKEN) {
-        console.log('Skipping auth test - MCP_CLI_AUTH_TOKEN not set');
+      if (!process.env.MCP_HTTP_AUTH_TOKEN) {
+        console.log('Skipping auth test - MCP_HTTP_AUTH_TOKEN not set');
         return;
       }
 
@@ -362,7 +362,7 @@ describe('MCP CLI Server', () => {
       // Test with token (should succeed)
       const responseWithAuth = await fetch(`${mcpUrl}/tools`, {
         headers: {
-          'Authorization': `Bearer ${process.env.MCP_CLI_AUTH_TOKEN}`,
+          'Authorization': `Bearer ${process.env.MCP_HTTP_AUTH_TOKEN}`,
         },
       });
       expect(responseWithAuth.ok).toBe(true);
@@ -375,7 +375,7 @@ describe('MCP CLI Server', () => {
     async () => {
       const response = await fetch(`${mcpUrl}/tools`, {
         headers: {
-          'Authorization': `Bearer ${process.env.MCP_CLI_AUTH_TOKEN || ''}`,
+          'Authorization': `Bearer ${process.env.MCP_HTTP_AUTH_TOKEN || ''}`,
         },
       });
 

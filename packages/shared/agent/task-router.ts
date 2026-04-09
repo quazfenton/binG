@@ -1,272 +1,177 @@
 /**
- * Task Router - Routes tasks between OpenCode, Nullclaw, and Advanced Agent Tasks
- *
- * OpenCode: Coding tasks (file ops, bash, code generation)
- * Nullclaw: Non-coding tasks (messaging, browsing, automation)
- * Advanced Tasks: Mid-to-long term goals requiring external agent spawning
- *
- * Execution Policies:
- * - local-safe: Simple prompts, read-only
- * - sandbox-required: Bash, file writes
- * - sandbox-heavy: Full-stack apps, databases
- * - desktop-required: GUI, browser automation
- *
- * Advanced Task Detection:
- * Routes to event system when task suggests:
- * - Persistent agent loops (background cognition)
- * - Multi-step research with depth control
- * - DAG workflows with multiple dependencies
- * - Skill bootstrapping (self-extending agents)
- * - Cross-agent communication/specialization
+ * Task Router - Determines which agent should handle a task
+ * Uses the declarative intent schema (intent-schema.ts) instead of
+ * hardcoded keyword arrays.
  */
-
-import { normalizeSessionId } from '@/lib/virtual-filesystem/scope-utils';
-
-import { createLogger } from '@/lib/utils/logger';
-import type { ExecutionPolicy } from '@/lib/sandbox/types';
-import { determineExecutionPolicy } from '@/lib/sandbox/types';
-import { scheduleTask } from '@/lib/events/trigger-integration';
-import { emitEvent } from '@/lib/events/bus';
-import { EventTypes } from '@/lib/events/schema';
-import { getAgentKernel, AgentType, AgentPriority } from './agent-kernel';
-
-const logger = createLogger('Agent:TaskRouter');
-
-export type TaskType = 'coding' | 'messaging' | 'browsing' | 'automation' | 'api' | 'unknown' | 'advanced';
-
-// FIX (Bug 7): Separate the routing target from the preferred-agent type so
-// the dispatch is explicit and unreachable branches can't silently fire.
-type RoutingTarget = 'opencode' | 'nullclaw' | 'cli' | 'advanced';
 
 /**
- * Advanced Task Types - Mid-to-long term goals requiring external agent spawning
- * These are routed to the event system for background processing
+ * Map an intent match to a task type and routing target.
+ * This replaces the old switch statement with a data-driven approach.
  */
-export type AdvancedTaskType =
-  | 'agent-loop'      // Persistent background cognition
-  | 'research'        // Multi-step research with depth
-  | 'dag-workflow'    // Multi-node workflow execution
-  | 'skill-build'     // Extract reusable skills
-  | 'consensus'       // Multi-agent debate/negotiation
-  | 'reflection'      // Self-improvement after execution
-  | 'tool-discover'   // Dynamic tool ranking
-  | 'cross-agent'     // Agent-to-agent communication;
+function intentToTaskRoute(match: IntentMatch): { taskType: TaskType; target: RoutingTarget; reasoning: string } {
+  const intent = match.intent;
 
-export interface TaskRequest {
-  id: string;
-  userId: string;
-  conversationId: string;
-  task: string;
-  stream?: boolean;
-  onStreamChunk?: (chunk: string) => void;
-  onToolExecution?: (toolName: string, args: Record<string, any>, result: any) => void;
-  preferredAgent?: RoutingTarget;
-  executionPolicy?: ExecutionPolicy;
-  cliCommand?: {
-    command: string;
-    args?: string[];
-  };
-}
-
-export interface TaskRoutingResult {
-  type: TaskType;
-  /** Normalised 0-1 score based on keyword hits per total keywords checked */
-  confidence: number;
-  target: RoutingTarget;
-  reasoning: string;
+  switch (intent.routingTarget) {
+    case 'opencode':
+      return {
+        taskType: intent.id === 'sandbox' ? 'automation' : 'coding',
+        target: 'opencode',
+        reasoning: `Task involves ${intent.id} — coding, file operations, or shell commands`,
+      };
+    case 'nullclaw':
+      return {
+        taskType: 'messaging',
+        target: 'nullclaw',
+        reasoning: `Task involves third-party service actions (${intent.id})`,
+      };
+    case 'advanced':
+      return {
+        taskType: 'advanced',
+        target: 'advanced',
+        reasoning: `Task requires persistent/background agent processing`,
+      };
+    default:
+      return {
+        taskType: 'unknown',
+        target: 'cli',
+        reasoning: 'Unclear intent, using CLI agent as fallback',
+      };
+  }
 }
 
 /**
  * Task Router - Determines which agent should handle a task
  */
 class TaskRouter {
-  private readonly CODING_KEYWORDS = [
-    'code', 'program', 'function', 'class', 'variable', 'import', 'export',
-    'file', 'directory', 'folder', 'path', 'read', 'write', 'create', 'delete',
-    'bash', 'shell', 'command', 'terminal', 'execute', 'run', 'build', 'compile',
-    'test', 'debug', 'refactor', 'git', 'commit', 'push', 'pull',
-    'npm', 'pnpm', 'yarn', 'pip', 'install', 'dependency', 'package',
-    'typescript', 'javascript', 'python', 'rust', 'go', 'java', 'react', 'vue',
-    'api', 'endpoint', 'route', 'server', 'database', 'query', 'schema',
-  ];
+  /**
+   * Analyze task using the declarative intent schema (two-stage classifier).
+   * Stage 1: Fast regex + keyword scoring.
+   * Stage 2: LLM-based disambiguation when confidence is low.
+   */
+  async analyzeTask(task: string): Promise<TaskRoutingResult> {
+    // Try fast path first (stage 1 only — no LLM cost)
+    const { classifyIntent, getAllStage1Scores } = await import('./intent-schema');
+    const stage1Result = classifyIntent(task, { minConfidence: 0.5, enableStage2: false });
 
-  private readonly MESSAGING_KEYWORDS = [
-    'discord', 'telegram', 'slack', 'message', 'send', 'chat', 'notify',
-    'channel', 'user', 'bot', 'webhook', 'mention', 'ping',
-  ];
+    let intentMatch: IntentMatch;
 
-  private readonly BROWSING_KEYWORDS = [
-    'browse', 'website', 'url', 'http', 'https', 'www', 'scrape', 'crawl',
-    'fetch', 'download', 'webpage', 'search', 'google', 'find information',
-  ];
-
-  private readonly AUTOMATION_KEYWORDS = [
-    'automate', 'schedule', 'cron', 'repeat', 'daily', 'hourly',
-    'server', 'deploy', 'restart', 'backup', 'monitor', 'alert',
-    'workflow', 'pipeline', 'ci', 'cd', 'integration',
-  ];
-
-  // ============================================================================
-  // Advanced Task Keywords - Mid-to-long term goals requiring external agents
-  // ============================================================================
-  
-  private readonly ADVANCED_TASK_KEYWORDS = {
-    'agent-loop': [
-      'background', 'continuous', 'loop', 'persist', 'ongoing', 'monitor',
-      'watch', 'poll', 'cron', 'schedule', 'periodically', 'recurring',
-      'long-running', 'daemon', 'service', 'keep running', 'always on',
-    ],
-    'research': [
-      'research', 'deep dive', 'investigate', 'analyze', 'study',
-      'comprehensive', 'in-depth', 'thorough', 'explore', 'survey',
-      'summarize', 'report', 'find information', 'gather data',
-    ],
-    'dag-workflow': [
-      'workflow', 'pipeline', 'chain', 'sequence', 'steps', 'stages',
-      'dependencies', 'multi-step', 'multi-stage', 'execute in order',
-      'run after', 'depends on', 'dag', 'graph', 'execution plan',
-    ],
-    'skill-build': [
-      'learn', 'extract', 'pattern', 'template', 'reusable', 'skill',
-      'abstraction', 'generalize', 'create function', 'make reusable',
-      'build skill', 'bootstrap', 'self-extend', 'improve',
-    ],
-    'consensus': [
-      'debate', 'discuss', 'multiple', 'agents', 'agree', 'consensus',
-      'vote', 'compare', 'evaluate', 'different approaches', 'specialist',
-      'role', 'team', 'collaborate', 'negotiate', 'argue',
-    ],
-    'reflection': [
-      'reflect', 'improve', 'what went wrong', 'analyze result', 'self-correct',
-      'learn from', 'fix', 'debug', 'fix errors', 'retry', 'improve result',
-    ],
-    'tool-discover': [
-      'find tools', 'discover', 'available tools', 'what tools', 'capabilities',
-      'rank', 'best tool', 'compare tools', 'which tool', 'tool for',
-    ],
-    'cross-agent': [
-      'tell agent', 'send to', 'delegate', 'ask other', 'another agent',
-      'agent communication', 'message agent', 'notify agent', 'inform',
-    ],
-  };
-
-  analyzeTask(task: string): TaskRoutingResult {
-    const lowerTask = task.toLowerCase();
-
-    const scores = {
-      coding:     this.scoreKeywords(lowerTask, this.CODING_KEYWORDS),
-      messaging:  this.scoreKeywords(lowerTask, this.MESSAGING_KEYWORDS),
-      browsing:   this.scoreKeywords(lowerTask, this.BROWSING_KEYWORDS),
-      automation: this.scoreKeywords(lowerTask, this.AUTOMATION_KEYWORDS),
-    };
-
-    const maxScore = Math.max(...Object.values(scores));
-    // FIX: If no keywords matched (all scores are 0), classify as 'unknown' instead of defaulting to 'coding'
-    const primaryType = maxScore === 0 ? 'unknown' : (Object.entries(scores)
-      .find(([, score]) => score === maxScore)?.[0] ?? 'unknown') as TaskType;
-
-    // FIX (Bug 5 & 7): Explicit target assignment with no fall-through ambiguity.
-    let target: RoutingTarget;
-    let reasoning: string;
-
-    // FIX: If no keywords matched (all scores are 0), classify as 'unknown' instead of defaulting to 'coding'
-    if (maxScore === 0) {
-      target = 'cli';
-      reasoning = 'No specific keywords detected, task may be a simple query or command';
+    if (stage1Result.confidence >= 0.5) {
+      intentMatch = stage1Result;
     } else {
-      switch (primaryType) {
-        case 'coding':
-          target = 'opencode';
-          reasoning = 'Task involves coding, file operations, or shell commands';
-          break;
-        case 'messaging':
-        case 'browsing':
-          target = 'nullclaw';
-          reasoning = `Task involves ${primaryType} which requires external API access`;
-          break;
-        case 'automation':
-          if (scores.coding > 0) {
-            target = 'opencode';
-            reasoning = 'Automation task with coding components';
-          } else {
-            target = 'nullclaw';
-            reasoning = 'Automation task requiring external services';
-          }
-          break;
-        default:
-          target = 'cli';
-          reasoning = 'Unknown task type, using CLI agent';
-      }
+      // Stage 1 was ambiguous — use LLM-based stage 2
+      intentMatch = await classifyIntent(task, { minConfidence: 0.3, enableStage2: true });
     }
 
-    // FIX Bug 6: Normalize confidence against keyword count, not character length
-    const maxPossibleScore = Math.max(
-      this.CODING_KEYWORDS.length,
-      this.MESSAGING_KEYWORDS.length,
-      this.BROWSING_KEYWORDS.length,
-      this.AUTOMATION_KEYWORDS.length,
-    );
-    // Confidence is now meaningful [0, 1] range
-    const confidence = maxScore > 0
-      ? Math.min(1, maxScore / Math.max(maxPossibleScore * 0.3, 1))
-      : 0;
+    // Map intent to task type and routing target
+    const { taskType, target, reasoning } = intentToTaskRoute(intentMatch);
 
-    const result: TaskRoutingResult = { type: primaryType, confidence, target, reasoning };
+    // Calculate confidence from intent match
+    const confidence = intentMatch.confidence;
+
+    const result: TaskRoutingResult = { type: taskType, confidence, target, reasoning };
 
     logger.debug(
-      `Task routed: ${task.substring(0, 50)}... → ${target} (${primaryType}, confidence: ${confidence.toFixed(2)})`,
+      `Task routed: ${task.substring(0, 50)}... → ${target} (${taskType}, confidence: ${confidence.toFixed(2)}, stage: ${intentMatch.stage})`,
     );
 
     return result;
   }
 
-  private scoreKeywords(task: string, keywords: string[]): number {
-    let score = 0;
-    for (const keyword of keywords) {
-      const regex = new RegExp(`\\b${keyword}\\b`, 'gi');
-      const matches = task.match(regex);
-      if (matches) score += matches.length;
-    }
-    return score;
-  }
-
-  // ============================================================================
-  // Advanced Task Detection - End of routing tree for mid-to-long term goals
-  // ============================================================================
-
   /**
    * Analyze if task requires advanced agent spawning (mid-to-long term goals)
-   * Called at end of routing tree when basic routing is ambiguous or task
-   * suggests persistent/background/external agent work
-   * 
-   * @param task - The user's task prompt
-   * @returns AdvancedTaskType or null if not an advanced task
+   * Uses the intent schema's 'advanced' intent patterns.
    */
-  analyzeAdvancedTask(task: string): AdvancedTaskType | null {
+  async analyzeAdvancedTask(task: string): Promise<AdvancedTaskType | null> {
+    const { classifyIntent, INTENT_SCHEMA } = await import('./intent-schema');
+
+    // Check if this matches the 'advanced' intent
+    const advancedIntent = INTENT_SCHEMA.find(i => i.id === 'advanced');
+    if (!advancedIntent) return null;
+
     const lowerTask = task.toLowerCase();
-    const scores: Record<AdvancedTaskType, number> = {
-      'agent-loop': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['agent-loop']),
-      'research': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['research']),
-      'dag-workflow': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['dag-workflow']),
-      'skill-build': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['skill-build']),
-      'consensus': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['consensus']),
-      'reflection': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['reflection']),
-      'tool-discover': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['tool-discover']),
-      'cross-agent': this.scoreKeywords(lowerTask, this.ADVANCED_TASK_KEYWORDS['cross-agent']),
-    };
+    let score = 0;
 
-    const maxScore = Math.max(...Object.values(scores));
-    const threshold = 2; // Require at least 2 keyword matches
-
-    if (maxScore >= threshold) {
-      const advancedType = (Object.entries(scores)
-        .find(([, score]) => score === maxScore)?.[0] ?? null) as AdvancedTaskType | null;
-      
-      logger.info(`[TaskRouter] Advanced task detected: ${advancedType} (score: ${maxScore})`);
-      return advancedType;
+    // Score against advanced patterns
+    for (const { regex, weight } of advancedIntent.patterns) {
+      if (regex.test(lowerTask)) score += weight;
+    }
+    for (const { word, weight } of advancedIntent.keywords) {
+      if (lowerTask.includes(word)) score += weight;
     }
 
-    return null;
+    const threshold = 3; // Require meaningful match
+    if (score < threshold) return null;
+
+    // Determine specific advanced task type from keyword sub-groups
+    const advancedType = this.detectSpecificAdvancedType(lowerTask);
+    if (advancedType) {
+      logger.info(`[TaskRouter] Advanced task detected: ${advancedType} (score: ${score})`);
+    }
+
+    return advancedType;
+  }
+
+  /**
+   * Detect specific advanced task type from keyword sub-groups.
+   * Replaces the hardcoded switch statement with a data-driven approach.
+   */
+  private detectSpecificAdvancedType(lowerTask: string): AdvancedTaskType | null {
+    // Data-driven mapping: each advanced type has its own keyword set
+    const advancedKeywords: Record<AdvancedTaskType, string[]> = {
+      'agent-loop': [
+        'background', 'continuous', 'loop', 'persist', 'ongoing', 'monitor',
+        'watch', 'poll', 'cron', 'schedule', 'periodically', 'recurring',
+        'long-running', 'daemon', 'service', 'keep running', 'always on',
+      ],
+      'research': [
+        'research', 'deep dive', 'investigate', 'analyze', 'study',
+        'comprehensive', 'in-depth', 'thorough', 'explore', 'survey',
+        'summarize', 'report', 'find information', 'gather data',
+      ],
+      'dag-workflow': [
+        'workflow', 'pipeline', 'chain', 'sequence', 'steps', 'stages',
+        'dependencies', 'multi-step', 'multi-stage', 'execute in order',
+        'run after', 'depends on', 'dag', 'graph', 'execution plan',
+      ],
+      'skill-build': [
+        'learn', 'extract', 'pattern', 'template', 'reusable', 'skill',
+        'abstraction', 'generalize', 'create function', 'make reusable',
+        'build skill', 'bootstrap', 'self-extend', 'improve',
+      ],
+      'consensus': [
+        'debate', 'discuss', 'multiple', 'agents', 'agree', 'consensus',
+        'vote', 'compare', 'evaluate', 'different approaches', 'specialist',
+        'role', 'team', 'collaborate', 'negotiate', 'argue',
+      ],
+      'reflection': [
+        'reflect', 'improve', 'what went wrong', 'analyze result', 'self-correct',
+        'learn from', 'fix', 'debug', 'fix errors', 'retry', 'improve result',
+      ],
+      'tool-discover': [
+        'find tools', 'discover', 'available tools', 'what tools', 'capabilities',
+        'rank', 'best tool', 'compare tools', 'which tool', 'tool for',
+      ],
+      'cross-agent': [
+        'tell agent', 'send to', 'delegate', 'ask other', 'another agent',
+        'agent communication', 'message agent', 'notify agent', 'inform',
+      ],
+    };
+
+    let bestType: AdvancedTaskType | null = null;
+    let bestScore = 0;
+
+    for (const [type, keywords] of Object.entries(advancedKeywords)) {
+      let score = 0;
+      for (const keyword of keywords) {
+        if (lowerTask.includes(keyword)) score += 1;
+      }
+      if (score > bestScore && score >= 2) {
+        bestScore = score;
+        bestType = type as AdvancedTaskType;
+      }
+    }
+
+    return bestType;
   }
 
   /**

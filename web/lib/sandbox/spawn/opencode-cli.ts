@@ -811,7 +811,15 @@ export class OpencodeV2Provider implements LLMProvider {
   }
 
   /**
-   * Self-heal: When a shell command fails, analyze the error and retry with corrections.
+   * Self-heal: When a shell command fails, return structured error information
+   * so the LLM can reason about the failure and decide the next action.
+   *
+   * Previously this used regex patterns to auto-fix common errors. Now it returns
+   * structured error data that the LLM can use with its tools (project_analyze,
+   * terminal_get_output, etc.) to diagnose and fix the issue.
+   *
+   * Only truly trivial auto-fixes are attempted (e.g., missing dependency auto-install)
+   * before falling back to structured error reporting.
    */
   private async selfHealAndRetry(
     originalCommand: string,
@@ -822,44 +830,229 @@ export class OpencodeV2Provider implements LLMProvider {
   ): Promise<ToolResult> {
     const maxAttempts = 3;
     if (attempt > maxAttempts) {
-      return { success: false, output: errorOutput + `\n[SELF-HEAL] Max retries (${maxAttempts}) reached.`, exitCode: 1 };
+      return {
+        success: false,
+        output: JSON.stringify({
+          errorType: 'max_retries_exceeded',
+          message: `Command failed after ${maxAttempts} attempts`,
+          originalCommand,
+          errorOutput: this.truncateOutput(errorOutput),
+        }, null, 2),
+        exitCode: 1,
+      };
     }
 
     const el = errorOutput.toLowerCase();
-    let corrective: string | null = null;
-    let reason = '';
+    const errorInfo = this.classifyError(el, errorOutput);
 
-    if (/(module\s+not\s+found|cannot\s+find\s+module|err_module_not_found)/i.test(el)) {
-      corrective = 'npm install && ' + originalCommand;
-      reason = 'Missing dependency — auto-installing';
-    } else if (/(command\s+not\s+found|is\s+not\s+recognized)/i.test(el)) {
-      const cmd = originalCommand.split(' ')[0];
-      corrective = `which ${cmd} 2>/dev/null || echo "${cmd} not found in PATH"`;
-      reason = `Command "${cmd}" not found — diagnosing`;
-    } else if (/(eaddrinuse|address\s+already\s+in\s+use)/i.test(el)) {
-      const m = el.match(/port\s+(\d+)/);
-      if (m) {
-        const port = m[1];
-        corrective = process.platform === 'win32' ? `netstat -ano | findstr :${port}` : `lsof -ti :${port} | xargs kill -9 2>/dev/null; ${originalCommand}`;
-        reason = `Port ${port} in use — killing process`;
-      }
-    } else if (/(enoent|no\s+such\s+file)/i.test(el)) {
-      corrective = process.platform === 'win32' ? 'dir' : 'ls -la';
-      reason = 'File not found — listing directory';
-    } else if (/(permission\s+denied|eacces|eperm)/i.test(el)) {
-      return { success: false, output: errorOutput + '\n[SELF-HEAL] Permission denied — cannot auto-escalate.', exitCode: 1 };
-    }
-
-    if (corrective) {
-      console.log(`[OpencodeV2Provider] [SELF-HEAL] Attempt ${attempt}/${maxAttempts}: ${reason}`);
-      const retry = await this.executeCommandDirect(corrective, cwd, timeoutSeconds, false);
+    // Only auto-fix truly trivial cases
+    if (errorInfo.autoFixable && attempt === 1) {
+      log.debug(`[OpencodeV2Provider] [AUTO-FIX] ${errorInfo.reason}`);
+      const retry = await this.executeCommandDirect(errorInfo.fixCommand!, cwd, timeoutSeconds, false);
       if (retry.success) {
-        return { success: true, output: `[SELF-HEAL] ${reason}\n--- Recovery ---\n${retry.output}`, exitCode: 0 };
+        return {
+          success: true,
+          output: `[AUTO-FIX] ${errorInfo.reason}\n--- Recovery ---\n${this.truncateOutput(retry.output || '')}`,
+          exitCode: 0,
+        };
       }
-      return this.selfHealAndRetry(originalCommand, cwd, retry.output, timeoutSeconds, attempt + 1);
+      // Auto-fix failed — fall through to structured error
     }
 
-    return { success: false, output: errorOutput, exitCode: 1 };
+    // Return structured error for the LLM to reason about
+    return {
+      success: false,
+      output: JSON.stringify({
+        errorType: errorInfo.type,
+        category: errorInfo.category,
+        message: errorInfo.message,
+        suggestions: errorInfo.suggestions,
+        originalCommand,
+        errorOutput: this.truncateOutput(errorOutput),
+        attempt,
+        maxAttempts,
+      }, null, 2),
+      exitCode: 1,
+    };
+  }
+
+  /**
+   * Classify an error output into a structured error object.
+   */
+  private classifyError(errorLower: string, originalOutput: string): {
+    type: string;
+    category: string;
+    message: string;
+    suggestions: string[];
+    autoFixable: boolean;
+    fixCommand?: string;
+    reason: string;
+  } {
+    const el = errorLower;
+
+    // Module/package not found
+    if (/(module\s+not\s+found|cannot\s+find\s+module|err_module_not_found|import\s+not\s+found|no\s+module\s+named)/i.test(el)) {
+      const pkgMatch = el.match(/(?:require|import)\s*['"]([^'"]+)['"]/) ||
+                       el.match(/module\s+['"]?([^'"\s]+)['"]?\s+(?:not found|cannot be found)/i);
+      const pkg = pkgMatch ? pkgMatch[1] : 'unknown';
+      return {
+        type: 'MODULE_NOT_FOUND',
+        category: 'dependency',
+        message: `Module "${pkg}" is not installed`,
+        suggestions: [
+          `Run "npm install ${pkg !== 'unknown' ? pkg : ''}" to install the missing package`,
+          `Check if the package name is correct`,
+          `Verify package.json has the dependency listed`,
+        ],
+        autoFixable: true,
+        fixCommand: 'npm install',
+        reason: 'Missing dependency — auto-installing',
+      };
+    }
+
+    // Command not found
+    if (/(command\s+not\s+found|is\s+not\s+recognized|not\s+found\s+in\s+path|executable\s+not\s+found)/i.test(el)) {
+      const cmdMatch = el.match(/['"]?(\w+)['"]?\s*(?:is\s+not|not\s+found|not\s+recognized)/);
+      const cmd = cmdMatch ? cmdMatch[1] : 'unknown';
+      return {
+        type: 'COMMAND_NOT_FOUND',
+        category: 'tooling',
+        message: `Command "${cmd}" is not installed or not in PATH`,
+        suggestions: [
+          `Run "which ${cmd}" or "command -v ${cmd}" to check if it exists`,
+          `Install the tool: "npm install -g ${cmd}" or "apt install ${cmd}"`,
+          `Check if the tool name is correct`,
+        ],
+        autoFixable: false,
+      };
+    }
+
+    // Port in use
+    if (/(eaddrinuse|address\s+already\s+in\s+use|port\s+\d+\s+already\s+in\s+use)/i.test(el)) {
+      const portMatch = el.match(/port\s+(\d+)/);
+      const port = portMatch ? portMatch[1] : 'unknown';
+      return {
+        type: 'EADDRINUSE',
+        category: 'network',
+        message: `Port ${port} is already in use by another process`,
+        suggestions: [
+          `Run "lsof -i :${port}" to find the process using this port`,
+          `Kill the process: "kill $(lsof -t -i :${port})"`,
+          `Use a different port`,
+        ],
+        autoFixable: false,
+      };
+    }
+
+    // File not found
+    if (/(enoent|no\s+such\s+file|no\s+such\s+directory|file\s+not\s+found|cannot\s+open\s+file)/i.test(el)) {
+      return {
+        type: 'ENOENT',
+        category: 'filesystem',
+        message: 'File or directory not found',
+        suggestions: [
+          'Run "ls -la" to see what files exist in the current directory',
+          'Check the file path is correct',
+          'Create the file or directory if needed',
+        ],
+        autoFixable: false,
+      };
+    }
+
+    // Permission denied
+    if (/(permission\s+denied|eacces|eperm|operation\s+not\s+permitted)/i.test(el)) {
+      return {
+        type: 'EACCES',
+        category: 'permission',
+        message: 'Permission denied — cannot execute operation',
+        suggestions: [
+          'Check file/directory permissions',
+          'Use "chmod" or "chown" to fix permissions',
+          'Avoid running commands that require root access',
+        ],
+        autoFixable: false,
+      };
+    }
+
+    // Syntax/parse error
+    if (/(syntax\s+error|unexpected\s+token|parse\s+error|invalid\s+syntax|unexpected\s+end)/i.test(el)) {
+      return {
+        type: 'SYNTAX_ERROR',
+        category: 'code',
+        message: 'Syntax or parse error in command/code',
+        suggestions: [
+          'Read the file to check for syntax errors',
+          'Check for missing brackets, quotes, or semicolons',
+        ],
+        autoFixable: false,
+      };
+    }
+
+    // Compilation/build error
+    if (/(compilation\s+failed|build\s+failed|compile\s+error|type\s+error|ts\d+:)/i.test(el)) {
+      return {
+        type: 'BUILD_ERROR',
+        category: 'code',
+        message: 'Build or compilation failed',
+        suggestions: [
+          'Read the error output for the specific file and line number',
+          'Fix the code errors and retry',
+        ],
+        autoFixable: false,
+      };
+    }
+
+    // Timeout
+    if (/(timed?\s*out|timeout|deadline\s+exceeded)/i.test(el)) {
+      return {
+        type: 'TIMEOUT',
+        category: 'execution',
+        message: 'Command timed out',
+        suggestions: [
+          'Increase the timeout duration',
+          'Check if the command is stuck or running indefinitely',
+          'Run "ps aux" to check for hung processes',
+        ],
+        autoFixable: false,
+      };
+    }
+
+    // Out of memory
+    if (/(out\s+of\s+memory|oom|heap\s+out\s+of\s+memory|javascript\s+heap)/i.test(el)) {
+      return {
+        type: 'OOM',
+        category: 'resource',
+        message: 'Out of memory',
+        suggestions: [
+          'Increase available memory',
+          'Reduce the scope of the operation',
+          'Check for memory leaks in the code',
+        ],
+        autoFixable: false,
+      };
+    }
+
+    // Default: unknown error
+    return {
+      type: 'UNKNOWN',
+      category: 'other',
+      message: 'Command failed with an unrecognized error',
+      suggestions: [
+        'Read the error output for details',
+        'Try running the command manually to understand the issue',
+      ],
+      autoFixable: false,
+    };
+  }
+
+  /**
+   * Truncate output to avoid returning massive error dumps.
+   */
+  private truncateOutput(output: string, maxLength: number = 4000): string {
+    if (!output) return '';
+    if (output.length <= maxLength) return output;
+    const half = Math.floor(maxLength / 2);
+    return output.slice(0, half) + '\n\n... [truncated] ...\n\n' + output.slice(-half);
   }
 
   /**
@@ -877,7 +1070,7 @@ export class OpencodeV2Provider implements LLMProvider {
    *
    * @see executeLocalCommand - Input sanitization
    */
-  private async executeCommandDirect(
+  async executeCommandDirect(
     command: string,
     cwd: string,
     timeoutSeconds: number,

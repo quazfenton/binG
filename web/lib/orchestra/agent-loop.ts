@@ -1,7 +1,7 @@
 import { getLLMProvider } from '../sandbox/providers/llm-factory'
 import { getSandboxProvider } from '../sandbox/providers'
 import { coreSandboxService } from '../sandbox/core-sandbox-service'
-import { ENHANCED_SANDBOX_TOOLS, type ToolName } from '../sandbox/enhanced-sandbox-tools'
+import { EXTENDED_SANDBOX_TOOLS, mapToolToCapability, getToolDescription } from '../sandbox/extended-sandbox-tools'
 import type { ToolResult } from '../sandbox/types'
 import type { SandboxHandle } from '../sandbox/providers/sandbox-provider'
 import { sandboxEvents } from '../sandbox/sandbox-events'
@@ -20,14 +20,33 @@ function getSystemPrompt(workspaceDir: string): string {
 You have direct access to the local filesystem and shell. You can execute any commands natively.
 The workspace is at ${workspaceDir}/.
 You can use bash/shell commands, git, npm/pnpm/yarn, python, and any tools installed on this machine.
+
+Additional capabilities:
+- terminal_create_session / terminal_send_input / terminal_get_output: Interactive terminal sessions for running dev servers, TUIs, etc.
+- project_analyze: Detect framework, package manager, recommended commands.
+- project_list_scripts: List all runnable scripts (npm, Makefile, pyproject, cargo, go, etc.).
+- port_status: Check which ports are listening.
+
 Always write files before trying to run them.
 Report results clearly and concisely.`
   }
   return `You are an expert software engineer with access to a Linux sandbox workspace.
 You can execute shell commands, write files, read files, list directories, run code, use git, and more.
 The workspace is at ${workspaceDir}/.
+
+Additional capabilities:
+- terminal_create_session / terminal_send_input / terminal_get_output: Interactive terminal sessions for running dev servers, monitoring output (with waitForPattern), navigating TUIs.
+- terminal_list_sessions: See all active terminal sessions.
+- project_analyze: Detect framework, package manager, entry points, config files, and recommended commands.
+- project_list_scripts: List all runnable scripts/tasks (npm scripts, Makefile, pyproject.toml, cargo, go, deno, turbo, nx).
+- project_dependencies: Check installed packages and detect issues.
+- project_structure: Get file tree with semantic understanding.
+- port_status: Check which ports are listening and what processes own them.
+
 Always write files before trying to run them.
 When installing packages, use the appropriate package manager (npm, pip, etc.).
+Use project_analyze before running commands to understand the project structure.
+For interactive programs (dev servers, TUIs), use terminal_create_session + terminal_get_output with waitForPattern.
 Report results clearly and concisely.`
 }
 
@@ -64,7 +83,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     const result = await llm.runAgentLoop({
       userMessage,
       conversationHistory,
-      tools: [...ENHANCED_SANDBOX_TOOLS] as any,
+      tools: [...EXTENDED_SANDBOX_TOOLS] as any,
       systemPrompt,
       maxSteps: 15,
       onToolExecution(toolName: string, args: Record<string, any>, toolResult: ToolResult) {
@@ -78,7 +97,7 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
       },
       async executeTool(name: string, args: Record<string, any>): Promise<ToolResult> {
         sandboxEvents.emit(sandboxId, 'agent:tool_start', { toolName: name, args })
-        const capId = toolNameToCapability(name);
+        const capId = mapToolToCapability(name);
         const wrapperResult = await wrapper.execute(capId, args);
         // Record execution with agency for learning
         wrapper.recordExecution(userMessage, wrapperResult.success, [capId]);
@@ -112,35 +131,4 @@ export async function runAgentLoop(options: AgentLoopOptions): Promise<AgentLoop
     })
     throw error
   }
-}
-
-/**
- * Map legacy tool names to capability IDs
- */
-function toolNameToCapability(toolName: string): string {
-  const mapping: Record<string, string> = {
-    exec_shell: 'sandbox.shell',
-    write_file: 'file.write',
-    read_file: 'file.read',
-    list_dir: 'file.list',
-    run_code: 'code.run',
-    git_clone: 'repo.clone',
-    git_status: 'repo.git',
-    git_commit: 'repo.commit',
-    git_push: 'repo.push',
-    start_process: 'process.start',
-    stop_process: 'process.stop',
-    list_processes: 'process.list',
-    search_files: 'file.search',
-    sync_files: 'file.sync',
-    mcp_list_tools: 'mcp.list',
-    mcp_call_tool: 'mcp.call',
-    computer_use_click: 'computer_use.click',
-    computer_use_type: 'computer_use.type',
-    computer_use_screenshot: 'computer_use.screenshot',
-    computer_use_scroll: 'computer_use.scroll',
-    get_previews: 'preview.get',
-    forward_port: 'preview.forward_port',
-  };
-  return mapping[toolName] || toolName;
 }

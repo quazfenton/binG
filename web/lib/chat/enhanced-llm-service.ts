@@ -278,7 +278,7 @@ export class EnhancedLLMService {
           explicitFiles: contextPack.includePatterns || [],
           recentSessionFiles: recentFiles,
           maxTotalSize: contextPack.maxTotalSize || 500000,
-          format: contextPack.format || 'markdown',
+          format: contextPack.format || 'json',
           maxLinesPerFile: contextPack.maxLinesPerFile || 500,
         });
         
@@ -304,7 +304,7 @@ export class EnhancedLLMService {
       ];
       // Prepend context pack to first system message or add as new system message
       const systemMsgIdx = processedMessages.findIndex(m => m.role === 'system');
-      const contextPrefix = `\n\n--- WORKSPACE CONTEXT ---\n${contextPackBundle}\n--- END CONTEXT ---\n`;
+      const contextPrefix = `\n\n--- WORKSPACE CONTEXT (JSON) ---\n${contextPackBundle}\n--- END CONTEXT ---\n`;
       if (systemMsgIdx >= 0) {
         const sysMsg = processedMessages[systemMsgIdx];
         processedMessages[systemMsgIdx] = {
@@ -603,7 +603,7 @@ export class EnhancedLLMService {
           explicitFiles: contextPack.includePatterns || [],
           recentSessionFiles: recentFiles,
           maxTotalSize: contextPack.maxTotalSize || 500000,
-          format: contextPack.format || 'markdown',
+          format: contextPack.format || 'json',
           maxLinesPerFile: contextPack.maxLinesPerFile || 500,
         });
         
@@ -625,7 +625,7 @@ export class EnhancedLLMService {
     let processedMessages = llmRequest.messages;
     if (contextPackBundle) {
       const systemMsgIdx = processedMessages.findIndex(m => m.role === 'system');
-      const contextPrefix = `\n\n--- WORKSPACE CONTEXT ---\n${contextPackBundle}\n--- END CONTEXT ---\n`;
+      const contextPrefix = `\n\n--- WORKSPACE CONTEXT (JSON) ---\n${contextPackBundle}\n--- END CONTEXT ---\n`;
       if (systemMsgIdx >= 0) {
         const sysMsg = processedMessages[systemMsgIdx];
         processedMessages = processedMessages.map((m, i) =>

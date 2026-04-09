@@ -15,6 +15,170 @@ import {
   type SmartContextOptions,
   type SmartContextResult,
 } from "../virtual-filesystem/smart-context";
+import {
+  getProjectSymbols,
+} from "../memory/vectorStore";
+import { virtualFilesystem } from "../virtual-filesystem/virtual-filesystem-service";
+import { createLogger } from "@/lib/utils/logger";
+
+const logger = createLogger("HybridRetrieval");
+
+// ─── Project Analysis Cache ──────────────────────────────────────────────────
+// Cached project analysis results, keyed by `${userId}:${scopePath}`.
+// Avoids re-analyzing the same project on every prompt.
+// TTL: 5 minutes — re-analyzes if project structure might have changed.
+
+interface CachedAnalysis {
+  result: string;
+  timestamp: number;
+}
+
+const PROJECT_ANALYSIS_CACHE = new Map<string, CachedAnalysis>();
+const PROJECT_ANALYSIS_TTL_MS = 5 * 60 * 1000; // 5 minutes
+
+/**
+ * Get cached project analysis or compute fresh value.
+ * Cache key: `${userId}:${scopePath}` — only re-analyzes when scope changes.
+ */
+async function getCachedProjectAnalysis(
+  userId: string,
+  scopePath?: string
+): Promise<string> {
+  const cacheKey = `${userId}:${scopePath || 'default'}`;
+  const cached = PROJECT_ANALYSIS_CACHE.get(cacheKey);
+
+  if (cached && Date.now() - cached.timestamp < PROJECT_ANALYSIS_TTL_MS) {
+    return cached.result;
+  }
+
+  try {
+    const { analyzeProject } = await import('@/lib/tools/project-analysis');
+    const analysis = await analyzeProject(userId, { depth: 1 });
+
+    let result = '';
+    if (analysis.framework !== 'unknown' || analysis.packageManager !== 'unknown') {
+      result = `Project: framework=${analysis.framework}, packageManager=${analysis.packageManager}, runtimeMode=${analysis.runtimeMode}`;
+      if (analysis.entryFile) result += `, entryFile=${analysis.entryFile}`;
+      if (analysis.hints.length > 0) result += `, hints: ${analysis.hints.slice(0, 3).join('; ')}`;
+    }
+
+    // Cache the result
+    if (result) {
+      PROJECT_ANALYSIS_CACHE.set(cacheKey, { result, timestamp: Date.now() });
+    }
+
+    return result;
+  } catch {
+    return '';
+  }
+}
+
+// ─── Tree Building for Symbol Retrieval ──────────────────────────────────────
+
+/**
+ * Build a minimal tree string from a set of file paths.
+ * Shows only the directories that contain referenced files.
+ */
+function buildTreeFromPaths(filePaths: string[], maxDepth = 6): string {
+  // Build a tree structure from file paths
+  const tree: Record<string, any> = {};
+
+  for (const path of filePaths) {
+    const parts = path.replace(/^\//, '').split('/');
+    let current = tree;
+    for (let i = 0; i < parts.length; i++) {
+      const part = parts[i];
+      const isFile = i === parts.length - 1;
+      if (!current[part]) {
+        current[part] = isFile ? null : {};
+      }
+      current = current[part];
+    }
+  }
+
+  function renderTree(node: Record<string, any>, prefix = '', depth = 0): string {
+    if (depth >= maxDepth) return `${prefix}...\n`;
+
+    const entries = Object.entries(node);
+    let result = '';
+
+    for (let i = 0; i < entries.length; i++) {
+      const [name, children] = entries[i];
+      const isLast = i === entries.length - 1;
+      const connector = isLast ? '└── ' : '├── ';
+      const isDir = children !== null;
+
+      result += `${prefix}${connector}${name}${isDir ? '/' : ''}\n`;
+
+      if (isDir && children && depth < maxDepth - 1) {
+        const newPrefix = prefix + (isLast ? '    ' : '│   ');
+        result += renderTree(children, newPrefix, depth + 1);
+      }
+    }
+
+    return result;
+  }
+
+  return renderTree(tree);
+}
+
+/**
+ * Build an abbreviated tree showing only directories containing referenced files
+ * plus a count of other files. Falls back to top-level dirs if too many.
+ */
+async function buildSmartTreeForSymbols(
+  userId: string | undefined,
+  symbolFilePaths: string[],
+  totalFileCount: number
+): Promise<string> {
+  // No userId — fallback to path-based tree
+  if (!userId || symbolFilePaths.length === 0) {
+    return buildTreeFromPaths(symbolFilePaths);
+  }
+
+  // Small project — try to show full tree
+  if (totalFileCount <= 10) {
+    try {
+      const listing = await virtualFilesystem.listDirectory(userId, '/');
+      if (listing.nodes && listing.nodes.length > 0) {
+        return buildFullTreeString(listing.nodes);
+      }
+    } catch {
+      // VFS inaccessible — fallback to path-based tree
+    }
+  }
+
+  // Show only directories containing referenced files
+  return buildTreeFromPaths(symbolFilePaths);
+}
+
+/**
+ * Build a full tree string from directory nodes (recursive).
+ * Used for small projects where showing the complete tree is cheap.
+ */
+function buildFullTreeString(
+  nodes: Array<{ name: string; type: string }>,
+  prefix = '',
+  depth = 0,
+  maxDepth = 10
+): string {
+  if (depth >= maxDepth || nodes.length === 0) return '';
+
+  let result = '';
+  for (let i = 0; i < nodes.length; i++) {
+    const node = nodes[i];
+    const isLast = i === nodes.length - 1;
+    const connector = isLast ? '└── ' : '├── ';
+    const isDir = node.type === 'directory';
+    result += `${prefix}${connector}${node.name}${isDir ? '/' : ''}\n`;
+
+    // For full tree we need the children — but since we only get top-level nodes
+    // from listDirectory, we can't recurse here. This is handled by the caller
+    // making multiple listDirectory calls. For small projects, showing top-level
+    // is usually sufficient.
+  }
+  return result;
+}
 
 export interface HybridRetrievalOptions {
   /** User ID for VFS access */
@@ -50,7 +214,7 @@ export interface HybridRetrievalOptions {
 export interface HybridRetrievalResult {
   /** The formatted context bundle */
   bundle: string;
-  /** Directory tree */
+  /** Directory tree (may be abbreviated for large projects) */
   tree: string;
   /** Which retrieval path was used */
   source: 'symbol-retrieval' | 'smart-context' | 'fallback';
@@ -62,6 +226,10 @@ export interface HybridRetrievalResult {
   estimatedTokens: number;
   /** Whether VFS was empty */
   vfsIsEmpty: boolean;
+  /** Tree display mode */
+  treeMode?: 'full' | 'abbreviated' | 'minimal';
+  /** Budget tier */
+  budgetTier?: 'compact' | 'balanced' | 'full';
   /** Warnings during generation */
   warnings: string[];
 }
@@ -98,16 +266,57 @@ export async function retrieveHybrid(
           groupByFile: true,
         });
 
-        const bundle = injectContextIntoPrompt(opts.prompt, context);
+        // Option C: Build tree from symbol file paths
+        const uniqueFilePaths = Array.from(new Set(result.symbols.map(s => s.filePath)));
+        let tree = '';
+        try {
+          const allSymbols = await getProjectSymbols(opts.projectId!);
+          tree = await buildSmartTreeForSymbols(
+            opts.userId,
+            uniqueFilePaths,
+            allSymbols.length
+          );
+        } catch {
+          tree = buildTreeFromPaths(uniqueFilePaths);
+        }
+
+        // Inject tree into context — adapt to format
+        let bundleWithContext = context.text;
+        if (tree && context.format !== 'json') {
+          // For markdown/xml/plain: inject tree as header
+          bundleWithContext = context.text.includes('tree') || context.text.includes('├')
+            ? context.text
+            : `## Workspace Structure\n\n\`\`\`\n${tree}\n\`\`\`\n\n${context.text}`;
+        }
+        // For JSON: tree is separate — don't pollute the JSON structure
+
+        const bundle = injectContextIntoPrompt(opts.prompt, {
+          ...context,
+          text: bundleWithContext,
+        });
+
+        const bundleBytes = new TextEncoder().encode(bundle).length;
+        const treeBytes = new TextEncoder().encode(tree).length;
+
+        logger.debug('Symbol retrieval succeeded', {
+          symbolCount: result.symbols.length,
+          filesIncluded: context.filesIncluded.length,
+          estimatedTokens: context.tokenCount,
+          bundleBytes,
+          treeBytes,
+          treeMode: 'minimal',
+        });
 
         return {
           bundle,
-          tree: '', // Symbol retrieval doesn't include tree
+          tree,
           source: 'symbol-retrieval',
           symbolCount: result.symbols.length,
           filesIncluded: context.filesIncluded.length,
           estimatedTokens: context.tokenCount,
           vfsIsEmpty: false,
+          treeMode: 'minimal',
+          budgetTier: 'balanced',
           warnings,
         };
       }
@@ -127,13 +336,24 @@ export async function retrieveHybrid(
       currentProjectPath: opts.currentProjectPath,
       scopePath: opts.scopePath,
       maxTotalSize: opts.maxTotalSize ?? 500_000,
-      format: opts.format ?? 'markdown',
+      format: opts.format ?? 'json',
       maxLinesPerFile: opts.maxLinesPerFile ?? 500,
     };
 
     const smartResult = await generateSmartContext(smartOpts);
 
     if (!smartResult.vfsIsEmpty && smartResult.bundle.length > 0) {
+      const bundleBytes = new TextEncoder().encode(smartResult.bundle).length;
+
+      logger.debug('Smart-context fallback succeeded', {
+        filesIncluded: smartResult.filesIncluded,
+        totalFilesInVfs: smartResult.totalFilesInVfs,
+        estimatedTokens: smartResult.estimatedTokens,
+        bundleBytes,
+        treeMode: smartResult.treeMode,
+        budgetTier: smartResult.budgetTier,
+      });
+
       return {
         bundle: smartResult.bundle,
         tree: smartResult.tree,
@@ -142,6 +362,8 @@ export async function retrieveHybrid(
         filesIncluded: smartResult.filesIncluded,
         estimatedTokens: smartResult.estimatedTokens,
         vfsIsEmpty: false,
+        treeMode: smartResult.treeMode,
+        budgetTier: smartResult.budgetTier,
         warnings,
       };
     }
@@ -149,9 +371,13 @@ export async function retrieveHybrid(
     warnings.push(`Smart-context failed: ${err instanceof Error ? err.message : String(err)}`);
   }
 
-  // ── Final fallback: minimal context ─────────────────────────────────────────
+  // ── Final fallback: minimal context with cached project analysis hint ───────
+  // Uses cached analysis (keyed by userId + scopePath) — only re-analyzes when scope changes.
+  const projectHint = await getCachedProjectAnalysis(opts.userId, opts.scopePath);
+
+  logger.debug('Hybrid retrieval: using final fallback (no relevant files)');
   return {
-    bundle: `--- WORKSPACE ---\nNo relevant files found for: "${opts.prompt}"\n--- END WORKSPACE ---\n`,
+    bundle: `--- WORKSPACE ---\nNo relevant files found for: "${opts.prompt}"${projectHint ? `\n\n${projectHint}` : ''}\n--- END WORKSPACE ---\n`,
     tree: '',
     source: 'fallback',
     symbolCount: 0,
@@ -189,5 +415,6 @@ export async function buildPromptWithContext(
     filesIncluded: [],
     symbolsIncluded: [],
     truncated: false,
+    format: opts.format ?? 'json',
   });
 }

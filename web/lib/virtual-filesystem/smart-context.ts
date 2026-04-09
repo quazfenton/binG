@@ -24,6 +24,7 @@
 import { virtualFilesystem } from './virtual-filesystem-service';
 import type { VirtualFile, VirtualFilesystemNode } from './filesystem-types';
 import { createLogger } from '@/lib/utils/logger';
+import { estimateTokens } from '@/lib/context/contextBuilder';
 
 const logger = createLogger('SmartContext');
 
@@ -61,7 +62,7 @@ export interface FileScore {
 export interface SmartContextResult {
   /** The formatted context bundle */
   bundle: string;
-  /** Directory tree */
+  /** Directory tree (may be abbreviated for large projects) */
   tree: string;
   /** Files included, ranked by relevance */
   rankedFiles: FileScore[];
@@ -73,6 +74,10 @@ export interface SmartContextResult {
   estimatedTokens: number;
   /** Whether VFS was empty */
   vfsIsEmpty: boolean;
+  /** Tree display mode: 'full' | 'abbreviated' | 'minimal' */
+  treeMode?: 'full' | 'abbreviated' | 'minimal';
+  /** Budget tier: 'compact' | 'balanced' | 'full' */
+  budgetTier?: 'compact' | 'balanced' | 'full';
   /** Warnings during generation */
   warnings: string[];
 }
@@ -578,7 +583,7 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
     recentSessionFiles: recentSessionFileList = [],
     currentProjectPath,
     maxTotalSize = 500000, 
-    format = 'markdown', 
+    format = 'json', 
     maxLinesPerFile = 500 
   } = options;
   const warnings: string[] = [];
@@ -606,11 +611,22 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
   // Collect all files from VFS
   let allFiles: VirtualFile[] = [];
   let tree = '';
+  let treeMode = 'full' as string;
   try {
-    // Get directory tree
     const listing = await virtualFilesystem.listDirectory(userId, '/');
     allFiles = await collectAllFiles(userId, '/');
-    tree = await buildTreeString(listing.nodes || [], '', 0, 10, userId, '/');
+
+    // Option B: Filter out excluded files (build artifacts, locks, binaries, etc.)
+    // Never filters explicit @mentions even if they match exclusion patterns
+    allFiles = filterFilesSmart(allFiles, explicitFiles);
+
+    // Option A: Build smart tree (progressive pruning based on project size)
+    const referencedPaths = new Set<string>();
+    for (const f of explicitFileList) referencedPaths.add(f.toLowerCase());
+
+    const smartTreeResult = await buildSmartTree(userId, '/', referencedPaths, allFiles.length);
+    tree = smartTreeResult.tree;
+    treeMode = smartTreeResult.mode;
   } catch (e: any) {
     // VFS not initialized or empty — return minimal context
     warnings.push(`VFS access failed: ${e.message}. Returning empty context.`);
@@ -623,6 +639,8 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       filesIncluded: 0,
       estimatedTokens: 15,
       vfsIsEmpty: true,
+      treeMode: 'minimal',
+      budgetTier: 'compact',
       warnings,
     };
   }
@@ -638,6 +656,8 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
       filesIncluded: 0,
       estimatedTokens: 15,
       vfsIsEmpty: true,
+      treeMode: 'full',
+      budgetTier: 'compact',
       warnings,
     };
   }
@@ -688,11 +708,36 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
     .filter(s => s.score > 0)
     .sort((a, b) => b.score - a.score);
 
+  // Option D: Dynamic context budget optimizer
+  const roughTokenEstimate = allFiles.length * 200; // ~200 tokens/file average
+  const budgetTier = estimateContextBudget(
+    allFiles.length,
+    roughTokenEstimate,
+    explicitFileList.length > 0
+  );
+
+  // Adjust maxLinesPerFile based on budget tier
+  const effectiveMaxLines = budgetTier === 'compact'
+    ? Math.min(maxLinesPerFile, 100)  // Compact: 100 lines max
+    : budgetTier === 'balanced'
+      ? Math.min(maxLinesPerFile, 300) // Balanced: 300 lines max
+      : maxLinesPerFile;                // Full: use original value
+
+  // Adjust maxTotalSize based on budget tier
+  const effectiveMaxSize = budgetTier === 'compact'
+    ? Math.min(maxTotalSize, 100_000)  // ~25K tokens
+    : budgetTier === 'balanced'
+      ? Math.min(maxTotalSize, 250_000) // ~62K tokens
+      : maxTotalSize;
+
+  // Guard against zero — always allow at least some content
+  const safeEffectiveMaxSize = Math.max(effectiveMaxSize, 10_000); // minimum 10KB
+
   // Select files up to maxTotalSize
   const encoder = new TextEncoder();
   const selected: { file: VirtualFile; score: FileScore }[] = [];
   let currentSize = 0;
-  
+
   // Cache file contents to avoid reading twice
   const fileContentCache = new Map<string, VirtualFile>();
 
@@ -715,9 +760,9 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
     if (scoredFile.score >= SCORE_THRESHOLDS.EXPLICIT) {
       const file = await getCachedFile(scoredFile.path);
       if (file) {
-        const content = truncateContent(file.content, maxLinesPerFile);
+        const content = truncateContent(file.content, effectiveMaxLines);
         currentSize += encoder.encode(content).length;
-        if (currentSize <= maxTotalSize) {
+        if (currentSize <= safeEffectiveMaxSize) {
           selected.push({ file: { ...file, content }, score: scoredFile });
         }
       }
@@ -729,9 +774,9 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
     if (scoredFile.score < SCORE_THRESHOLDS.EXPLICIT) {
       const file = await getCachedFile(scoredFile.path);
       if (file) {
-        const content = truncateContent(file.content, maxLinesPerFile);
+        const content = truncateContent(file.content, effectiveMaxLines);
         const size = encoder.encode(content).length;
-        if (currentSize + size <= maxTotalSize) {
+        if (currentSize + size <= safeEffectiveMaxSize) {
           selected.push({ file: { ...file, content }, score: scoredFile });
           currentSize += size;
         }
@@ -752,7 +797,35 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
   }
 
   // Generate bundle
-  const bundle = formatBundle(selected, tree, format, signals, explicitFiles);
+  const bundle = format === 'plain'
+    ? formatBundlePlain(selected, tree)
+    : formatBundle(selected, tree, format, signals, explicitFiles);
+
+  // Compute detailed metrics for logging
+  const bundleBytes = encoder.encode(bundle).length;
+  const treeBytes = encoder.encode(tree).length;
+  const estimatedTokensVal = estimateTokens(bundle);
+  const treeTokens = estimateTokens(tree);
+  const contentTokens = estimatedTokensVal - treeTokens;
+
+  // Log token usage for monitoring and optimization
+  logger.debug('SmartContext generated', {
+    totalFiles: allFiles.length,
+    filesIncluded: selected.length,
+    treeMode,
+    budgetTier,
+    bundleBytes,
+    treeBytes,
+    estimatedTokens: estimatedTokensVal,
+    treeTokens,
+    contentTokens,
+    avgScore: selected.length > 0
+      ? (selected.reduce((sum, s) => sum + s.score.score, 0) / selected.length).toFixed(2)
+      : '0',
+    topReasons: selected.length > 0
+      ? selected[0].score.reasons.slice(0, 3).join(', ')
+      : 'none',
+  });
 
   return {
     bundle,
@@ -760,8 +833,10 @@ export async function generateSmartContext(options: SmartContextOptions): Promis
     rankedFiles: selected.map(s => s.score),
     totalFilesInVfs: allFiles.length,
     filesIncluded: selected.length,
-    estimatedTokens: Math.ceil(encoder.encode(bundle).length / 4),
+    estimatedTokens: estimatedTokensVal,
     vfsIsEmpty: false,
+    treeMode: treeMode as 'full' | 'abbreviated' | 'minimal',
+    budgetTier,
     warnings,
   };
 }
@@ -844,6 +919,284 @@ async function buildTreeString(
   return result;
 }
 
+// ─── Option A: Progressive Tree Pruning ──────────────────────────────────────
+
+/**
+ * Build an abbreviated tree that only shows folders + referenced files.
+ * Unrelated leaf files are replaced with a `... N more file(s)` placeholder.
+ * Always shows directory structure even when no referenced files exist.
+ */
+async function buildAbbreviatedTree(
+  ownerId: string,
+  rootPath: string = '/',
+  referencedFiles: Set<string> = new Set<string>(),
+  maxDepth: number = 10,
+  currentDepth: number = 0,
+  prefix: string = '',
+  visitedDirs: Set<string> = new Set<string>()
+): Promise<string> {
+  if (currentDepth >= maxDepth) return '';
+  if (visitedDirs.has(rootPath)) return '';
+  visitedDirs.add(rootPath);
+
+  let result = '';
+  let nodes: VirtualFilesystemNode[] = [];
+  try {
+    const listing = await virtualFilesystem.listDirectory(ownerId, rootPath);
+    nodes = listing.nodes || [];
+  } catch {
+    return '';
+  }
+
+  if (nodes.length === 0) return '';
+
+  const dirs = nodes.filter(n => n.type === 'directory');
+  const files = nodes.filter(n => n.type === 'file');
+
+  const shownFiles: VirtualFilesystemNode[] = [];
+  let hiddenFileCount = 0;
+
+  for (const file of files) {
+    const fullPath = rootPath === '/' ? `/${file.name}` : `${rootPath}/${file.name}`;
+    if (referencedFiles.has(fullPath.toLowerCase())) {
+      shownFiles.push(file);
+    } else {
+      hiddenFileCount++;
+    }
+  }
+
+  // Always include all dirs, even if empty of referenced files
+  const allEntries: Array<{ node: VirtualFilesystemNode; shown: boolean }> = [];
+  for (const dir of dirs) allEntries.push({ node: dir, shown: true });
+  for (const file of shownFiles) allEntries.push({ node: file, shown: true });
+
+  const hasHiddenFiles = hiddenFileCount > 0;
+  const totalEntries = allEntries.length + (hasHiddenFiles ? 1 : 0);
+
+  for (let i = 0; i < allEntries.length; i++) {
+    const { node } = allEntries[i];
+    const isLast = i === allEntries.length - 1 && !hasHiddenFiles;
+    const connector = isLast ? '└── ' : '├── ';
+    const isDir = node.type === 'directory';
+    result += `${prefix}${connector}${node.name}${isDir ? '/' : ''}\n`;
+
+    if (isDir && currentDepth < maxDepth - 1) {
+      const newPrefix = prefix + (isLast ? '    ' : '│   ');
+      const childPath = rootPath === '/' ? `/${node.name}` : `${rootPath}/${node.name}`;
+      result += await buildAbbreviatedTree(
+        ownerId,
+        childPath,
+        referencedFiles,
+        maxDepth,
+        currentDepth + 1,
+        newPrefix,
+        visitedDirs
+      );
+    }
+  }
+
+  // Add placeholder for hidden files
+  if (hasHiddenFiles) {
+    const isLast = true;
+    const connector = isLast ? '└── ' : '├── ';
+    result += `${prefix}${connector}... ${hiddenFileCount} more file(s)\n`;
+  }
+
+  return result;
+}
+
+/**
+ * Decide which tree mode to use based on project size.
+ * Returns { tree, mode } where mode is 'full' | 'abbreviated' | 'minimal'.
+ */
+async function buildSmartTree(
+  ownerId: string,
+  rootPath: string,
+  referencedFiles: Set<string>,
+  totalFileCount: number
+): Promise<{ tree: string; mode: 'full' | 'abbreviated' | 'minimal' }> {
+  // Guard against empty ownerId
+  if (!ownerId) {
+    return { tree: '', mode: 'minimal' };
+  }
+
+  // Small project (< 10 files) — show full tree
+  if (totalFileCount <= 10) {
+    try {
+      const listing = await virtualFilesystem.listDirectory(ownerId, rootPath);
+      if (listing.nodes && listing.nodes.length > 0) {
+        const tree = await buildTreeString(listing.nodes, '', 0, 10, ownerId, rootPath);
+        return { tree, mode: 'full' };
+      }
+    } catch {
+      // Fallback to minimal
+    }
+  }
+
+  // Medium project (10-50 files) — abbreviated tree
+  if (totalFileCount <= 50) {
+    try {
+      const tree = await buildAbbreviatedTree(ownerId, rootPath, referencedFiles);
+      return { tree, mode: 'abbreviated' };
+    } catch {
+      // Fallback to minimal
+    }
+  }
+
+  // Large project (> 50 files) — minimal tree (top-level dirs only)
+  try {
+    const listing = await virtualFilesystem.listDirectory(ownerId, rootPath);
+    const topDirs = (listing.nodes || []).filter(n => n.type === 'directory');
+    let tree = '';
+    if (topDirs.length > 0) {
+      for (let i = 0; i < topDirs.length; i++) {
+        const dir = topDirs[i];
+        const isLast = i === topDirs.length - 1;
+        tree += `${isLast ? '└── ' : '├── '}${dir.name}/\n`;
+      }
+    }
+    tree += `... ${totalFileCount} files total (${referencedFiles.size} referenced)\n`;
+    return { tree, mode: 'minimal' };
+  } catch {
+    return { tree: `... ${totalFileCount} files total\n`, mode: 'minimal' };
+  }
+}
+
+// ─── Option B: File-Type Filtering & Smart Exclusions ────────────────────────
+
+/**
+ * Paths / patterns that should always be excluded from context.
+ * These are generated, lock, or binary files that waste tokens.
+ */
+const EXCLUDED_PATH_PATTERNS = [
+  // Build output
+  '/dist/', '/build/', '/out/', '/.next/', '/.svelte-kit/', '/.nuxt/',
+  // Node modules
+  '/node_modules/', '/.pnpm-store/', '/.yarn/',
+  // Generated / bundled files
+  '.min.js', '.min.css', '.bundle.js', '.chunk.js',
+  // Lock files (large, not useful for LLM)
+  '/package-lock.json', '/yarn.lock', '/pnpm-lock.yaml', '/bun.lockb',
+  '/poetry.lock', '/Pipfile.lock', '/Gemfile.lock', '/Cargo.lock',
+  // Binary / asset files
+  '.png', '.jpg', '.jpeg', '.gif', '.webp', '.svg', '.ico',
+  '.woff', '.woff2', '.ttf', '.eot',
+  '.mp3', '.mp4', '.wav', '.avi', '.mov',
+  '.zip', '.tar', '.gz', '.rar', '.7z',
+  '.exe', '.dll', '.so', '.dylib', '.a', '.lib',
+  '.pyc', '.pyo', '.pyd', '__pycache__',
+  '.class', '.jar', '.war',
+  '.o', '.obj', '.pdb',
+  // IDE / editor metadata
+  '.DS_Store', '.idea/', '.vscode/', '.vs/',
+  // Environment / secrets
+  '.env', '.env.local', '.env.production', '.env.development',
+  // Git
+  '.git/',
+] as const;
+
+/**
+ * File types that should be limited to a small count per type.
+ * E.g. only include 2 config files max per type.
+ */
+const CONFIG_FILE_CAPS: Record<string, number> = {
+  'tsconfig': 2,
+  'eslint': 2,
+  'prettier': 1,
+  'webpack': 1,
+  'vite': 1,
+  'babel': 1,
+  'jest': 1,
+  'vitest': 1,
+  'docker': 2,
+  'compose': 1,
+};
+
+/**
+ * Check if a file path should be excluded based on patterns.
+ */
+function isExcludedFile(filePath: string): boolean {
+  const lower = filePath.toLowerCase();
+
+  for (const pattern of EXCLUDED_PATH_PATTERNS) {
+    if (lower.includes(pattern.toLowerCase())) return true;
+  }
+
+  return false;
+}
+
+/**
+ * Extract a config-file "key" from a filename.
+ * E.g. `tsconfig.app.json` → `tsconfig`, `.eslintrc.js` → `eslint`
+ */
+function getConfigFileKey(fileName: string): string | null {
+  const base = fileName.toLowerCase();
+  for (const key of Object.keys(CONFIG_FILE_CAPS)) {
+    if (base.includes(key)) return key;
+  }
+  return null;
+}
+
+/**
+ * Filter files using smart exclusion rules.
+ * Never excludes files in the `explicitFiles` set (from @mentions).
+ * Returns the filtered file list.
+ */
+function filterFilesSmart(files: VirtualFile[], explicitFiles: Set<string> = new Set<string>()): VirtualFile[] {
+  // Track config file counts per key
+  const configCounts = new Map<string, number>();
+
+  const filtered: VirtualFile[] = [];
+
+  for (const file of files) {
+    const isExplicit = explicitFiles.has(file.path.toLowerCase());
+
+    // Skip excluded patterns — BUT never exclude explicit @mentions
+    if (!isExplicit && isExcludedFile(file.path)) continue;
+
+    // Cap config files — BUT never cap explicit @mentions
+    const configKey = getConfigFileKey(file.path.split('/').pop() || '');
+    if (configKey && !isExplicit) {
+      const current = configCounts.get(configKey) || 0;
+      if (current >= CONFIG_FILE_CAPS[configKey]) continue;
+      configCounts.set(configKey, current + 1);
+    }
+
+    filtered.push(file);
+  }
+
+  return filtered;
+}
+
+// ─── Option D: Dynamic Context Budget Optimizer ──────────────────────────────
+
+/**
+ * Estimate context size and return a recommended budget tier.
+ * This helps avoid wasting tokens on unnecessary content.
+ */
+function estimateContextBudget(
+  totalFileCount: number,
+  estimatedTokenCount: number,
+  hasExplicitFiles: boolean
+): 'compact' | 'balanced' | 'full' {
+  // Compact: large project, no explicit files — tree-only mode
+  if (totalFileCount > 50 && !hasExplicitFiles) {
+    return 'compact';
+  }
+
+  // Full: small project or explicit file attachments
+  if (totalFileCount <= 15 || hasExplicitFiles) {
+    return 'full';
+  }
+
+  // Balanced: medium project
+  if (estimatedTokenCount > 8000) {
+    return 'compact';
+  }
+
+  return 'balanced';
+}
+
 /**
  * Truncate content to max lines
  */
@@ -871,7 +1224,7 @@ function escapeXml(text: string): string {
 function formatBundle(
   selected: { file: VirtualFile; score: FileScore }[],
   tree: string,
-  format: string,
+  format: 'markdown' | 'xml' | 'json',
   signals: ReturnType<typeof extractPromptSignals>,
   explicitFiles: Set<string>,
 ): string {
@@ -938,46 +1291,85 @@ function formatBundle(
 }
 
 /**
+ * Format the context bundle in plain text format (no markdown, no XML).
+ */
+function formatBundlePlain(
+  selected: { file: VirtualFile; score: FileScore }[],
+  tree: string,
+): string {
+  let plain = '=== WORKSPACE CONTEXT ===\n\n';
+
+  if (tree) {
+    plain += `Directory tree:\n${tree}\n\n`;
+  }
+
+  for (const s of selected) {
+    const reasons = s.score.reasons.length > 0 ? ` (${s.score.reasons.join(', ')})` : '';
+    plain += `--- ${s.file.path}${reasons} ---\n\n`;
+    plain += `${s.file.content}\n\n`;
+  }
+
+  if (selected.length === 0) {
+    plain += `Directory tree:\n${tree || '(empty)'}\n\n`;
+    plain += 'No file contents available. Create files by asking me to build something.\n';
+  }
+
+  plain += '=== END WORKSPACE CONTEXT ===\n';
+  return plain;
+}
+
+/**
  * Detect if LLM response contains a file read request
  * Parses patterns like:
  * - <request_file>path/to/file.ts</request_file>
  * - "I need to read file.ts"
  * - "Let me check App.tsx"
  * - Tool calls with read_file
+ *
+ * Returns { files: string[], confidence: 'high' | 'medium' | 'low' }
  */
-export function detectFileReadRequest(llmResponse: string): string[] {
+export function detectFileReadRequest(llmResponse: string): { files: string[]; confidence: 'high' | 'medium' | 'low' } {
   const requestedFiles: string[] = [];
-  
+  let confidence: 'high' | 'medium' | 'low' = 'low';
+
   // Pattern 1: XML-style tags (highest confidence)
   const xmlPattern = /<request_file>([^<]+)<\/request_file>/gi;
+  let xmlCount = 0;
   for (const match of llmResponse.matchAll(xmlPattern)) {
     const file = match[1].trim();
-    if (file.length > 0 && file.length < 500) { // Sanity check
+    if (file.length > 0 && file.length < 500) {
       requestedFiles.push(file);
+      xmlCount++;
     }
   }
-  
+  if (xmlCount > 0) confidence = 'high';
+
   // Pattern 2: "read/check/look at" + filename (medium confidence)
   const readPattern = /\b(read|check|look at|examine|inspect|open)\s+(?:the\s+)?(?:file\s+)?([\w\-/.]+\.(?:tsx?|jsx?|py|rs|go|java|css|scss|json|md|yaml|yml|toml|sh|bash|html|sql|graphql|proto|tf|hcl))\b/gi;
+  let readCount = 0;
   for (const match of llmResponse.matchAll(readPattern)) {
     const file = match[2].trim();
-    // Filter out common false positives
     if (file.length > 2 && file.length < 500 && !file.includes(' ')) {
       requestedFiles.push(file);
+      readCount++;
     }
   }
-  
-  // Pattern 3: "in file.ts" or "from file.ts" (lower confidence, more false positives)
-  // Only match if preceded by specific verbs that indicate file access
+  if (readCount > 0 && confidence !== 'high') confidence = 'medium';
+
+  // Pattern 3: "in file.ts" or "from file.ts" (lower confidence)
   const inFilePattern = /\b(?:read|check|see|find|look|search|in|from|at)\s+(?:the\s+)?(?:file\s+)?([\w\-/.]+\.(?:tsx?|jsx?|py|rs|go|java|css|scss|json|md|yaml|yml|toml|sh|bash|html|sql|graphql|proto|tf|hcl))\b/gi;
+  let inFileCount = 0;
   for (const match of llmResponse.matchAll(inFilePattern)) {
     const file = match[1].trim();
     if (file.length > 2 && file.length < 500 && !file.includes(' ')) {
       requestedFiles.push(file);
+      inFileCount++;
     }
   }
-  
-  return [...new Set(requestedFiles)]; // Deduplicate
+  if (inFileCount > 0 && confidence === 'low') confidence = 'low';
+
+  // Deduplicate
+  return { files: Array.from(new Set(requestedFiles)), confidence };
 }
 
 /**
@@ -985,7 +1377,7 @@ export function detectFileReadRequest(llmResponse: string): string[] {
  */
 export function extractToolCallFileRequests(toolCalls: Array<{ name: string; arguments: Record<string, any> }>): string[] {
   const requestedFiles: string[] = [];
-  
+
   for (const toolCall of toolCalls) {
     if (toolCall.name === 'read_file' || toolCall.name === 'file.read') {
       const path = toolCall.arguments?.path;
@@ -994,7 +1386,7 @@ export function extractToolCallFileRequests(toolCalls: Array<{ name: string; arg
       }
     }
   }
-  
+
   return requestedFiles;
 }
 
@@ -1015,14 +1407,15 @@ export async function autoContinueWithFiles(options: {
 }): Promise<{ shouldContinue: boolean; contextPack: string; requestedFiles: string[] } | null> {
   const { userId, llmResponse, toolCalls, maxTotalSize = 300000, maxContinuations = 3 } = options;
 
-  // Detect file requests from LLM response text
-  const textRequestedFiles = detectFileReadRequest(llmResponse);
+  // Detect file requests from LLM response text (now returns { files, confidence })
+  const textDetection = detectFileReadRequest(llmResponse);
+  const textRequestedFiles = textDetection.files;
 
   // Detect file requests from tool calls
   const toolRequestedFiles = toolCalls ? extractToolCallFileRequests(toolCalls) : [];
 
   // Combine and deduplicate
-  const allRequestedFiles = [...new Set([...textRequestedFiles, ...toolRequestedFiles])];
+  const allRequestedFiles = Array.from(new Set([...textRequestedFiles, ...toolRequestedFiles]));
 
   if (allRequestedFiles.length === 0) {
     return null; // No files requested, no continuation needed
@@ -1118,11 +1511,16 @@ export async function* streamWithAutoContinue(
       const requestedContinuation = fullResponse.trimEnd().endsWith('[CONTINUE_REQUESTED]');
 
       if (requestedContinuation) {
-        // Build a context-aware continuation signal
-        // Include summary of tool calls executed so the model knows what was done
+        // Build a context-aware continuation signal with tool execution summary
         const toolSummary = allToolCalls.length > 0
           ? allToolCalls.map(tc => `${tc.name}(${tc.arguments?.path || tc.name})`).join(', ')
           : 'none';
+
+        // Also detect implicit file requests for better context
+        const fileDetection = detectFileReadRequest(fullResponse);
+        const implicitFiles = fileDetection.files.length > 0
+          ? ` (also mentioned: ${fileDetection.files.join(', ')})`
+          : '';
 
         // Get the last 300 chars of response for task context
         const contextHint = fullResponse.length > 300
@@ -1132,6 +1530,8 @@ export async function* streamWithAutoContinue(
         logger.info('Auto-continuing: LLM requested more turns', {
           toolCount: allToolCalls.length,
           toolSummary,
+          fileRequestConfidence: fileDetection.confidence,
+          implicitFiles: implicitFiles || 'none',
         });
 
         // Yield a structured event — NOT content — so the client knows
@@ -1140,13 +1540,15 @@ export async function* streamWithAutoContinue(
           type: 'auto-continue',
           content: '',
           toolSummary,
-          contextHint,
+          contextHint: contextHint + implicitFiles,
           isComplete: true,
           timestamp: new Date(),
           metadata: {
             autoContinue: true,
             continuationRequested: true,
             toolCount: allToolCalls.length,
+            fileRequestConfidence: fileDetection.confidence,
+            implicitFiles: fileDetection.files,
           },
         };
         return;
@@ -1158,13 +1560,13 @@ export async function* streamWithAutoContinue(
         toolCalls: allToolCalls.length > 0 ? allToolCalls : undefined,
         conversationId,
       });
-      
+
       if (autoContinue && autoContinue.shouldContinue) {
-        logger.info('Auto-continuing with requested files', { 
+        logger.info('Auto-continuing with requested files', {
           fileCount: autoContinue.requestedFiles.length,
           files: autoContinue.requestedFiles,
         });
-        
+
         // Yield a system-like message with the requested files
         yield {
           content: `\n\n[AUTO-CONTINUE] Automatically attaching requested files: ${autoContinue.requestedFiles.join(', ')}\n\n${autoContinue.contextPack}`,

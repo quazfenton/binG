@@ -109,19 +109,30 @@ app.prepare().then(startup).then(() => {
   // WebSocket server for terminal streaming
   const wss = new WebSocketServer({ noServer: true });
 
-  server.on('upgrade', (req: IncomingMessage, socket, head) => {
+  server.on('upgrade', async (req: IncomingMessage, socket, head) => {
     const { pathname, query } = parse(req.url || '', true);
 
     // FIX (Bug 7): Preserve Next.js HMR and other legitimate WebSocket connections.
     // Only intercept our terminal streaming paths; pass everything else through
     // to the default Next.js HMR handler (which uses its own WebSocket server).
     const isTerminalWS = pathname === '/ws' || pathname === '/api/sandbox/terminal/ws';
+    const isStreamControl = pathname === '/stream-control';
 
-    if (!isTerminalWS) {
-      // Not our terminal WebSocket — let Next.js HMR or other WS servers handle it.
-      // We don't have a handler for this path, so destroy the socket to avoid hanging.
-      // This is expected for paths like /_next/webpack-hmr which Next.js handles separately.
+    if (!isTerminalWS && !isStreamControl) {
+      // Not our WebSocket — let Next.js HMR or other WS servers handle it.
       socket.destroy();
+      return;
+    }
+
+    // Handle stream control WebSocket upgrade (LLM streaming control signals)
+    if (isStreamControl) {
+      try {
+        const { handleStreamControlUpgrade } = await import('@/lib/streaming/stream-control-handler');
+        await handleStreamControlUpgrade(req, socket, head);
+      } catch (err: any) {
+        logger.error('Stream control WebSocket upgrade failed', err);
+        socket.destroy();
+      }
       return;
     }
 
@@ -409,7 +420,7 @@ app.prepare().then(startup).then(() => {
 
   server.listen(port, () => {
     console.log(`> Ready on http://${hostname}:${port}`);
-    console.log(`> WebSocket server ready on ws://${hostname}:${port}`);
+    console.log(`> WebSocket paths: /ws (terminal PTY), /stream-control (LLM control)`);
   });
 });
 

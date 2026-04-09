@@ -255,7 +255,12 @@ export interface ProviderConfig {
   }
   antigravity?: {
     enabled?: boolean
-    // Accounts are loaded from DB, not config
+    clientId?: string
+    clientSecret?: string
+    masterRefreshToken?: string
+    masterEmail?: string
+    defaultProjectId?: string
+    // Per-user accounts are loaded from DB, not config
   }
 }
 
@@ -836,7 +841,7 @@ class LLMService {
     // Initialize providers lazily on first use
     await this.initializeProviders()
 
-    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId, apiKey } = request
+    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 65536, requestId, apiKey } = request
 
     return withRetry(
       async () => {
@@ -931,7 +936,7 @@ class LLMService {
 
   async *generateStreamingResponse(request: LLMRequest): AsyncGenerator<StreamingResponse> {
     // Initialize providers lazily on first use, with retry for transient failures
-    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 2000, requestId } = request
+    const { provider = 'openai', model, messages, temperature = 0.7, maxTokens = 65536, requestId } = request
 
     await withRetry(
       async () => this.initializeProviders(),
@@ -2193,6 +2198,11 @@ export const llmService = new LLMService({
   },
   antigravity: {
     enabled: process.env.ANTIGRAVITY_ENABLED !== 'false',
+    clientId: process.env.ANTIGRAVITY_CLIENT_ID || process.env.GOOGLE_CLIENT_ID,
+    clientSecret: process.env.ANTIGRAVITY_CLIENT_SECRET || process.env.GOOGLE_CLIENT_SECRET,
+    masterRefreshToken: process.env.ANTIGRAVITY_REFRESH_TOKEN,
+    masterEmail: process.env.ANTIGRAVITY_MASTER_EMAIL || 'master@antigravity.local',
+    defaultProjectId: process.env.ANTIGRAVITY_DEFAULT_PROJECT_ID || 'rising-fact-p41fc',
   }
 })
 

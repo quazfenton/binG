@@ -2,6 +2,12 @@
  * Antigravity Accounts Database Helper
  *
  * Loads and manages user Antigravity OAuth accounts from SQLite.
+ * Supports both per-user accounts and a master server-level account.
+ *
+ * Account Priority:
+ * 1. Per-user OAuth account (user connected their own Google account)
+ * 2. Master server account (configured via env vars, shared by all users)
+ *
  * Used by LLM provider for multi-account rate-limit rotation.
  */
 
@@ -17,10 +23,35 @@ export interface AntigravityAccount {
   lastUsedAt: number;
   quotaUpdatedAt: number;
   cachedQuota?: Record<string, unknown>;
+  isMaster?: boolean; // Flag to identify master account
+}
+
+/**
+ * Get the master (server-level) Antigravity account from environment variables.
+ * This account is shared by all users when no per-user account is available.
+ */
+function getMasterAccount(): AntigravityAccount | null {
+  const refreshToken = process.env.ANTIGRAVITY_REFRESH_TOKEN;
+  if (!refreshToken) {
+    return null; // No master account configured
+  }
+
+  return {
+    id: 'antigravity-master',
+    userId: 'master',
+    email: process.env.ANTIGRAVITY_MASTER_EMAIL || 'master@antigravity.local',
+    refreshToken,
+    projectId: process.env.ANTIGRAVITY_DEFAULT_PROJECT_ID || 'rising-fact-p41fc',
+    enabled: true,
+    lastUsedAt: Date.now(),
+    quotaUpdatedAt: 0,
+    isMaster: true,
+  };
 }
 
 /**
  * Get all enabled Antigravity accounts for a user.
+ * Returns per-user accounts first, then master account as fallback.
  * In multi-user mode, filter by userId. For single-user, pass 'default'.
  */
 export async function getAntigravityAccounts(
@@ -56,11 +87,20 @@ export async function getAntigravityAccounts(
       ORDER BY last_used_at ASC
     `).all(userId) as AntigravityAccount[];
 
-    return rows.map(row => ({
+    const userAccounts = rows.map(row => ({
       ...row,
       enabled: Boolean(row.enabled),
       cachedQuota: row.cachedQuota ? JSON.parse(String(row.cachedQuota)) : undefined,
+      isMaster: false,
     }));
+
+    // Add master account as fallback if configured
+    const masterAccount = getMasterAccount();
+    if (masterAccount) {
+      return [...userAccounts, masterAccount];
+    }
+
+    return userAccounts;
   } catch (error: any) {
     console.error('[Antigravity Accounts] Failed to load accounts:', error.message);
     return [];
@@ -123,4 +163,27 @@ export async function disableAntigravityAccount(accountId: string): Promise<void
   } catch {
     // Non-critical — ignore
   }
+}
+
+/**
+ * Check if a master account is configured via environment variables
+ */
+export function isMasterAccountConfigured(): boolean {
+  return !!process.env.ANTIGRAVITY_REFRESH_TOKEN;
+}
+
+/**
+ * Get master account info (if configured)
+ * Returns null if no master account is configured
+ */
+export function getMasterAccountInfo(): { email: string; projectId: string } | null {
+  const refreshToken = process.env.ANTIGRAVITY_REFRESH_TOKEN;
+  if (!refreshToken) {
+    return null;
+  }
+
+  return {
+    email: process.env.ANTIGRAVITY_MASTER_EMAIL || 'master@antigravity.local',
+    projectId: process.env.ANTIGRAVITY_DEFAULT_PROJECT_ID || 'rising-fact-p41fc',
+  };
 }

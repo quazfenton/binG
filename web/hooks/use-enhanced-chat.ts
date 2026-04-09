@@ -8,6 +8,7 @@ import { emitFilesystemUpdated } from '@/lib/virtual-filesystem/sync/sync-events
 import { buildApiHeaders } from '@/lib/utils';
 import type { AgentType, AgentStatus } from '@/components/agent-status-display';
 import { isValidExtractedPath } from '@/lib/chat/file-edit-parser';  // NEW: Server-side validation
+import { useStreamControl } from './use-stream-control';
 
 export interface UseChatOptions {
   api: string;
@@ -40,6 +41,68 @@ export interface UseChatReturn {
   // Agent activity for experimental panel
   agentActivity?: any;
   setAgentActivity?: (activity: any) => void;
+}
+
+// ─── Empty Response Retry Context Builder ────────────────────────────────────
+
+/**
+ * Builds diagnostic context for empty response retries.
+ * Captures tool execution state so server can enhance retry with feedback.
+ */
+function buildEmptyResponseRetryContext(ctx: {
+  toolInvocations?: Array<{ toolCallId: string; toolName: string; args?: any; result?: any; error?: string }>;
+  filesystemEdits?: { applied?: any[]; failed?: any[] };
+  fileEdits?: any[];
+  provider?: string;
+  model?: string;
+  finishReason?: string;
+}): { summary: string; failedToolCalls: any[]; filesystemChanges: any } {
+  const failedToolCalls: Array<{ name: string; error: string; args?: any }> = [];
+  const successfulToolCalls: Array<{ name: string; args?: any }> = [];
+
+  // Extract tool execution results
+  const tools = ctx.toolInvocations || [];
+  for (const tool of tools) {
+    if (tool.error || tool.result?.success === false) {
+      failedToolCalls.push({
+        name: tool.toolName,
+        error: tool.error || tool.result?.error || 'Unknown error',
+        args: tool.args,
+      });
+    } else if (tool.toolName) {
+      successfulToolCalls.push({ name: tool.toolName, args: tool.args });
+    }
+  }
+
+  // Check for filesystem changes
+  const fsApplied = ctx.filesystemEdits?.applied || [];
+  const fsFailed = ctx.filesystemEdits?.failed || [];
+  const filesystemChanges = {
+    applied: fsApplied.length,
+    failed: fsFailed.length,
+    failedDetails: fsFailed.slice(0, 3).map((f: any) => ({ path: f.path, error: f.error })),
+  };
+
+  // Build summary
+  const parts: string[] = [];
+  if (failedToolCalls.length > 0) {
+    parts.push(`${failedToolCalls.length} tool call(s) failed: ${failedToolCalls.map(t => t.name).join(', ')}`);
+  }
+  if (successfulToolCalls.length > 0) {
+    parts.push(`${successfulToolCalls.length} tool call(s) succeeded: ${successfulToolCalls.map(t => t.name).join(', ')}`);
+  }
+  if (filesystemChanges.applied > 0) {
+    parts.push(`${filesystemChanges.applied} file edit(s) applied`);
+  }
+  if (filesystemChanges.failed > 0) {
+    parts.push(`${filesystemChanges.failed} file edit(s) failed`);
+  }
+
+  const summary = parts.length > 0
+    ? `Previous attempt executed tools but returned empty response. ${parts.join('. ')}.`
+    : `Previous attempt returned empty response with no tool executions.`;
+
+  return { summary, failedToolCalls, filesystemChanges };
 }
 
 /**
@@ -111,6 +174,53 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   const abortControllerRef = useRef<AbortController | null>(null);
   const currentMessageRef = useRef<Message | null>(null);
   const messagesRef = useRef<Message[]>([]);
+
+  // Stream control WebSocket state
+  const [streamId, setStreamId] = useState<string | null>(null);
+
+  // Stream control WebSocket hook — connects on the same port as the app
+  const streamControl = useStreamControl({
+    streamId,
+    authToken: null, // TODO: Get from your auth system (cookie, session, etc.)
+    enabled: !!streamId,
+    onNeedMoreTurns: (contextHint, payload) => {
+      // Server sent structured continue signal via WebSocket
+      const toolSummary = payload?.toolSummary || '';
+      const implicitFiles = payload?.implicitFiles || [];
+
+      console.log('[StreamControl] Server signaled need_more_turns', {
+        contextHint,
+        toolSummary: !!toolSummary,
+        implicitFileCount: implicitFiles.length,
+        fileConfidence: payload?.fileRequestConfidence,
+      });
+
+      // Build enhanced continuation prompt
+      let continuationPrompt = '';
+      if (toolSummary && toolSummary !== 'none') {
+        continuationPrompt += `[TOOLS EXECUTED] ${toolSummary}\n\n`;
+      }
+      if (implicitFiles.length > 0) {
+        continuationPrompt += `[FILES MENTIONED] ${implicitFiles.join(', ')}\n\n`;
+      }
+      continuationPrompt += contextHint
+        ? `[CONTINUATION] Continue from where you left off.\n\nYour last response: ${contextHint}\n\nResume the task — pick up exactly where you stopped.`
+        : 'Please continue with the remaining tasks.';
+
+      setInput(continuationPrompt);
+      setTimeout(() => {
+        const fakeEvent = { preventDefault: () => {}, currentTarget: { reset: () => {} } } as React.FormEvent<HTMLFormElement>;
+        handleSubmit(fakeEvent);
+      }, 100);
+    },
+    onStreamComplete: (stats) => {
+      console.log('[StreamControl] Stream complete', stats);
+    },
+    onError: (error) => {
+      console.warn('[StreamControl] WebSocket error:', error);
+      // Non-falling — SSE still works even if WS control channel fails
+    },
+  });
 
   useEffect(() => {
     messagesRef.current = messages;
@@ -472,7 +582,7 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
 
               switch (determinedType) {
                 case 'init':
-                  // Initialization event - update agent status
+                  // Initialization event - update agent status and connect WebSocket control channel
                   console.log('Chat stream initialized:', eventData);
                   if (eventData.agent === 'planner') {
                     setAgentType('planner');
@@ -482,12 +592,19 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     setAgentType('background');
                   }
                   setAgentStatus('thinking');
-                  // Update agent activity
                   setAgentActivity(prev => ({
                     ...prev,
                     status: 'thinking',
                     currentAction: eventData.currentAction || 'Initializing...',
                   }));
+
+                  // Extract streamId for WebSocket control channel (same port as app)
+                  if (eventData.streamId) {
+                    setStreamId(eventData.streamId);
+                    console.log('[StreamControl] Received streamId from SSE init', {
+                      streamId: eventData.streamId,
+                    });
+                  }
                   break;
 
                 case 'token':
@@ -672,6 +789,16 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                         // CRITICAL: Clear the timeout from current stream before starting retry
                         clearTimeout(timeoutId);
 
+                        // Build diagnostic context for the retry
+                        const toolContext = buildEmptyResponseRetryContext({
+                          toolInvocations: streamingToolInvocations,
+                          filesystemEdits: eventData.filesystem,
+                          fileEdits: eventData.fileEdits,
+                          provider: doneMetadata.provider,
+                          model: doneMetadata.model,
+                          finishReason: eventData.finishReason,
+                        });
+
                         // Build retry message history WITHOUT the empty assistant response
                         const messagesWithoutEmpty = currentMessages.filter(
                           msg => msg.id !== assistantMessage.id
@@ -707,6 +834,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                             isRetry: true,
                             retryCount: retryCount + 1,
                             originalProvider: doneMetadata.provider,
+                            originalModel: doneMetadata.model,
+                            retryContext: toolContext,
                           },
                         };
 
@@ -735,6 +864,15 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                           const retryRequestBody = {
                             messages: [...messagesWithoutEmpty, lastUserMsg],
                             ...resolvedBody,
+                            // Server-side retry context for enhanced handling
+                            retryContext: {
+                              isEmptyResponseRetry: true,
+                              originalProvider: doneMetadata.provider,
+                              originalModel: doneMetadata.model,
+                              toolExecutionSummary: toolContext.summary,
+                              failedToolCalls: toolContext.failedToolCalls,
+                              filesystemChanges: toolContext.filesystemChanges,
+                            },
                           };
 
                           const retryResponse = await fetch(options.api, {
@@ -1610,22 +1748,44 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   break;
 
                 // Auto-continue: LLM signaled it needs more turns
-                // Strip [CONTINUE_REQUESTED] from response, then auto-submit continuation
-                case 'auto-continue': {
-                  // Strip the [CONTINUE_REQUESTED] token from the current message
-                  setMessages(prev => prev.map(msg =>
-                    msg.id === assistantMessage.id && msg.content.includes('[CONTINUE_REQUESTED]')
-                      ? { ...msg, content: msg.content.replace(/\[CONTINUE_REQUESTED\]/gi, '').trimEnd() }
-                      : msg
-                  ));
-
-                  // Build continuation prompt with context from the stream
+                // With WebSocket control: server sends 'need_more_turns' via WS
+                // Fallback (SSE only): LLM embeds [CONTINUE_REQUESTED] in text, server wraps in auto-continue event
+                case 'auto-continue':
+                case 'need_more_turns': {
                   const contextHint = eventData.contextHint || '';
-                  const continuationPrompt = contextHint
-                    ? `[CONTINUATION] Continue from where you left off.\n\nYour last response: ${contextHint}\n\nResume the task — pick up exactly where you stopped.`
-                    : 'Please continue with the remaining tasks.';
+                  const toolSummary = eventData.toolSummary || '';
+                  const implicitFiles = eventData.implicitFiles || [];
+                  const fileConfidence = eventData.fileRequestConfidence || '';
 
-                  console.log('[Auto-continue] Triggering next request');
+                  // Build enhanced continuation prompt with tool execution context
+                  let continuationPrompt = '';
+                  if (toolSummary && toolSummary !== 'none') {
+                    continuationPrompt += `[TOOLS EXECUTED] ${toolSummary}\n\n`;
+                  }
+                  if (implicitFiles.length > 0) {
+                    continuationPrompt += `[FILES MENTIONED] ${implicitFiles.join(', ')}\n\n`;
+                  }
+                  if (contextHint) {
+                    continuationPrompt += `[CONTINUATION] Continue from where you left off.\n\nYour last response: ${contextHint}\n\nResume the task — pick up exactly where you stopped.`;
+                  } else {
+                    continuationPrompt += 'Please continue with the remaining tasks.';
+                  }
+
+                  // Strip [CONTINUE_REQUESTED] from response if present (SSE fallback only)
+                  if (eventType === 'auto-continue') {
+                    setMessages(prev => prev.map(msg =>
+                      msg.id === assistantMessage.id && msg.content.includes('[CONTINUE_REQUESTED]')
+                        ? { ...msg, content: msg.content.replace(/\[CONTINUE_REQUESTED\]/gi, '').trimEnd() }
+                        : msg
+                    ));
+                  }
+
+                  console.log('[Auto-continue] Triggering next request', {
+                    viaWS: eventType === 'need_more_turns',
+                    toolSummary: !!toolSummary,
+                    implicitFileCount: implicitFiles.length,
+                    fileConfidence,
+                  });
 
                   // Set the input and submit after state settles
                   setInput(continuationPrompt);
