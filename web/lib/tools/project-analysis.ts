@@ -776,4 +776,4 @@ export {
   PROJECT_LIST_SCRIPTS_CAPABILITY,
   PROJECT_DEPENDENCIES_CAPABILITY,
   PROJECT_STRUCTURE_CAPABILITY,
-} from '../capabilities';
+} from './capabilities';

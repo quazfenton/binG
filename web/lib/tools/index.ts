@@ -275,7 +275,7 @@ export {
 // start dev server → monitor output → check port → navigate TUI → etc.
 
 export {
-  // Capability definitions
+  // Capability definitions (defined in capabilities.ts)
   TERMINAL_CREATE_SESSION_CAPABILITY,
   TERMINAL_SEND_INPUT_CAPABILITY,
   TERMINAL_GET_OUTPUT_CAPABILITY,
@@ -286,6 +286,9 @@ export {
   TERMINAL_STOP_PROCESS_CAPABILITY,
   TERMINAL_LIST_PROCESSES_CAPABILITY,
   TERMINAL_GET_PORT_STATUS_CAPABILITY,
+} from './capabilities';
+
+export {
   // Tool implementations
   createTerminalSession,
   sendTerminalInput,

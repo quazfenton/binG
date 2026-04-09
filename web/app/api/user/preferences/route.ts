@@ -95,6 +95,7 @@ async function saveUserPreferences(
 /**
  * GET /api/user/preferences
  * Get all user preferences
+ * Allow anonymous so unauthenticated users get defaults instead of 401.
  */
 export const GET = withAuth(
   async (request: NextRequest, auth) => {
@@ -111,7 +112,8 @@ export const GET = withAuth(
         { status: 500 }
       );
     }
-  }
+  },
+  { allowAnonymous: true }
 );
 
 /**

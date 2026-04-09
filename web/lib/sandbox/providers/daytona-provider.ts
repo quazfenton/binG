@@ -34,6 +34,7 @@ export class DaytonaProvider implements SandboxProvider {
 
     this.client = new Daytona({
       apiKey,
+      authMethod: 'api_key',  // Force API key auth — prevents false JWT detection
     })
     
     console.log(`[Daytona] Initialized - API Key configured: ${!!apiKey}`)

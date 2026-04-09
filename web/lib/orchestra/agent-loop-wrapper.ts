@@ -86,6 +86,7 @@ export class AgentLoopWrapper {
     // Initialize bootstrapped agency for learning
     this.agency = createBootstrappedAgency({
       sessionId: this.sandboxId,
+      userId: this.userId,  // Pass real user ID — prevents 'agency' phantom workspace
       enableLearning: true,
       maxHistorySize: 500,
       enablePatternRecognition: true,

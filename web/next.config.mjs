@@ -6,6 +6,8 @@ const projectRoot = resolve(__dirname);
 
 /** @type {import('next').NextConfig} */
 const nextConfig = {
+  // Turbopack config - required when using webpack
+  turbopack: {},
   images: {
     unoptimized: false,
     // SECURITY: Use custom loader for dynamic image validation instead of wildcard
@@ -271,6 +273,12 @@ const nextConfig = {
       '@bing/shared/agent/services/agent-worker/src': resolve(packagesRoot, 'shared/agent/services/agent-worker/src/index.ts'),
       '@bing/shared/agent/services/agent-gateway/src': resolve(packagesRoot, 'shared/agent/services/agent-gateway/src/index.ts'),
       '@bing/shared/agent/tool-router/tool-router': resolve(packagesRoot, 'shared/agent/tool-router/tool-router.ts'),
+      
+      // Direct module resolution aliases for Turbopack/Webpack compatibility
+      '@bing/shared/agent/cloud-agent-offload': resolve(packagesRoot, 'shared/agent/cloud-agent-offload.ts'),
+      '@bing/infra/config/config/features': resolve(projectRoot, '..', 'infra', 'config', 'config', 'features.ts'),
+      'packages/shared/agent/cloud-agent-offload': resolve(packagesRoot, 'shared/agent/cloud-agent-offload.ts'),
+      'infra/config/config/features': resolve(projectRoot, '..', 'infra', 'config', 'config', 'features.ts'),
     };
 
     config.resolve.mainFields = ['module', 'main'];
