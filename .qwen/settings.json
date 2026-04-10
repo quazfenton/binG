@@ -22,7 +22,8 @@
       "Bash(fc *)",
       "Bash(ren *)",
       "Bash(type *)",
-      "Bash(timeout *)"
+      "Bash(timeout *)",
+      "Bash(copy *)"
     ],
     "exclude": [
       "Bash(git checkout)"

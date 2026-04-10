@@ -54,7 +54,7 @@ export const relativePathSchema = pathSchema.refine(
 
 /**
  * Session ID validation
- * Format: ownerId:sessionId or just sessionId
+ * Format: ownerId$sessionId or just sessionId
  */
 export const sessionIdSchema = z.string()
   .min(1, 'Session ID is required')

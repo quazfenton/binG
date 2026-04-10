@@ -94,9 +94,13 @@ export async function POST(
     // The sessionId from the URL may be:
     // - "001" (raw conversation ID) → use as-is
     // - "session-xxx" (generated client ID) → strip prefix
-    // - "ownerId:001" (scoped format) → extract conversation ID part
+    // - "ownerId$001" or "ownerId:001" (scoped format) → extract conversation ID part
     let conversationId = sessionId;
-    if (conversationId.includes(':')) {
+    if (conversationId.includes('$')) {
+      const parts = conversationId.split('$');
+      conversationId = parts[parts.length - 1];
+    } else if (conversationId.includes(':')) {
+      // Legacy format fallback
       const parts = conversationId.split(':');
       conversationId = parts[parts.length - 1];
     } else if (conversationId.startsWith('session-')) {

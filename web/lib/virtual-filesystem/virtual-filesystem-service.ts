@@ -891,12 +891,12 @@ export class VirtualFilesystemService {
     }
 
     // CRITICAL VALIDATION: Reject composite IDs in session folder position
-    // This prevents paths like "project/sessions/anon:timestamp:001/file.ts"
+    // This prevents paths like "project/sessions/1$004/file.ts" or legacy "project/sessions/anon:timestamp:001/file.ts"
     // Session folder names must be simple: "001", "alpha", "001-1", etc.
     const sessionsMatch = strippedPath.match(/^project\/sessions\/([^/]+)/i);
     if (sessionsMatch) {
       const sessionSegment = sessionsMatch[1];
-      if (sessionSegment.includes(':')) {
+      if (sessionSegment.includes('$') || sessionSegment.includes(':')) {
         throw new Error(
           `Invalid session folder in path: "${inputPath}". ` +
           `Session folder names must be simple (e.g., "001", "alpha"), ` +

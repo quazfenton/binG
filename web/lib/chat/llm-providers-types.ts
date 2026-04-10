@@ -25,6 +25,7 @@ export interface LLMProviderConfig {
   maxTokens?: number;
   maxOutputTokens?: number;
   endpoint?: string;
+  isAvailable?: boolean;  // Whether the provider is currently available (set at runtime)
 }
 
 // LLM message types
