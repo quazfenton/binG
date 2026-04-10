@@ -528,6 +528,11 @@ export class AgentLoop {
         },
       });
     }
+    
+    // DIAGNOSTIC: Log converted tools
+    log.info(`[TOOLS-DIAG] executeManual converted ${Object.keys(vercelTools).length} tools`, {
+      toolNames: Object.keys(vercelTools),
+    });
 
     try {
       // Stream with Vercel AI SDK using user's configured provider
@@ -1191,6 +1196,13 @@ When task is complete, just respond naturally with your final answer.
     const llmMessages = this.convertToLLMMessages(messages);
 
     log.info(`Using Vercel AI SDK with provider: ${provider}, model: ${model}`);
+    
+    // DIAGNOSTIC: Log tools status before passing to streamWithVercelAI
+    log.info(`[TOOLS-DIAG] executeLLMStreaming tools count: ${Object.keys(tools || {}).length}`, {
+      provider,
+      model,
+      toolNames: tools ? Object.keys(tools) : [],
+    });
 
     yield* streamWithVercelAI({
       provider,

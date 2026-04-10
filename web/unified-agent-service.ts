@@ -220,12 +220,8 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
     return { mode: config.mode };
   }
 
-  // Desktop mode takes priority when enabled
-  if (startupCaps.desktop) {
-    return { mode: 'desktop' };
-  }
-
   // AGENT_EXECUTION_ENGINE: Explicit control over which execution engine to use.
+  // Check this BEFORE startup capabilities to respect user configuration.
   // - 'v1-api'        → Vercel AI SDK with tool calling (streamWithVercelAI + tools, provider fallback)
   // - 'v1-agent-loop' → Direct Mastra/ToolLoopAgent path (createAgentLoop from mastra/agent-loop.ts)
   // - 'auto'          → Auto-rotate between the two v1 modes based on task complexity
@@ -242,6 +238,12 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   if (engine === 'agent-loop') {
     log.info('AGENT_EXECUTION_ENGINE=agent-loop, using OpenCode agent loop execution path');
     return { mode: 'v2-native' as const, classification: null as any };
+  }
+
+  // Desktop mode takes priority when enabled AND in auto mode
+  // (moved after AGENT_EXECUTION_ENGINE check to respect explicit engine configuration)
+  if (startupCaps.desktop) {
+    return { mode: 'desktop' };
   }
 
   // AUTO mode: Rotate between v1-api and v1-agent-loop based on task complexity
@@ -1433,6 +1435,8 @@ async function runV1ApiCompletion(
       const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
 
       let content = '';
+      const fileEdits: Array<{ path: string; content: string; operation?: string }> = [];
+      const toolCalls: Array<{ tool: string; args: any; result: any }> = [];
       const streamOpts = {
         provider: providerName,
         model: modelForProvider,
@@ -1451,11 +1455,26 @@ async function runV1ApiCompletion(
             content += chunk.content;
             config.onStreamChunk(chunk.content);
           }
+          // CRITICAL FIX: Collect file edits from streaming chunks
+          if (chunk.fileEdits && chunk.fileEdits.length > 0) {
+            fileEdits.push(...chunk.fileEdits);
+          }
+          // Collect tool call records
+          if (chunk.toolCall) {
+            toolCalls.push(chunk.toolCall);
+          }
         }
       } else {
         for await (const chunk of streamWithVercelAI(streamOpts)) {
           if (chunk.content) {
             content += chunk.content;
+          }
+          // CRITICAL FIX: Collect file edits from streaming chunks (non-streaming path too)
+          if (chunk.fileEdits && chunk.fileEdits.length > 0) {
+            fileEdits.push(...chunk.fileEdits);
+          }
+          if (chunk.toolCall) {
+            toolCalls.push(chunk.toolCall);
           }
         }
       }
@@ -1495,6 +1514,9 @@ async function runV1ApiCompletion(
           model: modelForProvider,
           duration: latencyMs,
           fallbackChain: fallbackChainUsed,
+          // CRITICAL FIX: Include collected file edits and tool calls
+          fileEdits: fileEdits.length > 0 ? fileEdits : undefined,
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         },
       };
     } catch (error: any) {

@@ -274,9 +274,24 @@ export default function ConversationInterface() {
   const [pendingApprovalDiffs, setPendingApprovalDiffs] = useState<{ path: string; diff: string }[]>([]);
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
   
+  // CRITICAL FIX: Sanitize composite session ID for filesystem scope path.
+  // filesystemScopePath is consumed by VFS, terminal, code preview, etc.
+  // These consumers need SIMPLE session folder names (e.g., "004"), not composite IDs (e.g., "1$004").
+  // The $ character in folder names causes path resolution issues.
+  const simpleSessionFolder = useMemo(() => {
+    if (!compositeSessionId) return '000';
+    // If composite format (userId$sessionId), extract only the session part
+    const dollarIndex = compositeSessionId.lastIndexOf('$');
+    if (dollarIndex !== -1) {
+      return compositeSessionId.slice(dollarIndex + 1) || compositeSessionId;
+    }
+    // If already simple, use as-is
+    return compositeSessionId;
+  }, [compositeSessionId]);
+
   const filesystemScopePath = useMemo(
-    () => `project/sessions/${detectedFolderName || compositeSessionId}`,
-    [compositeSessionId, detectedFolderName],
+    () => `project/sessions/${detectedFolderName || simpleSessionFolder}`,
+    [detectedFolderName, simpleSessionFolder],
   );
 
   const providerRef = useRef(currentProvider);

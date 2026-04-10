@@ -395,7 +395,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
     id: 'portkey',
     name: 'Portkey AI Gateway',
     models: ['openrouter/auto',
-      'chutes/gemini-1.5-flash:free',
       'chutes/openrouter-auto:free',
       'chutes/grok-beta:free',
       'chutes/flux-dev:free',
@@ -471,7 +470,6 @@ export const PROVIDERS: Record<string, LLMProvider> = {
       'deepseek-r1',
       'gemini-1.5-pro',
       'gemini-1.5-flash',
-      'gemini-2.0-flash-exp',
       'llama-3.2-1b-instruct',
       'llama-3.2-3b-instruct'
     ],

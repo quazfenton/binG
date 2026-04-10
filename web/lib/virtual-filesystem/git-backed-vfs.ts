@@ -91,8 +91,12 @@ export class GitBackedVFS {
     // about its own owner's file changes.
     // The ownerId may be a compositeKey (ownerId$sessionId), so check both
     // exact match and prefix match (compositeKey starts with event.ownerId).
-    const isMatch = event.ownerId === this.ownerId || this.ownerId.startsWith(event.ownerId + '$') || this.ownerId.startsWith(event.ownerId + ':');
-    if (!isMatch) return;
+    // CRITICAL FIX: Use exact owner ID matching to prevent cross-session data leaks.
+    // Previously, prefix matching caused instance "1$004" to process events from "1$005"
+    // because both start with "1$". Now only exact matches or root-owner→composite matches.
+    const isExactMatch = event.ownerId === this.ownerId;
+    const isRootToComposite = !event.ownerId.includes('$') && !event.ownerId.includes(':') && this.ownerId.startsWith(event.ownerId + '$');
+    if (!isExactMatch && !isRootToComposite) return;
     if (!this.options.autoCommit || this.isPersisting) return;
 
     // Deduplicate: skip if this path is already buffered at same or newer version

@@ -564,15 +564,60 @@ export async function* streamWithVercelAI(
     // Strip tools upfront for known incompatible provider+model combos.
     let skipTools = false;
     if (tools && Object.keys(tools).length > 0) {
-      const nvidiaNonFCModels = [
+      // Explicit list of models that DO NOT support function calling
+      const nonFCModels = [
+        // NVIDIA NIM models that don't support FC
         'google/gemma-3-27b-it',
         'google/gemma-3-12b-it',
         'google/gemma-3-4b-it',
         'meta/llama-3.1-8b-instruct',
         'meta/llama-3.1-70b-instruct',
         'meta/llama-3.3-70b-instruct',
+        // Mistral Small doesn't support FC reliably
+        'mistral-small-latest',
+        'mistral-small-2402',
+        // OpenRouter free models often don't support FC
       ];
-      if (provider === 'nvidia' && nvidiaNonFCModels.some(m => modelName.includes(m))) {
+
+      // Explicit list of models that DO support function calling (known good)
+      const knownGoodFCModels = [
+        'mistral-large-latest',
+        'mistral-large-2411',
+        'mistral-large-2407',
+        'mistral-medium-latest',
+        'gpt-4',
+        'gpt-3.5',
+        'claude-3',
+        'claude-sonnet',
+        'claude-opus',
+        'gemini-1.5',
+        'gemini-2.0',
+      ];
+
+      // Check if current model matches any non-FC model
+      const modelLower = modelName.toLowerCase();
+      if (nonFCModels.some(m => modelLower.includes(m.toLowerCase()) || m.toLowerCase().includes(modelLower))) {
+        skipTools = true;
+      }
+
+      // CRITICAL FIX: If model is known to support FC, don't strip tools even if SDK reports false
+      const isKnownGoodFC = knownGoodFCModels.some(m => modelLower.includes(m.toLowerCase()));
+      chatLogger.info('[FC-KNOWN] Checking function calling support', {
+        provider,
+        model: modelName,
+        modelLower,
+        isKnownGoodFC,
+        knownGoodFCModels,
+      });
+      if (isKnownGoodFC) {
+        chatLogger.info('[FC-KNOWN] Model is known to support function calling', {
+          provider,
+          model: modelName,
+          action: 'Keeping tools enabled regardless of SDK capability flags',
+        });
+      }
+
+      if (provider === 'nvidia' && nonFCModels.some(m => modelName.includes(m))) {
         skipTools = true;
         chatLogger.warn('[FC-BYPASS] NVIDIA model does not support function calling despite SDK reporting otherwise', {
           provider,
@@ -581,10 +626,39 @@ export async function* streamWithVercelAI(
           knownIssue: 'NVIDIA NIM returns 400 "DEGRADED function cannot be invoked" for tool calls on these models',
         });
       }
+
+      if (provider === 'mistral' && /mistral-small/.test(modelName) && !isKnownGoodFC) {
+        skipTools = true;
+        chatLogger.warn('[FC-BYPASS] Mistral Small does not support function calling reliably', {
+          provider,
+          model: modelName,
+          action: 'Stripping tools and using text-mode fallback',
+        });
+      }
     }
+
+    chatLogger.info('[TOOLS-FINAL] Tools assignment check', {
+      hasToolsArg: !!tools,
+      toolsCount: tools ? Object.keys(tools).length : 0,
+      skipTools,
+      provider,
+      model: modelName,
+    });
+
+    chatLogger.info('[TOOLS-FINAL-BEFORE] Pre-assignment check', {
+      hasToolsArg: !!tools,
+      toolsCount: tools ? Object.keys(tools).length : 0,
+      skipTools,
+      provider,
+      model: modelName,
+      streamOptionsHasTools: !!streamOptions.tools,
+    });
 
     if (tools && Object.keys(tools).length > 0 && !skipTools) {
       streamOptions.tools = tools;
+      chatLogger.info('[TOOLS-FINAL] Tools assigned to streamOptions', {
+        toolsCount: Object.keys(tools).length,
+      });
     } else if (skipTools && tools) {
       chatLogger.warn('[TOOLS-STRIP] Provider-specific tool stripping applied', {
         provider,
