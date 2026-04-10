@@ -256,6 +256,12 @@ export async function retrieveHybrid(
         topK: opts.topK ?? 10,
       };
 
+      logger.debug('Starting symbol retrieval', {
+        projectId: opts.projectId,
+        promptLength: opts.prompt.length,
+        promptPreview: opts.prompt.slice(0, 100),
+      });
+
       const result = await search(opts.prompt, searchOpts);
 
       // If we found symbols, use the symbol retrieval path
@@ -321,7 +327,19 @@ export async function retrieveHybrid(
         };
       }
     } catch (err) {
-      warnings.push(`Symbol retrieval failed: ${err instanceof Error ? err.message : String(err)}`);
+      const errorMsg = err instanceof Error ? err.message : String(err);
+      const errorStack = err instanceof Error ? err.stack : undefined;
+      
+      logger.error('Symbol retrieval failed', {
+        error: errorMsg,
+        stack: errorStack?.split('\n').slice(0, 3).join('\n'),
+        projectId: opts.projectId,
+        promptLength: opts.prompt.length,
+        promptPreview: opts.prompt.slice(0, 100),
+        userId: opts.userId,
+      });
+      
+      warnings.push(`Symbol retrieval failed: ${errorMsg}`);
     }
   }
 

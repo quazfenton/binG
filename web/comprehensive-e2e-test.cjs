@@ -298,7 +298,7 @@ async function testGoogleProvider(token) {
       body: JSON.stringify({
         messages: [{ role: 'user', content: 'What is 2 + 2?' }],
         provider: 'google',
-        model: 'gemini-2.0-flash-exp',
+        model: 'gemini-2.5-flash',
         stream: false
       })
     });

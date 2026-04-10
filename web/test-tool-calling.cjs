@@ -101,10 +101,10 @@ async function main() {
     
     // OpenRouter models
     { provider: 'openrouter', model: 'mistralai/mistral-small-latest', prompt: 'Create a file called test-or.js with content: console.log("openrouter")' },
-    { provider: 'openrouter', model: 'google/gemini-2.0-flash-exp', prompt: 'Create a file called test-gemini.js with content: console.log("gemini")' },
+    { provider: 'openrouter', model: 'google/gemini-2.5-flash', prompt: 'Create a file called test-gemini.js with content: console.log("gemini")' },
     
     // Google
-    { provider: 'google', model: 'gemini-2.0-flash-exp', prompt: 'Create a file called test-google.js with content: console.log("google")' },
+    { provider: 'google', model: 'gemini-2.5-flash', prompt: 'Create a file called test-google.js with content: console.log("google")' },
     
     // Test with explicit instructions
     { provider: 'nvidia', model: 'nvidia/nemotron-4-340b-instruct', prompt: 'Create a file called explicit.js with content: console.log("explicit"). Use the write_file tool to do this.' },

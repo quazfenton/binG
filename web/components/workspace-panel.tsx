@@ -1214,10 +1214,16 @@ export function WorkspacePanel() {
   // Get authenticated user ID for VFS ownership
   const { user } = useAuth();
 
+  // Read compositeSessionId from sessionStorage (set by conversation-interface.tsx)
+  // Format: "userId$sessionNum" (e.g., "1$004") or "anon$sessionNum"
+  const getCompositeSessionId = useCallback(() => {
+    if (typeof window === 'undefined') return undefined;
+    return sessionStorage.getItem('current_composite_session_id') || undefined;
+  }, []);
+
   const vfs = useVirtualFilesystem(undefined, {
     userId: user?.id?.toString(),  // Use authenticated userId as ownerId for VFS
-    // compositeSessionId is derived from conversation-interface and passed here
-    // Format: "userId$sessionNum" for authenticated, "anon$sessionNum" for anonymous
+    compositeSessionId: getCompositeSessionId(),  // Pass composite for session folder derivation
   });
   const {
     currentPath,

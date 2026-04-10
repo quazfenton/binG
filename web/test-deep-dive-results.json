@@ -1,0 +1,252 @@
+[
+  {
+    "test": "Auth",
+    "pass": true,
+    "message": "Status 200"
+  },
+  {
+    "test": "Auth",
+    "pass": true,
+    "message": "Login success"
+  },
+  {
+    "test": "Auth",
+    "pass": true,
+    "message": "JWT returned"
+  },
+  {
+    "test": "[OpenRouter] File creation - calculator.js",
+    "pass": false,
+    "message": "No stream error"
+  },
+  {
+    "test": "[OpenRouter] File creation - calculator.js",
+    "pass": false,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[OpenRouter] File creation - calculator.js",
+    "pass": false,
+    "message": "Content > 100 chars, got 18"
+  },
+  {
+    "test": "[OpenRouter] File creation - calculator.js",
+    "pass": false,
+    "message": "References calculator/add"
+  },
+  {
+    "test": "[OpenRouter] File creation - calculator.js",
+    "pass": false,
+    "message": "Contains add function"
+  },
+  {
+    "test": "[OpenRouter] File creation - calculator.js",
+    "pass": false,
+    "message": "File edits detected (0)"
+  },
+  {
+    "test": "[OpenRouter] Multi-file - Express API",
+    "pass": false,
+    "message": "No stream error"
+  },
+  {
+    "test": "[OpenRouter] Multi-file - Express API",
+    "pass": false,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[OpenRouter] Multi-file - Express API",
+    "pass": false,
+    "message": "Content > 200 chars, got 18"
+  },
+  {
+    "test": "[OpenRouter] Multi-file - Express API",
+    "pass": false,
+    "message": "References package.json"
+  },
+  {
+    "test": "[OpenRouter] Multi-file - Express API",
+    "pass": false,
+    "message": "References index.js"
+  },
+  {
+    "test": "[OpenRouter] Multi-file - Express API",
+    "pass": false,
+    "message": "References routes.js"
+  },
+  {
+    "test": "[OpenRouter] Multi-file - Express API",
+    "pass": false,
+    "message": "Package.json file edit or reference"
+  },
+  {
+    "test": "[OpenRouter] Multi-file - Express API",
+    "pass": false,
+    "message": "Index.js file edit or reference"
+  },
+  {
+    "test": "[OpenRouter] Multi-file - Express API",
+    "pass": false,
+    "message": "Routes.js file edit or reference"
+  },
+  {
+    "test": "[OpenRouter] File editing - diff to existing file",
+    "pass": false,
+    "message": "No stream error"
+  },
+  {
+    "test": "[OpenRouter] File editing - diff to existing file",
+    "pass": false,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[OpenRouter] File editing - diff to existing file",
+    "pass": false,
+    "message": "Has content, got 18 chars"
+  },
+  {
+    "test": "[OpenRouter] File editing - diff to existing file",
+    "pass": false,
+    "message": "Response contains 2.0.0"
+  },
+  {
+    "test": "[OpenRouter] File editing - diff to existing file",
+    "pass": true,
+    "message": "Has diff or file edit"
+  },
+  {
+    "test": "[OpenRouter] Shell execution intent",
+    "pass": false,
+    "message": "No stream error"
+  },
+  {
+    "test": "[OpenRouter] Shell execution intent",
+    "pass": false,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[OpenRouter] Shell execution intent",
+    "pass": false,
+    "message": "Has content, got 18 chars"
+  },
+  {
+    "test": "[OpenRouter] Shell execution intent",
+    "pass": false,
+    "message": "References running/execution"
+  },
+  {
+    "test": "[OpenRouter] Shell execution intent",
+    "pass": false,
+    "message": "References hello.py or Hello"
+  },
+  {
+    "test": "[OpenRouter] No infinite loop - complex task",
+    "pass": false,
+    "message": "No stream error"
+  },
+  {
+    "test": "[OpenRouter] No infinite loop - complex task",
+    "pass": false,
+    "message": "Stream completed in 33s"
+  },
+  {
+    "test": "[OpenRouter] No infinite loop - complex task",
+    "pass": true,
+    "message": "Completed within timeout (33s)"
+  },
+  {
+    "test": "[OpenRouter] No infinite loop - complex task",
+    "pass": false,
+    "message": "Complex task generated substantial content (8 chars)"
+  },
+  {
+    "test": "[OpenRouter] No infinite loop - complex task",
+    "pass": false,
+    "message": "References todo/routes"
+  },
+  {
+    "test": "[OpenRouter] Auto-continue - Next.js app",
+    "pass": false,
+    "message": "No stream error"
+  },
+  {
+    "test": "[OpenRouter] Auto-continue - Next.js app",
+    "pass": false,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[OpenRouter] Auto-continue - Next.js app",
+    "pass": false,
+    "message": "Has content, got 14 chars"
+  },
+  {
+    "test": "[OpenRouter] Error handling - nonexistent file",
+    "pass": false,
+    "message": "No stream error"
+  },
+  {
+    "test": "[OpenRouter] Error handling - nonexistent file",
+    "pass": false,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[OpenRouter] Error handling - nonexistent file",
+    "pass": true,
+    "message": "Has content, got 23 chars"
+  },
+  {
+    "test": "[OpenRouter] Error handling - nonexistent file",
+    "pass": false,
+    "message": "Acknowledges error/missing file"
+  },
+  {
+    "test": "[OpenRouter] Regex fallback file edits",
+    "pass": false,
+    "message": "No stream error"
+  },
+  {
+    "test": "[OpenRouter] Regex fallback file edits",
+    "pass": false,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[OpenRouter] Regex fallback file edits",
+    "pass": false,
+    "message": "Has content, got 18 chars"
+  },
+  {
+    "test": "[OpenRouter] Regex fallback file edits",
+    "pass": false,
+    "message": "References slugify function"
+  },
+  {
+    "test": "[OpenRouter] Regex fallback file edits",
+    "pass": false,
+    "message": "Has file edit or tool call"
+  },
+  {
+    "test": "[OpenRouter] Multi-turn conversation context",
+    "pass": false,
+    "message": "No stream error"
+  },
+  {
+    "test": "[OpenRouter] Multi-turn conversation context",
+    "pass": false,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[OpenRouter] Multi-turn conversation context",
+    "pass": false,
+    "message": "Has content, got 18 chars"
+  },
+  {
+    "test": "[OpenRouter] Multi-turn conversation context",
+    "pass": false,
+    "message": "References port 8080"
+  },
+  {
+    "test": "[OpenRouter] Multi-turn conversation context",
+    "pass": false,
+    "message": "References config"
+  }
+]

@@ -1187,6 +1187,13 @@ export function extractFileEdits(content: string): FileEdit[] {
     allEdits.push(...extractFencedDeleteBlocks(content) as FileEdit[]);
   }
 
+  // FALLBACK: Extract file edits from standard markdown code blocks with filename references
+  // Catches: ```javascript // calculator.js or ```python # hello.py
+  // This handles LLM output that uses standard code blocks instead of structured ```file: format
+  if (/```(?:javascript|js|typescript|ts|python|py|json)/i.test(content)) {
+    allEdits.push(...extractCodeBlockFileEdits(content));
+  }
+
   // FALLBACK: Parse JavaScript-style MCP tool calls from ```javascript code blocks
   // Catches: write_file("path", "content"), delete_file("path"), mkdir("path"), apply_diff("path", "diff")
   // Only activates when there's a ```javascript/js block AND a tool call signature
@@ -2116,20 +2123,118 @@ export function extractFencedDiffEdits(content: string): DiffEdit[] {
  */
 export function extractFencedFileEdits(content: string): FileEdit[] {
   const edits: FileEdit[] = [];
-  if (!/```file:/i.test(content)) return edits;
+  
+  // Guard: bail early if no file blocks
+  if (!/```file:|```file\b|file:.*\.js|file:.*\.ts/i.test(content)) return edits;
 
-  const regex = /```file:\s+([^\n]+)\n([\s\S]*?)```/gi;
+  // Pattern 1: Standard ```file: path\ncontent\n```
+  const regex1 = /```file:\s*([^\n]+)\n([\s\S]*?)```/gi;
   let match: RegExpExecArray | null;
-
-  while ((match = regex.exec(content)) !== null) {
+  while ((match = regex1.exec(content)) !== null) {
     const targetPath = match[1]?.trim();
     const fileContent = match[2] ?? '';
-    if (!targetPath) continue;
-    if (!isValidExtractedPath(targetPath)) continue;
-    // Skip empty content
+    if (!targetPath || !isValidExtractedPath(targetPath)) continue;
     if (!fileContent || fileContent.trim().length === 0) continue;
-
     edits.push({ path: targetPath, content: fileContent.trimEnd() });
+  }
+
+  // Pattern 2: Handle malformed ```file: ```file: path (duplicate opening)
+  const regex2 = /```file:\s*```file:\s*([^\n]+)\n([\s\S]*?)```/gi;
+  while ((match = regex2.exec(content)) !== null) {
+    const targetPath = match[1]?.trim();
+    const fileContent = match[2] ?? '';
+    if (!targetPath || !isValidExtractedPath(targetPath)) continue;
+    if (!fileContent || fileContent.trim().length === 0) continue;
+    edits.push({ path: targetPath, content: fileContent.trimEnd() });
+  }
+
+  // Pattern 3: Handle ```file: path (no closing ``` on same line but has content after)
+  const regex3 = /```file:\s*([^\n]+)\n([\s\S]*?)(?:```|$)/gi;
+  while ((match = regex3.exec(content)) !== null) {
+    const targetPath = match[1]?.trim();
+    const fileContent = match[2] ?? '';
+    if (!targetPath || !isValidExtractedPath(targetPath)) continue;
+    if (!fileContent || fileContent.trim().length === 0) continue;
+    // Check we got actual content, not just partial
+    if (fileContent.length < 2) continue;
+    edits.push({ path: targetPath, content: fileContent.trimEnd() });
+  }
+
+  // Pattern 4: Simple ```file:path without space
+  const regex4 = /```file:([^\n]+)\n([\s\S]*?)```/gi;
+  while ((match = regex4.exec(content)) !== null) {
+    const targetPath = match[1]?.trim();
+    const fileContent = match[2] ?? '';
+    if (!targetPath || !isValidExtractedPath(targetPath)) continue;
+    if (!fileContent || fileContent.trim().length === 0) continue;
+    edits.push({ path: targetPath, content: fileContent.trimEnd() });
+  }
+
+  return edits;
+}
+
+/**
+ * Extract file edits from standard markdown code blocks that reference a filename.
+ * Handles LLM output like: ```javascript // calculator.js or ```javascript\n// filename: x.js
+ * Also handles: ```javascript file: utils.js (no newline after lang tag).
+ * This is a fallback when the LLM doesn't use the structured ```file: format.
+ *
+ * O(1) guard: checks for ```javascript/js/ts/py/json etc before expensive regex.
+ * Single combined filename regex instead of array iteration per block.
+ */
+export function extractCodeBlockFileEdits(content: string): FileEdit[] {
+  const edits: FileEdit[] = [];
+
+  // O(1) guard — bail out early if no code blocks exist
+  if (!/```(?:javascript|js|typescript|ts|python|py|json|html|css|bash|sh|md)\b/i.test(content)) {
+    return edits;
+  }
+
+  // Single combined regex for all filename patterns in first line
+  // Matches: // calc.js, # calc.py, "calc.js", 'calc.js', /* calc.js */, // file: x.js, // filename: x.js
+  const filenameRegex = /(?:\/\/|#)\s*(?:file(?:name)?[:\s]*)?([a-zA-Z0-9_\-/.]+\.[a-zA-Z]+)|["']([a-zA-Z0-9_\-/.]+\.[a-zA-Z]+)["']|\/\*\s*(?:file(?:name)?[:\s]*)?([a-zA-Z0-9_\-/.]+\.[a-zA-Z]+)\s*\*\//i;
+
+  // Regex handles both:
+  // - ```javascript\n// filename.js (lang tag, newline, then comment with filename)
+  // - ```javascript file: filename.js\n (lang tag + space + filename hint on same line)
+  // The langLine group only captures if it's NOT a comment (not starting with //, #, or /*)
+  // Uses negative lookahead to skip comment lines
+  const codeBlockRegex = /```(?:javascript|js|typescript|ts|jsx|tsx|python|py|json|html|css|bash|sh|markdown|md)(?:\s+(?!\/\/|#|\/\*)([^\n]+?))?\n([\s\S]*?)```/gi;
+  let match: RegExpExecArray | null;
+
+  while ((match = codeBlockRegex.exec(content)) !== null) {
+    const langLine = (match[1] || '').trim();
+    const blockContent = match[2] ?? '';
+
+    // If the line after ```lang is a filename hint (e.g., "file: utils.js"), use it directly
+    // This handles: ```javascript file: utils.js\nexport function...
+    if (langLine && /^file[:\s]/i.test(langLine)) {
+      const directPath = langLine.replace(/^file[:\s]+/i, '').trim();
+      if (directPath && isValidExtractedPath(directPath) && blockContent.trim()) {
+        edits.push({ path: directPath, content: blockContent.trimEnd() });
+        continue;
+      }
+    }
+
+    // Otherwise, look for filename in first line of blockContent
+    const firstLine = blockContent.split('\n')[0]?.trim() || '';
+
+    // O(1) combined filename check (was 4 separate regexes per block)
+    const m = firstLine.match(filenameRegex);
+    const targetPath = (m?.[1] || m?.[2] || m?.[3])?.trim();
+
+    if (!targetPath || !isValidExtractedPath(targetPath)) continue;
+
+    // Clean content: remove the first line if it's just a filename comment
+    let cleanContent = blockContent.trimEnd();
+    if (firstLine.startsWith('//') || firstLine.startsWith('#') || firstLine.startsWith('/*')) {
+      cleanContent = blockContent.split('\n').slice(1).join('\n').trimEnd();
+    }
+
+    // Skip empty content
+    if (!cleanContent || cleanContent.trim().length === 0) continue;
+
+    edits.push({ path: targetPath, content: cleanContent });
   }
 
   return edits;
@@ -2754,6 +2859,77 @@ export function detectNewProjectFolder(content: string): string | null {
 }
 
 // ---------------------------------------------------------------------------
+// Additional Extractors (O(1) gated, Map-dedup compatible)
+// ---------------------------------------------------------------------------
+
+/**
+ * Pattern 5b: Code blocks where first line is ONLY a filename.
+ * Catches: ```javascript\nproject/file.js\nconst x = 42;\n```
+ * Only matches when the first line is a pure path (no code on same line).
+ * O(1) gate: skips unless ``` is present.
+ */
+export function extractCodeBlockFirstLineFilename(content: string): FileEdit[] {
+  if (!content.includes('```')) return [];
+  const edits: FileEdit[] = [];
+  const regex = /```(?:\w+)?\s*\n([\w./\-]+\.\w+)\s*\n([\s\S]*?)```/gi;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(content)) !== null) {
+    const path = m[1].trim();
+    const fileContent = m[2].trim();
+    // Reject if first line contains code (only accept pure path)
+    if (!path.includes('(') && !path.includes('=') && path.includes('.') &&
+        fileContent.length > 5 && isValidExtractedPath(path)) {
+      edits.push({ path, content: fileContent });
+    }
+  }
+  return edits;
+}
+
+/**
+ * Pattern 11: Explicit creation commands — "create file called X with..." or
+ * "save to X". O(1) gate: skips unless "create" or "save" is present.
+ */
+export function extractExplicitCreateCommands(content: string): FileEdit[] {
+  const lower = content.toLowerCase();
+  if (!lower.includes('create') && !lower.includes('save')) return [];
+  const edits: FileEdit[] = [];
+  const patterns = [
+    /(?:create|write|make|add)\s+(?:file\s+)?(?:called|named)?\s*['"]?([\w./\-]+\.\w+)['"]?\s*(?:with|containing|:)?\s*\n?([\s\S]{1,5000})/gi,
+    /(?:save|store)\s+(?:this\s+)?(?:to\s+)?(?:file\s+)?['"]?([\w./\-]+\.\w+)['"]?\s*\n?([\s\S]{1,5000})/gi
+  ];
+  for (const pattern of patterns) {
+    let m: RegExpExecArray | null;
+    while ((m = pattern.exec(content)) !== null) {
+      const path = m[1]?.trim();
+      const fileContent = m[2]?.trim() || '';
+      if (path && isValidExtractedPath(path) && fileContent.length > 5) {
+        edits.push({ path, content: fileContent });
+      }
+    }
+  }
+  return edits;
+}
+
+/**
+ * Pattern 12: JSON-like path: "file" content: "..." patterns.
+ * O(1) gate: skips unless "path" and "content" keys are present.
+ */
+export function extractJsonLikePathContent(content: string): FileEdit[] {
+  if (!content.includes('path') || !content.includes('content')) return [];
+  const edits: FileEdit[] = [];
+  const regex = /(?:path|file)\s*[:=]\s*['"]([\w./\-]+\.\w+)['"][\s\S]{0,80}(?:content|text|body)\s*[:=]\s*['"]([\s\S]{1,3000})['"]/gi;
+  let m: RegExpExecArray | null;
+  while ((m = regex.exec(content)) !== null) {
+    const path = m[1]?.trim();
+    const fileContent = m[2]?.trim() || '';
+    if (path && isValidExtractedPath(path) && fileContent.length > 5) {
+      edits.push({ path, content: fileContent });
+    }
+  }
+  return edits;
+}
+
+// ---------------------------------------------------------------------------
 // Main Parser Function
 // ---------------------------------------------------------------------------
 
@@ -2801,6 +2977,10 @@ export function parseFilesystemResponse(content: string, forceExtract: boolean =
   for (const edit of extractFsActionDeletes(content)) deletes.add(edit);
   for (const edit of extractDeleteEdits(content)) deletes.add(edit.path);
   for (const folder of extractFolderCreateEdits(content)) folders.add(folder);
+  // New patterns — O(1) gated extractors with Map dedup
+  for (const edit of extractCodeBlockFirstLineFilename(content)) addWrite(edit);
+  for (const edit of extractExplicitCreateCommands(content)) addWrite(edit);
+  for (const edit of extractJsonLikePathContent(content)) addWrite(edit);
 
   return {
     writes: Array.from(writes.values()),
@@ -3337,6 +3517,15 @@ export function extractIncrementalFileEdits(
     allEdits.push(edit);
   }
 
+  // NEW: Standard markdown code blocks with filename references (```javascript // calc.js)
+  // This catches LLM output that uses standard code blocks instead of structured ```file: format
+  for (const edit of extractCodeBlockFileEdits(parseWindow)) {
+    // Only add if not already present (deduplicate)
+    if (!allEdits.some(e => e.path === edit.path)) {
+      allEdits.push(edit);
+    }
+  }
+
   // Fenced diff blocks (```diff path\n...``` or ```diff: path\n...```)
   for (const edit of extractFencedDiffEdits(parseWindow)) {
     allEdits.push({ path: edit.path, content: edit.diff });
@@ -3360,6 +3549,17 @@ export function extractIncrementalFileEdits(
   // Bash heredoc writes inside fenced ```bash blocks
   for (const edit of extractBashHereDocWrites(parseWindow)) {
     allEdits.push(edit);
+  }
+
+  // NEW: Bash shell commands detection for real-time tracking
+  // Detects ```bash blocks and extracts command info for logging/execution
+  for (const cmd of extractBashCommands(parseWindow)) {
+    // Track bash commands in state for downstream use (logging, execution, etc.)
+    if (!state.detectedBashCommands) state.detectedBashCommands = [];
+    // Deduplicate by command string
+    if (!state.detectedBashCommands.some(c => c.command === cmd.command)) {
+      state.detectedBashCommands.push(cmd);
+    }
   }
 
   // DELETE commands (single-line)

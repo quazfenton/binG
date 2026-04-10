@@ -41,7 +41,7 @@ export const PROVIDERS: Record<string, LLMProvider> = {
   google: {
     id: 'google',
     name: 'Google',
-    models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-2.0-flash', 'gemini-1.5-pro'],
+    models: ['gemini-2.5-pro', 'gemini-2.5-flash', 'gemini-1.5-pro'],
     supportsStreaming: true,
     maxTokens: 1000000,
     description: 'Google Gemini models',

@@ -719,20 +719,36 @@ export class EnhancedLLMService {
       if (vercelProvider) {
         // Build tools if enabled — Vercel AI SDK handles tool calling natively
         let vercelTools: Record<string, any> | undefined;
-        if (request.enableTools && request.userId) {
+        
+        // CRITICAL FIX: Always build tools when file operations are possible.
+        // Previously required BOTH enableTools AND userId to be truthy, but
+        // anonymous users (userId from cookie) and auto-detected tool requests
+        // were being excluded, causing "No tools provided" warnings.
+        const shouldBuildTools = request.enableTools !== false;  // Default true unless explicitly disabled
+        
+        if (shouldBuildTools) {
+          const effectiveUserId = request.userId || 'anonymous';  // Allow anonymous users
           try {
             const { getAllTools } = await import('./vercel-ai-tools');
             // Compute session-aware scopePath for VFS tools
             const sessionIdFromConv = normalizeSessionId(request.conversationId || '');
-            const computedScopePath = (request as any).scopePath 
+            const computedScopePath = (request as any).scopePath
               || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
-            
+
             vercelTools = await getAllTools({
-              userId: request.userId,
+              userId: effectiveUserId,
               conversationId: request.conversationId,
               sessionId: sessionIdFromConv,
               requestId,
               scopePath: computedScopePath,  // Session-aware path for VFS tools
+            });
+
+            chatLogger.info('[TOOLS] ✅ Tools built successfully', {
+              requestId,
+              toolCount: Object.keys(vercelTools).length,
+              toolNames: Object.keys(vercelTools),
+              userId: effectiveUserId,
+              wasAnonymous: !request.userId,
             });
 
             // FIX: Merge VFS MCP tools (write_file, read_file, apply_diff, etc.)
@@ -831,23 +847,31 @@ export class EnhancedLLMService {
               ];
               chatLogger.info('URL detected in prompt, injected web_fetch hint', { requestId, urls: detectedUrls });
             }
-} catch (toolErr: any) {
+          } catch (toolErr: any) {
             chatLogger.warn('Failed to build Vercel AI tools, proceeding without', { requestId, error: toolErr.message });
           }
+        } else {
+          chatLogger.debug('[TOOLS] Tools explicitly disabled by request.enableTools=false', { requestId });
         }
-        
+
         // ENHANCED: Log tools being passed to stream
         if (vercelTools && Object.keys(vercelTools).length > 0) {
-          chatLogger.info('[TOOLS] Tools passed to streamWithVercelAI', {
+          chatLogger.info('[TOOLS] ✅ Tools passed to streamWithVercelAI', {
             requestId,
             toolCount: Object.keys(vercelTools).length,
             toolNames: Object.keys(vercelTools),
           });
         } else {
-          chatLogger.warn('[TOOLS] NO tools passed to streamWithVercelAI - file operations will use text parsing', {
+          // CRITICAL FIX: Provide actionable diagnostics for missing tools
+          chatLogger.warn('[TOOLS] ⚠ No tools provided to stream - file operations will use text parsing only', {
+            provider,
+            model: llmRequest.model,
             requestId,
             enableTools: request.enableTools,
             userId: request.userId,
+            shouldHaveBuilt: request.enableTools !== false,
+            reason: request.enableTools === false ? 'explicitly disabled' : 'tool build failed (check errors above)',
+            implications: 'LLM will not use function calling - must rely on text-based tool parsing',
           });
         }
 

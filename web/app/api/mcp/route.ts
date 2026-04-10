@@ -192,11 +192,16 @@ export async function POST(request: NextRequest) {
       // Extract session identity from cookies — same as resolveFilesystemOwner
       const cookie = request.cookies.get('anon-session-id');
       const rawSessionId = cookie?.value;
-      const sessionId = rawSessionId ? rawSessionId.replace(/^anon_/, '') : '';
-      const userId = sessionId ? `anon:${sessionId}` : 'anon:mcp-fallback';
+      const simpleSessionId = rawSessionId ? rawSessionId.replace(/^anon_/, '') : '';
 
-      // Build scopePath from actual session ID, NOT hardcoded '000'
-      const scopePath = sessionId ? `project/sessions/${sessionId}` : 'project/sessions/000';
+      // CRITICAL FIX: Use composite session ID format to match main chat flow
+      // This ensures MCP tools write to the SAME workspace as the conversation
+      const compositeSessionId = simpleSessionId ? `anon:${simpleSessionId}` : 'anon:mcp-fallback';
+      const userId = compositeSessionId;
+
+      // Build scopePath from actual session ID using composite format
+      // Matches the format used by main chat: project/sessions/{sessionId}
+      const scopePath = simpleSessionId ? `project/sessions/${simpleSessionId}` : 'project/sessions/000';
 
       const tool = vfsTools[name as keyof typeof vfsTools];
       if (!tool) {
@@ -207,13 +212,13 @@ export async function POST(request: NextRequest) {
         }, { status: 400 });
       }
 
-      logger.debug('MCP tool call', { tool: name, userId, sessionId, scopePath, args: Object.keys(args || {}) });
+      logger.debug('MCP tool call', { tool: name, userId, simpleSessionId, compositeSessionId, scopePath, args: Object.keys(args || {}) });
 
       // Set tool context so files are written to the correct workspace
       let result: any;
       try {
         result = await toolContextStore.run(
-          { userId, sessionId, scopePath },
+          { userId, sessionId: compositeSessionId, scopePath },
           async () => {
             // @ts-ignore - AI SDK tool execute signature
             return await tool.execute(args || {});
@@ -306,7 +311,9 @@ export async function POST(request: NextRequest) {
       error: error.message, 
       stack: error.stack,
       name: error.name,
-      cause: error.cause 
+      cause: error.cause,
+      url: request.url,
+      method: request.method
     });
     // Don't leak internal error details to clients
     return NextResponse.json(
@@ -314,7 +321,7 @@ export async function POST(request: NextRequest) {
         jsonrpc: '2.0',
         error: {
           code: -32603,
-          message: 'Internal server error',
+          message: 'Internal server error: ' + error.message,
         },
       },
       { status: 500 }

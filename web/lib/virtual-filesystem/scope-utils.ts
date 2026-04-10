@@ -102,8 +102,8 @@ export function extractSessionIdFromPath(scopePath?: string): string | null {
   // If the segment contains a $ (e.g., "1$004"),
   // extract only the actual session ID part after the last $
   if (sessionIdSegment.includes('$')) {
-    const parts = sessionIdSegment.split('$');
-    return parts[parts.length - 1]; // Return the last part (actual session ID)
+    const dollarIndex = sessionIdSegment.lastIndexOf('$');
+    return sessionIdSegment.slice(dollarIndex + 1);
   }
 
   return sessionIdSegment;
@@ -128,8 +128,8 @@ export function sanitizeScopePath(scopePath?: string): string {
   if (!normalizedPath.includes('/sessions/')) {
     // Check if it's a composite ID format (contains $)
     if (normalizedPath.includes('$')) {
-      const parts = normalizedPath.split('$');
-      const lastPart = parts[parts.length - 1];
+      const dollarIndex = normalizedPath.lastIndexOf('$');
+      const lastPart = normalizedPath.slice(dollarIndex + 1);
       // If last part looks like a session ID (3 digits or with suffix), use it
       if (/^\d{3}(-\d+)?$/.test(lastPart) || /^[a-z]+(-\d+)?$/.test(lastPart)) {
         return `project/sessions/${lastPart}`;
@@ -153,8 +153,8 @@ export function sanitizeScopePath(scopePath?: string): string {
   // If segment contains composite ID (userId$sessionId), extract only sessionId
   // This ensures folder names like "002" are not corrupted with userId prefix
   if (sessionIdSegment.includes('$')) {
-    const parts = sessionIdSegment.split('$');
-    const actualSessionId = parts[parts.length - 1]; // Get the last part (folder name)
+    const dollarIndex = sessionIdSegment.lastIndexOf('$');
+    const actualSessionId = sessionIdSegment.slice(dollarIndex + 1);
     return `project/sessions/${actualSessionId}${remainingPath}`;
   }
 
@@ -219,8 +219,8 @@ export function normalizeSessionId(sessionId: string): string {
   // - "1$004" -> "004"
   // - "anon$004" -> "004"
   if (trimmed.includes('$')) {
-    const parts = trimmed.split('$');
-    return parts[parts.length - 1].trim();
+    const dollarIndex = trimmed.lastIndexOf('$');
+    return trimmed.slice(dollarIndex + 1).trim();
   }
 
   // Already a simple ID - return as-is

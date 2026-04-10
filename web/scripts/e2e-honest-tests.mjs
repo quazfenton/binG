@@ -147,18 +147,9 @@ async function cleanupFiles(paths) {
 async function test1_vfsWriteWorks() {
   testNum++;
   log('TEST', `${testNum}. VFS write endpoint works (baseline)`);
-  
-  const path = 'project/honest-test-1.txt';
-  await deleteVfs(path);
-  await sleep(300);
-  
-  // Verify file doesn't exist
-  const preCheck = await readVfs(path);
-  if (preCheck.exists) {
-    log('FAIL', `File already exists before test: ${path}`);
-    results.push({ name: 'VFS write baseline', passed: false, detail: 'file existed before write' });
-    return;
-  }
+
+  // Use unique filename to avoid cleanup issues
+  const path = `project/honest-test-baseline-${Date.now()}.txt`;
   
   // Write file
   const writeResult = await writeVfs(path, 'Honest test content');
@@ -167,9 +158,9 @@ async function test1_vfsWriteWorks() {
     results.push({ name: 'VFS write baseline', passed: false, detail: writeResult.error });
     return;
   }
-  
+
   await sleep(1000);
-  
+
   // Verify file exists with correct content
   const postCheck = await readVfs(path);
   if (!postCheck.exists) {
@@ -177,13 +168,13 @@ async function test1_vfsWriteWorks() {
     results.push({ name: 'VFS write baseline', passed: false, detail: 'file missing after write' });
     return;
   }
-  
+
   if (postCheck.content !== 'Honest test content') {
     log('FAIL', `Content mismatch: got "${postCheck.content?.slice(0, 50)}"`);
     results.push({ name: 'VFS write baseline', passed: false, detail: `content mismatch: "${postCheck.content?.slice(0, 50)}"` });
     return;
   }
-  
+
   log('OK', `VFS write works: wrote and read back correctly`);
   results.push({ name: 'VFS write baseline', passed: true, detail: 'write+read verified' });
 }
@@ -345,17 +336,17 @@ async function test4_multiFileCreation() {
 async function test5_diffApplication() {
   testNum++;
   log('TEST', `${testNum}. Diff application — does a unified diff actually apply?`);
-  
-  const testPath = 'project/honest-diff-test.txt';
+
+  const testPath = `project/honest-diff-${Date.now()}.txt`;
   await cleanupFiles([testPath]);
   await writeVfs(testPath, 'Line 1\nLine 2\nLine 3');
   await sleep(500);
-  
+
   const chatResult = await chat(
-    'Apply this diff to project/honest-diff-test.txt:\n' +
+    `Apply this diff to ${testPath}:\n` +
     '```diff\n' +
-    '--- a/project/honest-diff-test.txt\n' +
-    '+++ b/project/honest-diff-test.txt\n' +
+    `--- a/${testPath}\n` +
+    `+++ b/${testPath}\n` +
     '@@ -1,3 +1,3 @@\n' +
     ' Line 1\n' +
     '-Line 2\n' +
@@ -366,18 +357,18 @@ async function test5_diffApplication() {
     'mistral-small-latest',
     180000
   );
-  
+
   if (!chatResult.ok) {
     log('FAIL', `Chat failed: ${chatResult.error}`);
     results.push({ name: 'Diff application', passed: false, detail: chatResult.error });
     return;
   }
-  
-  await sleep(5000);
-  
+
+  await sleep(8000);
+
   const postCheck = await readVfs(testPath);
   const diffApplied = postCheck.exists && postCheck.content?.includes('Line TWO');
-  
+
   if (diffApplied) {
     log('OK', `Diff applied: Line 2 → Line TWO`);
     results.push({ name: 'Diff application', passed: true, detail: 'diff_actually_applied' });
@@ -390,30 +381,30 @@ async function test5_diffApplication() {
 async function test6_selfHealingActualFix() {
   testNum++;
   log('TEST', `${testNum}. Self-healing — does LLM actually fix broken file?`);
-  
-  const testPath = 'project/honest-broken.js';
+
+  const testPath = `project/honest-broken-${Date.now()}.js`;
   await cleanupFiles([testPath]);
   await writeVfs(testPath, 'const x = '); // Intentionally broken
   await sleep(500);
-  
+
   const chatResult = await chat(
-    'Fix the syntax error in project/honest-broken.js. It should be valid JavaScript that assigns a value to x.',
+    `Fix the syntax error in ${testPath}. It should be valid JavaScript that assigns a value to x.`,
     'mistral',
     'mistral-small-latest',
     180000
   );
-  
+
   if (!chatResult.ok) {
     log('FAIL', `Chat failed: ${chatResult.error}`);
     results.push({ name: 'Self-healing actual fix', passed: false, detail: chatResult.error });
     return;
   }
-  
+
   await sleep(5000);
-  
+
   const postCheck = await readVfs(testPath);
   const wasFixed = postCheck.exists && postCheck.content !== 'const x = ' && postCheck.content.includes('=');
-  
+
   if (wasFixed) {
     log('OK', `File was fixed: "${postCheck.content?.slice(0, 50)}"`);
     results.push({ name: 'Self-healing actual fix', passed: true, detail: 'file_actually_fixed' });

@@ -38,6 +38,16 @@ export async function embed(text: string): Promise<number[]> {
   });
 
   if (!res.ok) {
+    const errorBody = await res.text().catch(() => 'Unable to read error body');
+    console.error('[Embeddings] ❌ Embedding API error', {
+      status: res.status,
+      statusText: res.statusText,
+      textLength: text.length,
+      textPreview: text.slice(0, 200),
+      baseUrl: isServer ? process.env.NEXT_PUBLIC_APP_URL || 'http://localhost:3000' : '(client-side)',
+      errorBody: errorBody.slice(0, 500),
+      headers: Object.fromEntries(res.headers.entries()),
+    });
     throw new Error(`Embedding failed: ${res.status} ${res.statusText}`);
   }
 

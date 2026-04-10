@@ -981,8 +981,61 @@ export async function POST(request: NextRequest) {
     // Build system prompt with optional response style modifiers
     let baseSystemPrompt = process.env.OPENCODE_SYSTEM_PROMPT || '';
 
-    // CRITICAL: Instruct LLM to use file editing tools instead of explaining
-    baseSystemPrompt += `\n\nYou have access to file editing tools. When the user asks you to create, modify, or read files, USE the tools directly — do NOT explain how to do it or give terminal commands.\n- To create or modify files: use write_file or batch_write tools\n- To read files: use read_file tool\n- To apply patches: use apply_diff tool\n- To list files: use list_files tool\n- NEVER say "I can't modify files" — you CAN use the tools\n- NEVER give bash commands like "echo 'content' > file" — use the file editing tools\n- When asked to fix code, USE write_file to write the corrected code to the file\n- When asked to create files, USE write_file or batch_write\n- When asked to read files, USE read_file\n\nIMPORTANT: Do NOT output explanations about HOW to create/modify files. Actually USE the tools to do it. The tools will execute and write files to the VFS.\n\nFor file modifications, output this format: <file_edit path="filename.ext">new content here</file_edit>\nFor batch writes, output: batch_write([{ "path": "file1", "content": "..." }, { "path": "file2", "content": "..." }])\nWhen fixing code, use the file_edit format to write the corrected code to the file.`;
+    // CRITICAL: Unified tool usage instructions with ENFORCED output formats.
+    // The LLM must use ONE consistent format for file operations.
+    baseSystemPrompt += `\n\n=== FILE OPERATION INSTRUCTIONS (READ CAREFULLY) ===
+
+You have file editing tools. USE them directly — do NOT explain HOW to do things or give terminal commands.
+
+TOOL USAGE:
+- To CREATE or MODIFY files: call the write_file or batch_write tools
+- To EDIT existing files: call the apply_diff tool with a unified diff
+- To READ files: call the read_file tool FIRST before making any changes
+- To LIST files: call the list_files tool
+
+CRITICAL RULES:
+1. ALWAYS read a file (read_file) before editing it. Never assume file contents.
+2. When asked to FIX code: read_file → understand the bug → write_file the corrected version
+3. When asked to CREATE files: write_file with complete content
+4. NEVER say "I can't modify files" — you CAN use the tools
+5. NEVER output bash commands like "echo 'content' > file" — use write_file tool
+6. NEVER output code in markdown blocks expecting the system to parse them — USE THE TOOLS
+
+FILE OUTPUT FORMAT (when tools are unavailable or as fallback):
+If you cannot use tool calls, use EXACTLY this format:
+
+To CREATE or OVERWRITE a file:
+\`\`\`file: path/to/file.ext
+<complete file content here>
+\`\`\`
+
+To EDIT an existing file (unified diff):
+\`\`\`diff: path/to/file.ext
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ -old_start,old_count +new_start,new_count @@
+-line to remove
++line to add
+\`\`\`
+
+To CREATE a directory:
+\`\`\`mkdir: path/to/dir
+\`\`\`
+
+To DELETE a file:
+\`\`\`delete: path/to/file.ext
+\`\`\`
+
+FORMAT RULES:
+- ALWAYS use triple backticks with the exact fence tag (file:, diff:, mkdir:, delete:)
+- The path MUST follow the colon on the same line as the opening backticks
+- Content goes BETWEEN the opening and closing backticks
+- For diffs, use standard unified diff format with --- and +++ headers
+- Do NOT use other code block formats (e.g., \`\`\`javascript) for file content
+- Do NOT use XML tags like <file_edit> — use the backtick fence format above
+- Do NOT use @filename.txt format — use the backtick fence format above
+
+=== END FILE OPERATION INSTRUCTIONS ===`;
 
     const promptParams: PromptParameters = {
       responseDepth: body.responseDepth as any,
@@ -1204,12 +1257,13 @@ const config: UnifiedAgentConfig = {
                 // This mirrors the streaming path at line ~2340 — without this, edits are
                 // only emitted as SSE events (status: 'detected') but NEVER persisted to VFS.
                 const fullResponse = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
+                let appliedEditsResult: any = null;
                 if (enableFilesystemEdits && fullResponse.trim() && filesystemOwnerId) {
                   try {
                     const { enableVFSBatchMode, flushVFSBatchMode } = await import('@/lib/virtual-filesystem/git-backed-vfs');
                     enableVFSBatchMode(filesystemOwnerId);
 
-                    const appliedEdits = await applyFilesystemEditsFromResponse({
+                    appliedEditsResult = await applyFilesystemEditsFromResponse({
                       ownerId: filesystemOwnerId,
                       conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
                       requestId: requestId,
@@ -1227,8 +1281,8 @@ const config: UnifiedAgentConfig = {
                     await flushVFSBatchMode(filesystemOwnerId);
 
                     // Emit applied file edit events so UI shows status: 'applied'
-                    if (appliedEdits?.applied?.length) {
-                      for (const edit of appliedEdits.applied) {
+                    if (appliedEditsResult?.applied?.length) {
+                      for (const edit of appliedEditsResult.applied) {
                         if (!isValidFilePath(edit.path)) continue;
                         const editContent = edit.content || edit.diff || '';
                         if (!editContent || editContent.trim().length === 0) continue;
@@ -1248,12 +1302,12 @@ const config: UnifiedAgentConfig = {
                         });
                       }
                       chatLogger.info('Agentic path: filesystem edits applied to VFS', {
-                        editCount: appliedEdits.applied.length,
-                        paths: appliedEdits.applied.map(e => e.path).join(', '),
+                        editCount: appliedEditsResult.applied.length,
+                        paths: appliedEditsResult.applied.map(e => e.path).join(', '),
                       });
-                    } else if (appliedEdits?.errors?.length) {
+                    } else if (appliedEditsResult?.errors?.length) {
                       chatLogger.warn('Agentic path: VFS write errors', {
-                        errors: appliedEdits.errors.slice(0, 5),
+                        errors: appliedEditsResult.errors.slice(0, 5),
                       });
                     }
                   } catch (e) {
@@ -1261,6 +1315,15 @@ const config: UnifiedAgentConfig = {
                       error: e instanceof Error ? e.message : String(e),
                     });
                   }
+                }
+
+                // Collect file edits into result object for the done event
+                // This ensures the stream method returns fileEdits in the result
+                if (appliedEditsResult) {
+                  result.fileEdits = appliedEditsResult;
+                  result.metadata = result.metadata || {};
+                  result.metadata.appliedEditCount = appliedEditsResult.applied?.length || 0;
+                  result.metadata.extractedEditCount = finalEdits?.length || 0;
                 }
 
                 // SESSION NAMING: Detect if this is a new single-folder project
@@ -4442,7 +4505,19 @@ async function buildHybridWorkspaceContext(
     ].filter(Boolean).join('\n');
   } catch (err) {
     // Silently fall back to existing behavior
-    console.debug('[Chat] Hybrid retrieval failed, using existing context:', err instanceof Error ? err.message : String(err));
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    const errorStack = err instanceof Error ? err.stack : undefined;
+    
+    console.error('[Chat] ❌ Hybrid retrieval failed, using existing context', {
+      error: errorMsg,
+      stack: errorStack?.split('\n').slice(0, 3).join('\n'),
+      ownerId,
+      projectId: opts?.projectId,
+      promptLength: opts?.prompt?.length || 0,
+      promptPreview: opts?.prompt?.slice(0, 100),
+      scopePath,
+    });
+    
     return '';
   }
 }
@@ -4706,7 +4781,22 @@ function resolveScopedPath(input: {
   const normalizedRelative = rawPath.startsWith('project/')
     ? rawPath.slice('project/'.length)
     : rawPath;
-  return resolveScopeUtil(normalizedRelative, input.scopePath);
+  
+  const resolvedPath = resolveScopeUtil(normalizedRelative, input.scopePath);
+
+  // DEBUG LOGGING: Trace path resolution to debug session folder issues
+  console.debug('[resolveScopedPath] Path resolution', {
+    rawPath,
+    scopePath: input.scopePath,
+    normalizedRelative,
+    resolvedPath,
+    wasInAttached: attachedSet.has(rawPath),
+    wasInUserMessage: new RegExp(`\\b${escapedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(input.lastUserMessage || ''),
+    baseNameInUserMessage: new RegExp(`\\b${escapedBaseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(input.lastUserMessage || ''),
+    startsWithScope: rawPath.startsWith(`${input.scopePath}/`) || rawPath === input.scopePath,
+  });
+
+  return resolvedPath;
 }
 
 export async function applyFilesystemEditsFromResponse(input: {
@@ -4967,6 +5057,19 @@ export async function applyFilesystemEditsFromResponse(input: {
         }
 
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, edit.content);
+        
+        // DEBUG LOGGING: Track where files are actually being written
+        console.info('[VFS Write] File written to VFS', {
+          ownerId: input.ownerId,
+          requestedPath: edit.path,
+          resolvedPath: targetPath,
+          actualVfsPath: file.path,
+          contentLength: edit.content?.length || 0,
+          contentPreview: edit.content?.slice(0, 100),
+          scopePath: input.scopePath,
+          conversationId: input.conversationId,
+        });
+        
         chatLogger.debug('VFS write completed', {
           ownerId: input.ownerId,
           requestedPath: edit.path,
@@ -5040,10 +5143,27 @@ export async function applyFilesystemEditsFromResponse(input: {
 
         const patchedContent = applyUnifiedDiffToContent(currentContent, targetPath, diffOperation.diff);
         if (patchedContent === null) {
+          // DEBUG: Log why diff application failed
+          console.error('[DIFF-APPLY] Failed to apply diff', {
+            targetPath,
+            diffLength: diffOperation.diff.length,
+            diffPreview: diffOperation.diff.slice(0, 200),
+            currentContentLength: currentContent.length,
+            currentContentPreview: currentContent.slice(0, 200),
+            existedBefore,
+          });
           result.errors.push(`Failed to apply unified diff for ${targetPath}: patch could not be applied`);
           continue;
         }
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, patchedContent);
+
+        // DEBUG: Log successful diff application
+        console.info('[DIFF-APPLY] Successfully applied diff', {
+          targetPath,
+          originalLength: currentContent.length,
+          patchedLength: patchedContent.length,
+          existedBefore,
+        });
 
         result.applied.push({
           path: file.path,

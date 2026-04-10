@@ -509,7 +509,12 @@ export const readFileTool = (tool as any)({
     exists: true,
   };
     } catch (error: any) {
-  logger.error('readFile failed', { path, error: error.message });
+  logger.error('readFile failed', { 
+    path, 
+    error: error.message,
+    stack: error.stack,
+    userId: getToolContext().userId 
+  });
   return {
     success: false,
     path,

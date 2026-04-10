@@ -206,19 +206,58 @@ function invalidateSnapshotCache(path?: string, ownerId?: string): void {
 }
 
 export function useVirtualFilesystem(
-  initialPath: string = 'project',
+  initialPath?: string,
   options: UseVirtualFilesystemOptions = {}
 ) {
   const autoLoad = options?.autoLoad !== false; // default true
   const useOPFS = options?.useOPFS ?? false;
   const offlineMode = options?.offlineMode ?? false;
-  
-  // Derive session ID from initialPath if it's a scoped path (e.g., "project/sessions/OneGB")
-  // This ensures the VFS uses the same session ID as the path
+
+  // Derive session ID from initialPath if it's a scoped path (e.g., "project/sessions/004")
   const deriveSessionIdFromPath = (path: string): string | null => {
     const match = path.match(/^project\/sessions\/([^/]+)/);
     return match ? match[1] : null;
   };
+
+  // FIX: Derive the session folder name from compositeSessionId.
+  // Format: "userId$sessionNum" (e.g., "1$004") → extract "004"
+  // Format: "anon$sessionNum" (e.g., "anon$001") → extract "001"
+  // This ensures the VFS always starts in the correct session subdirectory.
+  const deriveSessionFolderFromComposite = (): string | null => {
+    const composite = options?.compositeSessionId;
+    if (!composite) return null;
+    if (composite.includes('$')) {
+      const parts = composite.split('$');
+      return parts[parts.length - 1]; // Return session number part
+    }
+    // If no $ separator, check if it's already a simple session number
+    if (/^\d{2,4}$/.test(composite) || /^[a-z]+(-\d+)?$/.test(composite)) {
+      return composite;
+    }
+    return null;
+  };
+
+  // Compute the resolved session-scoped path for initialization
+  const resolveInitialSessionPath = (): string => {
+    // Priority 1: If initialPath is already a scoped path (e.g., "project/sessions/..."), use it
+    if (initialPath && initialPath.includes('sessions/')) {
+      return initialPath.replace(/\\/g, '/').replace(/^\/+/, '').replace(/\/+$/, '');
+    }
+    // Priority 2: Derive session folder from compositeSessionId
+    const sessionFolder = deriveSessionFolderFromComposite();
+    if (sessionFolder) {
+      return `project/sessions/${sessionFolder}`;
+    }
+    // Priority 3: Derive from initialPath
+    const derived = deriveSessionIdFromPath(initialPath || '');
+    if (derived) {
+      return `project/sessions/${derived}`;
+    }
+    // Priority 4: Fall back to 'project' root (for legacy/test scenarios)
+    return 'project';
+  };
+
+  const resolvedInitialPath = resolveInitialSessionPath();
   
   // Allow passing compositeSessionId from parent, or derive from path, or fall back to anonymous
   const getSessionId = useCallback(() => {
@@ -252,9 +291,9 @@ export function useVirtualFilesystem(
     return getOrCreateAnonymousSessionId();
   }, [options?.userId, options?.compositeSessionId, initialPath]);
 
-  const [currentPath, setCurrentPath] = useState(initialPath);
+  const [currentPath, setCurrentPath] = useState(resolvedInitialPath);
   const currentPathRef = useRef(currentPath);
-  const initialPathRef = useRef(initialPath);
+  const initialPathRef = useRef(resolvedInitialPath);
   const [nodes, setNodes] = useState<VirtualFilesystemNode[]>([]);
   const [attachedFiles, setAttachedFiles] = useState<Record<string, AttachedVirtualFile>>({});
   const [isLoading, setIsLoading] = useState(false);
@@ -933,17 +972,19 @@ export function useVirtualFilesystem(
     return result.path;
   }, [writeFile]);
 
-  // Load directory on first mount and when initialPath changes
+  // Load directory on first mount and when resolvedInitialPath changes
   const hasMountedRef = useRef(false);
   const isLoadingRef = useRef(false); // Track if a load is in progress
   const pendingPathRef = useRef<string | null>(null); // Queue pending path changes
+  const loadedPathRef = useRef<string | null>(null); // Track what path was last loaded
   useEffect(() => {
     if (!autoLoad) return;
-    
+
     const loadPath = (path: string) => {
       isLoadingRef.current = true;
       void listDirectory(path).finally(() => {
         isLoadingRef.current = false;
+        loadedPathRef.current = path;
         // Check if there's a pending path to load
         if (pendingPathRef.current !== null) {
           const nextPath = pendingPathRef.current;
@@ -953,28 +994,39 @@ export function useVirtualFilesystem(
         }
       });
     };
-    
+
     // If already loading, queue this path for later instead of skipping
     if (isLoadingRef.current) {
-      log('listDirectory: queuing path change for after current load completes:', initialPath);
-      pendingPathRef.current = initialPath;
+      log('listDirectory: queuing path change for after current load completes:', resolvedInitialPath);
+      pendingPathRef.current = resolvedInitialPath;
       return;
     }
-    
+
+    // CRITICAL: If compositeSessionId just became available and we loaded 'project' root,
+    // re-navigate to the correct session-scoped path
+    const sessionFolder = deriveSessionFolderFromComposite();
+    if (sessionFolder && loadedPathRef.current === 'project') {
+      log('listDirectory: compositeSessionId now available, navigating to session folder:', resolvedInitialPath);
+      hasMountedRef.current = false; // Reset to force reload
+    }
+
     if (!hasMountedRef.current) {
       hasMountedRef.current = true;
-      loadPath(initialPath);
-    } else if (initialPathRef.current !== initialPath) {
-      initialPathRef.current = initialPath;
-      loadPath(initialPath);
+      loadPath(resolvedInitialPath);
+    } else if (initialPathRef.current !== resolvedInitialPath && resolvedInitialPath !== 'project') {
+      initialPathRef.current = resolvedInitialPath;
+      loadPath(resolvedInitialPath);
     }
     // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [initialPath, autoLoad]);
+  }, [resolvedInitialPath, autoLoad, options?.compositeSessionId]);
 
   const attachedFileList = useMemo(
     () => Object.values(attachedFiles).sort((a, b) => a.path.localeCompare(b.path)),
     [attachedFiles],
   );
+
+  // Derive session folder name from composite ID for external use
+  const sessionFolder = deriveSessionFolderFromComposite() || deriveSessionIdFromPath(resolvedInitialPath);
 
   return {
     currentPath,
@@ -984,6 +1036,8 @@ export function useVirtualFilesystem(
     isLoading,
     error,
     syncStatus,
+    compositeSessionId: options?.compositeSessionId || null,
+    sessionFolder,
     setCurrentPath,
     listDirectory,
     readFile,

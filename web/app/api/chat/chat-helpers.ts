@@ -18,8 +18,8 @@ export const chatMessageSchema = z.object({
 
 export const chatRequestSchema = z.object({
   messages: z.array(chatMessageSchema).min(1, 'Messages array cannot be empty'),
-  provider: z.string().min(1, 'Provider is required'),
-  model: z.string().min(1, 'Model is required'),
+  provider: z.string().optional().default(process.env.LLM_PROVIDER || 'mistral'),
+  model: z.string().optional().default(process.env.DEFAULT_MODEL || 'mistral-small-latest'),
   temperature: z.number().min(0).refine((val) => val <= 2, 'Temperature must be at most 2').optional().default(0.7),
   maxTokens: z.number().int().min(1).refine((val) => val <= 200000, 'Max tokens must be at most 200000').optional().default(100096),
   stream: z.boolean().optional().default(true),

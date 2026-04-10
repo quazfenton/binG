@@ -65,6 +65,13 @@ export async function POST(req: NextRequest) {
       return NextResponse.json({ error: "Text too long (max 50,000 chars)" }, { status: 400 });
     }
 
+    console.debug('[Embed API] Request received', {
+      textLength: text.length,
+      textPreview: text.slice(0, 100),
+      ip,
+      model: EMBED_MODEL,
+    });
+
     if (!OPENAI_API_KEY) {
       return NextResponse.json(
         { error: "OPENAI_API_KEY not set" },
@@ -85,9 +92,19 @@ export async function POST(req: NextRequest) {
     });
 
     if (!response.ok) {
-      const err = await response.text();
-      console.error("OpenAI embed error:", err);
-      return NextResponse.json({ error: "OpenAI API error" }, { status: 502 });
+      const errText = await response.text();
+      console.error('[Embed API] ❌ OpenAI API error', {
+        status: response.status,
+        statusText: response.statusText,
+        errorBody: errText.slice(0, 500),
+        model: EMBED_MODEL,
+        inputLength: text.length,
+        inputPreview: text.slice(0, 100),
+      });
+      return NextResponse.json(
+        { error: "OpenAI API error", details: errText.slice(0, 200) },
+        { status: 502 }
+      );
     }
 
     const data = await response.json();
@@ -95,8 +112,19 @@ export async function POST(req: NextRequest) {
 
     return NextResponse.json(embedding);
   } catch (err) {
-    console.error("Embed route error:", err);
-    return NextResponse.json({ error: "Internal error" }, { status: 500 });
+    const errorMsg = err instanceof Error ? err.message : String(err);
+    const errorStack = err instanceof Error ? err.stack : undefined;
+    
+    console.error('[Embed API] ❌ Internal error', {
+      error: errorMsg,
+      stack: errorStack?.split('\n').slice(0, 5).join('\n'),
+      timestamp: new Date().toISOString(),
+    });
+    
+    return NextResponse.json(
+      { error: "Internal error", details: process.env.NODE_ENV === 'development' ? errorMsg : undefined },
+      { status: 500 }
+    );
   }
 }
 
