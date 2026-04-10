@@ -192,6 +192,29 @@ export async function classifyTask(
 export async function routeChatRequest(request: ChatRequest): Promise<ChatResponse> {
   const startTime = Date.now();
 
+  // 0. Check circuit breaker - skip if provider is in open circuit state
+  if (!circuitBreaker.isAvailable(request.provider)) {
+    const stats = circuitBreaker.getStats(request.provider);
+    log.warn(`Provider ${request.provider} circuit is OPEN, skipping`);
+
+    return {
+      success: false,
+      response: '',
+      mode: 'circuit-open',
+      error: `Provider ${request.provider} is temporarily unavailable (circuit open after ${stats.failures} failures)`,
+      classification: {} as TaskClassification,
+      health: {} as any,
+      metadata: {
+        duration: Date.now() - startTime,
+        circuitBreaker: {
+          state: stats.state,
+          failures: stats.failures,
+          lastFailureTime: stats.lastFailureTime,
+        },
+      },
+    };
+  }
+
   // 1. Classify the task
   const classification = await classifyTask(request.userMessage, {
     projectSize: request.projectContext?.size,
@@ -277,6 +300,149 @@ export async function routeChatRequest(request: ChatRequest): Promise<ChatRespon
     };
   }
 }
+
+/**
+ * Circuit breaker for provider fault tolerance
+ *
+ * Prevents cascading failures by opening the circuit after repeated
+ * errors, allowing the provider to recover before retrying.
+ */
+interface CircuitBreakerState {
+  state: 'closed' | 'open' | 'half-open';
+  failures: number;
+  successes: number;
+  lastFailureTime: number;
+  lastSuccessTime: number;
+  failureTimestamps: number[];
+}
+
+interface CircuitBreakerConfig {
+  /** Number of failures before opening circuit */
+  failureThreshold: number;
+  /** Time in ms before attempting recovery */
+  recoveryTimeoutMs: number;
+  /** Time window for counting failures */
+  failureWindowMs: number;
+}
+
+const DEFAULT_CB_CONFIG: CircuitBreakerConfig = {
+  failureThreshold: 5,
+  recoveryTimeoutMs: 30000,
+  failureWindowMs: 60000,
+};
+
+class ProviderCircuitBreaker {
+  private states = new Map<string, CircuitBreakerState>();
+  private config: CircuitBreakerConfig;
+
+  constructor(config: CircuitBreakerConfig = DEFAULT_CB_CONFIG) {
+    this.config = config;
+  }
+
+  private getState(provider: string): CircuitBreakerState {
+    let state = this.states.get(provider);
+    if (!state) {
+      state = {
+        state: 'closed',
+        failures: 0,
+        successes: 0,
+        lastFailureTime: 0,
+        lastSuccessTime: 0,
+        failureTimestamps: [],
+      };
+      this.states.set(provider, state);
+    }
+    return state;
+  }
+
+  /** Check if provider is available (circuit not open) */
+  isAvailable(provider: string): boolean {
+    const state = this.getState(provider);
+    const now = Date.now();
+
+    if (state.state === 'closed') return true;
+
+    if (state.state === 'open') {
+      const timeSinceLastFailure = now - state.lastFailureTime;
+      if (timeSinceLastFailure >= this.config.recoveryTimeoutMs) {
+        // Transition to half-open for probe
+        state.state = 'half-open';
+        log.info(`[CircuitBreaker] ${provider}: HALF-OPEN (probing)`);
+        return true;
+      }
+      return false;
+    }
+
+    // half-open: allow one probe request
+    return true;
+  }
+
+  /** Record successful request */
+  recordSuccess(provider: string): void {
+    const state = this.getState(provider);
+    state.successes++;
+    state.lastSuccessTime = Date.now();
+
+    if (state.state === 'half-open') {
+      state.state = 'closed';
+      state.failures = 0;
+      state.failureTimestamps = [];
+      log.info(`[CircuitBreaker] ${provider}: CLOSED (recovered)`);
+    } else if (state.state === 'closed') {
+      // Clear old failures outside the window
+      const cutoff = Date.now() - this.config.failureWindowMs;
+      state.failureTimestamps = state.failureTimestamps.filter(t => t > cutoff);
+      state.failures = state.failureTimestamps.length;
+    }
+  }
+
+  /** Record failed request */
+  recordFailure(provider: string): void {
+    const state = this.getState(provider);
+    state.failures++;
+    state.lastFailureTime = Date.now();
+    state.failureTimestamps.push(Date.now());
+
+    // Clear old failures outside the window
+    const cutoff = Date.now() - this.config.failureWindowMs;
+    state.failureTimestamps = state.failureTimestamps.filter(t => t > cutoff);
+    state.failures = state.failureTimestamps.length;
+
+    if (state.failures >= this.config.failureThreshold && state.state !== 'open') {
+      state.state = 'open';
+      log.warn(`[CircuitBreaker] ${provider}: OPEN (${state.failures} failures in ${this.config.failureWindowMs / 1000}s)`);
+    }
+  }
+
+  /** Reset circuit for provider */
+  reset(provider: string): void {
+    const state = this.getState(provider);
+    state.state = 'closed';
+    state.failures = 0;
+    state.successes = 0;
+    state.failureTimestamps = [];
+    log.info(`[CircuitBreaker] ${provider}: RESET`);
+  }
+
+  /** Get all states */
+  getAllStates(): Map<string, CircuitBreakerState> {
+    return this.states;
+  }
+
+  /** Get stats for specific provider */
+  getStats(provider: string): CircuitBreakerState {
+    return this.getState(provider);
+  }
+}
+
+const circuitBreaker = new ProviderCircuitBreaker();
+
+export {
+  circuitBreaker,
+  ProviderCircuitBreaker,
+  type CircuitBreakerState,
+  type CircuitBreakerConfig,
+};
 
 // ============================================================================
 // Exports

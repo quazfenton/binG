@@ -1823,6 +1823,79 @@ export default function TerminalPanel({
     }
   }, [executeLocalShellCommand, updateTerminalState, sendInput, sendResize]);
 
+  // Tab completion for sandbox-cmd mode — combines VFS file paths + common commands
+  // Extracted from Input.js suggestion system + TerminalInputHandler VFS completion
+  const handleTabCompletion = useCallback((
+    terminalId: string,
+    term: TerminalInstance
+  ) => {
+    const lineBuffer = lineBufferRef.current[terminalId] || '';
+    const parts = lineBuffer.split(/\s+/);
+    const lastWord = parts[parts.length - 1] || '';
+
+    if (!lastWord) {
+      term.terminal?.write('\x07'); // Beep
+      return;
+    }
+
+    // 1. Command suggestions (from Input.js)
+    const commonCommands = [
+      'ls', 'ls -la', 'pwd', 'cd', 'mkdir', 'touch', 'rm', 'cat', 'echo',
+      'git status', 'git add .', 'git commit -m ""', 'git push', 'git pull',
+      'npm install', 'npm start', 'npm test', 'npm run build',
+      'python', 'node', 'code', 'curl', 'wget',
+      'find', 'grep', 'ps', 'kill', 'df', 'du', 'free',
+    ];
+
+    // If typing the first word (command), suggest commands
+    if (parts.length <= 1 || (parts.length === 1 && !lastWord.includes('/'))) {
+      const commandCompletions = commonCommands.filter(cmd =>
+        cmd.toLowerCase().startsWith(lastWord.toLowerCase())
+      );
+
+      if (commandCompletions.length === 1) {
+        const completion = commandCompletions[0].slice(lastWord.length);
+        lineBufferRef.current[terminalId] = lineBuffer + completion;
+        term.terminal?.write(completion);
+      } else if (commandCompletions.length > 1) {
+        term.terminal?.write('\r\n' + commandCompletions.join('  ') + '\r\n');
+        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+        term.terminal?.write(getPrompt('sandbox-cmd', cwd) + lineBuffer);
+      } else {
+        term.terminal?.write('\x07'); // Beep — no command matches
+      }
+      return;
+    }
+
+    // 2. File path completion from VFS filesystem entries
+    // Uses the terminal's VFS state if available, otherwise just beep
+    const vfsEntries = (term as any).vfsEntries;
+    if (vfsEntries && Object.keys(vfsEntries).length > 0) {
+      const scopePath = filesystemScopePathRef.current || 'project';
+      const completions = Object.keys(vfsEntries)
+        .filter(k => k.startsWith(scopePath) && k.toLowerCase().includes(lastWord.toLowerCase()))
+        .map(k => k.replace(scopePath + '/', ''))
+        .map(k => k.split('/').pop() || k);
+
+      const uniqueCompletions = [...new Set(completions)].filter(c => c.startsWith(lastWord.split('/').pop() || ''));
+
+      if (uniqueCompletions.length === 1) {
+        const completion = uniqueCompletions[0].slice((lastWord.split('/').pop() || '').length);
+        lineBufferRef.current[terminalId] = lineBuffer + completion;
+        term.terminal?.write(completion);
+      } else if (uniqueCompletions.length > 1) {
+        term.terminal?.write('\r\n' + uniqueCompletions.join('  ') + '\r\n');
+        const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+        term.terminal?.write(getPrompt('sandbox-cmd', cwd) + lineBuffer);
+      } else {
+        term.terminal?.write('\x07'); // Beep
+      }
+      return;
+    }
+
+    term.terminal?.write('\x07'); // Beep — no completions
+  }, [getPrompt, filesystemScopePathRef, localShellCwdRef]);
+
   // Handle sandbox command-mode input (line-based execution)
   const handleSandboxCmdInput = useCallback((
     terminalId: string,
@@ -1837,6 +1910,24 @@ export default function TerminalPanel({
       lineBufferRef.current[terminalId] = '';
 
       if (command) {
+        // Input validation — warn on dangerous commands (from Input.js)
+        const dangerousPatterns = [
+          /rm\s+-rf\s+\//,
+          /sudo\s+rm/,
+          />\s*\/dev\//,
+          /mkfs/,
+          /dd\s+if=/,
+          /:\(\)\{\s*:\|:\s*&\s*\}\s*;/,  // Fork bomb
+        ];
+
+        const isDangerous = dangerousPatterns.some(p => p.test(command));
+        if (isDangerous) {
+          term.terminal?.write('\x1b[31m⚠ Dangerous command detected. Blocking for safety.\x1b[0m\r\n');
+          const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+          term.terminal?.write(getPrompt('sandbox-cmd', cwd));
+          return;
+        }
+
         // Add to queue for execution
         commandQueueRef.current[terminalId] = [
           ...(commandQueueRef.current[terminalId] || []),
@@ -1863,7 +1954,8 @@ export default function TerminalPanel({
     }
 
     if (data === '\t') {
-      // Basic tab completion in command mode
+      // Tab completion — delegate to TerminalInputHandler for VFS-aware completions
+      handleTabCompletion(terminalId, term);
       return;
     }
 
@@ -1872,6 +1964,26 @@ export default function TerminalPanel({
       lineBufferRef.current[terminalId] = '';
       const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
       term.terminal?.write(getPrompt('sandbox-cmd', cwd));
+      return;
+    }
+
+    if (data === '\u0015') { // Ctrl+U — clear to start of line
+      if (lineBuffer.length > 0) {
+        term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project'));
+        lineBufferRef.current[terminalId] = '';
+      }
+      return;
+    }
+
+    if (data === '\u001b[H') { // Home — move cursor to start (via line clear + rewrite)
+      const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+      term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', cwd) + lineBuffer + '\x1b[' + (getPrompt('sandbox-cmd', cwd).length + 1) + 'G');
+      return;
+    }
+
+    if (data === '\u001b[F') { // End — move cursor to end (via line rewrite)
+      const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+      term.terminal?.write('\r\x1b[K' + getPrompt('sandbox-cmd', cwd) + lineBuffer);
       return;
     }
 
@@ -1912,6 +2024,30 @@ export default function TerminalPanel({
     }
 
     if (data >= ' ') {
+      // Handle multi-line paste (from Input.js — split on \n and queue each line)
+      if (data.includes('\n')) {
+        const lines = data.split('\n').filter(line => line.trim());
+        if (lines.length > 1) {
+          // Queue all lines for execution
+          term.terminal?.write(`\r\n\x1b[33mPasting ${lines.length} commands...\x1b[0m\r\n`);
+          const cwd = localShellCwdRef.current[terminalId] || filesystemScopePathRef.current || 'project';
+          for (const line of lines) {
+            const trimmed = line.trim();
+            if (trimmed) {
+              commandQueueRef.current[terminalId] = [
+                ...(commandQueueRef.current[terminalId] || []),
+                trimmed
+              ];
+              if (term.sandboxInfo.sessionId) {
+                sendInput(term.sandboxInfo.sessionId, trimmed + '\n');
+              }
+            }
+          }
+          term.terminal?.write(getPrompt('sandbox-cmd', cwd));
+          lineBufferRef.current[terminalId] = '';
+          return;
+        }
+      }
       lineBufferRef.current[terminalId] = lineBuffer + data;
       term.terminal?.write(data);
     }

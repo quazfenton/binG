@@ -6,10 +6,31 @@
  * needing to manage MCP connections directly
  *
  * SECURITY: This server requires authentication and binds to localhost only
+ *
+ * ENDPOINTS:
+ * - GET  /health        - Health status
+ * - GET  /tools         - List all registered tools
+ * - POST /call          - Execute a tool
+ * - GET  /discover      - Full MCP configuration
+ * - POST /memory/add    - Mem0: Store memories
+ * - POST /memory/search - Mem0: Search memories
+ * - GET  /memory/all    - Mem0: Get all memories
+ * - PATCH /memory/:id   - Mem0: Update memory
+ * - DELETE /memory/:id  - Mem0: Delete memory
+ * - DELETE /memory/all  - Mem0: Delete all memories
  */
 
-import { createServer, Server } from 'http'
+import { createServer, Server, IncomingMessage, ServerResponse } from 'http'
 import { mcpToolRegistry } from './registry'
+import {
+  isMem0Configured,
+  mem0Add,
+  mem0Search,
+  mem0GetAll,
+  mem0Update,
+  mem0Delete,
+  mem0DeleteAll,
+} from '../powers/mem0-power'
 import { createLogger } from '../utils/logger'
 
 const logger = createLogger('MCP:CLI-Server')
@@ -23,7 +44,7 @@ const MCP_HTTP_AUTH_TOKEN = process.env.MCP_HTTP_AUTH_TOKEN;
 /**
  * Validate authentication token from request
  */
-function validateAuthToken(req: any): boolean {
+function validateAuthToken(req: IncomingMessage): boolean {
   if (!MCP_HTTP_AUTH_TOKEN) {
     // If no token configured, allow localhost only (dev mode)
     const host = req.headers.host || '';
@@ -35,8 +56,133 @@ function validateAuthToken(req: any): boolean {
 }
 
 /**
+ * Send JSON response
+ */
+function sendJson(res: ServerResponse, status: number, data: any): void {
+  res.writeHead(status, { 'Content-Type': 'application/json' })
+  res.end(JSON.stringify(data))
+}
+
+/**
+ * Parse request body
+ */
+function parseBody(req: IncomingMessage): Promise<any> {
+  return new Promise((resolve, reject) => {
+    let body = ''
+    req.on('data', chunk => { body += chunk.toString() })
+    req.on('end', () => {
+      try { resolve(body ? JSON.parse(body) : {}) }
+      catch (e) { reject(new Error('Invalid JSON')) }
+    })
+    req.on('error', reject)
+  })
+}
+
+// ============================================================================
+// Memory (Mem0) Endpoints
+// ============================================================================
+
+async function handleMemoryAdd(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!isMem0Configured()) {
+    return sendJson(res, 503, { error: 'Mem0 not configured (set MEM0_API_KEY)' })
+  }
+  try {
+    const body = await parseBody(req)
+    if (!body.messages || !Array.isArray(body.messages)) {
+      return sendJson(res, 400, { error: 'messages[] array is required' })
+    }
+    const result = await mem0Add(body, {})
+    sendJson(res, result.success ? 200 : 500, result)
+  } catch (e: any) {
+    sendJson(res, 500, { error: e.message })
+  }
+}
+
+async function handleMemorySearch(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!isMem0Configured()) {
+    return sendJson(res, 503, { error: 'Mem0 not configured (set MEM0_API_KEY)' })
+  }
+  try {
+    const body = await parseBody(req)
+    if (!body.query) {
+      return sendJson(res, 400, { error: 'query is required' })
+    }
+    const result = await mem0Search(body, {})
+    sendJson(res, result.success ? 200 : 500, result)
+  } catch (e: any) {
+    sendJson(res, 500, { error: e.message })
+  }
+}
+
+async function handleMemoryGetAll(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!isMem0Configured()) {
+    return sendJson(res, 503, { error: 'Mem0 not configured (set MEM0_API_KEY)' })
+  }
+  try {
+    const params = new URL(req.url || '', 'http://localhost').searchParams
+    const result = await mem0GetAll({
+      userId: params.get('userId') || undefined,
+      agentId: params.get('agentId') || undefined,
+      limit: params.get('limit') ? parseInt(params.get('limit')!) : undefined,
+    }, {})
+    sendJson(res, result.success ? 200 : 500, result)
+  } catch (e: any) {
+    sendJson(res, 500, { error: e.message })
+  }
+}
+
+async function handleMemoryUpdate(req: IncomingMessage, res: ServerResponse, memoryId: string): Promise<void> {
+  if (!isMem0Configured()) {
+    return sendJson(res, 503, { error: 'Mem0 not configured (set MEM0_API_KEY)' })
+  }
+  try {
+    const body = await parseBody(req)
+    if (!body.text) {
+      return sendJson(res, 400, { error: 'text is required' })
+    }
+    const result = await mem0Update({ memoryId, text: body.text }, {})
+    sendJson(res, result.success ? 200 : 500, result)
+  } catch (e: any) {
+    sendJson(res, 500, { error: e.message })
+  }
+}
+
+async function handleMemoryDelete(req: IncomingMessage, res: ServerResponse, memoryId: string): Promise<void> {
+  if (!isMem0Configured()) {
+    return sendJson(res, 503, { error: 'Mem0 not configured (set MEM0_API_KEY)' })
+  }
+  try {
+    const result = await mem0Delete({ memoryId }, {})
+    sendJson(res, result.success ? 200 : 500, result)
+  } catch (e: any) {
+    sendJson(res, 500, { error: e.message })
+  }
+}
+
+async function handleMemoryDeleteAll(req: IncomingMessage, res: ServerResponse): Promise<void> {
+  if (!isMem0Configured()) {
+    return sendJson(res, 503, { error: 'Mem0 not configured (set MEM0_API_KEY)' })
+  }
+  try {
+    const body = await parseBody(req)
+    const result = await mem0DeleteAll(body || {}, {})
+    sendJson(res, result.success ? 200 : 500, result)
+  } catch (e: any) {
+    sendJson(res, 500, { error: e.message })
+  }
+}
+
+async function handleMemoryStatus(_req: IncomingMessage, res: ServerResponse): Promise<void> {
+  sendJson(res, 200, {
+    configured: isMem0Configured(),
+    apiKeySet: !!process.env.MEM0_API_KEY,
+    baseUrl: 'https://api.mem0.ai',
+  })
+}
+
+/**
  * Create HTTP server for CLI agent to call MCP tools
- * 
+ *
  * SECURITY CHANGES:
  * - Binds to 127.0.0.1 only (not all interfaces)
  * - Requires Bearer token authentication
@@ -51,7 +197,7 @@ export async function createMCPServerForCLI(port: number = 8888): Promise<void> 
         if (host.startsWith('localhost') || host.startsWith('127.0.0.1')) {
           res.setHeader('Access-Control-Allow-Origin', `http://localhost:${port}`)
         }
-        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS')
+        res.setHeader('Access-Control-Allow-Methods', 'GET, POST, PATCH, DELETE, OPTIONS')
         res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization')
 
         // Handle CORS preflight
@@ -63,10 +209,10 @@ export async function createMCPServerForCLI(port: number = 8888): Promise<void> 
 
         // SECURITY: Require authentication for all endpoints
         if (!validateAuthToken(req)) {
-          logger.warn('Unauthorized MCP CLI request', { 
-            method: req.method, 
+          logger.warn('Unauthorized MCP CLI request', {
+            method: req.method,
             path: req.url,
-            host: req.headers.host 
+            host: req.headers.host
           });
           res.writeHead(401)
           res.end(JSON.stringify({ error: 'Unauthorized - valid Bearer token required' }))
@@ -75,8 +221,37 @@ export async function createMCPServerForCLI(port: number = 8888): Promise<void> 
 
         // Route handling
         const url = new URL(req.url || '', `http://127.0.0.1:${port}`)
+        const pathParts = url.pathname.split('/').filter(Boolean)
 
         try {
+          // Memory endpoints: /memory/*
+          if (pathParts[0] === 'memory') {
+            if (!isMem0Configured()) {
+              return sendJson(res, 503, { error: 'Mem0 not configured (set MEM0_API_KEY)' })
+            }
+
+            const action = pathParts[1]
+            switch (req.method) {
+              case 'POST':
+                if (action === 'add') return handleMemoryAdd(req, res)
+                if (action === 'search') return handleMemorySearch(req, res)
+                if (action === 'delete-all' || action === 'deleteAll' || action === 'all') return handleMemoryDeleteAll(req, res)
+                break
+              case 'GET':
+                if (!action || action === 'all') return handleMemoryGetAll(req, res)
+                if (action === 'status') return handleMemoryStatus(req, res)
+                break
+              case 'PATCH':
+                if (action) return handleMemoryUpdate(req, res, action)
+                break
+              case 'DELETE':
+                if (action) return handleMemoryDelete(req, res, action)
+                break
+            }
+            return sendJson(res, 404, { error: 'Unknown memory endpoint' })
+          }
+
+          // Standard MCP endpoints
           switch (url.pathname) {
             case '/health':
               handleHealth(res)
@@ -95,19 +270,19 @@ export async function createMCPServerForCLI(port: number = 8888): Promise<void> 
               break
 
             default:
-              res.writeHead(404)
-              res.end(JSON.stringify({ error: 'Not found' }))
+              sendJson(res, 404, { error: 'Not found' })
           }
         } catch (error: any) {
           logger.error('Request handling error', error)
-          res.writeHead(500)
-          res.end(JSON.stringify({ error: error.message }))
+          sendJson(res, 500, { error: error.message })
         }
       })
 
       // SECURITY: Bind to localhost only (not all interfaces)
       server.listen(port, '127.0.0.1', () => {
         logger.info(`MCP CLI server listening on 127.0.0.1:${port}`)
+        const memoryStatus = isMem0Configured() ? 'enabled' : 'disabled (set MEM0_API_KEY)'
+        logger.info(`Mem0 memory endpoints: ${memoryStatus}`)
         logger.warn('MCP HTTP server requires authentication. Set MCP_HTTP_AUTH_TOKEN environment variable.')
         httpServer = server
         resolve()

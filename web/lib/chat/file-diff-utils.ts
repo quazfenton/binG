@@ -394,8 +394,172 @@ export function extractAddedCode(diff: string): string {
 }
 
 // ============================================================================
-// Self-healing diff repair loop
+// LLM Response Extraction
 // ============================================================================
+
+/**
+ * Extract file writes from bash/code blocks in LLM responses.
+ * Handles echo, cat heredocs, unified diffs, Before/After blocks,
+ * and code blocks with filename hints.
+ *
+ * CRITICAL: For diff patterns, matches ONLY the AFTER/CHANGED section,
+ * never the "before applying the diff" original content block.
+ */
+export function extractFileWritesFromLLMResponse(
+  content: string,
+  options: { scopePath?: string } = {}
+): Array<{ path: string; content: string }> {
+  const writes: Array<{ path: string; content: string }> = [];
+  const scopePath = options.scopePath || 'project';
+
+  // Pattern 1: echo "content" > file or echo 'content' > file in bash blocks
+  const bashBlockPattern = /```(?:bash|sh|shell)\s*\n([\s\S]*?)```/gi;
+  let bashBlockMatch;
+  while ((bashBlockMatch = bashBlockPattern.exec(content)) !== null) {
+    const blockContent = bashBlockMatch[1];
+    const echoPattern = /echo\s+(?:"((?:[^"\\]|\\.)*)"|'([^']*)')\s*>\s*([^\s\n;&|>]+)/gi;
+    let echoMatch;
+    while ((echoMatch = echoPattern.exec(blockContent)) !== null) {
+      const fileContent = echoMatch[1] ?? echoMatch[2] ?? '';
+      let filePath = echoMatch[3].trim();
+      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+        filePath = `${scopePath}/${filePath}`;
+      }
+      filePath = filePath.replace(/^\/+/, '');
+      if (filePath && fileContent) {
+        writes.push({ path: filePath, content: fileContent });
+      }
+    }
+    // cat heredoc: cat > file << 'EOF'\ncontent\nEOF
+    const catPattern = /cat\s*>\s*([^\s\n>]+)\s*<<\s*['"]?(\w+)['"]?\s*\n([\s\S]*?)\n\s*\2/gi;
+    let catMatch;
+    while ((catMatch = catPattern.exec(blockContent)) !== null) {
+      let filePath = catMatch[1].trim();
+      const fileContent = catMatch[3].trim();
+      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+        filePath = `${scopePath}/${filePath}`;
+      }
+      filePath = filePath.replace(/^\/+/, '');
+      if (filePath && fileContent) {
+        writes.push({ path: filePath, content: fileContent });
+      }
+    }
+  }
+
+  // Pattern 2: Unified diff blocks (```diff ... --- a/path +++ b/path ...)
+  const diffBlockPattern = /```(?:diff|patch)?\s*\n---\s*a\/([^\n]+)\n\+\+\+\s*b\/([^\n]+)\n@@[\s\S]*?```/gi;
+  let diffMatch;
+  while ((diffMatch = diffBlockPattern.exec(content)) !== null) {
+    let filePath = diffMatch[2].trim();
+    if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+      filePath = `${scopePath}/${filePath}`;
+    }
+    filePath = filePath.replace(/^\/+/, '');
+    const fullDiffMatch = diffMatch[0];
+    const addedLines = fullDiffMatch.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).map(l => l.slice(1)).join('\n');
+    if (filePath && addedLines) {
+      writes.push({ path: filePath, content: addedLines });
+    }
+  }
+
+  // Pattern 2b: AFTER/RESULT code blocks from diff responses
+  // CRITICAL: These phrases ONLY appear in the AFTER section, never BEFORE.
+  const diffApplyPatterns = [
+    // "**After:**\n```" (Before/After blocks)
+    /\*\*After:\*\*\s*\n```\w*\s*\n([\s\S]*?)```/gi,
+    // "the file will contain:\n```" (ONLY in AFTER section)
+    /the\s+file\s+will\s+contain[\s:]*\n```\w*\s*\n([\s\S]*?)```/gi,
+    // "the content becomes:\n```" (ONLY in AFTER section)
+    /the\s+content\s+becomes[\s:]*\n```\w*\s*\n([\s\S]*?)```/gi,
+    // "(changed content):\n```" (ONLY after "After applying the diff")
+    /\(changed\s+content\)[\s:]*\n```\w*\s*\n([\s\S]*?)```/gi,
+    // "Here's the result after applying the diff:\n```"
+    /here['']?s?\s+(?:the\s+)?result\s+after\s+applying\s+(?:the\s+)?diff[\s:]*\n```\w*\s*\n([\s\S]*?)```/gi,
+    // "the result is:\n```" (ONLY in AFTER section)
+    /the\s+result\s+is[\s:]*\n```\w*\s*\n([\s\S]*?)```/gi,
+  ];
+  for (const diffApplyPattern of diffApplyPatterns) {
+    let diffApplyMatch;
+    while ((diffApplyMatch = diffApplyPattern.exec(content)) !== null) {
+      const fileContent = diffApplyMatch[1].trim();
+      const pathMatch = content.match(/[`'"]?(project\/[\w\-\/]+\.[\w]+)[`'"]?/i);
+      if (pathMatch && fileContent && fileContent.length > 3) {
+        let filePath = pathMatch[1].trim();
+        if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+          filePath = `${scopePath}/${filePath}`;
+        }
+        filePath = filePath.replace(/^\/+/, '');
+        writes.push({ path: filePath, content: fileContent });
+        break;
+      }
+    }
+    if (writes.length > 0) break;
+  }
+
+  // Pattern 3: Code blocks with file path hints (```file: path or ```path/to/file)
+  const codeWithFilePattern = /```\w*\s*(?:file:\s*)?([^\s\n]+)\s*\n([\s\S]*?)```/gi;
+  let codeFileMatch;
+  while ((codeFileMatch = codeWithFilePattern.exec(content)) !== null) {
+    const pathHint = codeFileMatch[1].trim();
+    const isFilePath = pathHint.includes('/') || /\.(js|ts|tsx|jsx|py|html|css|json|md|txt|sh|bash)$/i.test(pathHint);
+    if (isFilePath && !pathHint.startsWith('bash') && !pathHint.startsWith('sh') && !pathHint.startsWith('javascript') && !pathHint.startsWith('python') && !pathHint.startsWith('diff')) {
+      let filePath = pathHint;
+      const fileContent = codeFileMatch[2].trim();
+      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+        filePath = `${scopePath}/${filePath}`;
+      }
+      filePath = filePath.replace(/^\/+/, '');
+      if (filePath && fileContent && fileContent.length > 5) {
+        writes.push({ path: filePath, content: fileContent });
+      }
+    }
+  }
+
+  // Pattern 4: JavaScript fs.writeFileSync calls
+  const jsBlockPattern = /```(?:javascript|js|node|typescript|ts)\s*\n([\s\S]*?)```/gi;
+  let jsBlockMatch;
+  while ((jsBlockMatch = jsBlockPattern.exec(content)) !== null) {
+    const blockContent = jsBlockMatch[1];
+    const fsWritePattern = /fs\.writeFileSync\(\s*(?:path\.join\([^)]*,\s*['"]([^'"]+)['"]\s*\)|['"]([^'"]+)['"])\s*,\s*['"]((?:[^"\\]|\\.)*)['"]/gi;
+    let fsMatch;
+    while ((fsMatch = fsWritePattern.exec(blockContent)) !== null) {
+      let filePath = (fsMatch[1] ?? fsMatch[2] ?? '').trim();
+      const fileContent = fsMatch[3] ?? '';
+      if (filePath && fileContent) {
+        if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+          filePath = `${scopePath}/${filePath}`;
+        }
+        filePath = filePath.replace(/^\/+/, '');
+        writes.push({ path: filePath, content: fileContent });
+      }
+    }
+  }
+
+  // Pattern 5: Python file writes
+  const pyBlockPattern = /```(?:python|py)\s*\n([\s\S]*?)```/gi;
+  let pyBlockMatch;
+  while ((pyBlockMatch = pyBlockPattern.exec(content)) !== null) {
+    const blockContent = pyBlockMatch[1];
+    const pyWritePattern = /with\s+open\(\s*['"]([^'"]+)['"][\s\S]*?\.write\(\s*['"]((?:[^"\\]|\\.)*)['"]\)/gi;
+    let pyMatch;
+    while ((pyMatch = pyWritePattern.exec(blockContent)) !== null) {
+      let filePath = pyMatch[1].trim();
+      const fileContent = pyMatch[2] ?? '';
+      if (filePath && fileContent) {
+        if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
+          filePath = `${scopePath}/${filePath}`;
+        }
+        filePath = filePath.replace(/^\/+/, '');
+        writes.push({ path: filePath, content: fileContent });
+      }
+    }
+  }
+
+  // Deduplicate by path (keep last write for each path)
+  const deduped = new Map<string, { path: string; content: string }>();
+  for (const w of writes) deduped.set(w.path, w);
+  return Array.from(deduped.values());
+}
 
 /**
  * Attempt to repair a broken diff by asking an LLM to fix it.
@@ -451,18 +615,15 @@ export async function repairDiff(opts: {
 // Smart apply — hybrid strategy with confidence metadata
 // ============================================================================
 
-/**
- * Apply a diff using the best available strategy, returning metadata
- * about which strategy succeeded and the confidence level.
- *
- * Strategy order:
- *  1. Full-file content detection (highest confidence)
- *  2. Unified diff
- *  3. diff-match-patch (fuzzy)
- *  4. Simple line diff
- *  5. Symbol-based patching (if symbolContext provided)
- *  6. LLM repair loop (if llm callback provided)
- */
+// ============================================================================
+// LLM Response Extraction
+// ============================================================================
+
+export interface FileWrite {
+  path: string;
+  content: string;
+}
+
 export async function smartApply(opts: {
   content: string;
   path: string;
