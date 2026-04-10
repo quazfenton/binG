@@ -1,0 +1,157 @@
+[
+  {
+    "test": "Auth",
+    "pass": true,
+    "message": "Status 200"
+  },
+  {
+    "test": "Auth",
+    "pass": true,
+    "message": "Login success"
+  },
+  {
+    "test": "Auth",
+    "pass": true,
+    "message": "JWT returned"
+  },
+  {
+    "test": "[Bash] LLM prompted to echo \"hello world\"",
+    "pass": true,
+    "message": "No stream error"
+  },
+  {
+    "test": "[Bash] LLM prompted to echo \"hello world\"",
+    "pass": true,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[Bash] LLM prompted to echo \"hello world\"",
+    "pass": true,
+    "message": "Has content: 60 chars"
+  },
+  {
+    "test": "[Bash] LLM prompted to echo \"hello world\"",
+    "pass": true,
+    "message": "References hello world output"
+  },
+  {
+    "test": "[Bash] LLM prompted to create file via echo redirect",
+    "pass": true,
+    "message": "No stream error"
+  },
+  {
+    "test": "[Bash] LLM prompted to create file via echo redirect",
+    "pass": true,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[Bash] LLM prompted to create file via echo redirect",
+    "pass": true,
+    "message": "Has content: 244 chars"
+  },
+  {
+    "test": "[Bash] LLM prompted to create file via echo redirect",
+    "pass": true,
+    "message": "References the file content"
+  },
+  {
+    "test": "[Bash] LLM prompted to list files (ls/pwd)",
+    "pass": true,
+    "message": "No stream error"
+  },
+  {
+    "test": "[Bash] LLM prompted to list files (ls/pwd)",
+    "pass": true,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[Bash] LLM prompted to list files (ls/pwd)",
+    "pass": true,
+    "message": "Has content: 28 chars"
+  },
+  {
+    "test": "[Bash] LLM prompted to list files (ls/pwd)",
+    "pass": true,
+    "message": "References ls output or files"
+  },
+  {
+    "test": "[Bash] LLM prompted to run node command",
+    "pass": true,
+    "message": "No stream error"
+  },
+  {
+    "test": "[Bash] LLM prompted to run node command",
+    "pass": true,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[Bash] LLM prompted to run node command",
+    "pass": true,
+    "message": "Has content: 142 chars"
+  },
+  {
+    "test": "[Bash] LLM prompted to run node command",
+    "pass": true,
+    "message": "Shows computation result"
+  },
+  {
+    "test": "[Bash] LLM prompted to run chained commands",
+    "pass": true,
+    "message": "No stream error"
+  },
+  {
+    "test": "[Bash] LLM prompted to run chained commands",
+    "pass": true,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[Bash] LLM prompted to run chained commands",
+    "pass": true,
+    "message": "Has content: 206 chars"
+  },
+  {
+    "test": "[Bash] LLM prompted to run chained commands",
+    "pass": true,
+    "message": "Shows command output"
+  },
+  {
+    "test": "[Bash] Error handling - non-existent command",
+    "pass": true,
+    "message": "No stream error"
+  },
+  {
+    "test": "[Bash] Error handling - non-existent command",
+    "pass": true,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[Bash] Error handling - non-existent command",
+    "pass": true,
+    "message": "Has content: 70 chars"
+  },
+  {
+    "test": "[Bash] Error handling - non-existent command",
+    "pass": false,
+    "message": "Acknowledges command failure"
+  },
+  {
+    "test": "[Bash] LLM prompted to run python",
+    "pass": true,
+    "message": "No stream error"
+  },
+  {
+    "test": "[Bash] LLM prompted to run python",
+    "pass": true,
+    "message": "Stream completed"
+  },
+  {
+    "test": "[Bash] LLM prompted to run python",
+    "pass": true,
+    "message": "Has content: 92 chars"
+  },
+  {
+    "test": "[Bash] LLM prompted to run python",
+    "pass": true,
+    "message": "Shows python output"
+  }
+]

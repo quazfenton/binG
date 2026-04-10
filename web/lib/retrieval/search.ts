@@ -155,7 +155,25 @@ export async function search(
   } = opts;
 
   // 1. Embed the query
-  const queryEmbedding = await embed(query);
+  let queryEmbedding: number[];
+  try {
+    queryEmbedding = await embed(query);
+  } catch (embedError: any) {
+    console.error('[Search] ❌ Query embedding failed', {
+      error: embedError.message,
+      queryLength: query.length,
+      queryPreview: query.slice(0, 200),
+      projectId,
+      tabId,
+    });
+    // Return empty result - caller should handle fallback
+    return {
+      symbols: [],
+      grepMatches: new Map(),
+      queryEmbedding: [],
+      totalCandidates: 0,
+    };
+  }
 
   // 2. Load all symbols for this project
   const allSymbols = cachedSymbols ?? (await getProjectSymbols(projectId));

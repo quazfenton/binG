@@ -54,14 +54,15 @@ export const relativePathSchema = pathSchema.refine(
 
 /**
  * Session ID validation
- * Format: ownerId$sessionId or just sessionId
+ * Format: ownerId$sessionId (composite) or just sessionId
+ * Supports: "001", "1$004", "anon$004", "alpha-2", "1$alpha-2"
  */
 export const sessionIdSchema = z.string()
   .min(1, 'Session ID is required')
   .max(200, 'Session ID too long (max 200 characters)')
   .regex(
-    /^[a-zA-Z0-9:_-]+$/,
-    'Session ID can only contain letters, numbers, colons, underscores, and hyphens'
+    /^[a-zA-Z0-9:_$-]+$/,
+    'Session ID can only contain letters, numbers, colons, underscores, hyphens, and $ (for composite IDs like userId$sessionId)'
   );
 
 /**

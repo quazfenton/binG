@@ -981,8 +981,61 @@ export async function POST(request: NextRequest) {
     // Build system prompt with optional response style modifiers
     let baseSystemPrompt = process.env.OPENCODE_SYSTEM_PROMPT || '';
 
-    // CRITICAL: Instruct LLM to use file editing tools instead of explaining
-    baseSystemPrompt += `\n\nYou have access to file editing tools. When the user asks you to create, modify, or read files, USE the tools directly — do NOT explain how to do it or give terminal commands.\n- To create or modify files: use write_file or batch_write tools\n- To read files: use read_file tool\n- To apply patches: use apply_diff tool\n- To list files: use list_files tool\n- NEVER say "I can't modify files" — you CAN use the tools\n- NEVER give bash commands like "echo 'content' > file" — use the file editing tools\n- When asked to fix code, USE write_file to write the corrected code to the file\n- When asked to create files, USE write_file or batch_write\n- When asked to read files, USE read_file\n\nIMPORTANT: Do NOT output explanations about HOW to create/modify files. Actually USE the tools to do it. The tools will execute and write files to the VFS.\n\nFor file modifications, output this format: <file_edit path="filename.ext">new content here</file_edit>\nFor batch writes, output: batch_write([{ "path": "file1", "content": "..." }, { "path": "file2", "content": "..." }])\nWhen fixing code, use the file_edit format to write the corrected code to the file.`;
+    // CRITICAL: Unified tool usage instructions with ENFORCED output formats.
+    // The LLM must use ONE consistent format for file operations.
+    baseSystemPrompt += `\n\n=== FILE OPERATION INSTRUCTIONS (READ CAREFULLY) ===
+
+You have file editing tools. USE them directly — do NOT explain HOW to do things or give terminal commands.
+
+TOOL USAGE:
+- To CREATE or MODIFY files: call the write_file or batch_write tools
+- To EDIT existing files: call the apply_diff tool with a unified diff
+- To READ files: call the read_file tool FIRST before making any changes
+- To LIST files: call the list_files tool
+
+CRITICAL RULES:
+1. ALWAYS read a file (read_file) before editing it. Never assume file contents.
+2. When asked to FIX code: read_file → understand the bug → write_file the corrected version
+3. When asked to CREATE files: write_file with complete content
+4. NEVER say "I can't modify files" — you CAN use the tools
+5. NEVER output bash commands like "echo 'content' > file" — use write_file tool
+6. NEVER output code in markdown blocks expecting the system to parse them — USE THE TOOLS
+
+FILE OUTPUT FORMAT (when tools are unavailable or as fallback):
+If you cannot use tool calls, use EXACTLY this format:
+
+To CREATE or OVERWRITE a file:
+\`\`\`file: path/to/file.ext
+<complete file content here>
+\`\`\`
+
+To EDIT an existing file (unified diff):
+\`\`\`diff: path/to/file.ext
+--- a/path/to/file.ext
++++ b/path/to/file.ext
+@@ -old_start,old_count +new_start,new_count @@
+-line to remove
++line to add
+\`\`\`
+
+To CREATE a directory:
+\`\`\`mkdir: path/to/dir
+\`\`\`
+
+To DELETE a file:
+\`\`\`delete: path/to/file.ext
+\`\`\`
+
+FORMAT RULES:
+- ALWAYS use triple backticks with the exact fence tag (file:, diff:, mkdir:, delete:)
+- The path MUST follow the colon on the same line as the opening backticks
+- Content goes BETWEEN the opening and closing backticks
+- For diffs, use standard unified diff format with --- and +++ headers
+- Do NOT use other code block formats (e.g., \`\`\`javascript) for file content
+- Do NOT use XML tags like <file_edit> — use the backtick fence format above
+- Do NOT use @filename.txt format — use the backtick fence format above
+
+=== END FILE OPERATION INSTRUCTIONS ===`;
 
     const promptParams: PromptParameters = {
       responseDepth: body.responseDepth as any,
@@ -1268,11 +1321,22 @@ const config: UnifiedAgentConfig = {
                 const responseContent = streamingContentBuffer + (typeof result.response === 'string' ? result.response : '') || '';
                 const { detectSingleFolderFromResponse } = await import('@/lib/session-naming');
                 const detectedFolder = detectSingleFolderFromResponse(responseContent);
-                
+
                 // Check if we should rename: new session (sequential ID) with single detected folder
                 const isSequentialSession = /^\d{3}$/.test(resolvedConversationId);
                 const isNewSession = isSequentialSession && !result.metadata?.isExistingSession;
-                
+
+                // DEBUG LOGGING: Session naming detection
+                console.debug('[SessionNaming] Session folder detection', {
+                  detectedFolder,
+                  resolvedConversationId,
+                  isSequentialSession,
+                  isNewSession,
+                  responseContentLength: responseContent.length,
+                  responsePreview: responseContent.slice(0, 200),
+                  metadata: result.metadata,
+                });
+
                 if (detectedFolder && isNewSession && detectedFolder !== resolvedConversationId) {
                   // Check if detected folder name is available
                   const { sessionNameExists } = await import('@/lib/session-naming');
@@ -4603,29 +4667,74 @@ async function storeConversationInMem0(
  */
 function validateExtractedPath(raw: string, isFolder: boolean = false): string | null {
   const path = (raw || '').trim().replace(/^['"`]|['"`]$/g, '');
-  if (!path) return null;
-  if (path.length > 300) return null;
-  if (PATH_CONTROL_CHARS_RE.test(path)) return null;
-  if (PATH_HEREDOC_RE.test(path)) return null;
-  if (PATH_UNSAFE_CHARS_RE.test(path)) return null;
-  if (PATH_BAD_START_RE.test(path)) return null;
-  if (PATH_TOO_MANY_DOTS_RE.test(path)) return null;
-  if (PATH_TRAVERSAL_RE.test(path)) return null;
-  if (PATH_COMMAND_RE.test(path)) return null;
+  if (!path) {
+    console.debug('[validateExtractedPath] Rejected: empty path', { raw });
+    return null;
+  }
+  if (path.length > 300) {
+    console.debug('[validateExtractedPath] Rejected: path too long (>300)', { path: path.slice(0, 100), length: path.length });
+    return null;
+  }
+  if (PATH_CONTROL_CHARS_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: control chars', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_HEREDOC_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: heredoc markers', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_UNSAFE_CHARS_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: unsafe chars', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_BAD_START_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: bad start', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_TOO_MANY_DOTS_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: too many dots', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_TRAVERSAL_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: path traversal', { path: path.slice(0, 100) });
+    return null;
+  }
+  if (PATH_COMMAND_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: looks like command', { path: path.slice(0, 100) });
+    return null;
+  }
   // Reject paths that look like CSS classes, Vue directives, or code snippets
-  if (PATH_LOOKS_LIKE_CODE_RE.test(path)) return null;
+  if (PATH_LOOKS_LIKE_CODE_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: looks like code', { path: path.slice(0, 100) });
+    return null;
+  }
   // Reject paths with colons (CSS classes like hover:scale-105)
-  if (PATH_HAS_COLON_RE.test(path)) return null;
+  if (PATH_HAS_COLON_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: contains colon', { path: path.slice(0, 100) });
+    return null;
+  }
   // CRITICAL FIX: Reject CSS values and SCSS variables in last path segment
   // This catches "project/sessions/002/0.3s" where "0.3s" is invalid
-  if (PATH_CSS_VALUE_RE.test(path)) return null;  // CSS values like "/0.3s"
-  if (PATH_SCSS_VAR_RE.test(path)) return null;  // SCSS variables like "/$var"
+  if (PATH_CSS_VALUE_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: CSS value', { path: path.slice(0, 100) });
+    return null;
+  }  // CSS values like "/0.3s"
+  if (PATH_SCSS_VAR_RE.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: SCSS var', { path: path.slice(0, 100) });
+    return null;
+  }  // SCSS variables like "/$var"
   // Must have a valid file extension or be a directory name
   // Allow brackets [] for Next.js dynamic routes like app/blog/[slug]/page.tsx
-  if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) return null;
+  if (!/^[a-zA-Z0-9._\-\[\]]+(?:\/[a-zA-Z0-9._\-\[\]]+)*\/?$/.test(path)) {
+    console.debug('[validateExtractedPath] Rejected: invalid format', { path: path.slice(0, 100) });
+    return null;
+  }
 
   // CRITICAL FIX: Use shared validation to reject JSON/object syntax in paths
-  if (!isValidFilePath(path, isFolder)) return null;
+  if (!isValidFilePath(path, isFolder)) {
+    console.debug('[validateExtractedPath] Rejected: isValidFilePath check', { path: path.slice(0, 100), isFolder });
+    return null;
+  }
 
   return path;
 }
@@ -4699,7 +4808,22 @@ function resolveScopedPath(input: {
   const normalizedRelative = rawPath.startsWith('project/')
     ? rawPath.slice('project/'.length)
     : rawPath;
-  return resolveScopeUtil(normalizedRelative, input.scopePath);
+  
+  const resolvedPath = resolveScopeUtil(normalizedRelative, input.scopePath);
+
+  // DEBUG LOGGING: Trace path resolution to debug session folder issues
+  console.debug('[resolveScopedPath] Path resolution', {
+    rawPath,
+    scopePath: input.scopePath,
+    normalizedRelative,
+    resolvedPath,
+    wasInAttached: attachedSet.has(rawPath),
+    wasInUserMessage: new RegExp(`\\b${escapedPath.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(input.lastUserMessage || ''),
+    baseNameInUserMessage: new RegExp(`\\b${escapedBaseName.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`, 'i').test(input.lastUserMessage || ''),
+    startsWithScope: rawPath.startsWith(`${input.scopePath}/`) || rawPath === input.scopePath,
+  });
+
+  return resolvedPath;
 }
 
 export async function applyFilesystemEditsFromResponse(input: {
@@ -4960,6 +5084,19 @@ export async function applyFilesystemEditsFromResponse(input: {
         }
 
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, edit.content);
+        
+        // DEBUG LOGGING: Track where files are actually being written
+        console.info('[VFS Write] File written to VFS', {
+          ownerId: input.ownerId,
+          requestedPath: edit.path,
+          resolvedPath: targetPath,
+          actualVfsPath: file.path,
+          contentLength: edit.content?.length || 0,
+          contentPreview: edit.content?.slice(0, 100),
+          scopePath: input.scopePath,
+          conversationId: input.conversationId,
+        });
+        
         chatLogger.debug('VFS write completed', {
           ownerId: input.ownerId,
           requestedPath: edit.path,
@@ -5033,10 +5170,27 @@ export async function applyFilesystemEditsFromResponse(input: {
 
         const patchedContent = applyUnifiedDiffToContent(currentContent, targetPath, diffOperation.diff);
         if (patchedContent === null) {
+          // DEBUG: Log why diff application failed
+          console.error('[DIFF-APPLY] Failed to apply diff', {
+            targetPath,
+            diffLength: diffOperation.diff.length,
+            diffPreview: diffOperation.diff.slice(0, 200),
+            currentContentLength: currentContent.length,
+            currentContentPreview: currentContent.slice(0, 200),
+            existedBefore,
+          });
           result.errors.push(`Failed to apply unified diff for ${targetPath}: patch could not be applied`);
           continue;
         }
         const file = await virtualFilesystem.writeFile(input.ownerId, targetPath, patchedContent);
+
+        // DEBUG: Log successful diff application
+        console.info('[DIFF-APPLY] Successfully applied diff', {
+          targetPath,
+          originalLength: currentContent.length,
+          patchedLength: patchedContent.length,
+          existedBefore,
+        });
 
         result.applied.push({
           path: file.path,

@@ -82,7 +82,7 @@ export async function initToolSystem(config?: BootstrapConfig): Promise<Bootstra
 export async function executeToolCapability(
   capabilityId: string,
   params: Record<string, unknown>,
-  context?: { userId?: string; sessionId?: string; workspaceId?: string }
+  context?: { userId?: string; sessionId?: string; workspaceId?: string; scopePath?: string }
 ): Promise<{ success: boolean; output?: unknown; error?: string; exitCode: number }> {
   // Lazy initialization if not already done
   if (!initialized) {

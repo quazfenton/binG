@@ -8,7 +8,7 @@ const PROVIDERS_TO_TEST = [
   { provider: 'nvidia', model: 'nvidia/nemotron-4-340b-instruct', name: 'NVIDIA Nemotron' },
   { provider: 'openrouter', model: 'meta-llama/llama-3.1-70b-instruct', name: 'OpenRouter Llama' },
   { provider: 'github', model: 'Copilot-4', name: 'GitHub Copilot' },
-  { provider: 'google', model: 'gemini-2.0-flash-exp', name: 'Google Gemini' },
+  { provider: 'google', model: 'gemini-2.5-flash', name: 'Google Gemini' },
 ];
 
 async function login() {
