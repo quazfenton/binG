@@ -1179,12 +1179,12 @@ export function extractFileEdits(content: string): FileEdit[] {
 
   // FALLBACK: Parse text-mode fenced mkdir: ```mkdir: path\n```
   if (content.includes('```mkdir:')) {
-    allEdits.push(...extractFencedMkdirEdits(content));
+    allEdits.push(...extractFencedMkdirEdits(content) as FileEdit[]);
   }
 
   // FALLBACK: Parse text-mode fenced delete: ```delete: path\n```
   if (content.includes('```delete:')) {
-    allEdits.push(...extractFencedDeleteBlocks(content));
+    allEdits.push(...extractFencedDeleteBlocks(content) as FileEdit[]);
   }
 
   // FALLBACK: Parse JavaScript-style MCP tool calls from ```javascript code blocks
@@ -1251,7 +1251,7 @@ export function extractFileEdits(content: string): FileEdit[] {
       const trimmedPath = path.trim();
       const fileContent = decodeEscapes(rawContent);
       if (trimmedPath && isValidExtractedPath(trimmedPath) && fileContent.trim()) {
-        if (!allEdits.some(e => e.path === trimmedPath && e.content.trim() === fileContent.trim())) {
+        if (!allEdits.some(e => e.path === trimmedPath && 'content' in e && (e as FileEdit).content.trim() === fileContent.trim())) {
           allEdits.push({ path: trimmedPath, content: fileContent });
         }
       }
@@ -1261,8 +1261,8 @@ export function extractFileEdits(content: string): FileEdit[] {
     for (const [path] of extractJsToolCalls('delete_file', 1)) {
       const trimmedPath = path.trim();
       if (trimmedPath && isValidExtractedPath(trimmedPath)) {
-        if (!allEdits.some(e => e.path === trimmedPath && e.action === 'delete')) {
-          allEdits.push({ path: trimmedPath, content: '', action: 'delete' });
+        if (!allEdits.some(e => e.path === trimmedPath && 'action' in e && (e as FileEdit).action === 'delete')) {
+          allEdits.push({ path: trimmedPath, content: '', action: 'delete' } as FileEdit);
         }
       }
     }
@@ -1272,7 +1272,7 @@ export function extractFileEdits(content: string): FileEdit[] {
       const trimmedPath = path.trim();
       const diff = decodeEscapes(rawDiff);
       if (trimmedPath && isValidExtractedPath(trimmedPath) && diff.trim()) {
-        if (!allEdits.some(e => e.path === trimmedPath && e.action === 'patch')) {
+        if (!allEdits.some(e => e.path === trimmedPath && 'action' in e && (e as FileEdit).action === 'patch')) {
           allEdits.push({ path: trimmedPath, content: diff, action: 'patch' });
         }
       }
@@ -1282,7 +1282,7 @@ export function extractFileEdits(content: string): FileEdit[] {
     for (const [path] of extractJsToolCalls('mkdir', 1)) {
       const trimmedPath = path.trim();
       if (trimmedPath && isValidExtractedPath(trimmedPath)) {
-        if (!allEdits.some(e => e.path === trimmedPath && e.action === 'mkdir')) {
+        if (!allEdits.some(e => e.path === trimmedPath && 'action' in e && (e as FileEdit).action === 'mkdir')) {
           allEdits.push({ path: trimmedPath, content: '', action: 'mkdir' });
         }
       }
@@ -1323,7 +1323,7 @@ export function extractFileEdits(content: string): FileEdit[] {
       const path = pathMatch[1].trim();
       if (!path || !isValidExtractedPath(path)) continue;
       
-      let action = name === 'delete_file' ? 'delete' : name === 'apply_diff' ? 'patch' : name === 'mkdir' ? 'mkdir' : 'write';
+      let action: 'write' | 'delete' | 'patch' | 'mkdir' = name === 'delete_file' ? 'delete' : name === 'apply_diff' ? 'patch' : name === 'mkdir' ? 'mkdir' : 'write';
       let fileContent = '';
       
       if (action === 'write') {
@@ -1365,8 +1365,8 @@ export function extractFileEdits(content: string): FileEdit[] {
   const dedupedEdits = new Map<string, FileEdit>();
   for (const edit of allEdits) {
     // Only set if path not already in map (first wins)
-    if (!dedupedEdits.has(edit.path)) {
-      dedupedEdits.set(edit.path, edit);
+    if (!dedupedEdits.has(edit.path) && 'content' in edit) {
+      dedupedEdits.set(edit.path, edit as FileEdit);
     }
   }
 

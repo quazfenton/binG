@@ -7,7 +7,7 @@ import { useVoiceInput } from "@/hooks/use-voice-input";
 import MessageBubble from "@/components/message-bubble";
 import Settings from "@/components/settings";
 import CodePreviewPanel from "@/components/code-preview-panel";
-import { LLMProvider } from "@/types";
+import { type LLMProviderConfig } from "@/lib/chat/llm-providers-types";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { GlobalStreamingState } from "@/hooks/use-streaming-state";
 
@@ -22,7 +22,7 @@ interface ChatPanelProps {
   onStopGeneration: () => void;
   setInput: (value: string) => void; // Add setInput prop
 
-  availableProviders: LLMProvider[];
+  availableProviders: LLMProviderConfig[];
   onClearChat: () => void;
   onShowHistory: () => void;
   currentConversationId: string | null;

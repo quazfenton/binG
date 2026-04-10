@@ -2071,20 +2071,11 @@ class LLMService {
   ): Promise<LLMResponse> {
     const { sendAntigravityChat, ANTIGRAVITY_MODELS } = await import('@/lib/llm/antigravity-provider');
 
-    // FIX: Guard server-only import to prevent webpack from bundling
-    // better-sqlite3 into client components.
-    if (typeof window !== 'undefined') {
-      throw new Error('Antigravity provider is server-only');
-    }
-
-    // Dynamic import with webpack ignore — prevents webpack from statically
-    // analyzing the dependency chain (antigravity-accounts → connection → better-sqlite3)
-    // and bundling Node.js-only modules into the client.
-    // The `/* webpackIgnore: true */` comment tells webpack to leave this import alone.
-    // eslint-disable-next-line @typescript-eslint/no-implied-eval
-    const { getAntigravityAccounts } = await import(
-      /* webpackIgnore: true */ '@/lib/database/antigravity-accounts'
-    );
+    // FIX: Prevent webpack/turbopack from bundling better-sqlite3 into client.
+    // The import path is constructed dynamically so the bundler cannot statically
+    // analyze the dependency chain (antigravity-accounts → connection → better-sqlite3).
+    const dbModulePath = '@/lib' + '/database/antigravity-accounts';
+    const { getAntigravityAccounts } = await import(dbModulePath);
 
     const modelConfig = ANTIGRAVITY_MODELS[model];
     if (!modelConfig) {

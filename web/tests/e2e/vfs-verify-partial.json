@@ -1,0 +1,88 @@
+[
+  {
+    "test": "Single File VFS Create [Mistral]",
+    "passed": true,
+    "details": "File exists in VFS. Content correct: false",
+    "llmResponse": "I'll create the file with the exact content you specified. Here's the file creation:\n\n**verify-single-1775789463588.txt**\n```\nThis is a verified file creation test. If you can read this, the file was actually written to the VFS.\n```",
+    "vfsExists": true,
+    "contentCorrect": false,
+    "readResponse": "I can't directly access or read files on your system, including \"verify-single-1775789463588.txt\". However, you can easily view its contents yourself by following these steps:\n\n### On Windows:\n1. Open **File Explorer** (Win + E).\n2. Navigate to the folder containing the file.\n3. Double-click the file to open it in **Notepad** (or another text editor).\n4. Copy the contents and paste them here if you'd like me to analyze them.\n\n### On macOS/Linux:\n1. Open **Terminal**.\n2. Run:\n   ```bash\n   cat /path/to/verify-single-1775789463588.txt\n   ```\n   (Replace `/path/to/` with the actual file path.)\n3. Copy the output and share it with me.\n\nAlternatively, if the file is small, you can drag and drop it into this chat (if supported) or manually type/paste its contents."
+  },
+  {
+    "test": "Multi-File VFS Create [Mistral]",
+    "passed": true,
+    "details": "3/3 files actually written to VFS. LLM claimed it created them.",
+    "llmResponse": "I'll create these three files for you. Here they are:\n\n1. **verify-multi1-1775789507053.js**:\n```javascript\nconsole.log('multi file test 1');\n```\n\n2. **verify-multi2-1775789507053.js**:\n```javascript\nconsole.log('multi file test 2');\n```\n\n3. **verify-multi3-1775789507053.json**:\n```json\n{\n  \"test\": \"multi file verification\"\n}\n```\n\nYou can copy each file's content and create the files manually, or if you're using a command line interface, you could create them with these commands (on Unix-like sy",
+    "fileResults": [
+      {
+        "file": "verify-multi1-1775789507053.js",
+        "exists": true,
+        "contentCorrect": false
+      },
+      {
+        "file": "verify-multi2-1775789507053.js",
+        "exists": true,
+        "contentCorrect": false
+      },
+      {
+        "file": "verify-multi3-1775789507053.json",
+        "exists": true,
+        "contentCorrect": false
+      }
+    ]
+  },
+  {
+    "test": "File Modification [Mistral]",
+    "passed": false,
+    "details": "File exists but content is NOT modified — modification was claimed but not executed",
+    "llmResponse": "I can't directly modify files on your system, but I can guide you on how to do it yourself. Here's how you can replace the content of \"verify-modify-1775789618295.txt\" with \"MODIFIED: New content after modification test.\":\n\n### On Windows:\n1. Open Notepad\n2. Type: `MODIFIED: New content after modification test.`\n3. Click File > Save As\n4. Navigate to the file location\n5. Select \"All Files\" in the \"Save as type\" dropdown\n6. Select the original file and click Save (confirm overwrite)\n\n### On Mac/Linux:\n1. Open Terminal\n2. Run: `echo \"MODIFIED: New content after modification test.\" > verify-modify-1775789618295.txt`\n\nOr using a text editor:\n1. Open the file in any text editor\n2. Replace all content with the new text\n3. Save the file\n\nWould you like me to provide more specific instructions for your operating system?",
+    "vfsExists": true,
+    "contentCorrect": false,
+    "readResponse": "I can't directly access or read files on your system, including \"verify-modify-1775789618295.txt\". However, you can easily view its contents yourself by following these steps:\n\n### On Windows:\n1. Open **File Explorer** (Win + E).\n2. Navigate to the folder containing the file.\n3. Double-click the file to open it in **Notepad** (or another text editor).\n4. Copy the contents and paste them here if you'd like me to analyze them.\n\n### On macOS/Linux:\n1. Open **Terminal**.\n2. Run:\n   ```bash\n   cat /path/to/verify-modify-1775789618295.txt\n   ```\n   (Replace `/path/to/` with the actual file path.)\n3. Copy the output and share it with me.\n\n### Alternative:\nIf the file is small, you can drag and drop it into this chat (if supported) or manually type/paste its contents."
+  },
+  {
+    "test": "Tool Execution [Mistral]",
+    "passed": true,
+    "details": "Tool markers in response: true. File in VFS: true.",
+    "hasToolMarkers": true,
+    "vfsExists": true,
+    "llmResponse": "I'll create the file \"verify-tools-1775789669374.txt\" with the specified content using the `write_file` tool.\n\n<function=write_file>\n    <parameter=path>verify-tools-1775789669374.txt</parameter>\n    <parameter=content>Tool execution verified successfully.</parameter>\n</function>"
+  },
+  {
+    "test": "Self-Healing Actual [Mistral]",
+    "passed": false,
+    "details": "LLM claimed to fix code but VFS still has broken code (or no fix was written)",
+    "llmResponse": "The syntax error in the function is that the `return` statement is missing the second operand (`b`) in the addition operation. Here's the corrected version:\n\n```javascript\nfunction add(a, b) {\n    return a + b;\n}\n```\n\nThe issue was that `a +` is an incomplete expression. You need to include both operands (`a` and `b`) for the addition to work properly.",
+    "readResponse": "I can't directly read files from your local system or any specific environment, including the file `verify-heal-1775789706232.js`. However, if you share the contents of the file here (by copying and pasting), I can help analyze or explain it for you.\n\nIf you're unsure how to view the file:\n1. **On Windows**: Right-click the file → Open with → Notepad/Visual Studio Code/etc.\n2. **On macOS/Linux**: Use `cat verify-heal-1775789706232.js` in the terminal or open it in a text editor.\n\nOnce you share the contents, I’d be happy to assist! Let me know if you need help with anything else."
+  },
+  {
+    "test": "Workspace Scoping [Mistral]",
+    "passed": true,
+    "details": "File A exists: true. File B exists: true.",
+    "fileAExists": true,
+    "fileBExists": true
+  },
+  {
+    "test": "Full App VFS Check [Mistral]",
+    "passed": true,
+    "details": "3/3 files actually exist in VFS. LLM response: 1199 chars.",
+    "llmResponse": "I'll create all the requested files for your \"vfs-test-app\" using the file edit tools. Here's how we'll proceed:\n\n1. First, let's create the `package.json` file\n2. Then we'll create the `src/index.js` file\n3. Finally, we'll create the `README.md` file\n\nLet's start with each file:\n\n<create_file path=\"package.json\">\n{\n  \"name\": \"vfs-test-app\",\n  \"version\": \"1.0.0\",\n  \"description\": \"A simple test application\",\n  \"main\": \"src/index.js\",\n  \"scripts\": {\n    \"start\": \"node src/index.js\"\n  },\n  \"keywor",
+    "fileResults": [
+      {
+        "file": "package.json",
+        "exists": true,
+        "contentCorrect": false
+      },
+      {
+        "file": "src/index.js",
+        "exists": true,
+        "contentCorrect": false
+      },
+      {
+        "file": "README.md",
+        "exists": true,
+        "contentCorrect": false
+      }
+    ]
+  }
+]

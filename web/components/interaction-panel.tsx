@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 //fix
 import React from "react";
 import { useState, useRef, useCallback, useEffect, useMemo } from "react";
@@ -86,7 +86,7 @@ import BookOpen from "lucide-react/dist/esm/icons/book-open";
 import Archive from "lucide-react/dist/esm/icons/archive";
 import Monitor from "lucide-react/dist/esm/icons/monitor";
 import VNCConnectionTab from "./vnc-connection-tab";
-import type { LLMProvider } from "../lib/chat/llm-providers-types";
+import type { LLMProviderConfig } from "../lib/chat/llm-providers-types";
 import MultiModelComparison from "./multi-model-comparison";
 import PluginManager, { type Plugin } from "./plugins/plugin-manager";
 import AIEnhancerPlugin from "./plugins/ai-enhancer-plugin";
@@ -332,7 +332,7 @@ interface InteractionPanelProps {
   error?: string | null;
   input: string;
   setInput: (value: string) => void;
-  availableProviders: LLMProvider[];
+  availableProviders: LLMProviderConfig[];
   onProviderChange: (provider: string, model: string) => void;
   hasCodeBlocks?: boolean;
   /** VFS MCP tool file edits (lights up code preview button even without markdown code blocks) */
@@ -1431,7 +1431,7 @@ export default function InteractionPanel({
         color: "text-green-400",
         action: () =>
           setInput(
-            "Create a complete project scaffold including:\n\n📁 **Project Structure**\n- Organized folder hierarchy\n- Configuration files\n- Environment setup\n\n🔧 **Development Tools**\n- Build scripts\n- Linting configuration\n- Testing setup\n\n📚 **Documentation**\n- README with setup instructions\n- API documentation\n- Contributing guidelines\n\nProject Type: \nFramework: \nDeployment Target: ",
+            "Create a complete project scaffold including:\n\nðŸ“ **Project Structure**\n- Organized folder hierarchy\n- Configuration files\n- Environment setup\n\nðŸ”§ **Development Tools**\n- Build scripts\n- Linting configuration\n- Testing setup\n\nðŸ“š **Documentation**\n- README with setup instructions\n- API documentation\n- Contributing guidelines\n\nProject Type: \nFramework: \nDeployment Target: ",
           ),
       },
       {
@@ -1453,7 +1453,7 @@ export default function InteractionPanel({
         color: "text-purple-400",
         action: () =>
           setInput(
-            "Transform data between formats:\n\n**Supported Formats:**\n- JSON ↔ CSV ↔ XML ↔ YAML\n- Database schemas\n- API responses\n- Configuration files\n\n**Features:**\n- Format validation\n- Structure optimization\n- Data cleaning\n- Schema generation\n\nSource Format: \nTarget Format: \nPaste your data:\n```\n\n```",
+            "Transform data between formats:\n\n**Supported Formats:**\n- JSON â†” CSV â†” XML â†” YAML\n- Database schemas\n- API responses\n- Configuration files\n\n**Features:**\n- Format validation\n- Structure optimization\n- Data cleaning\n- Schema generation\n\nSource Format: \nTarget Format: \nPaste your data:\n```\n\n```",
           ),
       },
       {
@@ -1464,7 +1464,7 @@ export default function InteractionPanel({
         color: "text-blue-600",
         action: () =>
           setInput(
-            "Generate Docker configuration:\n\n🐳 **Docker Setup**\n- Multi-stage Dockerfile\n- Docker Compose with services\n- Environment configuration\n- Volume and network setup\n\n📦 **Services to Include**\n- Application containers\n- Database services\n- Caching layers\n- Reverse proxy\n\n🔧 **Production Ready**\n- Health checks\n- Resource limits\n- Security best practices\n- Logging configuration\n\nApplication Stack: \nServices Needed: \nEnvironment: ",
+            "Generate Docker configuration:\n\nðŸ³ **Docker Setup**\n- Multi-stage Dockerfile\n- Docker Compose with services\n- Environment configuration\n- Volume and network setup\n\nðŸ“¦ **Services to Include**\n- Application containers\n- Database services\n- Caching layers\n- Reverse proxy\n\nðŸ”§ **Production Ready**\n- Health checks\n- Resource limits\n- Security best practices\n- Logging configuration\n\nApplication Stack: \nServices Needed: \nEnvironment: ",
           ),
       },
       {
@@ -1475,7 +1475,7 @@ export default function InteractionPanel({
         color: "text-orange-600",
         action: () =>
           setInput(
-            "Create Git workflow automation:\n\n🌿 **Branch Strategy**\n- Branching model (GitFlow/GitHub Flow)\n- Branch protection rules\n- Merge strategies\n\n🔄 **CI/CD Pipeline**\n- GitHub Actions / GitLab CI\n- Automated testing\n- Deployment workflows\n\n🪝 **Git Hooks**\n- Pre-commit hooks\n- Commit message validation\n- Code quality checks\n\n📋 **Templates**\n- PR/MR templates\n- Issue templates\n- Contributing guidelines\n\nRepository Type: \nCI/CD Platform: \nTeam Size: ",
+            "Create Git workflow automation:\n\nðŸŒ¿ **Branch Strategy**\n- Branching model (GitFlow/GitHub Flow)\n- Branch protection rules\n- Merge strategies\n\nðŸ”„ **CI/CD Pipeline**\n- GitHub Actions / GitLab CI\n- Automated testing\n- Deployment workflows\n\nðŸª **Git Hooks**\n- Pre-commit hooks\n- Commit message validation\n- Code quality checks\n\nðŸ“‹ **Templates**\n- PR/MR templates\n- Issue templates\n- Contributing guidelines\n\nRepository Type: \nCI/CD Platform: \nTeam Size: ",
           ),
       },
       {
@@ -1487,7 +1487,7 @@ export default function InteractionPanel({
         color: "text-indigo-500",
         action: () =>
           setInput(
-            "Setup environment management:\n\n🔐 **Environment Variables**\n- Development, staging, production configs\n- Secret management strategy\n- Environment validation\n\n🛡️ **Security**\n- API key rotation\n- Encrypted secrets\n- Access control\n\n📁 **Configuration Files**\n- .env templates\n- Docker environment files\n- Kubernetes secrets\n- Cloud provider configs\n\n🔄 **Deployment**\n- Environment promotion\n- Configuration drift detection\n- Rollback strategies\n\nDeployment Platform: \nSecrets to Manage: \nEnvironments Needed: ",
+            "Setup environment management:\n\nðŸ” **Environment Variables**\n- Development, staging, production configs\n- Secret management strategy\n- Environment validation\n\nðŸ›¡ï¸ **Security**\n- API key rotation\n- Encrypted secrets\n- Access control\n\nðŸ“ **Configuration Files**\n- .env templates\n- Docker environment files\n- Kubernetes secrets\n- Cloud provider configs\n\nðŸ”„ **Deployment**\n- Environment promotion\n- Configuration drift detection\n- Rollback strategies\n\nDeployment Platform: \nSecrets to Manage: \nEnvironments Needed: ",
           ),
       },
       {
@@ -1498,7 +1498,7 @@ export default function InteractionPanel({
         color: "text-yellow-400",
         action: () =>
           setInput(
-            "Generate images using Hugging Face Spaces:\n\n🎨 **Available Models:**\n- DALL-E Mini/Mega\n- Stable Diffusion variants\n- Midjourney-style models\n- Artistic style transfer\n- Face generation models\n\n⚡ **Zero GPU Hosting:**\n- Free GPU access\n- Instant model loading\n- No setup required\n- Community models\n\n🖼️ **Image Generation:**\n- Text-to-image\n- Image-to-image\n- Style transfer\n- Upscaling\n- Inpainting\n\n**Prompt:** Describe the image you want to generate\n**Style:** (realistic, artistic, cartoon, etc.)\n**Dimensions:** (512x512, 1024x1024, etc.)\n\nDescribe your image: ",
+            "Generate images using Hugging Face Spaces:\n\nðŸŽ¨ **Available Models:**\n- DALL-E Mini/Mega\n- Stable Diffusion variants\n- Midjourney-style models\n- Artistic style transfer\n- Face generation models\n\nâš¡ **Zero GPU Hosting:**\n- Free GPU access\n- Instant model loading\n- No setup required\n- Community models\n\nðŸ–¼ï¸ **Image Generation:**\n- Text-to-image\n- Image-to-image\n- Style transfer\n- Upscaling\n- Inpainting\n\n**Prompt:** Describe the image you want to generate\n**Style:** (realistic, artistic, cartoon, etc.)\n**Dimensions:** (512x512, 1024x1024, etc.)\n\nDescribe your image: ",
           ),
       },
       {
@@ -1509,7 +1509,7 @@ export default function InteractionPanel({
         color: "text-green-400",
         action: () =>
           setInput(
-            "🕹️ **GITHUB ARCADE** 🕹️\n\n```\n┌─────────────────────────────────────┐\n│  🎮 SELECT TRENDING REPOSITORY 🎮   │\n├─────────────────────────────────────┤\n│ [A] 🔥 React 19 - Latest Features  │\n│ [B] ⚡ Vite 5.0 - Lightning Fast   │\n│ [C] 🤖 LangChain - AI Chains       │\n│ [D] 🎨 Tailwind CSS - Utility CSS  │\n│ [E] 📦 Next.js 14 - Full Stack     │\n│ [F] 🔧 TypeScript - Type Safety    │\n│ [G] 🚀 Astro - Static Site Gen     │\n│ [H] 💾 Prisma - Database ORM       │\n└─────────────────────────────────────┘\n```\n\n🎯 **MISSION:** Select a repository to:\n- 📋 Auto-fetch README.md\n- 📦 Parse package.json\n- 🔍 Extract main scripts\n- 📝 Generate project analysis\n- 🛠️ Suggest improvements\n\n**Enter your choice (A-H) or specify a custom repo:**\nRepository: ",
+            "ðŸ•¹ï¸ **GITHUB ARCADE** ðŸ•¹ï¸\n\n```\nâ”Œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”\nâ”‚  ðŸŽ® SELECT TRENDING REPOSITORY ðŸŽ®   â”‚\nâ”œâ”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”¤\nâ”‚ [A] ðŸ”¥ React 19 - Latest Features  â”‚\nâ”‚ [B] âš¡ Vite 5.0 - Lightning Fast   â”‚\nâ”‚ [C] ðŸ¤– LangChain - AI Chains       â”‚\nâ”‚ [D] ðŸŽ¨ Tailwind CSS - Utility CSS  â”‚\nâ”‚ [E] ðŸ“¦ Next.js 14 - Full Stack     â”‚\nâ”‚ [F] ðŸ”§ TypeScript - Type Safety    â”‚\nâ”‚ [G] ðŸš€ Astro - Static Site Gen     â”‚\nâ”‚ [H] ðŸ’¾ Prisma - Database ORM       â”‚\nâ””â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”€â”˜\n```\n\nðŸŽ¯ **MISSION:** Select a repository to:\n- ðŸ“‹ Auto-fetch README.md\n- ðŸ“¦ Parse package.json\n- ðŸ” Extract main scripts\n- ðŸ“ Generate project analysis\n- ðŸ› ï¸ Suggest improvements\n\n**Enter your choice (A-H) or specify a custom repo:**\nRepository: ",
           ),
       },
       {
@@ -1520,7 +1520,7 @@ export default function InteractionPanel({
         color: "text-blue-400",
         action: () =>
           setInput(
-            "☁️ **CLOUD STORAGE SETUP** (5GB Free)\n\n🗄️ **Storage Providers:**\n- Google Cloud Storage\n- AWS S3\n- Azure Blob Storage\n- DigitalOcean Spaces\n- Cloudflare R2\n\n📦 **Implementation Features:**\n- File upload/download API\n- Automatic backup system\n- CDN integration\n- Image optimization\n- Version control\n- Access permissions\n\n🔧 **Self-Hosting Option:**\n- MinIO server setup\n- Docker containerization\n- SSL/TLS encryption\n- Backup strategies\n\n**ENABLE_CLOUD_STORAGE = true** (set to false to disable)\n\nPreferred Provider: \nUse Case: \nSecurity Requirements: ",
+            "â˜ï¸ **CLOUD STORAGE SETUP** (5GB Free)\n\nðŸ—„ï¸ **Storage Providers:**\n- Google Cloud Storage\n- AWS S3\n- Azure Blob Storage\n- DigitalOcean Spaces\n- Cloudflare R2\n\nðŸ“¦ **Implementation Features:**\n- File upload/download API\n- Automatic backup system\n- CDN integration\n- Image optimization\n- Version control\n- Access permissions\n\nðŸ”§ **Self-Hosting Option:**\n- MinIO server setup\n- Docker containerization\n- SSL/TLS encryption\n- Backup strategies\n\n**ENABLE_CLOUD_STORAGE = true** (set to false to disable)\n\nPreferred Provider: \nUse Case: \nSecurity Requirements: ",
           ),
       },
       {
@@ -1531,7 +1531,7 @@ export default function InteractionPanel({
         color: "text-purple-400",
         action: () =>
           setInput(
-            "🖥️ **VPS DEPLOYMENT SYSTEM**\n\n🚀 **VPS Providers:**\n- DigitalOcean Droplets\n- Linode\n- Vultr\n- Hetzner Cloud\n- Google Compute Engine\n\n⚙️ **Automated Setup:**\n- Server provisioning\n- Docker installation\n- Nginx reverse proxy\n- SSL certificate (Let's Encrypt)\n- Firewall configuration\n- Monitoring setup\n\n🔄 **CI/CD Pipeline:**\n- GitHub Actions integration\n- Automated deployments\n- Health checks\n- Rollback capabilities\n- Log aggregation\n\n**ENABLE_VPS_DEPLOYMENT = true** (set to false to disable)\n\nApplication Type: \nTraffic Expected: \nBudget Range: ",
+            "ðŸ–¥ï¸ **VPS DEPLOYMENT SYSTEM**\n\nðŸš€ **VPS Providers:**\n- DigitalOcean Droplets\n- Linode\n- Vultr\n- Hetzner Cloud\n- Google Compute Engine\n\nâš™ï¸ **Automated Setup:**\n- Server provisioning\n- Docker installation\n- Nginx reverse proxy\n- SSL certificate (Let's Encrypt)\n- Firewall configuration\n- Monitoring setup\n\nðŸ”„ **CI/CD Pipeline:**\n- GitHub Actions integration\n- Automated deployments\n- Health checks\n- Rollback capabilities\n- Log aggregation\n\n**ENABLE_VPS_DEPLOYMENT = true** (set to false to disable)\n\nApplication Type: \nTraffic Expected: \nBudget Range: ",
           ),
       },
     ];
@@ -2021,7 +2021,7 @@ export default function InteractionPanel({
                                 if (result.success && result.data) {
                                   const paths = Array.isArray(result.data) ? result.data : [result.data];
                                   toast.info(`Selected ${paths.length} file(s) from desktop`);
-                                  // Paths are strings — bridge to VFS attachment via drag-drop or path input
+                                  // Paths are strings â€” bridge to VFS attachment via drag-drop or path input
                                 }
                                 return;
                               }
@@ -2459,7 +2459,7 @@ export default function InteractionPanel({
             </Tabs>
           )}
 
-          {/* Rotating sponsor ad bar — subtle, blends with panel aesthetic */}
+          {/* Rotating sponsor ad bar â€” subtle, blends with panel aesthetic */}
           {sponsorAd && (
             <a
               href={sponsorAd.url}

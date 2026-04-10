@@ -149,7 +149,7 @@ export class LocalFolderSyncService {
 
     try {
       // Initialize OPFS for this workspace
-      const workspaceId = `${ownerId}:${sessionId}`;
+      const workspaceId = `${ownerId}$${sessionId}`;
       await opfsCore.initialize(workspaceId);
 
       // Create OPFS root directory for synced folder

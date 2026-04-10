@@ -89,9 +89,9 @@ export class GitBackedVFS {
   private handleFileChange(event: FilesystemChangeEvent): void {
     // Ignore events for other owners — each GitBackedVFS instance only cares
     // about its own owner's file changes.
-    // The ownerId may be a compositeKey (ownerId:sessionId), so check both
+    // The ownerId may be a compositeKey (ownerId$sessionId), so check both
     // exact match and prefix match (compositeKey starts with event.ownerId).
-    const isMatch = event.ownerId === this.ownerId || this.ownerId.startsWith(event.ownerId + ':');
+    const isMatch = event.ownerId === this.ownerId || this.ownerId.startsWith(event.ownerId + '$') || this.ownerId.startsWith(event.ownerId + ':');
     if (!isMatch) return;
     if (!this.options.autoCommit || this.isPersisting) return;
 
@@ -669,7 +669,7 @@ export function createGitBackedVFS(
 }
 
 // Singleton instances per owner+session composite key
-// Key format: ownerId:sessionId for proper commit tracking
+// Key format: ownerId$sessionId for proper commit tracking
 // CRITICAL FIX: Use globalThis to survive Next.js hot-reloading in dev mode
 declare global {
   // eslint-disable-next-line no-var
@@ -681,11 +681,11 @@ const gitVFSInstances = globalThis.__gitVFSInstances__ ?? (globalThis.__gitVFSIn
 /**
  * Get or create Git-backed VFS for owner
  *
- * CRITICAL FIX: Now properly handles composite ownerId:sessionId format.
+ * CRITICAL FIX: Now properly handles composite ownerId$sessionId format.
  * The sessionId passed to GitVFS must include the full composite format
  * so that ShadowCommit queries work correctly (rollback uses scopedSessionId).
  *
- * @param ownerId - The owner ID (e.g., "1" for authenticated, "anon:timestamp_random" for anonymous)
+ * @param ownerId - The owner ID (e.g., "1" for authenticated, "anon$timestamp_random" for anonymous)
  * @param vfs - The VFS service instance (should be the singleton)
  * @param options - Optional configuration, including optional sessionId for composite format
  */
@@ -695,14 +695,14 @@ export function getGitBackedVFSForOwner(
   options?: GitVFSOptions
 ): GitBackedVFS {
   // Determine the correct sessionId to use:
-  // - If options.sessionId is already scoped (contains ':'), use it as-is
-  // - Otherwise, create composite key as ownerId:sessionId
+  // - If options.sessionId is already scoped (contains '$'), use it as-is
+  // - Otherwise, create composite key as ownerId$sessionId
   // - If no sessionId provided, use ownerId directly (for backward compatibility)
   const sessionId = options?.sessionId;
-  const compositeKey = sessionId && sessionId.includes(':')
+  const compositeKey = sessionId && sessionId.includes('$')
     ? sessionId  // Already scoped (e.g., from rollback route)
     : sessionId
-      ? `${ownerId}:${sessionId}`  // Needs scoping
+      ? `${ownerId}$${sessionId}`  // Needs scoping
       : ownerId;  // No sessionId provided - use ownerId as sessionId
 
   if (!gitVFSInstances.has(compositeKey)) {

@@ -285,7 +285,7 @@ export class EnhancedLLMService {
     if (contextPack && userId && conversationId) {
       try {
         const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
-        const rootPath = conversationId.split(':').pop() || '/';
+        const rootPath = normalizeSessionId(conversationId) || '/';
         
         // O(1) Session File Lookup: Use incremental tracker instead of re-scanning messages
         let recentFiles: string[] = [];
@@ -626,7 +626,7 @@ export class EnhancedLLMService {
     if (contextPack && request.userId && request.conversationId) {
       try {
         const { generateSmartContext } = await import('@/lib/virtual-filesystem/smart-context');
-        const rootPath = request.conversationId.split(':').pop() || '/';
+        const rootPath = normalizeSessionId(request.conversationId) || '/';
         
         // O(1) Session File Lookup: Use incremental tracker instead of re-scanning messages
         let recentFiles: string[] = [];

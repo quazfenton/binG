@@ -193,7 +193,7 @@ export async function POST(req: NextRequest) {
           newContent: file.content,
         }],
         {
-          sessionId: `${ownerId}:${resolvedSessionId}`,
+          sessionId: `${ownerId}$${resolvedSessionId}`,
           message: `${source || 'filesystem'} write: ${file.path}`,
           author: ownerId,
           source: source || 'filesystem-write',

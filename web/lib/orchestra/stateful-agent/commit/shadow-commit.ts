@@ -168,20 +168,22 @@ export class ShadowCommitManager {
       }));
 
       // Extract owner_id from sessionId
-      // sessionId format: 'ownerId:conversationId' or just 'conversationId'
+      // sessionId format: 'ownerId$conversationId' (modern) or 'ownerId:conversationId' (legacy)
       // Priority: author > sessionId with ownerId prefix > fallback
       let ownerId = options.author;
-      if (!ownerId && options.sessionId.includes(':')) {
-        const parts = options.sessionId.split(':');
-        // If sessionId starts with 'anon:' or similar ownerId pattern, use full first part
+      if (!ownerId && (options.sessionId.includes('$') || options.sessionId.includes(':'))) {
+        // Try $ first (modern format), then fall back to : (legacy format)
+        const separator = options.sessionId.includes('$') ? '$' : ':';
+        const parts = options.sessionId.split(separator);
+        // If sessionId starts with 'anon' or contains @, use full first part
         // Otherwise, check if author was passed
         ownerId = parts[0].includes('anon') || parts[0].includes('@')
           ? parts[0]
           : parts.length > 1
-            ? `${parts[0]}:${parts[1]}`
+            ? `${parts[0]}${separator}${parts[1]}`
             : undefined;
       }
-      ownerId = ownerId || 'anon:unknown';
+      ownerId = ownerId || 'anon$unknown';
 
       console.log('[ShadowCommit] Inserting with commitId:', commitId, 'ownerId:', ownerId);
 
@@ -454,9 +456,9 @@ export class ShadowCommitManager {
         ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
       `);
 
-      const ownerId = commit.sessionId.includes(':')
-        ? commit.sessionId.split(':')[0]
-        : 'anon:unknown';
+      const ownerId = (commit.sessionId.includes('$') || commit.sessionId.includes(':'))
+        ? commit.sessionId.split(commit.sessionId.includes('$') ? '$' : ':')[0]
+        : 'anon$unknown';
 
       rollbackPointStmt.run(
         rollbackPointId,

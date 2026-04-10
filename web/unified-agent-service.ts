@@ -678,9 +678,9 @@ async function runStatefulAgentMode(config: UnifiedAgentConfig): Promise<Unified
 
   try {
     // FIX: Use conversationId for VFS session scoping.
-    // Build composite key: "userId$conversationId" for proper VFS isolation
+    // Build composite key: "userId:conversationId" for proper VFS isolation
     const vfsSessionId = config.conversationId
-      ? `${config.userId || 'system'}$${config.conversationId}`
+      ? `${config.userId || 'system'}:${config.conversationId}`
       : (config.projectContext?.id || `unified-${Date.now()}`);
 
     const agentOptions: StatefulAgentOptions = {
@@ -880,7 +880,7 @@ async function runMastraWorkflow(config: UnifiedAgentConfig): Promise<UnifiedAge
     const workflowResult = await mastraWorkflowIntegration.executeWorkflow(workflowId, {
       task: config.userMessage,
       ownerId: config.conversationId
-        ? `${config.userId || 'system'}$${config.conversationId}`
+        ? `${config.userId || 'system'}:${config.conversationId}`
         : (config.userId || config.sandboxId || 'default'),
       systemPrompt: config.systemPrompt,
       maxSteps: config.maxSteps,
@@ -950,11 +950,9 @@ function createCapabilityToolExecutor(config: UnifiedAgentConfig) {
     if (hasToolCapability(capabilityId)) {
       log.debug('Executing tool via capability', { tool: name, capability: capabilityId });
       // FIX: Pass conversationId as sessionId for VFS session scoping
-      // Also pass scopePath for proper VFS file operation scoping
       const result = await executeToolCapability(capabilityId, args, {
         userId: config.userId || 'system',
         sessionId: config.conversationId,  // FIX: Session scoping for VFS
-        scopePath: config.conversationId ? `project/sessions/${config.conversationId}` : undefined,  // FIX: VFS scope path
         workspaceId: config.projectContext?.id,
       });
       return { success: result.success, output: (result.output as string) || result.error, exitCode: result.exitCode };
@@ -1367,21 +1365,13 @@ async function runV1ApiCompletion(
   startTime: number
 ): Promise<UnifiedAgentResult> {
   if (process.env.ENABLE_V1_ORCHESTRATOR === 'true') {
-    log.info('[V1-API-COMPLETION] → delegating to v1-orchestrator');
     return runV1Orchestrated(config, messages, startTime);
   }
-
-  log.info('[V1-API-COMPLETION] ┌─ ENTRY ──────────────────────────');
 
   // Use config provider/model if specified, otherwise fall back to env defaults
   const primaryProvider = config.provider || process.env.LLM_PROVIDER || 'mistral';
   const primaryModel = config.model || process.env.DEFAULT_MODEL || 'mistral-large-latest';
   const requestId = `unified-v1-${Date.now()}`;
-
-  log.info('[V1-API-COMPLETION] │ primaryProvider:', primaryProvider);
-  log.info('[V1-API-COMPLETION] │ primaryModel:', primaryModel);
-  log.info('[V1-API-COMPLETION] │ requestId:', requestId);
-  log.info('[V1-API-COMPLETION] └────────────────────────────────────');
 
   // FIX: Map each provider to a model that supports tool calling / function calling.
   // Also: when falling back, check if the model is valid for the target provider.
@@ -1428,11 +1418,11 @@ async function runV1ApiCompletion(
   // Deduplicate while preserving order
   const uniqueProviders = [...new Set(providersToTry)];
 
-  log.info('[V1-API-COMPLETION] ┌─ PROVIDER FALLBACK CHAIN ────────');
-  log.info('[V1-API-COMPLETION] │ primary:', primaryProvider, '/', primaryModel);
-  log.info('[V1-API-COMPLETION] │ configured fallbacks:', fallbackChain);
-  log.info('[V1-API-COMPLETION] │ will try (deduped):', uniqueProviders);
-  log.info('[V1-API-COMPLETION] └────────────────────────────────────');
+  log.debug(`V1 API (completion): Provider fallback chain`, {
+    primaryProvider,
+    fallbackChain,
+    uniqueProviders,
+  });
 
   let lastError: Error | null = null;
 
@@ -1440,12 +1430,6 @@ async function runV1ApiCompletion(
   for (const providerName of uniqueProviders) {
     const modelForProvider = getModelForProvider(providerName);
     try {
-      log.info('[V1-API-COMPLETION] ┌─ ATTEMPT ───────────────────');
-      log.info('[V1-API-COMPLETION] │ provider:', providerName);
-      log.info('[V1-API-COMPLETION] │ model:', modelForProvider);
-      log.info('[V1-API-COMPLETION] │ isFirst:', providerName === primaryProvider);
-      log.info('[V1-API-COMPLETION] └───────────────────────────────');
-
       const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
 
       let content = '';
@@ -1477,34 +1461,12 @@ async function runV1ApiCompletion(
       }
 
       if (providerName !== primaryProvider) {
-        log.info(`[V1-API-COMPLETION] Fallback provider succeeded`, {
+        log.info(`V1 API: Fallback provider succeeded`, {
           primaryProvider,
           primaryModel,
           fallbackProvider: providerName,
           fallbackModel: modelForProvider,
         });
-      }
-
-      // FIX: Extract file writes from bash code blocks in the LLM response
-      // and actually write them to the VFS. The LLM often outputs bash commands
-      // (echo "content" > file, cat > file << EOF) instead of using tool calls.
-      // This bridges the gap so those files actually get created.
-      const bashWrites = extractBashFileWrites(content, config);
-      if (bashWrites.length > 0) {
-        log.info(`[V1-API-COMPLETION] Extracted ${bashWrites.length} file writes from bash commands`, {
-          paths: bashWrites.map(w => w.path),
-        });
-        // Write each extracted file to VFS
-        const { virtualFilesystem } = await import('@/lib/virtual-filesystem/index.server');
-        const ownerId = config.userId || config.filesystemOwnerId || '1';
-        for (const write of bashWrites) {
-          try {
-            await virtualFilesystem.writeFile(ownerId, write.path, write.content);
-            log.info(`[V1-API-COMPLETION] Wrote file from bash extraction: ${write.path}`);
-          } catch (err: any) {
-            log.warn(`[V1-API-COMPLETION] Failed to write extracted file ${write.path}:`, err.message);
-          }
-        }
       }
 
       // FIX: Record telemetry with the ACTUAL provider/model (handles fallbacks)
@@ -1537,22 +1499,16 @@ async function runV1ApiCompletion(
       };
     } catch (error: any) {
       lastError = error;
-      log.warn('[V1-API-COMPLETION] ┌─ ATTEMPT FAILED ────────────');
-      log.warn('[V1-API-COMPLETION] │ provider:', providerName);
-      log.warn('[V1-API-COMPLETION] │ model:', modelForProvider);
-      log.warn('[V1-API-COMPLETION] │ error:', error.message);
-      log.warn('[V1-API-COMPLETION] │ will try next:', uniqueProviders.slice(uniqueProviders.indexOf(providerName) + 1).join(', ') || 'NO MORE');
-      log.warn('[V1-API-COMPLETION] └───────────────────────────────');
+      log.warn(`V1 API: Provider ${providerName} failed, trying next`, {
+        provider: providerName,
+        model: modelForProvider,
+        error: error.message,
+      });
     }
   }
 
   // All providers failed
   const latencyMs = Date.now() - startTime;
-
-  log.error('[V1-API-COMPLETION] ┌─ ALL PROVIDERS FAILED ─────────');
-  log.error('[V1-API-COMPLETION] │ providers tried:', uniqueProviders);
-  log.error('[V1-API-COMPLETION] │ lastError:', lastError?.message);
-  log.error('[V1-API-COMPLETION] └─────────────────────────────────');
   chatRequestLogger.logRequestComplete(
     requestId,
     false,
@@ -1583,12 +1539,6 @@ async function attemptFallback(
   const visitedModes = new Set(triedModes);
   visitedModes.add(failedMode);
 
-  log.info('[Fallback] ┌─ ATTEMPTING FALLBACK ──────────────────');
-  log.info('[Fallback] │ failedMode:', failedMode);
-  log.info('[Fallback] │ error:', error instanceof Error ? error.message : String(error));
-  log.info('[Fallback] │ visitedModes:', Array.from(visitedModes));
-  log.info('[Fallback] └───────────────────────────────────────────');
-
   // Use startup capabilities — don't try modes that weren't available at startup
   const caps = startupCaps;
 
@@ -1618,18 +1568,6 @@ async function attemptFallback(
   // Don't allow fallback to v2 modes unless engine is explicitly unset.
   const forceV1Auto = engine === 'auto' || forceV1;
 
-  log.info('[Fallback] ┌─ FALLBACK CHAIN BUILD ─────────────────');
-  log.info('[Fallback] │ v2Disabled:', v2Disabled);
-  log.info('[Fallback] │ engine:', engine);
-  log.info('[Fallback] │ forceV1:', forceV1);
-  log.info('[Fallback] │ forceAgentLoop:', forceAgentLoop);
-  log.info('[Fallback] │ forceV1Auto:', forceV1Auto);
-  log.info('[Fallback] │ caps.v2Native:', caps.v2Native);
-  log.info('[Fallback] │ caps.v2Containerized:', caps.v2Containerized);
-  log.info('[Fallback] │ caps.v2Local:', caps.v2Local);
-  log.info('[Fallback] │ caps.v1Api:', caps.v1Api);
-  log.info('[Fallback] └───────────────────────────────────────────');
-
   // Try fallback chain based on what failed, excluding already tried modes
   // Only include modes that were available at startup
   // Priority: V2 Native (with StatefulAgent for complex) → V2 Containerized → V2 Local → V1 API
@@ -1648,25 +1586,16 @@ async function attemptFallback(
     fallbackOrder.push('v1-api');
   }
 
-  log.info('[Fallback] ┌─ FINAL FALLBACK CHAIN ─────────────────');
-  log.info('[Fallback] │ fallbackOrder:', fallbackOrder);
-  log.info('[Fallback] └───────────────────────────────────────────');
-
   // Try each fallback mode
   for (const fallbackMode of fallbackOrder) {
     try {
-      log.info('[Fallback] ┌─ TRYING FALLBACK ──────────────────');
-      log.info('[Fallback] │ fallbackMode:', fallbackMode);
-      log.info('[Fallback] │ failedMode:', failedMode);
-      log.info('[Fallback] │ isComplexTask:', isComplexTask);
-      log.info('[Fallback] └───────────────────────────────────────');
+      console.log(`[UnifiedAgent] Falling back to ${fallbackMode} after ${failedMode} failed`);
 
       // For complex tasks, try StatefulAgent first in v2-native mode
       if (fallbackMode === 'v2-native' && isComplexTask && caps.statefulAgent) {
-        log.info('[Fallback] → StatefulAgent for complex task in v2-native');
+        log.info(`Fallback: Complex task detected, using StatefulAgent in ${fallbackMode}`);
         const result = await runStatefulAgentMode(config);
         if (result.success) {
-          log.info('[Fallback] ✓ StatefulAgent succeeded');
           return {
             ...result,
             metadata: {
@@ -1711,18 +1640,12 @@ async function attemptFallback(
         };
       }
     } catch (fallbackError) {
-      log.warn('[Fallback] ┌─ FALLBACK FAILED ──────────────────');
-      log.warn('[Fallback] │ fallbackMode:', fallbackMode);
-      log.warn('[Fallback] │ error:', fallbackError instanceof Error ? fallbackError.message : String(fallbackError));
-      log.warn('[Fallback] └───────────────────────────────────────');
+      console.warn(`[UnifiedAgent] Fallback to ${fallbackMode} also failed:`, fallbackError);
       // Add the failed fallback mode to visitedModes to prevent re-trying
       visitedModes.add(fallbackMode);
       // Continue to next fallback with updated visitedModes
     }
   }
-
-  log.warn('[Fallback] ┌─ ALL FALLBACKS EXHAUSTED ─────────────');
-  log.warn('[Fallback] └───────────────────────────────────────────');
 
   // No fallback succeeded
   return null;

@@ -13,20 +13,50 @@ import { requireAdminPage } from '@/lib/auth/admin';
 import { CopyButton } from './CopyButton';
 
 export default async function AntigravitySetupPage() {
-  // Require admin access — redirects to login or access_denied if not authorized
-  const admin = await requireAdminPage();
-  const isAdmin = !!admin;
+  const cookieStore = await cookies();
+  
+  // Check auth directly - if no auth token, show unauthorized page
+  const authToken = cookieStore.get('auth-token')?.value
+    || cookieStore.get('token')?.value
+    || cookieStore.get('next-auth.session-token')?.value
+    || cookieStore.get('session_id')?.value;
 
-  if (!isAdmin) {
+  if (!authToken) {
     return (
       <div className="max-w-2xl mx-auto p-8">
         <h1 className="text-2xl font-bold mb-4">Unauthorized</h1>
-        <p className="text-red-600">You must be logged in as an admin to access this page.</p>
+        <p className="text-gray-600 mb-4">You must be logged in as an admin to access this page.</p>
+        <a href="/login" className="inline-block px-6 py-3 bg-blue-600 hover:bg-blue-700 text-white font-medium rounded-lg transition-colors">
+          Login →
+        </a>
       </div>
     );
   }
 
-  const cookieStore = await cookies();
+  // Require admin access
+  try {
+    const admin = await requireAdminPage();
+    const isAdmin = !!admin;
+
+    if (!isAdmin) {
+      return (
+        <div className="max-w-2xl mx-auto p-8">
+          <h1 className="text-2xl font-bold mb-4">Access Denied</h1>
+          <p className="text-red-600">You do not have admin privileges.</p>
+        </div>
+      );
+    }
+  } catch (err: any) {
+    // If redirect is thrown, re-throw it
+    if (err?.digest?.includes('NEXT_REDIRECT')) throw err;
+    return (
+      <div className="max-w-2xl mx-auto p-8">
+        <h1 className="text-2xl font-bold mb-4">Access Denied</h1>
+        <p className="text-red-600">An error occurred: {err?.message || 'Unknown error'}</p>
+      </div>
+    );
+  }
+
   const tokensCookie = cookieStore.get('antigravity-admin-tokens');
 
   let tokens: { email: string; refreshToken: string; projectId: string } | null = null;

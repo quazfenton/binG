@@ -1568,21 +1568,9 @@ const config: UnifiedAgentConfig = {
       // Default: Use existing unified agent flow (task-router mode)
       // This is the fallback when no custom orchestration mode is selected
       // FIX: Skip when AGENT_EXECUTION_ENGINE='v1-agent-loop' — fall through to direct Mastra path
-      console.log('[ROUTE-DEBUG] About to call processUnifiedAgentRequest, AGENT_EXECUTION_ENGINE:', AGENT_EXECUTION_ENGINE);
-      console.log('[ROUTE-DEBUG] enableFilesystemEdits BEFORE call:', enableFilesystemEdits);
+      console.log('[ROUTE-DEBUG] About to call processUnifiedAgentRequest with config.tools:', config.tools?.map(t => t.name));
       if (AGENT_EXECUTION_ENGINE !== 'v1-agent-loop') {
         const result = await processUnifiedAgentRequest(config);
-        console.log('[ROUTE-DEBUG] processUnifiedAgentRequest returned, result.success:', result.success, 'hasResponse:', !!result.response);
-
-        // GUARANTEED debug field — always appears if this code path is reached
-        const debugInfo = {
-          enableFilesystemEdits,
-          agentExecutionEngine: AGENT_EXECUTION_ENGINE,
-          resultSuccess: result.success,
-          hasResponse: !!result.response,
-          responseLength: result.response?.length || 0,
-        };
-        console.log('[ROUTE-DEBUG] debugInfo:', JSON.stringify(debugInfo));
 
         // FIX: Extract and apply file edits from the LLM response text.
         // The LLM may output code blocks, diffs, or write_file instructions
@@ -1640,7 +1628,12 @@ const config: UnifiedAgentConfig = {
             appliedEdits: appliedEdits
               ? { count: appliedEdits.applied?.length || 0, paths: appliedEdits.applied?.map((e: any) => e.path) || [] }
               : null,
-            _debug: debugInfo,
+            // DEBUG: Include extraction diagnostics in response
+            _debug: {
+              enableFilesystemEdits,
+              hasResponse: !!result.response,
+              bashWriteCount: 0, // will be set below
+            },
           },
         });
       }

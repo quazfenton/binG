@@ -1,0 +1,422 @@
+[
+  {
+    "test": "Authentication",
+    "pass": true,
+    "message": "Status should be 200, got 200"
+  },
+  {
+    "test": "Authentication",
+    "pass": true,
+    "message": "Login should succeed"
+  },
+  {
+    "test": "Authentication",
+    "pass": true,
+    "message": "JWT token returned"
+  },
+  {
+    "test": "[mistral-small] LLM creates file via tool call",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[mistral-small] LLM creates file via tool call",
+    "pass": true,
+    "message": "Stream should complete with done event"
+  },
+  {
+    "test": "[mistral-small] LLM creates file via tool call",
+    "pass": true,
+    "message": "Should have meaningful content, got 21 chars"
+  },
+  {
+    "test": "[mistral-small] LLM creates file via tool call",
+    "pass": false,
+    "message": "LLM should have called write_file tool OR produced file content"
+  },
+  {
+    "test": "[mistral-small] LLM creates file via tool call",
+    "pass": false,
+    "message": "Response should reference the helloWorld function"
+  },
+  {
+    "test": "[mistral-small] LLM creates file via tool call",
+    "pass": false,
+    "message": "Response should reference the file"
+  },
+  {
+    "test": "[mistral-small] LLM edits existing file",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[mistral-small] LLM edits existing file",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[mistral-small] LLM edits existing file",
+    "pass": true,
+    "message": "Should have meaningful content, got 21 chars"
+  },
+  {
+    "test": "[mistral-small] LLM edits existing file",
+    "pass": false,
+    "message": "LLM should have called a tool or produced a file edit. toolCalls: 0, fileEdits: 0"
+  },
+  {
+    "test": "[mistral-small] LLM generates multiple files",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[mistral-small] LLM generates multiple files",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[mistral-small] LLM generates multiple files",
+    "pass": false,
+    "message": "Should generate substantial content for multi-file task, got 21 chars"
+  },
+  {
+    "test": "[mistral-small] LLM generates multiple files",
+    "pass": false,
+    "message": "LLM should have called tools or produced file edits for multi-file generation"
+  },
+  {
+    "test": "[mistral-small] LLM reads file and reports content",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[mistral-small] LLM reads file and reports content",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[mistral-small] LLM reads file and reports content",
+    "pass": true,
+    "message": "Should have some response, got 21 chars"
+  },
+  {
+    "test": "[mistral-small] Shell execution intent from natural language",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[mistral-small] Shell execution intent from natural language",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[mistral-small] Shell execution intent from natural language",
+    "pass": true,
+    "message": "Should have content, got 21 chars"
+  },
+  {
+    "test": "[mistral-small] Shell execution intent from natural language",
+    "pass": false,
+    "message": "LLM should reference running/execution"
+  },
+  {
+    "test": "[mistral-small] Regex fallback for file edits (when tool_use fails)",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[mistral-small] Regex fallback for file edits (when tool_use fails)",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[mistral-small] Regex fallback for file edits (when tool_use fails)",
+    "pass": false,
+    "message": "Should have content, got 21 chars"
+  },
+  {
+    "test": "[mistral-small] Regex fallback for file edits (when tool_use fails)",
+    "pass": false,
+    "message": "LLM should reference calculator.js"
+  },
+  {
+    "test": "[openrouter-llama] LLM creates file via tool call",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[openrouter-llama] LLM creates file via tool call",
+    "pass": true,
+    "message": "Stream should complete with done event"
+  },
+  {
+    "test": "[openrouter-llama] LLM creates file via tool call",
+    "pass": true,
+    "message": "Should have meaningful content, got 454 chars"
+  },
+  {
+    "test": "[openrouter-llama] LLM creates file via tool call",
+    "pass": true,
+    "message": "LLM should have called write_file tool OR produced file content"
+  },
+  {
+    "test": "[openrouter-llama] LLM creates file via tool call",
+    "pass": true,
+    "message": "Response should reference the helloWorld function"
+  },
+  {
+    "test": "[openrouter-llama] LLM creates file via tool call",
+    "pass": true,
+    "message": "Response should reference the file"
+  },
+  {
+    "test": "[openrouter-llama] LLM edits existing file",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[openrouter-llama] LLM edits existing file",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[openrouter-llama] LLM edits existing file",
+    "pass": true,
+    "message": "Should have meaningful content, got 534 chars"
+  },
+  {
+    "test": "[openrouter-llama] LLM edits existing file",
+    "pass": true,
+    "message": "LLM should have called a tool or produced a file edit. toolCalls: 0, fileEdits: 1"
+  },
+  {
+    "test": "[openrouter-llama] LLM generates multiple files",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[openrouter-llama] LLM generates multiple files",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[openrouter-llama] LLM generates multiple files",
+    "pass": true,
+    "message": "Should generate substantial content for multi-file task, got 1976 chars"
+  },
+  {
+    "test": "[openrouter-llama] LLM generates multiple files",
+    "pass": true,
+    "message": "LLM should have called tools or produced file edits for multi-file generation"
+  },
+  {
+    "test": "[openrouter-llama] LLM reads file and reports content",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[openrouter-llama] LLM reads file and reports content",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[openrouter-llama] LLM reads file and reports content",
+    "pass": true,
+    "message": "Should have some response, got 56 chars"
+  },
+  {
+    "test": "[openrouter-llama] Shell execution intent from natural language",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[openrouter-llama] Shell execution intent from natural language",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[openrouter-llama] Shell execution intent from natural language",
+    "pass": true,
+    "message": "Should have content, got 266 chars"
+  },
+  {
+    "test": "[openrouter-llama] Shell execution intent from natural language",
+    "pass": true,
+    "message": "LLM should reference running/execution"
+  },
+  {
+    "test": "[openrouter-llama] Regex fallback for file edits (when tool_use fails)",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[openrouter-llama] Regex fallback for file edits (when tool_use fails)",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[openrouter-llama] Regex fallback for file edits (when tool_use fails)",
+    "pass": true,
+    "message": "Should have content, got 1772 chars"
+  },
+  {
+    "test": "[openrouter-llama] Regex fallback for file edits (when tool_use fails)",
+    "pass": true,
+    "message": "LLM should reference calculator.js"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM creates file via tool call",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM creates file via tool call",
+    "pass": true,
+    "message": "Stream should complete with done event"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM creates file via tool call",
+    "pass": true,
+    "message": "Should have meaningful content, got 21 chars"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM creates file via tool call",
+    "pass": false,
+    "message": "LLM should have called write_file tool OR produced file content"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM creates file via tool call",
+    "pass": false,
+    "message": "Response should reference the helloWorld function"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM creates file via tool call",
+    "pass": false,
+    "message": "Response should reference the file"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM edits existing file",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM edits existing file",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM edits existing file",
+    "pass": true,
+    "message": "Should have meaningful content, got 21 chars"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM edits existing file",
+    "pass": false,
+    "message": "LLM should have called a tool or produced a file edit. toolCalls: 0, fileEdits: 0"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM generates multiple files",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM generates multiple files",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM generates multiple files",
+    "pass": false,
+    "message": "Should generate substantial content for multi-file task, got 21 chars"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM generates multiple files",
+    "pass": false,
+    "message": "LLM should have called tools or produced file edits for multi-file generation"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM reads file and reports content",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM reads file and reports content",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[nvidia-nemotron] LLM reads file and reports content",
+    "pass": true,
+    "message": "Should have some response, got 21 chars"
+  },
+  {
+    "test": "[nvidia-nemotron] Shell execution intent from natural language",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[nvidia-nemotron] Shell execution intent from natural language",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[nvidia-nemotron] Shell execution intent from natural language",
+    "pass": true,
+    "message": "Should have content, got 21 chars"
+  },
+  {
+    "test": "[nvidia-nemotron] Shell execution intent from natural language",
+    "pass": false,
+    "message": "LLM should reference running/execution"
+  },
+  {
+    "test": "[nvidia-nemotron] Regex fallback for file edits (when tool_use fails)",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[nvidia-nemotron] Regex fallback for file edits (when tool_use fails)",
+    "pass": true,
+    "message": "Stream should complete"
+  },
+  {
+    "test": "[nvidia-nemotron] Regex fallback for file edits (when tool_use fails)",
+    "pass": false,
+    "message": "Should have content, got 21 chars"
+  },
+  {
+    "test": "[nvidia-nemotron] Regex fallback for file edits (when tool_use fails)",
+    "pass": false,
+    "message": "LLM should reference calculator.js"
+  },
+  {
+    "test": "[mistral-no-loop] No infinite loop on complex task",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[mistral-no-loop] No infinite loop on complex task",
+    "pass": true,
+    "message": "Stream should complete (not loop forever). Duration: 23s"
+  },
+  {
+    "test": "[mistral-no-loop] No infinite loop on complex task",
+    "pass": false,
+    "message": "Complex prompt should generate substantial response, got 21 chars"
+  },
+  {
+    "test": "[mistral-no-loop] No infinite loop on complex task",
+    "pass": true,
+    "message": "Should complete within timeout, took 23s"
+  },
+  {
+    "test": "[mistral-auto-continue] Auto-continue detection",
+    "pass": true,
+    "message": "Expected no stream error but got: null"
+  },
+  {
+    "test": "[mistral-auto-continue] Auto-continue detection",
+    "pass": true,
+    "message": "Stream should complete"
+  }
+]

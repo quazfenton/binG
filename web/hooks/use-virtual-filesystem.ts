@@ -27,9 +27,9 @@ export interface UseVirtualFilesystemOptions {
   useOPFS?: boolean;       // Enable OPFS caching for instant reads/writes
   offlineMode?: boolean;   // Force offline operation
   /**
-   * Composite session ID — format is `userId:sessionNum` (e.g., "1:004")
-   * for authenticated users, or just session number for anonymous users.
-   * This is used as the ownerId for VFS database partitioning.
+   * Composite session ID — format is `userId$sessionNum` (e.g., "1$004")
+   * for authenticated users, or `anon$sessionNum` (e.g., "anon$004")
+   * for anonymous users. This is used as the ownerId for VFS database partitioning.
    */
   compositeSessionId?: string;
   /**
@@ -231,16 +231,16 @@ export function useVirtualFilesystem(
   // FIX: Derive ownerId for server-side VFS operations.
   // Priority order:
   // 1. Explicit options.userId (authenticated user) — ensures logged-in users see their own workspace
-  // 2. Composite sessionId in "userId:sessionNum" format (e.g., "1:004") — extract userId part
+  // 2. Composite sessionId in "userId$sessionNum" format (e.g., "1$004") — extract userId part
   // 3. Derive from scoped path (e.g., "project/sessions/004")
   // 4. Fall back to anonymous session ID
   const getOwnerId = useCallback(() => {
     // Priority 1: Explicit authenticated userId
     if (options?.userId) return options.userId;
 
-    // Priority 2: Composite sessionId format "userId:sessionNum"
-    if (options?.compositeSessionId && options.compositeSessionId.includes(':')) {
-      const [userIdPart] = options.compositeSessionId.split(':');
+    // Priority 2: Composite sessionId format "userId$sessionNum"
+    if (options?.compositeSessionId && options.compositeSessionId.includes('$')) {
+      const [userIdPart] = options.compositeSessionId.split('$');
       if (userIdPart && userIdPart !== 'anon') return userIdPart;
     }
 
@@ -460,15 +460,15 @@ export function useVirtualFilesystem(
       // empty results while writes went to a different workspace.
 
       // CRITICAL FIX: Extract simple session ID from potentially composite IDs
-      // This handles formats like "1:004" -> "004" (composite) or "1" -> "1" (just userId)
+      // This handles formats like "1$004" -> "004" (composite) or "1" -> "1" (just userId)
       // Returns empty string for invalid input - caller should handle this case
       const extractSessionPart = (id: string): string => {
         if (!id || typeof id !== 'string') return '';
         const trimmed = id.trim();
         if (!trimmed) return '';
-        // Extract last segment after any colons (handles composite IDs like "1:004")
-        if (trimmed.includes(':')) {
-          const parts = trimmed.split(':');
+        // Extract last segment after any $ (handles composite IDs like "1$004")
+        if (trimmed.includes('$')) {
+          const parts = trimmed.split('$');
           return parts[parts.length - 1].trim();
         }
         return trimmed;
