@@ -34,6 +34,7 @@ import { initializeBackend, getBackendStatus } from '@/lib/backend';
 import { terminalManager } from '@/lib/terminal/terminal-manager';
 import { createLogger } from '@/lib/utils/logger';
 import { getDatabaseSessionStore } from '@/lib/database/session-store';
+import { logMCPStartupHealth } from '@/lib/mcp';
 
 const logger = createLogger('Server');
 
@@ -97,6 +98,9 @@ async function startup() {
     if (!backendStatus.storage.healthy) {
       logger.warn('Storage backend unhealthy', backendStatus.storage.error);
     }
+
+    // Log MCP tool sources health (fire-and-forget, don't block startup)
+    logMCPStartupHealth().catch(e => logger.warn('MCP health check failed', e));
 
   } catch (error) {
     logger.error('Backend initialization failed', error as Error);

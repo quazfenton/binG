@@ -545,8 +545,14 @@ export async function getComposioMCPTools(
  *
  * Use this in your chat/agent implementation to get MCP tools
  * in the format expected by AI SDK's tool calling
+ *
+ * NOTE: This is called lazily on each chat request, NOT on web startup.
+ * Tool sources are initialized/configured at startup, but the actual
+ * tool list is assembled per-request to reflect current state.
  */
 export async function getMCPToolsForAI_SDK(userId?: string) {
+  const callStart = Date.now();
+
   if (mcporterIntegration.isEnabled()) {
     await refreshMCPorterToolsCache()
   }
@@ -628,6 +634,49 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
     },
   }))
 
+  // NEW: Include stdio shell tool (bash_execute) — single generic tool for all shell operations.
+  // ~50 tokens vs ~1000+ for 9 VFS tool schemas. LLM knows bash from training data.
+  // Session-scoped, self-healing, VFS-synced.
+  let bashTools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = [];
+  try {
+    const { createBashTool, registerVFSSyncHook } = await import('../bash/bash-tool');
+    const { normalizeSessionId } = await import('../virtual-filesystem/scope-utils');
+
+    // Register VFS sync hook once (on first bash tool load) — syncs bash-created files to VFS
+    registerVFSSyncHook();
+
+    const sessionId = userId ? normalizeSessionId(userId, '000') : undefined;
+    const scopePath = sessionId ? `project/sessions/${sessionId}` : 'project';
+
+    const bashToolMap = createBashTool({
+      workingDir: scopePath,
+      enableSelfHealing: true,
+      persistToVFS: true,
+    });
+
+    bashTools = Object.entries(bashToolMap).map(([name, toolDef]: [string, any]) => ({
+      type: 'function' as const,
+      function: {
+        name: `bash_${name}`,
+        description: toolDef.description,
+        parameters: toolDef.parameters || (toolDef as any).inputSchema || {},
+      },
+    }));
+
+    if (bashTools.length > 0) {
+      logger.debug(`Bash shell tool available: ${bashTools.length} tool(s), scoped to ${scopePath}`);
+    }
+  } catch (error: any) {
+    logger.debug('Bash shell tool not available:', error.message);
+  }
+
   // NEW: Include remote MCP tools (from HTTP-transport-connected servers)
   // Use try/catch to avoid failing entire function if remote servers are unreachable
   let remoteTools: Array<{
@@ -646,15 +695,121 @@ export async function getMCPToolsForAI_SDK(userId?: string) {
     }
   }
 
-  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools, ...vfsTools, ...remoteTools]
+  // NEW: Include Mem0 persistent memory tools when configured
+  // These let the LLM store, search, and manage memories across sessions
+  let mem0Tools: Array<{
+    type: 'function'
+    function: {
+      name: string
+      description?: string
+      parameters: any
+    }
+  }> = [];
+  try {
+    const { isMem0Configured, buildMem0Tools } = await import('../powers/mem0-power');
+    if (isMem0Configured()) {
+      const mem0ToolMap = await buildMem0Tools({ userId, sessionId: userId });
+      mem0Tools = Object.entries(mem0ToolMap).map(([name, toolDef]: [string, any]) => ({
+        type: 'function' as const,
+        function: {
+          name: `mem0_${name}`,
+          description: toolDef.description || `Mem0 operation: ${name}`,
+          parameters: toolDef.parameters || (toolDef as any).inputSchema || {} as any,
+        },
+      }));
+      logger.debug(`Mem0 memory tools available: ${mem0Tools.length} tools`);
+    }
+  } catch (error: any) {
+    logger.debug('Mem0 tools not available:', error.message);
+  }
+
+  const tools = [...nativeTools, ...cachedMCPorterTools, ...blaxelTools, ...arcadeTools, ...providerTools, ...nullclawTools, ...composioTools, ...gitTools, ...vfsTools, ...bashTools, ...mem0Tools, ...remoteTools]
+
+  const elapsed = Date.now() - callStart;
 
   if (tools.length === 0) {
-    logger.debug('MCP not available - no tools to return')
+    logger.debug('[MCP-Tools] No tools available')
     return []
   }
 
-  logger.debug(`Returning ${tools.length} MCP tools for AI SDK (${blaxelTools.length} Blaxel, ${arcadeTools.length} Arcade, ${providerTools.length} provider-specific, ${composioTools.length} Composio)`)
+  logger.info(`[MCP-Tools] Assembled ${tools.length} tools in ${elapsed}ms`, {
+    native: nativeTools.length,
+    mcporter: cachedMCPorterTools.length,
+    blaxel: blaxelTools.length,
+    arcade: arcadeTools.length,
+    provider: providerTools.length,
+    nullclaw: nullclawTools.length,
+    composio: composioTools.length,
+    git: gitTools.length,
+    vfs: vfsTools.length,
+    bash: bashTools.length,
+    mem0: mem0Tools.length,
+    remote: remoteTools.length,
+  })
+
   return tools
+}
+
+/**
+ * Startup health check — logs what MCP sources are available at boot time.
+ * Call this once from server.ts or similar startup entry point.
+ */
+export async function logMCPStartupHealth(): Promise<void> {
+  logger.info('═══════════════════════════════════════════════════');
+  logger.info('[MCP-HTTP] ┌─ MCP Tool Sources ──────────────────');
+
+  // Native MCP registry
+  const registryStatus = mcpToolRegistry.getAllServerStatuses();
+  const connectedServers = registryStatus.filter(s => s.info.state === 'connected');
+  logger.info(`[MCP-HTTP] │ Native MCP servers: ${registryStatus.length} (${connectedServers.length} connected)`);
+  for (const server of registryStatus) {
+    const status = server.info.state === 'connected' ? '✅' : server.info.state === 'connecting' ? '🔄' : '❌';
+    logger.info(`[MCP-HTTP] │   ${status} ${server.name} (${server.id})`);
+  }
+
+  // MCPorter
+  logger.info(`[MCP-HTTP] │ MCPorter: ${mcporterIntegration.isEnabled() ? '✅ enabled' : '❌ disabled'}`);
+
+  // Blaxel
+  const blaxelKey = !!process.env.BLAXEL_API_KEY;
+  logger.info(`[MCP-HTTP] │ Blaxel: ${blaxelKey ? '✅ configured' : '❌ not configured'}`);
+
+  // Arcade
+  const arcadeKey = !!process.env.ARCADE_API_KEY;
+  logger.info(`[MCP-HTTP] │ Arcade: ${arcadeKey ? '✅ configured' : '❌ not configured'}`);
+
+  // Provider tools (E2B, Daytona, CodeSandbox, Sprites)
+  const { getAllProviderAdvancedTools } = await import('./provider-advanced-tools');
+  const providerTools = getAllProviderAdvancedTools();
+  logger.info(`[MCP-HTTP] │ Provider tools: ${providerTools.length} loaded`);
+
+  // Nullclaw
+  const nullclawEnabled = process.env.NULLCLAW_ENABLED === 'true';
+  logger.info(`[MCP-HTTP] │ Nullclaw: ${nullclawEnabled ? '✅ enabled' : '❌ disabled'}`);
+
+  // Composio
+  const composioKey = !!process.env.COMPOSIO_API_KEY;
+  logger.info(`[MCP-HTTP] │ Composio: ${composioKey ? '✅ configured' : '❌ not configured'}`);
+
+  // Git tools
+  logger.info(`[MCP-HTTP] │ Git tools: ✅ always available`);
+
+  // VFS tools
+  logger.info(`[MCP-HTTP] │ VFS tools: ✅ always available`);
+
+  // Bash shell (stdio)
+  logger.info(`[MCP-HTTP] │ Bash shell: ✅ stdio (session-scoped, self-healing)`);
+
+  // Mem0
+  const mem0Configured = !!process.env.MEM0_API_KEY;
+  logger.info(`[MCP-HTTP] │ Mem0 memory: ${mem0Configured ? '✅ configured (cloud API)' : '❌ not configured (set MEM0_API_KEY)'}`);
+
+  // Remote MCP servers
+  const remoteCount = hasRemoteMCPServers() ? '✅' : '❌';
+  logger.info(`[MCP-HTTP] │ Remote MCP servers: ${remoteCount}`);
+
+  logger.info('[MCP-HTTP] └─────────────────────────────────────');
+  logger.info('═══════════════════════════════════════════════════');
 }
 
 // Cached Blaxel provider instance for tool execution
@@ -943,7 +1098,7 @@ export async function callMCPToolFromAI_SDK(
       // Run inside request-scoped context so the tool gets the right userId and scopePath
       // Compute session-aware scopePath from conversationId if not provided
       const sessionIdFromConv = normalizeSessionId(args.conversationId || '');
-      const computedScopePath = scopePath 
+      const computedScopePath = scopePath
         || (args as any).scopePath
         || (sessionIdFromConv ? `project/sessions/${sessionIdFromConv}` : 'project/sessions/000');
 
@@ -957,29 +1112,48 @@ export async function callMCPToolFromAI_SDK(
           messages: [],
           toolCallId: crypto.randomUUID(),
         })
-      ) as any;
-
-      // Log completion
-      if (result?.success) {
-        logger.info('[VFS MCP] Tool completed (AI_SDK path)', {
-          tool: toolName,
-          success: true,
-          userId,
-        });
-      } else {
-        logger.warn('[VFS MCP] Tool failed (AI_SDK path)', {
-          tool: toolName,
-          success: false,
-          error: result?.error,
-          userId,
-        });
-      }
+      );
 
       return {
-        success: result?.success ?? false,
-        output: JSON.stringify(result),
-        error: result?.success ? undefined : result?.error,
+        success: result?.success !== false,
+        output: typeof result?.output === 'string' ? result.output : JSON.stringify(result),
+        error: result?.error,
       };
+    }
+
+    // NEW: Check if it's a bash/stdio shell tool (bash_execute)
+    if (toolName.startsWith('bash_')) {
+      const { createBashTool } = await import('../bash/bash-tool');
+      const sessionId = normalizeSessionId(args.conversationId || userId || '000');
+      const scopePath = `project/sessions/${sessionId}`;
+
+      const bashToolMap = createBashTool({
+        workingDir: scopePath,
+        enableSelfHealing: true,
+        persistToVFS: true,
+      });
+
+      const bashToolName = toolName.replace('bash_', '');
+      const bashTool = bashToolMap[bashToolName as keyof typeof bashToolMap];
+
+      if (bashTool) {
+        logger.info('[Bash] Tool invoked (AI_SDK path)', {
+          tool: toolName,
+          command: args?.command?.slice(0, 100),
+          workingDir: scopePath,
+        });
+
+        const result = await bashTool.execute(args || {}, {
+          messages: [],
+          toolCallId: crypto.randomUUID(),
+        } as any);
+
+        return {
+          success: result?.success !== false,
+          output: result?.output || JSON.stringify(result),
+          error: result?.error,
+        };
+      }
     }
 
     const nativeResult = await mcpToolRegistry.callTool(toolName, args)

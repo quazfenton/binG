@@ -15,6 +15,7 @@ import { promises as fs } from 'fs';
 import { exec } from 'child_process';
 import { promisify } from 'util';
 import { join, resolve, isAbsolute, normalize, sep } from 'path';
+import { registerExtractedTools } from './tools/registry';
 
 const execAsync = promisify(exec);
 
@@ -514,142 +515,10 @@ server.tool(
   }
 );
 
-// ─── Agent Management Tools (Stubs) ──────────────────────────────
-
-/**
- * create_agent — Stub for AI agent creation
- */
-server.tool(
-  'create_agent',
-  'Create and spawn AI agent for task execution with execution policy control (stub)',
-  {
-    task: z.string().describe('Task description'),
-    model: z.string().optional().describe('LLM model'),
-    executionPolicy: z.string().optional().describe('Execution policy'),
-  },
-  async ({ task, model, executionPolicy }) => {
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `[binG] Agent created for task: "${task}"${model ? ` (model: ${model})` : ''}${executionPolicy ? ` (policy: ${executionPolicy})` : ''}\n\nNote: Agent orchestration requires full binG web server. This is a standalone MCP server.`,
-        },
-      ],
-    };
-  }
-);
-
-/**
- * get_agent_status — Stub for agent status
- */
-server.tool(
-  'get_agent_status',
-  'Get status of running agent (stub)',
-  {
-    agentId: z.string().describe('Agent ID'),
-  },
-  async ({ agentId }) => {
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `[binG] Agent ${agentId} status: unavailable\n\nAgent management requires the full binG web server with agent orchestration infrastructure.`,
-        },
-      ],
-    };
-  }
-);
-
-/**
- * stop_agent — Stub for agent termination
- */
-server.tool(
-  'stop_agent',
-  'Stop running agent (stub)',
-  {
-    agentId: z.string().describe('Agent ID'),
-  },
-  async ({ agentId }) => {
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `[binG] Agent ${agentId} stop requested\n\nNote: Agent lifecycle management requires the full binG web server.`,
-        },
-      ],
-    };
-  }
-);
-
-/**
- * spawn_agent_session — Stub for persistent agent sessions
- */
-server.tool(
-  'spawn_agent_session',
-  'Spawn persistent agent session for complex workflows (stub)',
-  {
-    goal: z.string().describe('Session goal'),
-    mode: z.string().optional().describe('Agent mode'),
-  },
-  async ({ goal, mode }) => {
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `[binG] Agent session spawned for: "${goal}"${mode ? ` (mode: ${mode})` : ''}\n\nNote: Session management requires the full binG web server.`,
-        },
-      ],
-    };
-  }
-);
-
-// ─── Media Tools (Stubs) ─────────────────────────────────────────
-
-/**
- * voice_speech — Stub for TTS synthesis
- */
-server.tool(
-  'voice_speech',
-  'Generate speech from text using neural TTS (stub)',
-  {
-    text: z.string().describe('Text to synthesize'),
-    voice: z.string().optional().describe('Voice ID'),
-    model: z.string().optional().describe('TTS model'),
-  },
-  async ({ text, voice, model }) => {
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `[binG] TTS synthesis requested: "${text.slice(0, 50)}..."${voice ? ` (voice: ${voice})` : ''}${model ? ` (model: ${model})` : ''}\n\nNote: Voice generation requires external TTS provider integration (ElevenLabs, Cartesia, etc.).`,
-        },
-      ],
-    };
-  }
-);
-
-/**
- * generate_image — Stub for image generation
- */
-server.tool(
-  'generate_image',
-  'Generate images using FLUX, SDXL, or other providers (stub)',
-  {
-    prompt: z.string().describe('Image prompt'),
-    model: z.string().optional().describe('Image model'),
-    size: z.string().optional().describe('Image size'),
-  },
-  async ({ prompt, model, size }) => {
-    return {
-      content: [
-        {
-          type: 'text' as const,
-          text: `[binG] Image generation requested: "${prompt.slice(0, 50)}..."${model ? ` (model: ${model})` : ''}${size ? ` (size: ${size})` : ''}\n\nNote: Image generation requires external provider integration (FLUX, SDXL, etc.).`,
-        },
-      ],
-    };
-  }
-);
+// ─── Extracted Tools (Real Implementations) ──────────────────────
+// Agent management, voice/TTS, and image generation tools with
+// real implementations extracted from the binG web app.
+registerExtractedTools(server);
 
 // ─── Start server ────────────────────────────────────────────────
 

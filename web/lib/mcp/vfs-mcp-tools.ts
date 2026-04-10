@@ -1128,3 +1128,106 @@ export function getVFSToolDefinitions() {
 export function getVFSTool(name: string) {
   return vfsTools[name as keyof typeof vfsTools];
 }
+
+// ============================================================================
+// Mem0 Memory Tool Wrappers
+// These wrap mem0-power actions for use through the MCP tool registry.
+// They execute directly when the LLM calls mem0_* tools via function calling.
+// ============================================================================
+
+/**
+ * Build Mem0 tool executor map for the MCP tool registry.
+ * Each tool wraps the corresponding mem0-power action.
+ */
+export async function buildMem0MCPTools(context: { userId?: string; sessionId?: string } = {}): Promise<Record<string, { description: string; parameters: any; execute: (args: any) => Promise<any> }>> {
+  const { isMem0Configured, mem0Add, mem0Search, mem0GetAll, mem0Update, mem0Delete, mem0DeleteAll } = await import('../powers/mem0-power');
+  
+  if (!isMem0Configured()) {
+    return {};
+  }
+
+  const userId = context.userId || 'default-user';
+  const sessionId = context.sessionId;
+
+  return {
+    mem0_add: {
+      description: 'Store memories from a conversation for persistent context. Call after each user-agent interaction.',
+      parameters: {
+        type: 'object',
+        properties: {
+          messages: {
+            type: 'array',
+            items: {
+              type: 'object',
+              properties: {
+                role: { type: 'string', enum: ['user', 'assistant', 'system'] },
+                content: { type: 'string' },
+              },
+              required: ['role', 'content'],
+            },
+          },
+          userId: { type: 'string', description: 'User identifier for scoping memories' },
+        },
+        required: ['messages'],
+      },
+      execute: async (args: any) => mem0Add(args, { userId, sessionId }),
+    },
+    mem0_search: {
+      description: 'Search memories for relevant context before responding. Use to personalize responses based on user history.',
+      parameters: {
+        type: 'object',
+        properties: {
+          query: { type: 'string', description: 'Search query' },
+          userId: { type: 'string', description: 'User identifier' },
+          limit: { type: 'number', description: 'Max results (default 10)' },
+        },
+        required: ['query'],
+      },
+      execute: async (args: any) => mem0Search(args, { userId, sessionId }),
+    },
+    mem0_get_all: {
+      description: 'Retrieve all stored memories for a user.',
+      parameters: {
+        type: 'object',
+        properties: {
+          userId: { type: 'string', description: 'User identifier' },
+          limit: { type: 'number', description: 'Max results (default 50)' },
+        },
+      },
+      execute: async (args: any) => mem0GetAll(args, { userId, sessionId }),
+    },
+    mem0_update: {
+      description: 'Update an existing memory by ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          memoryId: { type: 'string', description: 'Memory ID to update' },
+          text: { type: 'string', description: 'New memory text' },
+        },
+        required: ['memoryId', 'text'],
+      },
+      execute: async (args: any) => mem0Update(args, { userId, sessionId }),
+    },
+    mem0_delete: {
+      description: 'Delete a specific memory by ID.',
+      parameters: {
+        type: 'object',
+        properties: {
+          memoryId: { type: 'string', description: 'Memory ID to delete' },
+        },
+        required: ['memoryId'],
+      },
+      execute: async (args: any) => mem0Delete(args, { userId, sessionId }),
+    },
+    mem0_delete_all: {
+      description: 'Delete all memories for a user.',
+      parameters: {
+        type: 'object',
+        properties: {
+          userId: { type: 'string', description: 'User identifier' },
+        },
+      },
+      execute: async (args: any) => mem0DeleteAll(args, { userId, sessionId }),
+    },
+  };
+}

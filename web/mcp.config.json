@@ -60,6 +60,12 @@
       "args": ["-y", "@modelcontextprotocol/server-bash"],
       "enabled": false,
       "description": "Run shell commands with safety controls (use with caution)"
+    },
+    "playwright": {
+      "command": "npx",
+      "args": ["-y", "@playwright/mcp@latest"],
+      "enabled": true,
+      "description": "Browser automation, page inspection, screenshots, and E2E testing via Playwright"
     }
   },
   "mcpSettings": {

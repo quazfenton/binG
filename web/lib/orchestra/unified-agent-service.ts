@@ -23,6 +23,7 @@ import { initToolSystem, executeToolCapability, hasToolCapability, isToolSystemR
 import { runAgentLoop as runV2AgentLoop } from './agent-loop';
 import { getConfiguredFallbackChain } from '../chat/provider-fallback-chains';
 import { chatRequestLogger } from '../chat/chat-request-logger';
+import { extractFileWritesFromLLMResponse, type FileWrite } from '../chat/file-diff-utils';
 import {
   createOpenCodeEngine,
   type OpenCodeEngineResult,
@@ -230,16 +231,13 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
     return { mode: config.mode };
   }
 
-  // Desktop mode takes priority when enabled
-  if (startupCaps.desktop) {
-    return { mode: 'desktop' };
-  }
-
   // AGENT_EXECUTION_ENGINE: Explicit control over which execution engine to use.
+  // Check this BEFORE startup capabilities to respect user configuration.
   // - 'v1-api'        → Vercel AI SDK with tool calling (streamWithVercelAI + tools, provider fallback)
   // - 'v1-agent-loop' → Direct Mastra/ToolLoopAgent path (createAgentLoop from mastra/agent-loop.ts)
   // - 'auto'          → Auto-rotate between the two v1 modes based on task complexity
-  const engine = process.env.AGENT_EXECUTION_ENGINE || 'auto';
+  // FIX: Trim inline comments from env values (e.g., "auto #comment" → "auto")
+  const engine = (process.env.AGENT_EXECUTION_ENGINE || 'auto').split('#')[0].trim();
 
   if (engine === 'v1-api') {
     log.info('AGENT_EXECUTION_ENGINE=v1-api, using Vercel AI SDK execution path');
@@ -252,6 +250,12 @@ async function determineMode(config: UnifiedAgentConfig): Promise<{
   if (engine === 'agent-loop') {
     log.info('AGENT_EXECUTION_ENGINE=agent-loop, using OpenCode agent loop execution path');
     return { mode: 'v2-native' as const, classification: null as any };
+  }
+
+  // Desktop mode takes priority when enabled AND in auto mode
+  // (moved after AGENT_EXECUTION_ENGINE check to respect explicit engine configuration)
+  if (startupCaps.desktop) {
+    return { mode: 'desktop' };
   }
 
   // AUTO mode: Rotate between v1-api and v1-agent-loop based on task complexity
@@ -1258,298 +1262,6 @@ async function runV1ApiWithTools(
 }
 
 /**
- * Extract file writes from bash code blocks in LLM response.
- * The LLM often outputs bash commands (echo "content" > file, cat > file << EOF)
- * instead of using tool calls. This extracts those and returns them for VFS writing.
- *
- * Also extracts:
- * - Unified diffs (```diff blocks)
- * - Code blocks with file path hints (```file: path or ```path/to/file)
- * - JavaScript fs.writeFileSync calls
- * - Python file writes
- */
-function extractBashFileWrites(
-  content: string,
-  config: { scopePath?: string }
-): Array<{ path: string; content: string }> {
-  const writes: Array<{ path: string; content: string }> = [];
-  const scopePath = config.scopePath || 'project';
-
-  // Pattern 1: echo "content" > file or echo 'content' > file
-  // Handle multiple echo commands in one block
-  const bashBlockPattern = /```(?:bash|sh|shell)\s*\n([\s\S]*?)```/gi;
-  let bashBlockMatch;
-  while ((bashBlockMatch = bashBlockPattern.exec(content)) !== null) {
-    const blockContent = bashBlockMatch[1];
-    // Find all echo commands in this block
-    const echoPattern = /echo\s+(?:"((?:[^"\\]|\\.)*)"|'([^']*)')\s*>\s*([^\s\n;&|>]+)/gi;
-    let echoMatch;
-    while ((echoMatch = echoPattern.exec(blockContent)) !== null) {
-      const fileContent = echoMatch[1] ?? echoMatch[2] ?? '';
-      let filePath = echoMatch[3].trim();
-      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
-        filePath = `${scopePath}/${filePath}`;
-      }
-      filePath = filePath.replace(/^\/+/, '');
-      if (filePath && fileContent) {
-        writes.push({ path: filePath, content: fileContent });
-        log.info('[BASH-EXTRACT] Found echo write:', { path: filePath, content: fileContent.slice(0, 50) });
-      }
-    }
-    // Handle cat heredoc: cat > file << 'EOF'\ncontent\nEOF
-    const catPattern = /cat\s*>\s*([^\s\n>]+)\s*<<\s*['"]?(\w+)['"]?\s*\n([\s\S]*?)\n\s*\2/gi;
-    let catMatch;
-    while ((catMatch = catPattern.exec(blockContent)) !== null) {
-      let filePath = catMatch[1].trim();
-      const fileContent = catMatch[3].trim();
-      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
-        filePath = `${scopePath}/${filePath}`;
-      }
-      filePath = filePath.replace(/^\/+/, '');
-      if (filePath && fileContent) {
-        writes.push({ path: filePath, content: fileContent });
-        log.info('[BASH-EXTRACT] Found cat write:', { path: filePath, content: fileContent.slice(0, 50) });
-      }
-    }
-  }
-
-  // Pattern 2: Unified diff blocks (```diff ... --- a/path +++ b/path ... content)
-  // More flexible: also match ```patch or ``` without language tag when context mentions "diff"
-  const diffBlockPattern = /```(?:diff|patch)?\s*\n---\s*a\/([^\n]+)\n\+\+\+\s*b\/([^\n]+)\n@@[\s\S]*?```/gi;
-  let diffMatch;
-  while ((diffMatch = diffBlockPattern.exec(content)) !== null) {
-    let filePath = diffMatch[2].trim();
-    if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
-      filePath = `${scopePath}/${filePath}`;
-    }
-    filePath = filePath.replace(/^\/+/, '');
-    // For diffs, extract the resulting content from "+++" lines
-    const fullDiffMatch = diffMatch[0];
-    const addedLines = fullDiffMatch.split('\n').filter(l => l.startsWith('+') && !l.startsWith('+++')).map(l => l.slice(1)).join('\n');
-    if (filePath && addedLines) {
-      writes.push({ path: filePath, content: addedLines });
-      log.info('[BASH-EXTRACT] Found diff write:', { path: filePath, content: addedLines.slice(0, 50) });
-    }
-  }
-
-  // Pattern 2b: When LLM says "After applying the diff" then shows a code block
-  // Handles: "After applying the diff:\n```", "After applying the diff (changed content):\n```",
-  // "After applying the diff, the file will contain:\n```", "After applying the diff, the result is:\n```"
-  // Made the descriptive phrase fully optional so it matches bare "After applying the diff:\n```"
-  const diffApplyPattern = /after\s+applying\s+(?:the\s+)?diff[,:]?\s*(?:\([^)]*\)\s*)?(?:the\s+file\s+(?:now|will)\s+(?:now\s+)?contain|the\s+result\s+is|here['']?s?\s+(?:the\s+)?result|resulting\s+content|changed\s+content)?[\s:]*\n```\w*\s*\n([\s\S]*?)```/gi;
-  let diffApplyMatch;
-  while ((diffApplyMatch = diffApplyPattern.exec(content)) !== null) {
-    const fileContent = diffApplyMatch[1].trim();
-    // Find file path from entire content (the LLM typically mentions it at the start)
-    const pathMatch = content.match(/[`'"]?(project\/[\w\-\/]+\.[\w]+)[`'"]?/i);
-    if (pathMatch && fileContent && fileContent.length > 3) {
-      let filePath = pathMatch[1].trim();
-      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
-        filePath = `${scopePath}/${filePath}`;
-      }
-      filePath = filePath.replace(/^\/+/, '');
-      writes.push({ path: filePath, content: fileContent });
-      log.info('[BASH-EXTRACT] Found diff-apply write:', { path: filePath, content: fileContent.slice(0, 50) });
-    }
-  }
-
-  // Pattern 3: Code blocks with file path hints (```file: path or ```path/to/file or ```javascript // path)
-  const codeWithFilePattern = /```\w*\s*(?:file:\s*)?([^\s\n]+)\s*\n([\s\S]*?)```/gi;
-  let codeFileMatch;
-  while ((codeFileMatch = codeWithFilePattern.exec(content)) !== null) {
-    const pathHint = codeFileMatch[1].trim();
-    // Only treat as file path if it looks like one (contains / or common extension)
-    const isFilePath = pathHint.includes('/') || /\.(js|ts|tsx|jsx|py|html|css|json|md|txt|sh|bash)$/i.test(pathHint);
-    if (isFilePath && !pathHint.startsWith('bash') && !pathHint.startsWith('sh') && !pathHint.startsWith('javascript') && !pathHint.startsWith('python') && !pathHint.startsWith('diff')) {
-      let filePath = pathHint;
-      const fileContent = codeFileMatch[2].trim();
-      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
-        filePath = `${scopePath}/${filePath}`;
-      }
-      filePath = filePath.replace(/^\/+/, '');
-      if (filePath && fileContent && fileContent.length > 5) {
-        writes.push({ path: filePath, content: fileContent });
-        log.info('[BASH-EXTRACT] Found code block with file path:', { path: filePath, content: fileContent.slice(0, 50) });
-      }
-    }
-  }
-
-  // Pattern 4: JavaScript fs.writeFileSync calls
-  const jsBlockPattern = /```(?:javascript|js|node|typescript|ts)\s*\n([\s\S]*?)```/gi;
-  let jsBlockMatch;
-  while ((jsBlockMatch = jsBlockPattern.exec(content)) !== null) {
-    const blockContent = jsBlockMatch[1];
-    const fsWritePattern = /fs\.writeFileSync\(\s*(?:path\.join\([^)]*,\s*['"]([^'"]+)['"]\s*\)|['"]([^'"]+)['"])\s*,\s*['"]((?:[^"\\]|\\.)*)['"]/gi;
-    let fsMatch;
-    while ((fsMatch = fsWritePattern.exec(blockContent)) !== null) {
-      let filePath = (fsMatch[1] ?? fsMatch[2] ?? '').trim();
-      const fileContent = fsMatch[3] ?? '';
-      if (filePath && fileContent) {
-        if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
-          filePath = `${scopePath}/${filePath}`;
-        }
-        filePath = filePath.replace(/^\/+/, '');
-        writes.push({ path: filePath, content: fileContent });
-        log.info('[BASH-EXTRACT] Found fs.writeFileSync:', { path: filePath, content: fileContent.slice(0, 50) });
-      }
-    }
-  }
-
-  // Pattern 5: Python file writes
-  const pyBlockPattern = /```(?:python|py)\s*\n([\s\S]*?)```/gi;
-  let pyBlockMatch;
-  while ((pyBlockMatch = pyBlockPattern.exec(content)) !== null) {
-    const blockContent = pyBlockMatch[1];
-    const pyWritePattern = /with\s+open\(\s*['"]([^'"]+)['"][\s\S]*?\.write\(\s*['"]((?:[^"\\]|\\.)*)['"]\)/gi;
-    let pyMatch;
-    while ((pyMatch = pyWritePattern.exec(blockContent)) !== null) {
-      let filePath = pyMatch[1].trim();
-      const fileContent = pyMatch[2] ?? '';
-      if (filePath && fileContent) {
-        if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
-          filePath = `${scopePath}/${filePath}`;
-        }
-        filePath = filePath.replace(/^\/+/, '');
-        writes.push({ path: filePath, content: fileContent });
-        log.info('[BASH-EXTRACT] Found python write:', { path: filePath, content: fileContent.slice(0, 50) });
-      }
-    }
-  }
-
-  // Pattern 6: LLM describes applying changes then shows result in code block
-  // "After applying the diff... the file will contain:\n```\ncontent\n```"
-  // "Here's the fixed file:\n```\ncontent\n```"
-  const applyPattern = /(?:after\s+(?:applying|the)\s+(?:diff|change|fix|edit)|the\s+file\s+will\s+(?:now\s+)?contain|here['']s\s+(?:the\s+)?(?:fixed|updated|new)\s+(?:file|content)|fixed\s+(?:file|content)|corrected\s+(?:version|content))[:\s]*\n```\w*\s*\n([\s\S]*?)```/gi;
-  let applyMatch;
-  while ((applyMatch = applyPattern.exec(content)) !== null) {
-    const fileContent = applyMatch[1].trim();
-    // Find the file path from context (look for file mentions before this match)
-    const contextBefore = content.substring(Math.max(0, applyMatch.index - 300), applyMatch.index);
-    const pathMatch = contextBefore.match(/[\/\\]([\w\-]+\.[\w]+)|project\/([\w\-\/]+\.[\w]+)/i);
-    if (pathMatch && fileContent && fileContent.length > 5) {
-      let filePath = (pathMatch[1] ?? pathMatch[2]).trim();
-      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
-        filePath = `${scopePath}/${filePath}`;
-      }
-      filePath = filePath.replace(/^\/+/, '');
-      writes.push({ path: filePath, content: fileContent });
-      log.info('[BASH-EXTRACT] Found apply-pattern write:', { path: filePath, content: fileContent.slice(0, 50) });
-    }
-  }
-
-  // Pattern 7: Self-healing — LLM shows "Original/Broken" then "Fixed/Fix:" pattern
-  // Extract ONLY the code after "**Fixed:**", "**Fix:**", "**Fix**:", "Fix:", etc.
-  // Handle both orders: **Fix:** and **Fix**:
-  const fixedCodePattern = /(?:\*\*(?:Fixed|Fix)\*\*[:\s]*|\*\*(?:Fixed|Fix)[:\s]*\*\*|###\s*(?:Fix|Fixed)(?:ed)?:?|\bFix[:\s]+|Corrected[:\s]+|Solution[:\s]+)\s*\n```(?:javascript|js|typescript|ts|node)?\s*\n([\s\S]*?)```/gi;
-  let fixedMatch;
-  while ((fixedMatch = fixedCodePattern.exec(content)) !== null) {
-    const fileContent = fixedMatch[1].trim();
-    if (fileContent.length > 5 && /\b(?:const|let|var)\s+\w+\s*=/.test(fileContent)) {
-      // Find file path from entire response
-      const pathMatch = content.match(/[`'"]?(project\/[\w\-\/]+\.[\w]+)[`'"]?/i);
-      if (pathMatch) {
-        let filePath = pathMatch[1].trim();
-        if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
-          filePath = `${scopePath}/${filePath}`;
-        }
-        filePath = filePath.replace(/^\/+/, '');
-        writes.push({ path: filePath, content: fileContent });
-        log.info('[BASH-EXTRACT] Found fixed-code write:', { path: filePath, content: fileContent.slice(0, 50) });
-        break; // Take the first fix found
-      }
-    }
-  }
-
-  // Pattern 7b: Self-healing fallback — when LLM shows "// Wrong:" and "// Fix:" inside code blocks
-  // Extract the "Fix" portion and write it to the mentioned file
-  if (writes.length === 0) {
-    const wrongFixPattern = /```(?:javascript|js|typescript|ts)\s*\n([\s\S]*?\/\/\s*Fix[:\s]*\n([\s\S]*?))(?:\/\/\s*Wrong|```)/gi;
-    let wrongFixMatch;
-    while ((wrongFixMatch = wrongFixPattern.exec(content)) !== null) {
-      const fixContent = wrongFixMatch[2]?.trim();
-      if (fixContent && fixContent.length > 5) {
-        const pathMatch = content.match(/[`'"]?(project\/[\w\-\/]+\.[\w]+)[`'"]?/i);
-        if (pathMatch) {
-          let filePath = pathMatch[1].trim();
-          if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
-            filePath = `${scopePath}/${filePath}`;
-          }
-          filePath = filePath.replace(/^\/+/, '');
-          writes.push({ path: filePath, content: fixContent });
-          log.info('[BASH-EXTRACT] Found wrong/fix-pattern write:', { path: filePath, content: fixContent.slice(0, 50) });
-          break;
-        }
-      }
-    }
-  }
-
-  // Pattern 7c: Self-healing fallback — when user asks to fix a specific file, extract the LAST valid code block
-  // (LLMs typically show broken examples first, then the fix last)
-  if (writes.length === 0) {
-    const userAskedToFix = /fix.*[\/\\]([\w\-]+\.[\w]+)|fix.*project\/([\w\-\/]+\.[\w]+)/i.test(content);
-    if (userAskedToFix) {
-      const fileMention = content.match(/fix.*?[`'"]?(project\/[\w\-\/]+\.[\w]+)[`'"]?/i)
-        || content.match(/[`'"]?(project\/[\w\-\/]+\.[\w]+)[`'"]?/i);
-      if (fileMention) {
-        // Find ALL code blocks with assignments, pick the LAST valid one
-        const codeBlocks = [...content.matchAll(/```(?:javascript|js|typescript|ts)?\s*\n([\s\S]*?)```/gi)];
-        for (let i = codeBlocks.length - 1; i >= 0; i--) {
-          const blockContent = codeBlocks[i][1].trim();
-          // Skip broken examples (contain "error:", "wrong", "missing", or end with incomplete assignment)
-          const isBroken = /error[:\s]|wrong|missing\s+(value|semicolon)|let\s+\w+\s*=\s*$/mi.test(blockContent);
-          if (isBroken) continue;
-          if (/\b(?:const|let|var)\s+\w+\s*=\s*\S/.test(blockContent) && blockContent.length > 5) {
-            let filePath = fileMention[1].trim();
-            if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
-              filePath = `${scopePath}/${filePath}`;
-            }
-            filePath = filePath.replace(/^\/+/, '');
-            writes.push({ path: filePath, content: blockContent });
-            log.info('[BASH-EXTRACT] Found self-heal fallback write (last valid):', { path: filePath, content: blockContent.slice(0, 50) });
-            break;
-          }
-        }
-      }
-    }
-  }
-
-  // Pattern 7d: Generic self-heal — if response mentions fixing a file, use the LAST valid code block
-  if (writes.length === 0) {
-    const healFileMatch = content.match(/(?:fix|correct|heal)\s+(?:the\s+)?(?:syntax\s+)?error\s+(?:in\s+)?[`'"]?(project\/[\w\-\/]+\.[\w]+)[`'"]?/i);
-    if (healFileMatch) {
-      let filePath = healFileMatch[1].trim();
-      if (!filePath.startsWith('project/') && !filePath.startsWith('/')) {
-        filePath = `${scopePath}/${filePath}`;
-      }
-      filePath = filePath.replace(/^\/+/, '');
-      // Find ALL code blocks, pick the LAST valid one
-      const codeBlocks = [...content.matchAll(/```(?:javascript|js|typescript|ts|node)?\s*\n([\s\S]*?)```/gi)];
-      for (let i = codeBlocks.length - 1; i >= 0; i--) {
-        const blockContent = codeBlocks[i][1].trim();
-        // Skip broken examples
-        const isBrokenExample = /error[:\s]|wrong|missing\s+(value|semicolon|brace|bracket|quote)/i.test(blockContent)
-          || blockContent.includes('let x =') && !blockContent.includes('= ') && !blockContent.includes('42') && !blockContent.includes('10') && !blockContent.includes('5;');
-        if (isBrokenExample) continue;
-        // Skip blocks that are ONLY comments (no actual code)
-        const nonCommentLines = blockContent.split('\n').filter(l => !l.trim().startsWith('//') && l.trim() !== '');
-        if (nonCommentLines.length === 0) continue;
-        // Accept if it has an assignment with an actual value
-        if (/\b(?:const|let|var)\s+\w+\s*=\s*\S/.test(blockContent) && blockContent.length > 5) {
-          writes.push({ path: filePath, content: blockContent });
-          log.info('[BASH-EXTRACT] Found generic self-heal write (last valid block):', { path: filePath, content: blockContent.slice(0, 50) });
-          break;
-        }
-      }
-    }
-  }
-
-  // Deduplicate by path (keep last write for each path — most recent instruction wins)
-  const deduped = new Map<string, { path: string; content: string }>();
-  for (const w of writes) deduped.set(w.path, w);
-  return Array.from(deduped.values());
-}
-
-/**
  * Run V1 API simple completion (no tools)
  */
 async function runV1Orchestrated(
@@ -1751,6 +1463,8 @@ async function runV1ApiCompletion(
       const { streamWithVercelAI } = await import('../chat/vercel-ai-streaming');
 
       let content = '';
+      const fileEdits: Array<{ path: string; content: string; operation?: string }> = [];
+      const toolCalls: Array<{ tool: string; args: any; result: any }> = [];
       const streamOpts = {
         provider: providerName,
         model: modelForProvider,
@@ -1759,24 +1473,7 @@ async function runV1ApiCompletion(
         maxTokens: config.maxTokens || 4096,
         maxRetries: 0,
         maxSteps: 10,  // Allow tool execution
-        tools: config.tools?.length ? Object.fromEntries(
-          config.tools.map((toolDef: any) => [
-            toolDef.name,
-            {
-              description: toolDef.description,
-              parameters: toolDef.parameters,
-              execute: async (args: Record<string, any>) => {
-                const toolResult = await capabilityExecuteTool(toolDef.name, args);
-                return {
-                  success: toolResult.success,
-                  output: toolResult.output,
-                  exitCode: toolResult.exitCode,
-                  error: toolResult.error,
-                };
-              },
-            },
-          ])
-        ) : undefined,
+        tools: config.tools?.length ? config.tools : undefined,
       };
 
       if (config.onStreamChunk) {
@@ -1786,11 +1483,26 @@ async function runV1ApiCompletion(
             content += chunk.content;
             config.onStreamChunk(chunk.content);
           }
+          // CRITICAL FIX: Collect file edits from streaming chunks
+          if (chunk.fileEdits && chunk.fileEdits.length > 0) {
+            fileEdits.push(...chunk.fileEdits);
+          }
+          // Collect tool call records
+          if (chunk.toolCall) {
+            toolCalls.push(chunk.toolCall);
+          }
         }
       } else {
         for await (const chunk of streamWithVercelAI(streamOpts)) {
           if (chunk.content) {
             content += chunk.content;
+          }
+          // CRITICAL FIX: Collect file edits from streaming chunks (non-streaming path too)
+          if (chunk.fileEdits && chunk.fileEdits.length > 0) {
+            fileEdits.push(...chunk.fileEdits);
+          }
+          if (chunk.toolCall) {
+            toolCalls.push(chunk.toolCall);
           }
         }
       }
@@ -1808,7 +1520,7 @@ async function runV1ApiCompletion(
       // and actually write them to the VFS. The LLM often outputs bash commands
       // (echo "content" > file, cat > file << EOF) instead of using tool calls.
       // This bridges the gap so those files actually get created.
-      const bashWrites = extractBashFileWrites(content, config);
+      const bashWrites = extractFileWritesFromLLMResponse(content, { scopePath: config.scopePath });
       if (bashWrites.length > 0) {
         log.info(`[V1-API-COMPLETION] Extracted ${bashWrites.length} file writes from bash commands`, {
           paths: bashWrites.map(w => w.path),
@@ -1852,6 +1564,9 @@ async function runV1ApiCompletion(
           model: modelForProvider,
           duration: latencyMs,
           fallbackChain: fallbackChainUsed,
+          // CRITICAL FIX: Include collected file edits and tool calls
+          fileEdits: fileEdits.length > 0 ? fileEdits : undefined,
+          toolCalls: toolCalls.length > 0 ? toolCalls : undefined,
         },
       };
     } catch (error: any) {
