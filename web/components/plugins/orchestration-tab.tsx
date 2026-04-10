@@ -73,6 +73,7 @@ import {
 } from "lucide-react";
 import { toast } from "sonner";
 import { useOrchestrationMode, type OrchestrationMode } from "@/contexts/orchestration-mode-context";
+import { useSpecEnhancementMode, getSpecEnhancementModeInfo, type SpecEnhancementMode } from "@/contexts/spec-enhancement-mode-context";
 import OrchestrationVisualizer, { type AgentNode, type AgentEdge, type AgentLog } from "@/components/orchestration-visualizer";
 import FrameworkVisualizer, {
   type WorkflowConfig,
@@ -300,6 +301,7 @@ interface KernelStats {
 
 export default function OrchestrationTab() {
   const { setMode: setOrchestrationMode } = useOrchestrationMode();
+  const { config: specConfig, setMode: setSpecMode, setChain, isOverridden: specIsOverridden } = useSpecEnhancementMode();
   const [events, setEvents] = useState<EventBusEvent[]>([]);
   const [agents, setAgents] = useState<AgentOption[]>([]);
   const [modes, setModes] = useState<OrchestrationModeOption[]>([]);
@@ -1015,43 +1017,108 @@ export default function OrchestrationTab() {
         ) : activeSubTab === "modes" ? (
           /* Modes View */
           <ScrollArea className="h-full">
-            <div className="space-y-3">
-              <h4 className="text-sm font-semibold text-white flex items-center gap-2">
-                <Layers className="w-4 h-4" />
-                Orchestration Modes
-              </h4>
-              {modes.map((mode) => (
-                <Card key={mode.id} className={`bg-white/5 border-white/10 cursor-pointer transition-all ${mode.active ? "border-purple-500/30 bg-purple-500/10" : "hover:bg-white/10"}`} onClick={() => handleActivateMode(mode.id)}>
-                  <CardContent className="p-3 space-y-2">
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className={`w-2 h-2 rounded-full ${mode.active ? "bg-purple-400" : "bg-gray-400"}`} />
-                        <div>
-                          <p className="text-sm font-medium text-white">{mode.name}</p>
-                          <p className="text-xs text-white/40">{mode.description}</p>
-                        </div>
-                      </div>
-                      <div className="flex items-center gap-1">
-                        {mode.executionType && (
-                          <Badge variant="outline" className={`text-[8px] ${
-                            mode.executionType === 'v2' ? 'border-blue-500/40 text-blue-300'
-                            : mode.executionType === 'v1' ? 'border-cyan-500/40 text-cyan-300'
-                            : 'border-purple-500/40 text-purple-300'
-                          }`}>
-                            {mode.executionType === 'v1' ? 'V1 API' : mode.executionType === 'v2' ? 'V2 Agent' : 'V1+V2'}
-                          </Badge>
-                        )}
-                        {mode.active && <CheckCircle className="w-4 h-4 text-purple-400" />}
-                      </div>
-                    </div>
+            <div className="space-y-4">
+              {/* Spec Enhancement Mode Section */}
+              <div className="space-y-3">
+                <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <Zap className="w-4 h-4 text-yellow-400" />
+                  Spec Enhancement Mode
+                  {specIsOverridden && <Badge variant="outline" className="text-[8px] border-yellow-500/40 text-yellow-300 ml-2">Custom</Badge>}
+                </h4>
+                <p className="text-xs text-white/40">Controls how the SPEC is amplified during build/implementation</p>
+                
+                {/* Spec Mode Selector */}
+                <div className="grid grid-cols-2 gap-2">
+                  {(['normal', 'enhanced', 'max', 'super'] as SpecEnhancementMode[]).map((mode) => {
+                    const info = getSpecEnhancementModeInfo(mode);
+                    const isActive = specConfig.mode === mode;
+                    
+                    return (
+                      <Card 
+                        key={mode} 
+                        className={`bg-white/5 border-white/10 cursor-pointer transition-all ${isActive ? "border-yellow-500/30 bg-yellow-500/10" : "hover:bg-white/10"}`}
+                        onClick={() => setSpecMode(mode)}
+                      >
+                        <CardContent className="p-3 space-y-1">
+                          <div className="flex items-center justify-between">
+                            <div className="flex items-center gap-2">
+                              <div className={`w-2 h-2 rounded-full ${isActive ? "bg-yellow-400" : "bg-gray-400"}`} />
+                              <p className="text-sm font-medium text-white">{info.label}</p>
+                            </div>
+                            {isActive && <CheckCircle className="w-4 h-4 text-yellow-400" />}
+                          </div>
+                          <p className="text-[10px] text-white/40">{info.description}</p>
+                          {mode === 'super' && isActive && specConfig.chain && (
+                            <Badge variant="outline" className="text-[8px] border-white/20 mt-1">
+                              Chain: {specConfig.chain}
+                            </Badge>
+                          )}
+                        </CardContent>
+                      </Card>
+                    );
+                  })}
+                </div>
+                
+                {/* Chain selector for Super mode */}
+                {specConfig.mode === 'super' && (
+                  <div className="p-3 bg-white/5 rounded-lg border border-white/10">
+                    <p className="text-xs text-white/60 mb-2">Super Mode Chain:</p>
                     <div className="flex flex-wrap gap-1">
-                      {mode.features.map((feature, i) => (
-                        <Badge key={i} variant="outline" className="text-[10px] border-white/20">{feature}</Badge>
+                      {['default', 'frontend', 'backend', 'ml_ai', 'mobile', 'security', 'devops', 'data', 'api', 'system', 'web3'].map((chain) => (
+                        <Button
+                          key={chain}
+                          size="sm"
+                          variant={specConfig.chain === chain ? "secondary" : "outline"}
+                          onClick={() => setChain(chain)}
+                          className="text-xs"
+                        >
+                          {chain === 'default' ? 'Full-Stack' : chain === 'ml_ai' ? 'ML/AI' : chain}
+                        </Button>
                       ))}
                     </div>
-                  </CardContent>
-                </Card>
-              ))}
+                  </div>
+                )}
+              </div>
+
+              {/* Orchestration Modes Section */}
+              <div className="space-y-3 pt-4 border-t border-white/10">
+                <h4 className="text-sm font-semibold text-white flex items-center gap-2">
+                  <Layers className="w-4 h-4" />
+                  Orchestration Modes
+                </h4>
+                {modes.map((mode) => (
+                  <Card key={mode.id} className={`bg-white/5 border-white/10 cursor-pointer transition-all ${mode.active ? "border-purple-500/30 bg-purple-500/10" : "hover:bg-white/10"}`} onClick={() => handleActivateMode(mode.id)}>
+                    <CardContent className="p-3 space-y-2">
+                      <div className="flex items-center justify-between">
+                        <div className="flex items-center gap-2">
+                          <div className={`w-2 h-2 rounded-full ${mode.active ? "bg-purple-400" : "bg-gray-400"}`} />
+                          <div>
+                            <p className="text-sm font-medium text-white">{mode.name}</p>
+                            <p className="text-xs text-white/40">{mode.description}</p>
+                          </div>
+                        </div>
+                        <div className="flex items-center gap-1">
+                          {mode.executionType && (
+                            <Badge variant="outline" className={`text-[8px] ${
+                              mode.executionType === 'v2' ? 'border-blue-500/40 text-blue-300'
+                              : mode.executionType === 'v1' ? 'border-cyan-500/40 text-cyan-300'
+                              : 'border-purple-500/40 text-purple-300'
+                            }`}>
+                              {mode.executionType === 'v1' ? 'V1 API' : mode.executionType === 'v2' ? 'V2 Agent' : 'V1+V2'}
+                            </Badge>
+                          )}
+                          {mode.active && <CheckCircle className="w-4 h-4 text-purple-400" />}
+                        </div>
+                      </div>
+                      <div className="flex flex-wrap gap-1">
+                        {mode.features.map((feature, i) => (
+                          <Badge key={i} variant="outline" className="text-[10px] border-white/20">{feature}</Badge>
+                        ))}
+                      </div>
+                    </CardContent>
+                  </Card>
+                ))}
+              </div>
             </div>
           </ScrollArea>
         ) : (
