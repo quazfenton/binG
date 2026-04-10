@@ -42,6 +42,7 @@ import { useTheme } from "next-themes";
 import { toast } from "sonner";
 import Image from "next/image";
 import { isBackgroundUrlAllowed } from "@/lib/utils/url-validation";
+import { useSpecEnhancementMode, getSpecEnhancementModeInfo, type SpecEnhancementMode } from "@/contexts/spec-enhancement-mode-context";
 
 interface SettingsProps {
   onClose: () => void;
@@ -126,6 +127,7 @@ export default function Settings({
   onResponseStyleToggle,
 }: SettingsProps) {
   const { isAuthenticated, user, login, logout, register, getApiKeys, setApiKeys, isLoading } = useAuth();
+  const { config: specConfig, setMode: setSpecMode, setChain, isOverridden } = useSpecEnhancementMode();
   const [textSize, setTextSize] = useState(100);
   const [highContrast, setHighContrast] = useState(false);
   const [screenReader, setScreenReader] = useState(false);
@@ -1407,6 +1409,62 @@ export default function Settings({
               >
                 <div className="custom-toggle-slider" />
               </div>
+            </div>
+
+            {/* Spec Enhancement Mode Selector */}
+            <div className="p-3 bg-black/20 rounded-lg border border-white/10">
+              <div className="flex items-center justify-between mb-3">
+                <div className="flex-1">
+                  <Label className="text-sm">Spec Enhancement Mode</Label>
+                  <p className="text-xs text-gray-500">Controls how SPEC is amplified during build</p>
+                </div>
+                {isOverridden && (
+                  <span className="text-[10px] px-2 py-0.5 bg-purple-500/20 text-purple-400 rounded">Custom</span>
+                )}
+              </div>
+              
+              <div className="grid grid-cols-2 gap-2 mb-2">
+                {(['normal', 'enhanced', 'max', 'super'] as SpecEnhancementMode[]).map((mode) => {
+                  const modeInfo = getSpecEnhancementModeInfo(mode);
+                  const isActive = specConfig.mode === mode;
+                  return (
+                    <button
+                      key={mode}
+                      onClick={() => setSpecMode(mode)}
+                      className={`p-2 rounded-lg border text-left transition-all ${
+                        isActive 
+                          ? 'border-purple-500/50 bg-purple-500/10' 
+                          : 'border-white/10 hover:border-white/20 hover:bg-white/5'
+                      }`}
+                    >
+                      <div className="text-xs font-medium text-white">{modeInfo.name}</div>
+                      <div className="text-[10px] text-gray-400 truncate">{modeInfo.description}</div>
+                    </button>
+                  );
+                })}
+              </div>
+              
+              {/* Show chain selector when super mode is selected */}
+              {specConfig.mode === 'super' && (
+                <div className="mt-3 pt-3 border-t border-white/10">
+                  <Label className="text-xs text-white/70 mb-2 block">Super Mode Chain</Label>
+                  <div className="flex flex-wrap gap-1">
+                    {(['default', 'frontend', 'backend', 'ml_ai', 'mobile', 'security', 'devops', 'data', 'api', 'system', 'web3'] as const).map((chain) => (
+                      <button
+                        key={chain}
+                        onClick={() => setChain(chain)}
+                        className={`px-2 py-1 text-[10px] rounded border transition-all ${
+                          specConfig.chain === chain
+                            ? 'border-cyan-500/50 bg-cyan-500/10 text-cyan-400'
+                            : 'border-white/10 text-gray-400 hover:border-white/20'
+                        }`}
+                      >
+                        {chain.replace('_', ' ')}
+                      </button>
+                    ))}
+                  </div>
+                </div>
+              )}
             </div>
 
             <div className="flex items-center justify-between">

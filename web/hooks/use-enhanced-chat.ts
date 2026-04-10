@@ -115,6 +115,12 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<Error | undefined>();
   
+  // Prompt queue: stores inputs submitted while a response is streaming
+  // When user presses Enter during streaming, the input is queued and auto-sent
+  // when the current response completes (one at a time, not all at once)
+  const [inputQueue, setInputQueue] = useState<string[]>([]);
+  const isInputOrIsLoading = isLoading || inputQueue.length > 0;
+  
   // Rate limiting for invalid path warnings (prevents log spam from malformed LLM output)
   const invalidPathWarningCount = useRef(0);
   const lastInvalidPathWarning = useRef(0);
@@ -245,8 +251,14 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
       abortControllerRef.current = null;
       setIsLoading(false);
       setAgentStatus('idle');
+      
+      // Process queued prompts when user stops generation
+      if (inputQueue.length > 0) {
+        console.log('[InputQueue] User stopped generation, processing next queued prompt');
+        setTimeout(() => processQueue(), 100);
+      }
     }
-  }, []);
+  }, [inputQueue]);
 
   const buildRequestHeaders = useCallback((): HeadersInit => {
     const headers = buildApiHeaders();
@@ -260,10 +272,50 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     return headers;
   }, [orchestrationMode]);
 
+  // Process next queued prompt after current response completes
+  const processQueue = useCallback(async () => {
+    if (inputQueue.length === 0) {
+      return;
+    }
+    
+    // Get next queued input (FIFO - oldest first)
+    const nextInput = inputQueue[0];
+    
+    console.log('[InputQueue] Processing queued prompt:', {
+      queueLength: inputQueue.length,
+      nextInputPreview: nextInput.substring(0, 50),
+    });
+    
+    // Remove from queue before submitting to prevent re-queueing
+    setInputQueue(prev => prev.slice(1));
+    
+    // Set as current input and submit
+    setInput(nextInput);
+    
+    // Use a small delay to ensure state updates before submit
+    setTimeout(() => { if (!isMountedRef.current) return;
+      const fakeEvent = { preventDefault: () => {}, currentTarget: { reset: () => {} } } as React.FormEvent<HTMLFormElement>;
+      handleSubmit(fakeEvent);
+    }, 50);
+  }, [inputQueue]);
+
   const handleSubmit = useCallback(async (e: React.FormEvent<HTMLFormElement>) => {
     e.preventDefault();
 
-    if (!input.trim() || isLoading) {
+    if (!input.trim()) {
+      return;
+    }
+
+    // Queue input if already loading (streaming response in progress)
+    // The queued input will auto-send when the current response completes
+    if (isLoading) {
+      const queuedInput = input.trim();
+      console.log('[InputQueue] Queueing input (stream in progress):', {
+        queueLength: inputQueue.length + 1,
+        inputPreview: queuedInput.substring(0, 50),
+      });
+      setInputQueue(prev => [...prev, queuedInput]);
+      setInput(''); // Clear input after queueing
       return;
     }
 
@@ -1009,6 +1061,13 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                     } else {
                       // Max retries reached — update the SAME bubble, don't create a new one
                       console.warn('[Chat] Empty response after retry, stopping retries');
+                      
+                      // Process queued prompts when max retries reached
+                      if (inputQueue.length > 0) {
+                        console.log('[InputQueue] Max retries reached, processing next queued prompt');
+                        setTimeout(() => processQueue(), 100);
+                      }
+                      
                       setMessages(prev => prev.map(msg =>
                         msg.id === assistantMessage.id
                           ? {
@@ -1029,6 +1088,19 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
                   clearTimeout(timeoutId);
                   setIsLoading(false);
                   setAgentStatus('completed');
+                  
+                  // Process queued prompts AFTER response completes
+                  // This ensures queued prompts wait for any auto-retry loops to finish
+                  // Only process if we're not in a retry loop (retryCount check)
+                  const isRetrying = (doneMetadata.retryCount || 0) > 0 && isEmptyResponse;
+                  if (!isRetrying && inputQueue.length > 0) {
+                    console.log('[InputQueue] Response complete, processing next queued prompt:', {
+                      queueLength: inputQueue.length,
+                    });
+                    // Use setTimeout to ensure state settles before processing next
+                    setTimeout(() => processQueue(), 100);
+                  }
+
                   if (options.onFinish) {
                     // Build the final message directly instead of relying on stale messagesRef
                     const finalMsg: Message = {
@@ -2220,5 +2292,8 @@ export function useEnhancedChat(options: UseChatOptions): UseChatReturn {
     // Agent activity for experimental panel
     agentActivity,
     setAgentActivity,
+    // Input queue state for prompt cueing
+    isInputOrIsLoading,
+    inputQueue,
   };
 }

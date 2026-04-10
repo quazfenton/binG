@@ -40,6 +40,9 @@ import {
   parseStructuredPathList,
 } from '@/lib/chat/file-edit-parser'
 
+// Import maximalist spec enhancer for 'max' mode
+import { enhanceWithSpec } from '@/lib/chat/maximalist-spec-enhancer'
+
 // Import router services
 import { n8nAgentService, type N8nAgentRequest, type N8nAgentResponse } from '@/lib/chat/n8n-agent-service'
 import { customFallbackService, type CustomFallbackRequest, type CustomFallbackResponse } from '@/lib/chat/custom-fallback-service'
@@ -116,8 +119,8 @@ export interface RouterRequest {
   scopePath?: string
   /** When true, the Vercel AI SDK handles tool calling natively — skip regex intent parsing */
   nativeToolCalling?: boolean
-  /** Spec amplification mode: 'normal' (disabled), 'enhanced', or 'max' */
-  mode?: 'normal' | 'enhanced' | 'max'
+  /** Spec amplification mode: 'normal' (disabled), 'enhanced', 'max', or 'super' */
+  mode?: 'normal' | 'enhanced' | 'max' | 'super'
   /** Request a bundled context pack (file tree + contents) for LLM */
   contextPack?: {
     format?: 'markdown' | 'xml' | 'json' | 'plain'
@@ -200,7 +203,7 @@ export interface UnifiedResponse {
     streaming?: boolean // For real-time streaming responses
     specAmplification?: {
       enabled: boolean
-      mode: 'normal' | 'enhanced' | 'max'
+      mode: 'normal' | 'enhanced' | 'max' | 'super'
       fastModel: string
       sectionsGenerated: number
       refinementIterations: number
@@ -2289,8 +2292,127 @@ export class ResponseRouter {
       // Chunk spec
       let chunks = chunkSpec(parsed)
       logger.debug('Spec: Chunked', { chunkCount: chunks.length, mode: request.mode })
-      if (request.mode === 'max') {
-        chunks = explodeChunks(chunks)
+      
+      // SUPER MODE: Use the hyper-detailed multi-chain spec enhancer
+      if (request.mode === 'super') {
+        logger.info('Spec: Using super mode spec enhancer for super mode', {
+          requestId: request.requestId,
+          primaryContentLength: primaryData?.content?.length,
+        })
+        
+        // Extract user request for super mode enhancement
+        const lastUserMsg = [...request.messages].reverse().find(m => m.role === 'user')
+        const userRequest = typeof lastUserMsg?.content === 'string' 
+          ? lastUserMsg.content 
+          : JSON.stringify(lastUserMsg?.content || '')
+        
+        // Get specChain from request for targeted chain enhancement
+        const specChain = (request as any).specChain
+        
+        try {
+          // Import super mode executor
+          const { executeSuperMode, DEFAULT_SUPER_MODE_CONFIG } = await import('@/lib/chat/spec-super-mode')
+          
+          // Use super mode spec enhancer
+          const superModeResult = await executeSuperMode(
+            userRequest,
+            primaryData.content || '',
+            {
+              ...DEFAULT_SUPER_MODE_CONFIG,
+              // If specific chain requested, use only that chain
+              chains: specChain ? [specChain as any] : DEFAULT_SUPER_MODE_CONFIG.chains,
+              provider: primaryProvider,
+              model: primaryModel,
+            }
+          )
+          
+          logger.info('Spec: Super mode enhancement complete', {
+            totalPhases: superModeResult.summary.totalPhases,
+            successfulPhases: superModeResult.summary.successfulPhases,
+            chainsCompleted: superModeResult.summary.chainsCompleted,
+            finalOutputLength: superModeResult.finalOutput.length,
+          })
+          
+          // Use the super mode enhanced output
+          refinedOutput = superModeResult.finalOutput
+          
+          // Emit super mode-specific metadata
+          const emitSuper = request.emit || (() => {});
+          emitSuper('spec_amplification', {
+            stage: 'super_complete',
+            mode: 'super',
+            totalPhases: superModeResult.summary.totalPhases,
+            successfulPhases: superModeResult.summary.successfulPhases,
+            chainsCompleted: superModeResult.summary.chainsCompleted,
+            refinedContent: formatSuperModeRefinements(superModeResult),
+          })
+          
+        } catch (superModeErr) {
+          logger.error('Spec: Super mode enhancement failed, falling back to maximalist', {
+            error: superModeErr?.message,
+            stack: superModeErr?.stack,
+          })
+          // Fall back to maximalist mode
+          request.mode = 'max'
+        }
+      }
+      // MAXIMALIST MODE: Use the new maximalist spec enhancer for comprehensive enhancements
+      else if (request.mode === 'max') {
+        logger.info('Spec: Using maximalist spec enhancer for max mode', {
+          requestId: request.requestId,
+          primaryContentLength: primaryData?.content?.length,
+        })
+        
+        // Extract user request for maximalist enhancement
+        const lastUserMsg = [...request.messages].reverse().find(m => m.role === 'user')
+        const userRequest = typeof lastUserMsg?.content === 'string' 
+          ? lastUserMsg.content 
+          : JSON.stringify(lastUserMsg?.content || '')
+        
+        try {
+          // Use maximalist spec enhancer
+          const maximalistState = await enhanceWithSpec(
+            userRequest,
+            primaryData.content || '',
+            {
+              mode: 'maximalist',
+              provider: primaryProvider,
+              model: primaryModel,
+              userId: request.userId,
+              conversationId: request.conversationId,
+            }
+          )
+          
+          logger.info('Spec: Maximalist enhancement complete', {
+            totalRounds: maximalistState.rounds.length,
+            midPointRegen: maximalistState.midPointRegenOccurred,
+            finalOutputLength: maximalistState.finalOutput.length,
+          })
+          
+          // Use the maximalist enhanced output
+          refinedOutput = maximalistState.finalOutput
+          
+          // Emit maximalist-specific metadata
+          const emitMaximalist = request.emit || (() => {});
+          emitMaximalist('spec_amplification', {
+            stage: 'maximalist_complete',
+            mode: 'maximalist',
+            totalRounds: maximalistState.rounds.length,
+            midPointRegen: maximalistState.midPointRegenOccurred,
+            contextHistoryLength: maximalistState.contextHistory.length,
+            refinedContent: formatMaximalistRefinements(maximalistState),
+          })
+          
+        } catch (maximalistErr) {
+          logger.error('Spec: Maximalist enhancement failed, falling back to DAG', {
+            error: maximalistErr?.message,
+            stack: maximalistErr?.stack,
+          })
+          // Fall back to DAG refinement
+          chunks = explodeChunks(chunks)
+        }
+      } else if (request.mode === 'enhanced') {
+        // Enhanced mode uses standard chunking
       }
 
       const primaryProvider = primaryData.data?.provider || fastModel?.provider || 'openrouter'
@@ -2582,6 +2704,66 @@ function formatSpecForThinking(spec: any, score: number): string {
 /**
  * Format refinement results as a clean, spaced list of improvements.
  * Replaces the raw "spec completed" message with actual improvement details.
+ */
+/**
+ * Format maximalist enhancement state into a readable summary
+ */
+function formatSuperModeRefinements(result: any): string {
+  const lines: string[] = [];
+  
+  lines.push('### Super Mode Enhancement Complete');
+  lines.push('');
+  lines.push(`**Total Phases:** ${result.summary.totalPhases}`);
+  lines.push(`**Successful Phases:** ${result.summary.successfulPhases}`);
+  lines.push(`**Chains Completed:** ${result.summary.chainsCompleted}`);
+  lines.push('');
+  
+  if (result.state?.phases && result.state.phases.length > 0) {
+    lines.push('**Phases Executed:**');
+    const completedPhases = result.state.completedPhases || [];
+    for (const phase of completedPhases.slice(-10)) { // Show last 10 phases
+      lines.push(`- ${phase.phase.title} (${phase.success ? '✓' : '✗'})`);
+    }
+    if (completedPhases.length > 10) {
+      lines.push(`- ... and ${completedPhases.length - 10} more phases`);
+    }
+    lines.push('');
+  }
+  
+  lines.push(`**Final Output Length:** ${result.finalOutput?.length || 0} characters`);
+  lines.push('');
+  lines.push('The implementation has been hyper-detailed enhanced across all 10 meta-prompt chains.');
+  
+  return lines.join('\n');
+}
+
+function formatMaximalistRefinements(state: any): string {
+  const lines: string[] = [];
+  
+  lines.push('### Maximalist Enhancement Complete');
+  lines.push('');
+  lines.push(`**Total Rounds:** ${state.rounds.length}`);
+  lines.push(`**Mid-point Regeneration:** ${state.midPointRegenOccurred ? 'Yes' : 'No'}`);
+  lines.push('');
+  
+  if (state.rounds && state.rounds.length > 0) {
+    lines.push('**Enhancement Rounds:**');
+    for (const round of state.rounds) {
+      const roundNote = (round as any).note || '';
+      lines.push(`- Round ${round.roundNumber}: ${round.spec?.goal?.substring(0, 80) || 'Enhancement'} ${roundNote}`);
+    }
+    lines.push('');
+  }
+  
+  lines.push(`**Final Output Length:** ${state.finalOutput?.length || 0} characters`);
+  lines.push('');
+  lines.push('The implementation has been comprehensively enhanced with multi-file, production-ready code.');
+  
+  return lines.join('\n');
+}
+
+/**
+ * Format refinement results as a clean, spaced list of improvements.
  */
 function formatRefinementsAsList(spec: any, refinedOutput: string, chunks: any[], fileWrites: any[]): string {
   const lines: string[] = [];

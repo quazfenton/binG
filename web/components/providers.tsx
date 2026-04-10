@@ -5,6 +5,7 @@ import { AuthProvider } from '@/contexts/auth-context';
 import { TamboContextProvider } from '@/contexts/tambo-context';
 import { PanelProvider } from '@/contexts/panel-context';
 import { OrchestrationModeProvider } from '@/contexts/orchestration-mode-context';
+import { SpecEnhancementModeProvider } from '@/contexts/spec-enhancement-mode-context';
 import { ThemeProvider } from './theme-provider';
 import { createLogger } from '@/lib/utils/logger';
 
@@ -52,7 +53,9 @@ export function Providers({ children }: { children: React.ReactNode }) {
         <TamboContextProvider>
           <PanelProvider>
             <OrchestrationModeProvider>
-              {children}
+              <SpecEnhancementModeProvider>
+                {children}
+              </SpecEnhancementModeProvider>
             </OrchestrationModeProvider>
           </PanelProvider>
         </TamboContextProvider>
