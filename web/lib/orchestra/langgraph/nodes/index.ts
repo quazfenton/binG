@@ -81,7 +81,9 @@ export async function plannerNode(state: AgentStateType): Promise<Partial<AgentS
   const agent = new StatefulAgent({
     sessionId,
     // FIX: Extract conversationId from composite sessionId for VFS session scoping
-    conversationId: sessionId?.includes(':') ? sessionId.slice(sessionId.lastIndexOf(':') + 1) : sessionId,
+    conversationId: sessionId?.includes('$') || sessionId?.includes(':')
+      ? sessionId.slice(sessionId.lastIndexOf(sessionId.includes('$') ? '$' : ':') + 1)
+      : sessionId,
     sandboxHandle: state.sandboxHandle,
     enforcePlanActVerify: false, // Planner just plans
   });
@@ -122,7 +124,9 @@ export async function executorNode(state: AgentStateType): Promise<Partial<Agent
   const agent = new StatefulAgent({
     sessionId,
     // FIX: Extract conversationId from composite sessionId for VFS session scoping
-    conversationId: sessionId?.includes(':') ? sessionId.slice(sessionId.lastIndexOf(':') + 1) : sessionId,
+    conversationId: sessionId?.includes('$') || sessionId?.includes(':')
+      ? sessionId.slice(sessionId.lastIndexOf(sessionId.includes('$') ? '$' : ':') + 1)
+      : sessionId,
     sandboxHandle: state.sandboxHandle,
     enforcePlanActVerify: true,
   });
@@ -160,7 +164,9 @@ export async function verifierNode(state: AgentStateType): Promise<Partial<Agent
   const agent = new StatefulAgent({
     sessionId,
     // FIX: Extract conversationId from composite sessionId for VFS session scoping
-    conversationId: sessionId?.includes(':') ? sessionId.slice(sessionId.lastIndexOf(':') + 1) : sessionId,
+    conversationId: sessionId?.includes('$') || sessionId?.includes(':')
+      ? sessionId.slice(sessionId.lastIndexOf(sessionId.includes('$') ? '$' : ':') + 1)
+      : sessionId,
     sandboxHandle: state.sandboxHandle,
     enforcePlanActVerify: false, // Verifier just reviews
   });
@@ -210,7 +216,9 @@ export async function selfHealingNode(state: AgentStateType): Promise<Partial<Ag
   const agent = new StatefulAgent({
     sessionId,
     // FIX: Extract conversationId from composite sessionId for VFS session scoping
-    conversationId: sessionId?.includes(':') ? sessionId.slice(sessionId.lastIndexOf(':') + 1) : sessionId,
+    conversationId: sessionId?.includes('$') || sessionId?.includes(':')
+      ? sessionId.slice(sessionId.lastIndexOf(sessionId.includes('$') ? '$' : ':') + 1)
+      : sessionId,
     sandboxHandle: state.sandboxHandle,
     maxSelfHealAttempts: 3,
   });

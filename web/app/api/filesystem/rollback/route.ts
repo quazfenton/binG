@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
       requestId: Math.random().toString(36).slice(2, 8),
     });
     const ownerId = authResolution.ownerId;
-    const scopedSessionId = `${ownerId}:${sessionId}`;
+    const scopedSessionId = `${ownerId}$${sessionId}`;
 
     const commitManager = new ShadowCommitManager();
     const commit = await commitManager.getCommit(scopedSessionId, commitId);

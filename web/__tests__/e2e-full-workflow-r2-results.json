@@ -1,350 +1,362 @@
 {
-  "timestamp": "2026-04-09T21:17:46.234Z",
-  "total": 57,
-  "passed": 21,
-  "failed": 36,
+  "timestamp": "2026-04-10T03:02:50.074Z",
+  "total": 59,
+  "passed": 37,
+  "failed": 22,
   "tests": [
     {
       "name": "Login succeeds",
       "pass": true,
       "detail": "status=200",
-      "timestamp": 1775769002914
+      "timestamp": 1775789825333
     },
     {
       "name": "Auth token received",
       "pass": true,
       "detail": "len=280",
-      "timestamp": 1775769002914
+      "timestamp": 1775789825333
     },
     {
       "name": "Google streams",
-      "pass": false,
-      "detail": "tokens=0",
-      "timestamp": 1775769035989
+      "pass": true,
+      "detail": "tokens=1",
+      "timestamp": 1775789838540
     },
     {
       "name": "Google completes",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769035989
+      "timestamp": 1775789838540
     },
     {
       "name": "Google correct",
-      "pass": false,
-      "detail": "text=\"\"",
-      "timestamp": 1775769035990
+      "pass": true,
+      "detail": "text=\"100\"",
+      "timestamp": 1775789838541
     },
     {
       "name": "Nvidia streams",
-      "pass": false,
+      "pass": true,
       "detail": "",
-      "timestamp": 1775769064806
+      "timestamp": 1775789848894
     },
     {
       "name": "Nvidia completes",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769064806
+      "timestamp": 1775789848894
     },
     {
       "name": "Nvidia correct",
-      "pass": false,
-      "detail": "text=\"\"",
-      "timestamp": 1775769064806
+      "pass": true,
+      "detail": "text=\"56\"",
+      "timestamp": 1775789848894
     },
     {
       "name": "Non-streaming responds",
       "pass": true,
       "detail": "status=200",
-      "timestamp": 1775769085122
+      "timestamp": 1775789859354
     },
     {
       "name": "Non-streaming has content",
       "pass": false,
-      "detail": "content=\"\"",
-      "timestamp": 1775769085123
+      "detail": "content=\"6\"",
+      "timestamp": 1775789859355
     },
     {
       "name": "Non-streaming correct",
-      "pass": false,
+      "pass": true,
       "detail": "",
-      "timestamp": 1775769085123
+      "timestamp": 1775789859355
     },
     {
       "name": "Code gen responds",
       "pass": false,
       "detail": "chars=0",
-      "timestamp": 1775769105894
+      "timestamp": 1775789872372
     },
     {
       "name": "Code gen completes",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769105894
+      "timestamp": 1775789872372
     },
     {
       "name": "Tool calls detected",
       "pass": false,
       "detail": "count=0",
-      "timestamp": 1775769105895
+      "timestamp": 1775789872372
     },
     {
       "name": "File edits detected",
       "pass": false,
       "detail": "count=0",
-      "timestamp": 1775769105895
+      "timestamp": 1775789872372
     },
     {
       "name": "Files created in VFS",
       "pass": false,
       "detail": "files=0",
-      "timestamp": 1775769110922
+      "timestamp": 1775789877399
     },
     {
       "name": "Multi-file responds",
       "pass": false,
       "detail": "chars=0",
-      "timestamp": 1775769146844
+      "timestamp": 1775789904112
     },
     {
       "name": "Multi-file correct (mentions 3000)",
       "pass": false,
       "detail": "",
-      "timestamp": 1775769146845
+      "timestamp": 1775789904112
     },
     {
       "name": "Diff responds",
       "pass": false,
       "detail": "chars=0",
-      "timestamp": 1775769175855
+      "timestamp": 1775789929611
     },
     {
       "name": "Diff completes",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769175855
+      "timestamp": 1775789929611
     },
     {
       "name": "File edits from diff",
       "pass": false,
       "detail": "edits=0",
-      "timestamp": 1775769175855
+      "timestamp": 1775789929611
     },
     {
       "name": "Empty-like handled",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769202946
+      "timestamp": 1775789956890
     },
     {
       "name": "Request completes",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769202947
+      "timestamp": 1775789956890
     },
     {
       "name": "MCP responds",
       "pass": true,
       "detail": "status=200",
-      "timestamp": 1775769206009
+      "timestamp": 1775789961344
     },
     {
       "name": "MCP has tools",
       "pass": false,
       "detail": "count=0",
-      "timestamp": 1775769206010
+      "timestamp": 1775789961344
     },
     {
       "name": "read_file available",
       "pass": false,
       "detail": "",
-      "timestamp": 1775769206010
+      "timestamp": 1775789961344
     },
     {
       "name": "write_file available",
       "pass": false,
       "detail": "",
-      "timestamp": 1775769206010
+      "timestamp": 1775789961344
     },
     {
       "name": "list_files available",
       "pass": false,
       "detail": "",
-      "timestamp": 1775769206010
+      "timestamp": 1775789961344
     },
     {
       "name": "read_files available",
       "pass": false,
       "detail": "",
-      "timestamp": 1775769206010
+      "timestamp": 1775789961344
     },
     {
       "name": "apply_diff available",
       "pass": false,
       "detail": "",
-      "timestamp": 1775769206011
+      "timestamp": 1775789961345
     },
     {
       "name": "Nested write",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769209060
+      "timestamp": 1775789964379
     },
     {
       "name": "Leading slash write",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769209099
+      "timestamp": 1775789964994
     },
     {
       "name": "Traversal rejected",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769209132
+      "timestamp": 1775789965370
     },
     {
       "name": "Nested files exist",
       "pass": true,
       "detail": "nodes=2",
-      "timestamp": 1775769209164
+      "timestamp": 1775789965479
     },
     {
-      "name": "OpenRouter responds",
-      "pass": false,
-      "detail": "HTTP 400: {\"error\":\"Model google/gemini-2.5-flash is not supported by openrouter\",\"availableModels\":[\"minimax/minimax-m2.5:free\",\"qwen/qwen3-coder:free\",\"openai/gpt-oss-120b:free\",\"z-ai/glm-4.5-air:free\",\"nvidia/nemotron-3-nano-30b-a3b:free\",\"meta-llama/llama-3.3-70b-instruct:free\",\"nvidia/nemotron-nano-12b-v2-vl:free\",\"nvidia/nemotron-3-super-120b-a12b:free\",\"stepfun/step-3.5-flash:free\",\"openai/gpt-oss-20b:free\",\"qwen/qwen3-next-80b-a3b-instruct:free\",\"arcee-ai/trinity-mini:free\",\"mistralai/mistral-smal",
-      "timestamp": 1775769212391
+      "name": "OpenRouter streams",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775789992085
+    },
+    {
+      "name": "OpenRouter completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775789992086
+    },
+    {
+      "name": "OpenRouter correct",
+      "pass": true,
+      "detail": "text=\"25\"",
+      "timestamp": 1775789992086
     },
     {
       "name": "Nemotron streams",
-      "pass": false,
+      "pass": true,
       "detail": "",
-      "timestamp": 1775769240812
+      "timestamp": 1775790016366
     },
     {
       "name": "Nemotron completes",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769240812
+      "timestamp": 1775790016366
     },
     {
       "name": "Nemotron correct",
-      "pass": false,
-      "detail": "text=\"\"",
-      "timestamp": 1775769240812
+      "pass": true,
+      "detail": "text=\"144\"",
+      "timestamp": 1775790016367
     },
     {
       "name": "Nano streams",
-      "pass": false,
+      "pass": true,
       "detail": "",
-      "timestamp": 1775769271715
+      "timestamp": 1775790039021
     },
     {
       "name": "Nano completes",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769271716
+      "timestamp": 1775790039021
     },
     {
       "name": "Nano correct",
-      "pass": false,
-      "detail": "text=\"\"",
-      "timestamp": 1775769271716
+      "pass": true,
+      "detail": "text=\"18\n\"",
+      "timestamp": 1775790039021
     },
     {
       "name": "OR Free streams",
-      "pass": false,
+      "pass": true,
       "detail": "",
-      "timestamp": 1775769303103
+      "timestamp": 1775790062124
     },
     {
       "name": "OR Free completes",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769303103
+      "timestamp": 1775790062125
     },
     {
       "name": "OR Free correct",
-      "pass": false,
-      "detail": "text=\"\"",
-      "timestamp": 1775769303103
+      "pass": true,
+      "detail": "text=\"42\"",
+      "timestamp": 1775790062125
     },
     {
       "name": "Gemini 3.1 Lite streams",
-      "pass": false,
+      "pass": true,
       "detail": "",
-      "timestamp": 1775769328294
+      "timestamp": 1775790088185
     },
     {
       "name": "Gemini 3.1 Lite completes",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769328295
+      "timestamp": 1775790088185
     },
     {
       "name": "Gemini 3.1 Lite correct",
-      "pass": false,
-      "detail": "text=\"\"",
-      "timestamp": 1775769328295
+      "pass": true,
+      "detail": "text=\"30\"",
+      "timestamp": 1775790088185
     },
     {
       "name": "Write-Read cycle responds",
       "pass": false,
       "detail": "chars=0",
-      "timestamp": 1775769357423
+      "timestamp": 1775790113001
     },
     {
       "name": "Write-Read completes",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769357423
+      "timestamp": 1775790113002
     },
     {
       "name": "Mentions version",
       "pass": false,
       "detail": "",
-      "timestamp": 1775769357423
+      "timestamp": 1775790113002
     },
     {
       "name": "Batch responds",
       "pass": false,
       "detail": "chars=0",
-      "timestamp": 1775769387038
+      "timestamp": 1775790138255
     },
     {
       "name": "Batch completes",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769387038
+      "timestamp": 1775790138255
     },
     {
       "name": "Batch file edits",
       "pass": false,
       "detail": "edits=0",
-      "timestamp": 1775769387039
+      "timestamp": 1775790138256
     },
     {
       "name": "Batch files created",
       "pass": false,
       "detail": "files=0",
-      "timestamp": 1775769392062
+      "timestamp": 1775790143282
     },
     {
       "name": "Read tool responds",
       "pass": false,
       "detail": "chars=0",
-      "timestamp": 1775769463220
+      "timestamp": 1775790167067
     },
     {
       "name": "Read tool completes",
       "pass": true,
       "detail": "",
-      "timestamp": 1775769463220
+      "timestamp": 1775790167067
     },
     {
       "name": "Read tool mentions content",
       "pass": false,
       "detail": "text=\"\"",
-      "timestamp": 1775769463220
+      "timestamp": 1775790167067
     }
   ]
 }

@@ -2378,7 +2378,7 @@ export class ResponseRouter {
         // This prevents composite IDs like "anon:timestamp:001" from leaking into paths
         const { normalizeSessionId } = await import('@/lib/virtual-filesystem/scope-utils');
         const simpleSessionId = normalizeSessionId(rawConversationId) || rawConversationId; // Use original if normalize returns empty
-        const compositeConversationId = `${ownerIdForEdits}:${rawConversationId}`;
+        const compositeConversationId = `${ownerIdForEdits}$${rawConversationId}`;
 
         logger.debug('Spec: Applying refinement filesystem edits', {
           ownerId: ownerIdForEdits.toString(),

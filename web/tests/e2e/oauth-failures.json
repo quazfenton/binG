@@ -1,0 +1,6 @@
+[
+  {
+    "test": "Setup page: redirects without auth",
+    "details": "Status: 200"
+  }
+]

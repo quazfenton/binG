@@ -1216,6 +1216,8 @@ export function WorkspacePanel() {
 
   const vfs = useVirtualFilesystem(undefined, {
     userId: user?.id?.toString(),  // Use authenticated userId as ownerId for VFS
+    // compositeSessionId is derived from conversation-interface and passed here
+    // Format: "userId$sessionNum" for authenticated, "anon$sessionNum" for anonymous
   });
   const {
     currentPath,

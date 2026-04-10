@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import React, { useState, useEffect } from 'react';
 import ReactMarkdown from 'react-markdown';
@@ -19,7 +19,7 @@ import {
   Sparkles,
   Trash2
 } from 'lucide-react';
-import type { LLMProvider } from '../lib/chat/llm-providers-types';
+import type { LLMProviderConfig } from '../lib/chat/llm-providers-types';
 import { useMultiRotatingStatements } from '@/hooks/use-rotating-statements';
 import { clipboard } from "@bing/platform/clipboard";
 
@@ -36,7 +36,7 @@ interface ModelResponse {
 interface MultiModelComparisonProps {
   isOpen: boolean;
   onClose: () => void;
-  availableProviders: LLMProvider[];
+  availableProviders: LLMProviderConfig[];
 }
 
 function RunningButton() {
@@ -520,7 +520,7 @@ export default function MultiModelComparison({
                 Model Comparison
               </h2>
               <p className="text-xs" style={{ color: 'rgba(255,255,255,0.5)' }}>
-                {responses.length} panel{responses.length !== 1 ? 's' : ''} · {responses.filter(r => r.status === 'complete').length} succeeded · {responses.filter(r => r.status === 'error').length} failed
+                {responses.length} panel{responses.length !== 1 ? 's' : ''} Â· {responses.filter(r => r.status === 'complete').length} succeeded Â· {responses.filter(r => r.status === 'error').length} failed
               </p>
             </div>
           </div>

@@ -144,7 +144,7 @@ async function testGoogleCorrectModel() {
   log('\n=== TEST 1: Google Gemini 3 Flash Preview ===');
   const res = await chat('What is 10*10? Reply with just the number.', 'google');
   if (res.error) { logTest('Google responds', false, res.error); return; }
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || res.events.find(e => e.type === 'done')?.data?.content || '';
+  const text = res.fullContent || '';
   logTest('Google streams', res.events.filter(e => e.type === 'token').length > 0, `tokens=${res.events.filter(e => e.type === 'token').length}`);
   logTest('Google completes', !!res.events.find(e => e.type === 'done'));
   logTest('Google correct', text.includes('100'), `text="${text.slice(0, 100)}"`);
@@ -155,7 +155,7 @@ async function testNvidia() {
   log('\n=== TEST 2: Nvidia meta/llama-3.3-70b-instruct ===');
   const res = await chat('What is 7*8? Reply with just the number.', 'nvidia');
   if (res.error) { logTest('Nvidia responds', false, res.error); return; }
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || res.events.find(e => e.type === 'done')?.data?.content || '';
+  const text = res.fullContent || '';
   logTest('Nvidia streams', res.events.filter(e => e.type === 'token').length > 0);
   logTest('Nvidia completes', !!res.events.find(e => e.type === 'done'));
   logTest('Nvidia correct', text.includes('56'), `text="${text.slice(0, 100)}"`);
@@ -177,7 +177,7 @@ async function testCodeGeneration() {
   const testId = `vite-${Date.now()}`;
   const res = await chat(`Create a Vite + TypeScript project in project/${testId}/. Write package.json and src/main.ts using file tools.`, 'mistral', null, true, 240000);
   if (res.error) { logTest('Code gen responds', false, res.error); return; }
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || res.events.find(e => e.type === 'done')?.data?.content || '';
+  const text = res.fullContent || '';
   const toolCalls = res.toolCalls || [];
   const fileEdits = res.fileEdits || [];
   logTest('Code gen responds', text.length > 10, `chars=${text.length}`);
@@ -197,7 +197,7 @@ async function testMultiFileContext() {
   await vfsWrite(`project/${testId}/app.js`, 'import { port } from "./config"; console.log(`Server on ${port}`);');
   const res = await chat(`Read project/${testId}/config.js and project/${testId}/app.js. What port does the server use?`, 'google');
   if (res.error) { logTest('Multi-file responds', false, res.error); return; }
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || res.events.find(e => e.type === 'done')?.data?.content || '';
+  const text = res.fullContent || '';
   logTest('Multi-file responds', text.length > 20, `chars=${text.length}`);
   logTest('Multi-file correct (mentions 3000)', text.includes('3000'), text.slice(0, 200));
 }
@@ -209,7 +209,7 @@ async function testDiffModify() {
   await vfsWrite(`project/${testId}/math.js`, 'function add(a, b) { return a + b; }');
   const res = await chat(`Add a subtract function to project/${testId}/math.js. Apply the change to the existing file.`, 'mistral', null, true, 180000);
   if (res.error) { logTest('Diff responds', false, res.error); return; }
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || res.events.find(e => e.type === 'done')?.data?.content || '';
+  const text = res.fullContent || '';
   const fileEdits = res.fileEdits || [];
   logTest('Diff responds', text.length > 10, `chars=${text.length}`);
   logTest('Diff completes', !!res.events.find(e => e.type === 'done'));
@@ -222,7 +222,7 @@ async function testEmptyRetry() {
   const res = await chat('...', 'mistral');
   if (res.error) { logTest('Empty handled', false, res.error); return; }
   const done = res.events.find(e => e.type === 'done');
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || done?.data?.content || '';
+  const text = res.fullContent || '';
   logTest('Empty-like handled', text.length > 0 || !!done);
   logTest('Request completes', !!done);
 }
@@ -232,12 +232,13 @@ async function testMCPTools() {
   log('\n=== TEST 8: MCP Tool Definitions ===');
   const res = await fetchJSON(`${BASE_URL}/api/mcp`, { method: 'POST', headers: authHeaders(), body: { jsonrpc: '2.0', method: 'tools/list', id: 1 } });
   logTest('MCP responds', res.status === 200, `status=${res.status}`);
-  const tools = res.data?.result || [];
+  const result = res.data?.result || {};
+  const tools = result.tools || result || [];
   const toolList = Array.isArray(tools) ? tools : [];
   const names = toolList.map(t => t.name);
   logTest('MCP has tools', toolList.length > 0, `count=${toolList.length}`);
   if (toolList.length === 0) {
-    log('  MCP raw response: ' + JSON.stringify(res.data).slice(0, 500), 'WARN');
+    log('  MCP raw result keys: ' + Object.keys(result).join(', '), 'WARN');
   }
   logTest('read_file available', names.includes('read_file'));
   logTest('write_file available', names.includes('write_file'));
@@ -274,7 +275,7 @@ async function testNvidiaNemotron() {
   log('\n=== TEST 11: Nvidia Nemotron-4-340b ===');
   const res = await chat('What is 12*12? Reply with just the number.', 'nvidia', 'nvidia/nemotron-4-340b-instruct');
   if (res.error) { logTest('Nemotron responds', false, res.error); return; }
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || res.events.find(e => e.type === 'done')?.data?.content || '';
+  const text = res.fullContent || '';
   logTest('Nemotron streams', res.events.filter(e => e.type === 'token').length > 0);
   logTest('Nemotron completes', !!res.events.find(e => e.type === 'done'));
   logTest('Nemotron correct', text.includes('144'), `text="${text.slice(0, 100)}"`);
@@ -285,7 +286,7 @@ async function testNvidiaNano() {
   log('\n=== TEST 12: Nvidia Nemotron Nano 12b ===');
   const res = await chat('What is 9+9? Reply with just the number.', 'nvidia', 'nvidia/nemotron-nano-12b-v2-vl');
   if (res.error) { logTest('Nano responds', false, res.error); return; }
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || res.events.find(e => e.type === 'done')?.data?.content || '';
+  const text = res.fullContent || '';
   logTest('Nano streams', res.events.filter(e => e.type === 'token').length > 0);
   logTest('Nano completes', !!res.events.find(e => e.type === 'done'));
   logTest('Nano correct', text.includes('18'), `text="${text.slice(0, 100)}"`);
@@ -296,7 +297,7 @@ async function testOpenRouterFree() {
   log('\n=== TEST 13: OpenRouter Free (nemotron-3-nano-30b-a3b:free) ===');
   const res = await chat('What is 6*7? Reply with just the number.', 'openrouter', 'nvidia/nemotron-3-nano-30b-a3b:free', true, 120000);
   if (res.error) { logTest('OR Free responds', false, res.error); return; }
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || res.events.find(e => e.type === 'done')?.data?.content || '';
+  const text = res.fullContent || '';
   logTest('OR Free streams', res.events.filter(e => e.type === 'token').length > 0);
   logTest('OR Free completes', !!res.events.find(e => e.type === 'done'));
   logTest('OR Free correct', text.includes('42'), `text="${text.slice(0, 100)}"`);
@@ -307,7 +308,7 @@ async function testGemini31Lite() {
   log('\n=== TEST 14: Google Gemini 3.1 Flash Lite ===');
   const res = await chat('What is 15+15? Reply with just the number.', 'google', 'gemini-3.1-flash-lite-preview');
   if (res.error) { logTest('Gemini 3.1 Lite responds', false, res.error); return; }
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || res.events.find(e => e.type === 'done')?.data?.content || '';
+  const text = res.fullContent || '';
   logTest('Gemini 3.1 Lite streams', res.events.filter(e => e.type === 'token').length > 0);
   logTest('Gemini 3.1 Lite completes', !!res.events.find(e => e.type === 'done'));
   logTest('Gemini 3.1 Lite correct', text.includes('30'), `text="${text.slice(0, 100)}"`);
@@ -320,7 +321,7 @@ async function testWriteReadCycle() {
   await vfsWrite(`project/${testId}/data.json`, '{"name": "test", "version": 1}');
   const res = await chat(`Read project/${testId}/data.json and tell me the version number. Then update it to version 2.`, 'mistral');
   if (res.error) { logTest('Write-Read cycle responds', false, res.error); return; }
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || res.events.find(e => e.type === 'done')?.data?.content || '';
+  const text = res.fullContent || '';
   logTest('Write-Read cycle responds', text.length > 10, `chars=${text.length}`);
   logTest('Write-Read completes', !!res.events.find(e => e.type === 'done'));
   logTest('Mentions version', text.toLowerCase().includes('version') || text.includes('1') || text.includes('2'));
@@ -332,7 +333,7 @@ async function testBatchCreation() {
   const testId = `batch-${Date.now()}`;
   const res = await chat(`Create 3 files in project/${testId}/: index.html (with "Hello"), style.css (with "body{margin:0}"), and app.js (with "console.log('hi')"). Use write_file tool for each.`, 'google', 'gemini-3-flash-preview', true, 180000);
   if (res.error) { logTest('Batch responds', false, res.error); return; }
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || res.events.find(e => e.type === 'done')?.data?.content || '';
+  const text = res.fullContent || '';
   const fileEdits = res.fileEdits || [];
   logTest('Batch responds', text.length > 10, `chars=${text.length}`);
   logTest('Batch completes', !!res.events.find(e => e.type === 'done'));
@@ -349,7 +350,7 @@ async function testReadFileTool() {
   await vfsWrite(`project/${testId}/secret.txt`, 'The answer is 42.');
   const res = await chat(`Use the read_file tool to read project/${testId}/secret.txt and tell me what it says.`, 'mistral', null, true, 180000);
   if (res.error) { logTest('Read tool responds', false, res.error); return; }
-  const text = res.events.filter(e => e.type === 'token').map(e => e.data.content || '').join('') || res.events.find(e => e.type === 'done')?.data?.content || '';
+  const text = res.fullContent || '';
   const fileEdits = res.fileEdits || [];
   logTest('Read tool responds', text.length > 5, `chars=${text.length}`);
   logTest('Read tool completes', !!res.events.find(e => e.type === 'done'));
