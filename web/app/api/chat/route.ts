@@ -1001,6 +1001,23 @@ CRITICAL RULES:
 5. NEVER output bash commands like "echo 'content' > file" — use write_file tool
 6. NEVER output code in markdown blocks expecting the system to parse them — USE THE TOOLS
 
+SELF-HEALING / BUG FIXING — CRITICAL INSTRUCTIONS:
+When the user asks you to FIX a syntax error or bug in a specific file:
+1. FIRST, call the read_file tool to get the current broken content
+2. Analyze the actual code to identify the specific bug
+3. Then call write_file with the corrected version
+4. If tools are unavailable, output the corrected content using the \`\`\`file: path/to/file.ext format
+
+NEVER output generic suggestions like "here are common errors" or "If you share the code..." — read the actual file, find the actual bug, and fix it.
+
+Common fixes for incomplete JavaScript:
+- "const x = " (no value) → add a value: "const x = 42;"
+- Missing semicolon → add it
+- Unclosed brackets/quotes → close them
+- "let x =" (no value) → add a value: "let x = 10;"
+
+IMPORTANT: You have access to the file through your tools. DO NOT ask the user to share the file content. READ IT YOURSELF using read_file, then FIX IT.
+
 FILE OUTPUT FORMAT (when tools are unavailable or as fallback):
 If you cannot use tool calls, use EXACTLY this format:
 

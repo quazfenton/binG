@@ -56,6 +56,7 @@ export {
   getMCPServerURL,
   generateOpenCodeCLIConfig,
   shutdownMCPConnections,
+  logMCPStartupHealth,
 } from './architecture-integration'
 
 // Desktop MCP Manager - server-only, import directly from './desktop-mcp-manager'

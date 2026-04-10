@@ -3551,17 +3551,6 @@ export function extractIncrementalFileEdits(
     allEdits.push(edit);
   }
 
-  // NEW: Bash shell commands detection for real-time tracking
-  // Detects ```bash blocks and extracts command info for logging/execution
-  for (const cmd of extractBashCommands(parseWindow)) {
-    // Track bash commands in state for downstream use (logging, execution, etc.)
-    if (!state.detectedBashCommands) state.detectedBashCommands = [];
-    // Deduplicate by command string
-    if (!state.detectedBashCommands.some(c => c.command === cmd.command)) {
-      state.detectedBashCommands.push(cmd);
-    }
-  }
-
   // DELETE commands (single-line)
   for (const edit of extractDeleteEdits(parseWindow)) {
     allEdits.push({ path: edit.path, content: '', action: 'delete' });

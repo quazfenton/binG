@@ -16,11 +16,31 @@ import { NextRequest, NextResponse } from 'next/server';
 import { Server } from '@modelcontextprotocol/sdk/server/index.js';
 import { CallToolRequestSchema, ListToolsRequestSchema } from '@modelcontextprotocol/sdk/types.js';
 import { vfsTools, getVFSToolDefinitions, setToolContext, toolContextStore } from '@/lib/mcp/vfs-mcp-tools';
+import { buildMem0MCPTools } from '@/lib/mcp/vfs-mcp-tools';
+import { isMem0Configured } from '@/lib/powers/mem0-power';
 import { createHTTPTransport, isValidMCPURL } from '@/lib/mcp/http-transport';
 import { handleMCPHealthCheck } from '@/lib/mcp/health-check';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('MCP-Server');
+
+// Mem0 tools cache (initialized lazily)
+let mem0MCPTools: Record<string, any> | null = null;
+
+async function getMem0Tools(): Promise<Record<string, any>> {
+  if (mem0MCPTools !== null) return mem0MCPTools;
+  if (!isMem0Configured()) {
+    mem0MCPTools = {};
+    return mem0MCPTools;
+  }
+  try {
+    mem0MCPTools = await buildMem0MCPTools({});
+    return mem0MCPTools;
+  } catch {
+    mem0MCPTools = {};
+    return mem0MCPTools;
+  }
+}
 
 /**
  * Create the MCP server with VFS tools
@@ -41,24 +61,78 @@ function createMCPServer(): Server {
   // List available tools handler
   server.setRequestHandler(ListToolsRequestSchema, async () => {
     const tools = getVFSToolDefinitions();
-    
+    const mem0Tools = await getMem0Tools();
+
+    const mem0ToolList = Object.entries(mem0Tools).map(([name, tool]: [string, any]) => ({
+      name: `mem0_${name}`,
+      description: tool.description,
+      inputSchema: tool.parameters,
+    }));
+
     return {
-      tools: tools.map(tool => ({
-        name: tool.function.name,
-        description: tool.function.description,
-        inputSchema: tool.function.parameters,
-      })),
+      tools: [
+        ...tools.map(tool => ({
+          name: tool.function.name,
+          description: tool.function.description,
+          inputSchema: tool.function.parameters,
+        })),
+        ...mem0ToolList,
+      ],
     };
   });
 
   // Tool call handler
   server.setRequestHandler(CallToolRequestSchema, async (request) => {
     const { name, arguments: args } = request.params;
-    
+
     logger.debug('MCP tool call', { tool: name, args: Object.keys(args || {}) });
-    
+
+    // Check if it's a mem0 tool
+    if (name.startsWith('mem0_')) {
+      const mem0Tools = await getMem0Tools();
+      const mem0ToolName = name.replace('mem0_', '');
+      const mem0Tool = mem0Tools[mem0ToolName];
+
+      if (!mem0Tool) {
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ error: `Unknown mem0 tool: ${mem0ToolName}` }),
+            },
+          ],
+          isError: true,
+        };
+      }
+
+      try {
+        const result = await mem0Tool.execute(args || {});
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify(result),
+            },
+          ],
+          isError: !(result as any).success,
+        };
+      } catch (error: any) {
+        logger.error('Mem0 tool execution failed', { tool: name, error: error.message });
+        return {
+          content: [
+            {
+              type: 'text',
+              text: JSON.stringify({ error: error.message }),
+            },
+          ],
+          isError: true,
+        };
+      }
+    }
+
+    // VFS tool
     const tool = vfsTools[name as keyof typeof vfsTools];
-    
+
     if (!tool) {
       return {
         content: [
@@ -88,7 +162,7 @@ function createMCPServer(): Server {
       };
     } catch (error: any) {
       logger.error('MCP tool execution failed', { tool: name, error: error.message });
-      
+
       return {
         content: [
           {
