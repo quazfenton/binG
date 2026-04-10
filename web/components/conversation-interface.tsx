@@ -26,6 +26,8 @@ import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from
 import { generateSessionName, checkFileConflicts } from "@/lib/session-naming";
 import { useOrchestrationMode, getOrchestrationModeHeaders } from "@/contexts/orchestration-mode-context";
 import type { OrchestrationMode } from "@/contexts/orchestration-mode-context";
+import { useSpecEnhancementMode, getSpecEnhancementModeInfo } from "@/contexts/spec-enhancement-mode-context";
+import type { SpecEnhancementMode } from "@/contexts/spec-enhancement-mode-context";
 import { useResponseStyle } from "@/contexts/response-style-context";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
 
@@ -119,6 +121,9 @@ export default function ConversationInterface() {
   const { user } = useAuth();
   const { isOpen: isWorkspaceOpen } = usePanel();
   const { config: orchestrationConfig } = useOrchestrationMode();
+  const { config: specEnhancementConfig } = useSpecEnhancementMode();
+  
+  // Get spec enhancement headers for API requests (used by useEnhancedChat)
   const { params: responseStyleParams, presetKey: responseStylePreset } = useResponseStyle();
   const [embedMode, setEmbedMode] = useState(false);
 
@@ -610,11 +615,15 @@ export default function ConversationInterface() {
       provider: providerRef.current,
       model: modelRef.current,
       stream: true,
-      mode: 'enhanced', // Enable spec amplification for enhanced responses
+      // Use spec enhancement mode from context - pass through directly, server handles mapping
+      mode: specEnhancementConfig.mode,
       agentMode: 'v1', // Use V1 mode for spec amplification (V2 has its own planning)
       conversationId: compositeSessionIdRef.current,
       // Pass user API keys for provider override (if user set custom keys)
       apiKeys: Object.keys(apiKeysRef.current).length > 0 ? apiKeysRef.current : undefined,
+      // Pass spec enhancement mode
+      specMode: specEnhancementConfig.mode,
+      specChain: specEnhancementConfig.chain,
       // Pass response style parameters
       presetKey: responseStylePreset || undefined,
       responseDepth: responseStyleParams.responseDepth,

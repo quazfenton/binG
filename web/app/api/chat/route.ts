@@ -1743,7 +1743,14 @@ const config: UnifiedAgentConfig = {
       // use the resolved filesystem owner ID which handles anonymous users correctly
       filesystemOwnerId: filesystemOwnerId,
       // Include conversation ID for spec enhancement filesystem edits
+<<<<<<< Updated upstream
       conversationId: `${filesystemOwnerId}$${resolvedConversationId}`,
+=======
+      conversationId: `${filesystemOwnerId}:${resolvedConversationId}`,
+      // Spec enhancement mode from client
+      specMode: (body as any)?.specMode,
+      specChain: (body as any)?.specChain,
+>>>>>>> Stashed changes
       // Pass scopePath for session-scoped file operations
       scopePath: requestedScopePath,
       // Keep these tri-state so router-level detection can still route specialized endpoints.
@@ -2093,7 +2100,7 @@ const config: UnifiedAgentConfig = {
         // Only trigger spec amplification when there are ACTUAL filesystem edits,
         // not just because the response contains code snippets (const, function, etc.)
         // Spec amplification runs in 'enhanced' or 'max' mode
-        const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
+        const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max' || routerRequest.mode === 'super';
         const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) && isSpecAmplificationMode;
 
         chatLogger.info('Spec amplification check (non-streaming)', {
@@ -2120,7 +2127,8 @@ const config: UnifiedAgentConfig = {
               ...messages,
               { role: 'assistant' as const, content: rawResponseContent },
             ],
-            mode: 'enhanced' as const,
+            mode: routerRequest.mode || 'enhanced',
+            specChain: routerRequest.specChain,
           };
 
           responseRouter.routeWithSpecAmplification(specRequest).catch(err => {
@@ -2903,7 +2911,7 @@ const config: UnifiedAgentConfig = {
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
                 const mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
                 const hasMcpFileEdits = mcpFileEdits.length > 0;
-                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
+                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max' || routerRequest.mode === 'super';
                 // Only trigger spec amplification when there are ACTUAL filesystem edits,
                 // not just because the response contains code snippets (const, function, etc.)
                 const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) &&
@@ -2965,7 +2973,8 @@ const config: UnifiedAgentConfig = {
                       ...messages,
                       { role: 'assistant' as const, content: enhancedContent },
                     ],
-                    mode: 'enhanced' as const,
+                    mode: routerRequest.mode || 'enhanced',
+            specChain: routerRequest.specChain,
                     emit: emitRef.current,  // CRITICAL: Pass emit function so spec amp events reach client
                   };
 
@@ -3380,7 +3389,7 @@ const config: UnifiedAgentConfig = {
                 const hasFileEdits = (effectiveEdits?.applied?.length || 0) > 0;
                 const mcpFileEdits = getRecentMcpFileEdits(resolvedConversationId);
                 const hasMcpFileEdits = mcpFileEdits.length > 0;
-                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max';
+                const isSpecAmplificationMode = routerRequest.mode === 'enhanced' || routerRequest.mode === 'max' || routerRequest.mode === 'super';
                 // Only trigger spec amplification when there are ACTUAL filesystem edits,
                 // not just because the response contains code snippets (const, function, etc.)
                 const shouldRunSpecAmplification = (hasFileEdits || hasMcpFileEdits) &&
@@ -3413,7 +3422,8 @@ const config: UnifiedAgentConfig = {
                       ...messages,
                       { role: 'assistant' as const, content: finalContent },
                     ],
-                    mode: 'enhanced' as const,
+                    mode: routerRequest.mode || 'enhanced',
+            specChain: routerRequest.specChain,
                     emit: emitRef.current,  // CRITICAL: Pass emit function so spec amp events reach client
                   };
 
