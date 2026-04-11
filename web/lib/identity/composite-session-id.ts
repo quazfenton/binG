@@ -101,8 +101,10 @@ export function buildCompositeSessionId(
 /**
  * Extract the simple session folder name from a composite ID.
  *
- * This is the SINGLE SOURCE OF TRUTH for extracting session folder names.
- * Always use this instead of manual splitting.
+ * SECURITY: Uses indexOf (FIRST $) not lastIndexOf, because:
+ * - userId is system-controlled and NEVER contains $
+ * - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
+ * - The FIRST $ is always our system separator
  *
  * @param input - Composite ("1$004") or simple ("004")
  * @returns Simple session folder name (e.g., "004")
@@ -111,7 +113,8 @@ export function extractSimpleSessionId(input: string | undefined): string {
   if (!input || !input.trim()) return '000';
 
   const trimmed = input.trim();
-  const dollarIndex = trimmed.lastIndexOf('$');
+  // CRITICAL: Use indexOf (FIRST $) — userId never contains $, but sessionId might
+  const dollarIndex = trimmed.indexOf('$');
 
   if (dollarIndex !== -1) {
     return trimmed.slice(dollarIndex + 1) || trimmed;
@@ -122,6 +125,11 @@ export function extractSimpleSessionId(input: string | undefined): string {
 
 /**
  * Extract the user ID part from a composite session ID.
+ *
+ * SECURITY: Uses indexOf (FIRST $) not lastIndexOf, because:
+ * - userId is system-controlled and NEVER contains $
+ * - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
+ * - The FIRST $ is always our system separator
  *
  * @param input - Composite ("1$004") or simple ("004")
  * @param defaultUserId - Fallback if input is simple
@@ -136,8 +144,9 @@ export function extractUserIdFromComposite(
   const trimmed = input.trim();
 
   if (trimmed.includes('$')) {
-    const lastDollarIndex = trimmed.lastIndexOf('$');
-    return trimmed.slice(0, lastDollarIndex);
+    // CRITICAL: Use indexOf (FIRST $) — userId never contains $
+    const dollarIndex = trimmed.indexOf('$');
+    return trimmed.slice(0, dollarIndex);
   }
 
   // Simple ID - return default since we don't know the user

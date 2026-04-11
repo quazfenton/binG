@@ -236,7 +236,7 @@ class NullclawIntegration {
    * Get or create container for session
    */
   getContainerForSession(userId: string, conversationId: string): NullclawContainer | undefined {
-    const sessionKey = `${userId}:${conversationId}`;
+    const sessionKey = `${userId}$${conversationId}`;
     const containerId = this.sessionContainers.get(sessionKey);
     
     if (containerId) {
@@ -373,7 +373,7 @@ class NullclawIntegration {
    * Initialize Nullclaw for a specific session (for per-session mode)
    */
   async initializeForSession(userId: string, conversationId: string): Promise<string | undefined> {
-    const sessionKey = `${userId}:${conversationId}`;
+    const sessionKey = `${userId}$${conversationId}`;
     
     // Check if already has container
     const existingContainer = this.getContainerForSession(userId, conversationId);

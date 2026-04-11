@@ -393,7 +393,7 @@ export async function* streamWithVercelAI(
     toolCallStreaming = true,
     smoothStreaming = true,
     maxRetries = 0,
-    maxSteps = 5,
+    maxSteps = 12,
     timeoutMs = 120000, // Default 120s timeout
     providerOptions,
   } = opts;
@@ -668,36 +668,49 @@ export async function* streamWithVercelAI(
       });
       // Inject text-mode tool instructions since tools were stripped
       const TEXT_MODE_TOOL_INSTRUCTIONS = `
-FILE OPERATIONS — You do NOT have tool calls. Use EXACTLY these text formats:
+## FILE OPERATIONS (REQUIRED FORMAT)
 
-CREATE OR OVERWRITE A FILE:
+You do NOT have function calling. Use ONLY these exact formats for file operations:
+
+### CREATE/OVERWRITE FILE
 \`\`\`file: path/to/file.ext
-your full file content here
+complete file content here (no truncation)
 \`\`\`
 
-EDIT EXISTING FILE (preferred — use unified diff):
+### EDIT FILE (unified diff format)
 \`\`\`diff: path/to/file.ext
 --- a/path/to/file.ext
 +++ b/path/to/file.ext
-@@ existing @@
+@@ -1,3 +1,4 @@
+ context line
 -line to remove
 +line to add
++new line
 \`\`\`
 
-CREATE DIRECTORY:
+### CREATE DIRECTORY
 \`\`\`mkdir: path/to/directory
 \`\`\`
 
-DELETE FILE:
+### DELETE FILE
 \`\`\`delete: path/to/file.ext
 \`\`\`
 
-RULES:
-- Always use the exact fence format shown above.
-- For existing files, prefer diff edits over full rewrites.
-- For new files, write the complete content.
-- Do NOT use backtick code blocks for anything else that starts with "file:" or "diff:".
-- Do NOT invent file paths — use paths the user provided or that exist in the project.
+### MULTIPLE FILES (use separate blocks)
+\`\`\`file: src/a.ts
+content of a.ts
+\`\`\`
+
+\`\`\`file: src/b.ts
+content of b.ts
+\`\`\`
+
+### CRITICAL RULES
+1. ONE file per \`\`\`file:\`\`\` or \`\`\`diff:\`\`\` block
+2. Use COMPLETE file content (never truncate with "..." or "// rest of file")
+3. Do NOT mix explanations inside file blocks
+4. Do NOT describe file operations in plain text — use the block formats above
+5. Paths are relative to workspace (e.g., "src/app.tsx", not "/src/app.tsx")
 `;
       if (streamOptions.system) {
         streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
@@ -751,41 +764,7 @@ RULES:
         });
         delete streamOptions.tools;
 
-        // Inject text-mode tool instructions into the system prompt so the model
-        // knows how to perform file actions without native function calling.
-        const TEXT_MODE_TOOL_INSTRUCTIONS = `
-FILE OPERATIONS — You do NOT have tool calls. Use EXACTLY these text formats:
-
-CREATE OR OVERWRITE A FILE:
-\`\`\`file: path/to/file.ext
-your full file content here
-\`\`\`
-
-EDIT EXISTING FILE (preferred — use unified diff):
-\`\`\`diff: path/to/file.ext
---- a/path/to/file.ext
-+++ b/path/to/file.ext
-@@ existing @@
--line to remove
-+line to add
-\`\`\`
-
-CREATE DIRECTORY:
-\`\`\`mkdir: path/to/directory
-\`\`\`
-
-DELETE FILE:
-\`\`\`delete: path/to/file.ext
-\`\`\`
-
-RULES:
-- Always use the exact fence format shown above.
-- For existing files, prefer diff edits over full rewrites.
-- For new files, write the complete content.
-- Do NOT use backtick code blocks for anything else that starts with "file:" or "diff:".
-- Do NOT invent file paths — use paths the user provided or that exist in the project.
-`;
-
+        // Inject text-mode tool instructions (reuse the same improved format)
         if (streamOptions.system) {
           streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
         } else {
@@ -803,46 +782,9 @@ RULES:
           warning: 'Model may not support function calling — text-mode instructions injected as safety net',
         });
 
-        // Inject text-mode tool instructions into the system prompt as a safety net
-        // so the model can still perform file actions via text format if native FC fails
-        const TEXT_MODE_TOOL_INSTRUCTIONS = `
-FILE OPERATIONS — If you are unable to use tool calls, use EXACTLY these text formats:
-
-CREATE OR OVERWRITE A FILE:
-\`\`\`file: path/to/file.ext
-your full file content here
-\`\`\`
-
-EDIT EXISTING FILE (preferred — use unified diff):
-\`\`\`diff: path/to/file.ext
---- a/path/to/file.ext
-+++ b/path/to/file.ext
-@@ existing @@
--line to remove
-+line to add
-\`\`\`
-
-CREATE DIRECTORY:
-\`\`\`mkdir: path/to/directory
-\`\`\`
-
-DELETE FILE:
-\`\`\`delete: path/to/file.ext
-\`\`\`
-
-RULES:
-- Always use the exact fence format shown above.
-- For existing files, prefer diff edits over full rewrites.
-- For new files, write the complete content.
-- Do NOT use backtick code blocks for anything else that starts with "file:" or "diff:".
-- Do NOT invent file paths — use paths the user provided or that exist in the project.
-`;
-
-        if (streamOptions.system) {
-          streamOptions.system = streamOptions.system + '\n\n' + TEXT_MODE_TOOL_INSTRUCTIONS;
-        } else {
-          streamOptions.system = TEXT_MODE_TOOL_INSTRUCTIONS;
-        }
+        // NOTE: For unknown FC support, we DO NOT inject text-mode instructions
+        // This avoids confusing models that support FC but don't report it.
+        // The text-mode parser will still catch any text-based file operations.
       }
     } else {
       chatLogger.info('[FC-GATE] No tools provided, skipping function calling check', { provider, model: modelName });
@@ -932,38 +874,62 @@ RULES:
             // Clear time-to-first-token timeout once we receive any response
             onFirstToken();
             
-            const callArgs = (chunk as any).args || (chunk as any).arguments || {};
-            const hasArgs = !!callArgs && Object.keys(callArgs).length > 0;
+            let callArgs = (chunk as any).args || (chunk as any).arguments || {};
             const toolName = (chunk as any).toolName;
             const toolCallId = (chunk as any).toolCallId;
+
+            // SELF-HEALING: Normalize tool args to fix common LLM mistakes
+            // (wrong field names like "filename" → "path", "code" → "content")
+            try {
+              const { normalizeToolArgs } = await import('../mcp/vfs-mcp-tools');
+              callArgs = normalizeToolArgs(toolName, callArgs);
+              (chunk as any).args = callArgs;
+            } catch {
+              // Normalization is best-effort
+            }
+
+            const hasArgs = !!callArgs && Object.keys(callArgs).length > 0;
             const argsCount = Object.keys(callArgs).length;
             
-            // ENHANCED: Log tool call with detailed args info
             if (hasArgs) {
               chatLogger.info('[TOOL-CALL] ✓ Tool invoked', {
                 toolCallId,
                 toolName,
                 argsCount,
                 argsKeys: Object.keys(callArgs),
-                // Show first 500 chars of args for debugging
                 argsPreview: JSON.stringify(callArgs).slice(0, 500),
-                // Log internal data structure
-                argsTypes: Object.fromEntries(Object.entries(callArgs).map(([k, v]) => [k, typeof v])),
               });
             } else {
-              // EMPTY ARGS - log with emphasis since this often causes tool failures
-              chatLogger.error('[TOOL-CALL] ✗ EMPTY args detected - tool likely to fail', {
+              // EMPTY ARGS — block execution, synthesize a failure result
+              chatLogger.error('[TOOL-CALL] ✗ EMPTY args — blocking execution', {
                 toolCallId,
                 toolName,
                 severity: 'HIGH',
-                warning: 'Tool will execute with empty args - check if model streaming was truncated or incomplete',
-                possibleCauses: [
-                  'Model response was truncated',
-                  'Function calling args not properly serialized',
-                  'Model stopped before sending complete args',
-                  'Multi-step tool call args split across chunks',
-                ],
               });
+
+              // Yield a synthetic tool-result failure so the model sees the error
+              // and can retry with correct args
+              yield {
+                content: '',
+                isComplete: false,
+                toolInvocations: [{
+                  toolCallId,
+                  toolName,
+                  state: 'result' as const,
+                  args: {},
+                  result: {
+                    success: false,
+                    error: {
+                      code: 'EMPTY_ARGS',
+                      message: `Tool "${toolName}" was called with no arguments. This usually means the model response was truncated.`,
+                      retryable: true,
+                      suggestedNextAction: `Call ${toolName} again with all required arguments.`,
+                    },
+                  },
+                }],
+                timestamp: new Date(),
+              };
+              break; // Skip normal tool-call yield
             }
 
             // Cache args so tool-result can include them (AI SDK doesn't repeat args in result)

@@ -40,7 +40,11 @@ function startPeriodicCleanup() {
       if (now - value.timestamp > cacheThreshold) {
         snapshotCache.delete(key);
         // Also clean up corresponding latestSeenVersion entry
-        const ownerFromKey = key.split(':')[0];
+        // SECURITY: Use indexOf (FIRST :) not split()[0], because:
+        // - ownerId is system-controlled and NEVER contains :
+        // - path MAY contain user-provided : (e.g., Windows paths)
+        const colonIndex = key.indexOf(':');
+        const ownerFromKey = colonIndex !== -1 ? key.slice(0, colonIndex) : key;
         if (ownerFromKey && !Array.from(snapshotCache.keys()).some(k => k.startsWith(`${ownerFromKey}:`))) {
           latestSeenVersion.delete(ownerFromKey);
         }
@@ -60,7 +64,11 @@ function startPeriodicCleanup() {
       for (const [key] of toDelete) {
         snapshotCache.delete(key);
         // Also clean up corresponding latestSeenVersion entry
-        const ownerFromKey = key.split(':')[0];
+        // SECURITY: Use indexOf (FIRST :) not split()[0], because:
+        // - ownerId is system-controlled and NEVER contains :
+        // - path MAY contain user-provided : (e.g., Windows paths)
+        const colonIndex = key.indexOf(':');
+        const ownerFromKey = colonIndex !== -1 ? key.slice(0, colonIndex) : key;
         if (ownerFromKey && !Array.from(snapshotCache.keys()).some(k => k.startsWith(`${ownerFromKey}:`))) {
           latestSeenVersion.delete(ownerFromKey);
         }

@@ -223,12 +223,15 @@ export function useVirtualFilesystem(
   // Format: "userId$sessionNum" (e.g., "1$004") → extract "004"
   // Format: "anon$sessionNum" (e.g., "anon$001") → extract "001"
   // This ensures the VFS always starts in the correct session subdirectory.
+  // SECURITY: Use indexOf (FIRST $) not split().pop(), because:
+  // - userId is system-controlled and NEVER contains $
+  // - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
   const deriveSessionFolderFromComposite = (): string | null => {
     const composite = options?.compositeSessionId;
     if (!composite) return null;
     if (composite.includes('$')) {
-      const parts = composite.split('$');
-      return parts[parts.length - 1]; // Return session number part
+      const dollarIndex = composite.indexOf('$');
+      return composite.slice(dollarIndex + 1); // Return session number part
     }
     // If no $ separator, check if it's already a simple session number
     if (/^\d{2,4}$/.test(composite) || /^[a-z]+(-\d+)?$/.test(composite)) {
@@ -273,13 +276,17 @@ export function useVirtualFilesystem(
   // 2. Composite sessionId in "userId$sessionNum" format (e.g., "1$004") — extract userId part
   // 3. Derive from scoped path (e.g., "project/sessions/004")
   // 4. Fall back to anonymous session ID
+  // SECURITY: Use indexOf (FIRST $) not split()[0], because:
+  // - userId is system-controlled and NEVER contains $
+  // - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
   const getOwnerId = useCallback(() => {
     // Priority 1: Explicit authenticated userId
     if (options?.userId) return options.userId;
 
     // Priority 2: Composite sessionId format "userId$sessionNum"
     if (options?.compositeSessionId && options.compositeSessionId.includes('$')) {
-      const [userIdPart] = options.compositeSessionId.split('$');
+      const dollarIndex = options.compositeSessionId.indexOf('$');
+      const userIdPart = options.compositeSessionId.slice(0, dollarIndex);
       if (userIdPart && userIdPart !== 'anon') return userIdPart;
     }
 
@@ -501,14 +508,17 @@ export function useVirtualFilesystem(
       // CRITICAL FIX: Extract simple session ID from potentially composite IDs
       // This handles formats like "1$004" -> "004" (composite) or "1" -> "1" (just userId)
       // Returns empty string for invalid input - caller should handle this case
+      // SECURITY: Use indexOf (FIRST $) not split().pop(), because:
+      // - userId is system-controlled and NEVER contains $
+      // - sessionId MAY contain user-provided $ (e.g., folder named "my$project")
       const extractSessionPart = (id: string): string => {
         if (!id || typeof id !== 'string') return '';
         const trimmed = id.trim();
         if (!trimmed) return '';
-        // Extract last segment after any $ (handles composite IDs like "1$004")
+        // Extract segment after FIRST $ (handles composite IDs like "1$004")
         if (trimmed.includes('$')) {
-          const parts = trimmed.split('$');
-          return parts[parts.length - 1].trim();
+          const dollarIndex = trimmed.indexOf('$');
+          return trimmed.slice(dollarIndex + 1).trim();
         }
         return trimmed;
       };

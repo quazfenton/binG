@@ -42,14 +42,18 @@ export function cookieToScopePath(cookieValue: string, prefix = 'project/session
 /**
  * Extract sessionId from ownerId
  * "anon:timestamp_random" -> "timestamp_random"
+ * "1$001" -> "001" (uses FIRST $ to handle user-provided $ in session names)
  */
 export function extractSessionIdFromOwnerId(ownerId: string): string {
   if (ownerId.startsWith('anon:')) {
     return ownerId.slice(5);
   }
   // Handle composite: "1$001" -> "001"
+  // SECURITY: Use indexOf (FIRST $) not pop(), because:
+  // - userId never contains $, but sessionId might (user-provided names)
   if (ownerId.includes('$')) {
-    return ownerId.split('$').pop() || ownerId;
+    const dollarIndex = ownerId.indexOf('$');
+    return ownerId.slice(dollarIndex + 1);
   }
   return ownerId;
 }
@@ -57,14 +61,17 @@ export function extractSessionIdFromOwnerId(ownerId: string): string {
 /**
  * Extract userId from ownerId (without session part)
  * "anon:timestamp_random" -> "anon"
- * "1$001" -> "1"
+ * "1$001" -> "1" (uses FIRST $ to handle user-provided $ in session names)
  */
 export function extractUserIdFromOwnerId(ownerId: string): string {
   if (ownerId.startsWith('anon:')) {
     return 'anon';
   }
+  // SECURITY: Use indexOf (FIRST $) not split()[0], because:
+  // - userId never contains $, but sessionId might (user-provided names)
   if (ownerId.includes('$')) {
-    return ownerId.split('$')[0];
+    const dollarIndex = ownerId.indexOf('$');
+    return ownerId.slice(0, dollarIndex);
   }
   return ownerId;
 }
@@ -85,27 +92,9 @@ export function buildOwnerId(sessionId: string, prefix = 'anon'): string {
   return `${prefix}:${sessionId}`;
 }
 
-/**
- * Parse composite session ID (userId$sessionId format)
- * "1$004" -> { userId: "1", sessionId: "004" }
- * "anon$004" -> { userId: "anon", sessionId: "004" }
- */
-export function parseCompositeSessionId(compositeId: string): { userId: string; sessionId: string } | null {
-  if (!compositeId.includes('$')) return null;
-  const parts = compositeId.split('$');
-  return {
-    userId: parts[0],
-    sessionId: parts[parts.length - 1],
-  };
-}
-
-/**
- * Build composite session ID
- * userId: "1", sessionId: "004" -> "1$004"
- */
-export function buildCompositeSessionId(userId: string, sessionId: string): string {
-  return `${userId}$${sessionId}`;
-}
+// NOTE: buildCompositeSessionId and parseCompositeSessionId have been moved to
+// @/lib/identity/composite-session-id.ts which is the canonical location.
+// Import from there instead of this file.
 
 /**
  * Normalize session ID to simple folder format

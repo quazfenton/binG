@@ -29,6 +29,154 @@ import { createLogger } from '../utils/logger';
 
 const logger = createLogger('VFS-MCP-Tools');
 
+// ============================================================================
+// Tool Argument Normalization (Self-Healing for LLM Mistakes)
+// ============================================================================
+
+/**
+ * Normalize tool arguments before Zod validation.
+ * Maps common LLM field-name mistakes to expected schema fields.
+ * This dramatically improves success rates across different models.
+ */
+export function normalizeToolArgs(toolName: string, raw: unknown): any {
+  if (!raw || typeof raw !== 'object') return raw;
+  const obj = { ...(raw as Record<string, unknown>) };
+
+  const alias = (candidates: string[]): unknown => {
+    for (const key of candidates) {
+      if (obj[key] !== undefined && obj[key] !== null) return obj[key];
+    }
+    return undefined;
+  };
+
+  switch (toolName.toLowerCase()) {
+    case 'write_file':
+    case 'create_file':
+    case 'writetofile': {
+      const path = alias(['path', 'file', 'filename', 'filepath', 'file_path', 'filePath', 'target']);
+      const content = alias(['content', 'contents', 'code', 'text', 'body', 'data', 'source']);
+      const commitMessage = alias(['commitMessage', 'commit_message', 'message', 'description']);
+      return { path, content, commitMessage };
+    }
+    case 'apply_diff':
+    case 'applydiff':
+    case 'patch': {
+      const path = alias(['path', 'file', 'filename', 'filepath', 'file_path', 'target']);
+      const diff = alias(['diff', 'patch', 'content', 'changes', 'delta']);
+      const commitMessage = alias(['commitMessage', 'commit_message', 'message']);
+      return { path, diff, commitMessage };
+    }
+    case 'read_file':
+    case 'readfile': {
+      const path = alias(['path', 'file', 'filename', 'filepath', 'file_path']);
+      return { path };
+    }
+    case 'read_files':
+    case 'readfiles': {
+      let paths = alias(['paths', 'files', 'filenames', 'file_paths']);
+      // Handle single path string
+      if (typeof paths === 'string') paths = [paths];
+      return { paths };
+    }
+    case 'delete_file':
+    case 'deletefile':
+    case 'remove_file': {
+      const path = alias(['path', 'file', 'filename', 'filepath', 'target']);
+      const reason = alias(['reason', 'message', 'description']);
+      return { path, reason };
+    }
+    case 'list_files':
+    case 'listfiles':
+    case 'ls': {
+      const path = alias(['path', 'directory', 'dir', 'folder']);
+      const recursive = alias(['recursive', 'recurse', 'deep']);
+      return { path: path ?? '/', recursive };
+    }
+    case 'batch_write':
+    case 'batchwrite':
+    case 'write_files':
+    case 'writefiles': {
+      let files = alias(['files', 'items', 'operations', 'data', 'batch']);
+      // Handle stringified JSON
+      if (typeof files === 'string') {
+        files = parseBatchWriteFiles(files);
+      }
+      // Handle top-level array
+      if (!files && Array.isArray(raw)) files = raw;
+      // Normalize each file's fields
+      if (Array.isArray(files)) {
+        files = files.filter(f => f && typeof f === 'object').map((f: any) => {
+          const path = f.path ?? f.file ?? f.filename ?? f.filepath ?? f.file_path;
+          const content = f.content ?? f.contents ?? f.code ?? f.text ?? f.body ?? f.data;
+          return { path, content };
+        });
+      }
+      const commitMessage = alias(['commitMessage', 'commit_message', 'message']);
+      return { files, commitMessage };
+    }
+    case 'create_directory':
+    case 'createdirectory':
+    case 'mkdir': {
+      const path = alias(['path', 'directory', 'dir', 'folder', 'name']);
+      return { path };
+    }
+    case 'search_files':
+    case 'searchfiles':
+    case 'search': {
+      const query = alias(['query', 'search', 'term', 'pattern', 'text']);
+      const path = alias(['path', 'directory', 'dir', 'folder', 'scope']);
+      const limit = alias(['limit', 'max', 'count', 'maxResults']);
+      return { query, path, limit };
+    }
+    default:
+      return obj;
+  }
+}
+
+/**
+ * Tolerant JSON parser for malformed LLM output.
+ * Handles: trailing commas, single quotes, unescaped control chars.
+ */
+export function tolerantJsonParse(text: string): unknown {
+  if (!text || typeof text !== 'string') return undefined;
+  const trimmed = text.trim();
+  if (!trimmed) return undefined;
+
+  // Sanitize control characters inside string values
+  function sanitizeJsonString(str: string): string {
+    let result = '', inString = false, escapeNext = false;
+    for (let i = 0; i < str.length; i++) {
+      const ch = str[i];
+      if (escapeNext) { result += ch; escapeNext = false; continue; }
+      if (ch === '\\' && inString) { result += ch; escapeNext = true; continue; }
+      if (ch === '"') { inString = !inString; result += ch; continue; }
+      if (inString) {
+        if (ch === '\n') result += '\\n';
+        else if (ch === '\r') result += '\\r';
+        else if (ch === '\t') result += '\\t';
+        else if (ch === '\b') result += '\\b';
+        else if (ch === '\f') result += '\\f';
+        else result += ch;
+      } else result += ch;
+    }
+    return result;
+  }
+
+  const attempts = [
+    () => JSON.parse(trimmed),
+    () => JSON.parse(trimmed.replace(/,\s*([}\]])/g, '$1')), // trailing commas
+    () => JSON.parse(trimmed.replace(/'/g, '"')), // single quotes
+    () => JSON.parse(sanitizeJsonString(trimmed)),
+    () => JSON.parse(sanitizeJsonString(trimmed.replace(/,\s*([}\]])/g, '$1'))),
+    () => JSON.parse(sanitizeJsonString(trimmed.replace(/'/g, '"'))),
+  ];
+
+  for (const attempt of attempts) {
+    try { return attempt(); } catch {}
+  }
+  return undefined;
+}
+
 /**
  * Parse files argument for batch_write tool.
  * Handles various formats the LLM might send:
@@ -276,12 +424,15 @@ export function initializeVFSTools(userId: string, sessionId?: string, scopePath
  * Use for new files or complete rewrites
  */
 export const writeFileTool = (tool as any)({
-  description: 'Create a new file or completely overwrite an existing file in the Virtual File System. Use this when the entire content is known or for new files.',
-  parameters: z.object({
-    path: z.string().describe('Full virtual path, e.g. "/src/components/Button.tsx" or "/app/page.tsx"'),
-    content: z.string().describe('Complete file content as a string'),
-    commitMessage: z.string().optional().describe('Optional description of the change for history/memory'),
-  }),
+  description: 'Create or overwrite a file. Required: path (e.g. "src/app.tsx"), content (complete file contents).',
+  parameters: z.preprocess(
+    (raw) => normalizeToolArgs('write_file', raw),
+    z.object({
+      path: z.string().describe('File path like "src/app.tsx" (no leading slash required)'),
+      content: z.string().describe('Complete file contents - do not truncate or abbreviate'),
+      commitMessage: z.string().optional().describe('Optional change description'),
+    })
+  ),
   execute: async ({ path, content, commitMessage = 'Write file via MCP tool' }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -375,12 +526,15 @@ export const writeFileTool = (tool as any)({
  * Preferred for targeted edits - much more reliable than full rewrite
  */
 export const applyDiffTool = (tool as any)({
-  description: 'Apply a unified diff patch to an existing file. Preferred for targeted edits to avoid overwriting unrelated code. Use standard git diff format (--- +++ @@ ...).',
-  parameters: z.object({
-    path: z.string().describe('Target file path'),
-    diff: z.string().describe('Unified diff format (--- +++ @@ lines ...). Use standard git diff style.'),
-    commitMessage: z.string().optional().describe('Optional description of the change'),
-  }),
+  description: 'Apply a diff patch to modify an existing file. Required: path, diff (unified format with --- +++ @@ lines).',
+  parameters: z.preprocess(
+    (raw) => normalizeToolArgs('apply_diff', raw),
+    z.object({
+      path: z.string().describe('File path to patch'),
+      diff: z.string().describe('Unified diff with --- +++ @@ format'),
+      commitMessage: z.string().optional().describe('Optional change description'),
+    })
+  ),
   execute: async ({ path, diff, commitMessage = 'Applied diff via MCP tool' }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -475,10 +629,13 @@ function reverseNormalizePath(originalPath: string, scopedPath: string): string 
  * Critical for the agent to see what exists before editing
  */
 export const readFileTool = (tool as any)({
-  description: 'Read the full content of a file from the Virtual File System. Essential for viewing existing code before making edits.',
-  parameters: z.object({
-    path: z.string().describe('Full path to the file'),
-  }),
+  description: 'Read a file. Required: path (e.g. "src/app.tsx"). Returns file content.',
+  parameters: z.preprocess(
+    (raw) => normalizeToolArgs('read_file', raw),
+    z.object({
+      path: z.string().describe('File path to read'),
+    })
+  ),
   execute: async ({ path }) => {
     try {
   if (!path || typeof path !== 'string') {
@@ -682,13 +839,17 @@ export const searchFilesTool = (tool as any)({
  * Efficient for creating several related files at once
  */
 export const batchWriteTool = (tool as any)({
-  description: 'Write multiple files in one operation. Efficient for creating several related files at once (e.g., component files, config files).',
-  parameters: z.object({
-    files: z.array(z.object({
-  path: z.string().describe('File path'),
-  content: z.string().describe('File content'),
-    })).max(50, 'Cannot write more than 50 files in a single batch').describe('Array of {path, content} objects'),    commitMessage: z.string().optional().describe('Optional description for all files'),
-  }),
+  description: 'Write multiple files at once. Required: files array of {path, content} objects. Example: {"files": [{"path": "src/a.ts", "content": "code"}]}',
+  parameters: z.preprocess(
+    (raw) => normalizeToolArgs('batch_write', raw),
+    z.object({
+      files: z.array(z.object({
+        path: z.string().describe('File path'),
+        content: z.string().describe('File content'),
+      })).max(50, 'Cannot write more than 50 files').describe('Array of {path, content} objects'),
+      commitMessage: z.string().optional().describe('Optional description'),
+    })
+  ),
   execute: async ({ files, commitMessage = 'Batch write via MCP tool' }) => {
     try {
       const context = getToolContext();
