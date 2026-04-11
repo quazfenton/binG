@@ -152,9 +152,12 @@ export function VersionHistoryPanel({
   return (
     <div className="rounded-lg border border-blue-200 dark:border-blue-800 bg-blue-50/30 dark:bg-blue-950/10 overflow-hidden">
       {/* Header */}
-      <button
+      <div
         onClick={() => setIsExpanded(!isExpanded)}
-        className="flex w-full items-center justify-between px-3 py-2 hover:bg-blue-100/50 dark:hover:bg-blue-900/20 transition-colors"
+        className="flex w-full items-center justify-between px-3 py-2 hover:bg-blue-100/50 dark:hover:bg-blue-900/20 transition-colors cursor-pointer"
+        role="button"
+        tabIndex={0}
+        onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); setIsExpanded(!isExpanded); } }}
       >
         <div className="flex items-center gap-2">
           <History className="h-4 w-4 text-blue-600 dark:text-blue-400" />
@@ -186,7 +189,7 @@ export function VersionHistoryPanel({
             <ChevronDown className="h-4 w-4 text-blue-600 dark:text-blue-400" />
           )}
         </div>
-      </button>
+      </div>
 
       {/* Content */}
       {isExpanded && (

@@ -608,25 +608,24 @@ export class AutonomousAgentEngine extends EventEmitter {
    */
   private async generateStimuli(cycle: number): Promise<StimulusEntry[]> {
     const stimuli: StimulusEntry[] = [];
-    const rng = this.random();
 
     // Peer message stimulus
-    if (rng < this.config.stimulusConfig.peerMessageProbability && this.state.identity.peers.length > 0) {
+    if (this.random() < this.config.stimulusConfig.peerMessageProbability && this.state.identity.peers.length > 0) {
       stimuli.push(await this.generatePeerMessageStimulus());
     }
 
     // World event stimulus
-    if (rng < this.config.stimulusConfig.worldEventProbability) {
+    if (this.random() < this.config.stimulusConfig.worldEventProbability) {
       stimuli.push(await this.generateWorldEventStimulus(cycle));
     }
 
     // Social feed stimulus
-    if (rng < this.config.stimulusConfig.socialFeedProbability) {
+    if (this.random() < this.config.stimulusConfig.socialFeedProbability) {
       stimuli.push(await this.generateSocialFeedStimulus());
     }
 
     // Reflection trigger stimulus
-    if (rng < this.config.stimulusConfig.reflectionTriggerProbability) {
+    if (this.random() < this.config.stimulusConfig.reflectionTriggerProbability) {
       stimuli.push({
         type: 'self_reflection_trigger',
         content: this.generateReflectionPrompt(),
@@ -729,7 +728,6 @@ export class AutonomousAgentEngine extends EventEmitter {
   private async selectActions(cycle: number): Promise<ActionEntry[]> {
     const actions: ActionEntry[] = [];
     const maxActions = this.config.constraints.maxActionsPerCycle;
-    const rng = this.random();
 
     // Prioritize based on active goal
     if (this.state.activeGoal) {
@@ -745,13 +743,13 @@ export class AutonomousAgentEngine extends EventEmitter {
     }
 
     // Spontaneous action (driven by curiosity/assertiveness)
-    if (actions.length < maxActions && rng < this.state.identity.personality.curiosity) {
+    if (actions.length < maxActions && this.random() < this.state.identity.personality.curiosity) {
       const spontaneousAction = this.generateSpontaneousAction(cycle);
       if (spontaneousAction) actions.push(spontaneousAction);
     }
 
     // Peer-directed action
-    if (actions.length < maxActions && this.state.peerQueue.length > 0 && rng < this.state.identity.personality.cooperativeness) {
+    if (actions.length < maxActions && this.state.peerQueue.length > 0 && this.random() < this.state.identity.personality.cooperativeness) {
       const peerAction = this.generatePeerAction(this.state.peerQueue.shift()!, cycle);
       if (peerAction) actions.push(peerAction);
     }
@@ -1453,11 +1451,10 @@ export class AutonomousAgentEngine extends EventEmitter {
     if (!this.config.autonomousConfig?.enableAutonomousStimuli) return [];
 
     const stimuli: StimulusEntry[] = [];
-    const rng = this.random();
     const { internalNarrativeProbability, memoryRecallProbability, futureProjectionProbability } = this.config.autonomousConfig;
 
-    if (rng < internalNarrativeProbability) stimuli.push(this.generateInternalNarrative(cycle));
-    if (rng < memoryRecallProbability && this.state.memory.length > 5) {
+    if (this.random() < internalNarrativeProbability) stimuli.push(this.generateInternalNarrative(cycle));
+    if (this.random() < memoryRecallProbability && this.state.memory.length > 5) {
       const recalled = this.state.memory.filter(m => !m.reflected || m.salience > 0.6).slice(-50);
       if (recalled.length > 0) {
         const m = recalled[Math.floor(this.random() * recalled.length)];
@@ -1472,11 +1469,11 @@ export class AutonomousAgentEngine extends EventEmitter {
         });
       }
     }
-    if (rng < futureProjectionProbability) {
+    if (this.random() < futureProjectionProbability) {
       const g = this.state.identity.goals.find(x => x.id === this.state.activeGoal) || this.state.identity.goals[0];
       stimuli.push({
         type: 'narrative_injection',
-        content: `Projection: In ${Math.floor(rng * 100) + 50} cycles, pursuing "${g?.description || 'my path'}", I estimate ${(rng * 40 + 20).toFixed(0)}% convergence. The uncertainty is part of the path.`,
+        content: `Projection: In ${Math.floor(this.random() * 100) + 50} cycles, pursuing "${g?.description || 'my path'}", I estimate ${(this.random() * 40 + 20).toFixed(0)}% convergence. The uncertainty is part of the path.`,
         source: 'internal',
         intendedValence: 0.1,
         salience: 0.4,
