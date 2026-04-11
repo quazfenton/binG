@@ -6,12 +6,23 @@ import type { FilesystemOwnerResolution } from '@/lib/virtual-filesystem/resolve
 export const runtime = 'nodejs';
 
 // Server-side LRU cache for snapshots
-const snapshotCache = new Map<string, {
+// CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
+declare global {
+  // eslint-disable-next-line no-var
+  var __snapshotCache__: Map<string, {
+    data: any;
+    timestamp: number;
+    etag: string;
+    version: number;
+  }> | undefined;
+}
+
+const snapshotCache = globalThis.__snapshotCache__ ?? (globalThis.__snapshotCache__ = new Map<string, {
   data: any;
   timestamp: number;
   etag: string;
   version: number;
-}>();
+}>());
 const CACHE_TTL_MS = 30000; // 30 seconds server-side cache
 const MAX_CACHE_SIZE = 50; // Max entries before proactive cleanup
 
@@ -29,7 +40,11 @@ function startPeriodicCleanup() {
       if (now - value.timestamp > cacheThreshold) {
         snapshotCache.delete(key);
         // Also clean up corresponding latestSeenVersion entry
-        const ownerFromKey = key.split(':')[0];
+        // SECURITY: Use indexOf (FIRST :) not split()[0], because:
+        // - ownerId is system-controlled and NEVER contains :
+        // - path MAY contain user-provided : (e.g., Windows paths)
+        const colonIndex = key.indexOf(':');
+        const ownerFromKey = colonIndex !== -1 ? key.slice(0, colonIndex) : key;
         if (ownerFromKey && !Array.from(snapshotCache.keys()).some(k => k.startsWith(`${ownerFromKey}:`))) {
           latestSeenVersion.delete(ownerFromKey);
         }
@@ -49,7 +64,11 @@ function startPeriodicCleanup() {
       for (const [key] of toDelete) {
         snapshotCache.delete(key);
         // Also clean up corresponding latestSeenVersion entry
-        const ownerFromKey = key.split(':')[0];
+        // SECURITY: Use indexOf (FIRST :) not split()[0], because:
+        // - ownerId is system-controlled and NEVER contains :
+        // - path MAY contain user-provided : (e.g., Windows paths)
+        const colonIndex = key.indexOf(':');
+        const ownerFromKey = colonIndex !== -1 ? key.slice(0, colonIndex) : key;
         if (ownerFromKey && !Array.from(snapshotCache.keys()).some(k => k.startsWith(`${ownerFromKey}:`))) {
           latestSeenVersion.delete(ownerFromKey);
         }
@@ -62,25 +81,43 @@ function startPeriodicCleanup() {
 // Start periodic cleanup
 startPeriodicCleanup();
 
-const latestSeenVersion = new Map<string, number>();
+// CRITICAL FIX: Use globalThis to survive Next.js hot-reloading
+// Without this, latestSeenVersion resets on hot-reload and cache validation breaks
+declare global {
+  // eslint-disable-next-line no-var
+  var __snapshotLatestVersion__: Map<string, number> | undefined;
+  // eslint-disable-next-line no-var
+  var __snapshotListenerRegistered__: boolean | undefined;
+}
 
-virtualFilesystem.onSnapshotChange((ownerId: string, version: number) => {
-  const currentMax = latestSeenVersion.get(ownerId) || 0;
-  latestSeenVersion.set(ownerId, Math.max(currentMax, version));
+const latestSeenVersion = globalThis.__snapshotLatestVersion__ ?? (globalThis.__snapshotLatestVersion__ = new Map<string, number>());
 
-  for (const key of snapshotCache.keys()) {
-    if (key.startsWith(`${ownerId}:`)) {
-      const cached = snapshotCache.get(key);
-      if (cached && cached.version < version) {
-        snapshotCache.delete(key);
-        console.log('[VFS SNAPSHOT] Cache invalidated for owner:', ownerId, 'version:', version);
+// Only register the listener once, even across hot-reloads
+if (!globalThis.__snapshotListenerRegistered__) {
+  globalThis.__snapshotListenerRegistered__ = true;
+  virtualFilesystem.onSnapshotChange((ownerId: string, version: number) => {
+    const currentMax = latestSeenVersion.get(ownerId) || 0;
+    latestSeenVersion.set(ownerId, Math.max(currentMax, version));
+
+    for (const key of snapshotCache.keys()) {
+      if (key.startsWith(`${ownerId}:`)) {
+        const cached = snapshotCache.get(key);
+        if (cached && cached.version < version) {
+          snapshotCache.delete(key);
+          console.log('[VFS SNAPSHOT] Cache invalidated for owner:', ownerId, 'version:', version);
+        }
       }
     }
-  }
-});
+  });
+}
 
 // Request tracking for detecting polling loops
-const requestTracker = new Map<string, { count: number; lastRequest: number; firstRequest: number }>();
+declare global {
+  // eslint-disable-next-line no-var
+  var __snapshotRequestTracker__: Map<string, { count: number; lastRequest: number; firstRequest: number }> | undefined;
+}
+
+const requestTracker = globalThis.__snapshotRequestTracker__ ?? (globalThis.__snapshotRequestTracker__ = new Map<string, { count: number; lastRequest: number; firstRequest: number }>());
 const REQUEST_WINDOW_MS = 5000; // 5 second window for tracking
 const MAX_TRACKER_SIZE = 100; // Max entries before cleanup
 
@@ -193,7 +230,12 @@ export async function GET(req: NextRequest) {
   try {
     owner = await resolveFilesystemOwner(req);
     const url = new URL(req.url);
-    const pathFilter = (url.searchParams.get('path') || 'project').replace(/\/+$/, '');
+    // Query project/sessions/* when path is project to catch session-scoped files
+    let pathFilter = url.searchParams.get('path') || 'project';
+    if (pathFilter === 'project') {
+      pathFilter = 'project/sessions';
+    }
+    pathFilter = pathFilter.replace(/\/+$/, '');
 
     // SECURITY: Validate pathFilter with schema before use
     const parseResult = snapshotRequestSchema.safeParse({ path: pathFilter });
@@ -281,7 +323,8 @@ export async function GET(req: NextRequest) {
       logWarn(`[${requestId}] EMPTY WORKSPACE: ownerId="${owner.ownerId}", source="${owner.source}", path="${pathFilter}"`);
     } else if (files.length === 0 && snapshot.files.length > 0) {
       logWarn(`[${requestId}] PATH MISMATCH: workspace has ${snapshot.files.length} files but none match path="${pathFilter}"`);
-      log(`[${requestId}] Workspace file paths:`, snapshot.files.slice(0, 10).map(f => f.path));
+      log(`[${requestId}] Workspace file paths:`, snapshot.files.map(f => f.path));
+      logWarn(`[${requestId}] Hint: requested prefix="${pathFilter}" — ensure files are written under "${pathFilter}/" scope`);
     }
 
     if (duration > 200) {

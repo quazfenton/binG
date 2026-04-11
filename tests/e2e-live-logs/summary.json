@@ -1,0 +1,85 @@
+{
+  "timestamp": "2026-04-09T21:06:49.763Z",
+  "baseUrl": "http://localhost:3000",
+  "scenarios": [
+    {
+      "name": "auth_login_probe",
+      "passed": true,
+      "status": 200,
+      "failurePoint": null,
+      "responseSnippet": "{\"success\":true,\"user\":{\"id\":1,\"email\":\"test@test.com\",\"username\":null,\"createdAt\":\"2026-04-09T10:12:37.000Z\",\"lastLogin\":\"2026-04-10T01:01:09.000Z\",\"isActive\":true,\"subscriptionTier\":\"free\",\"emailVerified\":false},\"token\":\"eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJ1c2VySWQiOiIxIiwiZW1haWwiOiJ0ZXN0QHRl"
+    },
+    {
+      "name": "chat_nonstream_probe",
+      "passed": false,
+      "status": 500,
+      "failurePoint": "chat non-stream path returned non-2xx",
+      "responseSnippet": "{\"success\":false,\"error\":{\"type\":\"critical_error\",\"code\":\"VALIDATION_ERROR\",\"message\":\"Critical system error occurred\",\"isRetryable\":true},\"data\":{\"content\":\"I apologize, but I'm experiencing technical difficulties right now. Our team has been notified and is working to resolve the issue. Please try"
+    },
+    {
+      "name": "chat_stream_baseline",
+      "passed": true,
+      "status": 200,
+      "tokenLength": 12,
+      "doneEvent": true,
+      "toolEventCount": 0,
+      "fileEventCount": 0
+    },
+    {
+      "name": "mistral_app_generation",
+      "passed": false,
+      "status": 200,
+      "doneEvent": true,
+      "toolEventCount": 0,
+      "fileEventCount": 0,
+      "filesInSession": [],
+      "indexHasButton": false,
+      "appHasCounterLogic": false,
+      "failurePoint": "stream finished without persisting expected files"
+    },
+    {
+      "name": "mistral_repeat_edit_existing",
+      "passed": false,
+      "status": 200,
+      "doneEvent": true,
+      "toolEventCount": 0,
+      "fileEventCount": 0,
+      "versionBefore": null,
+      "versionAfter": null,
+      "appContainsStartAt5": false,
+      "appContainsReset": false,
+      "failurePoint": "repeat edit did not change target file version"
+    },
+    {
+      "name": "mistral_terminal_run",
+      "passed": false,
+      "status": 200,
+      "toolEventCount": 0,
+      "fileEventCount": 0,
+      "terminalToolSeen": false,
+      "terminalOutputSeen": false,
+      "failurePoint": "natural-language run request did not produce a terminal/shell tool invocation event"
+    },
+    {
+      "name": "google_app_generation",
+      "passed": false,
+      "status": 200,
+      "doneEvent": true,
+      "toolEventCount": 0,
+      "fileEventCount": 0,
+      "indexReadStatus": 404,
+      "appReadStatus": 404,
+      "failurePoint": "google stream completed without expected workspace files"
+    },
+    {
+      "name": "ambiguous_file_selection",
+      "passed": false,
+      "status": 200,
+      "toolEventCount": 0,
+      "fileEventCount": 0,
+      "frontendContent": "{\"success\":false,\"error\":\"File not found\"}",
+      "serverContent": "{\"success\":false,\"error\":\"File not found\"}",
+      "failurePoint": "wrong file selected or both files changed during ambiguous-target update"
+    }
+  ]
+}

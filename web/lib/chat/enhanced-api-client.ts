@@ -197,9 +197,9 @@ export class EnhancedAPIClient {
   };
 
   private defaultCircuitBreakerConfig: CircuitBreakerConfig = {
-    failureThreshold: 10,
-    recoveryTimeout: 15000,
-    monitoringWindow: 90000
+    failureThreshold: 10,          // Need many failures before tripping
+    recoveryTimeout: 5000,         // Reduced from 15s - try again quickly after transient errors
+    monitoringWindow: 180000       // Increased from 90s - 3 min window, so scattered failures don't accumulate
   };
 
   constructor(circuitBreakerConfig?: Partial<CircuitBreakerConfig>) {
@@ -562,16 +562,19 @@ export class EnhancedAPIClient {
   }
 
   startHealthMonitoring(endpoints: string[], interval: number = 60000): void {
+    // DISABLED: Health checks are not reliable for LLM APIs.
+    // Most LLM provider base URLs (e.g., https://api.openai.com/v1) don't have
+    // health check endpoints - a GET request returns 401/404 even when the API is healthy.
+    // Instead, we track health based on actual request success/failure.
+    //
+    // If you need health checks, implement provider-specific endpoints in the config.
+    // For now, all providers default to healthy until they fail actual requests.
+    
     endpoints.forEach(endpoint => {
-      if (this.healthCheckIntervals.has(endpoint)) {
-        clearInterval(this.healthCheckIntervals.get(endpoint)!);
+      // Initialize as healthy - health will be updated by actual request outcomes
+      if (!this.healthCheckIntervals.has(endpoint)) {
+        this.updateEndpointHealth(endpoint, true, 0);
       }
-
-      const intervalId = setInterval(async () => {
-        await this.performHealthCheck(endpoint);
-      }, interval);
-
-      this.healthCheckIntervals.set(endpoint, intervalId);
     });
   }
 

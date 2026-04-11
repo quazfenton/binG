@@ -1,6 +1,6 @@
 /**
  * Enhanced Authentication Middleware
- * 
+ *
  * Combines existing auth-service with new security utilities
  * for comprehensive API protection.
  */
@@ -12,6 +12,33 @@ import { RateLimiter, securityHeaders } from '@/lib/security';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('Auth:Middleware');
+
+/**
+ * Check if desktop auth bypass should be used
+ * Lazily imported to avoid circular deps
+ */
+async function checkDesktopBypass(request: NextRequest): Promise<boolean> {
+  try {
+    const { shouldBypassAuth } = await import('./desktop-auth-bypass');
+    return shouldBypassAuth(request);
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Get desktop user context if in desktop mode
+ * Lazily imported to avoid circular deps
+ */
+async function getDesktopUser(request: NextRequest): Promise<{ userId: string; email?: string } | null> {
+  try {
+    const { getDesktopUserContext } = await import('./desktop-auth-bypass');
+    const user = getDesktopUserContext();
+    return user ? { userId: user.userId, email: user.email } : null;
+  } catch {
+    return null;
+  }
+}
 
 /**
  * Rate limiter for auth endpoints
@@ -170,9 +197,64 @@ export function withAuth<T extends NextResponse>(
 
       // Authentication check
       const authHeader = request.headers.get('authorization');
-      
+
+      // Desktop mode: only bypass auth for allowed paths (not all requests)
       if (!authHeader || !authHeader.startsWith('Bearer ')) {
-        if (allowAnonymous) {
+        // Check if this path is allowed for desktop bypass
+        const isBypassAllowed = await checkDesktopBypass(request);
+
+        if (isBypassAllowed) {
+          const desktopUser = await getDesktopUser(request);
+          if (desktopUser) {
+            // Desktop bypass allowed, but role-protected routes still need JWT
+            if (requiredRoles.length > 0) {
+              logger.warn('Role-protected route accessed via desktop bypass', {
+                path: request.nextUrl.pathname,
+                required: requiredRoles,
+              });
+
+              const response = NextResponse.json(
+                { error: 'Role-protected routes require JWT authentication' },
+                { status: 401 }
+              );
+
+              if (addSecurityHeaders) {
+                Object.entries(securityHeaders).forEach(([key, value]) => {
+                  response.headers.set(key, value);
+                });
+              }
+
+              return response as T;
+            }
+
+            authResult.authenticated = true;
+            authResult.success = true;
+            authResult.userId = desktopUser.userId;
+            authResult.email = desktopUser.email;
+            logger.debug('Desktop auth bypass used', { userId: desktopUser.userId });
+          } else if (allowAnonymous) {
+            authResult.authenticated = true;
+            authResult.success = true;
+          } else {
+            logger.warn('Missing authorization header', {
+              path: request.nextUrl.pathname,
+              ip: clientIP,
+            });
+
+            const response = NextResponse.json(
+              { error: 'Authorization required' },
+              { status: 401 }
+            );
+
+            if (addSecurityHeaders) {
+              Object.entries(securityHeaders).forEach(([key, value]) => {
+                response.headers.set(key, value);
+              });
+            }
+
+            return response as T;
+          }
+        } else if (allowAnonymous) {
           authResult.authenticated = true;
           authResult.success = true;
         } else {

@@ -46,7 +46,7 @@ export async function POST(req: NextRequest) {
       requestId: Math.random().toString(36).slice(2, 8),
     });
     const ownerId = authResolution.ownerId;
-    const scopedSessionId = `${ownerId}:${sessionId}`;
+    const scopedSessionId = `${ownerId}$${sessionId}`;
 
     const commitManager = new ShadowCommitManager();
     const commit = await commitManager.getCommit(scopedSessionId, commitId);
@@ -90,12 +90,16 @@ export async function POST(req: NextRequest) {
       timestamp: Date.now(),
     }));
 
+    // DESKTOP MODE: Skip reading files — content is stripped by ShadowCommitManager.
+    const desktopMode = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
     const rollbackVfs: Record<string, string> = {};
-    for (const p of restoredPaths) {
-      try {
-        const file = await virtualFilesystem.readFile(ownerId, p);
-        rollbackVfs[p] = file.content;
-      } catch { /* skip */ }
+    if (!desktopMode) {
+      for (const p of restoredPaths) {
+        try {
+          const file = await virtualFilesystem.readFile(ownerId, p);
+          rollbackVfs[p] = file.content;
+        } catch { /* skip */ }
+      }
     }
 
     await commitManager.commit(rollbackVfs, rollbackTransactions, {

@@ -1,4 +1,4 @@
-"use client";
+﻿"use client";
 
 import { useState, useEffect, useCallback, useMemo, useRef } from "react"; // Import useCallback, useMemo, and useRef
 import { usePanel } from "@/contexts/panel-context";
@@ -18,14 +18,20 @@ import { ConfirmationDialog } from "@/components/ui/confirmation-dialog";
 import { useChatHistory } from "@/hooks/use-chat-history";
 import { voiceService } from "@/lib/voice/voice-service";
 import { toast } from "sonner";
-import type { LLMProvider } from "@/lib/chat/llm-providers";
+import type { LLMProviderConfig } from "@/lib/chat/llm-providers-types";
 import { enhancedBufferManager } from "@/lib/streaming/enhanced-buffer-manager";
 import { useStreamingState } from "@/hooks/use-streaming-state";
 import { useAuth } from "@/contexts/auth-context";
 import { generateSecureId, getOrCreateAnonymousSessionId, buildApiHeaders } from "@/lib/utils";
 import { generateSessionName, checkFileConflicts } from "@/lib/session-naming";
-import type { AttachedVirtualFile } from "@/hooks/use-virtual-filesystem";
+import { useOrchestrationMode, getOrchestrationModeHeaders } from "@/contexts/orchestration-mode-context";
+import type { OrchestrationMode } from "@/contexts/orchestration-mode-context";
+import { useSpecEnhancementMode, getSpecEnhancementModeInfo } from "@/contexts/spec-enhancement-mode-context";
+import type { SpecEnhancementMode } from "@/contexts/spec-enhancement-mode-context";
+import { useResponseStyle } from "@/contexts/response-style-context";
 import { resolveScopedPath } from "@/lib/virtual-filesystem/scope-utils";
+
+type AttachedVirtualFile = any;
 import { emitFilesystemUpdated, onFilesystemUpdated } from "@/lib/virtual-filesystem/sync/sync-events";
 import {
   parseFilesystemResponse,
@@ -65,7 +71,7 @@ const CONVERSATION_UI_STATE_VERSION = 1;
 interface PersistedConversationUiState {
   version: number;
   currentConversationId: string | null;
-  filesystemSessionId: string | null;
+  compositeSessionId: string | null;
   currentProvider: string | null;
   currentModel: string | null;
   updatedAt: number;
@@ -81,7 +87,7 @@ function readPersistedConversationUiState(): PersistedConversationUiState | null
     return {
       version: CONVERSATION_UI_STATE_VERSION,
       currentConversationId: typeof parsed.currentConversationId === "string" ? parsed.currentConversationId : null,
-      filesystemSessionId: typeof parsed.filesystemSessionId === "string" ? parsed.filesystemSessionId : null,
+      compositeSessionId: typeof parsed.compositeSessionId === "string" ? parsed.compositeSessionId : null,
       currentProvider: typeof parsed.currentProvider === "string" ? parsed.currentProvider : null,
       currentModel: typeof parsed.currentModel === "string" ? parsed.currentModel : null,
       updatedAt: typeof parsed.updatedAt === "number" ? parsed.updatedAt : 0,
@@ -108,12 +114,17 @@ function writePersistedConversationUiState(state: Omit<PersistedConversationUiSt
 
 const buildFilesystemHeaders = (): HeadersInit => buildApiHeaders();
 
-// Use shared file diff utilities
-import { applyDiffToContent } from '@/lib/chat/file-diff-utils';
+// Use shared file diff utilities - smartApply supersedes applyDiffToContent
+import { smartApply } from '@/lib/chat/file-diff-utils';
 
 export default function ConversationInterface() {
   const { user } = useAuth();
   const { isOpen: isWorkspaceOpen } = usePanel();
+  const { config: orchestrationConfig } = useOrchestrationMode();
+  const { config: specEnhancementConfig } = useSpecEnhancementMode();
+  
+  // Get spec enhancement headers for API requests (used by useEnhancedChat)
+  const { params: responseStyleParams, presetKey: responseStylePreset } = useResponseStyle();
   const [embedMode, setEmbedMode] = useState(false);
 
   // Chat panel horizontal resizing state
@@ -161,6 +172,9 @@ export default function ConversationInterface() {
     return () => window.removeEventListener('message', handler);
   }, []);
   const [showAccessibility, setShowAccessibility] = useState(false);
+  const [showResponseStyle, setShowResponseStyle] = useState(
+    () => typeof window !== 'undefined' && localStorage.getItem('show_response_style') === 'true'
+  );
   const [showHistory, setShowHistory] = useState(false);
   const [showCodePreview, setShowCodePreview] = useState(false);
   const [showTerminal, setShowTerminal] = useState(false);
@@ -169,7 +183,7 @@ export default function ConversationInterface() {
   const [commandsByFile, setCommandsByFile] = useState<
     Record<string, string[]>
   >({});
-  const [availableProviders, setAvailableProviders] = useState<LLMProvider[]>(
+  const [availableProviders, setAvailableProviders] = useState<LLMProviderConfig[]>(
     [],
   );
   const [currentProvider, setCurrentProvider] = useState<string>(() => {
@@ -193,6 +207,7 @@ export default function ConversationInterface() {
     return "nvidia/nemotron-3-nano-30b-a3b:free";
   });
   const [isVoiceEnabled, setIsVoiceEnabled] = useState(false);
+  const [livekitEnabled, setLivekitEnabled] = useState(false);
   const [chatHistory, setChatHistory] = useState<ChatHistory[]>([]);
   const [currentConversationId, setCurrentConversationId] = useState<
     string | null
@@ -208,35 +223,49 @@ export default function ConversationInterface() {
   });
   // Generate initial session ID using new naming system
   // Always start fresh to prevent stale session IDs like "002" from being reused
-  const [filesystemSessionId, setFilesystemSessionId] = useState<string>('');
+  const [compositeSessionId, setCompositeSessionId] = useState<string>('');
 
   // Generate session name on mount (always fresh, never restored)
+  // FIX: Use composite userId$sessionId format for ALL users (logged-in + anonymous)
+  // Anonymous users get "anon$001" format - their data is local-only until they sign up
+  // Logged-in users get "12345$001" format - their data persists in the database
   useEffect(() => {
     let cancelled = false;
-    if (!filesystemSessionId) {
+    if (!compositeSessionId) {
       // Clear ANY stale sessionStorage to prevent old session IDs from persisting
       if (typeof window !== 'undefined') {
-        sessionStorage.removeItem('current_filesystem_session_id');
+        sessionStorage.removeItem('current_composite_session_id');
         sessionStorage.removeItem('current_conversation_id');
       }
-      // Generate fresh session name starting from 000
+
       generateSessionName(undefined, true, false).then((newId) => {
         if (!cancelled) {
-          setFilesystemSessionId(newId);
+          if (user?.id) {
+            // Logged-in user: composite format "userId$sessionNumber" (e.g., "12345$001")
+            const compositeId = `${user.id}$${newId}`;
+            setCompositeSessionId(compositeId);
+            console.log('[ConversationInterface] Using composite session ID (authenticated):', compositeId);
+          } else {
+            // Anonymous user: composite format "anon$sessionNumber" (e.g., "anon$001")
+            // Data is local-only until user signs up to migrate it
+            const compositeId = `anon$${newId}`;
+            setCompositeSessionId(compositeId);
+            console.log('[ConversationInterface] Using composite session ID (anonymous):', compositeId);
+          }
         }
       });
     }
     return () => {
       cancelled = true;
     };
-  }, [filesystemSessionId]); // Re-run when filesystemSessionId is cleared to regenerate
+  }, [compositeSessionId, user?.id]); // Re-run when compositeSessionId is cleared or user logs in
 
-  // Persist filesystemSessionId to sessionStorage so page refresh restores it
+  // Persist compositeSessionId to sessionStorage so page refresh restores it
   useEffect(() => {
     if (typeof window !== 'undefined') {
-      sessionStorage.setItem('current_filesystem_session_id', filesystemSessionId);
+      sessionStorage.setItem('current_composite_session_id', compositeSessionId);
     }
-  }, [filesystemSessionId]);
+  }, [compositeSessionId]);
   
   // Project name for simpler terminal paths (e.g., "webGame" instead of long session ID)
   const [projectName, setProjectName] = useState<string>('workspace');
@@ -250,9 +279,24 @@ export default function ConversationInterface() {
   const [pendingApprovalDiffs, setPendingApprovalDiffs] = useState<{ path: string; diff: string }[]>([]);
   const [showApprovalDialog, setShowApprovalDialog] = useState(false);
   
+  // CRITICAL FIX: Sanitize composite session ID for filesystem scope path.
+  // filesystemScopePath is consumed by VFS, terminal, code preview, etc.
+  // These consumers need SIMPLE session folder names (e.g., "004"), not composite IDs (e.g., "1$004").
+  // The $ character in folder names causes path resolution issues.
+  const simpleSessionFolder = useMemo(() => {
+    if (!compositeSessionId) return '000';
+    // If composite format (userId$sessionId), extract only the session part
+    const dollarIndex = compositeSessionId.lastIndexOf('$');
+    if (dollarIndex !== -1) {
+      return compositeSessionId.slice(dollarIndex + 1) || compositeSessionId;
+    }
+    // If already simple, use as-is
+    return compositeSessionId;
+  }, [compositeSessionId]);
+
   const filesystemScopePath = useMemo(
-    () => `project/sessions/${detectedFolderName || filesystemSessionId}`,
-    [filesystemSessionId, detectedFolderName],
+    () => `project/sessions/${detectedFolderName || simpleSessionFolder}`,
+    [detectedFolderName, simpleSessionFolder],
   );
 
   const providerRef = useRef(currentProvider);
@@ -262,9 +306,10 @@ export default function ConversationInterface() {
     applyFileEdits: true,
     scopePath: filesystemScopePath,
   });
-  const filesystemSessionIdRef = useRef(filesystemSessionId);
+  const compositeSessionIdRef = useRef(compositeSessionId);
   const persistedUiStateUpdatedAtRef = useRef(0);
-  const continueProcessedRef = useRef<string | null>(null);
+  // NOTE: [CONTINUE_REQUESTED] auto-continue handled server-side via streamWithAutoContinue
+  // and the auto-continue event handler in use-enhanced-chat.ts.
   const chatHistorySavedRef = useRef<string | null>(null);
   const diffApplyQueueRef = useRef<Promise<void>>(Promise.resolve());
 
@@ -286,8 +331,68 @@ export default function ConversationInterface() {
   }, [currentModel]);
 
   useEffect(() => {
-    filesystemSessionIdRef.current = filesystemSessionId;
-  }, [filesystemSessionId]);
+    compositeSessionIdRef.current = compositeSessionId;
+  }, [compositeSessionId]);
+
+  // Load user API keys from secrets storage for provider override
+  const apiKeysRef = useRef<Record<string, string>>({});
+  const [userApiKeysLoaded, setUserApiKeysLoaded] = useState(false);
+
+  // Reload user API keys from secrets storage
+  const reloadUserApiKeys = useCallback(async () => {
+    try {
+      const { secrets } = await import('@bing/platform/secrets');
+      const stored = await secrets.get('user-api-keys');
+      if (stored) {
+        apiKeysRef.current = JSON.parse(stored);
+      } else {
+        apiKeysRef.current = {};
+      }
+      setUserApiKeysLoaded(true);
+      return apiKeysRef.current;
+    } catch {
+      setUserApiKeysLoaded(true);
+      return {};
+    }
+  }, []);
+
+  // Re-merge user API keys into available providers (marks them as available)
+  const refreshProviderAvailability = useCallback((providers: LLMProviderConfig[], userKeys: Record<string, string>) => {
+    if (Object.keys(userKeys).length === 0) return providers;
+    return providers.map((p) => {
+      if (userKeys[p.id]) {
+        return { ...p, isAvailable: true };
+      }
+      return p;
+    });
+  }, []);
+
+  // Initial load on mount
+  useEffect(() => {
+    reloadUserApiKeys();
+  }, [reloadUserApiKeys]);
+
+  // Listen for API key changes from settings panel
+  useEffect(() => {
+    const handleKeysChanged = async () => {
+      const newKeys = await reloadUserApiKeys();
+
+      // Update providers directly in state â€” skip server re-fetch to avoid 5-min cache staleness.
+      // Mark any provider where the user has a key as available, regardless of server env vars.
+      setAvailableProviders((prev) => {
+        if (Object.keys(newKeys).length === 0 || prev.length === 0) return prev;
+        return prev.map((p) => {
+          if (newKeys[p.id]) {
+            return { ...p, isAvailable: true };
+          }
+          return p;
+        });
+      });
+    };
+
+    window.addEventListener('user-api-keys-changed', handleKeysChanged);
+    return () => window.removeEventListener('user-api-keys-changed', handleKeysChanged);
+  }, [reloadUserApiKeys]);
   
   // Persist currentConversationId to sessionStorage
   useEffect(() => {
@@ -303,30 +408,30 @@ export default function ConversationInterface() {
   useEffect(() => {
     const persisted = writePersistedConversationUiState({
       currentConversationId,
-      filesystemSessionId,
+      compositeSessionId,
       currentProvider,
       currentModel,
     });
     if (persisted) {
       persistedUiStateUpdatedAtRef.current = persisted.updatedAt;
     }
-  }, [currentConversationId, filesystemSessionId, currentProvider, currentModel]);
+  }, [currentConversationId, compositeSessionId, currentProvider, currentModel]);
 
-  // CRITICAL FIX: Clear any stale persisted filesystemSessionId on mount
+  // CRITICAL FIX: Clear any stale persisted compositeSessionId on mount
   // This ensures next page reload doesn't restore stale session IDs
   useEffect(() => {
     if (typeof window === 'undefined') return;
     const persisted = readPersistedConversationUiState();
-    if (persisted?.filesystemSessionId) {
-      // Always clear persisted filesystemSessionId to force fresh generation on next reload
+    if (persisted?.compositeSessionId) {
+      // Always clear persisted compositeSessionId to force fresh generation on next reload
       // This prevents stale session IDs like "002" from persisting across page reloads
       writePersistedConversationUiState({
         currentConversationId: persisted.currentConversationId,
-        filesystemSessionId: '',  // Clear to force fresh generation
+        compositeSessionId: '',  // Clear to force fresh generation
         currentProvider: persisted.currentProvider,
         currentModel: persisted.currentModel,
       });
-      console.log('[ConversationInterface] Cleared stale persisted filesystemSessionId:', persisted.filesystemSessionId);
+      console.log('[ConversationInterface] Cleared stale persisted compositeSessionId:', persisted.compositeSessionId);
     }
   }, []);
 
@@ -349,10 +454,10 @@ export default function ConversationInterface() {
       if (persisted.currentConversationId !== null) {
         setCurrentConversationId(persisted.currentConversationId);
       }
-      // CRITICAL FIX: Don't restore filesystemSessionId from storage - always use fresh generated ID
+      // CRITICAL FIX: Don't restore compositeSessionId from storage - always use fresh generated ID
       // This prevents stale session IDs from being restored via storage events
-      // if (persisted.filesystemSessionId) {
-      //   setFilesystemSessionId(persisted.filesystemSessionId);
+      // if (persisted.compositeSessionId) {
+      //   setCompositeSessionId(persisted.compositeSessionId);
       // }
       if (persisted.currentProvider) {
         setCurrentProvider(persisted.currentProvider);
@@ -505,13 +610,30 @@ export default function ConversationInterface() {
     setInput, // Destructure setInput from enhanced chat hook
   } = useEnhancedChat({
     api: "/api/chat",
+    orchestrationMode: orchestrationConfig.mode,
     body: () => ({
       provider: providerRef.current,
       model: modelRef.current,
       stream: true,
-      mode: 'enhanced', // Enable spec amplification for enhanced responses
+      // Use spec enhancement mode from context - pass through directly, server handles mapping
+      mode: specEnhancementConfig.mode,
       agentMode: 'v1', // Use V1 mode for spec amplification (V2 has its own planning)
-      conversationId: filesystemSessionIdRef.current,
+      conversationId: compositeSessionIdRef.current,
+      // Pass user API keys for provider override (if user set custom keys)
+      apiKeys: Object.keys(apiKeysRef.current).length > 0 ? apiKeysRef.current : undefined,
+      // Pass spec enhancement mode
+      specMode: specEnhancementConfig.mode,
+      specChain: specEnhancementConfig.chain,
+      // Pass response style parameters
+      presetKey: responseStylePreset || undefined,
+      responseDepth: responseStyleParams.responseDepth,
+      expertiseLevel: responseStyleParams.expertiseLevel,
+      reasoningMode: responseStyleParams.reasoningMode,
+      tone: responseStyleParams.tone,
+      creativityLevel: responseStyleParams.creativityLevel,
+      citationStrictness: responseStyleParams.citationStrictness,
+      outputFormat: responseStyleParams.outputFormat,
+      selfCorrection: responseStyleParams.selfCorrection,
       filesystemContext: {
         attachedFiles: filesystemContextRef.current.attachedFiles.map((file) => ({
           path: file.path,
@@ -601,7 +723,7 @@ export default function ConversationInterface() {
         // If it was a new chat and an ID was returned, set it as the current conversation ID
         if (!currentConversationId && savedChatId) {
           setCurrentConversationId(savedChatId);
-          persistFilesystemScope(savedChatId, filesystemSessionId);
+          persistFilesystemScope(savedChatId, compositeSessionId);
         }
 
         // Auto-speak AI responses if voice is enabled
@@ -609,37 +731,10 @@ export default function ConversationInterface() {
           voiceService.speak(lastMessage.content).catch(console.error);
         }
 
-        // Track last CONTINUE_REQUESTED message ID to prevent duplicate auto-submits
-        const lastContinueMessageId = lastMessage.id;
-        const lastContinueContent = lastMessage.content;
-
-        // Check if message ends with CONTINUE_REQUESTED token (not just contains it)
-        if (!lastContinueContent.trimEnd().endsWith('[CONTINUE_REQUESTED]')) {
-          return; // Skip - AI didn't request continuation
-        }
-
-        // Check if we already processed this CONTINUE_REQUESTED message
-        const alreadyProcessed = continueProcessedRef.current === lastContinueMessageId;
-        if (alreadyProcessed) {
-          return; // Skip duplicate processing
-        }
-        continueProcessedRef.current = lastContinueMessageId;
-
-        console.log('[Continuance] Auto-triggering next request');
-        toast.info('Continuance requested by AI - sending next message');
-
-        setTimeout(() => {
-          const fakeEvent = {
-            preventDefault: () => {},
-            currentTarget: { reset: () => {} },
-          } as React.FormEvent<HTMLFormElement>;
-
-          setInput('Please continue with the remaining tasks or improvements.');
-
-          setTimeout(() => {
-            handleSubmit(fakeEvent);
-          }, 50);
-        }, 1000);
+        // NOTE: [CONTINUE_REQUESTED] auto-continue is now handled server-side
+        // in streamWithAutoContinue â†’ emits 'auto-continue' event â†’
+        // useEnhanced-chat strips the token and auto-submits continuation.
+        // No UI-side duplication needed.
       }
     }
   }, [
@@ -647,7 +742,7 @@ export default function ConversationInterface() {
     isLoading,
     saveCurrentChat,
     currentConversationId,
-    filesystemSessionId,
+    compositeSessionId,
     isVoiceEnabled,
     handleSubmit,
     setInput
@@ -673,7 +768,7 @@ export default function ConversationInterface() {
 
     const assistantContent = lastAssistant.content.trim();
     const isIncompleteResponse =
-      assistantContent.includes('⚠️ _Response may be incomplete due to a connection issue._') ||
+      assistantContent.includes('âš ï¸ _Response may be incomplete due to a connection issue._') ||
       (lastAssistant as any)?.metadata?.isPending === true;
 
     // CRITICAL FIX: Don't process while streaming - wait for complete content
@@ -725,7 +820,7 @@ export default function ConversationInterface() {
 
       // Generate the official session name (handles conflicts, registers in usedNames, etc.)
       generateSessionName(detectedFolder, true, true).then((newSessionId) => {
-        setFilesystemSessionId(newSessionId);
+        setCompositeSessionId(newSessionId);
         setLlmFolderDetected(true); // Mark as detected to prevent re-triggering
         toast.success(`Project initialized: ${newSessionId}`);
       });
@@ -931,12 +1026,17 @@ export default function ConversationInterface() {
   }, [currentConversationId]);
 
   // Fetch available providers on mount and align defaults with server config
+  // Also merges user-provided API keys so providers with user keys appear in dropdown
   useEffect(() => {
     fetch("/api/providers", { credentials: 'include' })
       .then((res) => res.json())
       .then((data) => {
         if (data.success) {
-          const providers: LLMProvider[] = data.data.providers || [];
+          let providers: LLMProviderConfig[] = data.data.providers || [];
+
+          // Merge user-provided API keys: mark providers as available if user has a key
+          providers = refreshProviderAvailability(providers, apiKeysRef.current);
+
           setAvailableProviders(providers);
 
           // Attempt to restore persisted selection first
@@ -1009,7 +1109,7 @@ export default function ConversationInterface() {
           setCurrentModel("gemini-2.5-flash");
         }
       });
-  }, []); // initial load only
+  }, [refreshProviderAvailability]);
 
   // Effect to fetch chat history on mount to ensure it's available
   useEffect(() => {
@@ -1066,7 +1166,7 @@ export default function ConversationInterface() {
     const cleanName = suggestedFolderName.replace(/[^a-zA-Z0-9_-]/g, '').substring(0, 50);
     if (cleanName.length > 0 && messages.length === 0) {
       generateSessionName(cleanName, true, true).then((newSessionId) => {
-        setFilesystemSessionId(newSessionId);
+        setCompositeSessionId(newSessionId);
         toast.success(`Project initialized: ${newSessionId}`);
       });
     }
@@ -1089,8 +1189,8 @@ export default function ConversationInterface() {
 
     // Clear filesystem session ID synchronously FIRST to prevent stale session access
     // This ensures no file operations can target the previous workspace
-    setFilesystemSessionId('');
-    filesystemSessionIdRef.current = '';
+    setCompositeSessionId('');
+    compositeSessionIdRef.current = '';
 
     setMessages([]);
     setCurrentConversationId(null); // Ensure current conversation ID is reset for a new chat
@@ -1127,7 +1227,7 @@ export default function ConversationInterface() {
       setMessages(chat.messages); // Load messages using useChat's setMessages
       setCurrentConversationId(chatId);
       const restoredScopeId = restoreFilesystemScope(chatId);
-      setFilesystemSessionId(restoredScopeId || chatId);
+      setCompositeSessionId(restoredScopeId || chatId);
       // Reset approval state when loading different chat
       setPendingApprovalDiffs([]);
       setShowApprovalDialog(false);
@@ -1225,13 +1325,33 @@ export default function ConversationInterface() {
     }
   };
 
-  // Check if there are code blocks in messages for preview button glow (mode-aware)
+  // Check if there are code blocks in messages for preview button glow (legacy markdown code blocks)
   const hasCodeBlocks = useMemo(() => {
     return messages.some(
       (message) =>
         message.role === "assistant" && message.content.includes("```"),
     );
   }, [messages]);
+
+  // Track VFS MCP file edits for code preview button glow
+  // VFS tools write files directly without markdown code blocks, so we need separate tracking
+  const [hasMcpFileEdits, setHasMcpFileEdits] = useState(false);
+
+  useEffect(() => {
+    const unsubscribe = onFilesystemUpdated((event) => {
+      const source = event?.detail?.source;
+      // Light up the code preview button when files are edited via MCP tools
+      if (source?.startsWith('mcp-tool')) {
+        setHasMcpFileEdits(true);
+      }
+    });
+    return () => unsubscribe();
+  }, []);
+
+  // Reset MCP file edit tracking when conversation changes
+  useEffect(() => {
+    setHasMcpFileEdits(false);
+  }, [currentConversationId]);
 
   const handleToggleCodePreview = () => {
     setShowCodePreview((prevShowCodePreview) => {
@@ -1298,7 +1418,7 @@ export default function ConversationInterface() {
       entryCount: entries.length,
       entries: entries.map(e => ({ path: e.path, diffLength: e.diff.length, diffPreview: e.diff.slice(0, 200) })),
       filesystemScopePath: scopePath,
-      filesystemSessionId,
+      compositeSessionId,
     });
 
     // Create simple hash for diff tracking
@@ -1398,7 +1518,42 @@ export default function ConversationInterface() {
         currentContent = "";
       }
 
-      const nextContent = applyDiffToContent(currentContent, entry.path, entry.diff);
+      const patchResult = await smartApply({
+        content: currentContent,
+        path: entry.path,
+        diff: entry.diff,
+        // LLM repair callback: asks the chat API to fix a broken diff
+        llm: async (prompt: string): Promise<string> => {
+          try {
+            const response = await fetch('/api/chat', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', ...buildFilesystemHeaders() },
+              body: JSON.stringify({
+                messages: [{ role: 'user', content: prompt }],
+                provider: 'openai',
+                model: 'gpt-4o-mini',
+                maxTokens: 4000,
+                temperature: 0,
+              }),
+            });
+            if (!response.ok) return '';
+            const data = await response.json();
+            return data.content || data.response || '';
+          } catch {
+            return '';
+          }
+        },
+      });
+
+      const nextContent = patchResult.content;
+
+      if (patchResult.strategy !== 'unified') {
+        console.debug('[applyDiffsToFilesystem] Used strategy:', patchResult.strategy, {
+          path: resolvedPath,
+          confidence: patchResult.confidence,
+          attempts: patchResult.attempts,
+        });
+      }
 
       if (nextContent == null) {
         // Track failure for retry limit
@@ -1438,7 +1593,7 @@ export default function ConversationInterface() {
           body: JSON.stringify({
             path: resolvedPath,
             content: nextContent,
-            sessionId: filesystemSessionId,
+            sessionId: compositeSessionId,
             source: "command-diff",
             integration: "command-diff",
           }),
@@ -1481,7 +1636,7 @@ export default function ConversationInterface() {
     if (appliedCount > 0) {
       // CRITICAL FIX: Don't emit filesystem event for self-applied diffs
       // This prevents infinite read loops where:
-      // 1. We apply diffs → emit event → trigger refresh → re-read files → apply diffs again
+      // 1. We apply diffs â†’ emit event â†’ trigger refresh â†’ re-read files â†’ apply diffs again
       // The files are already updated in the VFS, no need to trigger refresh
       console.debug('[applyDiffsToFilesystem] Skipping emitFilesystemUpdated for self-applied diffs (prevents infinite loop)', {
         appliedCount,
@@ -1493,7 +1648,7 @@ export default function ConversationInterface() {
       //   source: "command-diff",
       //   workspaceVersion: lastWriteMetadata?.workspaceVersion,
       //   commitId: lastWriteMetadata?.commitId,
-      //   sessionId: lastWriteMetadata?.sessionId || filesystemSessionId,
+      //   sessionId: lastWriteMetadata?.sessionId || compositeSessionId,
       // });
     }
 
@@ -1531,11 +1686,11 @@ export default function ConversationInterface() {
         totalEntriesAttempted: entries.length,
         appliedCount,
         failedCount: totalFailedDiffs,
-        sessionId: filesystemSessionId,
+        sessionId: compositeSessionId,
         scopePath,
       });
     }
-  }, [filesystemScopePath, filesystemSessionId]);
+  }, [filesystemScopePath, compositeSessionId]);
 
   const applyDiffsToFilesystemQueued = useCallback((entries: Array<{ path: string; diff: string }>) => {
     if (!entries.length) {
@@ -1723,8 +1878,8 @@ export default function ConversationInterface() {
 
   useEffect(() => {
     if (!currentConversationId) return;
-    persistFilesystemScope(currentConversationId, filesystemSessionId);
-  }, [currentConversationId, filesystemSessionId]);
+    persistFilesystemScope(currentConversationId, compositeSessionId);
+  }, [currentConversationId, compositeSessionId]);
 
   const handleAttachedFilesChange = useCallback((files: Record<string, AttachedVirtualFile>) => {
     setAttachedFilesystemFiles(files);
@@ -1800,6 +1955,10 @@ export default function ConversationInterface() {
 
   // Memoized callbacks for InteractionPanel to prevent unnecessary re-renders
   const toggleAccessibility = useCallback(() => setShowAccessibility(prev => !prev), []);
+  const toggleResponseStyle = useCallback((enabled: boolean) => {
+    setShowResponseStyle(enabled);
+    localStorage.setItem('show_response_style', String(enabled));
+  }, []);
   const toggleHistory = useCallback(() => setShowHistory(prev => !prev), []);
   const toggleCodePreview = useCallback(() => {
     handleToggleCodePreview();
@@ -1914,12 +2073,12 @@ export default function ConversationInterface() {
               <div className="text-xs text-white/70 truncate">
                 <span className="mr-2">Provider:</span>
                 <span className="font-medium text-white">
-                  {currentProvider || "—"}
+                  {currentProvider || "â€”"}
                 </span>
                 <span className="mx-2 text-white/40">|</span>
                 <span className="mr-2">Model:</span>
                 <span className="font-medium text-white truncate inline-block max-w-[60%] align-bottom">
-                  {currentModel || "—"}
+                  {currentModel || "â€”"}
                 </span>
               </div>
               {/* Quick open history */}
@@ -1984,11 +2143,13 @@ export default function ConversationInterface() {
         availableProviders={availableProviders}
         onProviderChange={handleProviderChange}
         hasCodeBlocks={hasCodeBlocks}
+        hasMcpFileEdits={hasMcpFileEdits}
         activeTab={activeTab}
         onActiveTabChange={setActiveTab as any}
         userId={user?.id?.toString() || getStableSessionId()}
         onAttachedFilesChange={handleAttachedFilesChange}
         filesystemScopePath={filesystemScopePath}
+        showResponseStyle={showResponseStyle}
         // Note: useDiffsPoller removed - file changes synced via filesystem-updated events + SSE
       />
 
@@ -2011,6 +2172,10 @@ export default function ConversationInterface() {
           isProcessing={isLoading}
           voiceEnabled={isVoiceEnabled}
           onVoiceToggle={handleVoiceToggle}
+          livekitEnabled={livekitEnabled}
+          onLivekitToggle={(enabled) => setLivekitEnabled(enabled)}
+          showResponseStyle={showResponseStyle}
+          onResponseStyleToggle={toggleResponseStyle}
         />
       )}
 

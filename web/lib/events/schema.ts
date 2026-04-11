@@ -48,6 +48,89 @@ export const OrchestrationStepEvent = z.object({
 });
 
 /**
+ * Orchestration mode change events (user switching execution frameworks)
+ */
+export const ModeChangeEvent = z.object({
+  type: z.literal('MODE_CHANGE'),
+  userId: z.string(),
+  sessionId: z.string().optional(),
+  fromMode: z.string(),
+  toMode: z.string(),
+  source: z.enum(['ui', 'api', 'header', 'default']).optional(),
+  config: z.record(z.any()).optional(),
+});
+
+/**
+ * Orchestration progress events (real-time agent execution updates)
+ * Emitted by orchestration mode handlers during task execution.
+ * All fields except type/userId/sessionId are optional — only emit what's available.
+ */
+export const OrchestrationProgressEvent = z.object({
+  type: z.literal('ORCHESTRATION_PROGRESS'),
+  userId: z.string(),
+  sessionId: z.string().optional(),
+  mode: z.string().optional(),              // Current orchestration mode
+  nodeId: z.string().optional(),            // Current agent/node identifier
+  nodeRole: z.string().optional(),          // Role (planner, coder, reviewer, researcher, etc.)
+  nodeModel: z.string().optional(),         // Model being used (e.g. "claude-sonnet-4")
+  nodeProvider: z.string().optional(),      // Provider (opencode, codex, amp, etc.)
+
+  // Plan/step tracking
+  steps: z.array(z.object({                // Array of planned steps
+    id: z.string().optional(),
+    title: z.string().optional(),
+    description: z.string().optional(),
+    status: z.enum(['pending', 'running', 'completed', 'failed', 'skipped']).optional(),
+  })).optional(),
+  currentStepIndex: z.number().int().min(0).optional(),
+  totalSteps: z.number().int().min(0).optional(),
+
+  // Current activity description
+  currentAction: z.string().optional(),     // Human-readable "what's happening now"
+  phase: z.enum(['planning', 'acting', 'verifying', 'responding', 'idle']).optional(),
+
+  // Worker/node topology (for multi-agent modes)
+  nodes: z.array(z.object({               // All active nodes/workers
+    id: z.string().optional(),
+    role: z.string().optional(),
+    model: z.string().optional(),
+    provider: z.string().optional(),
+    status: z.enum(['idle', 'working', 'waiting', 'failed']).optional(),
+  })).optional(),
+
+  // Inter-node communication (optional — emitted when nodes exchange messages)
+  nodeCommunication: z.object({
+    from: z.string().optional(),
+    to: z.string().optional(),
+    content: z.string().optional(),
+    type: z.enum(['delegation', 'response', 'review', 'consensus', 'relay']).optional(),
+  }).optional(),
+
+  // Error/retry tracking
+  errors: z.array(z.object({
+    nodeId: z.string().optional(),
+    message: z.string(),
+    retryCount: z.number().int().min(0).optional(),
+    recovered: z.boolean().optional(),
+  })).optional(),
+
+  // HITL requests
+  hitlRequests: z.array(z.object({
+    id: z.string().optional(),
+    action: z.string().optional(),
+    reason: z.string().optional(),
+    status: z.enum(['pending', 'approved', 'rejected', 'expired']).optional(),
+    timeoutAt: z.number().optional(),
+  })).optional(),
+
+  // Generic metadata for future extensibility
+  metadata: z.record(z.any()).optional(),
+
+  // Timestamp for ordering and debugging
+  timestamp: z.number().optional(),
+});
+
+/**
  * Workflow events (template-based execution)
  */
 export const WorkflowEvent = z.object({
@@ -145,12 +228,40 @@ export const IntegrationEvent = z.object({
 });
 
 /**
+ * Skill bootstrap events (extract reusable skills from successful executions)
+ */
+export const SkillBootstrapEvent = z.object({
+  type: z.literal('SKILL_BOOTSTRAP'),
+  userId: z.string(),
+  sessionId: z.string().optional(),
+  payload: z.object({
+    successfulRun: z.object({
+      steps: z.array(z.object({
+        action: z.string(),
+        result: z.any(),
+        success: z.boolean(),
+      })),
+      totalDuration: z.number(),
+      userId: z.string(),
+      taskDescription: z.string().optional(),
+      filesModified: z.array(z.string()).optional(),
+    }),
+    model: z.string().optional(),
+    storeSkill: z.boolean().optional().default(true),
+    scheduled: z.boolean().optional().default(false),
+    sourceEventId: z.string().optional(),
+  }),
+});
+
+/**
  * Any event - discriminated union of all event types
  */
 export const AnyEvent = z.discriminatedUnion('type', [
   ScheduledTaskEvent,
   BackgroundJobEvent,
   OrchestrationStepEvent,
+  ModeChangeEvent,
+  OrchestrationProgressEvent,
   WorkflowEvent,
   BashExecutionEvent,
   DAGExecutionEvent,
@@ -158,12 +269,15 @@ export const AnyEvent = z.discriminatedUnion('type', [
   SelfHealingEvent,
   NotificationEvent,
   IntegrationEvent,
+  SkillBootstrapEvent,
 ]);
 
 // Export types
 export type ScheduledTaskEvent = z.infer<typeof ScheduledTaskEvent>;
 export type BackgroundJobEvent = z.infer<typeof BackgroundJobEvent>;
 export type OrchestrationStepEvent = z.infer<typeof OrchestrationStepEvent>;
+export type ModeChangeEvent = z.infer<typeof ModeChangeEvent>;
+export type OrchestrationProgressEvent = z.infer<typeof OrchestrationProgressEvent>;
 export type WorkflowEvent = z.infer<typeof WorkflowEvent>;
 export type BashExecutionEvent = z.infer<typeof BashExecutionEvent>;
 export type DAGExecutionEvent = z.infer<typeof DAGExecutionEvent>;
@@ -171,6 +285,7 @@ export type HumanApprovalEvent = z.infer<typeof HumanApprovalEvent>;
 export type SelfHealingEvent = z.infer<typeof SelfHealingEvent>;
 export type NotificationEvent = z.infer<typeof NotificationEvent>;
 export type IntegrationEvent = z.infer<typeof IntegrationEvent>;
+export type SkillBootstrapEvent = z.infer<typeof SkillBootstrapEvent>;
 export type AnyEvent = z.infer<typeof AnyEvent>;
 
 // Export event type enum
@@ -178,6 +293,8 @@ export const EventTypes = {
   SCHEDULED_TASK: 'SCHEDULED_TASK',
   BACKGROUND_JOB: 'BACKGROUND_JOB',
   ORCHESTRATION_STEP: 'ORCHESTRATION_STEP',
+  MODE_CHANGE: 'MODE_CHANGE',
+  ORCHESTRATION_PROGRESS: 'ORCHESTRATION_PROGRESS',
   WORKFLOW: 'WORKFLOW',
   BASH_EXECUTION: 'BASH_EXECUTION',
   DAG_EXECUTION: 'DAG_EXECUTION',
@@ -185,6 +302,7 @@ export const EventTypes = {
   SELF_HEALING: 'SELF_HEALING',
   NOTIFICATION: 'NOTIFICATION',
   INTEGRATION: 'INTEGRATION',
+  SKILL_BOOTSTRAP: 'SKILL_BOOTSTRAP',
 } as const;
 
 export type EventType = typeof EventTypes[keyof typeof EventTypes];

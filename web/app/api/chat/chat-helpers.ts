@@ -18,8 +18,8 @@ export const chatMessageSchema = z.object({
 
 export const chatRequestSchema = z.object({
   messages: z.array(chatMessageSchema).min(1, 'Messages array cannot be empty'),
-  provider: z.string().min(1, 'Provider is required'),
-  model: z.string().min(1, 'Model is required'),
+  provider: z.string().optional().default(process.env.LLM_PROVIDER || 'mistral'),
+  model: z.string().optional().default(process.env.DEFAULT_MODEL || 'mistral-small-latest'),
   temperature: z.number().min(0).refine((val) => val <= 2, 'Temperature must be at most 2').optional().default(0.7),
   maxTokens: z.number().int().min(1).refine((val) => val <= 200000, 'Max tokens must be at most 200000').optional().default(100096),
   stream: z.boolean().optional().default(true),
@@ -28,6 +28,16 @@ export const chatRequestSchema = z.object({
   conversationId: z.string().optional(),
   agentMode: z.enum(['v1', 'v2', 'auto']).optional().default('auto'),
   mode: z.enum(['normal', 'enhanced', 'max']).optional().default('max'),
+  // Prompt Parameters — optional response style modifiers (backwards compatible)
+  responseDepth: z.enum(['minimal', 'brief', 'standard', 'detailed', 'comprehensive', 'exhaustive']).optional(),
+  expertiseLevel: z.enum(['layperson', 'informed', 'practitioner', 'expert', 'world-class']).optional(),
+  reasoningMode: z.enum(['direct', 'structured', 'analytical', 'deliberative', 'dialectical', 'socratic']).optional(),
+  tone: z.enum(['formal', 'professional', 'conversational', 'casual', 'authoritative', 'tentative']).optional(),
+  creativityLevel: z.enum(['strictly-factual', 'evidence-based', 'balanced', 'exploratory', 'creative']).optional(),
+  citationStrictness: z.enum(['none', 'key-claims', 'all-claims', 'academic']).optional(),
+  outputFormat: z.enum(['prose', 'bulleted', 'tabular', 'mixed', 'outline', 'json']).optional(),
+  selfCorrection: z.enum(['none', 'light', 'thorough', 'iterative']).optional(),
+  presetKey: z.string().optional(),
   filesystemContext: z.object({
     attachedFiles: z.any().optional(),
     applyFileEdits: z.boolean().optional(),

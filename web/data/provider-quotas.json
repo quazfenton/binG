@@ -1,0 +1,66 @@
+{
+  "version": 1,
+  "updatedAt": "2026-04-09T06:45:11.206Z",
+  "quotas": {
+    "composio": {
+      "monthlyLimit": 20000,
+      "currentUsage": 0,
+      "resetDate": "2026-05-01",
+      "isDisabled": false
+    },
+    "arcade": {
+      "monthlyLimit": 10000,
+      "currentUsage": 0,
+      "resetDate": "2026-05-01",
+      "isDisabled": false
+    },
+    "nango": {
+      "monthlyLimit": 10000,
+      "currentUsage": 0,
+      "resetDate": "2026-05-01",
+      "isDisabled": false
+    },
+    "daytona": {
+      "monthlyLimit": 5000,
+      "currentUsage": 10,
+      "resetDate": "2026-05-01",
+      "isDisabled": false
+    },
+    "runloop": {
+      "monthlyLimit": 5000,
+      "currentUsage": 0,
+      "resetDate": "2026-05-01",
+      "isDisabled": false
+    },
+    "microsandbox": {
+      "monthlyLimit": 10000,
+      "currentUsage": 18,
+      "resetDate": "2026-05-01",
+      "isDisabled": false
+    },
+    "e2b": {
+      "monthlyLimit": 1000,
+      "currentUsage": 38,
+      "resetDate": "2026-05-01T04:00:00.000Z",
+      "isDisabled": false
+    },
+    "mistral": {
+      "monthlyLimit": 2000,
+      "currentUsage": 0,
+      "resetDate": "2026-05-01T04:00:00.000Z",
+      "isDisabled": false
+    },
+    "blaxel": {
+      "monthlyLimit": 5000,
+      "currentUsage": 0,
+      "resetDate": "2026-05-01T04:00:00.000Z",
+      "isDisabled": false
+    },
+    "sprites": {
+      "monthlyLimit": 2000,
+      "currentUsage": 0,
+      "resetDate": "2026-05-01T04:00:00.000Z",
+      "isDisabled": false
+    }
+  }
+}

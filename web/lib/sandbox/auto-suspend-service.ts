@@ -88,7 +88,7 @@ export class AutoSuspendService extends EventEmitter {
   private constructor(config?: Partial<AutoSuspendConfig>) {
     super();
     this.config = {
-      idleTimeout: 30 * 60 * 1000, // 30 minutes
+      idleTimeout: 5 * 60 * 1000, // 5 minutes
       checkInterval: 5 * 60 * 1000, // 5 minutes
       minActive: 2,
       maxActive: 10,
@@ -317,6 +317,15 @@ export class AutoSuspendService extends EventEmitter {
       console.log(`[AutoSuspend] Creating new sandbox for ${sandboxId}`);
       // @ts-ignore - ownerId may not be in SandboxCreateConfig type
       const newSandbox = await provider.createSandbox({ ownerId: sandboxId });
+
+      // Start VFS sync for the resumed sandbox
+      try {
+        const { sandboxFilesystemSync } = await import('../virtual-filesystem/sync/sandbox-filesystem-sync');
+        sandboxFilesystemSync.startSync(newSandbox.id, sandboxId);
+        console.log(`[AutoSuspend] Started VFS sync for resumed sandbox`);
+      } catch (syncErr: any) {
+        console.warn(`[AutoSuspend] Failed to start VFS sync on resume:`, syncErr.message);
+      }
 
       // Restore state if available and enabled
       if (suspended.state && this.config.restoreState) {

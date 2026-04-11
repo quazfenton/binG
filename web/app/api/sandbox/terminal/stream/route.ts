@@ -179,12 +179,22 @@ export async function GET(req: NextRequest) {
 
         const setupPty = async () => {
           try {
+            console.log('[Terminal Stream] Creating PTY session...', { sessionId, sandboxId });
             // Always create (or replace) the PTY session; TerminalManager will clean up any existing connection
             await terminalManager.createTerminalSession(sessionId, sandboxId, onData, onPortDetected);
+            console.log('[Terminal Stream] PTY session created successfully');
             send({ type: 'connected', data: { sessionId, sandboxId } });
           } catch (err) {
             const msg = err instanceof Error ? err.message : 'Failed to connect to terminal';
-            send({ type: 'error', data: msg });
+            console.error('[Terminal Stream] PTY session creation failed:', err);
+            console.error('[Terminal Stream] Error stack:', err instanceof Error ? err.stack : 'N/A');
+            send({ type: 'error', data: `PTY creation failed: ${msg}` });
+            // Clean up ping interval and subscriptions to prevent leaks
+            cleanup?.();
+            // Close the stream so the client doesn't hang forever
+            setTimeout(() => {
+              try { controller.close(); } catch { /* already closed */ }
+            }, 100);
           }
         };
 
@@ -200,7 +210,7 @@ export async function GET(req: NextRequest) {
       headers: {
         'Content-Type': 'text/event-stream',
         'Cache-Control': 'no-cache, no-transform',
-        'Connection': 'keep-alive',
+        'Connection': 'close',
         'X-Accel-Buffering': 'no',
       },
     });

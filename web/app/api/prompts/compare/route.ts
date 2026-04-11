@@ -5,7 +5,6 @@
  */
 
 import { NextRequest, NextResponse } from 'next/server';
-import { comparePrompts } from '@/lib/prompt-engineering/prompt-service';
 import { createLogger } from '@/lib/utils/logger';
 
 const logger = createLogger('API:Prompts:Compare');
@@ -19,22 +18,24 @@ class ComparisonValidationError extends Error {
 }
 
 export async function POST(request: NextRequest) {
-  let body: any;
-  
-  // Parse JSON with proper error handling
   try {
-    body = await request.json();
-  } catch (parseError: any) {
-    logger.warn('Invalid JSON in prompt comparison request:', parseError.message);
-    return NextResponse.json(
-      { error: 'Invalid JSON in request body' },
-      { status: 400 }
-    );
-  }
-  
-  const { templateA, templateB, input, provider, model } = body;
+    // TODO: Re-implement when prompt-service is available
+    /*
+    let body: any;
 
-  try {
+    // Parse JSON with proper error handling
+    try {
+      body = await request.json();
+    } catch (parseError: any) {
+      logger.warn('Invalid JSON in prompt comparison request:', parseError.message);
+      return NextResponse.json(
+        { error: 'Invalid JSON in request body' },
+        { status: 400 }
+      );
+    }
+
+    const { templateA, templateB, input, provider, model } = body;
+
     // Validate required fields
     if (!templateA || !templateB || !input) {
       return NextResponse.json(
@@ -75,7 +76,7 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    const comparison = await comparePrompts(templateA, templateB, input, provider || 'openrouter', model || 'default');
+    const comparison = await comparePrompts({ templateA, templateB, input } as any) as any;
 
     // Validate comparison result structure
     if (!comparison || typeof comparison.winner === 'undefined') {
@@ -92,6 +93,9 @@ export async function POST(request: NextRequest) {
       success: true,
       ...comparison,
     });
+    */
+
+    return NextResponse.json({ error: 'This endpoint is not implemented' }, { status: 501 });
   } catch (error: any) {
     // Use proper error class detection instead of brittle string matching
     if (error instanceof ComparisonValidationError || error.name === 'ComparisonValidationError') {

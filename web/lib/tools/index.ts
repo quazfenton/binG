@@ -142,10 +142,10 @@ let _toolManager: ToolIntegrationManager | null = null;
 /**
  * Get or create the singleton ToolIntegrationManager instance.
  * This is the recommended entry point for tool operations.
- * 
+ *
  * The ToolIntegrationManager consolidates:
  * - ToolProviderRegistry (provider management)
- * - ToolProviderRouter (fallback execution)
+ * - Provider fallback chain (retry + failover across Arcade/Nango/Composio/MCP/Smithery/Tambo)
  * - TOOL_REGISTRY (tool definitions)
  * - Tool discovery and search
  */
@@ -159,7 +159,7 @@ export function getToolManager(): ToolIntegrationManager {
 
     _toolManager = new ToolIntegrationManager({
       arcade: {
-        apiKey: process.env.ARCADE_API_KEY || '',
+        apiKey: (process.env.ARCADE_API_KEY || '').trim(),
       },
       nango: {
         apiKey: nangoKey,
@@ -242,6 +242,70 @@ export {
   INTEGRATION_PROXY_CAPABILITY,
 } from './capabilities';
 
+// ============================================================================
+// Project Analysis Tools (Queryable MCP-style tools)
+// ============================================================================
+// These replace the shallow buildProjectContext() + markdown blob approach.
+// The LLM can now call structured tools to discover project information on demand.
+
+export {
+  // Capability definitions
+  PROJECT_ANALYZE_CAPABILITY,
+  PROJECT_LIST_SCRIPTS_CAPABILITY,
+  PROJECT_DEPENDENCIES_CAPABILITY,
+  PROJECT_STRUCTURE_CAPABILITY,
+  // Tool implementations
+  analyzeProject,
+  listScripts,
+  getDependencies,
+  buildProjectStructure,
+  // Types
+  type ProjectAnalysisResult,
+  type ScriptInfo,
+  type DependencyAnalysisResult,
+  type DependencyIssue,
+  type ProjectStructureResult,
+  type DirectoryNode,
+} from './project-analysis';
+
+// ============================================================================
+// Terminal / PTY Tools (Interactive terminal sessions)
+// ============================================================================
+// MCP-style resource + tools for interactive terminal use:
+// start dev server → monitor output → check port → navigate TUI → etc.
+
+export {
+  // Capability definitions (defined in capabilities.ts)
+  TERMINAL_CREATE_SESSION_CAPABILITY,
+  TERMINAL_SEND_INPUT_CAPABILITY,
+  TERMINAL_GET_OUTPUT_CAPABILITY,
+  TERMINAL_RESIZE_CAPABILITY,
+  TERMINAL_CLOSE_SESSION_CAPABILITY,
+  TERMINAL_LIST_SESSIONS_CAPABILITY,
+  TERMINAL_START_PROCESS_CAPABILITY,
+  TERMINAL_STOP_PROCESS_CAPABILITY,
+  TERMINAL_LIST_PROCESSES_CAPABILITY,
+  TERMINAL_GET_PORT_STATUS_CAPABILITY,
+} from './capabilities';
+
+export {
+  // Tool implementations
+  createTerminalSession,
+  sendTerminalInput,
+  getTerminalOutput,
+  resizeTerminal,
+  closeTerminalSession,
+  listTerminalSessions,
+  startProcess,
+  stopProcess,
+  listProcesses,
+  getPortStatus,
+  // Types
+  type TerminalSessionInfo,
+  type ProcessInfo,
+  type PortInfo,
+} from './terminal';
+
 // Capability router - maps capabilities to providers
 export {
   getCapabilityRouter,
@@ -267,3 +331,4 @@ export {
   type ComposioToolRequest,
   type ComposioToolResponse,
 } from '../integrations/composio-service';
+export { initToolSystem, executeToolCapability, hasToolCapability, getToolRouter, isToolSystemReady } from './execute-capability';

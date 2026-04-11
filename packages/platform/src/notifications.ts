@@ -71,18 +71,18 @@ export async function notify(title: string, options?: string | NotifyOptions): P
 /**
  * Show a browser notification (web fallback)
  */
-function showWebNotification(title: string, opts: NotifyOptions): void {
+async function showWebNotification(title: string, opts: NotifyOptions): Promise<void> {
   if (!('Notification' in window)) {
     console.warn('[Notifications] Browser does not support notifications');
     return;
   }
 
-  // Request permission if not granted
-  if (Notification.permission === 'default') {
-    Notification.requestPermission();
+  let permission = Notification.permission;
+  if (permission === 'default') {
+    permission = await Notification.requestPermission();
   }
 
-  if (Notification.permission === 'granted') {
+  if (permission === 'granted') {
     const notification = new Notification(title, {
       body: opts.body,
       icon: opts.icon,

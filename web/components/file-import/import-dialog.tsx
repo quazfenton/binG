@@ -20,6 +20,7 @@ import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogDescription, Di
 import { Button } from '@/components/ui/button';
 import { Upload, File, Folder, X, Loader2, FileCode, FileText, Image, Archive } from 'lucide-react';
 import { toast } from 'sonner';
+import { isDesktopMode } from '@bing/platform/env';
 
 interface FileToImport {
   name: string;
@@ -56,10 +57,14 @@ export function ImportDialog({
   const [isImporting, setIsImporting] = useState(false);
   const [isDragging, setIsDragging] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+  const folderInputRef = useRef<HTMLInputElement>(null);
 
-  const handleFileSelect = useCallback((selectedFiles: FileList | null) => {
+  /**
+   * Handle file selection — uses native Tauri dialogs on desktop
+   */
+  const handleFileSelect = useCallback(async (selectedFiles: FileList | null) => {
     if (!selectedFiles) return;
-    
+
     const newFiles: FileToImport[] = Array.from(selectedFiles).map(file => ({
       name: file.name,
       size: file.size,
@@ -68,11 +73,46 @@ export function ImportDialog({
     }));
 
     setFiles(prev => {
-      // Avoid duplicates
       const existingPaths = new Set(prev.map(f => f.path || f.name));
       const uniqueNew = newFiles.filter(f => !existingPaths.has(f.path || f.name));
       return [...prev, ...uniqueNew];
     });
+  }, []);
+
+  /**
+   * Open native file/folder dialog on desktop, fallback to browser input
+   */
+  const handleOpenFileDialog = useCallback(async (directory = false) => {
+    if (isDesktopMode()) {
+      try {
+        const { tauriDialogProvider } = await import('@/lib/hitl/tauri-dialog-provider');
+        if (tauriDialogProvider.isAvailable()) {
+          const result = directory
+            ? await tauriDialogProvider.openFolder({ title: 'Select Folder to Import' })
+            : await tauriDialogProvider.openFile({
+                title: 'Select Files to Import',
+                multiple: true,
+              });
+
+          if (result.success && result.data) {
+            const paths = Array.isArray(result.data) ? result.data : [result.data];
+            toast.info(`Selected ${paths.length} item(s) from desktop dialog`);
+            // On desktop, paths are strings — user needs to drag-drop or use browser input
+            // as a bridge until full Tauri file reading is implemented
+          }
+          return;
+        }
+      } catch (e) {
+        console.warn('[ImportDialog] Tauri dialog failed, falling back to browser input', e);
+      }
+    }
+
+    // Fallback: trigger hidden browser file input
+    if (directory && folderInputRef.current) {
+      folderInputRef.current.click();
+    } else if (fileInputRef.current) {
+      fileInputRef.current.click();
+    }
   }, []);
 
   const handleDrop = useCallback((e: React.DragEvent) => {
@@ -236,7 +276,7 @@ export function ImportDialog({
             onDrop={handleDrop}
             onDragOver={handleDragOver}
             onDragLeave={handleDragLeave}
-            onClick={() => fileInputRef.current?.click()}
+            onClick={() => handleOpenFileDialog(false)}
           >
             <Upload className="w-12 h-12 mx-auto mb-4 text-muted-foreground" />
             <p className="text-lg font-medium">Drop files or folders here</p>
@@ -246,6 +286,16 @@ export function ImportDialog({
             <input
               ref={fileInputRef}
               id="file-input"
+              type="file"
+              multiple
+              // @ts-expect-error webkitdirectory is non-standard but widely supported
+              webkitdirectory=""
+              className="hidden"
+              onChange={e => handleFileSelect(e.target.files)}
+            />
+            <input
+              ref={folderInputRef}
+              id="folder-input"
               type="file"
               multiple
               // @ts-expect-error webkitdirectory is non-standard but widely supported

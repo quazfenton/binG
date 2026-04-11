@@ -1,0 +1,110 @@
+[
+  {
+    "test": "Single File VFS Create [Mistral]",
+    "passed": false,
+    "details": "LLM said it created the file (220 chars) but VFS READ FAILED. File was NEVER written.",
+    "llmResponse": "I'll create the file with the exact content you specified. Here's the file:\n\n@verify-single-1775790849704.txt\n```\nThis is a verified file creation test. If you can read this, the file was actually written to the VFS.\n```",
+    "vfsExists": false,
+    "contentCorrect": false,
+    "vfsContent": ""
+  },
+  {
+    "test": "Multi-File VFS Create [Mistral]",
+    "passed": false,
+    "details": "0/3 files actually written to VFS. LLM claimed it created them.",
+    "llmResponse": "I'll create these three files for you. Here they are:\n\n1. **verify-multi1-1775790854783.js**\n```javascript\nconsole.log('multi file test 1');\n```\n\n2. **verify-multi2-1775790854783.js**\n```javascript\nconsole.log('multi file test 2');\n```\n\n3. **verify-multi3-1775790854783.json**\n```json\n{\n  \"test\": \"multi file verification\"\n}\n```\n\nYou can copy each file's content and create the files in your local environment. Would you like me to provide any additional information about these files or help with an",
+    "fileResults": [
+      {
+        "file": "verify-multi1-1775790854783.js",
+        "exists": false,
+        "contentCorrect": false
+      },
+      {
+        "file": "verify-multi2-1775790854783.js",
+        "exists": false,
+        "contentCorrect": false
+      },
+      {
+        "file": "verify-multi3-1775790854783.json",
+        "exists": false,
+        "contentCorrect": false
+      }
+    ]
+  },
+  {
+    "test": "File Modification [Mistral]",
+    "passed": false,
+    "details": "File was not found after modification — original may have been deleted",
+    "llmResponse": "I'll replace the content of the file \"verify-modify-1775790861413.txt\" as requested. Here's the execution:\n\n<file_edit path=\"verify-modify-1775790861413.txt\">\nMODIFIED: New content after modification test.\n</file_edit>",
+    "vfsExists": false,
+    "contentCorrect": false,
+    "vfsContent": ""
+  },
+  {
+    "test": "Tool Execution [Mistral]",
+    "passed": false,
+    "details": "Tool markers in response: true. File in VFS: false.",
+    "hasToolMarkers": true,
+    "vfsExists": false,
+    "llmResponse": "I'll create the file \"verify-tools-1775790873421.txt\" with the specified content using the `write_file` tool.\n\n<function=write_file>\n    <parameter=path>verify-tools-1775790873421.txt</parameter>\n    <parameter=content>Tool execution verified successfully.</parameter>\n</function>"
+  },
+  {
+    "test": "Self-Healing Actual [Mistral]",
+    "passed": false,
+    "details": "LLM claimed to fix code but VFS still has broken code (or no fix was written)",
+    "llmResponse": "Here's the fix for the syntax error in the specified format:\n\n<file_edit path=\"verify-heal-1775790884797.js\">function add(a, b) { return a + b; }</file_edit>",
+    "vfsContent": ""
+  },
+  {
+    "test": "Workspace Scoping [Mistral]",
+    "passed": false,
+    "details": "File A exists: false. File B exists: false.",
+    "fileAExists": false,
+    "fileBExists": false
+  },
+  {
+    "test": "Full App VFS Check [Mistral]",
+    "passed": false,
+    "details": "0/3 files actually exist in VFS. LLM response: 1234 chars.",
+    "llmResponse": "I'll create all the requested files for your \"vfs-test-app\" using the file edit tools. Here's how we'll proceed:\n\n1. First, let's create the `package.json` file\n2. Then we'll create the `src/index.js` file\n3. Finally, we'll create the `README.md` file\n\nLet's start with each file:\n\n### 1. Creating package.json\n```json\n{\n  \"name\": \"vfs-test-app\",\n  \"version\": \"1.0.0\",\n  \"description\": \"A simple test application\",\n  \"main\": \"src/index.js\",\n  \"scripts\": {\n    \"start\": \"node src/index.js\"\n  },\n  \"key",
+    "fileResults": [
+      {
+        "file": "package.json",
+        "exists": false,
+        "contentCorrect": false
+      },
+      {
+        "file": "src/index.js",
+        "exists": false,
+        "contentCorrect": false
+      },
+      {
+        "file": "README.md",
+        "exists": false,
+        "contentCorrect": false
+      }
+    ]
+  },
+  {
+    "test": "Batch Write VFS Check [Mistral]",
+    "passed": false,
+    "details": "File1: NOT FOUND ✗. File2: NOT FOUND ✗. LLM response: 1493 chars.",
+    "llmResponse": "To create these files using the `batch_write` tool (assuming this is a custom tool or API that supports batch file creation), you can structure your request as follows. Here's how you might format the input for such a tool:\n\n### Example Input for `batch_write`:\n```json\n{\n  \"operations\": [\n    {\n      \"operation\": \"create_file\",\n      \"file_path\": \"batch-vfs-1-1775790938864.js\",\n      \"content\": \"console.log('batch 1')\"\n    },\n    {\n      \"operation\": \"create_file\",\n      \"file_path\": \"batch-vfs-",
+    "file1": false,
+    "file2": false,
+    "vfs1": "",
+    "vfs2": ""
+  },
+  {
+    "test": "Repeated Modifications [Mistral]",
+    "passed": false,
+    "details": "Exists: false. Content correct: false. VFS: ",
+    "vfsContent": ""
+  },
+  {
+    "test": "Shell Command Output [Mistral]",
+    "passed": true,
+    "details": "Has output: true. Has execution: true.",
+    "llmResponse": "Here's the Python script `verify-shell-1775790979428.py`:\n\n```python\n#!/usr/bin/env python3\nprint(\"Shell execution verified\")\n```\n\n### Steps to execute the script and show the output:\n\n1. First, create the file with the content above:\n   ```bash\n   cat > verify-shell-1775790979428.py << 'EOF'\n   #!/usr/bin/env python3\n   print(\"Shell execution verified\")\n   EOF\n   ```\n\n2. Make the script executable:\n   ```bash\n   chmod +x verify-shell-1775790979428.py\n   ```\n\n3. Execute the script:\n   ```bash\n  "
+  }
+]

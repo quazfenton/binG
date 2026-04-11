@@ -1,0 +1,362 @@
+{
+  "timestamp": "2026-04-10T07:23:07.221Z",
+  "total": 59,
+  "passed": 58,
+  "failed": 1,
+  "tests": [
+    {
+      "name": "Login succeeds",
+      "pass": true,
+      "detail": "status=200",
+      "timestamp": 1775805414673
+    },
+    {
+      "name": "Auth token received",
+      "pass": true,
+      "detail": "len=280",
+      "timestamp": 1775805414673
+    },
+    {
+      "name": "Google streams",
+      "pass": true,
+      "detail": "tokens=1",
+      "timestamp": 1775805434196
+    },
+    {
+      "name": "Google completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805434197
+    },
+    {
+      "name": "Google correct",
+      "pass": true,
+      "detail": "text=\"100\"",
+      "timestamp": 1775805434197
+    },
+    {
+      "name": "Nvidia streams",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805456808
+    },
+    {
+      "name": "Nvidia completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805456808
+    },
+    {
+      "name": "Nvidia correct",
+      "pass": true,
+      "detail": "text=\"56\"",
+      "timestamp": 1775805456809
+    },
+    {
+      "name": "Non-streaming responds",
+      "pass": true,
+      "detail": "status=200",
+      "timestamp": 1775805479462
+    },
+    {
+      "name": "Non-streaming has content",
+      "pass": true,
+      "detail": "content=\"6\"",
+      "timestamp": 1775805479462
+    },
+    {
+      "name": "Non-streaming correct",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805479462
+    },
+    {
+      "name": "Code gen responds",
+      "pass": true,
+      "detail": "chars=1643",
+      "timestamp": 1775805505497
+    },
+    {
+      "name": "Code gen completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805505497
+    },
+    {
+      "name": "Tool usage detected",
+      "pass": true,
+      "detail": "native=0, textMode=true",
+      "timestamp": 1775805505497
+    },
+    {
+      "name": "File edits detected (native or text-mode)",
+      "pass": true,
+      "detail": "native=8, textMode=true",
+      "timestamp": 1775805505497
+    },
+    {
+      "name": "Files created or mentioned in VFS",
+      "pass": true,
+      "detail": "files=2",
+      "timestamp": 1775805510532
+    },
+    {
+      "name": "Multi-file responds",
+      "pass": true,
+      "detail": "chars=282",
+      "timestamp": 1775805535111
+    },
+    {
+      "name": "Multi-file correct (mentions 3000 or reads files)",
+      "pass": true,
+      "detail": "I'll read both files to determine what port the server uses.\n\n```file: project/ctx-1775805513539/config.js\nexport const port = 3000;\n```\n\n```file: project/ctx-1775805513539/app.js\nimport { port } from",
+      "timestamp": 1775805535112
+    },
+    {
+      "name": "Diff responds",
+      "pass": true,
+      "detail": "chars=130",
+      "timestamp": 1775805559157
+    },
+    {
+      "name": "Diff completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805559157
+    },
+    {
+      "name": "File modification detected",
+      "pass": true,
+      "detail": "native=0, textMode=true",
+      "timestamp": 1775805559157
+    },
+    {
+      "name": "Empty-like handled",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805583371
+    },
+    {
+      "name": "Request completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805583371
+    },
+    {
+      "name": "MCP responds",
+      "pass": true,
+      "detail": "status=200",
+      "timestamp": 1775805586431
+    },
+    {
+      "name": "MCP has tools",
+      "pass": true,
+      "detail": "count=10",
+      "timestamp": 1775805586431
+    },
+    {
+      "name": "read_file available",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805586431
+    },
+    {
+      "name": "write_file available",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805586431
+    },
+    {
+      "name": "list_files available",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805586431
+    },
+    {
+      "name": "read_files available",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805586431
+    },
+    {
+      "name": "apply_diff available",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805586431
+    },
+    {
+      "name": "Nested write",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805589477
+    },
+    {
+      "name": "Leading slash write",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805589511
+    },
+    {
+      "name": "Traversal rejected",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805589525
+    },
+    {
+      "name": "Nested files exist",
+      "pass": true,
+      "detail": "nodes=2",
+      "timestamp": 1775805589543
+    },
+    {
+      "name": "OpenRouter streams",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805613215
+    },
+    {
+      "name": "OpenRouter completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805613215
+    },
+    {
+      "name": "OpenRouter correct",
+      "pass": true,
+      "detail": "text=\"25\"",
+      "timestamp": 1775805613215
+    },
+    {
+      "name": "Nemotron streams",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805636290
+    },
+    {
+      "name": "Nemotron completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805636290
+    },
+    {
+      "name": "Nemotron correct",
+      "pass": true,
+      "detail": "text=\"144\"",
+      "timestamp": 1775805636290
+    },
+    {
+      "name": "Nano streams",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805658487
+    },
+    {
+      "name": "Nano completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805658487
+    },
+    {
+      "name": "Nano correct",
+      "pass": true,
+      "detail": "text=\"18\n\"",
+      "timestamp": 1775805658487
+    },
+    {
+      "name": "OR Free streams",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805682127
+    },
+    {
+      "name": "OR Free completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805682128
+    },
+    {
+      "name": "OR Free correct",
+      "pass": true,
+      "detail": "text=\"42\"",
+      "timestamp": 1775805682128
+    },
+    {
+      "name": "Gemini 3.1 Lite streams",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805705842
+    },
+    {
+      "name": "Gemini 3.1 Lite completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805705842
+    },
+    {
+      "name": "Gemini 3.1 Lite correct",
+      "pass": true,
+      "detail": "text=\"30\"",
+      "timestamp": 1775805705843
+    },
+    {
+      "name": "Write-Read cycle responds",
+      "pass": true,
+      "detail": "chars=77",
+      "timestamp": 1775805729924
+    },
+    {
+      "name": "Write-Read completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805729924
+    },
+    {
+      "name": "Mentions version",
+      "pass": false,
+      "detail": "",
+      "timestamp": 1775805729924
+    },
+    {
+      "name": "Batch responds",
+      "pass": true,
+      "detail": "chars=457",
+      "timestamp": 1775805755777
+    },
+    {
+      "name": "Batch completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805755777
+    },
+    {
+      "name": "Batch file creation mentioned",
+      "pass": true,
+      "detail": "native=12, textMode=true",
+      "timestamp": 1775805755777
+    },
+    {
+      "name": "Batch files mentioned or created",
+      "pass": true,
+      "detail": "files=3",
+      "timestamp": 1775805760800
+    },
+    {
+      "name": "Read tool responds",
+      "pass": true,
+      "detail": "chars=95",
+      "timestamp": 1775805784207
+    },
+    {
+      "name": "Read tool completes",
+      "pass": true,
+      "detail": "",
+      "timestamp": 1775805784207
+    },
+    {
+      "name": "Read tool usage detected",
+      "pass": true,
+      "detail": "native=0, textMode=true",
+      "timestamp": 1775805784207
+    }
+  ]
+}

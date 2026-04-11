@@ -31,6 +31,11 @@ export interface JobResult {
   error?: string;
 }
 
+export interface JobRunResult {
+  jobId: string;
+  result: JobResult;
+}
+
 export interface JobStatus {
   id: string;
   name: string;
@@ -45,16 +50,23 @@ const webJobRegistry = new Map<string, JobStatus>();
 /**
  * Run a background job
  */
-export async function runJob(name: string, payload: any): Promise<JobResult> {
+export async function runJob(name: string, payload: any): Promise<JobRunResult> {
   if (isDesktopMode()) {
     // Offload to Rust via Tauri invoke
     try {
       const { invoke } = await import('@tauri-apps/api/core');
-      return await invoke<JobResult>(name, payload);
+      const result = await invoke<JobResult & { jobId?: string }>(name, payload);
+      // Use backend jobId if available, otherwise generate local one
+      const jobId = result.jobId || `${name}-${Date.now()}`;
+      return { jobId, result: { success: result.success, data: result.data, error: result.error } };
     } catch (error: any) {
+      const errorMsg = error?.message || String(error);
       return {
-        success: false,
-        error: error.message || String(error),
+        jobId: '',
+        result: {
+          success: false,
+          error: errorMsg,
+        },
       };
     }
   }
@@ -72,27 +84,37 @@ export async function runJob(name: string, payload: any): Promise<JobResult> {
     // Look for registered JS job handlers
     const handler = jobHandlers.get(name);
     if (handler) {
-      const result = await handler(payload);
+      const data = await handler(payload);
       webJobRegistry.set(jobId, {
         id: jobId,
         name,
         status: 'completed',
         progress: 100,
-        result: { success: true, data: result },
+        result: { success: true, data },
       });
-      return { success: true, data: result };
+      return { jobId, result: { success: true, data } };
     }
 
-    return { success: false, error: `No handler registered for job: ${name}` };
-  } catch (error: any) {
+    // No handler registered — update registry to 'failed' so getJobStatus doesn't show 'running' forever
+    const errorMsg = `No handler registered for job: ${name}`;
     webJobRegistry.set(jobId, {
       id: jobId,
       name,
       status: 'failed',
       progress: 0,
-      result: { success: false, error: error.message },
+      result: { success: false, error: errorMsg },
     });
-    return { success: false, error: error.message };
+    return { jobId, result: { success: false, error: errorMsg } };
+  } catch (error: any) {
+    const errorMsg = error?.message || String(error);
+    webJobRegistry.set(jobId, {
+      id: jobId,
+      name,
+      status: 'failed',
+      progress: 0,
+      result: { success: false, error: errorMsg },
+    });
+    return { jobId, result: { success: false, error: errorMsg } };
   }
 }
 

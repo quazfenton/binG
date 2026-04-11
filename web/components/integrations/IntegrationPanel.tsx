@@ -70,6 +70,7 @@ const AUTH0_CONNECT_PROVIDERS: Record<string, string> = {
 const ARCADE_PROVIDERS = new Set([
   'gmail', 'googledocs', 'googlesheets', 'googlecalendar', 'googledrive',
   'exa', 'twilio', 'spotify', 'vercel', 'railway',
+  'discord', 'reddit',  // Also available via Arcade SDK with managed OAuth
 ]);
 
 // Nango tool providers (agent automation)
@@ -337,8 +338,11 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
     if (!userId) return;
 
     try {
-      const token = (() => {
-        try { return (await import('@bing/platform/secrets')).secrets.get('auth-token'); } catch { return null; }
+      const token = await (async () => {
+        try {
+          const { secrets } = await import('@bing/platform/secrets');
+          return await secrets.get('auth-token');
+        } catch { return null; }
       })();
 
       // Fetch connection status and source from API
@@ -379,13 +383,94 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
     setLoading(integration.id);
 
     try {
-      // Get the auth config for this provider
+      // Resolve auth token once
+      const token = await (async () => {
+        try {
+          const { secrets } = await import('@bing/platform/secrets');
+          return await secrets.get('auth-token');
+        } catch { return null; }
+      })();
+      const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
+
+      // ── Primary: Try Arcade SDK OAuth ──────────────────────────────────
+      // Arcade SDK provides managed OAuth with automatic token handling
+      // Supports providers: github, google, slack, x/twitter, etc.
+      // Falls through to Auth0/legacy if Arcade is not configured or fails.
+      try {
+        const arcadeResponse = await fetch('/api/integrations/arcade/auth', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json', ...authHeaders },
+          body: JSON.stringify({
+            provider: integration.provider,
+            scopes: integration.scopes,
+          }),
+        });
+
+        if (arcadeResponse.ok) {
+          const arcadeData = await arcadeResponse.json();
+
+          if (arcadeData.status === 'completed' && arcadeData.token) {
+            // Already authorized via Arcade — token is ready
+            toast.success(`${integration.name} connected via Arcade`);
+            setLoading(null);
+            fetchConnectedIntegrations();
+            return;
+          }
+
+          if (arcadeData.status === 'pending' && arcadeData.authUrl) {
+            // User needs to complete OAuth — open Arcade auth URL in popup
+            const width = 600;
+            const height = 700;
+            const left = window.screenX + (window.outerWidth - width) / 2;
+            const top = window.screenY + (window.outerHeight - height) / 2;
+
+            const popup = window.open(
+              arcadeData.authUrl,
+              'arcade_auth',
+              `width=${width},height=${height},left=${left},top=${top},toolbar=no,menubar=no,scrollbars=yes,resizable=yes,noopener=yes,noreferrer=yes`
+            );
+
+            if (popup) {
+              setPopupWindow(popup);
+              toast.info(`Connecting to ${integration.name} via Arcade... Complete authorization in the popup.`);
+
+              // Poll for completion after user authorizes
+              const pollInterval = setInterval(async () => {
+                if (popup.closed) {
+                  clearInterval(pollInterval);
+                  setPopupWindow(null);
+
+                  // Check if authorization completed
+                  const statusResponse = await fetch(
+                    `/api/integrations/arcade/auth?provider=${integration.provider}`,
+                    { headers: authHeaders }
+                  );
+
+                  if (statusResponse.ok) {
+                    const statusData = await statusResponse.json();
+                    if (statusData.connected) {
+                      toast.success(`${integration.name} connected via Arcade`);
+                      fetchConnectedIntegrations();
+                    }
+                  }
+                  setLoading(null);
+                }
+              }, 1000);
+
+              return; // Exit — Arcade flow is active
+            }
+            // Popup blocked — fall through to Auth0
+          }
+        }
+      } catch (arcadeError) {
+        // Arcade SDK not available or failed — fall through to Auth0
+        console.log('[IntegrationPanel] Arcade SDK not available, falling back:', arcadeError);
+      }
+
+      // ── Fallback 1: Auth0 Connected Accounts ──────────────────────────
       const authConfig = getProviderAuthConfig(integration.provider);
-      
-      // Handle Auth0 Connected Accounts (for GitHub, Google when Auth0 is configured)
       if (authConfig?.method === 'auth0' && authConfig.connection) {
         try {
-          // Use /auth/login with connection parameter for Auth0 social login
           const authUrl = `/auth/login?connection=${authConfig.connection}&returnTo=${encodeURIComponent(window.location.href)}`;
 
           const width = 600;
@@ -402,30 +487,23 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
           if (popup) {
             setPopupWindow(popup);
             toast.info(`Connecting to ${integration.name} via Auth0...`);
+            setLoading(null);
             return;
           } else {
             toast.error('Popup blocked. Please allow popups for this site.');
             setLoading(null);
+            return;
           }
         } catch (auth0Error) {
-          console.warn('Auth0 connection failed, falling back to:', auth0Error);
-          toast.error(`Failed to connect to ${integration.name} via Auth0`);
-          setLoading(null);
-          return;
+          console.warn('[IntegrationPanel] Auth0 connection failed, falling back:', auth0Error);
+          // Fall through to standard OAuth
         }
       }
 
-      // Determine which auth endpoint to use based on provider config
+      // ── Fallback 2: Standard OAuth (legacy) ──────────────────────────
       let authEndpoint: string;
-      
-      // Resolve auth token once for all service types
-      const token = (() => {
-        try { return (await import('@bing/platform/secrets')).secrets.get('auth-token'); } catch { return null; }
-      })();
-      const authHeaders: Record<string, string> = token ? { Authorization: `Bearer ${token}` } : {};
 
       if (authConfig?.method === 'arcade' || authConfig?.method === 'nango') {
-        // Use Arcade or Nango authorization endpoint
         const servicePath = authConfig.method === 'arcade' ? 'arcade' : 'nango';
         try {
           const response = await fetch(
@@ -447,7 +525,6 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
           return;
         }
       } else {
-        // Standard OAuth — include token in query for popup redirect auth
         const tokenParam = token ? `&token=${encodeURIComponent(token)}` : '';
         authEndpoint = `/api/auth/oauth/initiate?provider=${integration.provider}${tokenParam}`;
       }
@@ -458,12 +535,8 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
       const left = window.screenX + (window.outerWidth - width) / 2;
       const top = window.screenY + (window.outerHeight - height) / 2;
 
-      // Add origin parameter for postMessage security validation
       const urlWithOrigin = `${authEndpoint}${authEndpoint.includes('?') ? '&' : '?'}origin=${encodeURIComponent(window.location.origin)}`;
 
-      // Open OAuth popup with noopener,noreferrer for security
-      // This prevents the third-party auth page from accessing window.opener (mitigates tabnabbing)
-      // Note: We use interval-based fallback to detect popup closure instead of window.opener
       const popup = window.open(
         urlWithOrigin,
         'oauth_popup',
@@ -497,8 +570,11 @@ export default function IntegrationPanel({ userId, onClose }: IntegrationPanelPr
     setLoading(integration.id);
 
     try {
-      const token = (() => {
-        try { return (await import('@bing/platform/secrets')).secrets.get('auth-token'); } catch { return null; }
+      const token = await (async () => {
+        try {
+          const { secrets } = await import('@bing/platform/secrets');
+          return await secrets.get('auth-token');
+        } catch { return null; }
       })();
 
       // Call API to revoke connection

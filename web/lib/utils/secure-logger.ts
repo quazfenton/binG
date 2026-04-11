@@ -70,15 +70,15 @@ export class SecureLogger extends Logger {
    * @deprecated Use createLogger(source, { secure: true }).info() instead
    */
   redact(text: string): string {
-    return (this as any).redact(text);
+    return super['redact'](text);
   }
 
   /**
    * Redact sensitive data from an object
    * @deprecated Use createLogger(source, { secure: true }).info() instead
    */
-  redactObject(obj: any, maxDepth?: number): any {
-    return (this as any).redactObject(obj, maxDepth);
+  redactObject(obj: any, _maxDepth?: number): any {
+    return super['sanitizeObject'](obj);
   }
 
   /**

@@ -5,12 +5,12 @@
  * DOES NOT replace existing components - orchestrates them.
  */
 
-import { ESCALATION_PROFILES } from '../agent/timeout-escalation';
+import { ESCALATION_PROFILES } from '@bing/shared/agent/timeout-escalation';
 import { createLogger } from '../utils/logger';
 import { providerRouter, type TaskContext } from './provider-router';
 import { sessionManager } from '../session/session-manager';
 import { resourceMonitor, type ResourceMetrics } from '../management/resource-monitor';
-import { taskRouter } from '../agent/task-router';
+import { taskRouter } from '@bing/shared/agent/task-router';
 import {
   assessRisk,
   type ExecutionPolicy,
@@ -21,6 +21,7 @@ import {
 import { normalizeSessionId } from '../virtual-filesystem/scope-utils';
 import type { SandboxHandle } from './providers/sandbox-provider';
 import { getSandboxProvider, type SandboxProviderType } from './providers';
+import { sandboxFilesystemSync } from '@/lib/virtual-filesystem/sync/sandbox-filesystem-sync';
 
 const logger = createLogger('Sandbox:Orchestrator');
 
@@ -86,7 +87,7 @@ export class SandboxOrchestrator {
       return existingSession;
     }
 
-    const routing = taskRouter.analyzeTask(task);
+    const routing = await taskRouter.analyzeTask(task);
     const policy = this.normalizePolicyForSandbox(explicitPolicy || risk.recommendedPolicy);
     const providerContext = this.buildTaskContext(routing.type, policy);
     const provider = await providerRouter.selectOptimalProvider(providerContext);
@@ -475,6 +476,15 @@ export class SandboxOrchestrator {
       },
     });
     await handle.executeCommand(`mkdir -p "${workspaceDir.replace(/(["\\$`])/g, '\\$1')}"`);
+    
+    // Start VFS sync for bidirectional file sync between VFS database and sandbox
+    try {
+      sandboxFilesystemSync.startSync(handle.id, userId);
+      logger.info('VFS sync started for orchestrator sandbox', { sandboxId: handle.id, userId });
+    } catch (syncErr: any) {
+      logger.warn('Failed to start VFS sync for orchestrator sandbox:', syncErr.message);
+    }
+    
     return handle;
   }
 }

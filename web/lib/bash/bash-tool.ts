@@ -47,6 +47,143 @@ const DEFAULT_CONFIG: BashToolConfig = {
 };
 
 // ============================================================================
+// Direct Command Detection (skip self-healing for trivial commands)
+// From terminal/command_executor.js — saves ~2x latency on simple ops
+// ============================================================================
+
+/**
+ * Direct commands that don't need AI self-healing.
+ * These are common, reliable, well-understood commands that rarely fail.
+ * Skipping self-healing saves a retry round-trip for trivial operations.
+ */
+const DIRECT_COMMANDS = new Set([
+  // Navigation
+  'ls', 'pwd', 'cd', 'dirs', 'popd', 'pushd',
+  // File operations (read-only)
+  'cat', 'head', 'tail', 'less', 'more', 'wc', 'stat', 'file', 'tree',
+  // Search
+  'find', 'grep', 'egrep', 'fgrep', 'locate', 'which', 'whereis', 'type',
+  // System info
+  'whoami', 'id', 'uname', 'hostname', 'date', 'time', 'uptime', 'env', 'printenv',
+  // Process
+  'ps', 'top', 'htop', 'jobs', 'bg', 'fg', 'kill', 'killall', 'pgrep',
+  // Disk/memory
+  'df', 'du', 'free', 'vmstat', 'iostat',
+  // Network
+  'ping', 'netstat', 'ss', 'ifconfig', 'ip', 'curl', 'wget', 'dig', 'nslookup', 'traceroute',
+  // Archive
+  'tar', 'zip', 'unzip', 'gzip', 'gunzip', 'bzip2', 'bunzip2', 'xz',
+  // Permissions (read-only)
+  'lsattr', 'getfacl',
+  // Version/info
+  'node', 'npm', 'pnpm', 'yarn', 'pip', 'python', 'python3', 'git', 'docker',
+  // Utility
+  'echo', 'printf', 'seq', 'yes', 'basename', 'dirname', 'realpath', 'readlink',
+  // Editors (we intercept these — see handleTextEditorCommand)
+  'vim', 'nano', 'vi', 'emacs', 'code',
+]);
+
+/**
+ * Check if a command is a direct (simple, reliable) command that doesn't need self-healing.
+ */
+export function isDirectCommand(command: string): boolean {
+  const base = command.trim().split(/\s+/)[0]?.toLowerCase() || '';
+  // Direct commands: no pipes, redirects, or chaining
+  if (base && !command.includes('|') && !command.includes('>') && !command.includes('&&') && !command.includes(';')) {
+    return DIRECT_COMMANDS.has(base) || base.startsWith('./') || base.includes('/');
+  }
+  return false;
+}
+
+/**
+ * Intercept text editor commands (vim/nano/emacs/code) and translate them
+ * to VFS file operations instead of trying to spawn an interactive terminal editor
+ * (which would hang the PTY with no user input channel).
+ */
+export async function handleTextEditorCommand(
+  command: string,
+  workingDir: string
+): Promise<BashExecutionResult | null> {
+  const match = command.match(/^(vim|vi|nano|emacs|code)\s+(?:-\w+\s+)*([^\s]+)/);
+  if (!match) return null;
+
+  const editor = match[1];
+  const filePath = match[2];
+
+  // Can't create a file from just `vim file.js` with no content — return helpful message
+  return {
+    success: false,
+    stdout: '',
+    stderr: `Interactive editor '${editor}' cannot run in terminal mode. Use write_file tool or 'echo "content" > ${filePath}' instead.`,
+    exitCode: 1,
+    duration: 0,
+    command,
+    workingDir,
+    intercepted: true,
+    editor,
+    filePath,
+  };
+}
+
+// ============================================================================
+// Hook System (from ai_terminal_integration.js)
+// Allows preExecution/postExecution/onError lifecycle hooks
+// ============================================================================
+
+export interface BashHookContext {
+  command: string;
+  workingDir: string;
+  userId?: string;
+  sessionId?: string;
+  [key: string]: any;
+}
+
+export interface BashHookResult {
+  output?: string;
+  error?: string;
+  skipExecution?: boolean;
+  [key: string]: any;
+}
+
+type BashHookHandler = (ctx: BashHookContext) => Promise<BashHookResult | void> | BashHookResult | void;
+
+const hooks = {
+  preExecution: [] as BashHookHandler[],
+  postExecution: [] as BashHookHandler[],
+  onError: [] as BashHookHandler[],
+};
+
+/**
+ * Register a lifecycle hook for bash execution.
+ * @param type - 'preExecution', 'postExecution', or 'onError'
+ * @param handler - Hook callback function
+ */
+export function registerBashHook(type: keyof typeof hooks, handler: BashHookHandler): void {
+  hooks[type].push(handler);
+}
+
+/**
+ * Clear all hooks (for testing).
+ */
+export function clearBashHooks(): void {
+  hooks.preExecution.length = 0;
+  hooks.postExecution.length = 0;
+  hooks.onError.length = 0;
+}
+
+async function triggerHooks(type: keyof typeof hooks, ctx: BashHookContext): Promise<BashHookResult | null> {
+  for (const handler of hooks[type]) {
+    try {
+      const result = await handler(ctx);
+      if (result?.skipExecution) return result;
+    } catch (e: any) {
+      logger.warn(`Hook error (${type})`, { error: e.message });
+    }
+  }
+  return null;
+}
+
+// ============================================================================
 // Bash Execution Implementation
 // ============================================================================
 
@@ -281,11 +418,42 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
           throw new Error(`Command blocked by safety filter: ${command.slice(0, 100)}`);
         }
 
+        // PATCH 1: Intercept text editor commands (vim/nano/emacs) — they'd hang the PTY
+        const editorResult = await handleTextEditorCommand(command, wd);
+        if (editorResult) {
+          logger.info('Text editor command intercepted', { editor: editorResult.editor, filePath: editorResult.filePath });
+          return {
+            success: false,
+            output: '',
+            error: editorResult.stderr,
+            exitCode: 1,
+            duration: 0,
+          };
+        }
+
+        // PATCH 2: Trigger preExecution hooks (allows VFS sync, scope injection, etc.)
+        const hookCtx: BashHookContext = { command, workingDir: wd, userId: agentId };
+        const preResult = await triggerHooks('preExecution', hookCtx);
+        if (preResult?.skipExecution) {
+          logger.info('Pre-execution hook skipped execution');
+          return {
+            success: true,
+            output: preResult.output || '',
+            error: preResult.error,
+            exitCode: 0,
+            duration: 0,
+          };
+        }
+
         let result: BashExecutionResult;
 
         try {
-          // Execute with or without self-healing
-          if (selfHeal && cfg.enableSelfHealing) {
+          // PATCH 3: Direct command detection — skip self-healing for trivial commands
+          // ls, pwd, whoami, etc. rarely fail — skip the retry loop to save latency
+          const isDirect = isDirectCommand(command);
+          const shouldSelfHeal = selfHeal && cfg.enableSelfHealing && !isDirect;
+
+          if (shouldSelfHeal) {
             result = await executeWithHealing(command, {
               workingDir: wd,
               maxRetries: cfg.maxRetries,
@@ -298,6 +466,10 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
             });
           }
 
+          if (isDirect) {
+            logger.debug('Direct command executed (skipped self-healing)', { command });
+          }
+
           // Persist to VFS if requested
           if (persist) {
             const outputPath = await persistToVFS(cfg.persistToVFS, agentId, command, result);
@@ -305,6 +477,9 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
               result.outputPath = outputPath;
             }
           }
+
+          // PATCH 2: Trigger postExecution hooks (allows file sync, logging, etc.)
+          await triggerHooks('postExecution', { ...hookCtx, result });
 
           return {
             success: result.success,
@@ -319,6 +494,9 @@ export function createBashTool(config: Partial<BashToolConfig> = {}) {
             command,
             error: error.message,
           });
+
+          // PATCH 2: Trigger onError hooks
+          await triggerHooks('onError', { ...hookCtx, error: error.message });
 
           return {
             success: false,
@@ -402,7 +580,7 @@ export async function executeBashViaEvent(
  */
 export function extractOutputFiles(command: string): string[] {
   const files: string[] = [];
-  
+
   // Match > filename patterns
   const redirectMatches = command.match(/>+\s*([^\s|&;]+)/g);
   if (redirectMatches) {
@@ -415,6 +593,63 @@ export function extractOutputFiles(command: string): string[] {
   }
 
   return files;
+}
+
+// ============================================================================
+// VFS Sync Hook (registers automatically when imported)
+// Syncs files created by bash commands back into the VFS session workspace
+// ============================================================================
+
+/**
+ * Register the default VFS sync hook for bash execution.
+ * This syncs files created by bash redirects (`> file.txt`) and `touch` commands
+ * back into the VFS session workspace so they appear in the workspace panel.
+ *
+ * Call this once during app initialization.
+ */
+export function registerVFSSyncHook(): void {
+  registerBashHook('postExecution', async (ctx: BashHookContext & { result?: BashExecutionResult }) => {
+    if (!ctx.result?.success) return;
+
+    // Extract files created by redirects (echo "x" > file.txt, cat > file.txt << EOF)
+    const outputFiles = extractOutputFiles(ctx.command);
+
+    for (const filePath of outputFiles) {
+      try {
+        // Read the file from disk and sync to VFS
+        const { readFile } = await import('fs/promises');
+        const { resolve } = await import('path');
+        const absolutePath = resolve(ctx.workingDir, filePath);
+        const content = await readFile(absolutePath, 'utf8');
+
+        // Determine VFS scope path from session
+        const scopePath = ctx.scopePath || 'project';
+        const vfsPath = filePath.startsWith('/')
+          ? filePath.replace(/^\/+/, '')
+          : `${scopePath}/${filePath}`;
+
+        await virtualFilesystem.writeFile(
+          ctx.userId || 'anonymous',
+          vfsPath,
+          content,
+          'text/plain',
+          { failIfExists: false }
+        );
+
+        logger.debug('VFS sync: bash-created file synced to VFS', {
+          command: ctx.command.slice(0, 80),
+          diskPath: absolutePath,
+          vfsPath,
+          contentLength: content.length,
+        });
+      } catch (e: any) {
+        logger.debug('VFS sync failed for bash output file', {
+          file: filePath,
+          error: e.message,
+        });
+      }
+    }
+  });
 }
 
 

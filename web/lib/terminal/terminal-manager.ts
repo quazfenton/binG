@@ -64,7 +64,7 @@ const websocketConnections = new Map<string, WebSocketConnection>()
 // ✅ FIX: Connection limits to prevent resource exhaustion
 const MAX_PTY_CONNECTIONS = 50
 const MAX_WEBSOCKET_CONNECTIONS = 100
-const CONNECTION_IDLE_TIMEOUT_MS = 30 * 60 * 1000 // 30 minutes
+const CONNECTION_IDLE_TIMEOUT_MS = 5 * 60 * 1000 // 5 minutes
 
 // Legacy port patterns (kept for backward compatibility)
 const LEGACY_PORT_PATTERNS = [
@@ -115,7 +115,7 @@ setInterval(() => {
 
 export class TerminalManager {
   private inferProviderFromSandboxId(sandboxId: string): SandboxProviderType | null {
-    if (sandboxId.startsWith('mistral-')) return 'mistral'
+    if (sandboxId.startsWith('mistral-agent-')) return 'mistral-agent'
     if (sandboxId.startsWith('blaxel-mcp-')) return 'blaxel-mcp'
     if (sandboxId.startsWith('blaxel-') || sandboxId.includes('-blaxel-')) return 'blaxel'
     if (sandboxId.startsWith('sprite-') || sandboxId.startsWith('bing-') || sandboxId.includes('-sprites-')) return 'sprites'
@@ -166,7 +166,7 @@ export class TerminalManager {
     
     // Track tried providers to avoid duplicates
     const tried = new Set<SandboxProviderType>()
-    
+
     const tryProvider = async (
       providerType: SandboxProviderType,
     ): Promise<{ handle: SandboxHandle; providerType: SandboxProviderType } | null> => {
@@ -174,37 +174,43 @@ export class TerminalManager {
       tried.add(providerType)
       try {
         const provider = await getSandboxProvider(providerType)
+        log.debug(`[Terminal] Trying provider ${providerType} for sandbox ${sandboxId}...`)
         const handle = await withTimeout(
           provider.getSandbox(sandboxId),
           PROVIDER_TIMEOUT_MS,
           providerType
         )
+        log.info(`[Terminal] ✓ Provider ${providerType} found sandbox ${sandboxId} — createPty=${!!handle.createPty}`)
         return { handle, providerType }
       } catch (err) {
-        console.warn(`[TerminalManager] Provider ${providerType} failed:`, err instanceof Error ? err.message : 'Unknown error')
+        log.debug(`[Terminal] ✗ Provider ${providerType} failed for ${sandboxId}:`, err instanceof Error ? err.message : 'Unknown error')
         return null
       }
     }
-    
+
     // Try primary provider first
+    log.info(`[Terminal] Trying primary provider: ${primaryType} for sandbox ${sandboxId}`)
     const primaryResult = await tryProvider(primaryType)
     if (primaryResult) return primaryResult
-    
+
     // Try all known providers to locate the sandbox (supports quota-based fallbacks)
     // This is critical because sandbox-service can create sandboxes on any provider via fallback
-    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'blaxel-mcp', 'sprites', 'codesandbox', 'webcontainer', 'webcontainer-filesystem', 'webcontainer-spawn', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral', 'vercel-sandbox'] //codesandbox***
+    const allProviders: SandboxProviderType[] = ['daytona', 'runloop', 'blaxel', 'blaxel-mcp', 'sprites', 'codesandbox', 'webcontainer', 'webcontainer-filesystem', 'webcontainer-spawn', 'opensandbox', 'opensandbox-code-interpreter', 'opensandbox-agent', 'microsandbox', 'e2b', 'mistral-agent', 'vercel-sandbox']
+    log.info(`[Terminal] Primary provider failed, trying all known providers for sandbox ${sandboxId}`)
     for (const providerType of allProviders) {
       const result = await tryProvider(providerType)
       if (result) return result
     }
-    
+
     // Finally try explicit fallback provider if configured
     const fallbackType = this.getFallbackProviderType()
     if (fallbackType) {
+      log.info(`[Terminal] Trying fallback provider: ${fallbackType}`)
       const fallbackResult = await tryProvider(fallbackType)
       if (fallbackResult) return fallbackResult
     }
 
+    log.error(`[Terminal] Sandbox ${sandboxId} not found on any provider. Tried: ${Array.from(tried).join(', ')}`)
     throw new Error(`Sandbox ${sandboxId} not found on configured providers`)
   }
 
@@ -224,17 +230,28 @@ export class TerminalManager {
     options?: { cols?: number; rows?: number },
     userId?: string,
   ): Promise<string> {
-    log.info(`Creating terminal session: sessionId=${sessionId}, sandboxId=${sandboxId}`)
-    
-    const { handle, providerType } = await this.resolveHandleForSandbox(sandboxId)
-    log.debug(`Resolved sandbox handle from provider: ${providerType}, workspace: ${handle.workspaceDir}`)
+    log.info(`[Terminal] Creating terminal session: sessionId=${sessionId}, sandboxId=${sandboxId}`)
+
+    let handle: SandboxHandle
+    let providerType: SandboxProviderType
+    try {
+      const resolved = await this.resolveHandleForSandbox(sandboxId)
+      handle = resolved.handle
+      providerType = resolved.providerType
+    } catch (err: any) {
+      log.error(`[Terminal] Failed to resolve sandbox handle: ${err.message}`)
+      // If we can't resolve the sandbox, we can't create a session at all
+      throw new Error(`Sandbox not found on any provider: ${sandboxId}. Available providers: daytona, e2b, sprites, codesandbox, webcontainer, opensandbox, microsandbox`)
+    }
+
+    log.info(`[Terminal] Resolved handle: provider=${providerType}, workspace=${handle.workspaceDir}, createPty=${!!handle.createPty}`)
     const provider = await getSandboxProvider(providerType)
     const ptyId = `pty-${sessionId}-${Date.now()}`
 
     // Clean up existing connection in either mode.
     await this.disconnectTerminal(sessionId)
 
-    // Emit session creation event
+    // Emit session creation event with mode info
     emitEvent(sandboxId, 'connected', {
       sessionId,
       mode: handle.createPty ? 'pty' : 'command-mode',
@@ -242,7 +259,8 @@ export class TerminalManager {
     }, { userId })
 
     if (!handle.createPty) {
-      log.debug(`PTY not available for ${sandboxId}, using command-mode`)
+      log.warn(`[Terminal] PTY not available — using command-mode (line-based shell emulation). Provider: ${providerType}`)
+      log.warn(`[Terminal] To enable real PTY, ensure sandbox is created on a provider that supports PTY (daytona, e2b, sprites, codesandbox, vercel-sandbox)`)
       // Fallback providers (e.g. microsandbox) can still support command execution mode.
       commandModeConnections.set(sessionId, {
         sandboxId,
@@ -257,7 +275,7 @@ export class TerminalManager {
         providerType,
       })
 
-      const modeMessage = '\r\n\x1b[33m[command-mode] PTY unavailable, using line-based execution.\x1b[0m\r\n'
+      const modeMessage = `\r\n\x1b[33m[command-mode] PTY unavailable, using line-based execution.\x1b[0m\r\n\x1b[90m  Provider: ${providerType} (no createPty support)\x1b[0m\r\n\x1b[90m  To enable real PTY, use a provider that supports PTY (daytona, e2b, sprites, codesandbox)\x1b[0m\r\n`
       onData(modeMessage)
       onData(`${handle.workspaceDir || '/workspace'} $ `)
 
@@ -284,42 +302,75 @@ export class TerminalManager {
     log.debug(`Creating PTY session with dimensions: ${options?.cols ?? 120}x${options?.rows ?? 30}`)
 
     let ptyHandle: any
-    try {
-      ptyHandle = await handle.createPty({
-        id: ptyId,
-        envs: { TERM: 'xterm-256color', LANG: 'en_US.UTF-8' },
-        cols: options?.cols ?? 120,
-        rows: options?.rows ?? 30,
-        onData: (data: Uint8Array) => {
-          const text = new TextDecoder().decode(data)
-          onData(text)
+    const PTY_RETRIES = 3
+    const PTY_RETRY_BASE_MS = 2000
+    let lastError: Error | undefined
 
-          // Enhanced port detection
-          if (onPortDetected) {
-            const detectedPorts = enhancedPortDetector.detectPorts(text)
-            const connection = activePtyConnections.get(sessionId)
+    // Retry PTY creation with backoff — Daytona containers sometimes need
+    // a few seconds to boot and get a network IP assigned.
+    // "failed to resolve container IP" is a transient Daytona platform error.
+    for (let attempt = 0; attempt < PTY_RETRIES; attempt++) {
+      try {
+        ptyHandle = await handle.createPty({
+          id: ptyId,
+          envs: { TERM: 'xterm-256color', LANG: 'en_US.UTF-8' },
+          cols: options?.cols ?? 120,
+          rows: options?.rows ?? 30,
+          onData: (data: Uint8Array) => {
+            const text = new TextDecoder().decode(data)
+            onData(text)
 
-            for (const { port, protocol, url } of detectedPorts) {
-              if (handle.getPreviewLink && !connection?.detectedPorts.has(port)) {
-                handle.getPreviewLink(port).then(preview => {
-                  log.info(`Port detected: ${port} (${protocol}) -> ${url || preview.url}`)
-                  onPortDetected!(preview)
-                  connection?.detectedPorts.add(port)
+            // Enhanced port detection
+            if (onPortDetected) {
+              const detectedPorts = enhancedPortDetector.detectPorts(text)
+              const connection = activePtyConnections.get(sessionId)
 
-                  // Emit port detected event
-                  emitEvent(sandboxId, 'port_detected', {
-                    port,
-                    url: url || preview.url,
-                    protocol,
-                }, { userId })
-              }).catch(() => {
-                // Port not yet available, ignore
-              })
+              for (const { port, protocol, url } of detectedPorts) {
+                if (handle.getPreviewLink && !connection?.detectedPorts.has(port)) {
+                  handle.getPreviewLink(port).then(preview => {
+                    log.info(`Port detected: ${port} (${protocol}) -> ${url || preview.url}`)
+                    onPortDetected!(preview)
+                    connection?.detectedPorts.add(port)
+
+                    // Emit port detected event
+                    emitEvent(sandboxId, 'port_detected', {
+                      port,
+                      url: url || preview.url,
+                      protocol,
+                    }, { userId })
+                  }).catch(() => {
+                    // Port not yet available, ignore
+                  })
+                }
+              }
             }
-          }
+          },
+        })
+
+        // Success — break out of retry loop
+        break
+      } catch (err: any) {
+        lastError = err
+        const isIpError = err.message?.includes('failed to resolve container IP') ||
+                          err.message?.includes('no IP address found')
+
+        if (isIpError && attempt < PTY_RETRIES - 1) {
+          const delay = PTY_RETRY_BASE_MS * Math.pow(2, attempt)
+          log.warn(`[Terminal] PTY creation failed (container IP not ready), retrying in ${delay}ms`, {
+            attempt: attempt + 1,
+            maxRetries: PTY_RETRIES,
+          })
+          await new Promise(r => setTimeout(r, delay))
+        } else {
+          throw err // Not retryable or last attempt
         }
-      },
-    })
+      }
+    }
+
+    // If all retries exhausted without success
+    if (!ptyHandle) {
+      throw lastError || new Error('Failed to create PTY after retries')
+    }
 
     // ✅ FIX: Check connection limit before adding
     if (activePtyConnections.size >= MAX_PTY_CONNECTIONS) {
@@ -378,12 +429,6 @@ export class TerminalManager {
       activePtyConnections.delete(sessionId)
       throw error
     }
-  } catch (error: any) {
-    // Handle errors from createPty
-    log.error(`Failed to create PTY: ${error.message}`)
-    activePtyConnections.delete(sessionId)
-    throw error
-  }
   }
 
   async reconnectTerminal(
@@ -538,6 +583,18 @@ export class TerminalManager {
    */
   hasPtyConnection(sessionId: string): boolean {
     return activePtyConnections.has(sessionId)
+  }
+
+  /**
+   * Check if session has ANY active connection (PTY, command-mode, or WebSocket).
+   * Returns false when the session exists in the bridge but no terminal is actually connected.
+   */
+  hasActiveSession(sessionId: string): boolean {
+    return (
+      activePtyConnections.has(sessionId) ||
+      commandModeConnections.has(sessionId) ||
+      websocketConnections.has(sessionId)
+    )
   }
 
   /**

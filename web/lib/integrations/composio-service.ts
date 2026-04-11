@@ -284,8 +284,8 @@ function createComposioService(config: ComposioServiceConfig): ComposioService {
   // Default models per provider
   const defaultModels: Record<string, string> = {
     openrouter: 'openai/gpt-oss-120b:free',
-    google: 'google/gemini-2.5-flash',
-    openai: 'gpt-4o-mini',
+    google: 'google/gemini-3-flash-preview',
+    openai: process.env.DEFAULT_MODEL || 'mistral-small-latest',
   };
 
   const selectedModel = llmModel || defaultModels[llmProvider] || defaultModels.openrouter;

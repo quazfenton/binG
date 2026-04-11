@@ -1,0 +1,92 @@
+[
+  {
+    "test": "Implicit Paths",
+    "passed": true,
+    "details": "Both files referenced with edit markers",
+    "duration": 15550
+  },
+  {
+    "test": "Multi-folder Selection",
+    "passed": true,
+    "details": "Correctly targets backend",
+    "duration": 39771
+  },
+  {
+    "test": "Repeated Diff Application",
+    "passed": true,
+    "details": "File modification detected, no duplication",
+    "duration": 25878
+  },
+  {
+    "test": "Auto-continue Marker",
+    "passed": true,
+    "details": "Response length: 8101 chars, edit markers: many",
+    "duration": 50428
+  },
+  {
+    "test": "VFS MCP Tool Args",
+    "passed": true,
+    "details": "Both list and create operations detected",
+    "duration": 15142
+  },
+  {
+    "test": "No Premature Ending",
+    "passed": true,
+    "details": "All sections present, length: 4486 chars",
+    "duration": 36640
+  },
+  {
+    "test": "Correct Tool Choice",
+    "passed": true,
+    "details": "Both directory and file creation detected",
+    "duration": 24584
+  },
+  {
+    "test": "Nested Directories",
+    "passed": true,
+    "details": "All nested paths detected",
+    "duration": 15754
+  },
+  {
+    "test": "Modification vs Creation",
+    "passed": true,
+    "details": "File modification detected",
+    "duration": 27822
+  },
+  {
+    "test": "Large File Content",
+    "passed": true,
+    "details": "Array: true, Objects: true, Length: 1514 chars",
+    "duration": 25896
+  },
+  {
+    "test": "Conversation Scoping",
+    "passed": true,
+    "details": "Both conversations handled independently",
+    "duration": 42039
+  },
+  {
+    "test": "Malformed Input",
+    "passed": true,
+    "details": "Handled gracefully, length: 0",
+    "duration": 11318
+  },
+  {
+    "test": "Shell Command Chain",
+    "passed": true,
+    "details": "Creation: true, Execution: true, Output: true",
+    "duration": 13254
+  },
+  {
+    "test": "Anti-Infinite-Loop (Many Files)",
+    "passed": true,
+    "details": "Completed in 68s, response length: 7112",
+    "duration": 68041
+  },
+  {
+    "test": "Streaming Completeness",
+    "passed": true,
+    "details": "Stream completed successfully, content: 21 chars",
+    "duration": 10424
+  }
+]

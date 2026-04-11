@@ -603,6 +603,371 @@ export class ArcadeService {
   }
 
   /**
+   * Start OAuth authorization for a provider using Arcade SDK
+   *
+   * Uses client.auth.start() which handles the OAuth flow through Arcade's
+   * managed auth layer. Returns auth URL if authorization is not yet complete.
+   *
+   * @param userId - User identifier (Arcade user ID)
+   * @param provider - OAuth provider name (e.g., "github", "google", "x"/"twitter")
+   * @param scopes - Optional OAuth scopes to request (e.g., ["tweet.read", "tweet.write"])
+   * @returns { status, url?, token? } — status is "completed" when token is ready
+   *
+   * @example
+   * ```typescript
+   * // Basic provider auth
+   * const result = await arcadeService.startProviderAuth('user_123', 'github');
+   *
+   * // With specific scopes (per Arcade SDK docs)
+   * const result = await arcadeService.startProviderAuth('user_123', 'x', [
+   *   'tweet.read', 'tweet.write', 'users.read'
+   * ]);
+   *
+   * if (result.status !== 'completed') {
+   *   // Redirect user to result.url to complete OAuth in browser
+   * } else {
+   *   // result.token is ready for API calls
+   * }
+   * ```
+   */
+  async startProviderAuth(
+    userId: string,
+    provider: string,
+    scopes?: string[],
+  ): Promise<{
+    status: 'completed' | 'pending' | 'error';
+    url?: string;
+    token?: string;
+    error?: string;
+  }> {
+    await this.initialize();
+
+    try {
+      // SDK path (preferred) — uses client.auth.start(userId, provider, scopes?)
+      // Per Arcade SDK docs:
+      //   client.auth.start(userId, provider)                        // no scopes
+      //   client.auth.start(userId, provider, ["scope1", "scope2"])  // array form (X/Twitter)
+      //   client.auth.start(userId, provider, { scopes: [...] })     // object form (Discord)
+      // All return { status, url?, context: { token? } }
+      if (this.client?.auth?.start) {
+        let authResponse: any;
+
+        if (scopes && scopes.length > 0) {
+          // Use object form { scopes } for consistency across providers
+          // (Discord, Google, GitHub all expect { scopes: [...] })
+          authResponse = await this.client.auth.start(userId, provider, { scopes });
+        } else {
+          authResponse = await this.client.auth.start(userId, provider);
+        }
+
+        if (authResponse.status === 'completed' && authResponse.context?.token) {
+          return {
+            status: 'completed',
+            token: authResponse.context.token,
+          };
+        }
+
+        // Authorization not yet complete — return URL for browser flow
+        if (authResponse.url) {
+          return {
+            status: 'pending',
+            url: authResponse.url,
+          };
+        }
+
+        // No URL and not completed — unexpected state
+        return {
+          status: 'error',
+          error: 'No authorization URL returned from Arcade',
+        };
+      }
+
+      // HTTP fallback — use the authorize endpoint
+      if (this.client?.auth?.authorize) {
+        const result = await this.client.auth.authorize({
+          userId,
+          tool: provider,
+        });
+
+        if (result.authorized && result.context?.token) {
+          return {
+            status: 'completed',
+            token: result.context.token,
+          };
+        }
+
+        if (result.auth_url) {
+          return {
+            status: 'pending',
+            url: result.auth_url,
+          };
+        }
+      }
+
+      // Full HTTP fallback — no SDK available
+      const response = await fetch(
+        `${this.config.baseUrl || 'https://api.arcade.dev'}/v1/auth/authorize`,
+        {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${this.config.apiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            user_id: userId,
+            tool: provider,
+          }),
+        }
+      );
+
+      if (!response.ok) {
+        return {
+          status: 'error',
+          error: `Arcade auth failed: ${response.status} ${response.statusText}`,
+        };
+      }
+
+      const data = await response.json();
+
+      if (data.authorized && data.context?.token) {
+        return {
+          status: 'completed',
+          token: data.context.token,
+        };
+      }
+
+      if (data.auth_url) {
+        return {
+          status: 'pending',
+          url: data.auth_url,
+        };
+      }
+
+      return {
+        status: 'error',
+        error: 'No token or auth URL returned from Arcade',
+      };
+    } catch (error: any) {
+      console.error('[ArcadeService] startProviderAuth failed:', error.message);
+      return {
+        status: 'error',
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Wait for provider authorization to complete using Arcade SDK
+   *
+   * Polls Arcade until the user completes the OAuth flow in their browser.
+   * Uses client.auth.waitForCompletion() under the hood.
+   *
+   * @param userId - User identifier
+   * @param provider - OAuth provider name
+   * @param authResponse - The initial auth response from startProviderAuth
+   * @param timeoutMs - Max time to wait (default: 300000 = 5 min)
+   * @returns { status, token? } — status is "completed" with token on success
+   *
+   * @example
+   * ```typescript
+   * const result = await arcadeService.waitForProviderAuth(userId, 'github', pendingResponse);
+   * // result.token is the OAuth token for the provider API
+   * ```
+   */
+  async waitForProviderAuth(
+    userId: string,
+    provider: string,
+    authResponse: { status: string; url?: string },
+    timeoutMs: number = 300000,
+  ): Promise<{
+    status: 'completed' | 'timeout' | 'error';
+    token?: string;
+    error?: string;
+  }> {
+    await this.initialize();
+
+    try {
+      // SDK path (preferred) — uses client.auth.waitForCompletion()
+      if (this.client?.auth?.waitForCompletion) {
+        const result = await this.client.auth.waitForCompletion(authResponse, {
+          timeoutMs,
+        });
+
+        if (result.status === 'completed' && result.context?.token) {
+          return {
+            status: 'completed',
+            token: result.context.token,
+          };
+        }
+
+        if (result.status === 'timeout') {
+          return {
+            status: 'timeout',
+            error: `Authorization timed out after ${timeoutMs / 1000}s`,
+          };
+        }
+
+        return {
+          status: 'error',
+          error: result.error || 'Authorization did not complete',
+        };
+      }
+
+      // Manual polling fallback — no SDK waitForCompletion
+      // FIX: Bypass the connection cache during polling to ensure we see newly authorized providers.
+      // getConnections() short-circuits to cached active connections; if a stale cache exists
+      // the polling loop won't see the new authorization and will time out incorrectly.
+      const maxAttempts = Math.max(1, Math.floor(timeoutMs / 3000)); // poll every 3s
+      for (let i = 0; i < maxAttempts; i++) {
+        await new Promise(resolve => setTimeout(resolve, 3000));
+
+        // Force a fresh fetch from Arcade API, bypassing the in-memory cache
+        const connections = await this._fetchConnections(userId);
+        const providerConn = connections.find(c =>
+          c.provider.toLowerCase() === provider.toLowerCase() && c.status === 'active'
+        );
+
+        if (providerConn) {
+          // Connection established — now we need to get the token
+          // Try contextual auth to retrieve token
+          const tokenResult = await this.getContextualAuth(userId, `${provider}.default`);
+          if (tokenResult.authorized && tokenResult.context?.token) {
+            return {
+              status: 'completed',
+              token: tokenResult.context.token,
+            };
+          }
+
+          // Connection exists but token not retrievable via contextual auth
+          return {
+            status: 'completed',
+            // Token will be obtained on next executeTool call via Arcade's internal auth
+          };
+        }
+      }
+
+      return {
+        status: 'timeout',
+        error: `Authorization timed out after ${timeoutMs / 1000}s`,
+      };
+    } catch (error: any) {
+      console.error('[ArcadeService] waitForProviderAuth failed:', error.message);
+      return {
+        status: 'error',
+        error: error.message,
+      };
+    }
+  }
+
+  /**
+   * Get an OAuth token for a provider using Arcade SDK
+   *
+   * Combines startProviderAuth + waitForProviderAuth into a single call.
+   * If already authorized, returns token immediately.
+   *
+   * @param userId - User identifier
+   * @param provider - OAuth provider name (e.g., "github", "google", "x")
+   * @param scopes - Optional OAuth scopes (e.g., ["tweet.read", "tweet.write"])
+   * @param timeoutMs - Max time to wait for user to authorize
+   * @returns { token?, requiresAuth?, authUrl? }
+   */
+  async getProviderToken(
+    userId: string,
+    provider: string,
+    scopes?: string[],
+    timeoutMs: number = 300000,
+  ): Promise<{
+    token?: string;
+    requiresAuth?: boolean;
+    authUrl?: string;
+    error?: string;
+  }> {
+    // First check if connection already exists
+    const existingConnection = await this.getConnection(userId, `${provider}.default`);
+    if (existingConnection) {
+      // Try to get token via contextual auth
+      const authResult = await this.getContextualAuth(userId, `${provider}.default`);
+      if (authResult.authorized && authResult.context?.token) {
+        return { token: authResult.context.token };
+      }
+      // Connection exists — token will be obtained on execute
+      return { token: undefined /* will be resolved during execution */ };
+    }
+
+    // Start authorization (with scopes if provided)
+    const startResult = await this.startProviderAuth(userId, provider, scopes);
+
+    if (startResult.status === 'error') {
+      return { error: startResult.error };
+    }
+
+    if (startResult.status === 'completed' && startResult.token) {
+      return { token: startResult.token };
+    }
+
+    // User needs to complete OAuth in browser — wait for them if caller allows
+    if (startResult.status === 'pending' && startResult.url) {
+      // If timeoutMs is > 0, poll Arcade until the user completes the OAuth flow
+      if (timeoutMs > 0) {
+        const waitResult = await this.waitForProviderAuth(userId, provider, startResult, timeoutMs);
+        if (waitResult.status === 'completed' && waitResult.token) {
+          return { token: waitResult.token };
+        }
+        if (waitResult.status === 'timeout') {
+          return { requiresAuth: true, authUrl: startResult.url };
+        }
+        if (waitResult.status === 'error') {
+          return { error: waitResult.error };
+        }
+      }
+      return {
+        requiresAuth: true,
+        authUrl: startResult.url,
+      };
+    }
+
+    return { error: 'Unexpected auth state' };
+  }
+
+  /**
+   * Fetch connections from Arcade API, bypassing the in-memory cache.
+   * Used during polling to detect newly authorized providers.
+   */
+  private async _fetchConnections(userId: string): Promise<ArcadeConnection[]> {
+    if (this.client?.connections) {
+      const connections = await this.client.connections.list({ userId });
+      return connections.map((c: any) => ({
+        id: c.id,
+        provider: c.provider,
+        userId: c.user_id,
+        status: c.status,
+        createdAt: new Date(c.created_at).getTime(),
+      }));
+    }
+
+    // HTTP fallback
+    const response = await fetch(
+      `${this.config.baseUrl || 'https://api.arcade.dev'}/v1/connections?user_id=${userId}`,
+      {
+        headers: {
+          'Authorization': `Bearer ${this.config.apiKey}`,
+        },
+      }
+    );
+
+    if (!response.ok) return [];
+
+    const data = await response.json();
+    return data.connections?.map((c: any) => ({
+      id: c.id,
+      provider: c.provider,
+      userId: c.user_id,
+      status: c.status,
+      createdAt: new Date(c.created_at).getTime(),
+    })) || [];
+  }
+
+  /**
    * Get user's connections
    */
   async getConnections(userId: string): Promise<ArcadeConnection[]> {
@@ -749,10 +1114,11 @@ let arcadeServiceInstance: ArcadeService | null = null;
  */
 export function getArcadeService(): ArcadeService | null {
   if (!arcadeServiceInstance) {
-    const apiKey = process.env.ARCADE_API_KEY;
+    const apiKey = process.env.ARCADE_API_KEY?.trim();
     if (!apiKey) {
       return null;
     }
+    console.log(`[ArcadeService] Initializing with key: ${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`);
 
     arcadeServiceInstance = createArcadeService({
       apiKey,
@@ -771,10 +1137,11 @@ export function initializeArcadeService(config?: Partial<ArcadeConfig>): ArcadeS
     return arcadeServiceInstance;
   }
 
-  const apiKey = config?.apiKey || process.env.ARCADE_API_KEY;
+  const apiKey = (config?.apiKey || process.env.ARCADE_API_KEY)?.trim();
   if (!apiKey) {
     return null;
   }
+  console.log(`[ArcadeService] Initializing with key: ${apiKey.slice(0, 8)}...${apiKey.slice(-4)}`);
 
   arcadeServiceInstance = createArcadeService({
     apiKey,

@@ -41,8 +41,10 @@ export interface BootstrapConfig {
   permissions?: string[];
   /** Enable MCP tool auto-discovery */
   enableMCP?: boolean;
-  /** Enable Composio toolkits */
+  /** Enable Composio toolkits (auto-enabled if API key is set) */
   enableComposio?: boolean;
+  /** Enable Arcade tools (auto-enabled if API key is set) */
+  enableArcade?: boolean;
   /** Enable sandbox providers */
   enableSandbox?: boolean;
   /** Enable Nullclaw automation */
@@ -78,10 +80,16 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
   let toolCount = 0;
   let capabilityCount = 0;
 
+  // Auto-enable Composio if API key is set
+  const shouldEnableComposio = config.enableComposio !== false && !!process.env.COMPOSIO_API_KEY;
+  // Auto-enable Arcade if API key is set
+  const shouldEnableArcade = config.enableArcade !== false && !!process.env.ARCADE_API_KEY;
+
   logger.info('Starting tool system bootstrap', {
     userId: config.userId,
     enableMCP: config.enableMCP,
-    enableComposio: config.enableComposio,
+    enableComposio: shouldEnableComposio,
+    enableArcade: shouldEnableArcade,
     enableSandbox: config.enableSandbox,
     enableNullclaw: config.enableNullclaw,
     enableOAuth: config.enableOAuth,
@@ -101,6 +109,17 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     errors.push(`Built-in capabilities: ${error.message}`);
   }
 
+  // Register project analysis tools (always enabled — replaces shallow buildProjectContext)
+  try {
+    const { registerProjectAnalysisTools } = await import('./bootstrap/bootstrap-project-analysis');
+    const count = await registerProjectAnalysisTools(registry, config);
+    capabilityCount += count;
+    logger.info(`Registered ${count} project analysis tools/capabilities`);
+  } catch (error: any) {
+    logger.error('Failed to register project analysis tools', error);
+    errors.push(`Project analysis: ${error.message}`);
+  }
+
   // Register MCP tools (if enabled)
   if (config.enableMCP !== false) {
     try {
@@ -114,8 +133,8 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     }
   }
 
-  // Register Composio tools (if enabled)
-  if (config.enableComposio) {
+  // Register Composio tools (auto-enabled if API key is set)
+  if (shouldEnableComposio) {
     try {
       const { registerComposioTools } = await import('./bootstrap/bootstrap-composio');
       const count = await registerComposioTools(registry, config);
@@ -125,6 +144,18 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
       logger.warn('Composio tools not available', error.message);
       errors.push(`Composio tools: ${error.message}`);
     }
+  }
+
+  // Register Tauri invoke tools (desktop mode only)
+  try {
+    const { registerTauriTools } = await import('./bootstrap/bootstrap-tauri');
+    const count = await registerTauriTools(registry);
+    if (count > 0) {
+      toolCount += count;
+      logger.info(`Registered ${count} Tauri invoke tools`);
+    }
+  } catch (error: any) {
+    logger.debug('Tauri invoke tools not available (expected in web mode)', error.message);
   }
 
   // Register sandbox tools (if enabled)
@@ -178,6 +209,30 @@ export async function bootstrapToolSystem(config: BootstrapConfig): Promise<Boot
     errors.push(`Event system: ${error.message}`);
   }
 
+  // Register advanced schedule tools (task.agent-loop, task.dag-run, task.skill-bootstrap)
+  // These extend the basic event system with agent loop orchestration and DAG workflows
+  try {
+    const { registerAllScheduleTools } = await import('./bootstrap/schedule-bootstrap');
+    const count = await registerAllScheduleTools(registry, config);
+    toolCount += count;
+    logger.info(`Registered ${count} advanced schedule tools`);
+  } catch (error: any) {
+    logger.debug('Advanced schedule tools not available', error.message);
+  }
+
+  // Register Arcade tools (auto-enabled if API key is set)
+  if (shouldEnableArcade) {
+    try {
+      const { registerArcadeTools } = await import('./bootstrap/bootstrap-arcade');
+      const count = await registerArcadeTools(registry, config);
+      toolCount += count;
+      logger.info(`Registered ${count} Arcade tools`);
+    } catch (error: any) {
+      logger.warn('Arcade tools not available', error.message);
+      errors.push(`Arcade tools: ${error.message}`);
+    }
+  }
+
   // Register MCP Gateway tools (if configured)
   if (process.env.MCP_GATEWAY_URL) {
     try {
@@ -223,7 +278,8 @@ export async function quickBootstrap(userId: string): Promise<BootstrapResult> {
   return bootstrapToolSystem({
     userId,
     enableMCP: true,
-    enableComposio: false,  // Disabled by default
+    enableComposio: true,  // Auto-enabled if API key is set
+    enableArcade: true,    // Auto-enabled if API key is set
     enableSandbox: true,
     enableNullclaw: false,  // Disabled by default
     enableOAuth: true,

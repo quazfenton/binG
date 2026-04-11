@@ -1,0 +1,62 @@
+{
+  "timestamp": "2026-04-09T21:03:53.373Z",
+  "url": "http://localhost:3000/api/chat",
+  "method": "POST",
+  "status": 500,
+  "headers": {
+    "access-control-allow-headers": "Content-Type, Authorization",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "application/json",
+    "cross-origin-resource-policy": "cross-origin",
+    "date": "Thu, 09 Apr 2026 21:03:53 GMT",
+    "keep-alive": "timeout=5",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "set-cookie": "anon-session-id=anon_1775768619178_c4b444e87118d8d90c; Path=/; Max-Age=31536000; SameSite=Lax; HttpOnly",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "j65o5w5j1YUF9il4Ti88oe0lkIM5bKGV3TnCAEJFhNI",
+    "x-csp-nonce-style": "gNKT-TXwiK_CcxN8ukIzgPQAhQ2bVbNWVdLmX2j5FRI",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1775768618334_tmih0rq3b",
+    "x-xss-protection": "1; mode=block"
+  },
+  "body": {
+    "messages": [
+      {
+        "role": "user",
+        "content": "Say hi in one sentence."
+      }
+    ],
+    "provider": "mistral",
+    "model": "mistral-small-latest",
+    "stream": false,
+    "conversationId": "e2e-nonstream-probe"
+  },
+  "responseText": "{\"success\":false,\"error\":{\"type\":\"critical_error\",\"code\":\"VALIDATION_ERROR\",\"message\":\"Critical system error occurred\",\"isRetryable\":true},\"data\":{\"content\":\"I apologize, but I'm experiencing technical difficulties right now. Our team has been notified and is working to resolve the issue. Please try again in a few moments.\",\"provider\":\"critical-fallback\",\"model\":\"fallback\",\"isFallback\":true,\"fallbackReason\":\"critical_error\"},\"timestamp\":\"2026-04-09T21:03:53.365Z\"}",
+  "responseJson": {
+    "success": false,
+    "error": {
+      "type": "critical_error",
+      "code": "VALIDATION_ERROR",
+      "message": "Critical system error occurred",
+      "isRetryable": true
+    },
+    "data": {
+      "content": "I apologize, but I'm experiencing technical difficulties right now. Our team has been notified and is working to resolve the issue. Please try again in a few moments.",
+      "provider": "critical-fallback",
+      "model": "fallback",
+      "isFallback": true,
+      "fallbackReason": "critical_error"
+    },
+    "timestamp": "2026-04-09T21:03:53.365Z"
+  },
+  "cookies": {
+    "anon-session-id": "anon_1775768619178_c4b444e87118d8d90c"
+  }
+}

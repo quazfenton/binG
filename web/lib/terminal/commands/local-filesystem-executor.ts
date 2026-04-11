@@ -44,6 +44,9 @@ export interface LocalCommandExecutorConfig {
   getCwd?: () => string
   setCwd?: (cwd: string) => void
   onFileChanged?: (path: string, type: 'create' | 'update' | 'delete') => void
+  onConnect?: () => Promise<void> | void
+  onDisconnect?: () => Promise<void> | void
+  getSandboxStatus?: () => 'disconnected' | 'connecting' | 'connected'
 }
 
 export class LocalCommandExecutor {
@@ -61,6 +64,9 @@ export class LocalCommandExecutor {
   private getExtCwd?: () => string
   private setExtCwd?: (cwd: string) => void
   private onFileChanged?: (path: string, type: 'create' | 'update' | 'delete') => void
+  private onConnect?: () => Promise<void> | void
+  private onDisconnect?: () => Promise<void> | void
+  private getSandboxStatus?: () => 'disconnected' | 'connecting' | 'connected'
 
   constructor(config: LocalCommandExecutorConfig | string) {
     if (typeof config === 'string') {
@@ -77,6 +83,9 @@ export class LocalCommandExecutor {
       this.getExtCwd = config.getCwd
       this.setExtCwd = config.setCwd
       this.onFileChanged = config.onFileChanged
+      this.onConnect = config.onConnect
+      this.onDisconnect = config.onDisconnect
+      this.getSandboxStatus = config.getSandboxStatus
       
       // If external filesystem provided, load initial state from it
       if (this.getExtFileSystem) {
@@ -276,18 +285,30 @@ export class LocalCommandExecutor {
 
       case 'connect':
         writeLine('\x1b[33mConnecting to sandbox...\x1b[0m')
-        writeLine('\x1b[90m(Use the connect button in the UI)\x1b[0m')
+        await this.onConnect?.()
         return ''
       
       case 'disconnect':
         writeLine('\x1b[33mDisconnecting from sandbox...\x1b[0m')
+        await this.onDisconnect?.()
         return ''
       
       case 'status':
+        const status = this.getSandboxStatus?.() || 'disconnected'
         writeLine('\x1b[36m=== Sandbox Status ===\x1b[0m')
-        writeLine('Status: \x1b[31mDisconnected\x1b[0m')
-        writeLine('Mode: \x1b[33mLocal Shell\x1b[0m')
-        writeLine('Type \x1b[32m"connect"\x1b[0m to connect to sandbox')
+        if (status === 'connected') {
+          writeLine('Status: \x1b[32mConnected\x1b[0m')
+          writeLine('Mode: \x1b[32mPTY\x1b[0m')
+          writeLine('Type \x1b[32m"disconnect"\x1b[0m to return to local shell')
+        } else if (status === 'connecting') {
+          writeLine('Status: \x1b[33mConnecting\x1b[0m')
+          writeLine('Mode: \x1b[33mProvisioning Sandbox\x1b[0m')
+          writeLine('Waiting for sandbox session to become active...')
+        } else {
+          writeLine('Status: \x1b[31mDisconnected\x1b[0m')
+          writeLine('Mode: \x1b[33mLocal Shell\x1b[0m')
+          writeLine('Type \x1b[32m"connect"\x1b[0m to connect to sandbox')
+        }
         return ''
       
       case 'preview':

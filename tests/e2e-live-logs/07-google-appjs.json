@@ -1,0 +1,39 @@
+{
+  "timestamp": "2026-04-09T21:05:48.806Z",
+  "url": "http://localhost:3000/api/filesystem/read",
+  "method": "POST",
+  "status": 404,
+  "headers": {
+    "access-control-allow-headers": "Content-Type, Authorization",
+    "access-control-allow-methods": "GET, POST, PUT, DELETE, OPTIONS",
+    "access-control-allow-origin": "*",
+    "connection": "keep-alive",
+    "content-security-policy": "default-src 'self'; script-src 'self' 'unsafe-inline' 'unsafe-eval' https:; style-src 'self' 'unsafe-inline'; img-src 'self' data: https: blob:; connect-src 'self' https: ws: wss: blob:; font-src 'self' data: https:; frame-src 'self' https: http://localhost:*; frame-ancestors 'self'; base-uri 'self'; form-action 'self';",
+    "content-type": "application/json",
+    "cross-origin-resource-policy": "cross-origin",
+    "date": "Thu, 09 Apr 2026 21:05:48 GMT",
+    "keep-alive": "timeout=5",
+    "permissions-policy": "camera=(), microphone=(), geolocation=(), payment=(), usb=(), magnetometer=(), gyroscope=(self \"https://www.youtube.com\"), accelerometer=(self \"https://www.youtube.com\")",
+    "referrer-policy": "strict-origin-when-cross-origin",
+    "strict-transport-security": "max-age=31536000; includeSubDomains; preload",
+    "transfer-encoding": "chunked",
+    "vary": "rsc, next-router-state-tree, next-router-prefetch, next-router-segment-prefetch",
+    "x-content-type-options": "nosniff",
+    "x-csp-nonce-script": "wW2tAHMtiHYo3CDMl2kjxO94v1z9IK5BX-npQO80WRs",
+    "x-csp-nonce-style": "U_Oq71MD2U-CSodHXGo2U69wnTCrX7X-59Da23sJGX8",
+    "x-frame-options": "SAMEORIGIN",
+    "x-request-id": "req_1775768748788_uhygvo1b5h9",
+    "x-xss-protection": "1; mode=block"
+  },
+  "body": {
+    "path": "project/sessions/e2e-google-app/app.js"
+  },
+  "responseText": "{\"success\":false,\"error\":\"File not found\"}",
+  "responseJson": {
+    "success": false,
+    "error": "File not found"
+  },
+  "cookies": {
+    "anon-session-id": "anon_1775768748772_33032d6fe763fa6a72"
+  }
+}

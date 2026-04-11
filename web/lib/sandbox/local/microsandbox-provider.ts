@@ -388,13 +388,28 @@ class MicrosandboxSandboxHandle implements SandboxHandle {
  */
 class LocalSandboxHandle implements SandboxHandle {
   readonly id: string
-  readonly workspaceDir: string
+  readonly workspaceDir = '/workspace'
   private workspacePath: string
+
+  /**
+   * Whether this local sandbox has its own database module for VFS sync.
+   * When running in a container, set LOCAL_SANDBOX_HAS_DB=true so the
+   * sandbox-filesystem-sync knows to sync files to this container's database.
+   * When running as a dev fallback (no container), this is false — files
+   * are stored locally but NOT synced to the Next.js app's VFS database.
+   */
+  readonly hasLocalDatabase = process.env.LOCAL_SANDBOX_HAS_DB === 'true'
 
   constructor(id?: string) {
     this.id = id || `local-${Date.now()}`
-    this.workspaceDir = './local-workspace'
-    this.workspacePath = path.resolve(process.cwd(), 'local-workspace', this.id)
+
+    // FIX: Use system temp or a configurable root instead of the Next.js app's cwd.
+    // When running in a container, the container should set LOCAL_SANDBOX_ROOT
+    // to its own workspace root (e.g., /workspace or /home/user).
+    // Default: system temp directory — avoids polluting the app directory.
+    const localRoot = process.env.LOCAL_SANDBOX_ROOT ||
+      (typeof process !== 'undefined' ? require('os').tmpdir() : '/tmp')
+    this.workspacePath = path.resolve(localRoot, 'sandbox-local', this.id)
 
     // Create workspace directory
     const fs = require('fs')

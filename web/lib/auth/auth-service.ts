@@ -237,7 +237,11 @@ export class AuthService {
           if (timeoutTimer) clearTimeout(timeoutTimer);
         };
 
+        // Check immediately before starting polling
+        this.db = getDatabase();
         if (this.db) {
+          cleanup();
+          this.dbInitPromise = null;
           resolve();
           return;
         }
@@ -246,7 +250,7 @@ export class AuthService {
           this.db = getDatabase();
           if (this.db) {
             cleanup();
-            this.dbInitPromise = null; // Clear promise for future re-initialization if needed
+            this.dbInitPromise = null;
             resolve();
             return;
           } else {
@@ -257,9 +261,9 @@ export class AuthService {
         // Timeout after 5 seconds - clear poll timer and REJECT to prevent proceeding with null db
         timeoutTimer = setTimeout(() => {
           cleanup();
-          this.dbInitPromise = null; // Clear promise to allow retry
+          this.dbInitPromise = null;
           const error = new Error('Database initialization timeout after 5 seconds');
-          console.error('[AuthService] Database initialization failed:', error);
+          logger.error('[AuthService] Database initialization failed:', error);
           reject(error);
         }, 5000);
 
@@ -268,6 +272,11 @@ export class AuthService {
     }
 
     await this.dbInitPromise;
+
+    // Final safety check: if db is still null after promise resolves, throw
+    if (!this.db) {
+      throw new Error('Database is not available after initialization attempt');
+    }
   }
 
   /**
@@ -479,7 +488,7 @@ export class AuthService {
       );
 
       // Update last login
-      this.dbOps.getDb().prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(userId);
+      this.dbOps.db.prepare('UPDATE users SET last_login = CURRENT_TIMESTAMP WHERE id = ?').run(userId);
 
       return {
         success: true,

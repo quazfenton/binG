@@ -12,6 +12,7 @@ import {
 } from 'lucide-react';
 import type { PluginProps } from './plugin-manager';
 import { toast } from 'sonner';
+import { clipboard } from '@bing/platform/clipboard';
 
 interface CloudFile {
   id: string;
@@ -75,14 +76,19 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
 
   const providerPrefix = activeProvider.toLowerCase().replace(/\s+/g, '-');
 
-  const getToken = (): string | null => {
-    return (await import('@bing/platform/secrets')).secrets.get('auth-token');
+  const getToken = async (): Promise<string | null> => {
+    try {
+      const { secrets } = await import('@bing/platform/secrets');
+      return await secrets.get('auth-token');
+    } catch {
+      return null;
+    }
   };
 
   const refreshFiles = async () => {
     setLoading(true);
     try {
-      const token = getToken();
+      const token = await getToken();
       if (!token) {
         setBackendMode(false);
         // Load local files when not signed in
@@ -248,7 +254,7 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
           const body = await res.json();
           const link = body?.data?.signedUrl;
           if (link) {
-            await navigator.clipboard.writeText(link);
+            await clipboard.writeText(link);
             toast.success('Signed share link copied');
             return;
           }
@@ -257,7 +263,7 @@ export default function CloudStorageProPlugin({ onClose }: PluginProps) {
     } catch {}
 
     const link = `https://${file.provider.toLowerCase().replace(' ', '')}.com/share/${file.id}`;
-    navigator.clipboard.writeText(link);
+    clipboard.writeText(link);
     toast.success('Share link copied (local mode)');
   };
 

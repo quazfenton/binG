@@ -13,7 +13,7 @@
 
 import { tool } from 'ai';
 import { z } from 'zod';
-import { GitManager, type GitStatusResult } from '@/lib/agent/git-manager';
+import { GitManager, type GitStatusResult } from '@bing/shared/agent/git-manager';
 import type { SandboxHandle } from '@/lib/sandbox/providers';
 import { getGitVFSSync, type GitVFSStatus } from '@/lib/virtual-filesystem/opfs/git-vfs-sync';
 import { ShadowCommitManager, type CommitResult, type CommitHistoryEntry, type TransactionEntry } from '@/lib/orchestra/stateful-agent/commit/shadow-commit';
@@ -189,7 +189,11 @@ export function createGitTools(handle: SandboxHandle) {
               try {
                 const result = await handle.readFile(filePath);
                 if (result.success && result.content) {
-                  vfsState[filePath] = result.content;
+                  // DESKTOP MODE: Skip storing content — ShadowCommitManager strips it anyway.
+                  const desktopMode = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+                  if (!desktopMode) {
+                    vfsState[filePath] = result.content;
+                  }
                   transactions.push({
                     path: filePath,
                     type: 'UPDATE',
@@ -220,7 +224,8 @@ export function createGitTools(handle: SandboxHandle) {
             }
 
             // Create shadow commit with VFS state and transactions
-            if (Object.keys(vfsState).length > 0) {
+            // In desktop mode, vfsState is empty but transactions still carry metadata.
+            if (transactions.length > 0) {
               shadowResult = await shadowCommitManager.commit(vfsState, transactions, {
                 sessionId: handle.id,
                 message,
@@ -592,7 +597,7 @@ export const standaloneGitTools = {
       execute: async ({ sessionId, message, files, author }) => {
         try {
           const shadowCommitManager = new ShadowCommitManager();
-          
+
           // Track files in vfs
           const transactions = files.map(f => ({
             path: f.path,
@@ -601,15 +606,13 @@ export const standaloneGitTools = {
             newContent: f.content,
             originalContent: f.originalContent,
           }));
-          
-          // Create shadow commit with tracked files
-          const vfsState: Record<string, string> = {};
-          for (const tx of transactions) {
-            if (tx.newContent !== undefined) {
-              vfsState[tx.path] = tx.newContent;
-            }
-          }
-          
+
+          // DESKTOP MODE: Skip building vfsState — content is stripped by ShadowCommitManager.
+          const desktopMode = process.env.DESKTOP_MODE === 'true' || process.env.DESKTOP_LOCAL_EXECUTION === 'true';
+          const vfsState: Record<string, string> = desktopMode
+            ? {}
+            : Object.fromEntries(transactions.filter(tx => tx.newContent !== undefined).map(tx => [tx.path, tx.newContent!]));
+
           const result = await shadowCommitManager.commit(vfsState, transactions, {
             sessionId,
             message,

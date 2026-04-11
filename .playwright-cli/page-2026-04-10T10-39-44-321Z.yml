@@ -1,0 +1,1845 @@
+- generic [ref=e2]:
+  - region "Skip to main content":
+    - link "Skip to main content" [ref=e221] [cursor=pointer]:
+      - /url: "#__docusaurus_skipToContent_fallback"
+  - navigation "Main" [ref=e222]:
+    - generic [ref=e223]:
+      - generic [ref=e224]:
+        - link "Playwright logo Playwright" [ref=e225] [cursor=pointer]:
+          - /url: /
+          - img "Playwright logo" [ref=e227]
+          - generic [ref=e228]: Playwright
+        - link "Docs" [ref=e229] [cursor=pointer]:
+          - /url: /docs/intro
+        - link "API" [ref=e230] [cursor=pointer]:
+          - /url: /docs/api/class-playwright
+        - button "Node.js" [ref=e232] [cursor=pointer]
+        - link "Community" [ref=e233] [cursor=pointer]:
+          - /url: /community/welcome
+      - generic [ref=e234]:
+        - link "GitHub repository" [ref=e235] [cursor=pointer]:
+          - /url: https://github.com/microsoft/playwright
+        - link "Discord server" [ref=e236] [cursor=pointer]:
+          - /url: https://aka.ms/playwright/discord
+        - button "Switch between dark and light mode (currently system mode)" [ref=e238] [cursor=pointer]:
+          - img [ref=e239]
+        - button "Search (Ctrl+K)" [ref=e242] [cursor=pointer]:
+          - generic [ref=e243]:
+            - img [ref=e244]
+            - generic [ref=e246]: Search
+          - generic [ref=e247]:
+            - img [ref=e249]
+            - generic [ref=e251]: K
+  - generic [ref=e254]:
+    - complementary [ref=e255]:
+      - navigation "Docs sidebar" [ref=e258]:
+        - list [ref=e259]:
+          - listitem [ref=e260]:
+            - button "Getting Started" [expanded] [ref=e262] [cursor=pointer]
+            - list [ref=e263]:
+              - listitem [ref=e264]:
+                - link "Installation" [ref=e265] [cursor=pointer]:
+                  - /url: /docs/intro
+              - listitem [ref=e266]:
+                - link "Writing tests" [ref=e267] [cursor=pointer]:
+                  - /url: /docs/writing-tests
+              - listitem [ref=e268]:
+                - link "Generating tests" [ref=e269] [cursor=pointer]:
+                  - /url: /docs/codegen-intro
+              - listitem [ref=e270]:
+                - link "Running and debugging tests" [ref=e271] [cursor=pointer]:
+                  - /url: /docs/running-tests
+              - listitem [ref=e272]:
+                - link "Trace viewer" [ref=e273] [cursor=pointer]:
+                  - /url: /docs/trace-viewer-intro
+              - listitem [ref=e274]:
+                - link "Setting up CI" [ref=e275] [cursor=pointer]:
+                  - /url: /docs/ci-intro
+              - listitem [ref=e276]:
+                - link "VS Code" [ref=e277] [cursor=pointer]:
+                  - /url: /docs/getting-started-vscode
+              - listitem [ref=e278]:
+                - link "Coding agents" [ref=e279] [cursor=pointer]:
+                  - /url: /docs/getting-started-cli
+              - listitem [ref=e280]:
+                - link "Playwright MCP" [ref=e281] [cursor=pointer]:
+                  - /url: /docs/getting-started-mcp
+          - listitem [ref=e282]:
+            - link "Release notes" [ref=e283] [cursor=pointer]:
+              - /url: /docs/release-notes
+          - listitem [ref=e284]:
+            - link "Canary releases" [ref=e285] [cursor=pointer]:
+              - /url: /docs/canary-releases
+          - listitem [ref=e286]:
+            - button "Playwright Test" [expanded] [ref=e288] [cursor=pointer]
+            - list [ref=e289]:
+              - listitem [ref=e290]:
+                - link "Agents" [ref=e291] [cursor=pointer]:
+                  - /url: /docs/test-agents
+              - listitem [ref=e292]:
+                - link "Annotations" [ref=e293] [cursor=pointer]:
+                  - /url: /docs/test-annotations
+              - listitem [ref=e294]:
+                - link "Command line" [ref=e295] [cursor=pointer]:
+                  - /url: /docs/test-cli
+              - listitem [ref=e296]:
+                - link "Configuration" [ref=e297] [cursor=pointer]:
+                  - /url: /docs/test-configuration
+              - listitem [ref=e298]:
+                - link "Configuration (use)" [ref=e299] [cursor=pointer]:
+                  - /url: /docs/test-use-options
+              - listitem [ref=e300]:
+                - link "Emulation" [ref=e301] [cursor=pointer]:
+                  - /url: /docs/emulation
+              - listitem [ref=e302]:
+                - link "Fixtures" [ref=e303] [cursor=pointer]:
+                  - /url: /docs/test-fixtures
+              - listitem [ref=e304]:
+                - link "Global setup and teardown" [ref=e305] [cursor=pointer]:
+                  - /url: /docs/test-global-setup-teardown
+              - listitem [ref=e306]:
+                - link "Parallelism" [ref=e307] [cursor=pointer]:
+                  - /url: /docs/test-parallel
+              - listitem [ref=e308]:
+                - link "Parameterize tests" [ref=e309] [cursor=pointer]:
+                  - /url: /docs/test-parameterize
+              - listitem [ref=e310]:
+                - link "Projects" [ref=e311] [cursor=pointer]:
+                  - /url: /docs/test-projects
+              - listitem [ref=e312]:
+                - link "Reporters" [ref=e313] [cursor=pointer]:
+                  - /url: /docs/test-reporters
+              - listitem [ref=e314]:
+                - link "Retries" [ref=e315] [cursor=pointer]:
+                  - /url: /docs/test-retries
+              - listitem [ref=e316]:
+                - link "Sharding" [ref=e317] [cursor=pointer]:
+                  - /url: /docs/test-sharding
+              - listitem [ref=e318]:
+                - link "Timeouts" [ref=e319] [cursor=pointer]:
+                  - /url: /docs/test-timeouts
+              - listitem [ref=e320]:
+                - link "TypeScript" [ref=e321] [cursor=pointer]:
+                  - /url: /docs/test-typescript
+              - listitem [ref=e322]:
+                - link "UI Mode" [ref=e323] [cursor=pointer]:
+                  - /url: /docs/test-ui-mode
+              - listitem [ref=e324]:
+                - link "Web server" [ref=e325] [cursor=pointer]:
+                  - /url: /docs/test-webserver
+          - listitem [ref=e326]:
+            - button "Guides" [expanded] [ref=e328] [cursor=pointer]
+            - list [ref=e329]:
+              - listitem [ref=e330]:
+                - link "Library" [ref=e331] [cursor=pointer]:
+                  - /url: /docs/library
+              - listitem [ref=e332]:
+                - link "Accessibility testing" [ref=e333] [cursor=pointer]:
+                  - /url: /docs/accessibility-testing
+              - listitem [ref=e334]:
+                - link "Actions" [ref=e335] [cursor=pointer]:
+                  - /url: /docs/input
+              - listitem [ref=e336]:
+                - link "Assertions" [ref=e337] [cursor=pointer]:
+                  - /url: /docs/test-assertions
+              - listitem [ref=e338]:
+                - link "API testing" [ref=e339] [cursor=pointer]:
+                  - /url: /docs/api-testing
+              - listitem [ref=e340]:
+                - link "Authentication" [ref=e341] [cursor=pointer]:
+                  - /url: /docs/auth
+              - listitem [ref=e342]:
+                - link "Auto-waiting" [ref=e343] [cursor=pointer]:
+                  - /url: /docs/actionability
+              - listitem [ref=e344]:
+                - link "Best Practices" [ref=e345] [cursor=pointer]:
+                  - /url: /docs/best-practices
+              - listitem [ref=e346]:
+                - link "Browsers" [ref=e347] [cursor=pointer]:
+                  - /url: /docs/browsers
+              - listitem [ref=e348]:
+                - link "Chrome extensions" [ref=e349] [cursor=pointer]:
+                  - /url: /docs/chrome-extensions
+              - listitem [ref=e350]:
+                - link "Clock" [ref=e351] [cursor=pointer]:
+                  - /url: /docs/clock
+              - listitem [ref=e352]:
+                - link "Components (experimental)" [ref=e353] [cursor=pointer]:
+                  - /url: /docs/test-components
+              - listitem [ref=e354]:
+                - link "Debugging Tests" [ref=e355] [cursor=pointer]:
+                  - /url: /docs/debug
+              - listitem [ref=e356]:
+                - link "Dialogs" [ref=e357] [cursor=pointer]:
+                  - /url: /docs/dialogs
+              - listitem [ref=e358]:
+                - link "Downloads" [ref=e359] [cursor=pointer]:
+                  - /url: /docs/downloads
+              - listitem [ref=e360]:
+                - link "Evaluating JavaScript" [ref=e361] [cursor=pointer]:
+                  - /url: /docs/evaluating
+              - listitem [ref=e362]:
+                - link "Events" [ref=e363] [cursor=pointer]:
+                  - /url: /docs/events
+              - listitem [ref=e364]:
+                - link "Extensibility" [ref=e365] [cursor=pointer]:
+                  - /url: /docs/extensibility
+              - listitem [ref=e366]:
+                - link "Frames" [ref=e367] [cursor=pointer]:
+                  - /url: /docs/frames
+              - listitem [ref=e368]:
+                - link "Handles" [ref=e369] [cursor=pointer]:
+                  - /url: /docs/handles
+              - listitem [ref=e370]:
+                - link "Isolation" [ref=e371] [cursor=pointer]:
+                  - /url: /docs/browser-contexts
+              - listitem [ref=e372]:
+                - link "Locators" [ref=e373] [cursor=pointer]:
+                  - /url: /docs/locators
+              - listitem [ref=e374]:
+                - link "Mock APIs" [ref=e375] [cursor=pointer]:
+                  - /url: /docs/mock
+              - listitem [ref=e376]:
+                - link "Mock browser APIs" [ref=e377] [cursor=pointer]:
+                  - /url: /docs/mock-browser-apis
+              - listitem [ref=e378]:
+                - link "Navigations" [ref=e379] [cursor=pointer]:
+                  - /url: /docs/navigations
+              - listitem [ref=e380]:
+                - link "Network" [ref=e381] [cursor=pointer]:
+                  - /url: /docs/network
+              - listitem [ref=e382]:
+                - link "Other locators" [ref=e383] [cursor=pointer]:
+                  - /url: /docs/other-locators
+              - listitem [ref=e384]:
+                - link "Pages" [ref=e385] [cursor=pointer]:
+                  - /url: /docs/pages
+              - listitem [ref=e386]:
+                - link "Page object models" [ref=e387] [cursor=pointer]:
+                  - /url: /docs/pom
+              - listitem [ref=e388]:
+                - link "Screenshots" [ref=e389] [cursor=pointer]:
+                  - /url: /docs/screenshots
+              - listitem [ref=e390]:
+                - link "Service Workers" [ref=e391] [cursor=pointer]:
+                  - /url: /docs/service-workers
+              - listitem [ref=e392]:
+                - link "Snapshot testing" [ref=e393] [cursor=pointer]:
+                  - /url: /docs/aria-snapshots
+              - listitem [ref=e394]:
+                - link "Test generator" [ref=e395] [cursor=pointer]:
+                  - /url: /docs/codegen
+              - listitem [ref=e396]:
+                - link "Touch events (legacy)" [ref=e397] [cursor=pointer]:
+                  - /url: /docs/touch-events
+              - listitem [ref=e398]:
+                - link "Trace viewer" [ref=e399] [cursor=pointer]:
+                  - /url: /docs/trace-viewer
+              - listitem [ref=e400]:
+                - link "Videos" [ref=e401] [cursor=pointer]:
+                  - /url: /docs/videos
+              - listitem [ref=e402]:
+                - link "Visual comparisons" [ref=e403] [cursor=pointer]:
+                  - /url: /docs/test-snapshots
+              - listitem [ref=e404]:
+                - link "WebView2" [ref=e405] [cursor=pointer]:
+                  - /url: /docs/webview2
+          - listitem [ref=e406]:
+            - button "Migration" [ref=e408] [cursor=pointer]
+          - listitem [ref=e409]:
+            - button "Integrations" [ref=e411] [cursor=pointer]
+          - listitem [ref=e412]:
+            - link "Supported languages" [ref=e413] [cursor=pointer]:
+              - /url: /docs/languages
+    - main [ref=e414]:
+      - generic [ref=e800]:
+        - generic [ref=e802]:
+          - article [ref=e803]:
+            - navigation "Breadcrumbs" [ref=e804]:
+              - list [ref=e805]:
+                - listitem [ref=e806]:
+                  - link "Home page" [ref=e807] [cursor=pointer]:
+                    - /url: /
+                    - img [ref=e808]
+                - listitem [ref=e810]:
+                  - generic [ref=e811]: Guides
+                - listitem [ref=e812]:
+                  - generic [ref=e813]: Locators
+            - generic [ref=e814]:
+              - heading "Locators" [level=1] [ref=e816]
+              - heading "IntroductionDirect link to Introduction" [level=2] [ref=e817]:
+                - text: Introduction
+                - link "Direct link to Introduction" [ref=e818] [cursor=pointer]:
+                  - /url: "#introduction"
+                  - text: "#"
+              - paragraph [ref=e819]:
+                - link "Locator" [ref=e820] [cursor=pointer]:
+                  - /url: /docs/api/class-locator
+                - text: s are the central piece of Playwright's auto-waiting and retry-ability. In a nutshell, locators represent a way to find element(s) on the page at any moment.
+              - heading "Quick GuideDirect link to Quick Guide" [level=3] [ref=e821]:
+                - text: Quick Guide
+                - link "Direct link to Quick Guide" [ref=e822] [cursor=pointer]:
+                  - /url: "#quick-guide"
+                  - text: "#"
+              - paragraph [ref=e823]: These are the recommended built-in locators.
+              - list [ref=e824]:
+                - listitem [ref=e825]:
+                  - link "page.getByRole()" [ref=e826] [cursor=pointer]:
+                    - /url: "#locate-by-role"
+                  - text: to locate by explicit and implicit accessibility attributes.
+                - listitem [ref=e827]:
+                  - link "page.getByText()" [ref=e828] [cursor=pointer]:
+                    - /url: "#locate-by-text"
+                  - text: to locate by text content.
+                - listitem [ref=e829]:
+                  - link "page.getByLabel()" [ref=e830] [cursor=pointer]:
+                    - /url: "#locate-by-label"
+                  - text: to locate a form control by associated label's text.
+                - listitem [ref=e831]:
+                  - link "page.getByPlaceholder()" [ref=e832] [cursor=pointer]:
+                    - /url: "#locate-by-placeholder"
+                  - text: to locate an input by placeholder.
+                - listitem [ref=e833]:
+                  - link "page.getByAltText()" [ref=e834] [cursor=pointer]:
+                    - /url: "#locate-by-alt-text"
+                  - text: to locate an element, usually image, by its text alternative.
+                - listitem [ref=e835]:
+                  - link "page.getByTitle()" [ref=e836] [cursor=pointer]:
+                    - /url: "#locate-by-title"
+                  - text: to locate an element by its title attribute.
+                - listitem [ref=e837]:
+                  - link "page.getByTestId()" [ref=e838] [cursor=pointer]:
+                    - /url: "#locate-by-test-id"
+                  - text: to locate an element based on its
+                  - code [ref=e839]: data-testid
+                  - text: attribute (other attributes can be configured).
+              - generic [ref=e841]:
+                - code [ref=e843]:
+                  - generic [ref=e844]: await page.getByLabel('User Name').fill('John');
+                  - generic [ref=e845]: await page.getByLabel('Password').fill('secret-password');
+                  - generic [ref=e846]: "await page.getByRole('button', { name: 'Sign in' }).click();"
+                  - generic [ref=e847]: await expect(page.getByText('Welcome, John!')).toBeVisible();
+                - button "Copy code to clipboard" [ref=e849] [cursor=pointer]:
+                  - generic [ref=e850]:
+                    - img [ref=e851]
+                    - img [ref=e853]
+              - heading "Locating elementsDirect link to Locating elements" [level=2] [ref=e855]:
+                - text: Locating elements
+                - link "Direct link to Locating elements" [ref=e856] [cursor=pointer]:
+                  - /url: "#locating-elements"
+                  - text: "#"
+              - paragraph [ref=e857]:
+                - text: Playwright comes with multiple built-in locators. To make tests resilient, we recommend prioritizing user-facing attributes and explicit contracts such as
+                - link "page.getByRole()" [ref=e858] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-role
+                - text: .
+              - paragraph [ref=e859]: For example, consider the following DOM structure.
+              - generic [ref=e860]:
+                - generic [ref=e866]: http://localhost:3000
+                - generic [ref=e872]:
+                  - button "Sign in" [ref=e875] [cursor=pointer]
+                  - generic [ref=e878]:
+                    - code [ref=e880]:
+                      - generic [ref=e881]: <button>Sign in</button>
+                    - button "Copy code to clipboard" [ref=e883] [cursor=pointer]:
+                      - generic [ref=e884]:
+                        - img [ref=e885]
+                        - img [ref=e887]
+              - paragraph [ref=e889]:
+                - text: Locate the element by its role of
+                - code [ref=e890]: button
+                - text: with name "Sign in".
+              - generic [ref=e892]:
+                - code [ref=e894]:
+                  - generic [ref=e895]: "await page.getByRole('button', { name: 'Sign in' }).click();"
+                - button "Copy code to clipboard" [ref=e897] [cursor=pointer]:
+                  - generic [ref=e898]:
+                    - img [ref=e899]
+                    - img [ref=e901]
+              - generic [ref=e903]:
+                - generic [ref=e904]:
+                  - img [ref=e906]
+                  - text: note
+                - paragraph [ref=e909]:
+                  - text: Use the
+                  - link "code generator" [ref=e910] [cursor=pointer]:
+                    - /url: /docs/codegen
+                  - text: to generate a locator, and then edit it as you'd like.
+              - paragraph [ref=e911]: Every time a locator is used for an action, an up-to-date DOM element is located in the page. In the snippet below, the underlying DOM element will be located twice, once prior to every action. This means that if the DOM changes in between the calls due to re-render, the new element corresponding to the locator will be used.
+              - generic [ref=e913]:
+                - code [ref=e915]:
+                  - generic [ref=e916]: "const locator = page.getByRole('button', { name: 'Sign in' });"
+                  - generic [ref=e917]: await locator.hover();
+                  - generic [ref=e918]: await locator.click();
+                - button "Copy code to clipboard" [ref=e920] [cursor=pointer]:
+                  - generic [ref=e921]:
+                    - img [ref=e922]
+                    - img [ref=e924]
+              - paragraph [ref=e926]:
+                - text: Note that all methods that create a locator, such as
+                - link "page.getByLabel()" [ref=e927] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-label
+                - text: ", are also available on the"
+                - link "Locator" [ref=e928] [cursor=pointer]:
+                  - /url: /docs/api/class-locator
+                - text: and
+                - link "FrameLocator" [ref=e929] [cursor=pointer]:
+                  - /url: /docs/api/class-framelocator
+                - text: classes, so you can chain them and iteratively narrow down your locator.
+              - generic [ref=e931]:
+                - code [ref=e933]:
+                  - generic [ref=e934]: const locator = page
+                  - generic [ref=e935]: .frameLocator('#my-frame')
+                  - generic [ref=e936]: ".getByRole('button', { name: 'Sign in' });"
+                  - generic [ref=e937]: await locator.click();
+                - button "Copy code to clipboard" [ref=e939] [cursor=pointer]:
+                  - generic [ref=e940]:
+                    - img [ref=e941]
+                    - img [ref=e943]
+              - heading "Locate by roleDirect link to Locate by role" [level=3] [ref=e945]:
+                - text: Locate by role
+                - link "Direct link to Locate by role" [ref=e946] [cursor=pointer]:
+                  - /url: "#locate-by-role"
+                  - text: "#"
+              - paragraph [ref=e947]:
+                - text: The
+                - link "page.getByRole()" [ref=e948] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-role
+                - text: locator reflects how users and assistive technology perceive the page, for example whether some element is a button or a checkbox. When locating by role, you should usually pass the accessible name as well, so that the locator pinpoints the exact element.
+              - paragraph [ref=e949]: For example, consider the following DOM structure.
+              - generic [ref=e950]:
+                - generic [ref=e956]: http://localhost:3000
+                - generic [ref=e962]:
+                  - generic [ref=e964]:
+                    - heading "Sign up" [level=3] [ref=e965]
+                    - paragraph [ref=e967]:
+                      - checkbox "Subscribe" [ref=e968]
+                      - text: Subscribe
+                    - button "Submit" [ref=e969] [cursor=pointer]
+                  - generic [ref=e972]:
+                    - code [ref=e974]:
+                      - generic [ref=e975]: <h3>Sign up</h3>
+                      - generic [ref=e976]: <label>
+                      - generic [ref=e977]: <input type="checkbox" /> Subscribe
+                      - generic [ref=e978]: </label>
+                      - generic [ref=e979]: <br/>
+                      - generic [ref=e980]: <button>Submit</button>
+                    - button "Copy code to clipboard" [ref=e982] [cursor=pointer]:
+                      - generic [ref=e983]:
+                        - img [ref=e984]
+                        - img [ref=e986]
+              - paragraph [ref=e988]: "You can locate each element by its implicit role:"
+              - generic [ref=e990]:
+                - code [ref=e992]:
+                  - generic [ref=e993]: "await expect(page.getByRole('heading', { name: 'Sign up' })).toBeVisible();"
+                  - generic [ref=e994]: "await page.getByRole('checkbox', { name: 'Subscribe' }).check();"
+                  - generic [ref=e995]: "await page.getByRole('button', { name: /submit/i }).click();"
+                - button "Copy code to clipboard" [ref=e997] [cursor=pointer]:
+                  - generic [ref=e998]:
+                    - img [ref=e999]
+                    - img [ref=e1001]
+              - paragraph [ref=e1003]:
+                - text: Role locators include
+                - link "buttons, checkboxes, headings, links, lists, tables, and many more" [ref=e1004] [cursor=pointer]:
+                  - /url: https://www.w3.org/TR/html-aria/#docconformance
+                - text: and follow W3C specifications for
+                - link "ARIA role" [ref=e1005] [cursor=pointer]:
+                  - /url: https://www.w3.org/TR/wai-aria-1.2/#roles
+                - text: ","
+                - link "ARIA attributes" [ref=e1006] [cursor=pointer]:
+                  - /url: https://www.w3.org/TR/wai-aria-1.2/#aria-attributes
+                - text: and
+                - link "accessible name" [ref=e1007] [cursor=pointer]:
+                  - /url: https://w3c.github.io/accname/#dfn-accessible-name
+                - text: . Note that many html elements like
+                - code [ref=e1008]: <button>
+                - text: have an
+                - link "implicitly defined role" [ref=e1009] [cursor=pointer]:
+                  - /url: https://w3c.github.io/html-aam/#html-element-role-mappings
+                - text: that is recognized by the role locator.
+              - paragraph [ref=e1010]:
+                - text: Note that role locators
+                - strong [ref=e1011]: do not replace
+                - text: accessibility audits and conformance tests, but rather give early feedback about the ARIA guidelines.
+              - generic [ref=e1012]:
+                - generic [ref=e1013]:
+                  - img [ref=e1015]
+                  - text: When to use role locators
+                - paragraph [ref=e1018]: We recommend prioritizing role locators to locate elements, as it is the closest way to how users and assistive technology perceive the page.
+              - heading "Locate by labelDirect link to Locate by label" [level=3] [ref=e1019]:
+                - text: Locate by label
+                - link "Direct link to Locate by label" [ref=e1020] [cursor=pointer]:
+                  - /url: "#locate-by-label"
+                  - text: "#"
+              - paragraph [ref=e1021]:
+                - text: Most form controls usually have dedicated labels that could be conveniently used to interact with the form. In this case, you can locate the control by its associated label using
+                - link "page.getByLabel()" [ref=e1022] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-label
+                - text: .
+              - paragraph [ref=e1023]: For example, consider the following DOM structure.
+              - generic [ref=e1024]:
+                - generic [ref=e1030]: http://localhost:3000
+                - generic [ref=e1036]:
+                  - generic [ref=e1039]:
+                    - text: Password
+                    - textbox "Password" [ref=e1040]
+                  - generic [ref=e1043]:
+                    - code [ref=e1045]:
+                      - generic [ref=e1046]: <label>Password <input type="password" /></label>
+                    - button "Copy code to clipboard" [ref=e1048] [cursor=pointer]:
+                      - generic [ref=e1049]:
+                        - img [ref=e1050]
+                        - img [ref=e1052]
+              - paragraph [ref=e1054]: "You can fill the input after locating it by the label text:"
+              - generic [ref=e1056]:
+                - code [ref=e1058]:
+                  - generic [ref=e1059]: await page.getByLabel('Password').fill('secret');
+                - button "Copy code to clipboard" [ref=e1061] [cursor=pointer]:
+                  - generic [ref=e1062]:
+                    - img [ref=e1063]
+                    - img [ref=e1065]
+              - generic [ref=e1067]:
+                - generic [ref=e1068]:
+                  - img [ref=e1070]
+                  - text: When to use label locators
+                - paragraph [ref=e1073]: Use this locator when locating form fields.
+              - heading "Locate by placeholderDirect link to Locate by placeholder" [level=3] [ref=e1074]:
+                - text: Locate by placeholder
+                - link "Direct link to Locate by placeholder" [ref=e1075] [cursor=pointer]:
+                  - /url: "#locate-by-placeholder"
+                  - text: "#"
+              - paragraph [ref=e1076]:
+                - text: Inputs may have a placeholder attribute to hint to the user what value should be entered. You can locate such an input using
+                - link "page.getByPlaceholder()" [ref=e1077] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-placeholder
+                - text: .
+              - paragraph [ref=e1078]: For example, consider the following DOM structure.
+              - generic [ref=e1079]:
+                - generic [ref=e1085]: http://localhost:3000
+                - generic [ref=e1091]:
+                  - textbox "name@example.com" [ref=e1094]
+                  - generic [ref=e1097]:
+                    - code [ref=e1099]:
+                      - generic [ref=e1100]: <input type="email" placeholder="name@example.com" />
+                    - button "Copy code to clipboard" [ref=e1102] [cursor=pointer]:
+                      - generic [ref=e1103]:
+                        - img [ref=e1104]
+                        - img [ref=e1106]
+              - paragraph [ref=e1108]: "You can fill the input after locating it by the placeholder text:"
+              - generic [ref=e1110]:
+                - code [ref=e1112]:
+                  - generic [ref=e1113]: await page
+                  - generic [ref=e1114]: .getByPlaceholder('name@example.com')
+                  - generic [ref=e1115]: .fill('playwright@microsoft.com');
+                - button "Copy code to clipboard" [ref=e1117] [cursor=pointer]:
+                  - generic [ref=e1118]:
+                    - img [ref=e1119]
+                    - img [ref=e1121]
+              - generic [ref=e1123]:
+                - generic [ref=e1124]:
+                  - img [ref=e1126]
+                  - text: When to use placeholder locators
+                - paragraph [ref=e1129]: Use this locator when locating form elements that do not have labels but do have placeholder texts.
+              - heading "Locate by textDirect link to Locate by text" [level=3] [ref=e1130]:
+                - text: Locate by text
+                - link "Direct link to Locate by text" [ref=e1131] [cursor=pointer]:
+                  - /url: "#locate-by-text"
+                  - text: "#"
+              - paragraph [ref=e1132]:
+                - text: Find an element by the text it contains. You can match by a substring, exact string, or a regular expression when using
+                - link "page.getByText()" [ref=e1133] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-text
+                - text: .
+              - paragraph [ref=e1134]: For example, consider the following DOM structure.
+              - generic [ref=e1135]:
+                - generic [ref=e1141]: http://localhost:3000
+                - generic [ref=e1147]:
+                  - generic [ref=e1149]: Welcome, John
+                  - generic [ref=e1152]:
+                    - code [ref=e1154]:
+                      - generic [ref=e1155]: <span>Welcome, John</span>
+                    - button "Copy code to clipboard" [ref=e1157] [cursor=pointer]:
+                      - generic [ref=e1158]:
+                        - img [ref=e1159]
+                        - img [ref=e1161]
+              - paragraph [ref=e1163]: "You can locate the element by the text it contains:"
+              - generic [ref=e1165]:
+                - code [ref=e1167]:
+                  - generic [ref=e1168]: await expect(page.getByText('Welcome, John')).toBeVisible();
+                - button "Copy code to clipboard" [ref=e1170] [cursor=pointer]:
+                  - generic [ref=e1171]:
+                    - img [ref=e1172]
+                    - img [ref=e1174]
+              - paragraph [ref=e1176]: "Set an exact match:"
+              - generic [ref=e1178]:
+                - code [ref=e1180]:
+                  - generic [ref=e1181]: "await expect(page.getByText('Welcome, John', { exact: true })).toBeVisible();"
+                - button "Copy code to clipboard" [ref=e1183] [cursor=pointer]:
+                  - generic [ref=e1184]:
+                    - img [ref=e1185]
+                    - img [ref=e1187]
+              - paragraph [ref=e1189]: "Match with a regular expression:"
+              - generic [ref=e1191]:
+                - code [ref=e1193]:
+                  - generic [ref=e1194]: await expect(page.getByText(/welcome, [A-Za-z]+$/i)).toBeVisible();
+                - button "Copy code to clipboard" [ref=e1196] [cursor=pointer]:
+                  - generic [ref=e1197]:
+                    - img [ref=e1198]
+                    - img [ref=e1200]
+              - generic [ref=e1202]:
+                - generic [ref=e1203]:
+                  - img [ref=e1205]
+                  - text: note
+                - paragraph [ref=e1208]: Matching by text always normalizes whitespace, even with exact match. For example, it turns multiple spaces into one, turns line breaks into spaces and ignores leading and trailing whitespace.
+              - generic [ref=e1209]:
+                - generic [ref=e1210]:
+                  - img [ref=e1212]
+                  - text: When to use text locators
+                - paragraph [ref=e1215]:
+                  - text: We recommend using text locators to find non interactive elements like
+                  - code [ref=e1216]: div
+                  - text: ","
+                  - code [ref=e1217]: span
+                  - text: ","
+                  - code [ref=e1218]: p
+                  - text: ", etc. For interactive elements like"
+                  - code [ref=e1219]: button
+                  - text: ","
+                  - code [ref=e1220]: a
+                  - text: ","
+                  - code [ref=e1221]: input
+                  - text: ", etc. use"
+                  - link "role locators" [ref=e1222] [cursor=pointer]:
+                    - /url: "#locate-by-role"
+                  - text: .
+              - paragraph [ref=e1223]:
+                - text: You can also
+                - link "filter by text" [ref=e1224] [cursor=pointer]:
+                  - /url: "#filter-by-text"
+                - text: which can be useful when trying to find a particular item in a list.
+              - heading "Locate by alt textDirect link to Locate by alt text" [level=3] [ref=e1225]:
+                - text: Locate by alt text
+                - link "Direct link to Locate by alt text" [ref=e1226] [cursor=pointer]:
+                  - /url: "#locate-by-alt-text"
+                  - text: "#"
+              - paragraph [ref=e1227]:
+                - text: All images should have an
+                - code [ref=e1228]: alt
+                - text: attribute that describes the image. You can locate an image based on the text alternative using
+                - link "page.getByAltText()" [ref=e1229] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-alt-text
+                - text: .
+              - paragraph [ref=e1230]: For example, consider the following DOM structure.
+              - generic [ref=e1231]:
+                - generic [ref=e1237]: http://localhost:3000
+                - generic [ref=e1243]:
+                  - img "playwright logo" [ref=e1246]
+                  - generic [ref=e1249]:
+                    - code [ref=e1251]:
+                      - generic [ref=e1252]: <img alt="playwright logo" src="/img/playwright-logo.svg" width="100" />
+                    - button "Copy code to clipboard" [ref=e1254] [cursor=pointer]:
+                      - generic [ref=e1255]:
+                        - img [ref=e1256]
+                        - img [ref=e1258]
+              - paragraph [ref=e1260]: "You can click on the image after locating it by the text alternative:"
+              - generic [ref=e1262]:
+                - code [ref=e1264]:
+                  - generic [ref=e1265]: await page.getByAltText('playwright logo').click();
+                - button "Copy code to clipboard" [ref=e1267] [cursor=pointer]:
+                  - generic [ref=e1268]:
+                    - img [ref=e1269]
+                    - img [ref=e1271]
+              - generic [ref=e1273]:
+                - generic [ref=e1274]:
+                  - img [ref=e1276]
+                  - text: When to use alt locators
+                - paragraph [ref=e1279]:
+                  - text: Use this locator when your element supports alt text such as
+                  - code [ref=e1280]: img
+                  - text: and
+                  - code [ref=e1281]: area
+                  - text: elements.
+              - heading "Locate by titleDirect link to Locate by title" [level=3] [ref=e1282]:
+                - text: Locate by title
+                - link "Direct link to Locate by title" [ref=e1283] [cursor=pointer]:
+                  - /url: "#locate-by-title"
+                  - text: "#"
+              - paragraph [ref=e1284]:
+                - text: Locate an element with a matching title attribute using
+                - link "page.getByTitle()" [ref=e1285] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-title
+                - text: .
+              - paragraph [ref=e1286]: For example, consider the following DOM structure.
+              - generic [ref=e1287]:
+                - generic [ref=e1293]: http://localhost:3000
+                - generic [ref=e1299]:
+                  - generic [ref=e1301]: 25 issues
+                  - generic [ref=e1304]:
+                    - code [ref=e1306]:
+                      - generic [ref=e1307]: <span title='Issues count'>25 issues</span>
+                    - button "Copy code to clipboard" [ref=e1309] [cursor=pointer]:
+                      - generic [ref=e1310]:
+                        - img [ref=e1311]
+                        - img [ref=e1313]
+              - paragraph [ref=e1315]: "You can check the issues count after locating it by the title text:"
+              - generic [ref=e1317]:
+                - code [ref=e1319]:
+                  - generic [ref=e1320]: await expect(page.getByTitle('Issues count')).toHaveText('25 issues');
+                - button "Copy code to clipboard" [ref=e1322] [cursor=pointer]:
+                  - generic [ref=e1323]:
+                    - img [ref=e1324]
+                    - img [ref=e1326]
+              - generic [ref=e1328]:
+                - generic [ref=e1329]:
+                  - img [ref=e1331]
+                  - text: When to use title locators
+                - paragraph [ref=e1334]:
+                  - text: Use this locator when your element has the
+                  - code [ref=e1335]: title
+                  - text: attribute.
+              - heading "Locate by test idDirect link to Locate by test id" [level=3] [ref=e1336]:
+                - text: Locate by test id
+                - link "Direct link to Locate by test id" [ref=e1337] [cursor=pointer]:
+                  - /url: "#locate-by-test-id"
+                  - text: "#"
+              - paragraph [ref=e1338]:
+                - text: Testing by test ids is the most resilient way of testing as even if your text or role of the attribute changes, the test will still pass. QA's and developers should define explicit test ids and query them with
+                - link "page.getByTestId()" [ref=e1339] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-test-id
+                - text: . However testing by test ids is not user facing. If the role or text value is important to you then consider using user facing locators such as
+                - link "role" [ref=e1340] [cursor=pointer]:
+                  - /url: "#locate-by-role"
+                - text: and
+                - link "text locators" [ref=e1341] [cursor=pointer]:
+                  - /url: "#locate-by-text"
+                - text: .
+              - paragraph [ref=e1342]: For example, consider the following DOM structure.
+              - generic [ref=e1343]:
+                - generic [ref=e1349]: http://localhost:3000
+                - generic [ref=e1355]:
+                  - button "Itinéraire" [ref=e1358] [cursor=pointer]
+                  - generic [ref=e1361]:
+                    - code [ref=e1363]:
+                      - generic [ref=e1364]: <button data-testid="directions">Itinéraire</button>
+                    - button "Copy code to clipboard" [ref=e1366] [cursor=pointer]:
+                      - generic [ref=e1367]:
+                        - img [ref=e1368]
+                        - img [ref=e1370]
+              - paragraph [ref=e1372]: "You can locate the element by its test id:"
+              - generic [ref=e1374]:
+                - code [ref=e1376]:
+                  - generic [ref=e1377]: await page.getByTestId('directions').click();
+                - button "Copy code to clipboard" [ref=e1379] [cursor=pointer]:
+                  - generic [ref=e1380]:
+                    - img [ref=e1381]
+                    - img [ref=e1383]
+              - generic [ref=e1385]:
+                - generic [ref=e1386]:
+                  - img [ref=e1388]
+                  - text: When to use testid locators
+                - paragraph [ref=e1391]:
+                  - text: You can also use test ids when you choose to use the test id methodology or when you can't locate by
+                  - link "role" [ref=e1392] [cursor=pointer]:
+                    - /url: "#locate-by-role"
+                  - text: or
+                  - link "text" [ref=e1393] [cursor=pointer]:
+                    - /url: "#locate-by-text"
+                  - text: .
+              - heading "Set a custom test id attributeDirect link to Set a custom test id attribute" [level=4] [ref=e1394]:
+                - text: Set a custom test id attribute
+                - link "Direct link to Set a custom test id attribute" [ref=e1395] [cursor=pointer]:
+                  - /url: "#set-a-custom-test-id-attribute"
+                  - text: "#"
+              - paragraph [ref=e1396]:
+                - text: By default,
+                - link "page.getByTestId()" [ref=e1397] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-test-id
+                - text: will locate elements based on the
+                - code [ref=e1398]: data-testid
+                - text: attribute, but you can configure it in your test config or by calling
+                - link "selectors.setTestIdAttribute()" [ref=e1399] [cursor=pointer]:
+                  - /url: /docs/api/class-selectors#selectors-set-test-id-attribute
+                - text: .
+              - paragraph [ref=e1400]: Set the test id to use a custom data attribute for your tests.
+              - generic [ref=e1401]:
+                - generic [ref=e1402]: playwright.config.ts
+                - generic [ref=e1403]:
+                  - code [ref=e1405]:
+                    - generic [ref=e1406]: "import { defineConfig } from '@playwright/test';"
+                    - generic [ref=e1407]: "export default defineConfig({"
+                    - generic [ref=e1408]: "use: {"
+                    - generic [ref=e1409]: "testIdAttribute: 'data-pw'"
+                    - generic [ref=e1410]: "}"
+                    - generic [ref=e1411]: "});"
+                  - button "Copy code to clipboard" [ref=e1413] [cursor=pointer]:
+                    - generic [ref=e1414]:
+                      - img [ref=e1415]
+                      - img [ref=e1417]
+              - paragraph [ref=e1419]:
+                - text: In your html you can now use
+                - code [ref=e1420]: data-pw
+                - text: as your test id instead of the default
+                - code [ref=e1421]: data-testid
+                - text: .
+              - generic [ref=e1422]:
+                - generic [ref=e1428]: http://localhost:3000
+                - generic [ref=e1434]:
+                  - button "Itinéraire" [ref=e1437] [cursor=pointer]
+                  - generic [ref=e1440]:
+                    - code [ref=e1442]:
+                      - generic [ref=e1443]: <button data-pw="directions">Itinéraire</button>
+                    - button "Copy code to clipboard" [ref=e1445] [cursor=pointer]:
+                      - generic [ref=e1446]:
+                        - img [ref=e1447]
+                        - img [ref=e1449]
+              - paragraph [ref=e1451]: "And then locate the element as you would normally do:"
+              - generic [ref=e1453]:
+                - code [ref=e1455]:
+                  - generic [ref=e1456]: await page.getByTestId('directions').click();
+                - button "Copy code to clipboard" [ref=e1458] [cursor=pointer]:
+                  - generic [ref=e1459]:
+                    - img [ref=e1460]
+                    - img [ref=e1462]
+              - heading "Locate by CSS or XPathDirect link to Locate by CSS or XPath" [level=3] [ref=e1464]:
+                - text: Locate by CSS or XPath
+                - link "Direct link to Locate by CSS or XPath" [ref=e1465] [cursor=pointer]:
+                  - /url: "#locate-by-css-or-xpath"
+                  - text: "#"
+              - paragraph [ref=e1466]:
+                - text: If you absolutely must use CSS or XPath locators, you can use
+                - link "page.locator()" [ref=e1467] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-locator
+                - text: to create a locator that takes a selector describing how to find an element in the page. Playwright supports CSS and XPath selectors, and auto-detects them if you omit
+                - code [ref=e1468]: css=
+                - text: or
+                - code [ref=e1469]: xpath=
+                - text: prefix.
+              - generic [ref=e1471]:
+                - code [ref=e1473]:
+                  - generic [ref=e1474]: await page.locator('css=button').click();
+                  - generic [ref=e1475]: await page.locator('xpath=//button').click();
+                  - generic [ref=e1476]: await page.locator('button').click();
+                  - generic [ref=e1477]: await page.locator('//button').click();
+                - button "Copy code to clipboard" [ref=e1479] [cursor=pointer]:
+                  - generic [ref=e1480]:
+                    - img [ref=e1481]
+                    - img [ref=e1483]
+              - paragraph [ref=e1485]:
+                - text: XPath and CSS selectors can be tied to the DOM structure or implementation. These selectors can break when the DOM structure changes. Long CSS or XPath chains below are an example of a
+                - strong [ref=e1486]: bad practice
+                - text: "that leads to unstable tests:"
+              - generic [ref=e1488]:
+                - code [ref=e1490]:
+                  - generic [ref=e1491]: await page.locator(
+                  - generic [ref=e1492]: "'#tsf > div:nth-child(2) > div.A8SBwf > div.RNNXgb > div > div.a4bIc > input'"
+                  - generic [ref=e1493]: ).click();
+                  - generic [ref=e1494]: await page
+                  - generic [ref=e1495]: .locator('//*[@id="tsf"]/div[2]/div[1]/div[1]/div/div[2]/input')
+                  - generic [ref=e1496]: .click();
+                - generic [ref=e1497]:
+                  - button "Toggle word wrap" [ref=e1498] [cursor=pointer]:
+                    - img [ref=e1499]
+                  - button "Copy code to clipboard" [ref=e1501] [cursor=pointer]:
+                    - generic [ref=e1502]:
+                      - img [ref=e1503]
+                      - img [ref=e1505]
+              - generic [ref=e1507]:
+                - generic [ref=e1508]:
+                  - img [ref=e1510]
+                  - text: When to use this
+                - paragraph [ref=e1513]:
+                  - text: CSS and XPath are not recommended as the DOM can often change leading to non resilient tests. Instead, try to come up with a locator that is close to how the user perceives the page such as
+                  - link "role locators" [ref=e1514] [cursor=pointer]:
+                    - /url: "#locate-by-role"
+                  - text: or
+                  - link "define an explicit testing contract" [ref=e1515] [cursor=pointer]:
+                    - /url: "#locate-by-test-id"
+                  - text: using test ids.
+              - heading "Locate in Shadow DOMDirect link to Locate in Shadow DOM" [level=2] [ref=e1516]:
+                - text: Locate in Shadow DOM
+                - link "Direct link to Locate in Shadow DOM" [ref=e1517] [cursor=pointer]:
+                  - /url: "#locate-in-shadow-dom"
+                  - text: "#"
+              - paragraph [ref=e1518]:
+                - text: All locators in Playwright
+                - strong [ref=e1519]: by default
+                - text: "work with elements in Shadow DOM. The exceptions are:"
+              - list [ref=e1520]:
+                - listitem [ref=e1521]: Locating by XPath does not pierce shadow roots.
+                - listitem [ref=e1522]:
+                  - link "Closed-mode shadow roots" [ref=e1523] [cursor=pointer]:
+                    - /url: https://developer.mozilla.org/en-US/docs/Web/API/Element/attachShadow#parameters
+                  - text: are not supported.
+              - paragraph [ref=e1524]: "Consider the following example with a custom web component:"
+              - generic [ref=e1526]:
+                - code [ref=e1528]:
+                  - generic [ref=e1529]: <x-details role=button aria-expanded=true aria-controls=inner-details>
+                  - generic [ref=e1530]: <div>Title</div>
+                  - generic [ref=e1531]: "#shadow-root"
+                  - generic [ref=e1532]: <div id=inner-details>Details</div>
+                  - generic [ref=e1533]: </x-details>
+                - button "Copy code to clipboard" [ref=e1535] [cursor=pointer]:
+                  - generic [ref=e1536]:
+                    - img [ref=e1537]
+                    - img [ref=e1539]
+              - paragraph [ref=e1541]: You can locate in the same way as if the shadow root was not present at all.
+              - paragraph [ref=e1542]:
+                - text: To click
+                - code [ref=e1543]: <div>Details</div>
+                - text: ":"
+              - generic [ref=e1545]:
+                - code [ref=e1547]:
+                  - generic [ref=e1548]: await page.getByText('Details').click();
+                - button "Copy code to clipboard" [ref=e1550] [cursor=pointer]:
+                  - generic [ref=e1551]:
+                    - img [ref=e1552]
+                    - img [ref=e1554]
+              - generic [ref=e1557]:
+                - code [ref=e1559]:
+                  - generic [ref=e1560]: <x-details role=button aria-expanded=true aria-controls=inner-details>
+                  - generic [ref=e1561]: <div>Title</div>
+                  - generic [ref=e1562]: "#shadow-root"
+                  - generic [ref=e1563]: <div id=inner-details>Details</div>
+                  - generic [ref=e1564]: </x-details>
+                - button "Copy code to clipboard" [ref=e1566] [cursor=pointer]:
+                  - generic [ref=e1567]:
+                    - img [ref=e1568]
+                    - img [ref=e1570]
+              - paragraph [ref=e1572]:
+                - text: To click
+                - code [ref=e1573]: <x-details>
+                - text: ":"
+              - generic [ref=e1575]:
+                - code [ref=e1577]:
+                  - generic [ref=e1578]: "await page.locator('x-details', { hasText: 'Details' }).click();"
+                - button "Copy code to clipboard" [ref=e1580] [cursor=pointer]:
+                  - generic [ref=e1581]:
+                    - img [ref=e1582]
+                    - img [ref=e1584]
+              - generic [ref=e1587]:
+                - code [ref=e1589]:
+                  - generic [ref=e1590]: <x-details role=button aria-expanded=true aria-controls=inner-details>
+                  - generic [ref=e1591]: <div>Title</div>
+                  - generic [ref=e1592]: "#shadow-root"
+                  - generic [ref=e1593]: <div id=inner-details>Details</div>
+                  - generic [ref=e1594]: </x-details>
+                - button "Copy code to clipboard" [ref=e1596] [cursor=pointer]:
+                  - generic [ref=e1597]:
+                    - img [ref=e1598]
+                    - img [ref=e1600]
+              - paragraph [ref=e1602]:
+                - text: To ensure that
+                - code [ref=e1603]: <x-details>
+                - text: "contains the text \"Details\":"
+              - generic [ref=e1605]:
+                - code [ref=e1607]:
+                  - generic [ref=e1608]: await expect(page.locator('x-details')).toContainText('Details');
+                - button "Copy code to clipboard" [ref=e1610] [cursor=pointer]:
+                  - generic [ref=e1611]:
+                    - img [ref=e1612]
+                    - img [ref=e1614]
+              - heading "Filtering LocatorsDirect link to Filtering Locators" [level=2] [ref=e1616]:
+                - text: Filtering Locators
+                - link "Direct link to Filtering Locators" [ref=e1617] [cursor=pointer]:
+                  - /url: "#filtering-locators"
+                  - text: "#"
+              - paragraph [ref=e1618]: Consider the following DOM structure where we want to click on the buy button of the second product card. We have a few options in order to filter the locators to get the right one.
+              - generic [ref=e1619]:
+                - generic [ref=e1625]: http://localhost:3000
+                - generic [ref=e1631]:
+                  - list [ref=e1634]:
+                    - listitem [ref=e1635]:
+                      - heading "Product 1" [level=3] [ref=e1636]
+                      - button "Add to cart" [ref=e1637] [cursor=pointer]
+                    - listitem [ref=e1638]:
+                      - heading "Product 2" [level=3] [ref=e1639]
+                      - button "Add to cart" [ref=e1640] [cursor=pointer]
+                  - generic [ref=e1643]:
+                    - code [ref=e1645]:
+                      - generic [ref=e1646]: <ul>
+                      - generic [ref=e1647]: <li>
+                      - generic [ref=e1648]: <h3>Product 1</h3>
+                      - generic [ref=e1649]: <button>Add to cart</button>
+                      - generic [ref=e1650]: </li>
+                      - generic [ref=e1651]: <li>
+                      - generic [ref=e1652]: <h3>Product 2</h3>
+                      - generic [ref=e1653]: <button>Add to cart</button>
+                      - generic [ref=e1654]: </li>
+                      - generic [ref=e1655]: </ul>
+                    - button "Copy code to clipboard" [ref=e1657] [cursor=pointer]:
+                      - generic [ref=e1658]:
+                        - img [ref=e1659]
+                        - img [ref=e1661]
+              - heading "Filter by textDirect link to Filter by text" [level=3] [ref=e1663]:
+                - text: Filter by text
+                - link "Direct link to Filter by text" [ref=e1664] [cursor=pointer]:
+                  - /url: "#filter-by-text"
+                  - text: "#"
+              - paragraph [ref=e1665]:
+                - text: Locators can be filtered by text with the
+                - link "locator.filter()" [ref=e1666] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-filter
+                - text: method. It will search for a particular string somewhere inside the element, possibly in a descendant element, case-insensitively. You can also pass a regular expression.
+              - generic [ref=e1668]:
+                - code [ref=e1670]:
+                  - generic [ref=e1671]: await page
+                  - generic [ref=e1672]: .getByRole('listitem')
+                  - generic [ref=e1673]: ".filter({ hasText: 'Product 2' })"
+                  - generic [ref=e1674]: ".getByRole('button', { name: 'Add to cart' })"
+                  - generic [ref=e1675]: .click();
+                - button "Copy code to clipboard" [ref=e1677] [cursor=pointer]:
+                  - generic [ref=e1678]:
+                    - img [ref=e1679]
+                    - img [ref=e1681]
+              - paragraph [ref=e1683]: "Use a regular expression:"
+              - generic [ref=e1685]:
+                - code [ref=e1687]:
+                  - generic [ref=e1688]: await page
+                  - generic [ref=e1689]: .getByRole('listitem')
+                  - generic [ref=e1690]: ".filter({ hasText: /Product 2/ })"
+                  - generic [ref=e1691]: ".getByRole('button', { name: 'Add to cart' })"
+                  - generic [ref=e1692]: .click();
+                - button "Copy code to clipboard" [ref=e1694] [cursor=pointer]:
+                  - generic [ref=e1695]:
+                    - img [ref=e1696]
+                    - img [ref=e1698]
+              - heading "Filter by not having textDirect link to Filter by not having text" [level=3] [ref=e1700]:
+                - text: Filter by not having text
+                - link "Direct link to Filter by not having text" [ref=e1701] [cursor=pointer]:
+                  - /url: "#filter-by-not-having-text"
+                  - text: "#"
+              - paragraph [ref=e1702]:
+                - text: Alternatively, filter by
+                - strong [ref=e1703]: not having
+                - text: "text:"
+              - generic [ref=e1705]:
+                - code [ref=e1707]:
+                  - generic [ref=e1708]: // 5 in-stock items
+                  - generic [ref=e1709]: "await expect(page.getByRole('listitem').filter({ hasNotText: 'Out of stock' })).toHaveCount(5);"
+                - generic [ref=e1710]:
+                  - button "Toggle word wrap" [ref=e1711] [cursor=pointer]:
+                    - img [ref=e1712]
+                  - button "Copy code to clipboard" [ref=e1714] [cursor=pointer]:
+                    - generic [ref=e1715]:
+                      - img [ref=e1716]
+                      - img [ref=e1718]
+              - heading "Filter by child/descendantDirect link to Filter by child/descendant" [level=3] [ref=e1720]:
+                - text: Filter by child/descendant
+                - link "Direct link to Filter by child/descendant" [ref=e1721] [cursor=pointer]:
+                  - /url: "#filter-by-childdescendant"
+                  - text: "#"
+              - paragraph [ref=e1722]:
+                - text: Locators support an option to only select elements that have or have not a descendant matching another locator. You can therefore filter by any other locator such as a
+                - link "locator.getByRole()" [ref=e1723] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-get-by-role
+                - text: ","
+                - link "locator.getByTestId()" [ref=e1724] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-get-by-test-id
+                - text: ","
+                - link "locator.getByText()" [ref=e1725] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-get-by-text
+                - text: etc.
+              - generic [ref=e1726]:
+                - generic [ref=e1732]: http://localhost:3000
+                - generic [ref=e1738]:
+                  - list [ref=e1741]:
+                    - listitem [ref=e1742]:
+                      - heading "Product 1" [level=3] [ref=e1743]
+                      - button "Add to cart" [ref=e1744] [cursor=pointer]
+                    - listitem [ref=e1745]:
+                      - heading "Product 2" [level=3] [ref=e1746]
+                      - button "Add to cart" [ref=e1747] [cursor=pointer]
+                  - generic [ref=e1750]:
+                    - code [ref=e1752]:
+                      - generic [ref=e1753]: <ul>
+                      - generic [ref=e1754]: <li>
+                      - generic [ref=e1755]: <h3>Product 1</h3>
+                      - generic [ref=e1756]: <button>Add to cart</button>
+                      - generic [ref=e1757]: </li>
+                      - generic [ref=e1758]: <li>
+                      - generic [ref=e1759]: <h3>Product 2</h3>
+                      - generic [ref=e1760]: <button>Add to cart</button>
+                      - generic [ref=e1761]: </li>
+                      - generic [ref=e1762]: </ul>
+                    - button "Copy code to clipboard" [ref=e1764] [cursor=pointer]:
+                      - generic [ref=e1765]:
+                        - img [ref=e1766]
+                        - img [ref=e1768]
+              - generic [ref=e1771]:
+                - code [ref=e1773]:
+                  - generic [ref=e1774]: await page
+                  - generic [ref=e1775]: .getByRole('listitem')
+                  - generic [ref=e1776]: ".filter({ has: page.getByRole('heading', { name: 'Product 2' }) })"
+                  - generic [ref=e1777]: ".getByRole('button', { name: 'Add to cart' })"
+                  - generic [ref=e1778]: .click();
+                - button "Copy code to clipboard" [ref=e1780] [cursor=pointer]:
+                  - generic [ref=e1781]:
+                    - img [ref=e1782]
+                    - img [ref=e1784]
+              - paragraph [ref=e1786]: "We can also assert the product card to make sure there is only one:"
+              - generic [ref=e1788]:
+                - code [ref=e1790]:
+                  - generic [ref=e1791]: await expect(page
+                  - generic [ref=e1792]: .getByRole('listitem')
+                  - generic [ref=e1793]: ".filter({ has: page.getByRole('heading', { name: 'Product 2' }) }))"
+                  - generic [ref=e1794]: .toHaveCount(1);
+                - button "Copy code to clipboard" [ref=e1796] [cursor=pointer]:
+                  - generic [ref=e1797]:
+                    - img [ref=e1798]
+                    - img [ref=e1800]
+              - paragraph [ref=e1802]:
+                - text: The filtering locator
+                - strong [ref=e1803]: must be relative
+                - text: to the original locator and is queried starting with the original locator match, not the document root. Therefore, the following will not work, because the filtering locator starts matching from the
+                - code [ref=e1804]: <ul>
+                - text: list element that is outside of the
+                - code [ref=e1805]: <li>
+                - text: "list item matched by the original locator:"
+              - generic [ref=e1807]:
+                - code [ref=e1809]:
+                  - generic [ref=e1810]: // ✖ WRONG
+                  - generic [ref=e1811]: await expect(page
+                  - generic [ref=e1812]: .getByRole('listitem')
+                  - generic [ref=e1813]: ".filter({ has: page.getByRole('list').getByText('Product 2') }))"
+                  - generic [ref=e1814]: .toHaveCount(1);
+                - button "Copy code to clipboard" [ref=e1816] [cursor=pointer]:
+                  - generic [ref=e1817]:
+                    - img [ref=e1818]
+                    - img [ref=e1820]
+              - heading "Filter by not having child/descendantDirect link to Filter by not having child/descendant" [level=3] [ref=e1822]:
+                - text: Filter by not having child/descendant
+                - link "Direct link to Filter by not having child/descendant" [ref=e1823] [cursor=pointer]:
+                  - /url: "#filter-by-not-having-childdescendant"
+                  - text: "#"
+              - paragraph [ref=e1824]:
+                - text: We can also filter by
+                - strong [ref=e1825]: not having
+                - text: a matching element inside.
+              - generic [ref=e1827]:
+                - code [ref=e1829]:
+                  - generic [ref=e1830]: await expect(page
+                  - generic [ref=e1831]: .getByRole('listitem')
+                  - generic [ref=e1832]: ".filter({ hasNot: page.getByText('Product 2') }))"
+                  - generic [ref=e1833]: .toHaveCount(1);
+                - button "Copy code to clipboard" [ref=e1835] [cursor=pointer]:
+                  - generic [ref=e1836]:
+                    - img [ref=e1837]
+                    - img [ref=e1839]
+              - paragraph [ref=e1841]: Note that the inner locator is matched starting from the outer one, not from the document root.
+              - heading "Locator operatorsDirect link to Locator operators" [level=2] [ref=e1842]:
+                - text: Locator operators
+                - link "Direct link to Locator operators" [ref=e1843] [cursor=pointer]:
+                  - /url: "#locator-operators"
+                  - text: "#"
+              - heading "Matching inside a locatorDirect link to Matching inside a locator" [level=3] [ref=e1844]:
+                - text: Matching inside a locator
+                - link "Direct link to Matching inside a locator" [ref=e1845] [cursor=pointer]:
+                  - /url: "#matching-inside-a-locator"
+                  - text: "#"
+              - paragraph [ref=e1846]:
+                - text: You can chain methods that create a locator, like
+                - link "page.getByText()" [ref=e1847] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-text
+                - text: or
+                - link "locator.getByRole()" [ref=e1848] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-get-by-role
+                - text: ", to narrow down the search to a particular part of the page."
+              - paragraph [ref=e1849]:
+                - text: In this example we first create a locator called product by locating its role of
+                - code [ref=e1850]: listitem
+                - text: . We then filter by text. We can use the product locator again to get by role of button and click it and then use an assertion to make sure there is only one product with the text "Product 2".
+              - generic [ref=e1852]:
+                - code [ref=e1854]:
+                  - generic [ref=e1855]: "const product = page.getByRole('listitem').filter({ hasText: 'Product 2' });"
+                  - generic [ref=e1856]: "await product.getByRole('button', { name: 'Add to cart' }).click();"
+                  - generic [ref=e1857]: await expect(product).toHaveCount(1);
+                - button "Copy code to clipboard" [ref=e1859] [cursor=pointer]:
+                  - generic [ref=e1860]:
+                    - img [ref=e1861]
+                    - img [ref=e1863]
+              - paragraph [ref=e1865]: "You can also chain two locators together, for example to find a \"Save\" button inside a particular dialog:"
+              - generic [ref=e1867]:
+                - code [ref=e1869]:
+                  - generic [ref=e1870]: "const saveButton = page.getByRole('button', { name: 'Save' });"
+                  - generic [ref=e1871]: // ...
+                  - generic [ref=e1872]: const dialog = page.getByTestId('settings-dialog');
+                  - generic [ref=e1873]: await dialog.locator(saveButton).click();
+                - button "Copy code to clipboard" [ref=e1875] [cursor=pointer]:
+                  - generic [ref=e1876]:
+                    - img [ref=e1877]
+                    - img [ref=e1879]
+              - heading "Matching two locators simultaneouslyDirect link to Matching two locators simultaneously" [level=3] [ref=e1881]:
+                - text: Matching two locators simultaneously
+                - link "Direct link to Matching two locators simultaneously" [ref=e1882] [cursor=pointer]:
+                  - /url: "#matching-two-locators-simultaneously"
+                  - text: "#"
+              - paragraph [ref=e1883]:
+                - text: Method
+                - link "locator.and()" [ref=e1884] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-and
+                - text: narrows down an existing locator by matching an additional locator. For example, you can combine
+                - link "page.getByRole()" [ref=e1885] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-role
+                - text: and
+                - link "page.getByTitle()" [ref=e1886] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-title
+                - text: to match by both role and title.
+              - generic [ref=e1888]:
+                - code [ref=e1890]:
+                  - generic [ref=e1891]: const button = page.getByRole('button').and(page.getByTitle('Subscribe'));
+                - button "Copy code to clipboard" [ref=e1893] [cursor=pointer]:
+                  - generic [ref=e1894]:
+                    - img [ref=e1895]
+                    - img [ref=e1897]
+              - heading "Matching one of the two alternative locatorsDirect link to Matching one of the two alternative locators" [level=3] [ref=e1899]:
+                - text: Matching one of the two alternative locators
+                - link "Direct link to Matching one of the two alternative locators" [ref=e1900] [cursor=pointer]:
+                  - /url: "#matching-one-of-the-two-alternative-locators"
+                  - text: "#"
+              - paragraph [ref=e1901]:
+                - text: If you'd like to target one of the two or more elements, and you don't know which one it will be, use
+                - link "locator.or()" [ref=e1902] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-or
+                - text: to create a locator that matches any one or both of the alternatives.
+              - paragraph [ref=e1903]: For example, consider a scenario where you'd like to click on a "New email" button, but sometimes a security settings dialog shows up instead. In this case, you can wait for either a "New email" button, or a dialog and act accordingly.
+              - generic [ref=e1904]:
+                - generic [ref=e1905]:
+                  - img [ref=e1907]
+                  - text: note
+                - paragraph [ref=e1910]:
+                  - text: If both "New email" button and security dialog appear on screen, the "or" locator will match both of them, possibly throwing the
+                  - link "\"strict mode violation\" error" [ref=e1911] [cursor=pointer]:
+                    - /url: "#strictness"
+                  - text: . In this case, you can use
+                  - link "locator.first()" [ref=e1912] [cursor=pointer]:
+                    - /url: /docs/api/class-locator#locator-first
+                  - text: to only match one of them.
+              - generic [ref=e1914]:
+                - code [ref=e1916]:
+                  - generic [ref=e1917]: "const newEmail = page.getByRole('button', { name: 'New' });"
+                  - generic [ref=e1918]: const dialog = page.getByText('Confirm security settings');
+                  - generic [ref=e1919]: await expect(newEmail.or(dialog).first()).toBeVisible();
+                  - generic [ref=e1920]: if (await dialog.isVisible())
+                  - generic [ref=e1921]: "await page.getByRole('button', { name: 'Dismiss' }).click();"
+                  - generic [ref=e1922]: await newEmail.click();
+                - button "Copy code to clipboard" [ref=e1924] [cursor=pointer]:
+                  - generic [ref=e1925]:
+                    - img [ref=e1926]
+                    - img [ref=e1928]
+              - heading "Matching only visible elementsDirect link to Matching only visible elements" [level=3] [ref=e1930]:
+                - text: Matching only visible elements
+                - link "Direct link to Matching only visible elements" [ref=e1931] [cursor=pointer]:
+                  - /url: "#matching-only-visible-elements"
+                  - text: "#"
+              - generic [ref=e1932]:
+                - generic [ref=e1933]:
+                  - img [ref=e1935]
+                  - text: note
+                - paragraph [ref=e1938]:
+                  - text: It's usually better to find a
+                  - link "more reliable way" [ref=e1939] [cursor=pointer]:
+                    - /url: /docs/locators#quick-guide
+                  - text: to uniquely identify the element instead of checking the visibility.
+              - paragraph [ref=e1940]:
+                - text: Consider a page with two buttons, the first invisible and the second
+                - link "visible" [ref=e1941] [cursor=pointer]:
+                  - /url: /docs/actionability#visible
+                - text: .
+              - generic [ref=e1943]:
+                - code [ref=e1945]:
+                  - generic [ref=e1946]: "<button style='display: none'>Invisible</button>"
+                  - generic [ref=e1947]: <button>Visible</button>
+                - button "Copy code to clipboard" [ref=e1949] [cursor=pointer]:
+                  - generic [ref=e1950]:
+                    - img [ref=e1951]
+                    - img [ref=e1953]
+              - list [ref=e1955]:
+                - listitem [ref=e1956]:
+                  - paragraph [ref=e1957]:
+                    - text: This will find both buttons and throw a
+                    - link "strictness" [ref=e1958] [cursor=pointer]:
+                      - /url: /docs/locators#strictness
+                    - text: "violation error:"
+                  - generic [ref=e1960]:
+                    - code [ref=e1962]:
+                      - generic [ref=e1963]: await page.locator('button').click();
+                    - button "Copy code to clipboard" [ref=e1965] [cursor=pointer]:
+                      - generic [ref=e1966]:
+                        - img [ref=e1967]
+                        - img [ref=e1969]
+                - listitem [ref=e1971]:
+                  - paragraph [ref=e1972]: This will only find a second button, because it is visible, and then click it.
+                  - generic [ref=e1974]:
+                    - code [ref=e1976]:
+                      - generic [ref=e1977]: "await page.locator('button').filter({ visible: true }).click();"
+                    - button "Copy code to clipboard" [ref=e1979] [cursor=pointer]:
+                      - generic [ref=e1980]:
+                        - img [ref=e1981]
+                        - img [ref=e1983]
+              - heading "ListsDirect link to Lists" [level=2] [ref=e1985]:
+                - text: Lists
+                - link "Direct link to Lists" [ref=e1986] [cursor=pointer]:
+                  - /url: "#lists"
+                  - text: "#"
+              - heading "Count items in a listDirect link to Count items in a list" [level=3] [ref=e1987]:
+                - text: Count items in a list
+                - link "Direct link to Count items in a list" [ref=e1988] [cursor=pointer]:
+                  - /url: "#count-items-in-a-list"
+                  - text: "#"
+              - paragraph [ref=e1989]: You can assert locators in order to count the items in a list.
+              - paragraph [ref=e1990]: "For example, consider the following DOM structure:"
+              - generic [ref=e1991]:
+                - generic [ref=e1997]: http://localhost:3000
+                - generic [ref=e2003]:
+                  - list [ref=e2006]:
+                    - listitem [ref=e2007]: apple
+                    - listitem [ref=e2008]: banana
+                    - listitem [ref=e2009]: orange
+                  - generic [ref=e2012]:
+                    - code [ref=e2014]:
+                      - generic [ref=e2015]: <ul>
+                      - generic [ref=e2016]: <li>apple</li>
+                      - generic [ref=e2017]: <li>banana</li>
+                      - generic [ref=e2018]: <li>orange</li>
+                      - generic [ref=e2019]: </ul>
+                    - button "Copy code to clipboard" [ref=e2021] [cursor=pointer]:
+                      - generic [ref=e2022]:
+                        - img [ref=e2023]
+                        - img [ref=e2025]
+              - paragraph [ref=e2027]: Use the count assertion to ensure that the list has 3 items.
+              - generic [ref=e2029]:
+                - code [ref=e2031]:
+                  - generic [ref=e2032]: await expect(page.getByRole('listitem')).toHaveCount(3);
+                - button "Copy code to clipboard" [ref=e2034] [cursor=pointer]:
+                  - generic [ref=e2035]:
+                    - img [ref=e2036]
+                    - img [ref=e2038]
+              - heading "Assert all text in a listDirect link to Assert all text in a list" [level=3] [ref=e2040]:
+                - text: Assert all text in a list
+                - link "Direct link to Assert all text in a list" [ref=e2041] [cursor=pointer]:
+                  - /url: "#assert-all-text-in-a-list"
+                  - text: "#"
+              - paragraph [ref=e2042]: You can assert locators in order to find all the text in a list.
+              - paragraph [ref=e2043]: "For example, consider the following DOM structure:"
+              - generic [ref=e2044]:
+                - generic [ref=e2050]: http://localhost:3000
+                - generic [ref=e2056]:
+                  - list [ref=e2059]:
+                    - listitem [ref=e2060]: apple
+                    - listitem [ref=e2061]: banana
+                    - listitem [ref=e2062]: orange
+                  - generic [ref=e2065]:
+                    - code [ref=e2067]:
+                      - generic [ref=e2068]: <ul>
+                      - generic [ref=e2069]: <li>apple</li>
+                      - generic [ref=e2070]: <li>banana</li>
+                      - generic [ref=e2071]: <li>orange</li>
+                      - generic [ref=e2072]: </ul>
+                    - button "Copy code to clipboard" [ref=e2074] [cursor=pointer]:
+                      - generic [ref=e2075]:
+                        - img [ref=e2076]
+                        - img [ref=e2078]
+              - paragraph [ref=e2080]:
+                - text: Use
+                - link "expect(locator).toHaveText()" [ref=e2081] [cursor=pointer]:
+                  - /url: /docs/api/class-locatorassertions#locator-assertions-to-have-text
+                - text: to ensure that the list has the text "apple", "banana" and "orange".
+              - generic [ref=e2083]:
+                - code [ref=e2085]:
+                  - generic [ref=e2086]: await expect(page
+                  - generic [ref=e2087]: .getByRole('listitem'))
+                  - generic [ref=e2088]: .toHaveText(['apple', 'banana', 'orange']);
+                - button "Copy code to clipboard" [ref=e2090] [cursor=pointer]:
+                  - generic [ref=e2091]:
+                    - img [ref=e2092]
+                    - img [ref=e2094]
+              - heading "Get a specific itemDirect link to Get a specific item" [level=3] [ref=e2096]:
+                - text: Get a specific item
+                - link "Direct link to Get a specific item" [ref=e2097] [cursor=pointer]:
+                  - /url: "#get-a-specific-item"
+                  - text: "#"
+              - paragraph [ref=e2098]: There are many ways to get a specific item in a list.
+              - heading "Get by textDirect link to Get by text" [level=4] [ref=e2099]:
+                - text: Get by text
+                - link "Direct link to Get by text" [ref=e2100] [cursor=pointer]:
+                  - /url: "#get-by-text"
+                  - text: "#"
+              - paragraph [ref=e2101]:
+                - text: Use the
+                - link "page.getByText()" [ref=e2102] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-text
+                - text: method to locate an element in a list by its text content and then click on it.
+              - paragraph [ref=e2103]: "For example, consider the following DOM structure:"
+              - generic [ref=e2104]:
+                - generic [ref=e2110]: http://localhost:3000
+                - generic [ref=e2116]:
+                  - list [ref=e2119]:
+                    - listitem [ref=e2120]: apple
+                    - listitem [ref=e2121]: banana
+                    - listitem [ref=e2122]: orange
+                  - generic [ref=e2125]:
+                    - code [ref=e2127]:
+                      - generic [ref=e2128]: <ul>
+                      - generic [ref=e2129]: <li>apple</li>
+                      - generic [ref=e2130]: <li>banana</li>
+                      - generic [ref=e2131]: <li>orange</li>
+                      - generic [ref=e2132]: </ul>
+                    - button "Copy code to clipboard" [ref=e2134] [cursor=pointer]:
+                      - generic [ref=e2135]:
+                        - img [ref=e2136]
+                        - img [ref=e2138]
+              - paragraph [ref=e2140]: Locate an item by its text content and click it.
+              - generic [ref=e2142]:
+                - code [ref=e2144]:
+                  - generic [ref=e2145]: await page.getByText('orange').click();
+                - button "Copy code to clipboard" [ref=e2147] [cursor=pointer]:
+                  - generic [ref=e2148]:
+                    - img [ref=e2149]
+                    - img [ref=e2151]
+              - heading "Filter by textDirect link to Filter by text" [level=4] [ref=e2153]:
+                - text: Filter by text
+                - link "Direct link to Filter by text" [ref=e2154] [cursor=pointer]:
+                  - /url: "#filter-by-text-1"
+                  - text: "#"
+              - paragraph [ref=e2155]:
+                - text: Use the
+                - link "locator.filter()" [ref=e2156] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-filter
+                - text: to locate a specific item in a list.
+              - paragraph [ref=e2157]: "For example, consider the following DOM structure:"
+              - generic [ref=e2158]:
+                - generic [ref=e2164]: http://localhost:3000
+                - generic [ref=e2170]:
+                  - list [ref=e2173]:
+                    - listitem [ref=e2174]: apple
+                    - listitem [ref=e2175]: banana
+                    - listitem [ref=e2176]: orange
+                  - generic [ref=e2179]:
+                    - code [ref=e2181]:
+                      - generic [ref=e2182]: <ul>
+                      - generic [ref=e2183]: <li>apple</li>
+                      - generic [ref=e2184]: <li>banana</li>
+                      - generic [ref=e2185]: <li>orange</li>
+                      - generic [ref=e2186]: </ul>
+                    - button "Copy code to clipboard" [ref=e2188] [cursor=pointer]:
+                      - generic [ref=e2189]:
+                        - img [ref=e2190]
+                        - img [ref=e2192]
+              - paragraph [ref=e2194]: Locate an item by the role of "listitem" and then filter by the text of "orange" and then click it.
+              - generic [ref=e2196]:
+                - code [ref=e2198]:
+                  - generic [ref=e2199]: await page
+                  - generic [ref=e2200]: .getByRole('listitem')
+                  - generic [ref=e2201]: ".filter({ hasText: 'orange' })"
+                  - generic [ref=e2202]: .click();
+                - button "Copy code to clipboard" [ref=e2204] [cursor=pointer]:
+                  - generic [ref=e2205]:
+                    - img [ref=e2206]
+                    - img [ref=e2208]
+              - heading "Get by test idDirect link to Get by test id" [level=4] [ref=e2210]:
+                - text: Get by test id
+                - link "Direct link to Get by test id" [ref=e2211] [cursor=pointer]:
+                  - /url: "#get-by-test-id"
+                  - text: "#"
+              - paragraph [ref=e2212]:
+                - text: Use the
+                - link "page.getByTestId()" [ref=e2213] [cursor=pointer]:
+                  - /url: /docs/api/class-page#page-get-by-test-id
+                - text: method to locate an element in a list. You may need to modify the html and add a test id if you don't already have a test id.
+              - paragraph [ref=e2214]: "For example, consider the following DOM structure:"
+              - generic [ref=e2215]:
+                - generic [ref=e2221]: http://localhost:3000
+                - generic [ref=e2227]:
+                  - list [ref=e2230]:
+                    - listitem [ref=e2231]: apple
+                    - listitem [ref=e2232]: banana
+                    - listitem [ref=e2233]: orange
+                  - generic [ref=e2236]:
+                    - code [ref=e2238]:
+                      - generic [ref=e2239]: <ul>
+                      - generic [ref=e2240]: <li data-testid='apple'>apple</li>
+                      - generic [ref=e2241]: <li data-testid='banana'>banana</li>
+                      - generic [ref=e2242]: <li data-testid='orange'>orange</li>
+                      - generic [ref=e2243]: </ul>
+                    - button "Copy code to clipboard" [ref=e2245] [cursor=pointer]:
+                      - generic [ref=e2246]:
+                        - img [ref=e2247]
+                        - img [ref=e2249]
+              - paragraph [ref=e2251]: Locate an item by its test id of "orange" and then click it.
+              - generic [ref=e2253]:
+                - code [ref=e2255]:
+                  - generic [ref=e2256]: await page.getByTestId('orange').click();
+                - button "Copy code to clipboard" [ref=e2258] [cursor=pointer]:
+                  - generic [ref=e2259]:
+                    - img [ref=e2260]
+                    - img [ref=e2262]
+              - heading "Get by nth itemDirect link to Get by nth item" [level=4] [ref=e2264]:
+                - text: Get by nth item
+                - link "Direct link to Get by nth item" [ref=e2265] [cursor=pointer]:
+                  - /url: "#get-by-nth-item"
+                  - text: "#"
+              - paragraph [ref=e2266]:
+                - text: If you have a list of identical elements, and the only way to distinguish between them is the order, you can choose a specific element from a list with
+                - link "locator.first()" [ref=e2267] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-first
+                - text: ","
+                - link "locator.last()" [ref=e2268] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-last
+                - text: or
+                - link "locator.nth()" [ref=e2269] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-nth
+                - text: .
+              - generic [ref=e2271]:
+                - code [ref=e2273]:
+                  - generic [ref=e2274]: const banana = await page.getByRole('listitem').nth(1);
+                - button "Copy code to clipboard" [ref=e2276] [cursor=pointer]:
+                  - generic [ref=e2277]:
+                    - img [ref=e2278]
+                    - img [ref=e2280]
+              - paragraph [ref=e2282]:
+                - text: However, use this method with caution. Often times, the page might change, and the locator will point to a completely different element from the one you expected. Instead, try to come up with a unique locator that will pass the
+                - link "strictness criteria" [ref=e2283] [cursor=pointer]:
+                  - /url: "#strictness"
+                - text: .
+              - heading "Chaining filtersDirect link to Chaining filters" [level=3] [ref=e2284]:
+                - text: Chaining filters
+                - link "Direct link to Chaining filters" [ref=e2285] [cursor=pointer]:
+                  - /url: "#chaining-filters"
+                  - text: "#"
+              - paragraph [ref=e2286]:
+                - text: When you have elements with various similarities, you can use the
+                - link "locator.filter()" [ref=e2287] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-filter
+                - text: method to select the right one. You can also chain multiple filters to narrow down the selection.
+              - paragraph [ref=e2288]: "For example, consider the following DOM structure:"
+              - generic [ref=e2289]:
+                - generic [ref=e2295]: http://localhost:3000
+                - generic [ref=e2301]:
+                  - list [ref=e2304]:
+                    - listitem [ref=e2305]:
+                      - generic [ref=e2306]: John
+                      - button "Say hello" [ref=e2308] [cursor=pointer]
+                    - listitem [ref=e2309]:
+                      - generic [ref=e2310]: Mary
+                      - button "Say hello" [ref=e2312] [cursor=pointer]
+                    - listitem [ref=e2313]:
+                      - generic [ref=e2314]: John
+                      - button "Say goodbye" [ref=e2316] [cursor=pointer]
+                    - listitem [ref=e2317]:
+                      - generic [ref=e2318]: Mary
+                      - button "Say goodbye" [ref=e2320] [cursor=pointer]
+                  - generic [ref=e2323]:
+                    - code [ref=e2325]:
+                      - generic [ref=e2326]: <ul>
+                      - generic [ref=e2327]: <li>
+                      - generic [ref=e2328]: <div>John</div>
+                      - generic [ref=e2329]: <div><button>Say hello</button></div>
+                      - generic [ref=e2330]: </li>
+                      - generic [ref=e2331]: <li>
+                      - generic [ref=e2332]: <div>Mary</div>
+                      - generic [ref=e2333]: <div><button>Say hello</button></div>
+                      - generic [ref=e2334]: </li>
+                      - generic [ref=e2335]: <li>
+                      - generic [ref=e2336]: <div>John</div>
+                      - generic [ref=e2337]: <div><button>Say goodbye</button></div>
+                      - generic [ref=e2338]: </li>
+                      - generic [ref=e2339]: <li>
+                      - generic [ref=e2340]: <div>Mary</div>
+                      - generic [ref=e2341]: <div><button>Say goodbye</button></div>
+                      - generic [ref=e2342]: </li>
+                      - generic [ref=e2343]: </ul>
+                    - button "Copy code to clipboard" [ref=e2345] [cursor=pointer]:
+                      - generic [ref=e2346]:
+                        - img [ref=e2347]
+                        - img [ref=e2349]
+              - paragraph [ref=e2351]: "To take a screenshot of the row with \"Mary\" and \"Say goodbye\":"
+              - generic [ref=e2353]:
+                - code [ref=e2355]:
+                  - generic [ref=e2356]: const rowLocator = page.getByRole('listitem');
+                  - generic [ref=e2357]: await rowLocator
+                  - generic [ref=e2358]: ".filter({ hasText: 'Mary' })"
+                  - generic [ref=e2359]: ".filter({ has: page.getByRole('button', { name: 'Say goodbye' }) })"
+                  - generic [ref=e2360]: ".screenshot({ path: 'screenshot.png' });"
+                - button "Copy code to clipboard" [ref=e2362] [cursor=pointer]:
+                  - generic [ref=e2363]:
+                    - img [ref=e2364]
+                    - img [ref=e2366]
+              - paragraph [ref=e2368]: You should now have a "screenshot.png" file in your project's root directory.
+              - heading "Rare use casesDirect link to Rare use cases" [level=3] [ref=e2369]:
+                - text: Rare use cases
+                - link "Direct link to Rare use cases" [ref=e2370] [cursor=pointer]:
+                  - /url: "#rare-use-cases"
+                  - text: "#"
+              - heading "Do something with each element in the listDirect link to Do something with each element in the list" [level=4] [ref=e2371]:
+                - text: Do something with each element in the list
+                - link "Direct link to Do something with each element in the list" [ref=e2372] [cursor=pointer]:
+                  - /url: "#do-something-with-each-element-in-the-list"
+                  - text: "#"
+              - paragraph [ref=e2373]: "Iterate elements:"
+              - generic [ref=e2375]:
+                - code [ref=e2377]:
+                  - generic [ref=e2378]: for (const row of await page.getByRole('listitem').all())
+                  - generic [ref=e2379]: console.log(await row.textContent());
+                - button "Copy code to clipboard" [ref=e2381] [cursor=pointer]:
+                  - generic [ref=e2382]:
+                    - img [ref=e2383]
+                    - img [ref=e2385]
+              - paragraph [ref=e2387]: "Iterate using regular for loop:"
+              - generic [ref=e2389]:
+                - code [ref=e2391]:
+                  - generic [ref=e2392]: const rows = page.getByRole('listitem');
+                  - generic [ref=e2393]: const count = await rows.count();
+                  - generic [ref=e2394]: for (let i = 0; i < count; ++i)
+                  - generic [ref=e2395]: console.log(await rows.nth(i).textContent());
+                - button "Copy code to clipboard" [ref=e2397] [cursor=pointer]:
+                  - generic [ref=e2398]:
+                    - img [ref=e2399]
+                    - img [ref=e2401]
+              - heading "Evaluate in the pageDirect link to Evaluate in the page" [level=4] [ref=e2403]:
+                - text: Evaluate in the page
+                - link "Direct link to Evaluate in the page" [ref=e2404] [cursor=pointer]:
+                  - /url: "#evaluate-in-the-page"
+                  - text: "#"
+              - paragraph [ref=e2405]:
+                - text: The code inside
+                - link "locator.evaluateAll()" [ref=e2406] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-evaluate-all
+                - text: runs in the page, you can call any DOM apis there.
+              - generic [ref=e2408]:
+                - code [ref=e2410]:
+                  - generic [ref=e2411]: const rows = page.getByRole('listitem');
+                  - generic [ref=e2412]: const texts = await rows.evaluateAll(
+                  - generic [ref=e2413]: list => list.map(element => element.textContent));
+                - button "Copy code to clipboard" [ref=e2415] [cursor=pointer]:
+                  - generic [ref=e2416]:
+                    - img [ref=e2417]
+                    - img [ref=e2419]
+              - heading "StrictnessDirect link to Strictness" [level=2] [ref=e2421]:
+                - text: Strictness
+                - link "Direct link to Strictness" [ref=e2422] [cursor=pointer]:
+                  - /url: "#strictness"
+                  - text: "#"
+              - paragraph [ref=e2423]: "Locators are strict. This means that all operations on locators that imply some target DOM element will throw an exception if more than one element matches. For example, the following call throws if there are several buttons in the DOM:"
+              - heading "Throws an error if more than oneDirect link to Throws an error if more than one" [level=4] [ref=e2424]:
+                - text: Throws an error if more than one
+                - link "Direct link to Throws an error if more than one" [ref=e2425] [cursor=pointer]:
+                  - /url: "#throws-an-error-if-more-than-one"
+                  - text: "#"
+              - generic [ref=e2427]:
+                - code [ref=e2429]:
+                  - generic [ref=e2430]: await page.getByRole('button').click();
+                - button "Copy code to clipboard" [ref=e2432] [cursor=pointer]:
+                  - generic [ref=e2433]:
+                    - img [ref=e2434]
+                    - img [ref=e2436]
+              - paragraph [ref=e2438]: On the other hand, Playwright understands when you perform a multiple-element operation, so the following call works perfectly fine when the locator resolves to multiple elements.
+              - heading "Works fine with multiple elementsDirect link to Works fine with multiple elements" [level=4] [ref=e2439]:
+                - text: Works fine with multiple elements
+                - link "Direct link to Works fine with multiple elements" [ref=e2440] [cursor=pointer]:
+                  - /url: "#works-fine-with-multiple-elements"
+                  - text: "#"
+              - generic [ref=e2442]:
+                - code [ref=e2444]:
+                  - generic [ref=e2445]: await page.getByRole('button').count();
+                - button "Copy code to clipboard" [ref=e2447] [cursor=pointer]:
+                  - generic [ref=e2448]:
+                    - img [ref=e2449]
+                    - img [ref=e2451]
+              - paragraph [ref=e2453]:
+                - text: You can explicitly opt-out from strictness check by telling Playwright which element to use when multiple elements match, through
+                - link "locator.first()" [ref=e2454] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-first
+                - text: ","
+                - link "locator.last()" [ref=e2455] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-last
+                - text: ", and"
+                - link "locator.nth()" [ref=e2456] [cursor=pointer]:
+                  - /url: /docs/api/class-locator#locator-nth
+                - text: . These methods are
+                - strong [ref=e2457]: not recommended
+                - text: because when your page changes, Playwright may click on an element you did not intend. Instead, follow best practices above to create a locator that uniquely identifies the target element.
+              - heading "More LocatorsDirect link to More Locators" [level=2] [ref=e2458]:
+                - text: More Locators
+                - link "Direct link to More Locators" [ref=e2459] [cursor=pointer]:
+                  - /url: "#more-locators"
+                  - text: "#"
+              - paragraph [ref=e2460]:
+                - text: For less commonly used locators, look at the
+                - link "other locators" [ref=e2461] [cursor=pointer]:
+                  - /url: /docs/other-locators
+                - text: guide.
+          - navigation "Docs pages" [ref=e2462]:
+            - link "Previous « Isolation" [ref=e2463] [cursor=pointer]:
+              - /url: /docs/browser-contexts
+              - generic [ref=e2464]: Previous
+              - generic [ref=e2465]: « Isolation
+            - link "Next Mock APIs »" [ref=e2466] [cursor=pointer]:
+              - /url: /docs/mock
+              - generic [ref=e2467]: Next
+              - generic [ref=e2468]: Mock APIs »
+        - list [ref=e2471]:
+          - listitem [ref=e2472]:
+            - link "Introduction" [ref=e2473] [cursor=pointer]:
+              - /url: "#introduction"
+            - list [ref=e2474]:
+              - listitem [ref=e2475]:
+                - link "Quick Guide" [ref=e2476] [cursor=pointer]:
+                  - /url: "#quick-guide"
+          - listitem [ref=e2477]:
+            - link "Locating elements" [ref=e2478] [cursor=pointer]:
+              - /url: "#locating-elements"
+            - list [ref=e2479]:
+              - listitem [ref=e2480]:
+                - link "Locate by role" [ref=e2481] [cursor=pointer]:
+                  - /url: "#locate-by-role"
+              - listitem [ref=e2482]:
+                - link "Locate by label" [ref=e2483] [cursor=pointer]:
+                  - /url: "#locate-by-label"
+              - listitem [ref=e2484]:
+                - link "Locate by placeholder" [ref=e2485] [cursor=pointer]:
+                  - /url: "#locate-by-placeholder"
+              - listitem [ref=e2486]:
+                - link "Locate by text" [ref=e2487] [cursor=pointer]:
+                  - /url: "#locate-by-text"
+              - listitem [ref=e2488]:
+                - link "Locate by alt text" [ref=e2489] [cursor=pointer]:
+                  - /url: "#locate-by-alt-text"
+              - listitem [ref=e2490]:
+                - link "Locate by title" [ref=e2491] [cursor=pointer]:
+                  - /url: "#locate-by-title"
+              - listitem [ref=e2492]:
+                - link "Locate by test id" [ref=e2493] [cursor=pointer]:
+                  - /url: "#locate-by-test-id"
+              - listitem [ref=e2494]:
+                - link "Locate by CSS or XPath" [ref=e2495] [cursor=pointer]:
+                  - /url: "#locate-by-css-or-xpath"
+          - listitem [ref=e2496]:
+            - link "Locate in Shadow DOM" [ref=e2497] [cursor=pointer]:
+              - /url: "#locate-in-shadow-dom"
+          - listitem [ref=e2498]:
+            - link "Filtering Locators" [ref=e2499] [cursor=pointer]:
+              - /url: "#filtering-locators"
+            - list [ref=e2500]:
+              - listitem [ref=e2501]:
+                - link "Filter by text" [ref=e2502] [cursor=pointer]:
+                  - /url: "#filter-by-text"
+              - listitem [ref=e2503]:
+                - link "Filter by not having text" [ref=e2504] [cursor=pointer]:
+                  - /url: "#filter-by-not-having-text"
+              - listitem [ref=e2505]:
+                - link "Filter by child/descendant" [ref=e2506] [cursor=pointer]:
+                  - /url: "#filter-by-childdescendant"
+              - listitem [ref=e2507]:
+                - link "Filter by not having child/descendant" [ref=e2508] [cursor=pointer]:
+                  - /url: "#filter-by-not-having-childdescendant"
+          - listitem [ref=e2509]:
+            - link "Locator operators" [ref=e2510] [cursor=pointer]:
+              - /url: "#locator-operators"
+            - list [ref=e2511]:
+              - listitem [ref=e2512]:
+                - link "Matching inside a locator" [ref=e2513] [cursor=pointer]:
+                  - /url: "#matching-inside-a-locator"
+              - listitem [ref=e2514]:
+                - link "Matching two locators simultaneously" [ref=e2515] [cursor=pointer]:
+                  - /url: "#matching-two-locators-simultaneously"
+              - listitem [ref=e2516]:
+                - link "Matching one of the two alternative locators" [ref=e2517] [cursor=pointer]:
+                  - /url: "#matching-one-of-the-two-alternative-locators"
+              - listitem [ref=e2518]:
+                - link "Matching only visible elements" [ref=e2519] [cursor=pointer]:
+                  - /url: "#matching-only-visible-elements"
+          - listitem [ref=e2520]:
+            - link "Lists" [ref=e2521] [cursor=pointer]:
+              - /url: "#lists"
+            - list [ref=e2522]:
+              - listitem [ref=e2523]:
+                - link "Count items in a list" [ref=e2524] [cursor=pointer]:
+                  - /url: "#count-items-in-a-list"
+              - listitem [ref=e2525]:
+                - link "Assert all text in a list" [ref=e2526] [cursor=pointer]:
+                  - /url: "#assert-all-text-in-a-list"
+              - listitem [ref=e2527]:
+                - link "Get a specific item" [ref=e2528] [cursor=pointer]:
+                  - /url: "#get-a-specific-item"
+              - listitem [ref=e2529]:
+                - link "Chaining filters" [ref=e2530] [cursor=pointer]:
+                  - /url: "#chaining-filters"
+              - listitem [ref=e2531]:
+                - link "Rare use cases" [ref=e2532] [cursor=pointer]:
+                  - /url: "#rare-use-cases"
+          - listitem [ref=e2533]:
+            - link "Strictness" [ref=e2534] [cursor=pointer]:
+              - /url: "#strictness"
+          - listitem [ref=e2535]:
+            - link "More Locators" [ref=e2536] [cursor=pointer]:
+              - /url: "#more-locators"
+  - contentinfo [ref=e690]:
+    - generic [ref=e691]:
+      - generic [ref=e692]:
+        - generic [ref=e693]:
+          - generic [ref=e694]: Learn
+          - list [ref=e695]:
+            - listitem [ref=e696]:
+              - link "Getting started" [ref=e697] [cursor=pointer]:
+                - /url: /docs/intro
+            - listitem [ref=e698]:
+              - link "Playwright Training" [ref=e699] [cursor=pointer]:
+                - /url: https://learn.microsoft.com/en-us/training/modules/build-with-playwright/
+                - text: Playwright Training
+                - img [ref=e700]
+            - listitem [ref=e702]:
+              - link "Learn Videos" [ref=e703] [cursor=pointer]:
+                - /url: /community/learn-videos
+            - listitem [ref=e704]:
+              - link "Feature Videos" [ref=e705] [cursor=pointer]:
+                - /url: /community/feature-videos
+        - generic [ref=e706]:
+          - generic [ref=e707]: Community
+          - list [ref=e708]:
+            - listitem [ref=e709]:
+              - link "Stack Overflow" [ref=e710] [cursor=pointer]:
+                - /url: https://stackoverflow.com/questions/tagged/playwright
+                - text: Stack Overflow
+                - img [ref=e711]
+            - listitem [ref=e713]:
+              - link "Discord" [ref=e714] [cursor=pointer]:
+                - /url: https://aka.ms/playwright/discord
+                - text: Discord
+                - img [ref=e715]
+            - listitem [ref=e717]:
+              - link "Twitter" [ref=e718] [cursor=pointer]:
+                - /url: https://twitter.com/playwrightweb
+                - text: Twitter
+                - img [ref=e719]
+            - listitem [ref=e721]:
+              - link "LinkedIn" [ref=e722] [cursor=pointer]:
+                - /url: https://www.linkedin.com/company/playwrightweb
+                - text: LinkedIn
+                - img [ref=e723]
+        - generic [ref=e725]:
+          - generic [ref=e726]: More
+          - list [ref=e727]:
+            - listitem [ref=e728]:
+              - link "GitHub" [ref=e729] [cursor=pointer]:
+                - /url: https://github.com/microsoft/playwright
+                - text: GitHub
+                - img [ref=e730]
+            - listitem [ref=e732]:
+              - link "YouTube" [ref=e733] [cursor=pointer]:
+                - /url: https://www.youtube.com/channel/UC46Zj8pDH5tDosqm1gd7WTg
+                - text: YouTube
+                - img [ref=e734]
+            - listitem [ref=e736]:
+              - link "Blog" [ref=e737] [cursor=pointer]:
+                - /url: https://dev.to/playwright
+                - text: Blog
+                - img [ref=e738]
+            - listitem [ref=e740]:
+              - link "Ambassadors" [ref=e741] [cursor=pointer]:
+                - /url: /community/ambassadors
+            - listitem [ref=e742]:
+              - link "Microsoft Privacy Statement" [ref=e743] [cursor=pointer]:
+                - /url: https://go.microsoft.com/fwlink/?LinkId=521839
+                - text: Microsoft Privacy Statement
+                - img [ref=e744]
+      - generic [ref=e747]: Copyright © 2026 Microsoft

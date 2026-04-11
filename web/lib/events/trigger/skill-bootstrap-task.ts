@@ -8,7 +8,7 @@
  */
 
 import { createLogger } from '@/lib/utils/logger';
-import { executeWithFallback, scheduleWithTrigger } from './utils';
+import { executeWithFallback, invokeTriggerTask, scheduleWithTrigger } from './utils';
 
 const logger = createLogger('Trigger:SkillBootstrap');
 
@@ -49,22 +49,12 @@ export interface SkillBootstrapTaskResult {
 export async function executeSkillBootstrapTask(
   payload: SkillBootstrapTaskPayload
 ): Promise<SkillBootstrapTaskResult> {
-  return executeWithFallback(
-    () => executeWithTrigger(payload),
-    () => executeLocally(payload),
-    'skill bootstrap'
+  return executeWithFallback<SkillBootstrapTaskPayload, SkillBootstrapTaskResult>(
+    async (taskId) => invokeTriggerTask(taskId, payload),
+    (p) => executeLocally(p),
+    'skill bootstrap',
+    payload
   );
-}
-
-/**
- * Execute with Trigger.dev SDK
- */
-async function executeWithTrigger(
-  payload: SkillBootstrapTaskPayload
-): Promise<SkillBootstrapTaskResult> {
-  // For now, execute locally - Trigger.dev v3 SDK integration requires task registration
-  logger.warn('Trigger.dev execution requested but not fully configured, using local execution');
-  return executeLocally(payload);
 }
 
 /**
@@ -74,8 +64,7 @@ async function executeLocally(
   payload: SkillBootstrapTaskPayload
 ): Promise<SkillBootstrapTaskResult> {
   const { handleSkillBootstrap } = await import('@/lib/events/handlers/bing-handlers');
-  
-  // Create mock event for handler
+
   const mockEvent = {
     id: `skill-${Date.now()}`,
     type: 'SKILL_BOOTSTRAP' as const,
@@ -88,9 +77,9 @@ async function executeLocally(
     status: 'pending' as const,
     retryCount: 0,
   };
-  
+
   const result = await handleSkillBootstrap(mockEvent);
-  
+
   return {
     success: result.success,
     skillId: result.skillId,
@@ -100,70 +89,53 @@ async function executeLocally(
 }
 
 /**
- * Parse skill from LLM response
- */
-function parseSkillFromResponse(content: string): ExtractedSkill {
-  try {
-    // Try to parse JSON from response
-    const jsonMatch = content.match(/\{[\s\S]*\}/);
-    if (jsonMatch) {
-      return JSON.parse(jsonMatch[0]);
-    }
-    
-    // Fallback: extract key fields
-    return {
-      name: extractField(content, 'name') || 'Extracted Skill',
-      description: extractField(content, 'description') || 'A reusable skill',
-      parameters: {},
-      implementation: extractField(content, 'implementation') || '// Implementation',
-      category: extractField(content, 'category') || 'general',
-      tags: extractField(content, 'tags')?.split(',').map((t: string) => t.trim()) || [],
-    };
-  } catch (error) {
-    logger.warn('Failed to parse skill JSON, using fallback', error);
-    return {
-      name: 'Extracted Skill',
-      description: 'A reusable skill extracted from successful execution',
-      parameters: {},
-      implementation: '// Skill implementation',
-      category: 'general',
-      tags: ['extracted', 'auto-generated'],
-    };
-  }
-}
-
-/**
- * Extract field from text (simple heuristic)
- */
-function extractField(text: string, field: string): string {
-  const regex = new RegExp(`"${field}"\\s*:\\s*"([^"]+)"`, 'i');
-  const match = text.match(regex);
-  return match ? match[1] : '';
-}
-
-/**
  * Schedule automatic skill extraction after successful task
  */
 export async function scheduleSkillBootstrap(
-  payload: Omit<SkillBootstrapTaskPayload, 'successfulRun'> & {
-    successfulRunId: string;
+  payload: {
+    successfulRun: SkillBootstrapTaskPayload['successfulRun'];
     triggerEventId: string;
+    model?: string;
     delayMs?: number;
   }
 ): Promise<{ scheduled: boolean; jobId?: string }> {
-  // Scheduling requires Trigger.dev to be configured
-  logger.warn('Skill bootstrap scheduling not yet available - Trigger.dev configuration required');
-  return { scheduled: false };
-}
+  const available = await import('./utils').then(m => m.isTriggerAvailable());
 
-/**
- * Fetch successful run data (placeholder - would integrate with execution store)
- */
-async function fetchSuccessfulRun(runId: string): Promise<any> {
-  // Placeholder - in production, fetch from execution store
-  return {
-    steps: [],
-    totalDuration: 0,
-    userId: 'unknown',
-  };
+  if (available) {
+    return scheduleWithTrigger(
+      async () => {
+        const { invokeTriggerTask } = await import('./utils');
+        const result = await invokeTriggerTask('skill-bootstrap', payload);
+        return { scheduled: true, jobId: (result as any).runId };
+      },
+      'skill bootstrap'
+    );
+  }
+
+  // Fallback: use the internal event bus
+  try {
+    const { emitEvent } = await import('@/lib/events/bus');
+
+    const result = await emitEvent({
+      type: 'SKILL_BOOTSTRAP',
+      userId: payload.successfulRun.userId,
+      payload: {
+        successfulRun: payload.successfulRun,
+        model: payload.model,
+        storeSkill: true,
+        scheduled: true,
+        sourceEventId: payload.triggerEventId,
+      },
+    }, payload.successfulRun.userId);
+
+    logger.info('Skill bootstrap scheduled via event system', {
+      eventId: result.eventId,
+      triggerEventId: payload.triggerEventId,
+    });
+
+    return { scheduled: true, jobId: result.eventId };
+  } catch (error: any) {
+    logger.error('Failed to schedule skill bootstrap', { error: error.message });
+    return { scheduled: false };
+  }
 }

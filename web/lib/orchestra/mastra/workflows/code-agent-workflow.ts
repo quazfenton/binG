@@ -15,7 +15,7 @@
 
 import { createWorkflow, createStep } from '@mastra/core/workflows';
 import { z } from 'zod';
-import { simulatedOrchestrator } from '../../../agent/simulated-orchestration';
+import { simulatedOrchestrator } from '@bing/shared/agent/simulated-orchestration';
 import { getModel } from '../models/model-router';
 import {
   writeFileTool,
