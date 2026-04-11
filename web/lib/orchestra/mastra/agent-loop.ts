@@ -294,6 +294,7 @@ export class AgentLoop {
                     args: tc.arguments,
                     result: result2,
                     state: 'completed',
+                    isFallback: true,
                   },
                 });
                 results.push({
@@ -301,17 +302,8 @@ export class AgentLoop {
                   tool: tc.name,
                   arguments: tc.arguments,
                   result: result2,
+                  isFallback: true,
                 });
-                
-                // Emit filesystem update after write_file so UI refreshes
-                if (tc.name === 'write_file' && result2.success) {
-                  emitFilesystemUpdated({
-                    path: tc.arguments.path,
-                    paths: [tc.arguments.path],
-                    type: 'create',
-                    source: 'fallback-tool',
-                  });
-                }
               } catch (err: any) {
                 log.error(`Fallback tool execution failed: ${tc.name}`, err.message);
               }
@@ -332,7 +324,7 @@ export class AgentLoop {
           args: inv.toolInvocation.args,
           result: inv.toolInvocation.result,
           sourceSystem: 'mastra',
-          sourceAgent: results.some(r => r.tool === inv.toolInvocation.toolName) ? 'tool-loop-agent-fallback' : 'tool-loop-agent',
+          sourceAgent: inv.toolInvocation.isFallback || (results.find(r => r.tool === inv.toolInvocation.toolName) as any)?.isFallback ? 'tool-loop-agent-fallback' : 'tool-loop-agent',
         })),
         reasoning: reasoningChunks.join('\n\n'),
       };
@@ -434,23 +426,15 @@ export class AgentLoop {
                   args: tc.arguments,
                   result: result2,
                   state: 'completed',
+                  isFallback: true,
                 });
                 results.push({
                   iteration: results.length + 1,
                   tool: tc.name,
                   arguments: tc.arguments,
                   result: result2,
+                  isFallback: true,
                 });
-                
-                // Emit filesystem update after write_file so UI refreshes
-                if (tc.name === 'write_file' && result2.success) {
-                  emitFilesystemUpdated({
-                    path: tc.arguments.path,
-                    paths: [tc.arguments.path],
-                    type: 'create',
-                    source: 'fallback-tool',
-                  });
-                }
               } catch (err: any) {
                 log.error(`Fallback tool execution failed: ${tc.name}`, err.message);
               }
@@ -471,7 +455,7 @@ export class AgentLoop {
           args: inv.args,
           result: inv.result,
           sourceSystem: 'mastra',
-          sourceAgent: results.some(r => r.tool === inv.toolName) ? 'tool-loop-agent-fallback' : 'tool-loop-agent',
+          sourceAgent: inv.isFallback || (results.find(r => r.tool === inv.toolName) as any)?.isFallback ? 'tool-loop-agent-fallback' : 'tool-loop-agent',
         })),
         reasoning: result.reasoning,
       };

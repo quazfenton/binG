@@ -122,7 +122,7 @@ export async function POST(req: Request) {
   } catch (error: any) {
     logger.error(`Failed to connect MCP server:`, error.message)
     return NextResponse.json(
-      { error: error.message },
+      { error: 'Failed to connect MCP server' },
       { status: 500 }
     )
   }

@@ -2966,7 +2966,7 @@ export function WorkspacePanel() {
                       role="region"
                       aria-label="File Explorer"
                       onKeyDown={(e) => {
-                        if (e.key === 'ArrowDown' || e.key === 'ArrowUp') {
+                        if ((e.key === 'ArrowDown' || e.key === 'ArrowUp') && e.target === e.currentTarget) {
                           e.preventDefault();
                           const scrollAmount = 40;
                           const container = e.currentTarget;
@@ -4660,6 +4660,7 @@ export function WorkspacePanel() {
                     aria-label="MCP Servers"
                     onWheel={(e) => {
                       const container = e.currentTarget;
+                      e.preventDefault();
                       e.stopPropagation();
                       container.scrollTop += e.deltaY;
                     }}

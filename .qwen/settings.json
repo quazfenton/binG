@@ -16,14 +16,20 @@
       "Bash(set *)",
       "Bash(%path%)",
       "Bash(cargo check *)",
-      "Bash(npx *)",
+      "Bash(npx vitest *)",
+      "Bash(npx tsx *)",
+      "Bash(npx trigger.dev@*)",
+      "Bash(npx @smithery/cli *)",
+      "Bash(npx opencode *)",
+      "Bash(npx playwright *)",
       "Bash(findstr *)",
       "Bash(curl *)",
       "Bash(fc *)",
       "Bash(ren *)",
       "Bash(type *)",
       "Bash(timeout *)",
-      "Bash(copy *)"
+      "Bash(copy *)",
+      "Bash(npx *)"
     ],
     "exclude": [
       "Bash(git checkout)"
